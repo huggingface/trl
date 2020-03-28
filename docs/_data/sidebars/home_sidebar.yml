@@ -7,24 +7,24 @@ entries:
 - folders:
   - folderitems:
     - output: web,pdf
-      title: Export to modules
-      url: /export.html
+      title: Overview
+      url: /
     - output: web,pdf
-      title: Convert to html
-      url: /export2html.html
+      title: Title
+      url: /00-core
     - output: web,pdf
-      title: Show doc
-      url: /showdoc.html
+      title: GPT2 with value head
+      url: /01-gpt2-with-value-head
     - output: web,pdf
-      title: Test functions
-      url: /test.html
+      title: PPO for transformer models
+      url: /02-ppo
     - output: web,pdf
-      title: Core functions
-      url: /core.html
+      title: BERT IMDB training
+      url: /03-bert-imdb-training
     - output: web,pdf
-      title: Command line functions
-      url: /cli.html
+      title: Tune GPT2 to produce positive movie reviews
+      url: /04-gpt2-sentiment-ppo-training
     output: web
-    title: Notebook
+    title: lm_ppo
   output: web
   title: Sidebar
