@@ -1,10 +1,10 @@
 {
   "lm_ppo": {
     "Overview": "/",
-    "Title": "/00-core",
+    "Utility functions": "/00-core",
     "GPT2 with value head": "/01-gpt2-with-value-head",
     "PPO for transformer models": "/02-ppo",
     "BERT IMDB training": "/03-bert-imdb-training",
-    "Tune GPT2 to produce positive movie reviews": "/04-gpt2-sentiment-ppo-training"
+    "Tune GPT2 to generate positive reviews": "/04-gpt2-sentiment-ppo-training"
   }
 }

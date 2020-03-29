@@ -1,12 +1,12 @@
 ---
 
-title: Tune GPT2 to produce positive movie reviews
+title: Tune GPT2 to generate positive reviews
 
 keywords: fastai
 sidebar: home_sidebar
 
-summary: "Optimise GPT2 to produce positive movie reviews using a BERT sentiment classifier for rewards."
-description: "Optimise GPT2 to produce positive movie reviews using a BERT sentiment classifier for rewards."
+summary: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT sentiment classifier for rewards."
+description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT sentiment classifier for rewards."
 ---
 <!--
 
@@ -27,6 +27,18 @@ description: "Optimise GPT2 to produce positive movie reviews using a BERT senti
 </div>
     {% endraw %}
 
+<div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
+<div class="text_cell_render border-box-sizing rendered_html">
+<h2 id="Setup-experiment">Setup experiment<a class="anchor-link" href="#Setup-experiment"> </a></h2>
+</div>
+</div>
+</div>
+<div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
+<div class="text_cell_render border-box-sizing rendered_html">
+<h3 id="Import-dependencies">Import dependencies<a class="anchor-link" href="#Import-dependencies"> </a></h3>
+</div>
+</div>
+</div>
     {% raw %}
     
 <div class="cell border-box-sizing code_cell rendered">
@@ -45,12 +57,6 @@ description: "Optimise GPT2 to produce positive movie reviews using a BERT senti
 </div>
     {% endraw %}
 
-<div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
-<div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Import-dependencies">Import dependencies<a class="anchor-link" href="#Import-dependencies"> </a></h2>
-</div>
-</div>
-</div>
     {% raw %}
     
 <div class="cell border-box-sizing code_cell rendered">
@@ -98,7 +104,7 @@ description: "Optimise GPT2 to produce positive movie reviews using a BERT senti
 
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Experiment-configuration">Experiment configuration<a class="anchor-link" href="#Experiment-configuration"> </a></h2>
+<h3 id="Configuration">Configuration<a class="anchor-link" href="#Configuration"> </a></h3>
 </div>
 </div>
 </div>
@@ -110,26 +116,25 @@ description: "Optimise GPT2 to produce positive movie reviews using a BERT senti
 <div class="inner_cell">
     <div class="input_area">
 <div class=" highlight hl-ipython3"><pre><span></span><span class="n">config</span> <span class="o">=</span> <span class="p">{</span>
-    <span class="s2">&quot;tb_path&quot;</span><span class="p">:</span> <span class="s2">&quot;runs&quot;</span><span class="p">,</span>
     <span class="s2">&quot;lm_name&quot;</span><span class="p">:</span> <span class="s2">&quot;lvwerra/gpt2-imdb&quot;</span><span class="p">,</span>
     <span class="s2">&quot;ref_lm_name&quot;</span><span class="p">:</span> <span class="s2">&quot;lvwerra/gpt2-imdb&quot;</span><span class="p">,</span>
     <span class="s2">&quot;cls_model_name&quot;</span><span class="p">:</span> <span class="s2">&quot;lvwerra/bert-imdb&quot;</span>
+    <span class="s2">&quot;steps&quot;</span><span class="p">:</span> <span class="mi">25600</span><span class="p">,</span>
+    <span class="s2">&quot;batch_size&quot;</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span>
+    <span class="s2">&quot;forward_batch_size&quot;</span><span class="p">:</span> <span class="mi">16</span><span class="p">,</span>
+    <span class="s2">&quot;ppo_epochs&quot;</span><span class="p">:</span> <span class="mi">4</span><span class="p">,</span>   
     <span class="s2">&quot;tk_name&quot;</span><span class="p">:</span> <span class="s2">&quot;gpt2&quot;</span><span class="p">,</span>
     <span class="s2">&quot;txt_in_len&quot;</span><span class="p">:</span> <span class="mi">5</span><span class="p">,</span>
     <span class="s2">&quot;txt_out_len&quot;</span><span class="p">:</span> <span class="mi">15</span><span class="p">,</span>
     <span class="s2">&quot;lr&quot;</span><span class="p">:</span> <span class="mf">1.41e-5</span><span class="p">,</span>
     <span class="s2">&quot;init_kl_coef&quot;</span><span class="p">:</span><span class="mf">0.2</span><span class="p">,</span>
     <span class="s2">&quot;target&quot;</span><span class="p">:</span> <span class="mi">6</span><span class="p">,</span>
-    <span class="s2">&quot;horizon&quot;</span><span class="p">:</span><span class="mi">1000</span><span class="p">,</span>
+    <span class="s2">&quot;horizon&quot;</span><span class="p">:</span><span class="mi">10000</span><span class="p">,</span>
     <span class="s2">&quot;gamma&quot;</span><span class="p">:</span><span class="mi">1</span><span class="p">,</span>
     <span class="s2">&quot;lam&quot;</span><span class="p">:</span><span class="mf">0.95</span><span class="p">,</span>
     <span class="s2">&quot;cliprange&quot;</span><span class="p">:</span> <span class="o">.</span><span class="mi">2</span><span class="p">,</span>
     <span class="s2">&quot;cliprange_value&quot;</span><span class="p">:</span><span class="o">.</span><span class="mi">2</span><span class="p">,</span>
-    <span class="s2">&quot;vf_coef&quot;</span><span class="p">:</span><span class="o">.</span><span class="mi">1</span><span class="p">,</span>
-    <span class="s2">&quot;epochs&quot;</span><span class="p">:</span> <span class="mi">25600</span><span class="p">,</span>
-    <span class="s2">&quot;batch_size&quot;</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span>
-    <span class="s2">&quot;forward_batch_size&quot;</span><span class="p">:</span> <span class="mi">16</span><span class="p">,</span>
-    <span class="s2">&quot;ppo_epochs&quot;</span><span class="p">:</span> <span class="mi">4</span><span class="p">,</span>    
+    <span class="s2">&quot;vf_coef&quot;</span><span class="p">:</span><span class="o">.</span><span class="mi">1</span><span class="p">,</span> 
 <span class="p">}</span>
 </pre></div>
 
@@ -149,7 +154,7 @@ description: "Optimise GPT2 to produce positive movie reviews using a BERT senti
 </div>
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Load-IMDB-dataset">Load IMDB dataset<a class="anchor-link" href="#Load-IMDB-dataset"> </a></h2><p>We load the IMDB dataset into a DataFrame and filter for comments that are at least 500 characters long and take the first 1000 characters of each comment. The first filter we apply to avoid comments that are less than <code>txt_in_len</code> token long and the second to avoid tokenizing way more text than we actually need.</p>
+<h3 id="Initialize-W&amp;B-logger">Initialize W&amp;B logger<a class="anchor-link" href="#Initialize-W&amp;B-logger"> </a></h3><p>We use <code>wandb</code>to log all the metrics during training.</p>
 
 </div>
 </div>
@@ -161,40 +166,7 @@ description: "Optimise GPT2 to produce positive movie reviews using a BERT senti
 
 <div class="inner_cell">
     <div class="input_area">
-<div class=" highlight hl-ipython3"><pre><span></span><span class="c1"># makes sure you download the imdb-dataset in the data folder</span>
-<span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="s1">&#39;../data/imdb-dataset.csv&#39;</span><span class="p">)</span>
-
-<span class="c1"># make sure the comments are long enough</span>
-<span class="n">df</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">df</span><span class="p">[</span><span class="s1">&#39;review&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">str</span><span class="o">.</span><span class="n">len</span><span class="p">()</span> <span class="o">&gt;</span> <span class="mi">500</span><span class="p">]</span>
-
-<span class="c1"># make sure comments are not too long</span>
-<span class="n">df</span><span class="p">[</span><span class="s1">&#39;review&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s1">&#39;review&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="p">[:</span><span class="mi">1000</span><span class="p">])</span>
-
-<span class="n">df</span><span class="o">.</span><span class="n">head</span><span class="p">()</span>
-</pre></div>
-
-    </div>
-</div>
-</div>
-
-</div>
-    {% endraw %}
-
-<div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
-<div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Initialize-W&amp;B-logger">Initialize W&amp;B logger<a class="anchor-link" href="#Initialize-W&amp;B-logger"> </a></h2><p>We use <code>wandb</code>to log all the metrics during training.</p>
-
-</div>
-</div>
-</div>
-    {% raw %}
-    
-<div class="cell border-box-sizing code_cell rendered">
-<div class="input">
-
-<div class="inner_cell">
-    <div class="input_area">
-<div class=" highlight hl-ipython3"><pre><span></span><span class="n">wandb</span><span class="o">.</span><span class="n">init</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s1">&#39;run-42&#39;</span><span class="p">,</span> <span class="n">project</span><span class="o">=</span><span class="s1">&#39;gpt-2-sentiment&#39;</span><span class="p">,</span> <span class="n">config</span><span class="o">=</span><span class="n">config</span><span class="p">)</span>
+<div class=" highlight hl-ipython3"><pre><span></span><span class="n">wandb</span><span class="o">.</span><span class="n">init</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s1">&#39;run-42&#39;</span><span class="p">,</span> <span class="n">project</span><span class="o">=</span><span class="s1">&#39;gpt2-sentiment&#39;</span><span class="p">,</span> <span class="n">config</span><span class="o">=</span><span class="n">config</span><span class="p">)</span>
 </pre></div>
 
     </div>
@@ -244,7 +216,46 @@ wandb:  $ pip install wandb --upgrade
 
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Load-BERT-classifier">Load BERT classifier<a class="anchor-link" href="#Load-BERT-classifier"> </a></h2><p>We load a BERT classifier fine-tuned on the IMDB dataset.</p>
+<h2 id="Load-data-and-models">Load data and models<a class="anchor-link" href="#Load-data-and-models"> </a></h2>
+</div>
+</div>
+</div>
+<div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
+<div class="text_cell_render border-box-sizing rendered_html">
+<h3 id="Load-IMDB-dataset">Load IMDB dataset<a class="anchor-link" href="#Load-IMDB-dataset"> </a></h3><p>The IMDB dataset contains 50k movie review annotated with "positive"/"negative" feedback indicating the sentiment. It can be downloaded from Kaggle (<a href="https://www.kaggle.com/lakshmi25npathi/imdb-dataset-of-50k-movie-reviews">link</a>).  We load the IMDB dataset into a DataFrame and filter for comments that are at least 500 characters long and take the first 1000 characters of each comment. The first filter we apply to avoid comments that are less than <code>txt_in_len</code> token long and the second to avoid tokenizing way more text than we actually need.</p>
+
+</div>
+</div>
+</div>
+    {% raw %}
+    
+<div class="cell border-box-sizing code_cell rendered">
+<div class="input">
+
+<div class="inner_cell">
+    <div class="input_area">
+<div class=" highlight hl-ipython3"><pre><span></span><span class="c1"># makes sure you download the imdb-dataset in the data folder</span>
+<span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="s1">&#39;../data/imdb-dataset.csv&#39;</span><span class="p">)</span>
+
+<span class="c1"># make sure the comments are long enough</span>
+<span class="n">df</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">df</span><span class="p">[</span><span class="s1">&#39;review&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">str</span><span class="o">.</span><span class="n">len</span><span class="p">()</span> <span class="o">&gt;</span> <span class="mi">500</span><span class="p">]</span>
+
+<span class="c1"># make sure comments are not too long</span>
+<span class="n">df</span><span class="p">[</span><span class="s1">&#39;review&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s1">&#39;review&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="p">[:</span><span class="mi">1000</span><span class="p">])</span>
+
+<span class="n">df</span><span class="o">.</span><span class="n">head</span><span class="p">()</span>
+</pre></div>
+
+    </div>
+</div>
+</div>
+
+</div>
+    {% endraw %}
+
+<div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
+<div class="text_cell_render border-box-sizing rendered_html">
+<h3 id="Load-BERT-classifier">Load BERT classifier<a class="anchor-link" href="#Load-BERT-classifier"> </a></h3><p>We load a BERT classifier fine-tuned on the IMDB dataset.</p>
 
 </div>
 </div>
@@ -370,7 +381,7 @@ wandb:  $ pip install wandb --upgrade
 
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Load-pre-trained-GPT2-language-models">Load pre-trained GPT2 language models<a class="anchor-link" href="#Load-pre-trained-GPT2-language-models"> </a></h2>
+<h3 id="Load-pre-trained-GPT2-language-models">Load pre-trained GPT2 language models<a class="anchor-link" href="#Load-pre-trained-GPT2-language-models"> </a></h3>
 </div>
 </div>
 </div>
@@ -402,7 +413,7 @@ wandb:  $ pip install wandb --upgrade
 
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Move-models-to-GPU">Move models to GPU<a class="anchor-link" href="#Move-models-to-GPU"> </a></h2>
+<h3 id="Move-models-to-GPU">Move models to GPU<a class="anchor-link" href="#Move-models-to-GPU"> </a></h3>
 </div>
 </div>
 </div>
@@ -451,13 +462,13 @@ wandb:  $ pip install wandb --upgrade
 
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Tokenize-IMDB-reviews">Tokenize IMDB reviews<a class="anchor-link" href="#Tokenize-IMDB-reviews"> </a></h2>
+<h3 id="Tokenize-IMDB-reviews">Tokenize IMDB reviews<a class="anchor-link" href="#Tokenize-IMDB-reviews"> </a></h3>
 </div>
 </div>
 </div>
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<p>We tokenize all IMDB in advance to avoid tokenizing twice.</p>
+<p>We tokenize all IMDB in advance to avoid tokenizing twice. In the first step we encode the queries and slice the first <code>txt_in_len</code> tokens. In a second step we decode these tokens back to text for later display.</p>
 
 </div>
 </div>
@@ -526,29 +537,6 @@ wandb:  $ pip install wandb --upgrade
 
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Initialize-PPO-trainer">Initialize PPO trainer<a class="anchor-link" href="#Initialize-PPO-trainer"> </a></h2>
-</div>
-</div>
-</div>
-    {% raw %}
-    
-<div class="cell border-box-sizing code_cell rendered">
-<div class="input">
-
-<div class="inner_cell">
-    <div class="input_area">
-<div class=" highlight hl-ipython3"><pre><span></span><span class="n">ppo_trainer</span> <span class="o">=</span> <span class="n">PPOTrainer</span><span class="p">(</span><span class="n">gpt2_model</span><span class="p">,</span> <span class="n">gpt2_model_ref</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="o">**</span><span class="n">config</span><span class="p">)</span>
-</pre></div>
-
-    </div>
-</div>
-</div>
-
-</div>
-    {% endraw %}
-
-<div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
-<div class="text_cell_render border-box-sizing rendered_html">
 <h2 id="Optimize-model">Optimize model<a class="anchor-link" href="#Optimize-model"> </a></h2>
 </div>
 </div>
@@ -568,7 +556,7 @@ wandb:  $ pip install wandb --upgrade
 <p><strong>Forward batching</strong></p>
 <p>Since the models can be fairly big and we want to rollout large PPO batches this can lead to out-of-memory errors when doing the forward passes for text generation and sentiment analysis. We introduce the parameter <code>forward_batch_size</code> to split the forward passes into smaller batches. Although this hurts performance a little this is neglectible compared to the computations of the backward passes when optimizing the model. The same parameter is used in the <a href="/lm_ppo/02-ppo#PPOTrainer"><code>PPOTrainer</code></a> when doing forward passes. The <code>batch_size</code> should multiple of <code>forward_batch_size</code>.</p>
 <p><strong>Training time</strong></p>
-<p>This step takes <strong>~2h</strong> on a P6000 GPU with the specified settings.</p>
+<p>This step takes <strong>~2h</strong> on a P6000 GPU with the above specified settings.</p>
 
 </div>
 </div>
@@ -580,9 +568,10 @@ wandb:  $ pip install wandb --upgrade
 
 <div class="inner_cell">
     <div class="input_area">
-<div class=" highlight hl-ipython3"><pre><span></span><span class="n">fbs</span> <span class="o">=</span> <span class="n">config</span><span class="p">[</span><span class="s1">&#39;forward_batch_size&#39;</span><span class="p">]</span>
+<div class=" highlight hl-ipython3"><pre><span></span><span class="n">ppo_trainer</span> <span class="o">=</span> <span class="n">PPOTrainer</span><span class="p">(</span><span class="n">gpt2_model</span><span class="p">,</span> <span class="n">gpt2_model_ref</span><span class="p">,</span> <span class="o">**</span><span class="n">config</span><span class="p">)</span>
+<span class="n">fbs</span> <span class="o">=</span> <span class="n">config</span><span class="p">[</span><span class="s1">&#39;forward_batch_size&#39;</span><span class="p">]</span>
 
-<span class="k">for</span> <span class="n">epoch</span> <span class="ow">in</span> <span class="n">tqdm</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">ceil</span><span class="p">(</span><span class="n">config</span><span class="p">[</span><span class="s2">&quot;epochs&quot;</span><span class="p">]</span><span class="o">/</span><span class="n">config</span><span class="p">[</span><span class="s1">&#39;batch_size&#39;</span><span class="p">])))):</span>
+<span class="k">for</span> <span class="n">epoch</span> <span class="ow">in</span> <span class="n">tqdm</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">ceil</span><span class="p">(</span><span class="n">config</span><span class="p">[</span><span class="s2">&quot;steps&quot;</span><span class="p">]</span><span class="o">/</span><span class="n">config</span><span class="p">[</span><span class="s1">&#39;batch_size&#39;</span><span class="p">])))):</span>
     <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">empty_cache</span><span class="p">()</span>
     <span class="n">logs</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">()</span>
     <span class="n">game_data</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">()</span>
@@ -651,8 +640,11 @@ wandb:  $ pip install wandb --upgrade
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
 <h3 id="Training-progress">Training progress<a class="anchor-link" href="#Training-progress"> </a></h3><p>If you are tracking the training progress with Weights&amp;Biases you should see a plot similar to the following:</p>
-<p><img src="/lm_ppo/images/gpt2_tuning_progress.png" alt="Overview"></p>
-<p>Clearly, the model quickly learns to produce positive reviews.</p>
+<div style="text-align: center">
+{% include image.html max-width="800" file="/lm_ppo/images/gpt2_tuning_progress.png" %}
+<p style="text-align: center;"> <b>Figure:</b> Reward mean and distribution evolution during training. </p>
+</div><p>One can observe how the model starts to generate more positive outputs after a few optimisation steps.</p>
+<p><em>Note</em>: Investigating the KL-divergence will probably show that at this point the model has not converged to the target KL-divergence, yet. To get there would require longer training.</p>
 
 </div>
 </div>
@@ -687,10 +679,7 @@ wandb:  $ pip install wandb --upgrade
                                      <span class="n">pad_token_id</span><span class="o">=</span><span class="n">gpt2_tokenizer</span><span class="o">.</span><span class="n">eos_token_id</span><span class="p">)</span>
 <span class="n">game_data</span><span class="p">[</span><span class="s1">&#39;response (after)&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="n">gpt2_tokenizer</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="n">response_tensors</span><span class="p">[</span><span class="n">i</span><span class="p">,</span> <span class="p">:])</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">bs</span><span class="p">)]</span>
 
-
-
-
-<span class="c1">#### sentiment analysis of </span>
+<span class="c1">#### sentiment analysis of query/response pairs before/after</span>
 <span class="n">texts</span> <span class="o">=</span> <span class="p">[</span><span class="n">q</span> <span class="o">+</span> <span class="n">r</span> <span class="k">for</span> <span class="n">q</span><span class="p">,</span><span class="n">r</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">game_data</span><span class="p">[</span><span class="s1">&#39;query&#39;</span><span class="p">],</span> <span class="n">game_data</span><span class="p">[</span><span class="s1">&#39;response (before)&#39;</span><span class="p">])]</span>
 <span class="n">sentiment_inputs</span><span class="p">,</span> <span class="n">attention_masks</span> <span class="o">=</span> <span class="n">build_bert_batch_from_txt</span><span class="p">(</span><span class="n">texts</span><span class="p">,</span> <span class="n">sentiment_tokenizer</span><span class="p">,</span> <span class="n">device</span><span class="p">)</span>    
 <span class="n">rewards</span> <span class="o">=</span> <span class="n">sentiment_model</span><span class="o">.</span><span class="n">forward</span><span class="p">(</span><span class="n">sentiment_inputs</span><span class="p">,</span> <span class="n">attention_masks</span><span class="p">)[</span><span class="mi">0</span><span class="p">][:,</span> <span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">detach</span><span class="p">()</span>
@@ -701,6 +690,7 @@ wandb:  $ pip install wandb --upgrade
 <span class="n">rewards</span> <span class="o">=</span> <span class="n">sentiment_model</span><span class="o">.</span><span class="n">forward</span><span class="p">(</span><span class="n">sentiment_inputs</span><span class="p">,</span> <span class="n">attention_masks</span><span class="p">)[</span><span class="mi">0</span><span class="p">][:,</span> <span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">detach</span><span class="p">()</span>
 <span class="n">game_data</span><span class="p">[</span><span class="s1">&#39;rewards (after)&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">rewards</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
 
+<span class="c1"># store results in a dataframe</span>
 <span class="n">df_results</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">game_data</span><span class="p">)</span>
 <span class="n">df_results</span>
 </pre></div>
@@ -714,7 +704,8 @@ wandb:  $ pip install wandb --upgrade
 
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Save-model">Save model<a class="anchor-link" href="#Save-model"> </a></h2>
+<h2 id="Save-model">Save model<a class="anchor-link" href="#Save-model"> </a></h2><p>Finally, we save the model to disk for later usage.</p>
+
 </div>
 </div>
 </div>

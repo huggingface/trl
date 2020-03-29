@@ -10,7 +10,7 @@ entries:
       title: Overview
       url: /
     - output: web,pdf
-      title: Title
+      title: Utility functions
       url: /00-core
     - output: web,pdf
       title: GPT2 with value head
@@ -22,7 +22,7 @@ entries:
       title: BERT IMDB training
       url: /03-bert-imdb-training
     - output: web,pdf
-      title: Tune GPT2 to produce positive movie reviews
+      title: Tune GPT2 to generate positive reviews
       url: /04-gpt2-sentiment-ppo-training
     output: web
     title: lm_ppo

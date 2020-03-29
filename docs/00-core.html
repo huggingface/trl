@@ -1,12 +1,12 @@
 ---
 
-title: Title
+title: Utility functions
 
 keywords: fastai
 sidebar: home_sidebar
 
-summary: "summary"
-description: "summary"
+summary: "A set of utility functions used throughout the library."
+description: "A set of utility functions used throughout the library."
 ---
 <!--
 
@@ -92,7 +92,7 @@ description: "summary"
 
 
 <div class="output_markdown rendered_html output_subarea ">
-<h4 id="flatten_dict" class="doc_header"><code>flatten_dict</code><a href="https://github.com/lvwerra/lm_ppo/tree/master/lm_ppo/core.py#L15" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>flatten_dict</code>(<strong><code>nested</code></strong>, <strong><code>sep</code></strong>=<em><code>'/'</code></em>)</p>
+<h4 id="flatten_dict" class="doc_header"><code>flatten_dict</code><a href="https://github.com/lvwerra/lm_ppo/tree/master/lm_ppo/core.py#L14" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>flatten_dict</code>(<strong><code>nested</code></strong>, <strong><code>sep</code></strong>=<em><code>'/'</code></em>)</p>
 </blockquote>
 <p>Flatten dictionary and concatenate nested keys with separator.</p>
 
@@ -117,7 +117,7 @@ description: "summary"
 
 
 <div class="output_markdown rendered_html output_subarea ">
-<h4 id="stack_dicts" class="doc_header"><code>stack_dicts</code><a href="https://github.com/lvwerra/lm_ppo/tree/master/lm_ppo/core.py#L29" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>stack_dicts</code>(<strong><code>stats_dicts</code></strong>)</p>
+<h4 id="stack_dicts" class="doc_header"><code>stack_dicts</code><a href="https://github.com/lvwerra/lm_ppo/tree/master/lm_ppo/core.py#L28" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>stack_dicts</code>(<strong><code>stats_dicts</code></strong>)</p>
 </blockquote>
 <p>Stack the values of a dict.</p>
 
@@ -142,7 +142,7 @@ description: "summary"
 
 
 <div class="output_markdown rendered_html output_subarea ">
-<h4 id="add_suffix" class="doc_header"><code>add_suffix</code><a href="https://github.com/lvwerra/lm_ppo/tree/master/lm_ppo/core.py#L37" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>add_suffix</code>(<strong><code>input_dict</code></strong>, <strong><code>suffix</code></strong>)</p>
+<h4 id="add_suffix" class="doc_header"><code>add_suffix</code><a href="https://github.com/lvwerra/lm_ppo/tree/master/lm_ppo/core.py#L36" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>add_suffix</code>(<strong><code>input_dict</code></strong>, <strong><code>suffix</code></strong>)</p>
 </blockquote>
 <p>Add suffix to dict keys.</p>
 
@@ -223,7 +223,6 @@ description: "summary"
         <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">):</span>
             <span class="n">new_dict</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">=</span> <span class="n">v</span><span class="o">.</span><span class="n">detach</span><span class="p">()</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
         <span class="k">else</span><span class="p">:</span>
-            <span class="nb">print</span><span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">)</span>
             <span class="n">new_dict</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">=</span> <span class="n">v</span>
         <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">isscalar</span><span class="p">(</span><span class="n">new_dict</span><span class="p">[</span><span class="n">k</span><span class="p">]):</span>
             <span class="n">new_dict</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">new_dict</span><span class="p">[</span><span class="n">k</span><span class="p">])</span>
@@ -248,7 +247,7 @@ description: "summary"
 
 
 <div class="output_markdown rendered_html output_subarea ">
-<h4 id="pad_to_size" class="doc_header"><code>pad_to_size</code><a href="https://github.com/lvwerra/lm_ppo/tree/master/lm_ppo/core.py#L43" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>pad_to_size</code>(<strong><code>tensor</code></strong>, <strong><code>size</code></strong>, <strong><code>dim</code></strong>=<em><code>1</code></em>, <strong><code>padding</code></strong>=<em><code>50256</code></em>)</p>
+<h4 id="pad_to_size" class="doc_header"><code>pad_to_size</code><a href="https://github.com/lvwerra/lm_ppo/tree/master/lm_ppo/core.py#L42" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>pad_to_size</code>(<strong><code>tensor</code></strong>, <strong><code>size</code></strong>, <strong><code>dim</code></strong>=<em><code>1</code></em>, <strong><code>padding</code></strong>=<em><code>50256</code></em>)</p>
 </blockquote>
 <p>Pad tensor to size.</p>
 
@@ -273,7 +272,7 @@ description: "summary"
 
 
 <div class="output_markdown rendered_html output_subarea ">
-<h4 id="logprobs_from_logits" class="doc_header"><code>logprobs_from_logits</code><a href="https://github.com/lvwerra/lm_ppo/tree/master/lm_ppo/core.py#L51" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>logprobs_from_logits</code>(<strong><code>logits</code></strong>, <strong><code>labels</code></strong>)</p>
+<h4 id="logprobs_from_logits" class="doc_header"><code>logprobs_from_logits</code><a href="https://github.com/lvwerra/lm_ppo/tree/master/lm_ppo/core.py#L50" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>logprobs_from_logits</code>(<strong><code>logits</code></strong>, <strong><code>labels</code></strong>)</p>
 </blockquote>
 <p>See: <a href="https://github.com/pytorch/pytorch/issues/563#issuecomment-330103591">https://github.com/pytorch/pytorch/issues/563#issuecomment-330103591</a></p>
 
@@ -298,7 +297,7 @@ description: "summary"
 
 
 <div class="output_markdown rendered_html output_subarea ">
-<h4 id="whiten" class="doc_header"><code>whiten</code><a href="https://github.com/lvwerra/lm_ppo/tree/master/lm_ppo/core.py#L60" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>whiten</code>(<strong><code>values</code></strong>, <strong><code>shift_mean</code></strong>=<em><code>True</code></em>)</p>
+<h4 id="whiten" class="doc_header"><code>whiten</code><a href="https://github.com/lvwerra/lm_ppo/tree/master/lm_ppo/core.py#L59" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>whiten</code>(<strong><code>values</code></strong>, <strong><code>shift_mean</code></strong>=<em><code>True</code></em>)</p>
 </blockquote>
 <p>Whiten values.</p>
 
@@ -323,7 +322,7 @@ description: "summary"
 
 
 <div class="output_markdown rendered_html output_subarea ">
-<h4 id="clip_by_value" class="doc_header"><code>clip_by_value</code><a href="https://github.com/lvwerra/lm_ppo/tree/master/lm_ppo/core.py#L68" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>clip_by_value</code>(<strong><code>x</code></strong>, <strong><code>tensor_min</code></strong>, <strong><code>tensor_max</code></strong>)</p>
+<h4 id="clip_by_value" class="doc_header"><code>clip_by_value</code><a href="https://github.com/lvwerra/lm_ppo/tree/master/lm_ppo/core.py#L67" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>clip_by_value</code>(<strong><code>x</code></strong>, <strong><code>tensor_min</code></strong>, <strong><code>tensor_max</code></strong>)</p>
 </blockquote>
 <p>Tensor extenstion to torch.clamp
 <a href="https://github.com/pytorch/pytorch/issues/2793#issuecomment-428784713">https://github.com/pytorch/pytorch/issues/2793#issuecomment-428784713</a></p>
@@ -349,7 +348,7 @@ description: "summary"
 
 
 <div class="output_markdown rendered_html output_subarea ">
-<h4 id="entropy_from_logits" class="doc_header"><code>entropy_from_logits</code><a href="https://github.com/lvwerra/lm_ppo/tree/master/lm_ppo/core.py#L76" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>entropy_from_logits</code>(<strong><code>logits</code></strong>)</p>
+<h4 id="entropy_from_logits" class="doc_header"><code>entropy_from_logits</code><a href="https://github.com/lvwerra/lm_ppo/tree/master/lm_ppo/core.py#L75" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>entropy_from_logits</code>(<strong><code>logits</code></strong>)</p>
 </blockquote>
 <p>Calculate entropy from logits.</p>
 
@@ -374,7 +373,7 @@ description: "summary"
 
 
 <div class="output_markdown rendered_html output_subarea ">
-<h4 id="average_torch_dicts" class="doc_header"><code>average_torch_dicts</code><a href="https://github.com/lvwerra/lm_ppo/tree/master/lm_ppo/core.py#L83" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>average_torch_dicts</code>(<strong><code>list_of_dicts</code></strong>)</p>
+<h4 id="average_torch_dicts" class="doc_header"><code>average_torch_dicts</code><a href="https://github.com/lvwerra/lm_ppo/tree/master/lm_ppo/core.py#L82" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>average_torch_dicts</code>(<strong><code>list_of_dicts</code></strong>)</p>
 </blockquote>
 <p>Average values of a list of dicts wiht torch tensors.</p>
 
@@ -399,7 +398,7 @@ description: "summary"
 
 
 <div class="output_markdown rendered_html output_subarea ">
-<h4 id="stats_to_np" class="doc_header"><code>stats_to_np</code><a href="https://github.com/lvwerra/lm_ppo/tree/master/lm_ppo/core.py#L90" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>stats_to_np</code>(<strong><code>stats_dict</code></strong>)</p>
+<h4 id="stats_to_np" class="doc_header"><code>stats_to_np</code><a href="https://github.com/lvwerra/lm_ppo/tree/master/lm_ppo/core.py#L89" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>stats_to_np</code>(<strong><code>stats_dict</code></strong>)</p>
 </blockquote>
 <p>Cast all torch.tensors in dict to numpy arrays.</p>
 
@@ -469,7 +468,7 @@ description: "summary"
 
 
 <div class="output_markdown rendered_html output_subarea ">
-<h4 id="build_bert_batch_from_txt" class="doc_header"><code>build_bert_batch_from_txt</code><a href="https://github.com/lvwerra/lm_ppo/tree/master/lm_ppo/core.py#L106" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>build_bert_batch_from_txt</code>(<strong><code>text_list</code></strong>, <strong><code>tokenizer</code></strong>, <strong><code>device</code></strong>)</p>
+<h4 id="build_bert_batch_from_txt" class="doc_header"><code>build_bert_batch_from_txt</code><a href="https://github.com/lvwerra/lm_ppo/tree/master/lm_ppo/core.py#L104" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>build_bert_batch_from_txt</code>(<strong><code>text_list</code></strong>, <strong><code>tokenizer</code></strong>, <strong><code>device</code></strong>)</p>
 </blockquote>
 <p>Create token id and attention mask tensors from text list for BERT classification.</p>
 

@@ -1,9 +1,13 @@
-# lm_ppo: Language modeling with PPO
-> A Pytorch implementation of Proximal Policy Optimization for transfomer language models.
+# Welcome to lm_ppo
+> Train transformer language models with Reinforcement Learning.
 
 
 ## What is it?
-The library `lm_ppo` one can fine-tune transformer language models with Proximal Policy Optimization (PPO). The library is built with the `transformer` library by  🤗Huggingface. Therefore, one can load pre-trained language models directly via the transformer interface.
+With `lm_ppo` you can train transformer language models with Proximal Policy Optimization (PPO). The library is built with the `transformer` library by  🤗Huggingface. Therefore, pre-trained language models can be directly loaded via the transformer interface. At this point only GTP2 is implemented.
+
+**Highlights:**
+- GPT2 model with a value head: A transformer model with an additional scalar output for each token which can be used as a value function in Reinforcement Learning.
+- PPOTrainer: A PPO trainer for language models that just needs (query, response, reward) triplets to optimise the language model.
 
 ## How it works
 Fine-tuning a language model via PPO consists of roughly three steps:
@@ -14,7 +18,11 @@ Fine-tuning a language model via PPO consists of roughly three steps:
 
 This process is illustrated in the sketch below:
 
-![Overview](nbs/images/lm_ppo_overview.png)
+
+<div style="text-align: center">
+<img src="nbs/images/lm_ppo_overview.png" width="800">
+<p style="text-align: center;"> <b>Figure:</b> Sketch of the workflow. </p>
+</div>
 
 ## Install
 
@@ -28,7 +36,7 @@ If you want to run the example a few additional libraries are required. Clone th
 
 ## How to use
 
-### Basic example
+### Example
 This is a basic example on how to use the library. Based on a query the language model creates a response which is then evaluated. The evaluation could be a human in the loop or another model's output.
 
 ```
@@ -52,27 +60,26 @@ query_txt = "This morning I went to the "
 query_tensor = gpt2_tokenizer.encode(query_txt, return_tensors="pt")
 
 # get model response
-response_tensor  = respond_to_batch(gpt2_model, query_tensor, pad_token_id=gpt2_tokenizer.eos_token_id)
+response_tensor  = respond_to_batch(gpt2_model, query_tensor,
+                                    pad_token_id=gpt2_tokenizer.eos_token_id)
 response_txt = gpt2_tokenizer.decode(response_tensor[0,:])
 
 # define a reward for response
-reward = torch.tensor([1.0]) # this could be any reward such as a human or another model
+# (this could be any reward such as human feedback or output from another model)
+reward = torch.tensor([1.0]) 
 
 # train model with ppo
 train_stats = ppo_trainer.step(query_tensor, response_tensor, reward)
 ```
 
-
-
-
-    2
-
-
-
 ### Advanced example: IMDB sentiment
-For a detailed example check out the notebook `nbs/04-gpt2-sentiment-training.ipynb`, where GPT2 is fine-tuned to generate positive movie reviews. An few examples from the language models before and after optimisation are given below:
+For a detailed example check out the notebook *Tune GPT2 to generate positive reviews*, where GPT2 is fine-tuned to generate positive movie reviews. An few examples from the language models before and after optimisation are given below:
 
-![Overview](nbs/images/table_imdb_preview.png)
+<div style="text-align: center">
+<img src="nbs/images/table_imdb_preview.png" width="800">
+<p style="text-align: center;"> <b>Figure:</b> A few review continuations before and after optimisation. </p>
+</div>
+
 
 ## Reference
 

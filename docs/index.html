@@ -1,12 +1,12 @@
 ---
 
-title: lm_ppo: Language modeling with PPO
+title: Welcome to lm_ppo
 
 keywords: fastai
 sidebar: home_sidebar
 
-summary: "A Pytorch implementation of Proximal Policy Optimization for transfomer language models."
-description: "A Pytorch implementation of Proximal Policy Optimization for transfomer language models."
+summary: "Train transformer language models with Reinforcement Learning."
+description: "Train transformer language models with Reinforcement Learning."
 ---
 <!--
 
@@ -29,7 +29,12 @@ description: "A Pytorch implementation of Proximal Policy Optimization for trans
 
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="What-is-it?">What is it?<a class="anchor-link" href="#What-is-it?"> </a></h2><p>The library <code>lm_ppo</code> one can fine-tune transformer language models with Proximal Policy Optimization (PPO). The library is built with the <code>transformer</code> library by  🤗Huggingface. Therefore, one can load pre-trained language models directly via the transformer interface.</p>
+<h2 id="What-is-it?">What is it?<a class="anchor-link" href="#What-is-it?"> </a></h2><p>With <code>lm_ppo</code> you can train transformer language models with Proximal Policy Optimization (PPO). The library is built with the <code>transformer</code> library by  🤗Huggingface. Therefore, pre-trained language models can be directly loaded via the transformer interface. At this point only GTP2 is implemented.</p>
+<p><strong>Highlights:</strong></p>
+<ul>
+<li>GPT2 model with a value head: A transformer model with an additional scalar output for each token which can be used as a value function in Reinforcement Learning.</li>
+<li>PPOTrainer: A PPO trainer for language models that just needs (query, response, reward) triplets to optimise the language model.</li>
+</ul>
 
 </div>
 </div>
@@ -43,8 +48,10 @@ description: "A Pytorch implementation of Proximal Policy Optimization for trans
 <li><strong>Optimization</strong>: This is the most complex part. In the optimisation step the query/response pairs are used to calculate the log-probabilities of the tokens in the sequences. This is done with the model that is trained and and a reference model, which is usually the pre-trained model before fine-tuning. The KL-divergence between the two outputs is used as an additional reward signal to make sure the generated responses don't deviate to far from the reference language model. The active language model is then trained with PPO.</li>
 </ol>
 <p>This process is illustrated in the sketch below:</p>
-<p><img src="/lm_ppo/images/lm_ppo_overview.png" alt="Overview"></p>
-
+<div style="text-align: center">
+{% include image.html max-width="800" file="/lm_ppo/images/lm_ppo_overview.png" %}
+<p style="text-align: center;"> <b>Figure:</b> Sketch of the workflow. </p>
+</div>
 </div>
 </div>
 </div>
@@ -72,7 +79,7 @@ description: "A Pytorch implementation of Proximal Policy Optimization for trans
 </div>
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h3 id="Basic-example">Basic example<a class="anchor-link" href="#Basic-example"> </a></h3><p>This is a basic example on how to use the library. Based on a query the language model creates a response which is then evaluated. The evaluation could be a human in the loop or another model's output.</p>
+<h3 id="Example">Example<a class="anchor-link" href="#Example"> </a></h3><p>This is a basic example on how to use the library. Based on a query the language model creates a response which is then evaluated. The evaluation could be a human in the loop or another model's output.</p>
 
 </div>
 </div>
@@ -104,11 +111,13 @@ description: "A Pytorch implementation of Proximal Policy Optimization for trans
 <span class="n">query_tensor</span> <span class="o">=</span> <span class="n">gpt2_tokenizer</span><span class="o">.</span><span class="n">encode</span><span class="p">(</span><span class="n">query_txt</span><span class="p">,</span> <span class="n">return_tensors</span><span class="o">=</span><span class="s2">&quot;pt&quot;</span><span class="p">)</span>
 
 <span class="c1"># get model response</span>
-<span class="n">response_tensor</span>  <span class="o">=</span> <span class="n">respond_to_batch</span><span class="p">(</span><span class="n">gpt2_model</span><span class="p">,</span> <span class="n">query_tensor</span><span class="p">,</span> <span class="n">pad_token_id</span><span class="o">=</span><span class="n">gpt2_tokenizer</span><span class="o">.</span><span class="n">eos_token_id</span><span class="p">)</span>
+<span class="n">response_tensor</span>  <span class="o">=</span> <span class="n">respond_to_batch</span><span class="p">(</span><span class="n">gpt2_model</span><span class="p">,</span> <span class="n">query_tensor</span><span class="p">,</span>
+                                    <span class="n">pad_token_id</span><span class="o">=</span><span class="n">gpt2_tokenizer</span><span class="o">.</span><span class="n">eos_token_id</span><span class="p">)</span>
 <span class="n">response_txt</span> <span class="o">=</span> <span class="n">gpt2_tokenizer</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="n">response_tensor</span><span class="p">[</span><span class="mi">0</span><span class="p">,:])</span>
 
 <span class="c1"># define a reward for response</span>
-<span class="n">reward</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([</span><span class="mf">1.0</span><span class="p">])</span> <span class="c1"># this could be any reward such as a human or another model</span>
+<span class="c1"># (this could be any reward such as human feedback or output from another model)</span>
+<span class="n">reward</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([</span><span class="mf">1.0</span><span class="p">])</span> 
 
 <span class="c1"># train model with ppo</span>
 <span class="n">train_stats</span> <span class="o">=</span> <span class="n">ppo_trainer</span><span class="o">.</span><span class="n">step</span><span class="p">(</span><span class="n">query_tensor</span><span class="p">,</span> <span class="n">response_tensor</span><span class="p">,</span> <span class="n">reward</span><span class="p">)</span>
@@ -118,28 +127,16 @@ description: "A Pytorch implementation of Proximal Policy Optimization for trans
 </div>
 </div>
 
-<div class="output_wrapper">
-<div class="output">
-
-<div class="output_area">
-
-<div class="output_subarea output_stream output_stdout output_text">
-<pre>objective/kl_coef 0.2
-</pre>
-</div>
-</div>
-
-</div>
-</div>
-
 </div>
     {% endraw %}
 
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h3 id="Advanced-example:-IMDB-sentiment">Advanced example: IMDB sentiment<a class="anchor-link" href="#Advanced-example:-IMDB-sentiment"> </a></h3><p>For a detailed example check out the notebook <code>nbs/04-gpt2-sentiment-training.ipynb</code>, where GPT2 is fine-tuned to generate positive movie reviews. An few examples from the language models before and after optimisation are given below:</p>
-<p><img src="/lm_ppo/images/table_imdb_preview.png" alt="Overview"></p>
-
+<h3 id="Advanced-example:-IMDB-sentiment">Advanced example: IMDB sentiment<a class="anchor-link" href="#Advanced-example:-IMDB-sentiment"> </a></h3><p>For a detailed example check out the notebook <em>Tune GPT2 to generate positive reviews</em>, where GPT2 is fine-tuned to generate positive movie reviews. An few examples from the language models before and after optimisation are given below:</p>
+<div style="text-align: center">
+{% include image.html max-width="800" file="/lm_ppo/images/table_imdb_preview.png" %}
+<p style="text-align: center;"> <b>Figure:</b> A few review continuations before and after optimisation. </p>
+</div>
 </div>
 </div>
 </div>
