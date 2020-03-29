@@ -117,7 +117,7 @@ description: "A GPT2 model with a value head built on the transformer library by
 
 
 <div class="output_markdown rendered_html output_subarea ">
-<h2 id="ValueHead" class="doc_header"><code>class</code> <code>ValueHead</code><a href="https://github.com/lvwerra/lm_ppo/tree/master/lm_ppo/gpt2.py#L14" class="source_link" style="float:right">[source]</a></h2><blockquote><p><code>ValueHead</code>(<strong><code>config</code></strong>) :: <code>Module</code></p>
+<h2 id="ValueHead" class="doc_header"><code>class</code> <code>ValueHead</code><a href="https://github.com/lvwerra/lm_ppo/tree/master/lm_ppo/gpt2.py#L16" class="source_link" style="float:right">[source]</a></h2><blockquote><p><code>ValueHead</code>(<strong><code>config</code></strong>) :: <code>Module</code></p>
 </blockquote>
 <p>The ValueHead class implements a head for GPT2 that returns a scalar for each output token.</p>
 
@@ -207,7 +207,7 @@ description: "A GPT2 model with a value head built on the transformer library by
 
 
 <div class="output_markdown rendered_html output_subarea ">
-<h2 id="GPT2HeadWithValueModel" class="doc_header"><code>class</code> <code>GPT2HeadWithValueModel</code><a href="https://github.com/lvwerra/lm_ppo/tree/master/lm_ppo/gpt2.py#L59" class="source_link" style="float:right">[source]</a></h2><blockquote><p><code>GPT2HeadWithValueModel</code>(<strong><code>config</code></strong>) :: <code>GPT2PreTrainedModel</code></p>
+<h2 id="GPT2HeadWithValueModel" class="doc_header"><code>class</code> <code>GPT2HeadWithValueModel</code><a href="https://github.com/lvwerra/lm_ppo/tree/master/lm_ppo/gpt2.py#L61" class="source_link" style="float:right">[source]</a></h2><blockquote><p><code>GPT2HeadWithValueModel</code>(<strong><code>config</code></strong>) :: <code>GPT2PreTrainedModel</code></p>
 </blockquote>
 <p>The GPT2HeadWithValueModel class implements a GPT2 language model with a secondary, scalar head.</p>
 
@@ -463,169 +463,6 @@ description: "A GPT2 model with a value head built on the transformer library by
 
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Respond-to-query">Respond to query<a class="anchor-link" href="#Respond-to-query"> </a></h2>
-</div>
-</div>
-</div>
-    {% raw %}
-    
-<div class="cell border-box-sizing code_cell rendered">
-<div class="input">
-
-<div class="inner_cell">
-    <div class="input_area">
-<div class=" highlight hl-ipython3"><pre><span></span><span class="k">def</span> <span class="nf">respond</span><span class="p">(</span><span class="n">model</span><span class="p">,</span>
-            <span class="n">query</span><span class="p">,</span>
-            <span class="n">text_length</span><span class="o">=</span><span class="mi">50</span><span class="p">,</span>
-            <span class="n">temperature</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
-            <span class="n">k</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
-            <span class="n">p</span><span class="o">=</span><span class="mf">1.</span><span class="p">,</span>
-            <span class="n">repetition_penalty</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
-            <span class="n">pad_token_id</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
-    
-    <span class="n">output_sequences</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">generate</span><span class="p">(</span>
-        <span class="n">input_ids</span><span class="o">=</span><span class="n">query</span><span class="p">,</span>
-        <span class="n">max_length</span><span class="o">=</span><span class="n">text_length</span><span class="p">,</span>
-        <span class="n">min_length</span><span class="o">=</span><span class="n">text_length</span><span class="p">,</span>
-        <span class="n">temperature</span><span class="o">=</span><span class="n">temperature</span><span class="p">,</span>
-        <span class="n">top_k</span><span class="o">=</span><span class="n">k</span><span class="p">,</span>
-        <span class="n">top_p</span><span class="o">=</span><span class="n">p</span><span class="p">,</span>
-        <span class="n">repetition_penalty</span><span class="o">=</span><span class="n">repetition_penalty</span><span class="p">,</span>
-        <span class="n">do_sample</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-        <span class="n">pad_token_id</span><span class="o">=</span><span class="n">pad_token_id</span><span class="p">,</span>
-    <span class="p">)</span>
-
-    <span class="n">generated_sequence</span> <span class="o">=</span> <span class="n">output_sequences</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
-    <span class="n">generated_sequence</span> <span class="o">=</span> <span class="n">generated_sequence</span><span class="p">[</span><span class="n">query</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]:]</span>
-
-    <span class="k">return</span> <span class="n">generated_sequence</span>
-</pre></div>
-
-    </div>
-</div>
-</div>
-
-</div>
-    {% endraw %}
-
-    {% raw %}
-    
-<div class="cell border-box-sizing code_cell rendered">
-
-<div class="output_wrapper">
-<div class="output">
-
-<div class="output_area">
-
-
-<div class="output_markdown rendered_html output_subarea ">
-<h4 id="respond" class="doc_header"><code>respond</code><a href="https://github.com/lvwerra/lm_ppo/tree/master/lm_ppo/gpt2.py#L111" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>respond</code>(<strong><code>model</code></strong>, <strong><code>query</code></strong>, <strong><code>text_length</code></strong>=<em><code>50</code></em>, <strong><code>temperature</code></strong>=<em><code>1.0</code></em>, <strong><code>k</code></strong>=<em><code>0</code></em>, <strong><code>p</code></strong>=<em><code>1.0</code></em>, <strong><code>repetition_penalty</code></strong>=<em><code>1.0</code></em>, <strong><code>pad_token_id</code></strong>=<em><code>None</code></em>)</p>
-</blockquote>
-
-</div>
-
-</div>
-
-</div>
-</div>
-
-</div>
-    {% endraw %}
-
-<div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
-<div class="text_cell_render border-box-sizing rendered_html">
-<p>Move the computation to the GPU if possible:</p>
-
-</div>
-</div>
-</div>
-    {% raw %}
-    
-<div class="cell border-box-sizing code_cell rendered">
-<div class="input">
-
-<div class="inner_cell">
-    <div class="input_area">
-<div class=" highlight hl-ipython3"><pre><span></span><span class="n">device</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">device</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span> <span class="k">if</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">is_available</span><span class="p">()</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">args</span><span class="o">.</span><span class="n">no_cuda</span> <span class="k">else</span> <span class="s2">&quot;cpu&quot;</span><span class="p">)</span>
-<span class="n">model</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="s1">&#39;Device:&#39;</span><span class="p">,</span> <span class="n">device</span><span class="p">)</span>
-</pre></div>
-
-    </div>
-</div>
-</div>
-
-<div class="output_wrapper">
-<div class="output">
-
-<div class="output_area">
-
-<div class="output_subarea output_stream output_stdout output_text">
-<pre>Device: cpu
-</pre>
-</div>
-</div>
-
-</div>
-</div>
-
-</div>
-    {% endraw %}
-
-    {% raw %}
-    
-<div class="cell border-box-sizing code_cell rendered">
-<div class="input">
-
-<div class="inner_cell">
-    <div class="input_area">
-<div class=" highlight hl-ipython3"><pre><span></span><span class="n">query_txt</span><span class="o">=</span><span class="s2">&quot;My favourite movie is&quot;</span>
-<span class="n">query</span> <span class="o">=</span> <span class="n">tokenizer</span><span class="o">.</span><span class="n">encode</span><span class="p">(</span><span class="n">query_txt</span><span class="p">,</span> <span class="n">return_tensors</span><span class="o">=</span><span class="s2">&quot;pt&quot;</span><span class="p">)</span>
-<span class="n">query</span> <span class="o">=</span> <span class="n">query</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
-</pre></div>
-
-    </div>
-</div>
-</div>
-
-</div>
-    {% endraw %}
-
-    {% raw %}
-    
-<div class="cell border-box-sizing code_cell rendered">
-<div class="input">
-
-<div class="inner_cell">
-    <div class="input_area">
-<div class=" highlight hl-ipython3"><pre><span></span><span class="n">response</span> <span class="o">=</span> <span class="n">respond</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">query</span><span class="p">,</span> <span class="n">text_length</span><span class="o">=</span><span class="mi">20</span><span class="p">,</span> <span class="n">pad_token_id</span><span class="o">=</span><span class="n">tokenizer</span><span class="o">.</span><span class="n">eos_token_id</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="n">tokenizer</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="n">response</span><span class="p">))</span>
-</pre></div>
-
-    </div>
-</div>
-</div>
-
-<div class="output_wrapper">
-<div class="output">
-
-<div class="output_area">
-
-<div class="output_subarea output_stream output_stdout output_text">
-<pre> not Spike&#39;s Animal Crossing and love him not A Link to the Past.
-
-</pre>
-</div>
-</div>
-
-</div>
-</div>
-
-</div>
-    {% endraw %}
-
-<div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
-<div class="text_cell_render border-box-sizing rendered_html">
 <h2 id="Batched-response-to-queries">Batched response to queries<a class="anchor-link" href="#Batched-response-to-queries"> </a></h2><p>To speed up computations it helps to process queries in a batched fashion.</p>
 
 </div>
@@ -638,30 +475,19 @@ description: "A GPT2 model with a value head built on the transformer library by
 
 <div class="inner_cell">
     <div class="input_area">
-<div class=" highlight hl-ipython3"><pre><span></span><span class="k">def</span> <span class="nf">respond_to_batch</span><span class="p">(</span><span class="n">model</span><span class="p">,</span>
-            <span class="n">queries</span><span class="p">,</span>
-            <span class="n">text_length</span><span class="o">=</span><span class="mi">50</span><span class="p">,</span>
-            <span class="n">temperature</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
-            <span class="n">k</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
-            <span class="n">p</span><span class="o">=</span><span class="mf">1.</span><span class="p">,</span>
-            <span class="n">repetition_penalty</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
-            <span class="n">pad_token_id</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
-    
-    <span class="n">output_sequences</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">generate</span><span class="p">(</span>
-        <span class="n">input_ids</span><span class="o">=</span><span class="n">queries</span><span class="p">,</span>
-        <span class="n">max_length</span><span class="o">=</span><span class="n">text_length</span><span class="p">,</span>
-        <span class="n">min_length</span><span class="o">=</span><span class="n">text_length</span><span class="p">,</span>
-        <span class="n">temperature</span><span class="o">=</span><span class="n">temperature</span><span class="p">,</span>
-        <span class="n">top_k</span><span class="o">=</span><span class="n">k</span><span class="p">,</span>
-        <span class="n">top_p</span><span class="o">=</span><span class="n">p</span><span class="p">,</span>
-        <span class="n">repetition_penalty</span><span class="o">=</span><span class="n">repetition_penalty</span><span class="p">,</span>
-        <span class="n">do_sample</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-        <span class="n">pad_token_id</span><span class="o">=</span><span class="n">pad_token_id</span><span class="p">,</span>
-    <span class="p">)</span>
-
-    <span class="n">generated_sequence</span> <span class="o">=</span> <span class="n">output_sequences</span><span class="p">[:</span> <span class="p">,</span><span class="n">queries</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]:]</span>
-
-    <span class="k">return</span> <span class="n">generated_sequence</span>
+<div class=" highlight hl-ipython3"><pre><span></span><span class="k">def</span> <span class="nf">respond_to_batch</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">queries</span><span class="p">,</span> <span class="n">txt_len</span><span class="o">=</span><span class="mi">20</span><span class="p">,</span> <span class="n">top_k</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">top_p</span><span class="o">=</span><span class="mf">1.0</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Sample text from language model.&quot;&quot;&quot;</span>
+    <span class="n">input_ids</span> <span class="o">=</span> <span class="n">queries</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">txt_len</span><span class="p">):</span>
+        <span class="c1"># Get Logits</span>
+        <span class="n">outputs</span> <span class="o">=</span> <span class="n">model</span><span class="p">(</span><span class="n">input_ids</span><span class="p">)</span>
+        <span class="n">next_token_logits</span> <span class="o">=</span> <span class="n">outputs</span><span class="p">[</span><span class="mi">0</span><span class="p">][:,</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="p">:]</span>
+        <span class="n">next_token_logits</span> <span class="o">=</span> <span class="n">top_k_top_p_filtering</span><span class="p">(</span><span class="n">next_token_logits</span><span class="p">,</span> <span class="n">top_k</span><span class="o">=</span><span class="n">top_k</span><span class="p">,</span> <span class="n">top_p</span><span class="o">=</span><span class="n">top_p</span><span class="p">)</span>
+        <span class="c1"># Sample</span>
+        <span class="n">probs</span> <span class="o">=</span> <span class="n">F</span><span class="o">.</span><span class="n">softmax</span><span class="p">(</span><span class="n">next_token_logits</span><span class="p">,</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">next_token</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">multinomial</span><span class="p">(</span><span class="n">probs</span><span class="p">,</span> <span class="n">num_samples</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">squeeze</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">input_ids</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">([</span><span class="n">input_ids</span><span class="p">,</span> <span class="n">next_token</span><span class="o">.</span><span class="n">unsqueeze</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)],</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">input_ids</span><span class="p">[:,</span> <span class="o">-</span><span class="n">txt_len</span><span class="p">:]</span>
 </pre></div>
 
     </div>
@@ -682,8 +508,9 @@ description: "A GPT2 model with a value head built on the transformer library by
 
 
 <div class="output_markdown rendered_html output_subarea ">
-<h4 id="respond_to_batch" class="doc_header"><code>respond_to_batch</code><a href="https://github.com/lvwerra/lm_ppo/tree/master/lm_ppo/gpt2.py#L139" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>respond_to_batch</code>(<strong><code>model</code></strong>, <strong><code>queries</code></strong>, <strong><code>text_length</code></strong>=<em><code>50</code></em>, <strong><code>temperature</code></strong>=<em><code>1.0</code></em>, <strong><code>k</code></strong>=<em><code>0</code></em>, <strong><code>p</code></strong>=<em><code>1.0</code></em>, <strong><code>repetition_penalty</code></strong>=<em><code>1.0</code></em>, <strong><code>pad_token_id</code></strong>=<em><code>None</code></em>)</p>
+<h4 id="respond_to_batch" class="doc_header"><code>respond_to_batch</code><a href="https://github.com/lvwerra/lm_ppo/tree/master/lm_ppo/gpt2.py#L113" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>respond_to_batch</code>(<strong><code>model</code></strong>, <strong><code>queries</code></strong>, <strong><code>txt_len</code></strong>=<em><code>20</code></em>, <strong><code>top_k</code></strong>=<em><code>0</code></em>, <strong><code>top_p</code></strong>=<em><code>1.0</code></em>)</p>
 </blockquote>
+<p>Sample text from language model.</p>
 
 </div>
 
@@ -717,7 +544,7 @@ description: "A GPT2 model with a value head built on the transformer library by
 <span class="nb">print</span><span class="p">([</span><span class="n">q</span><span class="o">.</span><span class="n">shape</span> <span class="k">for</span> <span class="n">q</span> <span class="ow">in</span> <span class="n">queries</span><span class="p">])</span>
 <span class="n">queries</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">(</span><span class="n">queries</span><span class="p">)</span>
 
-<span class="n">responses</span> <span class="o">=</span> <span class="n">respond_to_batch</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">queries</span><span class="p">,</span> <span class="n">text_length</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">pad_token_id</span><span class="o">=</span><span class="n">tokenizer</span><span class="o">.</span><span class="n">eos_token_id</span><span class="p">)</span>
+<span class="n">responses</span> <span class="o">=</span> <span class="n">respond_to_batch</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">queries</span><span class="p">,</span> <span class="n">txt_len</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
 </pre></div>
 
     </div>
@@ -772,8 +599,8 @@ description: "A GPT2 model with a value head built on the transformer library by
 <div class="output_area">
 
 <div class="output_subarea output_stream output_stdout output_text">
-<pre>My most favourite movie is the brilliant adaptation of the
-My least favourite movie is The Birth of a Nation
+<pre>My most favourite movie is Captain America: Civil War, which moved into the
+My least favourite movie is Jon Favreau&#39;s Log Horizon, complete with psychedelic
 </pre>
 </div>
 </div>

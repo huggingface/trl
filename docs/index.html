@@ -117,8 +117,7 @@ description: "Train transformer language models with Reinforcement Learning."
 <span class="n">query_tensor</span> <span class="o">=</span> <span class="n">gpt2_tokenizer</span><span class="o">.</span><span class="n">encode</span><span class="p">(</span><span class="n">query_txt</span><span class="p">,</span> <span class="n">return_tensors</span><span class="o">=</span><span class="s2">&quot;pt&quot;</span><span class="p">)</span>
 
 <span class="c1"># get model response</span>
-<span class="n">response_tensor</span>  <span class="o">=</span> <span class="n">respond_to_batch</span><span class="p">(</span><span class="n">gpt2_model</span><span class="p">,</span> <span class="n">query_tensor</span><span class="p">,</span>
-                                    <span class="n">pad_token_id</span><span class="o">=</span><span class="n">gpt2_tokenizer</span><span class="o">.</span><span class="n">eos_token_id</span><span class="p">)</span>
+<span class="n">response_tensor</span>  <span class="o">=</span> <span class="n">respond_to_batch</span><span class="p">(</span><span class="n">gpt2_model</span><span class="p">,</span> <span class="n">query_tensor</span><span class="p">)</span>
 <span class="n">response_txt</span> <span class="o">=</span> <span class="n">gpt2_tokenizer</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="n">response_tensor</span><span class="p">[</span><span class="mi">0</span><span class="p">,:])</span>
 
 <span class="c1"># define a reward for response</span>
