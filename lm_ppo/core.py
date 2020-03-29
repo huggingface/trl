@@ -4,7 +4,6 @@ __all__ = ['flatten_dict', 'stack_dicts', 'add_suffix', 'pad_to_size', 'logprobs
            'clip_by_value', 'entropy_from_logits', 'average_torch_dicts', 'stats_to_np', 'build_bert_batch_from_txt']
 
 # Cell
-import wandb
 import torch
 import torch.nn.functional as F
 import collections
@@ -94,7 +93,6 @@ def stats_to_np(stats_dict):
         if isinstance(v, torch.Tensor):
             new_dict[k] = v.detach().cpu().numpy()
         else:
-            print(k, v)
             new_dict[k] = v
         if np.isscalar(new_dict[k]):
             new_dict[k] = float(new_dict[k])
