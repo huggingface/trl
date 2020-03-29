@@ -260,7 +260,6 @@ class PPOTrainer:
             returns=dict(mean=return_mean, var=return_var),
             val=dict(vpred=torch.mean(vpred), error=torch.mean((vpred - returns) ** 2),
                      clipfrac=vf_clipfrac, mean=value_mean, var=value_var),
-            logp=dict(logp=logprob, logp_old=old_logprobs, logp_diff=logprob-old_logprobs)
         )
         return pg_loss, self.ppo_params['vf_coef'] * vf_loss, flatten_dict(stats)
 
