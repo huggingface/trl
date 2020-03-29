@@ -76,8 +76,7 @@ query_txt = "This morning I went to the "
 query_tensor = gpt2_tokenizer.encode(query_txt, return_tensors="pt")
 
 # get model response
-response_tensor  = respond_to_batch(gpt2_model, query_tensor,
-                                    pad_token_id=gpt2_tokenizer.eos_token_id)
+response_tensor  = respond_to_batch(gpt2_model, query_tensor)
 response_txt = gpt2_tokenizer.decode(response_tensor[0,:])
 
 # define a reward for response
