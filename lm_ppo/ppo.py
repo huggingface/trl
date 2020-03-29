@@ -53,7 +53,7 @@ class FixedKLController:
 
 class PPOTrainer:
     """
-    The PPO_trainer uses Proximal Policy Optimization to tune a language model.
+    The PPO_trainer uses Proximal Policy Optimization to optimise language models.
     """
 
     default_params = {
