@@ -24,15 +24,31 @@ This process is illustrated in the sketch below:
 <p style="text-align: center;"> <b>Figure:</b> Sketch of the workflow. </p>
 </div>
 
-## Install
+## Installation
 
+### Python package
 Install the library with pip:
 
 `pip install lm_ppo`
 
-If you want to run the example a few additional libraries are required. Clone the repository and install it with pip:
+### Repository
+If you want to run the examples in the repository a few additional libraries are required. Clone the repository and install it with pip:
+
+`git clone https://github.com/lvwerra/trl.git`
+
+`cd tlr/`
 
 `pip install -r requirements.txt`
+
+### Jupyter notebooks
+
+If you run the Jupyter notebooks you might need to run the following:
+
+`jupyter nbextension enable --py --sys-prefix widgetsnbextension`
+
+For Jupyterlab run this in addition:
+
+`jupyter labextension install @jupyter-widgets/jupyterlab-manager`
 
 ## How to use
 
