@@ -1,12 +1,12 @@
-# Welcome to trl
-> Train transformer language models with Reinforcement Learning.
+# Welcome to Transformer Reinforcement Learning (trl)
+> Train transformer language models with reinforcement learning.
 
 
 ## What is it?
-With `trl` you can train transformer language models with Proximal Policy Optimization (PPO). The library is built with the `transformer` library by  🤗Huggingface. Therefore, pre-trained language models can be directly loaded via the transformer interface. At this point only GTP2 is implemented.
+With `trl` you can train transformer language models with Proximal Policy Optimization (PPO). The library is built with the `transformer` library by  🤗 Hugging Face ([link](https://github.com/huggingface/transformers)). Therefore, pre-trained language models can be directly loaded via the transformer interface. At this point only GTP2 is implemented.
 
 **Highlights:**
-- GPT2 model with a value head: A transformer model with an additional scalar output for each token which can be used as a value function in Reinforcement Learning.
+- GPT2 model with a value head: A transformer model with an additional scalar output for each token which can be used as a value function in reinforcement learning.
 - PPOTrainer: A PPO trainer for language models that just needs (query, response, reward) triplets to optimise the language model.
 - Example: Train GPT2 to generate positive movie reviews with a BERT sentiment classifier.
 
@@ -108,10 +108,10 @@ This library is built with `nbdev` and as such all the library code as well as e
 - `04-gpt2-sentiment-ppo-training.ipynb`: Fine-tune GPT2 with the BERT sentiment classifier to produce positive movie reviews.
 
 
-## Reference
+## References
 
 ### Proximal Policy Optimisation
 The PPO implementation largely follows the structure introduced in the paper **"Fine-Tuning Language Models from Human Preferences"** by D. Ziegler et al. \[[paper](https://arxiv.org/pdf/1909.08593.pdf), [code](https://github.com/openai/lm-human-preferences)].
 
 ### Language models
-The language models utilize the `transformer` library by 🤗Huggingface.
+The language models utilize the `transformer` library by 🤗Hugging Face.

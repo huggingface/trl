@@ -31,7 +31,7 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 <div class="text_cell_render border-box-sizing rendered_html">
 <div style="text-align: center">
 {% include image.html max-width="600" file="/trl/images/gpt2_bert_training.png" %}
-<p style="text-align: center;"> <b>Figure:</b> Experiment setup to tune GPT2. The yellow arrows are outside the scope of this notebook, but the trained models are available through Huggingface. </p>
+<p style="text-align: center;"> <b>Figure:</b> Experiment setup to tune GPT2. The yellow arrows are outside the scope of this notebook, but the trained models are available through Hugging Face. </p>
 </div><p>In this notebook we fine-tune GPT2 (small) to generate positive movie reviews based on the IMDB dataset. The model gets 5 tokens from a real review and is tasked to produce positive continuations. To reward positive continuations we use a BERT classifier to analyse the sentiment of the produced sentences and use the classifier's outputs as rewards signals for PPO training.</p>
 
 </div>

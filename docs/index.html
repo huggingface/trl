@@ -1,12 +1,12 @@
 ---
 
-title: Welcome to trl
+title: Welcome to Transformer Reinforcement Learning (trl)
 
 keywords: fastai
 sidebar: home_sidebar
 
-summary: "Train transformer language models with Reinforcement Learning."
-description: "Train transformer language models with Reinforcement Learning."
+summary: "Train transformer language models with reinforcement learning."
+description: "Train transformer language models with reinforcement learning."
 ---
 <!--
 
@@ -29,10 +29,10 @@ description: "Train transformer language models with Reinforcement Learning."
 
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="What-is-it?">What is it?<a class="anchor-link" href="#What-is-it?"> </a></h2><p>With <code>trl</code> you can train transformer language models with Proximal Policy Optimization (PPO). The library is built with the <code>transformer</code> library by  🤗Huggingface. Therefore, pre-trained language models can be directly loaded via the transformer interface. At this point only GTP2 is implemented.</p>
+<h2 id="What-is-it?">What is it?<a class="anchor-link" href="#What-is-it?"> </a></h2><p>With <code>trl</code> you can train transformer language models with Proximal Policy Optimization (PPO). The library is built with the <code>transformer</code> library by  🤗 Hugging Face (<a href="https://github.com/huggingface/transformers">link</a>). Therefore, pre-trained language models can be directly loaded via the transformer interface. At this point only GTP2 is implemented.</p>
 <p><strong>Highlights:</strong></p>
 <ul>
-<li>GPT2 model with a value head: A transformer model with an additional scalar output for each token which can be used as a value function in Reinforcement Learning.</li>
+<li>GPT2 model with a value head: A transformer model with an additional scalar output for each token which can be used as a value function in reinforcement learning.</li>
 <li>PPOTrainer: A PPO trainer for language models that just needs (query, response, reward) triplets to optimise the language model.</li>
 <li>Example: Train GPT2 to generate positive movie reviews with a BERT sentiment classifier.</li>
 </ul>
@@ -163,8 +163,8 @@ description: "Train transformer language models with Reinforcement Learning."
 </div>
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Reference">Reference<a class="anchor-link" href="#Reference"> </a></h2><h3 id="Proximal-Policy-Optimisation">Proximal Policy Optimisation<a class="anchor-link" href="#Proximal-Policy-Optimisation"> </a></h3><p>The PPO implementation largely follows the structure introduced in the paper <strong>"Fine-Tuning Language Models from Human Preferences"</strong> by D. Ziegler et al. [<a href="https://arxiv.org/pdf/1909.08593.pdf">paper</a>, <a href="https://github.com/openai/lm-human-preferences">code</a>].</p>
-<h3 id="Language-models">Language models<a class="anchor-link" href="#Language-models"> </a></h3><p>The language models utilize the <code>transformer</code> library by 🤗Huggingface.</p>
+<h2 id="References">References<a class="anchor-link" href="#References"> </a></h2><h3 id="Proximal-Policy-Optimisation">Proximal Policy Optimisation<a class="anchor-link" href="#Proximal-Policy-Optimisation"> </a></h3><p>The PPO implementation largely follows the structure introduced in the paper <strong>"Fine-Tuning Language Models from Human Preferences"</strong> by D. Ziegler et al. [<a href="https://arxiv.org/pdf/1909.08593.pdf">paper</a>, <a href="https://github.com/openai/lm-human-preferences">code</a>].</p>
+<h3 id="Language-models">Language models<a class="anchor-link" href="#Language-models"> </a></h3><p>The language models utilize the <code>transformer</code> library by 🤗Hugging Face.</p>
 
 </div>
 </div>

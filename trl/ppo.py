@@ -77,8 +77,8 @@ class PPOTrainer:
         Initialize PPOTrainer.
 
         Args:
-            model (torch.model): Huggingface GPT2 model
-            ref_model (torch.model): Huggingface GPT2 refrence model used for KL penalty
+            model (torch.model): Hugging Face transformer GPT2 model with value head
+            ref_model (torch.model): Hugging Face transformer GPT2 refrence model used for KL penalty
             ppo_params (dict or None): PPO parameters for training. Can include following keys:
                 'lr' (float): Adam learning rate, default: 1.41e-5
                 'batch_size' (int): Number of samples per optimisation step, default: 256

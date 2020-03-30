@@ -29,7 +29,7 @@ description: "A Pytorch implementation of Proximal Policy Optimization for trans
 
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<p>This follows the language model approach proposed in paper <a href="https://arxiv.org/pdf/1909.08593.pdf">"Fine-Tuning Language Models from Human Preferences"</a> and is similar to the <a href="https://github.com/openai/lm-human-preferences">original implementation</a>. The two main differences are 1) the method is implemented in Pytorch and 2) works with the transformer library by Huggingface.</p>
+<p>This follows the language model approach proposed in paper <a href="https://arxiv.org/pdf/1909.08593.pdf">"Fine-Tuning Language Models from Human Preferences"</a> and is similar to the <a href="https://github.com/openai/lm-human-preferences">original implementation</a>. The two main differences are 1) the method is implemented in Pytorch and 2) works with the <code>transformer</code> library by Hugging Face.</p>
 
 </div>
 </div>
@@ -187,8 +187,8 @@ description: "A Pytorch implementation of Proximal Policy Optimization for trans
 <span class="sd">        Initialize PPOTrainer.</span>
 <span class="sd">        </span>
 <span class="sd">        Args:</span>
-<span class="sd">            model (torch.model): Huggingface GPT2 model</span>
-<span class="sd">            ref_model (torch.model): Huggingface GPT2 refrence model used for KL penalty</span>
+<span class="sd">            model (torch.model): Hugging Face transformer GPT2 model with value head</span>
+<span class="sd">            ref_model (torch.model): Hugging Face transformer GPT2 refrence model used for KL penalty</span>
 <span class="sd">            ppo_params (dict or None): PPO parameters for training. Can include following keys:</span>
 <span class="sd">                &#39;lr&#39; (float): Adam learning rate, default: 1.41e-5</span>
 <span class="sd">                &#39;batch_size&#39; (int): Number of samples per optimisation step, default: 256</span>
