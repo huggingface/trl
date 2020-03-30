@@ -68,35 +68,20 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 <span class="kn">import</span> <span class="nn">wandb</span>
 <span class="kn">import</span> <span class="nn">time</span>
 <span class="kn">import</span> <span class="nn">os</span>
-<span class="kn">from</span> <span class="nn">tqdm</span> <span class="kn">import</span> <span class="n">tqdm</span>
+<span class="kn">from</span> <span class="nn">tqdm</span> <span class="k">import</span> <span class="n">tqdm</span>
 <span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
 <span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
 <span class="n">tqdm</span><span class="o">.</span><span class="n">pandas</span><span class="p">()</span>
 
-<span class="kn">from</span> <span class="nn">transformers</span> <span class="kn">import</span> <span class="n">GPT2Tokenizer</span>
-<span class="kn">from</span> <span class="nn">transformers</span> <span class="kn">import</span> <span class="n">AutoModelForSequenceClassification</span><span class="p">,</span> <span class="n">AutoTokenizer</span>
+<span class="kn">from</span> <span class="nn">transformers</span> <span class="k">import</span> <span class="n">GPT2Tokenizer</span>
+<span class="kn">from</span> <span class="nn">transformers</span> <span class="k">import</span> <span class="n">AutoModelForSequenceClassification</span><span class="p">,</span> <span class="n">AutoTokenizer</span>
 
-<span class="kn">from</span> <span class="nn">lm_ppo.gpt2</span> <span class="kn">import</span> <span class="n">GPT2HeadWithValueModel</span><span class="p">,</span> <span class="n">respond_to_batch</span>
-<span class="kn">from</span> <span class="nn">lm_ppo.ppo</span> <span class="kn">import</span> <span class="n">PPOTrainer</span>
-<span class="kn">from</span> <span class="nn">lm_ppo.core</span> <span class="kn">import</span> <span class="n">build_bert_batch_from_txt</span>
+<span class="kn">from</span> <span class="nn">lm_ppo.gpt2</span> <span class="k">import</span> <span class="n">GPT2HeadWithValueModel</span><span class="p">,</span> <span class="n">respond_to_batch</span>
+<span class="kn">from</span> <span class="nn">lm_ppo.ppo</span> <span class="k">import</span> <span class="n">PPOTrainer</span>
+<span class="kn">from</span> <span class="nn">lm_ppo.core</span> <span class="k">import</span> <span class="n">build_bert_batch_from_txt</span>
 </pre></div>
 
     </div>
-</div>
-</div>
-
-<div class="output_wrapper">
-<div class="output">
-
-<div class="output_area">
-
-<div class="output_subarea output_stream output_stderr output_text">
-<pre>/Users/leandro/git/lm_ppo/env/lib/python3.7/site-packages/tqdm/std.py:658: FutureWarning: The Panel class is removed from pandas. Accessing it from the top-level namespace will also be removed in the next version
-  from pandas import Panel
-</pre>
-</div>
-</div>
-
 </div>
 </div>
 
@@ -119,7 +104,7 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 <div class=" highlight hl-ipython3"><pre><span></span><span class="n">config</span> <span class="o">=</span> <span class="p">{</span>
     <span class="s2">&quot;lm_name&quot;</span><span class="p">:</span> <span class="s2">&quot;lvwerra/gpt2-imdb&quot;</span><span class="p">,</span>
     <span class="s2">&quot;ref_lm_name&quot;</span><span class="p">:</span> <span class="s2">&quot;lvwerra/gpt2-imdb&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;cls_model_name&quot;</span><span class="p">:</span> <span class="s2">&quot;lvwerra/bert-imdb&quot;</span>
+    <span class="s2">&quot;cls_model_name&quot;</span><span class="p">:</span> <span class="s2">&quot;lvwerra/bert-imdb&quot;</span><span class="p">,</span>
     <span class="s2">&quot;steps&quot;</span><span class="p">:</span> <span class="mi">25600</span><span class="p">,</span>
     <span class="s2">&quot;batch_size&quot;</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span>
     <span class="s2">&quot;forward_batch_size&quot;</span><span class="p">:</span> <span class="mi">16</span><span class="p">,</span>
@@ -183,8 +168,8 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 <div class="output_html rendered_html output_subarea ">
 
                 Logging results to <a href="https://wandb.com" target="_blank">Weights & Biases</a> <a href="https://docs.wandb.com/integrations/jupyter.html" target="_blank">(Documentation)</a>.<br/>
-                Project page: <a href="https://app.wandb.ai/lvwerra/gpt-2-sentiment-batch" target="_blank">https://app.wandb.ai/lvwerra/gpt-2-sentiment-batch</a><br/>
-                Run page: <a href="https://app.wandb.ai/lvwerra/gpt-2-sentiment-batch/runs/tubi7ws2" target="_blank">https://app.wandb.ai/lvwerra/gpt-2-sentiment-batch/runs/tubi7ws2</a><br/>
+                Project page: <a href="https://app.wandb.ai/lvwerra/gpt2-sentiment" target="_blank">https://app.wandb.ai/lvwerra/gpt2-sentiment</a><br/>
+                Run page: <a href="https://app.wandb.ai/lvwerra/gpt2-sentiment/runs/u7xlm5y6" target="_blank">https://app.wandb.ai/lvwerra/gpt2-sentiment/runs/u7xlm5y6</a><br/>
             
 </div>
 
@@ -192,19 +177,10 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 
 <div class="output_area">
 
-<div class="output_subarea output_stream output_stderr output_text">
-<pre>wandb: Wandb version 0.8.30 is available!  To upgrade, please run:
-wandb:  $ pip install wandb --upgrade
-</pre>
-</div>
-</div>
-
-<div class="output_area">
-
 
 
 <div class="output_text output_subarea output_execute_result">
-<pre>W&amp;B Run: https://app.wandb.ai/lvwerra/gpt-2-sentiment-batch/runs/tubi7ws2</pre>
+<pre>W&amp;B Run: https://app.wandb.ai/lvwerra/gpt2-sentiment/runs/u7xlm5y6</pre>
 </div>
 
 </div>
@@ -248,6 +224,71 @@ wandb:  $ pip install wandb --upgrade
 </pre></div>
 
     </div>
+</div>
+</div>
+
+<div class="output_wrapper">
+<div class="output">
+
+<div class="output_area">
+
+
+<div class="output_html rendered_html output_subarea output_execute_result">
+<div>
+<style scoped>
+    .dataframe tbody tr th:only-of-type {
+        vertical-align: middle;
+    }
+
+    .dataframe tbody tr th {
+        vertical-align: top;
+    }
+
+    .dataframe thead th {
+        text-align: right;
+    }
+</style>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>review</th>
+      <th>sentiment</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>One of the other reviewers has mentioned that ...</td>
+      <td>positive</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>A wonderful little production. &lt;br /&gt;&lt;br /&gt;The...</td>
+      <td>positive</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>I thought this was a wonderful way to spend ti...</td>
+      <td>positive</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>Basically there's a family where a little boy ...</td>
+      <td>negative</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>Petter Mattei's "Love in the Time of Money" is...</td>
+      <td>positive</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+</div>
+
+</div>
+
 </div>
 </div>
 
@@ -302,6 +343,22 @@ wandb:  $ pip install wandb --upgrade
 </div>
 </div>
 
+<div class="output_wrapper">
+<div class="output">
+
+<div class="output_area">
+
+
+
+<div class="output_text output_subarea output_execute_result">
+<pre>(tensor([[ 3.6573, -4.2497]], grad_fn=&lt;AddmmBackward&gt;),)</pre>
+</div>
+
+</div>
+
+</div>
+</div>
+
 </div>
     {% endraw %}
 
@@ -329,7 +386,7 @@ wandb:  $ pip install wandb --upgrade
 
 
 <div class="output_text output_subarea output_execute_result">
-<pre>(tensor([[ 3.6573, -4.2497]], grad_fn=&lt;AddmmBackward&gt;),)</pre>
+<pre>(tensor([[-3.7931,  4.2146]], grad_fn=&lt;AddmmBackward&gt;),)</pre>
 </div>
 
 </div>
@@ -369,7 +426,7 @@ wandb:  $ pip install wandb --upgrade
 
 
 <div class="output_text output_subarea output_execute_result">
-<pre>-4.2497382164001465</pre>
+<pre>tensor(4.2146, grad_fn=&lt;SelectBackward&gt;)</pre>
 </div>
 
 </div>
@@ -494,7 +551,7 @@ wandb:  $ pip install wandb --upgrade
 <div class="output_area">
 
 <div class="output_subarea output_stream output_stderr output_text">
-<pre>100%|██████████| 45017/45017 [00:42&lt;00:00, 1057.92it/s]
+<pre>100%|██████████| 45017/45017 [00:46&lt;00:00, 959.20it/s] 
 </pre>
 </div>
 </div>
@@ -525,7 +582,7 @@ wandb:  $ pip install wandb --upgrade
 <div class="output_area">
 
 <div class="output_subarea output_stream output_stderr output_text">
-<pre>100%|██████████| 45017/45017 [00:02&lt;00:00, 19357.26it/s]
+<pre>100%|██████████| 45017/45017 [00:05&lt;00:00, 8993.62it/s]
 </pre>
 </div>
 </div>
@@ -635,6 +692,20 @@ wandb:  $ pip install wandb --upgrade
 </div>
 </div>
 
+<div class="output_wrapper">
+<div class="output">
+
+<div class="output_area">
+
+<div class="output_subarea output_stream output_stderr output_text">
+<pre>100%|██████████| 100/100 [2:08:18&lt;00:00, 76.99s/it] 
+</pre>
+</div>
+</div>
+
+</div>
+</div>
+
 </div>
     {% endraw %}
 
@@ -666,6 +737,7 @@ wandb:  $ pip install wandb --upgrade
     <div class="input_area">
 <div class=" highlight hl-ipython3"><pre><span></span><span class="c1">#### get a batch from the dataset</span>
 <span class="n">bs</span> <span class="o">=</span> <span class="mi">16</span>
+<span class="n">game_data</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">()</span>
 <span class="n">df_batch</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">sample</span><span class="p">(</span><span class="n">bs</span><span class="p">)</span>
 <span class="n">game_data</span><span class="p">[</span><span class="s1">&#39;query&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df_batch</span><span class="p">[</span><span class="s1">&#39;query&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span>
 <span class="n">query_tensors</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">stack</span><span class="p">(</span><span class="n">df_batch</span><span class="p">[</span><span class="s1">&#39;tokens&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">tolist</span><span class="p">())</span>
@@ -698,6 +770,252 @@ wandb:  $ pip install wandb --upgrade
 </div>
 </div>
 
+<div class="output_wrapper">
+<div class="output">
+
+<div class="output_area">
+
+
+<div class="output_html rendered_html output_subarea output_execute_result">
+<div>
+<style scoped>
+    .dataframe tbody tr th:only-of-type {
+        vertical-align: middle;
+    }
+
+    .dataframe tbody tr th {
+        vertical-align: top;
+    }
+
+    .dataframe thead th {
+        text-align: right;
+    }
+</style>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>query</th>
+      <th>response (before)</th>
+      <th>response (after)</th>
+      <th>rewards (before)</th>
+      <th>rewards (after)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>That's what the title</td>
+      <td>said to me. All I had to do was hear one word...</td>
+      <td>says, and this movie was very good,-I really ...</td>
+      <td>1.710360</td>
+      <td>4.207656</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>The female hot numbers on</td>
+      <td>the Fonda get a saving grace here, you can st...</td>
+      <td>the DVD are beautiful. The music is extraordi...</td>
+      <td>1.585194</td>
+      <td>4.228330</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>In the film Kongwon</td>
+      <td>(American Truffaut), a snake made of ash fall...</td>
+      <td>has a funky personality and makes the movies ...</td>
+      <td>-0.015413</td>
+      <td>2.537073</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>Let's see: what</td>
+      <td>a blast from start to finish, female and male...</td>
+      <td>happens on that later?&lt;|endoftext|&gt; This film...</td>
+      <td>3.278678</td>
+      <td>4.061680</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>Really? Is this necessary</td>
+      <td>for Sith philosophy combined with missionary ...</td>
+      <td>? Watched this too, but it's what made it so b...</td>
+      <td>-2.509291</td>
+      <td>3.025524</td>
+    </tr>
+    <tr>
+      <th>5</th>
+      <td>During a sleepless night</td>
+      <td>Keira Knightley has besieged a monastery, tro...</td>
+      <td>, I found this Parker Bros. film. The acting i...</td>
+      <td>1.341672</td>
+      <td>3.933312</td>
+    </tr>
+    <tr>
+      <th>6</th>
+      <td>My wife spotted this film</td>
+      <td>almost halfway through second grade, and afte...</td>
+      <td>when I was younger and kept her P-1-her-p-</td>
+      <td>1.781651</td>
+      <td>1.456647</td>
+    </tr>
+    <tr>
+      <th>7</th>
+      <td>I love John's work</td>
+      <td>but I actually have to write language as in w...</td>
+      <td>and I hereby recommend this film. I am really...</td>
+      <td>-1.904006</td>
+      <td>4.159198</td>
+    </tr>
+    <tr>
+      <th>8</th>
+      <td>I's a big struggle</td>
+      <td>to see anyone who acts in that way. by Jim Th...</td>
+      <td>, but overall I'm happy with the changes even ...</td>
+      <td>-1.595925</td>
+      <td>2.651260</td>
+    </tr>
+    <tr>
+      <th>9</th>
+      <td>i liked this film a</td>
+      <td>lot Paul Verhoeven The other actor does what ...</td>
+      <td>lot recipe. It was probably one of the best m...</td>
+      <td>4.314877</td>
+      <td>4.346435</td>
+    </tr>
+    <tr>
+      <th>10</th>
+      <td>I'd never seen a</td>
+      <td>heavier, woodier example of Victorian archite...</td>
+      <td>film of this caliber, and I think it's wonder...</td>
+      <td>3.297736</td>
+      <td>4.158653</td>
+    </tr>
+    <tr>
+      <th>11</th>
+      <td>I have to agree with</td>
+      <td>most people, that Davis was right after all. ...</td>
+      <td>this movie, the features in this film are fan...</td>
+      <td>0.609289</td>
+      <td>4.207779</td>
+    </tr>
+    <tr>
+      <th>12</th>
+      <td>The only reason I watched</td>
+      <td>it this soon after was because part of it too...</td>
+      <td>this movie I really do. It helps a little to ...</td>
+      <td>-2.684667</td>
+      <td>-2.928670</td>
+    </tr>
+    <tr>
+      <th>13</th>
+      <td>When I think of a</td>
+      <td>film directed by two independent directors, c...</td>
+      <td>movie, or potentially a comedy in an interest...</td>
+      <td>-1.889202</td>
+      <td>2.494266</td>
+    </tr>
+    <tr>
+      <th>14</th>
+      <td>So first things first..</td>
+      <td>blank moment. The montage has the mocking tone...</td>
+      <td>but first we are really surprised when it sho...</td>
+      <td>-1.846089</td>
+      <td>2.433687</td>
+    </tr>
+    <tr>
+      <th>15</th>
+      <td>...this one just isn</td>
+      <td>'t theretonally. I understand the enterprise a...</td>
+      <td>'t really in, after seeing it. I just love it ...</td>
+      <td>-2.095725</td>
+      <td>4.127057</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+</div>
+
+</div>
+
+</div>
+</div>
+
+</div>
+    {% endraw %}
+
+<div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
+<div class="text_cell_render border-box-sizing rendered_html">
+<p>Looking at the reward mean/median of the generated sequences we observe a significant difference.</p>
+
+</div>
+</div>
+</div>
+    {% raw %}
+    
+<div class="cell border-box-sizing code_cell rendered">
+<div class="input">
+
+<div class="inner_cell">
+    <div class="input_area">
+<div class=" highlight hl-ipython3"><pre><span></span><span class="nb">print</span><span class="p">(</span><span class="s1">&#39;mean:&#39;</span><span class="p">)</span>
+<span class="n">display</span><span class="p">(</span><span class="n">df_results</span><span class="o">.</span><span class="n">mean</span><span class="p">())</span>
+<span class="nb">print</span><span class="p">()</span>
+<span class="nb">print</span><span class="p">(</span><span class="s1">&#39;median:&#39;</span><span class="p">)</span>
+<span class="n">display</span><span class="p">(</span><span class="n">df_results</span><span class="o">.</span><span class="n">median</span><span class="p">())</span>
+</pre></div>
+
+    </div>
+</div>
+</div>
+
+<div class="output_wrapper">
+<div class="output">
+
+<div class="output_area">
+
+<div class="output_subarea output_stream output_stdout output_text">
+<pre>mean:
+</pre>
+</div>
+</div>
+
+<div class="output_area">
+
+
+
+<div class="output_text output_subarea ">
+<pre>rewards (before)    0.211196
+rewards (after)     3.068743
+dtype: float64</pre>
+</div>
+
+</div>
+
+<div class="output_area">
+
+<div class="output_subarea output_stream output_stdout output_text">
+<pre>
+median:
+</pre>
+</div>
+</div>
+
+<div class="output_area">
+
+
+
+<div class="output_text output_subarea ">
+<pre>rewards (before)    0.296938
+rewards (after)     3.997496
+dtype: float64</pre>
+</div>
+
+</div>
+
+</div>
+</div>
+
 </div>
     {% endraw %}
 
@@ -721,6 +1039,25 @@ wandb:  $ pip install wandb --upgrade
 </pre></div>
 
     </div>
+</div>
+</div>
+
+<div class="output_wrapper">
+<div class="output">
+
+<div class="output_area">
+
+
+
+<div class="output_text output_subarea output_execute_result">
+<pre>(&#39;gpt2-imdb-pos/vocab.json&#39;,
+ &#39;gpt2-imdb-pos/merges.txt&#39;,
+ &#39;gpt2-imdb-pos/special_tokens_map.json&#39;,
+ &#39;gpt2-imdb-pos/added_tokens.json&#39;)</pre>
+</div>
+
+</div>
+
 </div>
 </div>
 
