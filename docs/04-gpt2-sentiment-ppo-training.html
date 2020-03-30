@@ -76,9 +76,9 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 <span class="kn">from</span> <span class="nn">transformers</span> <span class="kn">import</span> <span class="n">GPT2Tokenizer</span>
 <span class="kn">from</span> <span class="nn">transformers</span> <span class="kn">import</span> <span class="n">AutoModelForSequenceClassification</span><span class="p">,</span> <span class="n">AutoTokenizer</span>
 
-<span class="kn">from</span> <span class="nn">lm_ppo.gpt2</span> <span class="kn">import</span> <span class="n">GPT2HeadWithValueModel</span><span class="p">,</span> <span class="n">respond_to_batch</span>
-<span class="kn">from</span> <span class="nn">lm_ppo.ppo</span> <span class="kn">import</span> <span class="n">PPOTrainer</span>
-<span class="kn">from</span> <span class="nn">lm_ppo.core</span> <span class="kn">import</span> <span class="n">build_bert_batch_from_txt</span>
+<span class="kn">from</span> <span class="nn">trl.gpt2</span> <span class="kn">import</span> <span class="n">GPT2HeadWithValueModel</span><span class="p">,</span> <span class="n">respond_to_batch</span>
+<span class="kn">from</span> <span class="nn">trl.ppo</span> <span class="kn">import</span> <span class="n">PPOTrainer</span>
+<span class="kn">from</span> <span class="nn">trl.core</span> <span class="kn">import</span> <span class="n">build_bert_batch_from_txt</span>
 </pre></div>
 
     </div>
@@ -627,7 +627,7 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 <li>Log all the training statistics</li>
 </ol>
 <p><strong>Forward batching</strong></p>
-<p>Since the models can be fairly big and we want to rollout large PPO batches this can lead to out-of-memory errors when doing the forward passes for text generation and sentiment analysis. We introduce the parameter <code>forward_batch_size</code> to split the forward passes into smaller batches. Although this hurts performance a little this is neglectible compared to the computations of the backward passes when optimizing the model. The same parameter is used in the <a href="/lm_ppo/02-ppo#PPOTrainer"><code>PPOTrainer</code></a> when doing forward passes. The <code>batch_size</code> should multiple of <code>forward_batch_size</code>.</p>
+<p>Since the models can be fairly big and we want to rollout large PPO batches this can lead to out-of-memory errors when doing the forward passes for text generation and sentiment analysis. We introduce the parameter <code>forward_batch_size</code> to split the forward passes into smaller batches. Although this hurts performance a little this is neglectible compared to the computations of the backward passes when optimizing the model. The same parameter is used in the <a href="/trl/02-ppo#PPOTrainer"><code>PPOTrainer</code></a> when doing forward passes. The <code>batch_size</code> should multiple of <code>forward_batch_size</code>.</p>
 <p><strong>Training time</strong></p>
 <p>This step takes <strong>~2h</strong> on a P6000 GPU with the above specified settings.</p>
 
@@ -728,7 +728,7 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 <div class="text_cell_render border-box-sizing rendered_html">
 <h3 id="Training-progress">Training progress<a class="anchor-link" href="#Training-progress"> </a></h3><p>If you are tracking the training progress with Weights&amp;Biases you should see a plot similar to the following:</p>
 <div style="text-align: center">
-{% include image.html max-width="800" file="/lm_ppo/images/gpt2_tuning_progress.png" %}
+{% include image.html max-width="800" file="/trl/images/gpt2_tuning_progress.png" %}
 <p style="text-align: center;"> <b>Figure:</b> Reward mean and distribution evolution during training. </p>
 </div><p>One can observe how the model starts to generate more positive outputs after a few optimisation steps.
 {% include note.html content='Investigating the KL-divergence will probably show that at this point the model has not converged to the target KL-divergence, yet. To get there would require longer training or starting with a higher inital coefficient.' %}</p>

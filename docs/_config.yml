@@ -1,7 +1,7 @@
-repository: lvwerra/lm_ppo
+repository: lvwerra/trl
 output: web
-topnav_title: lm_ppo
-site_title: lm_ppo
+topnav_title: trl
+site_title: trl
 company_name: Leandro von Werra
 description: A Pytorch implementation of Proximal Policy Optimization for transfomer language models.
 # Set to false to disable KaTeX math
@@ -61,4 +61,4 @@ sidebars:
 permalink: pretty
 
 theme: jekyll-theme-cayman
-baseurl: /lm_ppo/
+baseurl: /trl/

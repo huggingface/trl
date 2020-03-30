@@ -2,7 +2,7 @@ topnav:
 - title: Topnav
   items:
     - title: GitHub
-      external_url: https://github.com/lvwerra/lm_ppo
+      external_url: https://github.com/lvwerra/trl
 
 #Topnav dropdowns
 topnav_dropdowns:

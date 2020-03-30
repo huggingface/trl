@@ -1,5 +1,5 @@
 {
-  "lm_ppo": {
+  "trl": {
     "Overview": "/",
     "Utility functions": "/00-core",
     "GPT2 with value head": "/01-gpt2-with-value-head",

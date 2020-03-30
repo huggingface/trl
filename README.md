@@ -1,9 +1,9 @@
-# Welcome to lm_ppo
+# Welcome to trl
 > Train transformer language models with Reinforcement Learning.
 
 
 ## What is it?
-With `lm_ppo` you can train transformer language models with Proximal Policy Optimization (PPO). The library is built with the `transformer` library by  🤗Huggingface. Therefore, pre-trained language models can be directly loaded via the transformer interface. At this point only GTP2 is implemented.
+With `trl` you can train transformer language models with Proximal Policy Optimization (PPO). The library is built with the `transformer` library by  🤗Huggingface. Therefore, pre-trained language models can be directly loaded via the transformer interface. At this point only GTP2 is implemented.
 
 **Highlights:**
 - GPT2 model with a value head: A transformer model with an additional scalar output for each token which can be used as a value function in Reinforcement Learning.
@@ -20,7 +20,7 @@ This process is illustrated in the sketch below:
 
 
 <div style="text-align: center">
-<img src="nbs/images/lm_ppo_overview.png" width="800">
+<img src="nbs/images/trl_overview.png" width="800">
 <p style="text-align: center;"> <b>Figure:</b> Sketch of the workflow. </p>
 </div>
 
@@ -29,7 +29,7 @@ This process is illustrated in the sketch below:
 ### Python package
 Install the library with pip:
 
-`pip install lm_ppo`
+`pip install trl`
 
 ### Repository
 If you want to run the examples in the repository a few additional libraries are required. Clone the repository and install it with pip:
@@ -59,8 +59,8 @@ This is a basic example on how to use the library. Based on a query the language
 # imports
 import torch
 from transformers import GPT2Tokenizer
-from lm_ppo.gpt2 import GPT2HeadWithValueModel, respond_to_batch
-from lm_ppo.ppo import PPOTrainer
+from trl.gpt2 import GPT2HeadWithValueModel, respond_to_batch
+from trl.ppo import PPOTrainer
 
 # get models
 gpt2_model = GPT2HeadWithValueModel.from_pretrained('gpt2')

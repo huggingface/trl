@@ -91,7 +91,7 @@ description: "A Pytorch implementation of Proximal Policy Optimization for trans
 
 
 <div class="output_markdown rendered_html output_subarea ">
-<h2 id="AdaptiveKLController" class="doc_header"><code>class</code> <code>AdaptiveKLController</code><a href="https://github.com/lvwerra/lm_ppo/tree/master/lm_ppo/ppo.py#L26" class="source_link" style="float:right">[source]</a></h2><blockquote><p><code>AdaptiveKLController</code>(<strong><code>init_kl_coef</code></strong>, <strong><code>target</code></strong>, <strong><code>horizon</code></strong>)</p>
+<h2 id="AdaptiveKLController" class="doc_header"><code>class</code> <code>AdaptiveKLController</code><a href="https://github.com/lvwerra/trl/tree/master/trl/ppo.py#L26" class="source_link" style="float:right">[source]</a></h2><blockquote><p><code>AdaptiveKLController</code>(<strong><code>init_kl_coef</code></strong>, <strong><code>target</code></strong>, <strong><code>horizon</code></strong>)</p>
 </blockquote>
 <p>Adaptive KL controller described in the paper:
 <a href="https://arxiv.org/pdf/1909.08593.pdf">https://arxiv.org/pdf/1909.08593.pdf</a></p>
@@ -140,7 +140,7 @@ description: "A Pytorch implementation of Proximal Policy Optimization for trans
 
 
 <div class="output_markdown rendered_html output_subarea ">
-<h2 id="FixedKLController" class="doc_header"><code>class</code> <code>FixedKLController</code><a href="https://github.com/lvwerra/lm_ppo/tree/master/lm_ppo/ppo.py#L44" class="source_link" style="float:right">[source]</a></h2><blockquote><p><code>FixedKLController</code>(<strong><code>kl_coef</code></strong>)</p>
+<h2 id="FixedKLController" class="doc_header"><code>class</code> <code>FixedKLController</code><a href="https://github.com/lvwerra/trl/tree/master/trl/ppo.py#L44" class="source_link" style="float:right">[source]</a></h2><blockquote><p><code>FixedKLController</code>(<strong><code>kl_coef</code></strong>)</p>
 </blockquote>
 <p>Fixed KL controller.</p>
 
@@ -414,7 +414,7 @@ description: "A Pytorch implementation of Proximal Policy Optimization for trans
 
 
 <div class="output_markdown rendered_html output_subarea ">
-<h2 id="PPOTrainer" class="doc_header"><code>class</code> <code>PPOTrainer</code><a href="https://github.com/lvwerra/lm_ppo/tree/master/lm_ppo/ppo.py#L54" class="source_link" style="float:right">[source]</a></h2><blockquote><p><code>PPOTrainer</code>(<strong><code>model</code></strong>, <strong><code>ref_model</code></strong>, <strong>**<code>ppo_params</code></strong>)</p>
+<h2 id="PPOTrainer" class="doc_header"><code>class</code> <code>PPOTrainer</code><a href="https://github.com/lvwerra/trl/tree/master/trl/ppo.py#L54" class="source_link" style="float:right">[source]</a></h2><blockquote><p><code>PPOTrainer</code>(<strong><code>model</code></strong>, <strong><code>ref_model</code></strong>, <strong>**<code>ppo_params</code></strong>)</p>
 </blockquote>
 <p>The PPO_trainer uses Proximal Policy Optimization to optimise language models.</p>
 

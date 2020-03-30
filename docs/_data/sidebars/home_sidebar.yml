@@ -25,6 +25,6 @@ entries:
       title: Tune GPT2 to generate positive reviews
       url: /04-gpt2-sentiment-ppo-training
     output: web
-    title: lm_ppo
+    title: trl
   output: web
   title: Sidebar
