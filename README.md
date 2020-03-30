@@ -42,11 +42,11 @@ If you want to run the examples in the repository a few additional libraries are
 
 ### Jupyter notebooks
 
-If you run the Jupyter notebooks you might need to run the following:
+If you run Jupyter notebooks you might need to run the following:
 
 `jupyter nbextension enable --py --sys-prefix widgetsnbextension`
 
-For Jupyterlab run this in addition:
+For Jupyterlab additionally this command:
 
 `jupyter labextension install @jupyter-widgets/jupyterlab-manager`
 
@@ -94,6 +94,17 @@ For a detailed example check out the notebook *Tune GPT2 to generate positive re
 <img src="nbs/images/table_imdb_preview.png" width="800">
 <p style="text-align: center;"> <b>Figure:</b> A few review continuations before and after optimisation. </p>
 </div>
+
+
+## Notebooks
+This library is built with `nbdev` and as such all the library code as well as examples are in Jupyter notebooks. The following list gives an overview:
+
+- `index.ipynb`: Generates the README and the overview page.
+- `00-core.ipynb`: Contains the utility functions used throughout the library and examples.
+- `01-gpt2-with-value-head.ipynb`: Implementation of a `transformer` compatible GPT2 model with an additional value head as well as a function to generate sequences.
+- `02-ppo.ipynb`: Implementation of the PPOTrainer used to train language models.
+- `03-bert-imdb-training.ipynb`: Training of BERT with `simpletransformers` to classify sentiment on the IMDB dataset.
+- `04-gpt2-sentiment-ppo-training.ipynb`: Fine-tune GPT2 with the BERT sentiment classifier to produce positive movie reviews.
 
 
 ## Reference
