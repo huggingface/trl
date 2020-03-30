@@ -68,20 +68,35 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 <span class="kn">import</span> <span class="nn">wandb</span>
 <span class="kn">import</span> <span class="nn">time</span>
 <span class="kn">import</span> <span class="nn">os</span>
-<span class="kn">from</span> <span class="nn">tqdm</span> <span class="k">import</span> <span class="n">tqdm</span>
+<span class="kn">from</span> <span class="nn">tqdm</span> <span class="kn">import</span> <span class="n">tqdm</span>
 <span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
 <span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
 <span class="n">tqdm</span><span class="o">.</span><span class="n">pandas</span><span class="p">()</span>
 
-<span class="kn">from</span> <span class="nn">transformers</span> <span class="k">import</span> <span class="n">GPT2Tokenizer</span>
-<span class="kn">from</span> <span class="nn">transformers</span> <span class="k">import</span> <span class="n">AutoModelForSequenceClassification</span><span class="p">,</span> <span class="n">AutoTokenizer</span>
+<span class="kn">from</span> <span class="nn">transformers</span> <span class="kn">import</span> <span class="n">GPT2Tokenizer</span>
+<span class="kn">from</span> <span class="nn">transformers</span> <span class="kn">import</span> <span class="n">AutoModelForSequenceClassification</span><span class="p">,</span> <span class="n">AutoTokenizer</span>
 
-<span class="kn">from</span> <span class="nn">lm_ppo.gpt2</span> <span class="k">import</span> <span class="n">GPT2HeadWithValueModel</span><span class="p">,</span> <span class="n">respond_to_batch</span>
-<span class="kn">from</span> <span class="nn">lm_ppo.ppo</span> <span class="k">import</span> <span class="n">PPOTrainer</span>
-<span class="kn">from</span> <span class="nn">lm_ppo.core</span> <span class="k">import</span> <span class="n">build_bert_batch_from_txt</span>
+<span class="kn">from</span> <span class="nn">lm_ppo.gpt2</span> <span class="kn">import</span> <span class="n">GPT2HeadWithValueModel</span><span class="p">,</span> <span class="n">respond_to_batch</span>
+<span class="kn">from</span> <span class="nn">lm_ppo.ppo</span> <span class="kn">import</span> <span class="n">PPOTrainer</span>
+<span class="kn">from</span> <span class="nn">lm_ppo.core</span> <span class="kn">import</span> <span class="n">build_bert_batch_from_txt</span>
 </pre></div>
 
     </div>
+</div>
+</div>
+
+<div class="output_wrapper">
+<div class="output">
+
+<div class="output_area">
+
+<div class="output_subarea output_stream output_stderr output_text">
+<pre>/Users/leandro/git/lm_ppo/env/lib/python3.7/site-packages/tqdm/std.py:658: FutureWarning: The Panel class is removed from pandas. Accessing it from the top-level namespace will also be removed in the next version
+  from pandas import Panel
+</pre>
+</div>
+</div>
+
 </div>
 </div>
 
@@ -105,11 +120,11 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
     <span class="s2">&quot;lm_name&quot;</span><span class="p">:</span> <span class="s2">&quot;lvwerra/gpt2-imdb&quot;</span><span class="p">,</span>
     <span class="s2">&quot;ref_lm_name&quot;</span><span class="p">:</span> <span class="s2">&quot;lvwerra/gpt2-imdb&quot;</span><span class="p">,</span>
     <span class="s2">&quot;cls_model_name&quot;</span><span class="p">:</span> <span class="s2">&quot;lvwerra/bert-imdb&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;tk_name&quot;</span><span class="p">:</span> <span class="s2">&quot;gpt2&quot;</span><span class="p">,</span>
     <span class="s2">&quot;steps&quot;</span><span class="p">:</span> <span class="mi">25600</span><span class="p">,</span>
     <span class="s2">&quot;batch_size&quot;</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span>
     <span class="s2">&quot;forward_batch_size&quot;</span><span class="p">:</span> <span class="mi">16</span><span class="p">,</span>
     <span class="s2">&quot;ppo_epochs&quot;</span><span class="p">:</span> <span class="mi">4</span><span class="p">,</span>   
-    <span class="s2">&quot;tk_name&quot;</span><span class="p">:</span> <span class="s2">&quot;gpt2&quot;</span><span class="p">,</span>
     <span class="s2">&quot;txt_in_len&quot;</span><span class="p">:</span> <span class="mi">5</span><span class="p">,</span>
     <span class="s2">&quot;txt_out_len&quot;</span><span class="p">:</span> <span class="mi">15</span><span class="p">,</span>
     <span class="s2">&quot;lr&quot;</span><span class="p">:</span> <span class="mf">1.41e-5</span><span class="p">,</span>
@@ -609,7 +624,7 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 <li>Join query and responses and tokenize for BERT analysis</li>
 <li>Get sentiments for query/responses from BERT</li>
 <li>Optimize policy with PPO using the (query, response, reward) triplet</li>
-<li>Log all the statistics</li>
+<li>Log all the training statistics</li>
 </ol>
 <p><strong>Forward batching</strong></p>
 <p>Since the models can be fairly big and we want to rollout large PPO batches this can lead to out-of-memory errors when doing the forward passes for text generation and sentiment analysis. We introduce the parameter <code>forward_batch_size</code> to split the forward passes into smaller batches. Although this hurts performance a little this is neglectible compared to the computations of the backward passes when optimizing the model. The same parameter is used in the <a href="/lm_ppo/02-ppo#PPOTrainer"><code>PPOTrainer</code></a> when doing forward passes. The <code>batch_size</code> should multiple of <code>forward_batch_size</code>.</p>
@@ -715,8 +730,8 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 <div style="text-align: center">
 {% include image.html max-width="800" file="/lm_ppo/images/gpt2_tuning_progress.png" %}
 <p style="text-align: center;"> <b>Figure:</b> Reward mean and distribution evolution during training. </p>
-</div><p>One can observe how the model starts to generate more positive outputs after a few optimisation steps.</p>
-<p><em>Note</em>: Investigating the KL-divergence will probably show that at this point the model has not converged to the target KL-divergence, yet. To get there would require longer training.</p>
+</div><p>One can observe how the model starts to generate more positive outputs after a few optimisation steps.
+{% include note.html content='Investigating the KL-divergence will probably show that at this point the model has not converged to the target KL-divergence, yet. To get there would require longer training or starting with a higher inital coefficient.' %}</p>
 
 </div>
 </div>

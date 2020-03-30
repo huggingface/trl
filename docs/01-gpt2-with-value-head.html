@@ -57,7 +57,7 @@ description: "A GPT2 model with a value head built on the transformer library by
     <div class="input_area">
 <div class=" highlight hl-ipython3"><pre><span></span><span class="k">class</span> <span class="nc">ValueHead</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
     <span class="sd">&quot;&quot;&quot;The ValueHead class implements a head for GPT2 that returns a scalar for each output token.&quot;&quot;&quot;</span>
-    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">config</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">config</span><span class="p">):</span>
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">detach_head</span> <span class="o">=</span> <span class="kc">False</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">summary_type</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">summary_type</span> <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="s2">&quot;summary_type&quot;</span><span class="p">)</span> <span class="k">else</span> <span class="s2">&quot;last&quot;</span>
@@ -140,7 +140,7 @@ description: "A GPT2 model with a value head built on the transformer library by
     <div class="input_area">
 <div class=" highlight hl-ipython3"><pre><span></span><span class="k">class</span> <span class="nc">GPT2HeadWithValueModel</span><span class="p">(</span><span class="n">GPT2PreTrainedModel</span><span class="p">):</span>
     <span class="sd">&quot;&quot;&quot;The GPT2HeadWithValueModel class implements a GPT2 language model with a secondary, scalar head.&quot;&quot;&quot;</span>
-    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">config</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">config</span><span class="p">):</span>
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">config</span><span class="p">)</span>
         <span class="n">config</span><span class="o">.</span><span class="n">num_labels</span> <span class="o">=</span> <span class="mi">1</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">transformer</span> <span class="o">=</span> <span class="n">GPT2Model</span><span class="p">(</span><span class="n">config</span><span class="p">)</span>
@@ -611,6 +611,28 @@ My least favourite movie is Jon Favreau&#39;s Log Horizon, complete with psyched
 </div>
     {% endraw %}
 
+<div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
+<div class="text_cell_render border-box-sizing rendered_html">
+<h2 id="Why-the-custom-response-function?">Why the custom response function?<a class="anchor-link" href="#Why-the-custom-response-function?"> </a></h2><p>The models in the <code>transformer</code> library come with a very useful and optimised generation function <code>model.generate()</code>. In the beginning this function was indeed used to generate text but after lengthy debugging it turned out that PPO was exploiting some aspects that are generally useful for text generation but allowed the model to abuse it and gain extra rewards.</p>
+<h3 id="The-model-reward">The model reward<a class="anchor-link" href="#The-model-reward"> </a></h3><p>To understand how the model was able to exploit the generation function it is worth looking at the reward function for language modeling with PPO. The reward consists of an arbitrary score (any scalar to indicate whether the model output was good or bad) and the KL-divergence from the untrained model:</p>
+<p>{{% raw %}}
+$$reward = score - \beta \times KL$$
+{{% endraw %}}</p>
+<p>where $\beta$ is some positive factor. The KL divergence is calculate with:</p>
+<p>{{% raw %}}
+$$ KL = \mathbb{E}_{x \sim p_{model}} [\log p_{model}(x) - \log p_{refmodel}(x)]$$
+{{% endraw %}}</p>
+<p>Since $x$ is sampled from $p_{model}$ the KL-divergence is always positive. However, if the model found a way to get negative KL-divergence it would achieve a positive reward. This is what happened twice with in the experiment and both times a quirk of the text generation was abused to avoid proper sampling from the probability distribution.</p>
+<h3 id="Case-1:-min_length=None">Case 1: <code>min_length=None</code><a class="anchor-link" href="#Case-1:-min_length=None"> </a></h3><p>When no <code>min_length</code> is specified in the <code>model.generate()</code> function the model probability distribution is normally sampled until the first <code>&lt;eos&gt;</code> token appears. Then the rest of the sequence is padded with a padding token until <code>max_length</code> is reached (for GPT2 this is also the <code>&lt;eos&gt;</code> token). If that sequence is again passed through the model to evaluate the log-probabilities everything is normal until after the first <code>&lt;eos&gt;</code> token, since multiple <code>&lt;eos&gt;</code> tokens are very unlikely. The model exploited this by decreasing the probability for the <code>&lt;eos&gt;</code> token after the first appearence even further below the probability of the reference model, thus achieving negative KL-divergence. Additionally, it inserted the first <code>&lt;eos&gt;</code> earlier and earlier in the sentences to minimize the KL-divergence and thus maximise the reward. This only worked because the sequence after the first <code>&lt;eos&gt;</code> token wasn't properly sampled but padded, otherwise the low probabilities would have lead to other tokens with higher probability being sampled.</p>
+<h3 id="Case-2:-min_length=max_length">Case 2: <code>min_length=max_length</code><a class="anchor-link" href="#Case-2:-min_length=max_length"> </a></h3><p>I thought this could be easily fixed: just set the <code>min_length=max_length</code>. This seemed to work fine for a few experiments until the training failed again due to negative KL-divergences. Finding the problem was harder than before, since it only happened rarely after several training steps. In addition the generated sentences deteriorated quickly to complete gibberish. After some investigation it turned out that the model was again exploiting the sampling function. Up to this point I was not aware that the model was also not allowed to produce an <code>&lt;eos&gt;</code> token before <code>min_length</code> is reached. In practice this is achieved by setting the next token logit to -infinity:</p>
+
+<pre><code>next_token_logits[:, eos_token_id] = -float("inf")</code></pre>
+<p>This makes sure that after the softmax function the probability for the <code>&lt;eos&gt;</code> token is zero, no matter the model output. The model exploited this by maximizing the logit output for that token and thus setting all other logits to increasingly small numbers. Since, I did not apply the same step when evaluating the generated sequence (calculating softmax without the -inf trick) the probabilities for the generated sequences were extremely small and in fact smaller than the probabilities of the reference model. This lead again to negative KL-divergence.</p>
+<h3 id="Conclusion">Conclusion<a class="anchor-link" href="#Conclusion"> </a></h3><p>In both cases $x \sim p_{model}$ in the KL-divergence equation was not satisfied, but this was hidden in the sequence generating function. Reinforcement Learning is very effective in finding and exploiting environment quirks as others have pointed out for other environments such as ATARI games. The solution was to go back to a simpler sequence sampler to avoid this exploits. Alternatively, I could have applied the same tricks and some masking to the model outputs when evaluating the sequences, but I didn't feel confident enough that there would not be other sequence generation tricks the model could abuse.</p>
+
+</div>
+</div>
+</div>
 </div>
  
 

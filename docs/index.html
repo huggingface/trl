@@ -69,9 +69,9 @@ description: "Train transformer language models with Reinforcement Learning."
 <p><code>git clone https://github.com/lvwerra/trl.git</code></p>
 <p><code>cd tlr/</code></p>
 <p><code>pip install -r requirements.txt</code></p>
-<h3 id="Jupyter-notebooks">Jupyter notebooks<a class="anchor-link" href="#Jupyter-notebooks"> </a></h3><p>If you run the Jupyter notebooks you might need to run the following:</p>
+<h3 id="Jupyter-notebooks">Jupyter notebooks<a class="anchor-link" href="#Jupyter-notebooks"> </a></h3><p>If you run Jupyter notebooks you might need to run the following:</p>
 <p><code>jupyter nbextension enable --py --sys-prefix widgetsnbextension</code></p>
-<p>For Jupyterlab run this in addition:</p>
+<p>For Jupyterlab additionally this command:</p>
 <p><code>jupyter labextension install @jupyter-widgets/jupyterlab-manager</code></p>
 
 </div>
@@ -99,9 +99,9 @@ description: "Train transformer language models with Reinforcement Learning."
     <div class="input_area">
 <div class=" highlight hl-ipython3"><pre><span></span><span class="c1"># imports</span>
 <span class="kn">import</span> <span class="nn">torch</span>
-<span class="kn">from</span> <span class="nn">transformers</span> <span class="k">import</span> <span class="n">GPT2Tokenizer</span>
-<span class="kn">from</span> <span class="nn">lm_ppo.gpt2</span> <span class="k">import</span> <span class="n">GPT2HeadWithValueModel</span><span class="p">,</span> <span class="n">respond_to_batch</span>
-<span class="kn">from</span> <span class="nn">lm_ppo.ppo</span> <span class="k">import</span> <span class="n">PPOTrainer</span>
+<span class="kn">from</span> <span class="nn">transformers</span> <span class="kn">import</span> <span class="n">GPT2Tokenizer</span>
+<span class="kn">from</span> <span class="nn">lm_ppo.gpt2</span> <span class="kn">import</span> <span class="n">GPT2HeadWithValueModel</span><span class="p">,</span> <span class="n">respond_to_batch</span>
+<span class="kn">from</span> <span class="nn">lm_ppo.ppo</span> <span class="kn">import</span> <span class="n">PPOTrainer</span>
 
 <span class="c1"># get models</span>
 <span class="n">gpt2_model</span> <span class="o">=</span> <span class="n">GPT2HeadWithValueModel</span><span class="o">.</span><span class="n">from_pretrained</span><span class="p">(</span><span class="s1">&#39;gpt2&#39;</span><span class="p">)</span>
@@ -142,6 +142,21 @@ description: "Train transformer language models with Reinforcement Learning."
 {% include image.html max-width="800" file="/lm_ppo/images/table_imdb_preview.png" %}
 <p style="text-align: center;"> <b>Figure:</b> A few review continuations before and after optimisation. </p>
 </div>
+</div>
+</div>
+</div>
+<div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
+<div class="text_cell_render border-box-sizing rendered_html">
+<h2 id="Notebooks">Notebooks<a class="anchor-link" href="#Notebooks"> </a></h2><p>This library is built with <code>nbdev</code> and as such all the library code as well as examples are in Jupyter notebooks. The following list gives an overview:</p>
+<ul>
+<li><code>index.ipynb</code>: Generates the README and the overview page.</li>
+<li><code>00-core.ipynb</code>: Contains the utility functions used throughout the library and examples.</li>
+<li><code>01-gpt2-with-value-head.ipynb</code>: Implementation of a <code>transformer</code> compatible GPT2 model with an additional value head as well as a function to generate sequences.</li>
+<li><code>02-ppo.ipynb</code>: Implementation of the PPOTrainer used to train language models.</li>
+<li><code>03-bert-imdb-training.ipynb</code>: Training of BERT with <code>simpletransformers</code> to classify sentiment on the IMDB dataset.</li>
+<li><code>04-gpt2-sentiment-ppo-training.ipynb</code>: Fine-tune GPT2 with the BERT sentiment classifier to produce positive movie reviews.</li>
+</ul>
+
 </div>
 </div>
 </div>
