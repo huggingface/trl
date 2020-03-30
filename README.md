@@ -8,6 +8,7 @@ With `trl` you can train transformer language models with Proximal Policy Optimi
 **Highlights:**
 - GPT2 model with a value head: A transformer model with an additional scalar output for each token which can be used as a value function in Reinforcement Learning.
 - PPOTrainer: A PPO trainer for language models that just needs (query, response, reward) triplets to optimise the language model.
+- Example: Train GPT2 to generate positive movie reviews with a BERT sentiment classifier.
 
 ## How it works
 Fine-tuning a language model via PPO consists of roughly three steps:
