@@ -106,7 +106,7 @@ This library is built with `nbdev` and as such all the library code as well as e
 - `02-ppo.ipynb`: Implementation of the PPOTrainer used to train language models.
 - `03-bert-imdb-training.ipynb`: Training of BERT with `simpletransformers` to classify sentiment on the IMDB dataset.
 - `04-gpt2-sentiment-ppo-training.ipynb`: Fine-tune GPT2 with the BERT sentiment classifier to produce positive movie reviews.
-
+- `05-gpt2-sentiment-control.ipynb`: Fine-tune GPT2 with the BERT sentiment classifier to produce movie reviews with controlled sentiment.
 
 ## References
 
