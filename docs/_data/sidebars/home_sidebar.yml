@@ -24,6 +24,9 @@ entries:
     - output: web,pdf
       title: Tune GPT2 to generate positive reviews
       url: /04-gpt2-sentiment-ppo-training
+    - output: web,pdf
+      title: Tune GPT2 to generate controlled sentiment reviews
+      url: /05-gpt2-sentiment-control
     output: web
     title: trl
   output: web
