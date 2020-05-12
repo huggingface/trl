@@ -8,5 +8,5 @@ simpletransformers==0.21.4
 torch==1.4.0
 tqdm==4.43.0
 transformers==2.6.0
-wandb==0.8.31
+wandb==0.8.35
 matplotlib==3.2.1
