@@ -6,7 +6,6 @@ keywords: fastai
 sidebar: home_sidebar
 
 summary: "A Pytorch implementation of Proximal Policy Optimization for transfomer models."
-description: "A Pytorch implementation of Proximal Policy Optimization for transfomer models."
 ---
 <!--
 
@@ -19,14 +18,11 @@ description: "A Pytorch implementation of Proximal Policy Optimization for trans
 -->
 
 <div class="container" id="notebook-container">
-        
     {% raw %}
-    
+        
 <div class="cell border-box-sizing code_cell rendered">
 
 </div>
-    {% endraw %}
-
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
 <p>This follows the language model approach proposed in paper <a href="https://arxiv.org/pdf/1909.08593.pdf">"Fine-Tuning Language Models from Human Preferences"</a> and is similar to the <a href="https://github.com/openai/lm-human-preferences">original implementation</a>. The two main differences are 1) the method is implemented in Pytorch and 2) works with the <code>transformer</code> library by Hugging Face.</p>
@@ -34,23 +30,17 @@ description: "A Pytorch implementation of Proximal Policy Optimization for trans
 </div>
 </div>
 </div>
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 
 </div>
-    {% endraw %}
-
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="KL-controllers">KL-controllers<a class="anchor-link" href="#KL-controllers"> </a></h2><p>To ensure that the learned policy does not deviate to much from the original language model the KL divergence between the policy and a reference policy (the language model before PPO training) is used as an additional reward signal. Large KL-divergences are punished and staying close to the reference is rewarded.</p>
+<h2 id="KL-controllers">KL-controllers<a class="anchor-link" href="#KL-controllers">&#182;</a></h2><p>To ensure that the learned policy does not deviate to much from the original language model the KL divergence between the policy and a reference policy (the language model before PPO training) is used as an additional reward signal. Large KL-divergences are punished and staying close to the reference is rewarded.</p>
 <p>Two controllers are presented in the paper: an adaptive log-space proportional controller and a fixed controller.</p>
 
 </div>
 </div>
 </div>
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -78,10 +68,6 @@ description: "A Pytorch implementation of Proximal Policy Optimization for trans
 </div>
 
 </div>
-    {% endraw %}
-
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 
 <div class="output_wrapper">
@@ -104,10 +90,6 @@ description: "A Pytorch implementation of Proximal Policy Optimization for trans
 </div>
 
 </div>
-    {% endraw %}
-
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -127,10 +109,6 @@ description: "A Pytorch implementation of Proximal Policy Optimization for trans
 </div>
 
 </div>
-    {% endraw %}
-
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 
 <div class="output_wrapper">
@@ -152,10 +130,6 @@ description: "A Pytorch implementation of Proximal Policy Optimization for trans
 </div>
 
 </div>
-    {% endraw %}
-
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -401,10 +375,6 @@ description: "A Pytorch implementation of Proximal Policy Optimization for trans
 </div>
 
 </div>
-    {% endraw %}
-
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 
 <div class="output_wrapper">
@@ -426,11 +396,9 @@ description: "A Pytorch implementation of Proximal Policy Optimization for trans
 </div>
 
 </div>
-    {% endraw %}
-
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Tensor-shapes-and-contents">Tensor shapes and contents<a class="anchor-link" href="#Tensor-shapes-and-contents"> </a></h2>
+<h2 id="Tensor-shapes-and-contents">Tensor shapes and contents<a class="anchor-link" href="#Tensor-shapes-and-contents">&#182;</a></h2>
 </div>
 </div>
 </div>
@@ -508,18 +476,19 @@ description: "A Pytorch implementation of Proximal Policy Optimization for trans
 </div>
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Model-output-alignments">Model output alignments<a class="anchor-link" href="#Model-output-alignments"> </a></h2><p>Some notes on output alignments, since I spent a considerable time debugging this. All model outputs are shifted by 1 to the model inputs. That means that the logits are shifted by one as well as values. For this reason the logits and values are always shifted one step to the left. This also means we don't have logits for the first input element and so we delete the first input token when calculating the softmax, since we don't have logits predictions. The same applies for the values and we shift them by index one to the left.</p>
+<h2 id="Model-output-alignments">Model output alignments<a class="anchor-link" href="#Model-output-alignments">&#182;</a></h2><p>Some notes on output alignments, since I spent a considerable time debugging this. All model outputs are shifted by 1 to the model inputs. That means that the logits are shifted by one as well as values. For this reason the logits and values are always shifted one step to the left. This also means we don't have logits for the first input element and so we delete the first input token when calculating the softmax, since we don't have logits predictions. The same applies for the values and we shift them by index one to the left.</p>
 
 </div>
 </div>
 </div>
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="KL-divergence">KL-divergence<a class="anchor-link" href="#KL-divergence"> </a></h2><p>One question that came up during the implementation was "Why is the KL-divergence just the difference of the log-probs? Where is the probability in front of the log term?". The answer can be found in Sergey Levine's <a href="http://rll.berkeley.edu/deeprlcourse/docs/week_3_lecture_1_dynamics_learning.pdf">lecture slides</a>: To calculate the KL divergence we calculate the expected value of the log term. The probability usually in front of the log-term comes from that expected value and for a set of trajectories we can simply take the mean over the sampled trajectories.</p>
+<h2 id="KL-divergence">KL-divergence<a class="anchor-link" href="#KL-divergence">&#182;</a></h2><p>One question that came up during the implementation was "Why is the KL-divergence just the difference of the log-probs? Where is the probability in front of the log term?". The answer can be found in Sergey Levine's <a href="http://rll.berkeley.edu/deeprlcourse/docs/week_3_lecture_1_dynamics_learning.pdf">lecture slides</a>: To calculate the KL divergence we calculate the expected value of the log term. The probability usually in front of the log-term comes from that expected value and for a set of trajectories we can simply take the mean over the sampled trajectories.</p>
 
 </div>
 </div>
 </div>
+    {% endraw %}
 </div>
  
 
