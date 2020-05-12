@@ -6,6 +6,7 @@ keywords: fastai
 sidebar: home_sidebar
 
 summary: "Train transformer language models with reinforcement learning."
+description: "Train transformer language models with reinforcement learning."
 ---
 <!--
 
@@ -18,14 +19,17 @@ summary: "Train transformer language models with reinforcement learning."
 -->
 
 <div class="container" id="notebook-container">
-    {% raw %}
         
+    {% raw %}
+    
 <div class="cell border-box-sizing code_cell rendered">
 
 </div>
+    {% endraw %}
+
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="What-is-it?">What is it?<a class="anchor-link" href="#What-is-it?">&#182;</a></h2><p>With <code>trl</code> you can train transformer language models with Proximal Policy Optimization (PPO). The library is built with the <code>transformer</code> library by  🤗 Hugging Face (<a href="https://github.com/huggingface/transformers">link</a>). Therefore, pre-trained language models can be directly loaded via the transformer interface. At this point only GTP2 is implemented.</p>
+<h2 id="What-is-it?">What is it?<a class="anchor-link" href="#What-is-it?"> </a></h2><p>With <code>trl</code> you can train transformer language models with Proximal Policy Optimization (PPO). The library is built with the <code>transformer</code> library by  🤗 Hugging Face (<a href="https://github.com/huggingface/transformers">link</a>). Therefore, pre-trained language models can be directly loaded via the transformer interface. At this point only GTP2 is implemented.</p>
 <p><strong>Highlights:</strong></p>
 <ul>
 <li>GPT2 model with a value head: A transformer model with an additional scalar output for each token which can be used as a value function in reinforcement learning.</li>
@@ -38,7 +42,7 @@ summary: "Train transformer language models with reinforcement learning."
 </div>
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="How-it-works">How it works<a class="anchor-link" href="#How-it-works">&#182;</a></h2><p>Fine-tuning a language model via PPO consists of roughly three steps:</p>
+<h2 id="How-it-works">How it works<a class="anchor-link" href="#How-it-works"> </a></h2><p>Fine-tuning a language model via PPO consists of roughly three steps:</p>
 <ol>
 <li><strong>Rollout</strong>: The language model generates a response or continuation based on query which could be the start of a sentence.</li>
 <li><strong>Evaluation</strong>: The query and response are evaluated with a function, model, human feedback or some combination of them. The important thing is that this process should yield a scalar value for each query/response pair.</li>
@@ -54,19 +58,19 @@ summary: "Train transformer language models with reinforcement learning."
 </div>
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Installation">Installation<a class="anchor-link" href="#Installation">&#182;</a></h2>
+<h2 id="Installation">Installation<a class="anchor-link" href="#Installation"> </a></h2>
 </div>
 </div>
 </div>
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h3 id="Python-package">Python package<a class="anchor-link" href="#Python-package">&#182;</a></h3><p>Install the library with pip:</p>
+<h3 id="Python-package">Python package<a class="anchor-link" href="#Python-package"> </a></h3><p>Install the library with pip:</p>
 <p><code>pip install trl</code></p>
-<h3 id="Repository">Repository<a class="anchor-link" href="#Repository">&#182;</a></h3><p>If you want to run the examples in the repository a few additional libraries are required. Clone the repository and install it with pip:</p>
+<h3 id="Repository">Repository<a class="anchor-link" href="#Repository"> </a></h3><p>If you want to run the examples in the repository a few additional libraries are required. Clone the repository and install it with pip:</p>
 <p><code>git clone https://github.com/lvwerra/trl.git</code></p>
 <p><code>cd tlr/</code></p>
 <p><code>pip install -r requirements.txt</code></p>
-<h3 id="Jupyter-notebooks">Jupyter notebooks<a class="anchor-link" href="#Jupyter-notebooks">&#182;</a></h3><p>If you run Jupyter notebooks you might need to run the following:</p>
+<h3 id="Jupyter-notebooks">Jupyter notebooks<a class="anchor-link" href="#Jupyter-notebooks"> </a></h3><p>If you run Jupyter notebooks you might need to run the following:</p>
 <p><code>jupyter nbextension enable --py --sys-prefix widgetsnbextension</code></p>
 <p>For Jupyterlab additionally this command:</p>
 <p><code>jupyter labextension install @jupyter-widgets/jupyterlab-manager</code></p>
@@ -76,17 +80,19 @@ summary: "Train transformer language models with reinforcement learning."
 </div>
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="How-to-use">How to use<a class="anchor-link" href="#How-to-use">&#182;</a></h2>
+<h2 id="How-to-use">How to use<a class="anchor-link" href="#How-to-use"> </a></h2>
 </div>
 </div>
 </div>
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h3 id="Example">Example<a class="anchor-link" href="#Example">&#182;</a></h3><p>This is a basic example on how to use the library. Based on a query the language model creates a response which is then evaluated. The evaluation could be a human in the loop or another model's output.</p>
+<h3 id="Example">Example<a class="anchor-link" href="#Example"> </a></h3><p>This is a basic example on how to use the library. Based on a query the language model creates a response which is then evaluated. The evaluation could be a human in the loop or another model's output.</p>
 
 </div>
 </div>
 </div>
+    {% raw %}
+    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -127,43 +133,12 @@ summary: "Train transformer language models with reinforcement learning."
 </div>
 </div>
 
-<div class="output_wrapper">
-<div class="output">
-
-<div class="output_area">
-
-
-
-
- 
- 
-<div id="dcc6c521-1a59-4a50-828d-1505e03b676e"></div>
-<div class="output_subarea output_widget_view ">
-<script type="text/javascript">
-var element = $('#dcc6c521-1a59-4a50-828d-1505e03b676e');
-</script>
-<script type="application/vnd.jupyter.widget-view+json">
-{"version_major": 2, "version_minor": 0, "model_id": "43ed478ff3e24fe7b1c2c0f97620bcf6"}
-</script>
 </div>
+    {% endraw %}
 
-</div>
-
-<div class="output_area">
-
-<div class="output_subarea output_stream output_stdout output_text">
-<pre>
-</pre>
-</div>
-</div>
-
-</div>
-</div>
-
-</div>
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h3 id="Advanced-example:-IMDB-sentiment">Advanced example: IMDB sentiment<a class="anchor-link" href="#Advanced-example:-IMDB-sentiment">&#182;</a></h3><p>For a detailed example check out the notebook <em>Tune GPT2 to generate positive reviews</em>, where GPT2 is fine-tuned to generate positive movie reviews. An few examples from the language models before and after optimisation are given below:</p>
+<h3 id="Advanced-example:-IMDB-sentiment">Advanced example: IMDB sentiment<a class="anchor-link" href="#Advanced-example:-IMDB-sentiment"> </a></h3><p>For a detailed example check out the notebook <em>Tune GPT2 to generate positive reviews</em>, where GPT2 is fine-tuned to generate positive movie reviews. An few examples from the language models before and after optimisation are given below:</p>
 <div style="text-align: center">
 {% include image.html max-width="800" file="/trl/images/table_imdb_preview.png" %}
 <p style="text-align: center;"> <b>Figure:</b> A few review continuations before and after optimisation. </p>
@@ -173,7 +148,7 @@ var element = $('#dcc6c521-1a59-4a50-828d-1505e03b676e');
 </div>
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Notebooks">Notebooks<a class="anchor-link" href="#Notebooks">&#182;</a></h2><p>This library is built with <code>nbdev</code> and as such all the library code as well as examples are in Jupyter notebooks. The following list gives an overview:</p>
+<h2 id="Notebooks">Notebooks<a class="anchor-link" href="#Notebooks"> </a></h2><p>This library is built with <code>nbdev</code> and as such all the library code as well as examples are in Jupyter notebooks. The following list gives an overview:</p>
 <ul>
 <li><code>index.ipynb</code>: Generates the README and the overview page.</li>
 <li><code>00-core.ipynb</code>: Contains the utility functions used throughout the library and examples.</li>
@@ -189,17 +164,12 @@ var element = $('#dcc6c521-1a59-4a50-828d-1505e03b676e');
 </div>
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="References">References<a class="anchor-link" href="#References">&#182;</a></h2><h3 id="Proximal-Policy-Optimisation">Proximal Policy Optimisation<a class="anchor-link" href="#Proximal-Policy-Optimisation">&#182;</a></h3><p>The PPO implementation largely follows the structure introduced in the paper <strong>"Fine-Tuning Language Models from Human Preferences"</strong> by D. Ziegler et al. [<a href="https://arxiv.org/pdf/1909.08593.pdf">paper</a>, <a href="https://github.com/openai/lm-human-preferences">code</a>].</p>
-<h3 id="Language-models">Language models<a class="anchor-link" href="#Language-models">&#182;</a></h3><p>The language models utilize the <code>transformer</code> library by 🤗Hugging Face.</p>
+<h2 id="References">References<a class="anchor-link" href="#References"> </a></h2><h3 id="Proximal-Policy-Optimisation">Proximal Policy Optimisation<a class="anchor-link" href="#Proximal-Policy-Optimisation"> </a></h3><p>The PPO implementation largely follows the structure introduced in the paper <strong>"Fine-Tuning Language Models from Human Preferences"</strong> by D. Ziegler et al. [<a href="https://arxiv.org/pdf/1909.08593.pdf">paper</a>, <a href="https://github.com/openai/lm-human-preferences">code</a>].</p>
+<h3 id="Language-models">Language models<a class="anchor-link" href="#Language-models"> </a></h3><p>The language models utilize the <code>transformer</code> library by 🤗Hugging Face.</p>
 
 </div>
 </div>
 </div>
-    {% endraw %}
 </div>
  
-
-<script type="application/vnd.jupyter.widget-state+json">
-{"state": {"fb43d9d506884252b184df6db31be608": {"model_name": "LayoutModel", "model_module": "@jupyter-widgets/base", "model_module_version": "1.1.0", "state": {"_model_module": "@jupyter-widgets/base", "_model_module_version": "1.1.0", "_model_name": "LayoutModel", "_view_count": null, "_view_module": "@jupyter-widgets/base", "_view_module_version": "1.1.0", "_view_name": "LayoutView", "align_content": null, "align_items": null, "align_self": null, "border": null, "bottom": null, "display": null, "flex": null, "flex_flow": null, "grid_area": null, "grid_auto_columns": null, "grid_auto_flow": null, "grid_auto_rows": null, "grid_column": null, "grid_gap": null, "grid_row": null, "grid_template_areas": null, "grid_template_columns": null, "grid_template_rows": null, "height": null, "justify_content": null, "left": null, "margin": null, "max_height": null, "max_width": null, "min_height": null, "min_width": null, "order": null, "overflow": null, "overflow_x": null, "overflow_y": null, "padding": null, "right": null, "top": null, "visibility": null, "width": null}}, "a8691d9bab4e4c54908d7ffa123789b0": {"model_name": "ProgressStyleModel", "model_module": "@jupyter-widgets/controls", "model_module_version": "1.4.0", "state": {"_model_module": "@jupyter-widgets/controls", "_model_module_version": "1.4.0", "_model_name": "ProgressStyleModel", "_view_count": null, "_view_module": "@jupyter-widgets/base", "_view_module_version": "1.1.0", "_view_name": "StyleView", "bar_color": null, "description_width": "initial"}}, "cb3cbed19d22440480a3d37548de5e5a": {"model_name": "IntProgressModel", "model_module": "@jupyter-widgets/controls", "model_module_version": "1.4.0", "state": {"_dom_classes": [], "_model_module": "@jupyter-widgets/controls", "_model_module_version": "1.4.0", "_model_name": "IntProgressModel", "_view_count": null, "_view_module": "@jupyter-widgets/controls", "_view_module_version": "1.4.0", "_view_name": "ProgressView", "bar_style": "success", "description": "Downloading", "description_tooltip": null, "layout": "IPY_MODEL_fb43d9d506884252b184df6db31be608", "max": 665, "min": 0, "orientation": "horizontal", "style": "IPY_MODEL_a8691d9bab4e4c54908d7ffa123789b0", "value": 665}}, "01cd6548651c4293b962dcc59f5590bf": {"model_name": "LayoutModel", "model_module": "@jupyter-widgets/base", "model_module_version": "1.1.0", "state": {"_model_module": "@jupyter-widgets/base", "_model_module_version": "1.1.0", "_model_name": "LayoutModel", "_view_count": null, "_view_module": "@jupyter-widgets/base", "_view_module_version": "1.1.0", "_view_name": "LayoutView", "align_content": null, "align_items": null, "align_self": null, "border": null, "bottom": null, "display": null, "flex": null, "flex_flow": null, "grid_area": null, "grid_auto_columns": null, "grid_auto_flow": null, "grid_auto_rows": null, "grid_column": null, "grid_gap": null, "grid_row": null, "grid_template_areas": null, "grid_template_columns": null, "grid_template_rows": null, "height": null, "justify_content": null, "left": null, "margin": null, "max_height": null, "max_width": null, "min_height": null, "min_width": null, "order": null, "overflow": null, "overflow_x": null, "overflow_y": null, "padding": null, "right": null, "top": null, "visibility": null, "width": null}}, "bce9e133f4af415fb8e5ee1ae7aed97d": {"model_name": "DescriptionStyleModel", "model_module": "@jupyter-widgets/controls", "model_module_version": "1.4.0", "state": {"_model_module": "@jupyter-widgets/controls", "_model_module_version": "1.4.0", "_model_name": "DescriptionStyleModel", "_view_count": null, "_view_module": "@jupyter-widgets/base", "_view_module_version": "1.1.0", "_view_name": "StyleView", "description_width": ""}}, "995ff6fba6be408db01855e574e80135": {"model_name": "HTMLModel", "model_module": "@jupyter-widgets/controls", "model_module_version": "1.4.0", "state": {"_dom_classes": [], "_model_module": "@jupyter-widgets/controls", "_model_module_version": "1.4.0", "_model_name": "HTMLModel", "_view_count": null, "_view_module": "@jupyter-widgets/controls", "_view_module_version": "1.4.0", "_view_name": "HTMLView", "description": "", "description_tooltip": null, "layout": "IPY_MODEL_01cd6548651c4293b962dcc59f5590bf", "placeholder": "\u200b", "style": "IPY_MODEL_bce9e133f4af415fb8e5ee1ae7aed97d", "value": "100% 665/665 [00:00&lt;00:00, 24.2kB/s]"}}, "1789a4ef69394d59aa1647a52a741f21": {"model_name": "LayoutModel", "model_module": "@jupyter-widgets/base", "model_module_version": "1.1.0", "state": {"_model_module": "@jupyter-widgets/base", "_model_module_version": "1.1.0", "_model_name": "LayoutModel", "_view_count": null, "_view_module": "@jupyter-widgets/base", "_view_module_version": "1.1.0", "_view_name": "LayoutView", "align_content": null, "align_items": null, "align_self": null, "border": null, "bottom": null, "display": null, "flex": null, "flex_flow": null, "grid_area": null, "grid_auto_columns": null, "grid_auto_flow": null, "grid_auto_rows": null, "grid_column": null, "grid_gap": null, "grid_row": null, "grid_template_areas": null, "grid_template_columns": null, "grid_template_rows": null, "height": null, "justify_content": null, "left": null, "margin": null, "max_height": null, "max_width": null, "min_height": null, "min_width": null, "order": null, "overflow": null, "overflow_x": null, "overflow_y": null, "padding": null, "right": null, "top": null, "visibility": null, "width": null}}, "43ed478ff3e24fe7b1c2c0f97620bcf6": {"model_name": "HBoxModel", "model_module": "@jupyter-widgets/controls", "model_module_version": "1.4.0", "state": {"_dom_classes": [], "_model_module": "@jupyter-widgets/controls", "_model_module_version": "1.4.0", "_model_name": "HBoxModel", "_view_count": null, "_view_module": "@jupyter-widgets/controls", "_view_module_version": "1.4.0", "_view_name": "HBoxView", "box_style": "", "children": ["IPY_MODEL_cb3cbed19d22440480a3d37548de5e5a", "IPY_MODEL_995ff6fba6be408db01855e574e80135"], "layout": "IPY_MODEL_1789a4ef69394d59aa1647a52a741f21"}}}, "version_major": 2, "version_minor": 0}
-</script>
 

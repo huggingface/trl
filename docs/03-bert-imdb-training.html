@@ -6,6 +6,7 @@ keywords: fastai
 sidebar: home_sidebar
 
 summary: "Train BERT on IMDB dataset for sentiment classification"
+description: "Train BERT on IMDB dataset for sentiment classification"
 ---
 <!--
 
@@ -18,11 +19,14 @@ summary: "Train BERT on IMDB dataset for sentiment classification"
 -->
 
 <div class="container" id="notebook-container">
-    {% raw %}
         
+    {% raw %}
+    
 <div class="cell border-box-sizing code_cell rendered">
 
 </div>
+    {% endraw %}
+
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
 <p>We use the <code>simpletransformers</code> library to train BERT (large) for sentiment classification on the IMDB dataset.</p>
@@ -30,6 +34,8 @@ summary: "Train BERT on IMDB dataset for sentiment classification"
 </div>
 </div>
 </div>
+    {% raw %}
+    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -47,19 +53,23 @@ summary: "Train BERT on IMDB dataset for sentiment classification"
 </div>
 
 </div>
+    {% endraw %}
+
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="IMDB-dataset">IMDB dataset<a class="anchor-link" href="#IMDB-dataset">&#182;</a></h2><p>The IMDB dataset contains 50k movie review annotated with "positive"/"negative" feedback indicating the sentiment. It can be downloaded from Kaggle (<a href="https://www.kaggle.com/lakshmi25npathi/imdb-dataset-of-50k-movie-reviews">link</a>).</p>
+<h2 id="IMDB-dataset">IMDB dataset<a class="anchor-link" href="#IMDB-dataset"> </a></h2><p>The IMDB dataset contains 50k movie review annotated with "positive"/"negative" feedback indicating the sentiment. It can be downloaded from Kaggle (<a href="https://www.kaggle.com/lakshmi25npathi/imdb-dataset-of-50k-movie-reviews">link</a>).</p>
 
 </div>
 </div>
 </div>
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h3 id="Load-dataset">Load dataset<a class="anchor-link" href="#Load-dataset">&#182;</a></h3>
+<h3 id="Load-dataset">Load dataset<a class="anchor-link" href="#Load-dataset"> </a></h3>
 </div>
 </div>
 </div>
+    {% raw %}
+    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -73,6 +83,10 @@ summary: "Train BERT on IMDB dataset for sentiment classification"
 </div>
 
 </div>
+    {% endraw %}
+
+    {% raw %}
+    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -151,12 +165,16 @@ summary: "Train BERT on IMDB dataset for sentiment classification"
 </div>
 
 </div>
+    {% endraw %}
+
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h3 id="Create-labels">Create labels<a class="anchor-link" href="#Create-labels">&#182;</a></h3>
+<h3 id="Create-labels">Create labels<a class="anchor-link" href="#Create-labels"> </a></h3>
 </div>
 </div>
 </div>
+    {% raw %}
+    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -170,6 +188,10 @@ summary: "Train BERT on IMDB dataset for sentiment classification"
 </div>
 
 </div>
+    {% endraw %}
+
+    {% raw %}
+    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -254,12 +276,16 @@ summary: "Train BERT on IMDB dataset for sentiment classification"
 </div>
 
 </div>
+    {% endraw %}
+
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h3 id="Rename-columns">Rename columns<a class="anchor-link" href="#Rename-columns">&#182;</a></h3>
+<h3 id="Rename-columns">Rename columns<a class="anchor-link" href="#Rename-columns"> </a></h3>
 </div>
 </div>
 </div>
+    {% raw %}
+    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -274,6 +300,10 @@ summary: "Train BERT on IMDB dataset for sentiment classification"
 </div>
 
 </div>
+    {% endraw %}
+
+    {% raw %}
+    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -352,6 +382,8 @@ summary: "Train BERT on IMDB dataset for sentiment classification"
 </div>
 
 </div>
+    {% endraw %}
+
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
 <p>Train test split;</p>
@@ -359,6 +391,8 @@ summary: "Train BERT on IMDB dataset for sentiment classification"
 </div>
 </div>
 </div>
+    {% raw %}
+    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -372,18 +406,22 @@ summary: "Train BERT on IMDB dataset for sentiment classification"
 </div>
 
 </div>
+    {% endraw %}
+
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Bert-training">Bert training<a class="anchor-link" href="#Bert-training">&#182;</a></h2>
+<h2 id="Bert-training">Bert training<a class="anchor-link" href="#Bert-training"> </a></h2>
 </div>
 </div>
 </div>
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h3 id="Config">Config<a class="anchor-link" href="#Config">&#182;</a></h3>
+<h3 id="Config">Config<a class="anchor-link" href="#Config"> </a></h3>
 </div>
 </div>
 </div>
+    {% raw %}
+    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -403,12 +441,16 @@ summary: "Train BERT on IMDB dataset for sentiment classification"
 </div>
 
 </div>
+    {% endraw %}
+
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h3 id="Training">Training<a class="anchor-link" href="#Training">&#182;</a></h3>
+<h3 id="Training">Training<a class="anchor-link" href="#Training"> </a></h3>
 </div>
 </div>
 </div>
+    {% raw %}
+    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -424,12 +466,16 @@ summary: "Train BERT on IMDB dataset for sentiment classification"
 </div>
 
 </div>
+    {% endraw %}
+
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h3 id="Calculate-validation-accuracy">Calculate validation accuracy<a class="anchor-link" href="#Calculate-validation-accuracy">&#182;</a></h3>
+<h3 id="Calculate-validation-accuracy">Calculate validation accuracy<a class="anchor-link" href="#Calculate-validation-accuracy"> </a></h3>
 </div>
 </div>
 </div>
+    {% raw %}
+    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -459,6 +505,10 @@ summary: "Train BERT on IMDB dataset for sentiment classification"
 </div>
 
 </div>
+    {% endraw %}
+
+    {% raw %}
+    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -499,6 +549,7 @@ summary: "Train BERT on IMDB dataset for sentiment classification"
 
 </div>
     {% endraw %}
+
 </div>
  
 
