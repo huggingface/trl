@@ -609,6 +609,30 @@ description: "Optimise GPT2 to produce IMDB movie reviews with controlled sentim
 
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
+<h3 id="Watch-model-with-wandb">Watch model with wandb<a class="anchor-link" href="#Watch-model-with-wandb"> </a></h3><p>This wandb magic logs the gradients and weights of the model during training.</p>
+
+</div>
+</div>
+</div>
+    {% raw %}
+    
+<div class="cell border-box-sizing code_cell rendered">
+<div class="input">
+
+<div class="inner_cell">
+    <div class="input_area">
+<div class=" highlight hl-ipython3"><pre><span></span><span class="n">wandb</span><span class="o">.</span><span class="n">watch</span><span class="p">(</span><span class="n">gpt2_model</span><span class="p">,</span> <span class="n">log</span><span class="o">=</span><span class="s1">&#39;all&#39;</span><span class="p">)</span>
+</pre></div>
+
+    </div>
+</div>
+</div>
+
+</div>
+    {% endraw %}
+
+<div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
+<div class="text_cell_render border-box-sizing rendered_html">
 <h3 id="Tokenize-IMDB-reviews">Tokenize IMDB reviews<a class="anchor-link" href="#Tokenize-IMDB-reviews"> </a></h3>
 </div>
 </div>
