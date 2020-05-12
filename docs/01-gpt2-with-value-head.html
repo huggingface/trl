@@ -6,7 +6,6 @@ keywords: fastai
 sidebar: home_sidebar
 
 summary: "A GPT2 model with a value head built on the `transformer` library by Hugging Face."
-description: "A GPT2 model with a value head built on the `transformer` library by Hugging Face."
 ---
 <!--
 
@@ -19,37 +18,28 @@ description: "A GPT2 model with a value head built on the `transformer` library 
 -->
 
 <div class="container" id="notebook-container">
+    {% raw %}
         
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 
 </div>
-    {% endraw %}
-
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Why-a-value-head?">Why a value head?<a class="anchor-link" href="#Why-a-value-head?"> </a></h2><p>Optimisation through PPO requires estimates on the current states value. The value can be estimated by adding a second head to the GPT2 model which outputs a scalar for each output token.</p>
+<h2 id="Why-a-value-head?">Why a value head?<a class="anchor-link" href="#Why-a-value-head?">&#182;</a></h2><p>Optimisation through PPO requires estimates on the current states value. The value can be estimated by adding a second head to the GPT2 model which outputs a scalar for each output token.</p>
 
 </div>
 </div>
 </div>
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Detach-head">Detach head<a class="anchor-link" href="#Detach-head"> </a></h2><p>I experimented with detaching the head from the body when optimizing the model. This means that only the head is trained and the gradients are not passed through the body. Although I did not use it in the end it is still possible to detach the head by calling <code>model.detach_head()</code>.</p>
+<h2 id="Detach-head">Detach head<a class="anchor-link" href="#Detach-head">&#182;</a></h2><p>I experimented with detaching the head from the body when optimizing the model. This means that only the head is trained and the gradients are not passed through the body. Although I did not use it in the end it is still possible to detach the head by calling <code>model.detach_head()</code>.</p>
 
 </div>
 </div>
 </div>
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 
 </div>
-    {% endraw %}
-
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -104,10 +94,6 @@ description: "A GPT2 model with a value head built on the `transformer` library 
 </div>
 
 </div>
-    {% endraw %}
-
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 
 <div class="output_wrapper">
@@ -129,10 +115,6 @@ description: "A GPT2 model with a value head built on the `transformer` library 
 </div>
 
 </div>
-    {% endraw %}
-
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -194,10 +176,6 @@ description: "A GPT2 model with a value head built on the `transformer` library 
 </div>
 
 </div>
-    {% endraw %}
-
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 
 <div class="output_wrapper">
@@ -219,17 +197,13 @@ description: "A GPT2 model with a value head built on the `transformer` library 
 </div>
 
 </div>
-    {% endraw %}
-
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Load-a-pre-trained-language-model">Load a pre-trained language model<a class="anchor-link" href="#Load-a-pre-trained-language-model"> </a></h2><p>Loading a pretrained language model works like loading it with a model from the <code>transformer</code> library.</p>
+<h2 id="Load-a-pre-trained-language-model">Load a pre-trained language model<a class="anchor-link" href="#Load-a-pre-trained-language-model">&#182;</a></h2><p>Loading a pretrained language model works like loading it with a model from the <code>transformer</code> library.</p>
 
 </div>
 </div>
 </div>
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -244,16 +218,12 @@ description: "A GPT2 model with a value head built on the `transformer` library 
 </div>
 
 </div>
-    {% endraw %}
-
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Forward-pass">Forward pass<a class="anchor-link" href="#Forward-pass"> </a></h2>
+<h2 id="Forward-pass">Forward pass<a class="anchor-link" href="#Forward-pass">&#182;</a></h2>
 </div>
 </div>
 </div>
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -269,11 +239,9 @@ description: "A GPT2 model with a value head built on the `transformer` library 
 </div>
 
 </div>
-    {% endraw %}
-
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Model-outputs">Model outputs<a class="anchor-link" href="#Model-outputs"> </a></h2>
+<h2 id="Model-outputs">Model outputs<a class="anchor-link" href="#Model-outputs">&#182;</a></h2>
 </div>
 </div>
 </div>
@@ -284,8 +252,6 @@ description: "A GPT2 model with a value head built on the `transformer` library 
 </div>
 </div>
 </div>
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -315,8 +281,6 @@ description: "A GPT2 model with a value head built on the `transformer` library 
 </div>
 
 </div>
-    {% endraw %}
-
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
 <p>The logits tensor is of shape <code>[batch_size, num_input_tokens, vocab_size]</code>:</p>
@@ -324,8 +288,6 @@ description: "A GPT2 model with a value head built on the `transformer` library 
 </div>
 </div>
 </div>
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -355,8 +317,6 @@ description: "A GPT2 model with a value head built on the `transformer` library 
 </div>
 
 </div>
-    {% endraw %}
-
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
 <p>The value tensor is of shape <code>[batch_size, num_input_tokens]</code>:</p>
@@ -364,8 +324,6 @@ description: "A GPT2 model with a value head built on the `transformer` library 
 </div>
 </div>
 </div>
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -395,8 +353,6 @@ description: "A GPT2 model with a value head built on the `transformer` library 
 </div>
 
 </div>
-    {% endraw %}
-
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
 <p>We can greedy decode the next token predictions from the logits:</p>
@@ -404,8 +360,6 @@ description: "A GPT2 model with a value head built on the `transformer` library 
 </div>
 </div>
 </div>
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -419,10 +373,6 @@ description: "A GPT2 model with a value head built on the `transformer` library 
 </div>
 
 </div>
-    {% endraw %}
-
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -459,17 +409,13 @@ description: "A GPT2 model with a value head built on the `transformer` library 
 </div>
 
 </div>
-    {% endraw %}
-
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Batched-response-to-queries">Batched response to queries<a class="anchor-link" href="#Batched-response-to-queries"> </a></h2><p>To speed up computations it helps to process queries in a batched fashion.</p>
+<h2 id="Batched-response-to-queries">Batched response to queries<a class="anchor-link" href="#Batched-response-to-queries">&#182;</a></h2><p>To speed up computations it helps to process queries in a batched fashion.</p>
 
 </div>
 </div>
 </div>
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -495,10 +441,6 @@ description: "A GPT2 model with a value head built on the `transformer` library 
 </div>
 
 </div>
-    {% endraw %}
-
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 
 <div class="output_wrapper">
@@ -520,8 +462,6 @@ description: "A GPT2 model with a value head built on the `transformer` library 
 </div>
 
 </div>
-    {% endraw %}
-
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
 <p>We have the model respond to two queries in parallel:</p>
@@ -529,8 +469,6 @@ description: "A GPT2 model with a value head built on the `transformer` library 
 </div>
 </div>
 </div>
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -566,8 +504,6 @@ description: "A GPT2 model with a value head built on the `transformer` library 
 </div>
 
 </div>
-    {% endraw %}
-
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
 <p><strong>Note:</strong> This only works because both queries have the same number of tokens. If that is not the case one must pad the tensors before stacking them in <code>torch.cat(queries)</code>.</p>
@@ -576,8 +512,6 @@ description: "A GPT2 model with a value head built on the `transformer` library 
 </div>
 </div>
 </div>
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -609,30 +543,23 @@ My least favourite movie is Jon Favreau&#39;s Log Horizon, complete with psyched
 </div>
 
 </div>
-    {% endraw %}
-
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Why-the-custom-response-function?">Why the custom response function?<a class="anchor-link" href="#Why-the-custom-response-function?"> </a></h2><p>The models in the <code>transformer</code> library come with a very useful and optimised generation function <code>model.generate()</code>. In the beginning this function was indeed used to generate text but after lengthy debugging it turned out that PPO was exploiting some aspects that are generally useful for text generation but allowed the model to abuse it and gain extra rewards.</p>
-<h3 id="The-model-reward">The model reward<a class="anchor-link" href="#The-model-reward"> </a></h3><p>To understand how the model was able to exploit the generation function it is worth looking at the reward function for language modeling with PPO. The reward consists of an arbitrary score (any scalar to indicate whether the model output was good or bad) and the KL-divergence from the untrained model:</p>
-<p>{{% raw %}}
-$$reward = score - \beta \times KL$$
-{{% endraw %}}</p>
-<p>where $\beta$ is some positive factor. The KL divergence is calculate with:</p>
-<p>{{% raw %}}
-$$ KL = \mathbb{E}_{x \sim p_{model}} [\log p_{model}(x) - \log p_{refmodel}(x)]$$
-{{% endraw %}}</p>
-<p>Since $x$ is sampled from $p_{model}$ the KL-divergence is always positive. However, if the model found a way to get negative KL-divergence it would achieve a positive reward. This is what happened twice with in the experiment and both times a quirk of the text generation was abused to avoid proper sampling from the probability distribution.</p>
-<h3 id="Case-1:-min_length=None">Case 1: <code>min_length=None</code><a class="anchor-link" href="#Case-1:-min_length=None"> </a></h3><p>When no <code>min_length</code> is specified in the <code>model.generate()</code> function the model probability distribution is normally sampled until the first <code>&lt;eos&gt;</code> token appears. Then the rest of the sequence is padded with a padding token until <code>max_length</code> is reached (for GPT2 this is also the <code>&lt;eos&gt;</code> token). If that sequence is again passed through the model to evaluate the log-probabilities everything is normal until after the first <code>&lt;eos&gt;</code> token, since multiple <code>&lt;eos&gt;</code> tokens are very unlikely. The model exploited this by decreasing the probability for the <code>&lt;eos&gt;</code> token after the first appearence even further below the probability of the reference model, thus achieving negative KL-divergence. Additionally, it inserted the first <code>&lt;eos&gt;</code> earlier and earlier in the sentences to minimize the KL-divergence and thus maximise the reward. This only worked because the sequence after the first <code>&lt;eos&gt;</code> token wasn't properly sampled but padded, otherwise the low probabilities would have lead to other tokens with higher probability being sampled.</p>
-<h3 id="Case-2:-min_length=max_length">Case 2: <code>min_length=max_length</code><a class="anchor-link" href="#Case-2:-min_length=max_length"> </a></h3><p>I thought this could be easily fixed: just set the <code>min_length=max_length</code>. This seemed to work fine for a few experiments until the training failed again due to negative KL-divergences. Finding the problem was harder than before, since it only happened rarely after several training steps. In addition the generated sentences deteriorated quickly to complete gibberish. After some investigation it turned out that the model was again exploiting the sampling function. Up to this point I was not aware that the model was also not allowed to produce an <code>&lt;eos&gt;</code> token before <code>min_length</code> is reached. In practice this is achieved by setting the next token logit to -infinity:</p>
+<h2 id="Why-the-custom-response-function?">Why the custom response function?<a class="anchor-link" href="#Why-the-custom-response-function?">&#182;</a></h2><p>The models in the <code>transformer</code> library come with a very useful and optimised generation function <code>model.generate()</code>. In the beginning this function was indeed used to generate text but after lengthy debugging it turned out that PPO was exploiting some aspects that are generally useful for text generation but allowed the model to abuse it and gain extra rewards.</p>
+<h3 id="The-model-reward">The model reward<a class="anchor-link" href="#The-model-reward">&#182;</a></h3><p>To understand how the model was able to exploit the generation function it is worth looking at the reward function for language modeling with PPO. The reward consists of an arbitrary score (any scalar to indicate whether the model output was good or bad) and the KL-divergence from the untrained model:</p>
+$$reward = score - \beta \times KL$$<p>where $\beta$ is some positive factor. The KL divergence is calculate with:</p>
+$$ KL = \mathbb{E}_{x \sim p_{model}} [\log p_{model}(x) - \log p_{refmodel}(x)]$$<p>Since $x$ is sampled from $p_{model}$ the KL-divergence is always positive. However, if the model found a way to get negative KL-divergence it would achieve a positive reward. This is what happened twice with in the experiment and both times a quirk of the text generation was abused to avoid proper sampling from the probability distribution.</p>
+<h3 id="Case-1:-min_length=None">Case 1: <code>min_length=None</code><a class="anchor-link" href="#Case-1:-min_length=None">&#182;</a></h3><p>When no <code>min_length</code> is specified in the <code>model.generate()</code> function the model probability distribution is normally sampled until the first <code>&lt;eos&gt;</code> token appears. Then the rest of the sequence is padded with a padding token until <code>max_length</code> is reached (for GPT2 this is also the <code>&lt;eos&gt;</code> token). If that sequence is again passed through the model to evaluate the log-probabilities everything is normal until after the first <code>&lt;eos&gt;</code> token, since multiple <code>&lt;eos&gt;</code> tokens are very unlikely. The model exploited this by decreasing the probability for the <code>&lt;eos&gt;</code> token after the first appearence even further below the probability of the reference model, thus achieving negative KL-divergence. Additionally, it inserted the first <code>&lt;eos&gt;</code> earlier and earlier in the sentences to minimize the KL-divergence and thus maximise the reward. This only worked because the sequence after the first <code>&lt;eos&gt;</code> token wasn't properly sampled but padded, otherwise the low probabilities would have lead to other tokens with higher probability being sampled.</p>
+<h3 id="Case-2:-min_length=max_length">Case 2: <code>min_length=max_length</code><a class="anchor-link" href="#Case-2:-min_length=max_length">&#182;</a></h3><p>I thought this could be easily fixed: just set the <code>min_length=max_length</code>. This seemed to work fine for a few experiments until the training failed again due to negative KL-divergences. Finding the problem was harder than before, since it only happened rarely after several training steps. In addition the generated sentences deteriorated quickly to complete gibberish. After some investigation it turned out that the model was again exploiting the sampling function. Up to this point I was not aware that the model was also not allowed to produce an <code>&lt;eos&gt;</code> token before <code>min_length</code> is reached. In practice this is achieved by setting the next token logit to -infinity:</p>
 
 <pre><code>next_token_logits[:, eos_token_id] = -float("inf")</code></pre>
 <p>This makes sure that after the softmax function the probability for the <code>&lt;eos&gt;</code> token is zero, no matter the model output. The model exploited this by maximizing the logit output for that token and thus setting all other logits to increasingly small numbers. Since, I did not apply the same step when evaluating the generated sequence (calculating softmax without the -inf trick) the probabilities for the generated sequences were extremely small and in fact smaller than the probabilities of the reference model. This lead again to negative KL-divergence.</p>
-<h3 id="Conclusion">Conclusion<a class="anchor-link" href="#Conclusion"> </a></h3><p>In both cases $x \sim p_{model}$ in the KL-divergence equation was not satisfied, but this was hidden in the sequence generating function. Reinforcement Learning is very effective in finding and exploiting environment quirks as others have pointed out for other environments such as ATARI games. The solution was to go back to a simpler sequence sampler to avoid this exploits. Alternatively, I could have applied the same tricks and some masking to the model outputs when evaluating the sequences, but I didn't feel confident enough that there would not be other sequence generation tricks the model could abuse.</p>
+<h3 id="Conclusion">Conclusion<a class="anchor-link" href="#Conclusion">&#182;</a></h3><p>In both cases $x \sim p_{model}$ in the KL-divergence equation was not satisfied, but this was hidden in the sequence generating function. Reinforcement Learning is very effective in finding and exploiting environment quirks as others have pointed out for other environments such as ATARI games. The solution was to go back to a simpler sequence sampler to avoid this exploits. Alternatively, I could have applied the same tricks and some masking to the model outputs when evaluating the sequences, but I didn't feel confident enough that there would not be other sequence generation tricks the model could abuse.</p>
 
 </div>
 </div>
 </div>
+    {% endraw %}
 </div>
  
 

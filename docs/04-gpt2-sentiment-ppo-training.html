@@ -6,7 +6,6 @@ keywords: fastai
 sidebar: home_sidebar
 
 summary: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT sentiment classifier for rewards."
-description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT sentiment classifier for rewards."
 ---
 <!--
 
@@ -19,14 +18,11 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 -->
 
 <div class="container" id="notebook-container">
-        
     {% raw %}
-    
+        
 <div class="cell border-box-sizing code_cell rendered">
 
 </div>
-    {% endraw %}
-
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
 <div style="text-align: center">
@@ -39,18 +35,16 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 </div>
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Setup-experiment">Setup experiment<a class="anchor-link" href="#Setup-experiment"> </a></h2>
+<h2 id="Setup-experiment">Setup experiment<a class="anchor-link" href="#Setup-experiment">&#182;</a></h2>
 </div>
 </div>
 </div>
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h3 id="Import-dependencies">Import dependencies<a class="anchor-link" href="#Import-dependencies"> </a></h3>
+<h3 id="Import-dependencies">Import dependencies<a class="anchor-link" href="#Import-dependencies">&#182;</a></h3>
 </div>
 </div>
 </div>
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -65,10 +59,6 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 </div>
 
 </div>
-    {% endraw %}
-
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -95,32 +85,13 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 </div>
 </div>
 
-<div class="output_wrapper">
-<div class="output">
-
-<div class="output_area">
-
-<div class="output_subarea output_stream output_stderr output_text">
-<pre>/Users/leandro/git/trl/env/lib/python3.7/site-packages/tqdm/std.py:658: FutureWarning: The Panel class is removed from pandas. Accessing it from the top-level namespace will also be removed in the next version
-  from pandas import Panel
-</pre>
 </div>
-</div>
-
-</div>
-</div>
-
-</div>
-    {% endraw %}
-
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h3 id="Configuration">Configuration<a class="anchor-link" href="#Configuration"> </a></h3>
+<h3 id="Configuration">Configuration<a class="anchor-link" href="#Configuration">&#182;</a></h3>
 </div>
 </div>
 </div>
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -154,8 +125,6 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 </div>
 
 </div>
-    {% endraw %}
-
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
 <p>You can see that we load a GPT2 model called <code>gpt2_imdb</code>. This model was additionally fine-tuned on the IMDB dataset for 1 epoch with the huggingface <a href="https://github.com/huggingface/transformers/blob/master/examples/run_language_modeling.py">script</a> (no special settings). The other parameters are mostly taken from the original paper <a href="https://arxiv.org/pdf/1909.08593.pdf">"Fine-Tuning Language Models from Human Preferences"</a>. This model as well as the BERT model is available in the Huggingface model zoo <a href="https://huggingface.co/models">here</a>. The following code should automatically download the models.</p>
@@ -165,13 +134,11 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 </div>
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h3 id="Initialize-W&amp;B-logger">Initialize W&amp;B logger<a class="anchor-link" href="#Initialize-W&amp;B-logger"> </a></h3><p>We use <code>wandb</code>to log all the metrics during training.</p>
+<h3 id="Initialize-W&amp;B-logger">Initialize W&amp;B logger<a class="anchor-link" href="#Initialize-W&amp;B-logger">&#182;</a></h3><p>We use <code>wandb</code>to log all the metrics during training.</p>
 
 </div>
 </div>
 </div>
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -214,23 +181,19 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 </div>
 
 </div>
-    {% endraw %}
-
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Load-data-and-models">Load data and models<a class="anchor-link" href="#Load-data-and-models"> </a></h2>
+<h2 id="Load-data-and-models">Load data and models<a class="anchor-link" href="#Load-data-and-models">&#182;</a></h2>
 </div>
 </div>
 </div>
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h3 id="Load-IMDB-dataset">Load IMDB dataset<a class="anchor-link" href="#Load-IMDB-dataset"> </a></h3><p>The IMDB dataset contains 50k movie review annotated with "positive"/"negative" feedback indicating the sentiment. It can be downloaded from Kaggle (<a href="https://www.kaggle.com/lakshmi25npathi/imdb-dataset-of-50k-movie-reviews">link</a>).  We load the IMDB dataset into a DataFrame and filter for comments that are at least 500 characters long and take the first 1000 characters of each comment. The first filter we apply to avoid comments that are less than <code>txt_in_len</code> token long and the second to avoid tokenizing way more text than we actually need.</p>
+<h3 id="Load-IMDB-dataset">Load IMDB dataset<a class="anchor-link" href="#Load-IMDB-dataset">&#182;</a></h3><p>The IMDB dataset contains 50k movie review annotated with "positive"/"negative" feedback indicating the sentiment. It can be downloaded from Kaggle (<a href="https://www.kaggle.com/lakshmi25npathi/imdb-dataset-of-50k-movie-reviews">link</a>).  We load the IMDB dataset into a DataFrame and filter for comments that are at least 500 characters long and take the first 1000 characters of each comment. The first filter we apply to avoid comments that are less than <code>txt_in_len</code> token long and the second to avoid tokenizing way more text than we actually need.</p>
 
 </div>
 </div>
 </div>
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -318,17 +281,13 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 </div>
 
 </div>
-    {% endraw %}
-
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h3 id="Load-BERT-classifier">Load BERT classifier<a class="anchor-link" href="#Load-BERT-classifier"> </a></h3><p>We load a BERT classifier fine-tuned on the IMDB dataset.</p>
+<h3 id="Load-BERT-classifier">Load BERT classifier<a class="anchor-link" href="#Load-BERT-classifier">&#182;</a></h3><p>We load a BERT classifier fine-tuned on the IMDB dataset.</p>
 
 </div>
 </div>
 </div>
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -343,8 +302,6 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 </div>
 
 </div>
-    {% endraw %}
-
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
 <p>The model outputs are the logits for the negative and positive class. We will use the logits for positive class as a reward signal for the language model.</p>
@@ -352,8 +309,6 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 </div>
 </div>
 </div>
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -385,10 +340,6 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 </div>
 
 </div>
-    {% endraw %}
-
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -420,8 +371,6 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 </div>
 
 </div>
-    {% endraw %}
-
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
 <p>The resulting reward signal:</p>
@@ -429,8 +378,6 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 </div>
 </div>
 </div>
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -460,11 +407,9 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 </div>
 
 </div>
-    {% endraw %}
-
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h3 id="Load-pre-trained-GPT2-language-models">Load pre-trained GPT2 language models<a class="anchor-link" href="#Load-pre-trained-GPT2-language-models"> </a></h3>
+<h3 id="Load-pre-trained-GPT2-language-models">Load pre-trained GPT2 language models<a class="anchor-link" href="#Load-pre-trained-GPT2-language-models">&#182;</a></h3>
 </div>
 </div>
 </div>
@@ -475,8 +420,6 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 </div>
 </div>
 </div>
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -492,11 +435,28 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 </div>
 
 </div>
-    {% endraw %}
-
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h3 id="Move-models-to-GPU">Move models to GPU<a class="anchor-link" href="#Move-models-to-GPU"> </a></h3>
+<h3 id="Watch-model-with-wandb">Watch model with wandb<a class="anchor-link" href="#Watch-model-with-wandb">&#182;</a></h3>
+</div>
+</div>
+</div>
+<div class="cell border-box-sizing code_cell rendered">
+<div class="input">
+
+<div class="inner_cell">
+    <div class="input_area">
+<div class=" highlight hl-ipython3"><pre><span></span><span class="n">wandb</span><span class="o">.</span><span class="n">watch</span><span class="p">(</span><span class="n">gpt2_model</span><span class="p">,</span> <span class="n">log</span><span class="o">=</span><span class="s1">&#39;all&#39;</span><span class="p">)</span>
+</pre></div>
+
+    </div>
+</div>
+</div>
+
+</div>
+<div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
+<div class="text_cell_render border-box-sizing rendered_html">
+<h3 id="Move-models-to-GPU">Move models to GPU<a class="anchor-link" href="#Move-models-to-GPU">&#182;</a></h3>
 </div>
 </div>
 </div>
@@ -507,8 +467,6 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 </div>
 </div>
 </div>
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -522,10 +480,6 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 </div>
 
 </div>
-    {% endraw %}
-
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -541,11 +495,9 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 </div>
 
 </div>
-    {% endraw %}
-
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h3 id="Tokenize-IMDB-reviews">Tokenize IMDB reviews<a class="anchor-link" href="#Tokenize-IMDB-reviews"> </a></h3>
+<h3 id="Tokenize-IMDB-reviews">Tokenize IMDB reviews<a class="anchor-link" href="#Tokenize-IMDB-reviews">&#182;</a></h3>
 </div>
 </div>
 </div>
@@ -556,8 +508,6 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 </div>
 </div>
 </div>
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -585,10 +535,6 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 </div>
 
 </div>
-    {% endraw %}
-
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -616,11 +562,9 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 </div>
 
 </div>
-    {% endraw %}
-
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Optimize-model">Optimize model<a class="anchor-link" href="#Optimize-model"> </a></h2>
+<h2 id="Optimize-model">Optimize model<a class="anchor-link" href="#Optimize-model">&#182;</a></h2>
 </div>
 </div>
 </div>
@@ -644,8 +588,6 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 </div>
 </div>
 </div>
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -732,11 +674,9 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 </div>
 
 </div>
-    {% endraw %}
-
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h3 id="Training-progress">Training progress<a class="anchor-link" href="#Training-progress"> </a></h3><p>If you are tracking the training progress with Weights&amp;Biases you should see a plot similar to the following:</p>
+<h3 id="Training-progress">Training progress<a class="anchor-link" href="#Training-progress">&#182;</a></h3><p>If you are tracking the training progress with Weights&amp;Biases you should see a plot similar to the following:</p>
 <div style="text-align: center">
 {% include image.html max-width="800" file="/trl/images/gpt2_tuning_progress.png" %}
 <p style="text-align: center;"> <b>Figure:</b> Reward mean and distribution evolution during training. </p>
@@ -748,13 +688,11 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 </div>
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Model-inspection">Model inspection<a class="anchor-link" href="#Model-inspection"> </a></h2><p>Let's inspect some examples from the IMDB dataset. We can use <code>gpt2_model_ref</code> to compare the tuned model <code>gpt2_model</code> against the model before optimisation.</p>
+<h2 id="Model-inspection">Model inspection<a class="anchor-link" href="#Model-inspection">&#182;</a></h2><p>Let's inspect some examples from the IMDB dataset. We can use <code>gpt2_model_ref</code> to compare the tuned model <code>gpt2_model</code> against the model before optimisation.</p>
 
 </div>
 </div>
 </div>
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -967,8 +905,6 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 </div>
 
 </div>
-    {% endraw %}
-
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
 <p>Looking at the reward mean/median of the generated sequences we observe a significant difference.</p>
@@ -976,8 +912,6 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 </div>
 </div>
 </div>
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -1042,17 +976,13 @@ dtype: float64</pre>
 </div>
 
 </div>
-    {% endraw %}
-
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Save-model">Save model<a class="anchor-link" href="#Save-model"> </a></h2><p>Finally, we save the model to disk for later usage.</p>
+<h2 id="Save-model">Save model<a class="anchor-link" href="#Save-model">&#182;</a></h2><p>Finally, we save the model to disk for later usage.</p>
 
 </div>
 </div>
 </div>
-    {% raw %}
-    
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
 
@@ -1088,7 +1018,6 @@ dtype: float64</pre>
 
 </div>
     {% endraw %}
-
 </div>
  
 

@@ -1,0 +1,66 @@
+wandb_version: 1
+
+_wandb:
+  desc: null
+  value:
+    cli_version: 0.8.31
+    is_jupyter_run: true
+    is_kaggle_kernel: false
+    python_version: 3.7.7
+batch_size:
+  desc: null
+  value: 256
+cliprange:
+  desc: null
+  value: 0.2
+cliprange_value:
+  desc: null
+  value: 0.2
+cls_model_name:
+  desc: null
+  value: lvwerra/bert-imdb
+forward_batch_size:
+  desc: null
+  value: 16
+gamma:
+  desc: null
+  value: 1
+horizon:
+  desc: null
+  value: 10000
+init_kl_coef:
+  desc: null
+  value: 0.2
+lam:
+  desc: null
+  value: 0.95
+lm_name:
+  desc: null
+  value: lvwerra/gpt2-imdb
+lr:
+  desc: null
+  value: 1.41e-05
+ppo_epochs:
+  desc: null
+  value: 4
+ref_lm_name:
+  desc: null
+  value: lvwerra/gpt2-imdb
+steps:
+  desc: null
+  value: 25600
+target:
+  desc: null
+  value: 6
+tk_name:
+  desc: null
+  value: gpt2
+txt_in_len:
+  desc: null
+  value: 5
+txt_out_len:
+  desc: null
+  value: 15
+vf_coef:
+  desc: null
+  value: 0.1
