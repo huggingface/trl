@@ -1,0 +1,26 @@
+{
+    "root": "/Users/leandro/git/trl",
+    "program": "<python with no main file>",
+    "git": {
+        "remote": "https://github.com/lvwerra/trl.git",
+        "commit": "8b1192244185f036003a77aac73a3e880351b08f"
+    },
+    "email": "leandro.vonwerra@spoud.io",
+    "startedAt": "2020-05-12T10:53:35.425417",
+    "host": "Leandros-MacBook-Pro.local",
+    "username": "leandro",
+    "executable": "/Users/leandro/git/trl/env/bin/python",
+    "os": "Darwin-19.3.0-x86_64-i386-64bit",
+    "python": "3.7.7",
+    "cpu_count": 4,
+    "args": [
+        "-f",
+        "/Users/leandro/Library/Jupyter/runtime/kernel-f1c8b088-0d73-4447-9652-70fc449950c0.json"
+    ],
+    "state": "running",
+    "jobType": null,
+    "mode": "run",
+    "name": "run-42",
+    "project": "gpt2-sentiment",
+    "heartbeatAt": "2020-05-12T10:53:41.107321"
+}
