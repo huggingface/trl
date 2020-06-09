@@ -56,7 +56,7 @@ For Jupyterlab additionally this command:
 ### Example
 This is a basic example on how to use the library. Based on a query the language model creates a response which is then evaluated. The evaluation could be a human in the loop or another model's output.
 
-```
+```python
 # imports
 import torch
 from transformers import GPT2Tokenizer
