@@ -1,12 +1,11 @@
-
 -e .
 jupyterlab==2.0.1
 nbdev==0.2.16
 numpy==1.18.2
 pandas==1.0.3
-simpletransformers==0.21.4
-torch==1.4.0
+simpletransformers==0.60.9
+torch>=1.4.0
 tqdm==4.43.0
-transformers==2.6.0
-wandb==0.8.35
+transformers==4.3.2
+wandb==0.10.20
 matplotlib==3.2.1
