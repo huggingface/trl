@@ -37,7 +37,7 @@ If you want to run the examples in the repository a few additional libraries are
 
 `git clone https://github.com/lvwerra/trl.git`
 
-`cd tlr/`
+`cd trl/`
 
 `pip install -r requirements.txt`
 
