@@ -1,6 +1,6 @@
 -e .
 pandas==1.3.5
-jupyterlab==2.0.1
+jupyterlab==2.2.10
 nbdev==0.2.16
 datasets==1.17.0
 torch>=1.4.0
