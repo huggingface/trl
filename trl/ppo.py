@@ -102,9 +102,12 @@ class PPOTrainer:
         self.model = model
         self.optimizer = Adam(model.parameters(), lr=self.ppo_params['lr'])
 
-        self.kl_ctl = AdaptiveKLController(self.ppo_params['init_kl_coef'],
-                                           self.ppo_params['target'],
-                                           self.ppo_params['horizon'])
+        if self.ppo_params['adap_kl_ctrl']:
+            self.kl_ctl = AdaptiveKLController(self.ppo_params['init_kl_coef'],
+                                               self.ppo_params['target'],
+                                               self.ppo_params['horizon'])
+        else:
+            self.kl_ctl = FixedKLController(self.ppo_params['init_kl_coef'])
 
 
     def step(self, query, response, scores):
