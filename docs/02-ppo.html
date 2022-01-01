@@ -211,10 +211,13 @@ description: "A Pytorch implementation of Proximal Policy Optimization for trans
         <span class="bp">self</span><span class="o">.</span><span class="n">ref_model</span> <span class="o">=</span> <span class="n">ref_model</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">model</span> <span class="o">=</span> <span class="n">model</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">optimizer</span> <span class="o">=</span> <span class="n">Adam</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">parameters</span><span class="p">(),</span> <span class="n">lr</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">ppo_params</span><span class="p">[</span><span class="s1">&#39;lr&#39;</span><span class="p">])</span>
-     
-        <span class="bp">self</span><span class="o">.</span><span class="n">kl_ctl</span> <span class="o">=</span> <span class="n">AdaptiveKLController</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ppo_params</span><span class="p">[</span><span class="s1">&#39;init_kl_coef&#39;</span><span class="p">],</span>
-                                           <span class="bp">self</span><span class="o">.</span><span class="n">ppo_params</span><span class="p">[</span><span class="s1">&#39;target&#39;</span><span class="p">],</span>
-                                           <span class="bp">self</span><span class="o">.</span><span class="n">ppo_params</span><span class="p">[</span><span class="s1">&#39;horizon&#39;</span><span class="p">])</span>
+        
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">ppo_params</span><span class="p">[</span><span class="s1">&#39;adap_kl_ctrl&#39;</span><span class="p">]:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">kl_ctl</span> <span class="o">=</span> <span class="n">AdaptiveKLController</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ppo_params</span><span class="p">[</span><span class="s1">&#39;init_kl_coef&#39;</span><span class="p">],</span>
+                                               <span class="bp">self</span><span class="o">.</span><span class="n">ppo_params</span><span class="p">[</span><span class="s1">&#39;target&#39;</span><span class="p">],</span>
+                                               <span class="bp">self</span><span class="o">.</span><span class="n">ppo_params</span><span class="p">[</span><span class="s1">&#39;horizon&#39;</span><span class="p">])</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">kl_ctl</span> <span class="o">=</span> <span class="n">FixedKLController</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ppo_params</span><span class="p">[</span><span class="s1">&#39;init_kl_coef&#39;</span><span class="p">])</span>
 
 
     <span class="k">def</span> <span class="nf">step</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">query</span><span class="p">,</span> <span class="n">response</span><span class="p">,</span> <span class="n">scores</span><span class="p">):</span>
