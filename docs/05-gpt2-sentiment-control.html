@@ -85,6 +85,8 @@ description: "Optimise GPT2 to produce IMDB movie reviews with controlled sentim
 <span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
 <span class="n">tqdm</span><span class="o">.</span><span class="n">pandas</span><span class="p">()</span>
 
+<span class="kn">from</span> <span class="nn">datasets</span> <span class="kn">import</span> <span class="n">load_dataset</span>
+
 <span class="kn">from</span> <span class="nn">transformers</span> <span class="kn">import</span> <span class="n">GPT2Tokenizer</span>
 <span class="kn">from</span> <span class="nn">transformers</span> <span class="kn">import</span> <span class="n">AutoModelForSequenceClassification</span><span class="p">,</span> <span class="n">AutoTokenizer</span>
 
@@ -94,21 +96,6 @@ description: "Optimise GPT2 to produce IMDB movie reviews with controlled sentim
 </pre></div>
 
     </div>
-</div>
-</div>
-
-<div class="output_wrapper">
-<div class="output">
-
-<div class="output_area">
-
-<div class="output_subarea output_stream output_stderr output_text">
-<pre>/Users/leandro/git/trl/env/lib/python3.7/site-packages/tqdm/std.py:658: FutureWarning: The Panel class is removed from pandas. Accessing it from the top-level namespace will also be removed in the next version
-  from pandas import Panel
-</pre>
-</div>
-</div>
-
 </div>
 </div>
 
@@ -131,7 +118,7 @@ description: "Optimise GPT2 to produce IMDB movie reviews with controlled sentim
 <div class=" highlight hl-ipython3"><pre><span></span><span class="n">config</span> <span class="o">=</span> <span class="p">{</span>
     <span class="s2">&quot;lm_name&quot;</span><span class="p">:</span> <span class="s2">&quot;lvwerra/gpt2-imdb&quot;</span><span class="p">,</span>
     <span class="s2">&quot;ref_lm_name&quot;</span><span class="p">:</span> <span class="s2">&quot;lvwerra/gpt2-imdb&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;cls_model_name&quot;</span><span class="p">:</span> <span class="s2">&quot;lvwerra/bert-imdb&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;cls_model_name&quot;</span><span class="p">:</span> <span class="s2">&quot;lvwerra/distilbert-imdb&quot;</span><span class="p">,</span>
     <span class="s2">&quot;tk_name&quot;</span><span class="p">:</span> <span class="s2">&quot;gpt2&quot;</span><span class="p">,</span>
     <span class="s2">&quot;steps&quot;</span><span class="p">:</span> <span class="mi">51200</span><span class="p">,</span>
     <span class="s2">&quot;batch_size&quot;</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span>
@@ -145,9 +132,9 @@ description: "Optimise GPT2 to produce IMDB movie reviews with controlled sentim
     <span class="s2">&quot;horizon&quot;</span><span class="p">:</span><span class="mi">10000</span><span class="p">,</span>
     <span class="s2">&quot;gamma&quot;</span><span class="p">:</span><span class="mi">1</span><span class="p">,</span>
     <span class="s2">&quot;lam&quot;</span><span class="p">:</span><span class="mf">0.95</span><span class="p">,</span>
-    <span class="s2">&quot;cliprange&quot;</span><span class="p">:</span> <span class="o">.</span><span class="mi">2</span><span class="p">,</span>
-    <span class="s2">&quot;cliprange_value&quot;</span><span class="p">:</span><span class="o">.</span><span class="mi">2</span><span class="p">,</span>
-    <span class="s2">&quot;vf_coef&quot;</span><span class="p">:</span><span class="o">.</span><span class="mi">1</span><span class="p">,</span> 
+    <span class="s2">&quot;cliprange&quot;</span><span class="p">:</span> <span class="mf">.2</span><span class="p">,</span>
+    <span class="s2">&quot;cliprange_value&quot;</span><span class="p">:</span><span class="mf">.2</span><span class="p">,</span>
+    <span class="s2">&quot;vf_coef&quot;</span><span class="p">:</span><span class="mf">.1</span><span class="p">,</span> 
     <span class="s2">&quot;seed&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
 <span class="p">}</span>
 </pre></div>
@@ -253,7 +240,7 @@ description: "Optimise GPT2 to produce IMDB movie reviews with controlled sentim
 </div>
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h3 id="Load-IMDB-dataset">Load IMDB dataset<a class="anchor-link" href="#Load-IMDB-dataset"> </a></h3><p>The IMDB dataset contains 50k movie review annotated with "positive"/"negative" feedback indicating the sentiment. It can be downloaded from Kaggle (<a href="https://www.kaggle.com/lakshmi25npathi/imdb-dataset-of-50k-movie-reviews">link</a>).  We load the IMDB dataset into a DataFrame and filter for comments that are at least 500 characters long and take the first 1000 characters of each comment. The first filter we apply to avoid comments that are less than <code>txt_in_len</code> token long and the second to avoid tokenizing way more text than we actually need.</p>
+<h3 id="Load-IMDB-dataset">Load IMDB dataset<a class="anchor-link" href="#Load-IMDB-dataset"> </a></h3><p>The IMDB dataset contains 50k movie review annotated with "positive"/"negative" feedback indicating the sentiment.  We load the IMDB dataset into a DataFrame and filter for comments that are at least 500 characters long and take the first 1000 characters of each comment. The first filter we apply to avoid comments that are less than <code>txt_in_len</code> token long and the second to avoid tokenizing way more text than we actually need.</p>
 
 </div>
 </div>
@@ -265,8 +252,11 @@ description: "Optimise GPT2 to produce IMDB movie reviews with controlled sentim
 
 <div class="inner_cell">
     <div class="input_area">
-<div class=" highlight hl-ipython3"><pre><span></span><span class="c1"># makes sure you download the imdb-dataset in the data folder</span>
-<span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="s1">&#39;../data/imdb-dataset.csv&#39;</span><span class="p">)</span>
+<div class=" highlight hl-ipython3"><pre><span></span><span class="c1"># load imdb with datasets</span>
+<span class="n">ds</span> <span class="o">=</span> <span class="n">load_dataset</span><span class="p">(</span><span class="s1">&#39;imdb&#39;</span><span class="p">,</span> <span class="n">split</span><span class="o">=</span><span class="s1">&#39;train&#39;</span><span class="p">)</span>
+<span class="n">ds</span> <span class="o">=</span> <span class="n">ds</span><span class="o">.</span><span class="n">rename_columns</span><span class="p">({</span><span class="s1">&#39;text&#39;</span><span class="p">:</span> <span class="s1">&#39;review&#39;</span><span class="p">,</span> <span class="s1">&#39;label&#39;</span><span class="p">:</span> <span class="s1">&#39;sentiment&#39;</span><span class="p">})</span>
+<span class="n">ds</span><span class="o">.</span><span class="n">set_format</span><span class="p">(</span><span class="s1">&#39;pandas&#39;</span><span class="p">)</span>
+<span class="n">df</span> <span class="o">=</span> <span class="n">ds</span><span class="p">[:]</span>
 
 <span class="c1"># make sure the comments are long enough</span>
 <span class="n">df</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">df</span><span class="p">[</span><span class="s1">&#39;review&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">str</span><span class="o">.</span><span class="n">len</span><span class="p">()</span> <span class="o">&gt;</span> <span class="mi">500</span><span class="p">]</span>
