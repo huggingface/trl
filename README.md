@@ -70,7 +70,7 @@ gpt2_tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
 
 # initialize trainer
 ppo_config = {'batch_size': 1, 'forward_batch_size': 1}
-ppo_trainer = PPOTrainer(gpt2_model, gpt2_model_ref, **ppo_config)
+ppo_trainer = PPOTrainer(gpt2_model, gpt2_model_ref, gpt2_tokenizer, **ppo_config)
 
 # encode a query
 query_txt = "This morning I went to the "
@@ -82,10 +82,10 @@ response_txt = gpt2_tokenizer.decode(response_tensor[0,:])
 
 # define a reward for response
 # (this could be any reward such as human feedback or output from another model)
-reward = torch.tensor([1.0]) 
+reward = [torch.tensor(1.0)]
 
 # train model with ppo
-train_stats = ppo_trainer.step(query_tensor, response_tensor, reward)
+train_stats = ppo_trainer.step([query_tensor[0]], [response_tensor[0]], reward)
 ```
 
 ### Advanced example: IMDB sentiment
