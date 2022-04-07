@@ -11,7 +11,7 @@ import collections
 import time
 import random
 
-from .core import (logprobs_from_logits,
+from trl.core import (logprobs_from_logits,
                          whiten,
                          clip_by_value,
                          entropy_from_logits,

@@ -24,8 +24,8 @@ modules = ["core.py",
            "model_value_head.py",
            "ppo.py"]
 
-doc_url = "https://lvwerra.github.io/trl/"
+doc_url = "https://anshradh.github.io/trl/"
 
-git_url = "https://github.com/lvwerra/trl/tree/master/"
+git_url = "https://github.com/anshradh/trl/tree/master/"
 
 def custom_doc_links(name): return None
