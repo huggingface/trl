@@ -13,15 +13,15 @@ index = {"flatten_dict": "00-core.ipynb",
          "average_torch_dicts": "00-core.ipynb",
          "stats_to_np": "00-core.ipynb",
          "build_bert_batch_from_txt": "00-core.ipynb",
-         "ValueHead": "01-gpt2-with-value-head.ipynb",
-         "GPT2HeadWithValueModel": "01-gpt2-with-value-head.ipynb",
-         "respond_to_batch": "01-gpt2-with-value-head.ipynb",
+         "ValueHead": "01-model-with-value-head.ipynb",
+         "LMHeadWithValueModel": "01-model-with-value-head.ipynb",
+         "respond_to_batch": "01-model-with-value-head.ipynb",
          "AdaptiveKLController": "02-ppo.ipynb",
          "FixedKLController": "02-ppo.ipynb",
          "PPOTrainer": "02-ppo.ipynb"}
 
 modules = ["core.py",
-           "gpt2.py",
+           "model_value_head.py",
            "ppo.py"]
 
 doc_url = "https://lvwerra.github.io/trl/"
