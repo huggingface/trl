@@ -14,14 +14,15 @@ import random
 from transformers import DataCollatorForLanguageModeling
 
 from .core import (logprobs_from_logits,
-                         whiten,
-                         clip_by_value,
-                         entropy_from_logits,
-                         flatten_dict,
-                         average_torch_dicts,
-                         stats_to_np,
-                         stack_dicts,
-                         add_suffix)
+                      whiten,
+                      clip_by_value,
+                      entropy_from_logits,
+                      flatten_dict,
+                      average_torch_dicts,
+                      stats_to_np,
+                      stack_dicts,
+                      add_suffix,
+                      WANDB_PADDING)
 
 # Cell
 
@@ -144,7 +145,6 @@ class PPOTrainer:
         t = time.time()
         rewards, non_score_reward = self.compute_rewards(scores, logprobs, ref_logprobs)
         timing['time/ppo/compute_rewards'] = time.time()-t
-        print('reward', rewards[0].shape, logprobs[0].shape)
 
         t = time.time()
         all_stats = []
@@ -165,6 +165,7 @@ class PPOTrainer:
 
         # reshape advantages/ratios such that they are not averaged.
         train_stats['policy/advantages'] = torch.flatten(train_stats['policy/advantages']).unsqueeze(0)
+        train_stats['policy/advantages'] = torch.nan_to_num(train_stats['policy/advantages'], WANDB_PADDING)
         train_stats['policy/ratio'] = torch.flatten(train_stats['policy/ratio']).unsqueeze(0)
 
         stats = self.record_step_stats(scores=scores, logprobs=logprobs, ref_logprobs=ref_logprobs,
