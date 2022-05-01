@@ -91,7 +91,7 @@ description: "A Pytorch implementation of Proximal Policy Optimization for trans
 
 
 <div class="output_markdown rendered_html output_subarea ">
-<h2 id="AdaptiveKLController" class="doc_header"><code>class</code> <code>AdaptiveKLController</code><a href="https://github.com/lvwerra/trl/tree/master/trl/ppo.py#L28" class="source_link" style="float:right">[source]</a></h2><blockquote><p><code>AdaptiveKLController</code>(<strong><code>init_kl_coef</code></strong>, <strong><code>target</code></strong>, <strong><code>horizon</code></strong>)</p>
+<h2 id="AdaptiveKLController" class="doc_header"><code>class</code> <code>AdaptiveKLController</code><a href="https://github.com/lvwerra/trl/tree/master/trl/ppo.py#L29" class="source_link" style="float:right">[source]</a></h2><blockquote><p><code>AdaptiveKLController</code>(<strong><code>init_kl_coef</code></strong>, <strong><code>target</code></strong>, <strong><code>horizon</code></strong>)</p>
 </blockquote>
 <p>Adaptive KL controller described in the paper:
 <a href="https://arxiv.org/pdf/1909.08593.pdf">https://arxiv.org/pdf/1909.08593.pdf</a></p>
@@ -140,7 +140,7 @@ description: "A Pytorch implementation of Proximal Policy Optimization for trans
 
 
 <div class="output_markdown rendered_html output_subarea ">
-<h2 id="FixedKLController" class="doc_header"><code>class</code> <code>FixedKLController</code><a href="https://github.com/lvwerra/trl/tree/master/trl/ppo.py#L46" class="source_link" style="float:right">[source]</a></h2><blockquote><p><code>FixedKLController</code>(<strong><code>kl_coef</code></strong>)</p>
+<h2 id="FixedKLController" class="doc_header"><code>class</code> <code>FixedKLController</code><a href="https://github.com/lvwerra/trl/tree/master/trl/ppo.py#L47" class="source_link" style="float:right">[source]</a></h2><blockquote><p><code>FixedKLController</code>(<strong><code>kl_coef</code></strong>)</p>
 </blockquote>
 <p>Fixed KL controller.</p>
 
@@ -252,7 +252,6 @@ description: "A Pytorch implementation of Proximal Policy Optimization for trans
         <span class="n">t</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
         <span class="n">rewards</span><span class="p">,</span> <span class="n">non_score_reward</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">compute_rewards</span><span class="p">(</span><span class="n">scores</span><span class="p">,</span> <span class="n">logprobs</span><span class="p">,</span> <span class="n">ref_logprobs</span><span class="p">)</span>
         <span class="n">timing</span><span class="p">[</span><span class="s1">&#39;time/ppo/compute_rewards&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span><span class="o">-</span><span class="n">t</span> 
-        <span class="nb">print</span><span class="p">(</span><span class="s1">&#39;reward&#39;</span><span class="p">,</span> <span class="n">rewards</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">logprobs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
         
         <span class="n">t</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span> 
         <span class="n">all_stats</span> <span class="o">=</span> <span class="p">[]</span>
@@ -273,6 +272,7 @@ description: "A Pytorch implementation of Proximal Policy Optimization for trans
         
         <span class="c1"># reshape advantages/ratios such that they are not averaged.</span>
         <span class="n">train_stats</span><span class="p">[</span><span class="s1">&#39;policy/advantages&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">flatten</span><span class="p">(</span><span class="n">train_stats</span><span class="p">[</span><span class="s1">&#39;policy/advantages&#39;</span><span class="p">])</span><span class="o">.</span><span class="n">unsqueeze</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="n">train_stats</span><span class="p">[</span><span class="s1">&#39;policy/advantages&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">nan_to_num</span><span class="p">(</span><span class="n">train_stats</span><span class="p">[</span><span class="s1">&#39;policy/advantages&#39;</span><span class="p">],</span> <span class="n">WANDB_PADDING</span><span class="p">)</span>
         <span class="n">train_stats</span><span class="p">[</span><span class="s1">&#39;policy/ratio&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">flatten</span><span class="p">(</span><span class="n">train_stats</span><span class="p">[</span><span class="s1">&#39;policy/ratio&#39;</span><span class="p">])</span><span class="o">.</span><span class="n">unsqueeze</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
         
         <span class="n">stats</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">record_step_stats</span><span class="p">(</span><span class="n">scores</span><span class="o">=</span><span class="n">scores</span><span class="p">,</span> <span class="n">logprobs</span><span class="o">=</span><span class="n">logprobs</span><span class="p">,</span> <span class="n">ref_logprobs</span><span class="o">=</span><span class="n">ref_logprobs</span><span class="p">,</span>
@@ -434,7 +434,7 @@ description: "A Pytorch implementation of Proximal Policy Optimization for trans
 
 
 <div class="output_markdown rendered_html output_subarea ">
-<h2 id="PPOTrainer" class="doc_header"><code>class</code> <code>PPOTrainer</code><a href="https://github.com/lvwerra/trl/tree/master/trl/ppo.py#L56" class="source_link" style="float:right">[source]</a></h2><blockquote><p><code>PPOTrainer</code>(<strong><code>model</code></strong>, <strong><code>ref_model</code></strong>, <strong><code>tokenizer</code></strong>, <strong>**<code>ppo_params</code></strong>)</p>
+<h2 id="PPOTrainer" class="doc_header"><code>class</code> <code>PPOTrainer</code><a href="https://github.com/lvwerra/trl/tree/master/trl/ppo.py#L57" class="source_link" style="float:right">[source]</a></h2><blockquote><p><code>PPOTrainer</code>(<strong><code>model</code></strong>, <strong><code>ref_model</code></strong>, <strong><code>tokenizer</code></strong>, <strong>**<code>ppo_params</code></strong>)</p>
 </blockquote>
 <p>The PPO_trainer uses Proximal Policy Optimization to optimise language models.</p>
 
