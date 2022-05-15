@@ -30,4 +30,4 @@ jobs:
         if [ -n "$(nbdev_diff_nbs)" ]; then echo -e "!!! Detected difference between the notebooks and the library"; false; fi
     - name: Run tests
       run: |
-        nbdev_test_nbs
+        nbdev_test_nbs --fname '*/[!03|!04|!05|]*.ipynb'
