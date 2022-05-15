@@ -2,7 +2,8 @@
 
 __all__ = ["index", "modules", "custom_doc_links", "git_url"]
 
-index = {"flatten_dict": "00-core.ipynb",
+index = {"WANDB_PADDING": "00-core.ipynb",
+         "flatten_dict": "00-core.ipynb",
          "stack_dicts": "00-core.ipynb",
          "add_suffix": "00-core.ipynb",
          "pad_to_size": "00-core.ipynb",
@@ -12,7 +13,9 @@ index = {"flatten_dict": "00-core.ipynb",
          "entropy_from_logits": "00-core.ipynb",
          "average_torch_dicts": "00-core.ipynb",
          "stats_to_np": "00-core.ipynb",
+         "listify_batch": "00-core.ipynb",
          "build_bert_batch_from_txt": "00-core.ipynb",
+         "CausalLMOutputWithCrossAttentions": "01-gpt2-with-value-head.ipynb",
          "ValueHead": "01-gpt2-with-value-head.ipynb",
          "GPT2HeadWithValueModel": "01-gpt2-with-value-head.ipynb",
          "respond_to_batch": "01-gpt2-with-value-head.ipynb",

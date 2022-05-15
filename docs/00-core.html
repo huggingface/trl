@@ -36,6 +36,19 @@ description: "A set of utility functions used throughout the library."
 
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
+<h2 id="Constants">Constants<a class="anchor-link" href="#Constants"> </a></h2>
+</div>
+</div>
+</div>
+    {% raw %}
+    
+<div class="cell border-box-sizing code_cell rendered">
+
+</div>
+    {% endraw %}
+
+<div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
+<div class="text_cell_render border-box-sizing rendered_html">
 <h2 id="General-utils">General utils<a class="anchor-link" href="#General-utils"> </a></h2>
 </div>
 </div>
@@ -66,7 +79,7 @@ description: "A set of utility functions used throughout the library."
     <span class="n">results</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">()</span>
     <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">stats_dicts</span><span class="p">[</span><span class="mi">0</span><span class="p">]:</span>
         <span class="n">stats_list</span> <span class="o">=</span> <span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">flatten</span><span class="p">(</span><span class="n">d</span><span class="p">[</span><span class="n">k</span><span class="p">])</span> <span class="k">for</span> <span class="n">d</span> <span class="ow">in</span> <span class="n">stats_dicts</span><span class="p">]</span>
-        <span class="n">results</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">stack</span><span class="p">(</span><span class="n">stats_list</span><span class="p">)</span>
+        <span class="n">results</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">=</span> <span class="n">pad_sequence</span><span class="p">(</span><span class="n">stats_list</span><span class="p">,</span> <span class="n">batch_first</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">padding_value</span><span class="o">=</span><span class="n">WANDB_PADDING</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">results</span>
 
 <span class="k">def</span> <span class="nf">add_suffix</span><span class="p">(</span><span class="n">input_dict</span><span class="p">,</span> <span class="n">suffix</span><span class="p">):</span>
@@ -92,7 +105,7 @@ description: "A set of utility functions used throughout the library."
 
 
 <div class="output_markdown rendered_html output_subarea ">
-<h4 id="flatten_dict" class="doc_header"><code>flatten_dict</code><a href="https://github.com/lvwerra/trl/tree/master/trl/core.py#L14" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>flatten_dict</code>(<strong><code>nested</code></strong>, <strong><code>sep</code></strong>=<em><code>'/'</code></em>)</p>
+<h4 id="flatten_dict" class="doc_header"><code>flatten_dict</code><a href="https://github.com/lvwerra/trl/tree/master/trl/core.py#L20" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>flatten_dict</code>(<strong><code>nested</code></strong>, <strong><code>sep</code></strong>=<em><code>'/'</code></em>)</p>
 </blockquote>
 <p>Flatten dictionary and concatenate nested keys with separator.</p>
 
@@ -117,7 +130,7 @@ description: "A set of utility functions used throughout the library."
 
 
 <div class="output_markdown rendered_html output_subarea ">
-<h4 id="stack_dicts" class="doc_header"><code>stack_dicts</code><a href="https://github.com/lvwerra/trl/tree/master/trl/core.py#L28" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>stack_dicts</code>(<strong><code>stats_dicts</code></strong>)</p>
+<h4 id="stack_dicts" class="doc_header"><code>stack_dicts</code><a href="https://github.com/lvwerra/trl/tree/master/trl/core.py#L34" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>stack_dicts</code>(<strong><code>stats_dicts</code></strong>)</p>
 </blockquote>
 <p>Stack the values of a dict.</p>
 
@@ -142,7 +155,7 @@ description: "A set of utility functions used throughout the library."
 
 
 <div class="output_markdown rendered_html output_subarea ">
-<h4 id="add_suffix" class="doc_header"><code>add_suffix</code><a href="https://github.com/lvwerra/trl/tree/master/trl/core.py#L36" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>add_suffix</code>(<strong><code>input_dict</code></strong>, <strong><code>suffix</code></strong>)</p>
+<h4 id="add_suffix" class="doc_header"><code>add_suffix</code><a href="https://github.com/lvwerra/trl/tree/master/trl/core.py#L42" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>add_suffix</code>(<strong><code>input_dict</code></strong>, <strong><code>suffix</code></strong>)</p>
 </blockquote>
 <p>Add suffix to dict keys.</p>
 
@@ -227,6 +240,10 @@ description: "A set of utility functions used throughout the library."
         <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">isscalar</span><span class="p">(</span><span class="n">new_dict</span><span class="p">[</span><span class="n">k</span><span class="p">]):</span>
             <span class="n">new_dict</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">new_dict</span><span class="p">[</span><span class="n">k</span><span class="p">])</span>
     <span class="k">return</span> <span class="n">new_dict</span>
+
+<span class="k">def</span> <span class="nf">listify_batch</span><span class="p">(</span><span class="n">tensor</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Turns the first dimension of a tensor into a list.&quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="p">[</span><span class="n">tensor</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">tensor</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])]</span>
 </pre></div>
 
     </div>
@@ -247,7 +264,7 @@ description: "A set of utility functions used throughout the library."
 
 
 <div class="output_markdown rendered_html output_subarea ">
-<h4 id="pad_to_size" class="doc_header"><code>pad_to_size</code><a href="https://github.com/lvwerra/trl/tree/master/trl/core.py#L42" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>pad_to_size</code>(<strong><code>tensor</code></strong>, <strong><code>size</code></strong>, <strong><code>dim</code></strong>=<em><code>1</code></em>, <strong><code>padding</code></strong>=<em><code>50256</code></em>)</p>
+<h4 id="pad_to_size" class="doc_header"><code>pad_to_size</code><a href="https://github.com/lvwerra/trl/tree/master/trl/core.py#L48" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>pad_to_size</code>(<strong><code>tensor</code></strong>, <strong><code>size</code></strong>, <strong><code>dim</code></strong>=<em><code>1</code></em>, <strong><code>padding</code></strong>=<em><code>50256</code></em>)</p>
 </blockquote>
 <p>Pad tensor to size.</p>
 
@@ -272,7 +289,7 @@ description: "A set of utility functions used throughout the library."
 
 
 <div class="output_markdown rendered_html output_subarea ">
-<h4 id="logprobs_from_logits" class="doc_header"><code>logprobs_from_logits</code><a href="https://github.com/lvwerra/trl/tree/master/trl/core.py#L50" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>logprobs_from_logits</code>(<strong><code>logits</code></strong>, <strong><code>labels</code></strong>)</p>
+<h4 id="logprobs_from_logits" class="doc_header"><code>logprobs_from_logits</code><a href="https://github.com/lvwerra/trl/tree/master/trl/core.py#L56" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>logprobs_from_logits</code>(<strong><code>logits</code></strong>, <strong><code>labels</code></strong>)</p>
 </blockquote>
 <p>See: <a href="https://github.com/pytorch/pytorch/issues/563#issuecomment-330103591">https://github.com/pytorch/pytorch/issues/563#issuecomment-330103591</a></p>
 
@@ -297,7 +314,7 @@ description: "A set of utility functions used throughout the library."
 
 
 <div class="output_markdown rendered_html output_subarea ">
-<h4 id="whiten" class="doc_header"><code>whiten</code><a href="https://github.com/lvwerra/trl/tree/master/trl/core.py#L59" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>whiten</code>(<strong><code>values</code></strong>, <strong><code>shift_mean</code></strong>=<em><code>True</code></em>)</p>
+<h4 id="whiten" class="doc_header"><code>whiten</code><a href="https://github.com/lvwerra/trl/tree/master/trl/core.py#L65" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>whiten</code>(<strong><code>values</code></strong>, <strong><code>shift_mean</code></strong>=<em><code>True</code></em>)</p>
 </blockquote>
 <p>Whiten values.</p>
 
@@ -322,7 +339,7 @@ description: "A set of utility functions used throughout the library."
 
 
 <div class="output_markdown rendered_html output_subarea ">
-<h4 id="clip_by_value" class="doc_header"><code>clip_by_value</code><a href="https://github.com/lvwerra/trl/tree/master/trl/core.py#L67" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>clip_by_value</code>(<strong><code>x</code></strong>, <strong><code>tensor_min</code></strong>, <strong><code>tensor_max</code></strong>)</p>
+<h4 id="clip_by_value" class="doc_header"><code>clip_by_value</code><a href="https://github.com/lvwerra/trl/tree/master/trl/core.py#L73" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>clip_by_value</code>(<strong><code>x</code></strong>, <strong><code>tensor_min</code></strong>, <strong><code>tensor_max</code></strong>)</p>
 </blockquote>
 <p>Tensor extenstion to torch.clamp
 <a href="https://github.com/pytorch/pytorch/issues/2793#issuecomment-428784713">https://github.com/pytorch/pytorch/issues/2793#issuecomment-428784713</a></p>
@@ -348,7 +365,7 @@ description: "A set of utility functions used throughout the library."
 
 
 <div class="output_markdown rendered_html output_subarea ">
-<h4 id="entropy_from_logits" class="doc_header"><code>entropy_from_logits</code><a href="https://github.com/lvwerra/trl/tree/master/trl/core.py#L75" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>entropy_from_logits</code>(<strong><code>logits</code></strong>)</p>
+<h4 id="entropy_from_logits" class="doc_header"><code>entropy_from_logits</code><a href="https://github.com/lvwerra/trl/tree/master/trl/core.py#L81" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>entropy_from_logits</code>(<strong><code>logits</code></strong>)</p>
 </blockquote>
 <p>Calculate entropy from logits.</p>
 
@@ -373,7 +390,7 @@ description: "A set of utility functions used throughout the library."
 
 
 <div class="output_markdown rendered_html output_subarea ">
-<h4 id="average_torch_dicts" class="doc_header"><code>average_torch_dicts</code><a href="https://github.com/lvwerra/trl/tree/master/trl/core.py#L82" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>average_torch_dicts</code>(<strong><code>list_of_dicts</code></strong>)</p>
+<h4 id="average_torch_dicts" class="doc_header"><code>average_torch_dicts</code><a href="https://github.com/lvwerra/trl/tree/master/trl/core.py#L88" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>average_torch_dicts</code>(<strong><code>list_of_dicts</code></strong>)</p>
 </blockquote>
 <p>Average values of a list of dicts wiht torch tensors.</p>
 
@@ -398,9 +415,34 @@ description: "A set of utility functions used throughout the library."
 
 
 <div class="output_markdown rendered_html output_subarea ">
-<h4 id="stats_to_np" class="doc_header"><code>stats_to_np</code><a href="https://github.com/lvwerra/trl/tree/master/trl/core.py#L89" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>stats_to_np</code>(<strong><code>stats_dict</code></strong>)</p>
+<h4 id="stats_to_np" class="doc_header"><code>stats_to_np</code><a href="https://github.com/lvwerra/trl/tree/master/trl/core.py#L95" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>stats_to_np</code>(<strong><code>stats_dict</code></strong>)</p>
 </blockquote>
 <p>Cast all torch.tensors in dict to numpy arrays.</p>
+
+</div>
+
+</div>
+
+</div>
+</div>
+
+</div>
+    {% endraw %}
+
+    {% raw %}
+    
+<div class="cell border-box-sizing code_cell rendered">
+
+<div class="output_wrapper">
+<div class="output">
+
+<div class="output_area">
+
+
+<div class="output_markdown rendered_html output_subarea ">
+<h4 id="listify_batch" class="doc_header"><code>listify_batch</code><a href="https://github.com/lvwerra/trl/tree/master/trl/core.py#L107" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>listify_batch</code>(<strong><code>tensor</code></strong>)</p>
+</blockquote>
+<p>Turns the first dimension of a tensor into a list.</p>
 
 </div>
 
@@ -468,7 +510,7 @@ description: "A set of utility functions used throughout the library."
 
 
 <div class="output_markdown rendered_html output_subarea ">
-<h4 id="build_bert_batch_from_txt" class="doc_header"><code>build_bert_batch_from_txt</code><a href="https://github.com/lvwerra/trl/tree/master/trl/core.py#L104" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>build_bert_batch_from_txt</code>(<strong><code>text_list</code></strong>, <strong><code>tokenizer</code></strong>, <strong><code>device</code></strong>)</p>
+<h4 id="build_bert_batch_from_txt" class="doc_header"><code>build_bert_batch_from_txt</code><a href="https://github.com/lvwerra/trl/tree/master/trl/core.py#L113" class="source_link" style="float:right">[source]</a></h4><blockquote><p><code>build_bert_batch_from_txt</code>(<strong><code>text_list</code></strong>, <strong><code>tokenizer</code></strong>, <strong><code>device</code></strong>)</p>
 </blockquote>
 <p>Create token id and attention mask tensors from text list for BERT classification.</p>
 
