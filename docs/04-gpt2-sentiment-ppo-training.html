@@ -5,8 +5,8 @@ title: Tune GPT2 to generate positive reviews
 keywords: fastai
 sidebar: home_sidebar
 
-summary: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT sentiment classifier for rewards."
-description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT sentiment classifier for rewards."
+summary: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT sentiment classifier as a reward function."
+description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT sentiment classifier as a reward function."
 ---
 <!--
 
@@ -32,7 +32,7 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 <div style="text-align: center">
 {% include image.html max-width="600" file="/trl/images/gpt2_bert_training.png" %}
 <p style="text-align: center;"> <b>Figure:</b> Experiment setup to tune GPT2. The yellow arrows are outside the scope of this notebook, but the trained models are available through Hugging Face. </p>
-</div><p>In this notebook we fine-tune GPT2 (small) to generate positive movie reviews based on the IMDB dataset. The model gets 5 tokens from a real review and is tasked to produce positive continuations. To reward positive continuations we use a BERT classifier to analyse the sentiment of the produced sentences and use the classifier's outputs as rewards signals for PPO training.</p>
+</div><p>In this notebook we fine-tune GPT2 (small) to generate positive movie reviews based on the IMDB dataset. The model gets the start of a real review and is tasked to produce positive continuations. To reward positive continuations we use a BERT classifier to analyse the sentiment of the produced sentences and use the classifier's outputs as rewards signals for PPO training.</p>
 
 </div>
 </div>
@@ -113,11 +113,9 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 <div class="inner_cell">
     <div class="input_area">
 <div class=" highlight hl-ipython3"><pre><span></span><span class="n">config</span> <span class="o">=</span> <span class="p">{</span>
-    <span class="s2">&quot;lm_name&quot;</span><span class="p">:</span> <span class="s2">&quot;lvwerra/gpt2-imdb&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;ref_lm_name&quot;</span><span class="p">:</span> <span class="s2">&quot;lvwerra/gpt2-imdb&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;model_name&quot;</span><span class="p">:</span> <span class="s2">&quot;lvwerra/gpt2-imdb&quot;</span><span class="p">,</span>
     <span class="s2">&quot;cls_model_name&quot;</span><span class="p">:</span> <span class="s2">&quot;lvwerra/distilbert-imdb&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;tk_name&quot;</span><span class="p">:</span> <span class="s2">&quot;gpt2&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;steps&quot;</span><span class="p">:</span> <span class="mi">25600</span><span class="p">,</span>
+    <span class="s2">&quot;steps&quot;</span><span class="p">:</span> <span class="mi">20000</span><span class="p">,</span>
     <span class="s2">&quot;batch_size&quot;</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span>
     <span class="s2">&quot;forward_batch_size&quot;</span><span class="p">:</span> <span class="mi">16</span><span class="p">,</span>
     <span class="s2">&quot;ppo_epochs&quot;</span><span class="p">:</span> <span class="mi">4</span><span class="p">,</span>   
@@ -144,6 +142,13 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 </div>
     {% endraw %}
 
+<div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
+<div class="text_cell_render border-box-sizing rendered_html">
+<p><strong>Forward batching</strong>: Since the models can be fairly big and we want to rollout large PPO batches this can lead to out-of-memory errors when doing the forward passes for text generation and sentiment analysis. We introduce the parameter <code>forward_batch_size</code> to split the forward passes into smaller batches. Although this hurts performance a little this is neglectible compared to the computations of the backward passes when optimizing the model. The same parameter is used in the <a href="/trl/02-ppo#PPOTrainer"><code>PPOTrainer</code></a> when doing forward passes. The <code>batch_size</code> should multiple of <code>forward_batch_size</code>.</p>
+
+</div>
+</div>
+</div>
     {% raw %}
     
 <div class="cell border-box-sizing code_cell rendered">
@@ -197,7 +202,7 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 
 <div class="output_subarea output_stream output_stderr output_text">
 <pre><span class="ansi-blue-intense-fg ansi-bold">wandb</span>: Currently logged in as: <span class="ansi-yellow-fg">lvwerra</span> (use `wandb login --relogin` to force relogin)
-<span class="ansi-blue-intense-fg ansi-bold">wandb</span>: wandb version 0.12.15 is available!  To upgrade, please run:
+<span class="ansi-blue-intense-fg ansi-bold">wandb</span>: wandb version 0.12.16 is available!  To upgrade, please run:
 <span class="ansi-blue-intense-fg ansi-bold">wandb</span>:  $ pip install wandb --upgrade
 </pre>
 </div>
@@ -208,12 +213,9 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 
 <div class="output_html rendered_html output_subarea ">
 
-                Tracking run with wandb version 0.10.20<br/>
-                Syncing run <strong style="color:#cdcd00">run-42</strong> to <a href="https://wandb.ai" target="_blank">Weights & Biases</a> <a href="https://docs.wandb.com/integrations/jupyter.html" target="_blank">(Documentation)</a>.<br/>
-                Project page: <a href="https://wandb.ai/lvwerra/gpt2-test" target="_blank">https://wandb.ai/lvwerra/gpt2-test</a><br/>
-                Run page: <a href="https://wandb.ai/lvwerra/gpt2-test/runs/32n4k3wt" target="_blank">https://wandb.ai/lvwerra/gpt2-test/runs/32n4k3wt</a><br/>
-                Run data is saved locally in <code>/Users/leandro/git/trl/nbs/wandb/run-20220430_184555-32n4k3wt</code><br/><br/>
-            
+                    Syncing run <strong><a href="https://wandb.ai/lvwerra/gpt2-test/runs/30spsy9r" target="_blank">run-42</a></strong> to <a href="https://wandb.ai/lvwerra/gpt2-test" target="_blank">Weights & Biases</a> (<a href="https://docs.wandb.com/integrations/jupyter.html" target="_blank">docs</a>).<br/>
+
+                
 </div>
 
 </div>
@@ -222,7 +224,7 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 
 
 <div class="output_html rendered_html output_subarea output_execute_result">
-<h1>Run(32n4k3wt)</h1><iframe src="https://wandb.ai/lvwerra/gpt2-test/runs/32n4k3wt" style="border:none;width:100%;height:400px"></iframe>
+<button onClick="this.nextSibling.style.display='block';this.style.display='none';">Display W&B run</button><iframe src="https://wandb.ai/lvwerra/gpt2-test/runs/30spsy9r?jupyter=true" style="border:none;width:100%;height:420px;display:none;"></iframe>
 </div>
 
 </div>
@@ -269,8 +271,8 @@ description: "Optimise GPT2 to produce positive IMDB movie reviews using a BERT 
 <div class="output_area">
 
 <div class="output_subarea output_stream output_stderr output_text">
-<pre>Reusing dataset imdb (/Users/leandro/.cache/huggingface/datasets/imdb/plain_text/1.0.0/2fdd8b9bcadd6e7055e742a706876ba43f19faee861df134affd7a3f60fc38a1)
-Loading cached processed dataset at /Users/leandro/.cache/huggingface/datasets/imdb/plain_text/1.0.0/2fdd8b9bcadd6e7055e742a706876ba43f19faee861df134affd7a3f60fc38a1/cache-ff455473e884c6a3.arrow
+<pre>Reusing dataset imdb (/home/leandro/.cache/huggingface/datasets/imdb/plain_text/1.0.0/2fdd8b9bcadd6e7055e742a706876ba43f19faee861df134affd7a3f60fc38a1)
+Loading cached processed dataset at /home/leandro/.cache/huggingface/datasets/imdb/plain_text/1.0.0/2fdd8b9bcadd6e7055e742a706876ba43f19faee861df134affd7a3f60fc38a1/cache-ff455473e884c6a3.arrow
 </pre>
 </div>
 </div>
@@ -377,8 +379,8 @@ Loading cached processed dataset at /Users/leandro/.cache/huggingface/datasets/i
 
 
 <div class="output_text output_subarea output_execute_result">
-<pre>[[{&#39;label&#39;: &#39;NEGATIVE&#39;, &#39;score&#39;: 2.335047721862793},
-  {&#39;label&#39;: &#39;POSITIVE&#39;, &#39;score&#39;: -2.7265753746032715}]]</pre>
+<pre>[[{&#39;label&#39;: &#39;NEGATIVE&#39;, &#39;score&#39;: 2.335048198699951},
+  {&#39;label&#39;: &#39;POSITIVE&#39;, &#39;score&#39;: -2.726576566696167}]]</pre>
 </div>
 
 </div>
@@ -413,7 +415,7 @@ Loading cached processed dataset at /Users/leandro/.cache/huggingface/datasets/i
 
 <div class="output_text output_subarea output_execute_result">
 <pre>[[{&#39;label&#39;: &#39;NEGATIVE&#39;, &#39;score&#39;: -2.2947897911071777},
-  {&#39;label&#39;: &#39;POSITIVE&#39;, &#39;score&#39;: 2.557039260864258}]]</pre>
+  {&#39;label&#39;: &#39;POSITIVE&#39;, &#39;score&#39;: 2.557039737701416}]]</pre>
 </div>
 
 </div>
@@ -451,31 +453,14 @@ Loading cached processed dataset at /Users/leandro/.cache/huggingface/datasets/i
 
 <div class="inner_cell">
     <div class="input_area">
-<div class=" highlight hl-ipython3"><pre><span></span><span class="n">gpt2_model</span> <span class="o">=</span> <span class="n">GPT2HeadWithValueModel</span><span class="o">.</span><span class="n">from_pretrained</span><span class="p">(</span><span class="n">config</span><span class="p">[</span><span class="s1">&#39;lm_name&#39;</span><span class="p">])</span>
-<span class="n">gpt2_model_ref</span> <span class="o">=</span> <span class="n">GPT2HeadWithValueModel</span><span class="o">.</span><span class="n">from_pretrained</span><span class="p">(</span><span class="n">config</span><span class="p">[</span><span class="s1">&#39;ref_lm_name&#39;</span><span class="p">])</span>
+<div class=" highlight hl-ipython3"><pre><span></span><span class="n">gpt2_model</span> <span class="o">=</span> <span class="n">GPT2HeadWithValueModel</span><span class="o">.</span><span class="n">from_pretrained</span><span class="p">(</span><span class="n">config</span><span class="p">[</span><span class="s1">&#39;model_name&#39;</span><span class="p">])</span>
+<span class="n">gpt2_model_ref</span> <span class="o">=</span> <span class="n">GPT2HeadWithValueModel</span><span class="o">.</span><span class="n">from_pretrained</span><span class="p">(</span><span class="n">config</span><span class="p">[</span><span class="s1">&#39;model_name&#39;</span><span class="p">])</span>
 
-<span class="n">gpt2_tokenizer</span> <span class="o">=</span> <span class="n">AutoTokenizer</span><span class="o">.</span><span class="n">from_pretrained</span><span class="p">(</span><span class="n">config</span><span class="p">[</span><span class="s1">&#39;tk_name&#39;</span><span class="p">])</span>
+<span class="n">gpt2_tokenizer</span> <span class="o">=</span> <span class="n">AutoTokenizer</span><span class="o">.</span><span class="n">from_pretrained</span><span class="p">(</span><span class="n">config</span><span class="p">[</span><span class="s1">&#39;model_name&#39;</span><span class="p">])</span>
 <span class="n">gpt2_tokenizer</span><span class="o">.</span><span class="n">pad_token</span> <span class="o">=</span> <span class="n">gpt2_tokenizer</span><span class="o">.</span><span class="n">eos_token</span>
 </pre></div>
 
     </div>
-</div>
-</div>
-
-<div class="output_wrapper">
-<div class="output">
-
-<div class="output_area">
-
-<div class="output_subarea output_stream output_stderr output_text">
-<pre>Some weights of GPT2HeadWithValueModel were not initialized from the model checkpoint at lvwerra/gpt2-imdb and are newly initialized: [&#39;transformer.h.1.attn.masked_bias&#39;, &#39;transformer.h.2.attn.masked_bias&#39;, &#39;transformer.h.11.attn.masked_bias&#39;, &#39;transformer.h.4.attn.masked_bias&#39;, &#39;transformer.h.7.attn.masked_bias&#39;, &#39;transformer.h.3.attn.masked_bias&#39;, &#39;transformer.h.6.attn.masked_bias&#39;, &#39;transformer.h.9.attn.masked_bias&#39;, &#39;transformer.h.5.attn.masked_bias&#39;, &#39;transformer.h.0.attn.masked_bias&#39;, &#39;transformer.h.8.attn.masked_bias&#39;, &#39;transformer.h.10.attn.masked_bias&#39;, &#39;v_head.summary.bias&#39;, &#39;v_head.summary.weight&#39;]
-You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
-Some weights of GPT2HeadWithValueModel were not initialized from the model checkpoint at lvwerra/gpt2-imdb and are newly initialized: [&#39;transformer.h.1.attn.masked_bias&#39;, &#39;transformer.h.2.attn.masked_bias&#39;, &#39;transformer.h.11.attn.masked_bias&#39;, &#39;transformer.h.4.attn.masked_bias&#39;, &#39;transformer.h.7.attn.masked_bias&#39;, &#39;transformer.h.3.attn.masked_bias&#39;, &#39;transformer.h.6.attn.masked_bias&#39;, &#39;transformer.h.9.attn.masked_bias&#39;, &#39;transformer.h.5.attn.masked_bias&#39;, &#39;transformer.h.0.attn.masked_bias&#39;, &#39;transformer.h.8.attn.masked_bias&#39;, &#39;transformer.h.10.attn.masked_bias&#39;, &#39;v_head.summary.bias&#39;, &#39;v_head.summary.weight&#39;]
-You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
-</pre>
-</div>
-</div>
-
 </div>
 </div>
 
@@ -511,7 +496,7 @@ You should probably TRAIN this model on a down-stream task to be able to use it 
 
 
 <div class="output_text output_subarea output_execute_result">
-<pre>[&lt;wandb.wandb_torch.TorchGraph at 0x16d35cd90&gt;]</pre>
+<pre>[]</pre>
 </div>
 
 </div>
@@ -561,7 +546,7 @@ You should probably TRAIN this model on a down-stream task to be able to use it 
 </div>
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<p>We tokenize all IMDB in advance to avoid tokenizing twice. In the first step we encode the queries and slice the first <code>txt_in_len</code> tokens. In a second step we decode these tokens back to text for later display.</p>
+<p>We want to randomize the query and response length so we introduce a <code>LengthSampler</code> that uniformly samples values from an interval.</p>
 
 </div>
 </div>
@@ -590,6 +575,13 @@ You should probably TRAIN this model on a down-stream task to be able to use it 
 </div>
     {% endraw %}
 
+<div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
+<div class="text_cell_render border-box-sizing rendered_html">
+<p>We pre-tokenize all IMDB in advance to avoid tokenizing twice. In the first step we encode the queries and slice the first <code>input_size()</code> tokens. In a second step we decode these tokens back to text for later display.</p>
+
+</div>
+</div>
+</div>
     {% raw %}
     
 <div class="cell border-box-sizing code_cell rendered">
@@ -609,17 +601,33 @@ You should probably TRAIN this model on a down-stream task to be able to use it 
 </div>
 </div>
 
-<div class="output_wrapper">
-<div class="output">
+</div>
+    {% endraw %}
 
-<div class="output_area">
+<div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
+<div class="text_cell_render border-box-sizing rendered_html">
+<h3 id="Generation-settings">Generation settings<a class="anchor-link" href="#Generation-settings"> </a></h3><p>For the response generation we just use sampling and make sure top-k and nucleus sampling are turned off as well as a minimal length.</p>
 
-<div class="output_subarea output_stream output_stderr output_text">
-<pre>Loading cached processed dataset at /Users/leandro/.cache/huggingface/datasets/imdb/plain_text/1.0.0/2fdd8b9bcadd6e7055e742a706876ba43f19faee861df134affd7a3f60fc38a1/cache-2094f78e312bfcc1.arrow
-</pre>
 </div>
 </div>
+</div>
+    {% raw %}
+    
+<div class="cell border-box-sizing code_cell rendered">
+<div class="input">
 
+<div class="inner_cell">
+    <div class="input_area">
+<div class=" highlight hl-ipython3"><pre><span></span><span class="n">gen_kwargs</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">&quot;min_length&quot;</span><span class="p">:</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span>
+    <span class="s2">&quot;top_k&quot;</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>
+    <span class="s2">&quot;top_p&quot;</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">,</span>
+    <span class="s2">&quot;do_sample&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="s2">&quot;pad_token_id&quot;</span><span class="p">:</span> <span class="n">gpt2_tokenizer</span><span class="o">.</span><span class="n">eos_token_id</span>
+<span class="p">}</span>
+</pre></div>
+
+    </div>
 </div>
 </div>
 
@@ -634,20 +642,47 @@ You should probably TRAIN this model on a down-stream task to be able to use it 
 </div>
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<p><strong>Steps</strong></p>
-<p>The training loop consists of the following steps:</p>
+<h3 id="Dataloader">Dataloader<a class="anchor-link" href="#Dataloader"> </a></h3><p>We use a dataloader to return the batches of queries used for each PPO epoch:</p>
+
+</div>
+</div>
+</div>
+    {% raw %}
+    
+<div class="cell border-box-sizing code_cell rendered">
+<div class="input">
+
+<div class="inner_cell">
+    <div class="input_area">
+<div class=" highlight hl-ipython3"><pre><span></span><span class="k">def</span> <span class="nf">collater</span><span class="p">(</span><span class="n">data</span><span class="p">):</span>
+    <span class="k">return</span> <span class="nb">dict</span><span class="p">((</span><span class="n">key</span><span class="p">,</span> <span class="p">[</span><span class="n">d</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="k">for</span> <span class="n">d</span> <span class="ow">in</span> <span class="n">data</span><span class="p">])</span> <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="n">data</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+
+<span class="n">dataloader</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">DataLoader</span><span class="p">(</span><span class="n">ds</span><span class="p">,</span> <span class="n">batch_size</span><span class="o">=</span><span class="n">config</span><span class="p">[</span><span class="s1">&#39;batch_size&#39;</span><span class="p">],</span> <span class="n">collate_fn</span><span class="o">=</span><span class="n">collater</span><span class="p">)</span>
+</pre></div>
+
+    </div>
+</div>
+</div>
+
+</div>
+    {% endraw %}
+
+<div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
+<div class="text_cell_render border-box-sizing rendered_html">
+<h3 id="Training-loop">Training loop<a class="anchor-link" href="#Training-loop"> </a></h3>
+</div>
+</div>
+</div>
+<div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
+<div class="text_cell_render border-box-sizing rendered_html">
+<p>The training loop consists of the following main steps:</p>
 <ol>
-<li>Get a batch of queries</li>
-<li>Get the query responses from the policy</li>
-<li>Join query and responses and tokenize for BERT analysis</li>
+<li>Get the query responses from the policy network (GPT-2)</li>
 <li>Get sentiments for query/responses from BERT</li>
 <li>Optimize policy with PPO using the (query, response, reward) triplet</li>
-<li>Log all the training statistics</li>
 </ol>
-<p><strong>Forward batching</strong></p>
-<p>Since the models can be fairly big and we want to rollout large PPO batches this can lead to out-of-memory errors when doing the forward passes for text generation and sentiment analysis. We introduce the parameter <code>forward_batch_size</code> to split the forward passes into smaller batches. Although this hurts performance a little this is neglectible compared to the computations of the backward passes when optimizing the model. The same parameter is used in the <a href="/trl/02-ppo#PPOTrainer"><code>PPOTrainer</code></a> when doing forward passes. The <code>batch_size</code> should multiple of <code>forward_batch_size</code>.</p>
 <p><strong>Training time</strong></p>
-<p>This step takes <strong>~2h</strong> on a P6000 GPU with the above specified settings.</p>
+<p>This step takes <strong>~2h</strong> on a V100 GPU with the above specified settings.</p>
 
 </div>
 </div>
@@ -660,23 +695,22 @@ You should probably TRAIN this model on a down-stream task to be able to use it 
 <div class="inner_cell">
     <div class="input_area">
 <div class=" highlight hl-ipython3"><pre><span></span><span class="n">ppo_trainer</span> <span class="o">=</span> <span class="n">PPOTrainer</span><span class="p">(</span><span class="n">gpt2_model</span><span class="p">,</span> <span class="n">gpt2_model_ref</span><span class="p">,</span> <span class="n">gpt2_tokenizer</span><span class="p">,</span> <span class="o">**</span><span class="n">config</span><span class="p">)</span>
-<span class="n">total_ppo_epochs</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">ceil</span><span class="p">(</span><span class="n">config</span><span class="p">[</span><span class="s2">&quot;steps&quot;</span><span class="p">]</span><span class="o">/</span><span class="n">config</span><span class="p">[</span><span class="s1">&#39;batch_size&#39;</span><span class="p">]))</span>
 
-<span class="k">def</span> <span class="nf">collater</span><span class="p">(</span><span class="n">data</span><span class="p">):</span>
-    <span class="k">return</span> <span class="nb">dict</span><span class="p">((</span><span class="n">key</span><span class="p">,</span> <span class="p">[</span><span class="n">d</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="k">for</span> <span class="n">d</span> <span class="ow">in</span> <span class="n">data</span><span class="p">])</span> <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="n">data</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
-<span class="n">dataloader</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">DataLoader</span><span class="p">(</span><span class="n">ds</span><span class="p">,</span> <span class="n">batch_size</span><span class="o">=</span><span class="n">config</span><span class="p">[</span><span class="s1">&#39;batch_size&#39;</span><span class="p">],</span> <span class="n">collate_fn</span><span class="o">=</span><span class="n">collater</span><span class="p">)</span>
+<span class="n">total_ppo_epochs</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">ceil</span><span class="p">(</span><span class="n">config</span><span class="p">[</span><span class="s2">&quot;steps&quot;</span><span class="p">]</span><span class="o">/</span><span class="n">config</span><span class="p">[</span><span class="s1">&#39;batch_size&#39;</span><span class="p">]))</span>
 
 <span class="k">for</span> <span class="n">epoch</span><span class="p">,</span> <span class="n">batch</span> <span class="ow">in</span> <span class="n">tqdm</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="n">total_ppo_epochs</span><span class="p">),</span> <span class="nb">iter</span><span class="p">(</span><span class="n">dataloader</span><span class="p">))):</span>
     <span class="n">logs</span><span class="p">,</span> <span class="n">timing</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(),</span> <span class="nb">dict</span><span class="p">()</span>
     <span class="n">t0</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
-    <span class="n">query_tensors</span> <span class="o">=</span> <span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">t</span><span class="p">)</span><span class="o">.</span><span class="n">long</span><span class="p">()</span> <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">batch</span><span class="p">[</span><span class="s2">&quot;tokens&quot;</span><span class="p">]]</span>
+    <span class="n">query_tensors</span> <span class="o">=</span> <span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">t</span><span class="p">)</span><span class="o">.</span><span class="n">long</span><span class="p">()</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="p">)</span> <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">batch</span><span class="p">[</span><span class="s2">&quot;tokens&quot;</span><span class="p">]]</span>
     
     <span class="c1">#### Get response from gpt2</span>
     <span class="n">t</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
     <span class="n">response_tensors</span> <span class="o">=</span> <span class="p">[]</span>
     <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">config</span><span class="p">[</span><span class="s1">&#39;batch_size&#39;</span><span class="p">]):</span>
-        <span class="n">response</span>  <span class="o">=</span> <span class="n">respond_to_batch</span><span class="p">(</span><span class="n">gpt2_model</span><span class="p">,</span> <span class="n">query_tensors</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">unsqueeze</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="p">),</span> <span class="n">txt_len</span><span class="o">=</span><span class="n">output_size</span><span class="p">())</span>
-        <span class="n">response_tensors</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">response</span><span class="o">.</span><span class="n">squeeze</span><span class="p">())</span>
+        <span class="n">gen_len</span> <span class="o">=</span> <span class="n">output_size</span><span class="p">()</span>
+        <span class="n">response</span> <span class="o">=</span> <span class="n">gpt2_model</span><span class="o">.</span><span class="n">generate</span><span class="p">(</span><span class="n">query_tensors</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">unsqueeze</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">),</span>
+                                       <span class="n">max_new_tokens</span><span class="o">=</span><span class="n">gen_len</span><span class="p">,</span> <span class="o">**</span><span class="n">gen_kwargs</span><span class="p">)</span>
+        <span class="n">response_tensors</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">response</span><span class="o">.</span><span class="n">squeeze</span><span class="p">()[</span><span class="o">-</span><span class="n">gen_len</span><span class="p">:])</span>
     <span class="n">batch</span><span class="p">[</span><span class="s1">&#39;response&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="n">gpt2_tokenizer</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="n">r</span><span class="o">.</span><span class="n">squeeze</span><span class="p">())</span> <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">response_tensors</span><span class="p">]</span>
     <span class="n">timing</span><span class="p">[</span><span class="s1">&#39;time/get_response&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span><span class="o">-</span><span class="n">t</span>
 
@@ -687,7 +721,7 @@ You should probably TRAIN this model on a down-stream task to be able to use it 
     <span class="n">rewards</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([</span><span class="n">output</span><span class="p">[</span><span class="mi">1</span><span class="p">][</span><span class="s2">&quot;score&quot;</span><span class="p">]</span> <span class="k">for</span> <span class="n">output</span> <span class="ow">in</span> <span class="n">pipe_outputs</span><span class="p">])</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
     <span class="n">timing</span><span class="p">[</span><span class="s1">&#39;time/get_sentiment_preds&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span><span class="o">-</span><span class="n">t</span>
     
-    <span class="c1">#### Run PPO training </span>
+    <span class="c1">#### Run PPO step </span>
     <span class="n">t</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
     <span class="n">stats</span> <span class="o">=</span> <span class="n">ppo_trainer</span><span class="o">.</span><span class="n">step</span><span class="p">(</span><span class="n">query_tensors</span><span class="p">,</span> <span class="n">response_tensors</span><span class="p">,</span> <span class="n">rewards</span><span class="p">)</span>
     <span class="n">timing</span><span class="p">[</span><span class="s1">&#39;time/optimization&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span><span class="o">-</span><span class="n">t</span>
@@ -705,19 +739,6 @@ You should probably TRAIN this model on a down-stream task to be able to use it 
 </pre></div>
 
     </div>
-</div>
-</div>
-
-<div class="output_wrapper">
-<div class="output">
-
-<div class="output_area">
-
-<div class="output_subarea output_stream output_stderr output_text">
-<pre>868it [24:21:56, 60.14s/it]</pre>
-</div>
-</div>
-
 </div>
 </div>
 
@@ -758,13 +779,21 @@ You should probably TRAIN this model on a down-stream task to be able to use it 
 <span class="n">game_data</span><span class="p">[</span><span class="s1">&#39;query&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df_batch</span><span class="p">[</span><span class="s1">&#39;query&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span>
 <span class="n">query_tensors</span> <span class="o">=</span> <span class="n">df_batch</span><span class="p">[</span><span class="s1">&#39;tokens&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span>
 
+<span class="n">response_tensors_ref</span><span class="p">,</span> <span class="n">response_tensors</span> <span class="o">=</span> <span class="p">[],</span> <span class="p">[]</span>
+
 <span class="c1">#### get response from gpt2 and gpt2_ref</span>
 <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">bs</span><span class="p">):</span>
     <span class="n">gen_len</span> <span class="o">=</span> <span class="n">output_size</span><span class="p">()</span>
-    <span class="n">response_tensors_ref</span>  <span class="o">=</span> <span class="n">respond_to_batch</span><span class="p">(</span><span class="n">gpt2_model_ref</span><span class="p">,</span> <span class="n">query_tensors</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">unsqueeze</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="p">),</span> <span class="n">txt_len</span><span class="o">=</span><span class="n">gen_len</span><span class="p">)</span>
-    <span class="n">response_tensors</span> <span class="o">=</span> <span class="n">respond_to_batch</span><span class="p">(</span><span class="n">gpt2_model</span><span class="p">,</span> <span class="n">query_tensors</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">unsqueeze</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="p">),</span> <span class="n">txt_len</span><span class="o">=</span><span class="n">gen_len</span><span class="p">)</span>
-<span class="n">game_data</span><span class="p">[</span><span class="s1">&#39;response (before)&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="n">gpt2_tokenizer</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="n">response_tensors_ref</span><span class="p">[</span><span class="n">i</span><span class="p">,</span> <span class="p">:])</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">bs</span><span class="p">)]</span>
-<span class="n">game_data</span><span class="p">[</span><span class="s1">&#39;response (after)&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="n">gpt2_tokenizer</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="n">response_tensors</span><span class="p">[</span><span class="n">i</span><span class="p">,</span> <span class="p">:])</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">bs</span><span class="p">)]</span>
+    <span class="n">output</span> <span class="o">=</span> <span class="n">gpt2_model_ref</span><span class="o">.</span><span class="n">generate</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">query_tensors</span><span class="p">[</span><span class="n">i</span><span class="p">])</span><span class="o">.</span><span class="n">unsqueeze</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="p">),</span>
+                                     <span class="n">max_new_tokens</span><span class="o">=</span><span class="n">gen_len</span><span class="p">,</span> <span class="o">**</span><span class="n">gen_kwargs</span><span class="p">)</span><span class="o">.</span><span class="n">squeeze</span><span class="p">()[</span><span class="o">-</span><span class="n">gen_len</span><span class="p">:]</span>
+    <span class="n">response_tensors_ref</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">output</span><span class="p">)</span>
+    <span class="n">output</span> <span class="o">=</span> <span class="n">gpt2_model</span><span class="o">.</span><span class="n">generate</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">query_tensors</span><span class="p">[</span><span class="n">i</span><span class="p">])</span><span class="o">.</span><span class="n">unsqueeze</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="p">),</span>
+                                 <span class="n">max_new_tokens</span><span class="o">=</span><span class="n">gen_len</span><span class="p">,</span> <span class="o">**</span><span class="n">gen_kwargs</span><span class="p">)</span><span class="o">.</span><span class="n">squeeze</span><span class="p">()[</span><span class="o">-</span><span class="n">gen_len</span><span class="p">:]</span>
+    <span class="n">response_tensors</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">output</span><span class="p">)</span>
+
+<span class="c1">#### decode responses</span>
+<span class="n">game_data</span><span class="p">[</span><span class="s1">&#39;response (before)&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="n">gpt2_tokenizer</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="n">response_tensors_ref</span><span class="p">[</span><span class="n">i</span><span class="p">])</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">bs</span><span class="p">)]</span>
+<span class="n">game_data</span><span class="p">[</span><span class="s1">&#39;response (after)&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="n">gpt2_tokenizer</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="n">response_tensors</span><span class="p">[</span><span class="n">i</span><span class="p">])</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">bs</span><span class="p">)]</span>
 
 <span class="c1">#### sentiment analysis of query/response pairs before/after</span>
 <span class="n">texts</span> <span class="o">=</span> <span class="p">[</span><span class="n">q</span> <span class="o">+</span> <span class="n">r</span> <span class="k">for</span> <span class="n">q</span><span class="p">,</span><span class="n">r</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">game_data</span><span class="p">[</span><span class="s1">&#39;query&#39;</span><span class="p">],</span> <span class="n">game_data</span><span class="p">[</span><span class="s1">&#39;response (before)&#39;</span><span class="p">])]</span>
@@ -784,6 +813,15 @@ You should probably TRAIN this model on a down-stream task to be able to use it 
 
 <div class="output_wrapper">
 <div class="output">
+
+<div class="output_area">
+
+<div class="output_subarea output_stream output_stderr output_text">
+<pre>/home/leandro/miniconda3/envs/trl/lib/python3.9/site-packages/transformers/pipelines/base.py:1075: UserWarning: You seem to be using the pipelines sequentially on GPU. In order to maximize efficiency please use a dataset
+  warnings.warn(
+</pre>
+</div>
+</div>
 
 <div class="output_area">
 
@@ -817,131 +855,131 @@ You should probably TRAIN this model on a down-stream task to be able to use it 
   <tbody>
     <tr>
       <th>0</th>
-      <td>That's what the title</td>
-      <td>said to me. All I had to do was hear one word...</td>
-      <td>says, and this movie was very good,-I really ...</td>
-      <td>1.710360</td>
-      <td>4.207656</td>
+      <td>Oh dear,</td>
+      <td>what are I saying?! I fast-forwarded through</td>
+      <td>I must say that I are hanging my head on this</td>
+      <td>-0.858954</td>
+      <td>-1.007609</td>
     </tr>
     <tr>
       <th>1</th>
-      <td>The female hot numbers on</td>
-      <td>the Fonda get a saving grace here, you can st...</td>
-      <td>the DVD are beautiful. The music is extraordi...</td>
-      <td>1.585194</td>
-      <td>4.228330</td>
+      <td>I've seen</td>
+      <td>it, as well.&lt;br</td>
+      <td>three million dialogue throughout, and</td>
+      <td>1.996807</td>
+      <td>2.240883</td>
     </tr>
     <tr>
       <th>2</th>
-      <td>In the film Kongwon</td>
-      <td>(American Truffaut), a snake made of ash fall...</td>
-      <td>has a funky personality and makes the movies ...</td>
-      <td>-0.015413</td>
-      <td>2.537073</td>
+      <td>Hi:&lt;br /&gt;&lt;br</td>
+      <td>/&gt;This movie is a turkey though when it comes to</td>
+      <td>/&gt;I also like that movie. It's so funny</td>
+      <td>-0.438191</td>
+      <td>2.415630</td>
     </tr>
     <tr>
       <th>3</th>
-      <td>Let's see: what</td>
-      <td>a blast from start to finish, female and male...</td>
-      <td>happens on that later?&lt;|endoftext|&gt; This film...</td>
-      <td>3.278678</td>
-      <td>4.061680</td>
+      <td>I'm a writer</td>
+      <td>and I'm not going to be asked to</td>
+      <td>, not a screenwriter. I've written</td>
+      <td>-0.655991</td>
+      <td>-0.724324</td>
     </tr>
     <tr>
       <th>4</th>
-      <td>Really? Is this necessary</td>
-      <td>for Sith philosophy combined with missionary ...</td>
-      <td>? Watched this too, but it's what made it so b...</td>
-      <td>-2.509291</td>
-      <td>3.025524</td>
+      <td>If you</td>
+      <td>absolutely love sensitive romance, the plot a...</td>
+      <td>are looking at the cinematography, the acting,</td>
+      <td>2.221309</td>
+      <td>0.148751</td>
     </tr>
     <tr>
       <th>5</th>
-      <td>During a sleepless night</td>
-      <td>Keira Knightley has besieged a monastery, tro...</td>
-      <td>, I found this Parker Bros. film. The acting i...</td>
-      <td>1.341672</td>
-      <td>3.933312</td>
+      <td>OMG this</td>
+      <td>casting cast. Obi cult breezy, this is</td>
+      <td>movie was totally wonderful, I it was the ide...</td>
+      <td>-1.533139</td>
+      <td>2.590190</td>
     </tr>
     <tr>
       <th>6</th>
-      <td>My wife spotted this film</td>
-      <td>almost halfway through second grade, and afte...</td>
-      <td>when I was younger and kept her P-1-her-p-</td>
-      <td>1.781651</td>
-      <td>1.456647</td>
+      <td>It's</td>
+      <td>unrealistic; the guy who was supposed to be E...</td>
+      <td>a very good film. It reminds us about over</td>
+      <td>-2.097017</td>
+      <td>2.835831</td>
     </tr>
     <tr>
       <th>7</th>
-      <td>I love John's work</td>
-      <td>but I actually have to write language as in w...</td>
-      <td>and I hereby recommend this film. I am really...</td>
-      <td>-1.904006</td>
-      <td>4.159198</td>
+      <td>There is a really</td>
+      <td>awful laptop game!&lt;br /&gt;&lt;br /&gt;I used to</td>
+      <td>interesting story that set us the journey. Th...</td>
+      <td>-2.341743</td>
+      <td>2.282939</td>
     </tr>
     <tr>
       <th>8</th>
-      <td>I's a big struggle</td>
-      <td>to see anyone who acts in that way. by Jim Th...</td>
-      <td>, but overall I'm happy with the changes even ...</td>
-      <td>-1.595925</td>
-      <td>2.651260</td>
+      <td>This is</td>
+      <td>my favorite part about</td>
+      <td>a well thought well</td>
+      <td>2.554794</td>
+      <td>2.734139</td>
     </tr>
     <tr>
       <th>9</th>
-      <td>i liked this film a</td>
-      <td>lot Paul Verhoeven The other actor does what ...</td>
-      <td>lot recipe. It was probably one of the best m...</td>
-      <td>4.314877</td>
-      <td>4.346435</td>
+      <td>Wasn't</td>
+      <td>Wasn't it clichéd?&lt;|endoftext|&gt;</td>
+      <td>anyone else interested in this movie? It's a ...</td>
+      <td>-1.790802</td>
+      <td>2.631960</td>
     </tr>
     <tr>
       <th>10</th>
-      <td>I'd never seen a</td>
-      <td>heavier, woodier example of Victorian archite...</td>
-      <td>film of this caliber, and I think it's wonder...</td>
-      <td>3.297736</td>
-      <td>4.158653</td>
+      <td>This film is another of director Tim</td>
+      <td>Burton's masterpieces</td>
+      <td>Curry's best bombs</td>
+      <td>2.622917</td>
+      <td>2.544106</td>
     </tr>
     <tr>
       <th>11</th>
-      <td>I have to agree with</td>
-      <td>most people, that Davis was right after all. ...</td>
-      <td>this movie, the features in this film are fan...</td>
-      <td>0.609289</td>
-      <td>4.207779</td>
+      <td>I thought this movie</td>
+      <td>was excellent. I actually laughed 6 times and...</td>
+      <td>was perfect, and I believe it's almost overlo...</td>
+      <td>2.548022</td>
+      <td>2.601913</td>
     </tr>
     <tr>
       <th>12</th>
-      <td>The only reason I watched</td>
-      <td>it this soon after was because part of it too...</td>
-      <td>this movie I really do. It helps a little to ...</td>
-      <td>-2.684667</td>
-      <td>-2.928670</td>
+      <td>This early John Wayne</td>
+      <td>films looked like an abandoned police beating</td>
+      <td>film is a realistic portrayal of what</td>
+      <td>-1.742279</td>
+      <td>2.609762</td>
     </tr>
     <tr>
       <th>13</th>
-      <td>When I think of a</td>
-      <td>film directed by two independent directors, c...</td>
-      <td>movie, or potentially a comedy in an interest...</td>
-      <td>-1.889202</td>
-      <td>2.494266</td>
+      <td>I was</td>
+      <td>given an experience-a big one, almost 25</td>
+      <td>very happy with all the reflections and this ...</td>
+      <td>2.250709</td>
+      <td>2.558540</td>
     </tr>
     <tr>
       <th>14</th>
-      <td>So first things first..</td>
-      <td>blank moment. The montage has the mocking tone...</td>
-      <td>but first we are really surprised when it sho...</td>
-      <td>-1.846089</td>
-      <td>2.433687</td>
+      <td>Embarrassingly, I</td>
+      <td>am more at a strict conformity after getting ...</td>
+      <td>had never seen a movie before. There was one ...</td>
+      <td>-2.021666</td>
+      <td>-1.803383</td>
     </tr>
     <tr>
       <th>15</th>
-      <td>...this one just isn</td>
-      <td>'t theretonally. I understand the enterprise a...</td>
-      <td>'t really in, after seeing it. I just love it ...</td>
-      <td>-2.095725</td>
-      <td>4.127057</td>
+      <td>I am a fan</td>
+      <td>of living on simple islands, and we have visi...</td>
+      <td>of many things and learned how to appreciate ...</td>
+      <td>1.791297</td>
+      <td>2.324461</td>
     </tr>
   </tbody>
 </table>
@@ -971,10 +1009,10 @@ You should probably TRAIN this model on a down-stream task to be able to use it 
 <div class="inner_cell">
     <div class="input_area">
 <div class=" highlight hl-ipython3"><pre><span></span><span class="nb">print</span><span class="p">(</span><span class="s1">&#39;mean:&#39;</span><span class="p">)</span>
-<span class="n">display</span><span class="p">(</span><span class="n">df_results</span><span class="o">.</span><span class="n">mean</span><span class="p">())</span>
+<span class="n">display</span><span class="p">(</span><span class="n">df_results</span><span class="p">[[</span><span class="s2">&quot;rewards (before)&quot;</span><span class="p">,</span> <span class="s2">&quot;rewards (after)&quot;</span><span class="p">]]</span><span class="o">.</span><span class="n">mean</span><span class="p">())</span>
 <span class="nb">print</span><span class="p">()</span>
 <span class="nb">print</span><span class="p">(</span><span class="s1">&#39;median:&#39;</span><span class="p">)</span>
-<span class="n">display</span><span class="p">(</span><span class="n">df_results</span><span class="o">.</span><span class="n">median</span><span class="p">())</span>
+<span class="n">display</span><span class="p">(</span><span class="n">df_results</span><span class="p">[[</span><span class="s2">&quot;rewards (before)&quot;</span><span class="p">,</span> <span class="s2">&quot;rewards (after)&quot;</span><span class="p">]]</span><span class="o">.</span><span class="n">median</span><span class="p">())</span>
 </pre></div>
 
     </div>
@@ -997,8 +1035,8 @@ You should probably TRAIN this model on a down-stream task to be able to use it 
 
 
 <div class="output_text output_subarea ">
-<pre>rewards (before)    0.211196
-rewards (after)     3.068743
+<pre>rewards (before)    0.156629
+rewards (after)     1.686487
 dtype: float64</pre>
 </div>
 
@@ -1018,8 +1056,8 @@ median:
 
 
 <div class="output_text output_subarea ">
-<pre>rewards (before)    0.296938
-rewards (after)     3.997496
+<pre>rewards (before)   -0.547091
+rewards (after)     2.479868
 dtype: float64</pre>
 </div>
 
@@ -1033,7 +1071,7 @@ dtype: float64</pre>
 
 <div class="cell border-box-sizing text_cell rendered"><div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h2 id="Save-model">Save model<a class="anchor-link" href="#Save-model"> </a></h2><p>Finally, we save the model to disk for later usage.</p>
+<h2 id="Save-model">Save model<a class="anchor-link" href="#Save-model"> </a></h2><p>Finally, we save the model and push it to the Hugging Face for later usage.</p>
 
 </div>
 </div>
@@ -1045,9 +1083,8 @@ dtype: float64</pre>
 
 <div class="inner_cell">
     <div class="input_area">
-<div class=" highlight hl-ipython3"><pre><span></span><span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="s1">&#39;gpt2-imdb-pos&#39;</span><span class="p">)</span>
-<span class="n">gpt2_model</span><span class="o">.</span><span class="n">save_pretrained</span><span class="p">(</span><span class="s1">&#39;gpt2-imdb-pos&#39;</span><span class="p">)</span>
-<span class="n">gpt2_tokenizer</span><span class="o">.</span><span class="n">save_pretrained</span><span class="p">(</span><span class="s1">&#39;gpt2-imdb-pos&#39;</span><span class="p">)</span>
+<div class=" highlight hl-ipython3"><pre><span></span><span class="n">gpt2_model</span><span class="o">.</span><span class="n">save_pretrained</span><span class="p">(</span><span class="s1">&#39;gpt2-imdb-pos-v2&#39;</span><span class="p">,</span> <span class="n">push_to_hub</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">gpt2_tokenizer</span><span class="o">.</span><span class="n">save_pretrained</span><span class="p">(</span><span class="s1">&#39;gpt2-imdb-pos-v2&#39;</span><span class="p">,</span> <span class="n">push_to_hub</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 
     </div>
@@ -1059,13 +1096,35 @@ dtype: float64</pre>
 
 <div class="output_area">
 
+<div class="output_subarea output_stream output_stderr output_text">
+<pre>/home/leandro/miniconda3/envs/trl/lib/python3.9/site-packages/huggingface_hub/hf_api.py:1001: FutureWarning: `create_repo` now takes `token` as an optional positional argument. Be sure to adapt your code!
+  warnings.warn(
+Cloning https://huggingface.co/lvwerra/gpt2-imdb-pos-v2 into local empty directory.
+remote: Enforcing permissions...        
+remote: Allowed refs: all        
+To https://huggingface.co/lvwerra/gpt2-imdb-pos-v2
+   369b075..28b9865  main -&gt; main
+
+remote: Enforcing permissions...        
+remote: Allowed refs: all        
+To https://huggingface.co/lvwerra/gpt2-imdb-pos-v2
+   28b9865..42792ea  main -&gt; main
+
+</pre>
+</div>
+</div>
+
+<div class="output_area">
+
 
 
 <div class="output_text output_subarea output_execute_result">
-<pre>(&#39;gpt2-imdb-pos/vocab.json&#39;,
- &#39;gpt2-imdb-pos/merges.txt&#39;,
- &#39;gpt2-imdb-pos/special_tokens_map.json&#39;,
- &#39;gpt2-imdb-pos/added_tokens.json&#39;)</pre>
+<pre>(&#39;gpt2-imdb-pos-v2/tokenizer_config.json&#39;,
+ &#39;gpt2-imdb-pos-v2/special_tokens_map.json&#39;,
+ &#39;gpt2-imdb-pos-v2/vocab.json&#39;,
+ &#39;gpt2-imdb-pos-v2/merges.txt&#39;,
+ &#39;gpt2-imdb-pos-v2/added_tokens.json&#39;,
+ &#39;gpt2-imdb-pos-v2/tokenizer.json&#39;)</pre>
 </div>
 
 </div>
