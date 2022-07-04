@@ -23,7 +23,7 @@ def flatten_dict(nested, sep='/'):
         for k, v in nest.items():
             if sep in k:
                 raise ValueError(f"separator '{sep}' not allowed to be in key '{k}'")
-            if isinstance(v, collections.Mapping):
+            if isinstance(v, collections.abc.Mapping):
                 rec(v, prefix + k + sep, into)
             else:
                 into[prefix + k] = v
