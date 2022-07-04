@@ -64,6 +64,8 @@ def tokenize(sample):
 
 ds = ds.map(tokenize, batched=False)
 
+import pdb; pdb.set_trace()
+
 gen_kwargs = {
     "min_length": -1,
     "max_length": 1024,
@@ -112,9 +114,8 @@ for epoch, batch in tqdm(zip(range(total_ppo_epochs), iter(dataloader))):
         response = gpt2_model.generate(
             query_tensors[i].unsqueeze(dim=0), max_new_tokens=gen_len, **gen_kwargs
         )
-        response_tensors.append(response.squeeze()[len(batch["query"][i]):])
+        response_tensors.append(response.squeeze()[-gen_len:])
     batch["response"] = [gpt2_tokenizer.decode(r.squeeze()) for r in response_tensors]
-    import pdb; pdb.set_trace()
     timing["time/get_response"] = time.time() - t
 
     #### Compute reward score
