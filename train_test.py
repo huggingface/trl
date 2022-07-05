@@ -17,7 +17,7 @@ config = {
     "model_name": "gpt2",
     "cls_model_name": "lvwerra/distilbert-imdb",
     "steps": 20000,
-    "batch_size": 32,
+    "batch_size": 16,
     "forward_batch_size": 16,
     "ppo_epochs": 4,
     "input_size": 960,
@@ -62,12 +62,12 @@ def tokenize(sample):
     return sample
 
 
-# ds = ds.filter(lambda x: np.random.uniform() < 0.1)
+ds = ds.filter(lambda x: np.random.uniform() < 0.1)
 ds = ds.map(tokenize, batched=False)
 
 gen_kwargs = {
     "min_length": -1,
-    "max_length": 1024,
+    "max_length": config["input_size"] + config["output_size"],
     "top_k": 0.0,
     "top_p": 1.0,
     "do_sample": True,
@@ -92,8 +92,7 @@ def calculate_reward(pipe_output):
 
 
 def logit(p):
-    epsilon = 1e-5
-    return np.log(p + epsilon) - np.log(1 - p + epsilon)
+    return np.log(p) - np.log(1 - p)
 
 
 ppo_trainer = PPOTrainer(gpt2_model, gpt2_model_ref, gpt2_tokenizer, **config)
@@ -107,21 +106,23 @@ for epoch, batch in tqdm(zip(range(total_ppo_epochs), iter(dataloader))):
 
     #### Get response from gpt2
     t = time.time()
-    output_tensors = []
+    response_tensors = []
     for i in range(config["batch_size"]):
         gen_len = config["output_size"]
-        output = gpt2_model.generate(
+        response = gpt2_model.generate(
             query_tensors[i].unsqueeze(dim=0), max_new_tokens=gen_len, **gen_kwargs
         ).squeeze()[len(query_tensors[i]):]
-        stop_idx = (output == torch.tensor(198)).nonzero().flatten()
-        output_tensors.append(output[:stop_idx[0] if len(stop_idx) > 0 else -1])
-    batch["response"] = [gpt2_tokenizer.decode(r) for r in output_tensors]
+
+        stop_idx = (response == torch.tensor(198)).nonzero().flatten()
+        response_tensors.append(response[:stop_idx[0] if len(stop_idx) > 0 else -1])
+
+    batch["response"] = [gpt2_tokenizer.decode(r) for r in response_tensors]
     timing["time/get_response"] = time.time() - t
 
     #### Compute reward score
     t = time.time()
     rewards = torch.tensor(
-        [logit(r.count("a") / len(r)) for r in batch["response"]]
+        [r.count("a") * 5 / (len(r) + 1) for r in batch["response"]]
     ).to(device)
     timing["time/get_reward_preds"] = time.time() - t
 

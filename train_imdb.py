@@ -38,7 +38,7 @@ config = {
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 pipe_device = 0 if torch.cuda.is_available() else -1
 
-wandb.init(name="run-imdb", project="gpt2-test", config=config)
+wandb.init(name="run-imdb-test", project="gpt2-test", config=config)
 
 ds = load_dataset("imdb", split="train")
 ds = ds.rename_columns({"text": "review", "label": "sentiment"})
@@ -132,7 +132,7 @@ for epoch, batch in tqdm(zip(range(total_ppo_epochs), iter(dataloader))):
         response = gpt2_model.generate(
             query_tensors[i].unsqueeze(dim=0), max_new_tokens=gen_len, **gen_kwargs
         )
-        response_tensors.append(response.squeeze()[-gen_len:])
+        response_tensors.append(response.squeeze()[len(query_tensors[i]):])
     batch["response"] = [gpt2_tokenizer.decode(r.squeeze()) for r in response_tensors]
     timing["time/get_response"] = time.time() - t
 
