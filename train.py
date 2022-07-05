@@ -25,8 +25,8 @@ config = {
     "ppo_epochs": 4,
     "input_size": 960,
     "output_size": 32,
-    "lr": 1.41e-5,
-    "init_kl_coef": 0.2,
+    "lr": 1e-5,
+    "init_kl_coef": 0.8,
     "target": 6,
     "horizon": 10000,
     "gamma": 1,
@@ -96,7 +96,7 @@ dataloader = torch.utils.data.DataLoader(
 def calculate_reward(query, response):
     encoded_input = reward_tokenizer(query + response, return_tensors='pt').to(device)
     output = reward_model(**encoded_input)
-    return output.logits[0, 1]
+    return output.logits[0, 1] * 4 - 8
 
 
 ppo_trainer = PPOTrainer(gpt2_model, gpt2_model_ref, gpt2_tokenizer, **config)
@@ -119,7 +119,7 @@ for epoch, batch in tqdm(zip(range(total_ppo_epochs), iter(dataloader))):
 
         stop_idx = (response == torch.tensor(198)).nonzero().flatten()
         if len(stop_idx) > 0:
-            response = response[:stop_idx[0]]
+            response = response[:stop_idx[0] + 1]
         response_tensors.append(response)
 
     batch["response"] = [gpt2_tokenizer.decode(r) for r in response_tensors]
