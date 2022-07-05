@@ -71,6 +71,7 @@ gen_kwargs = {
     "top_p": 1.0,
     "do_sample": True,
     "pad_token_id": gpt2_tokenizer.eos_token_id,
+    "eos_token_id": 198,
 }
 
 
@@ -83,15 +84,14 @@ dataloader = torch.utils.data.DataLoader(
 )
 
 
-def calculate_reward(pipe_output):
-    output_dict = {}
-    for result_dict in pipe_output:
-        output_dict[result_dict["label"]] = result_dict["score"]
-    return logit(output_dict["POSITIVE"])
+def calculate_reward(response):
+    vowel_counts = [response.lower().count(x) for x in "aeiou"]
+    return logit(np.sum(vowel_counts) / len(response))
 
 
 def logit(p):
-    return np.log(p) - np.log(1 - p)
+    epsilon = 1e-2
+    return np.log(p + epsilon) - np.log(1 - p + epsilon)
 
 
 ppo_trainer = PPOTrainer(gpt2_model, gpt2_model_ref, gpt2_tokenizer, **config)
@@ -112,8 +112,8 @@ for epoch, batch in tqdm(zip(range(total_ppo_epochs), iter(dataloader))):
             query_tensors[i].unsqueeze(dim=0), max_length=query_len + config["output_size"], **gen_kwargs
         ).squeeze()[query_len:]
 
-        stop_idx = (response == torch.tensor(198)).nonzero().flatten()
-        response_tensors.append(response[:stop_idx[0] if len(stop_idx) > 0 else -1])
+        # stop_idx = (response == torch.tensor(198)).nonzero().flatten()
+        # response_tensors.append(response[:stop_idx[0] if len(stop_idx) > 0 else -1])
 
     batch["response"] = [gpt2_tokenizer.decode(r) for r in response_tensors]
     timing["time/get_response"] = time.time() - t
@@ -121,7 +121,7 @@ for epoch, batch in tqdm(zip(range(total_ppo_epochs), iter(dataloader))):
     #### Compute reward score
     t = time.time()
     rewards = torch.tensor(
-        [r.count("a") * 5 / (len(r) + 1) for r in batch["response"]]
+        [calculate_reward(r) for r in batch["response"]]
     ).to(device)
     timing["time/get_reward_preds"] = time.time() - t
 
