@@ -21,7 +21,7 @@ config = {
     "forward_batch_size": 16,
     "ppo_epochs": 4,
     "input_size": 960,
-    "output_size": 64,
+    "output_size": 32,
     "lr": 1.41e-5,
     "init_kl_coef": 0.2,
     "target": 6,
@@ -62,6 +62,7 @@ def tokenize(sample):
     return sample
 
 
+# ds = ds.filter(lambda x: np.random.uniform() < 0.1)
 ds = ds.map(tokenize, batched=False)
 
 gen_kwargs = {
@@ -106,15 +107,15 @@ for epoch, batch in tqdm(zip(range(total_ppo_epochs), iter(dataloader))):
 
     #### Get response from gpt2
     t = time.time()
-    response_tensors = []
+    output_tensors = []
     for i in range(config["batch_size"]):
         gen_len = config["output_size"]
-        response = gpt2_model.generate(
+        output = gpt2_model.generate(
             query_tensors[i].unsqueeze(dim=0), max_new_tokens=gen_len, **gen_kwargs
-        )
-        response_tensors.append(response.squeeze()[len(batch["query"][i]):])
-    batch["response"] = [gpt2_tokenizer.decode(r.squeeze()) for r in response_tensors]
-    import pdb; pdb.set_trace()
+        ).squeeze()[len(query_tensors[i]):]
+        stop_idx = (output == torch.tensor(198)).nonzero().flatten()
+        output_tensors.append(output[:stop_idx[0] if len(stop_idx) > 0 else -1])
+    batch["response"] = [gpt2_tokenizer.decode(r) for r in output_tensors]
     timing["time/get_response"] = time.time() - t
 
     #### Compute reward score
