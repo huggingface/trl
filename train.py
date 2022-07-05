@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from datasets import load_dataset
-from transformers import AutoTokenizer, pipeline
+from transformers import AutoTokenizer, AutoModelForSequenceClassification 
 
 from trl.gpt2 import GPT2HeadWithValueModel, respond_to_batch
 from trl.ppo import PPOTrainer
@@ -15,13 +15,16 @@ from trl.core import build_bert_batch_from_txt, listify_batch
 
 config = {
     "model_name": "gpt2",
-    "cls_model_name": "lvwerra/distilbert-imdb",
+    "cls_model_name": "ChaiML/rewardModel90kEpoch2K1M3",
+    "cls_tokenizer_name": "roberta-large-mnli",
+    "auth_token": "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",
+    "wandb_key": "f3c2ba6991e7af7c6225908adad8f098296d7433",
     "steps": 20000,
-    "batch_size": 32,
+    "batch_size": 16,
     "forward_batch_size": 16,
     "ppo_epochs": 4,
     "input_size": 960,
-    "output_size": 64,
+    "output_size": 32,
     "lr": 1.41e-5,
     "init_kl_coef": 0.2,
     "target": 6,
@@ -34,9 +37,9 @@ config = {
 }
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-pipe_device = 0 if torch.cuda.is_available() else -1
 
-wandb.init(name="run-test", project="gpt2-test", config=config)
+wandb.login(key=config["wandb_key"])
+wandb.init(name="run-test", project="gpt2-ppo", config=config)
 
 ds = load_dataset(
     "ChaiML/user_model_inputs",
@@ -56,19 +59,24 @@ gpt2_model.to(device)
 gpt2_model_ref.to(device)
 
 
+reward_model = AutoModelForSequenceClassification.from_pretrained(
+    config["cls_model_name"],
+    use_auth_token=config["auth_token"]
+).to(device)
+
+reward_tokenizer = AutoTokenizer.from_pretrained(config["cls_tokenizer_name"])
+
+
 def tokenize(sample):
     sample["tokens"] = gpt2_tokenizer.encode(sample["text"])[-config["input_size"] :]
     sample["query"] = gpt2_tokenizer.decode(sample["tokens"])
     return sample
 
-
+# ds = ds.filter(lambda x: np.random.uniform() < 0.1)
 ds = ds.map(tokenize, batched=False)
-
-import pdb; pdb.set_trace()
 
 gen_kwargs = {
     "min_length": -1,
-    "max_length": 1024,
     "top_k": 0.0,
     "top_p": 1.0,
     "do_sample": True,
@@ -85,16 +93,10 @@ dataloader = torch.utils.data.DataLoader(
 )
 
 
-def calculate_reward(pipe_output):
-    output_dict = {}
-    for result_dict in pipe_output:
-        output_dict[result_dict["label"]] = result_dict["score"]
-    return logit(output_dict["POSITIVE"])
-
-
-def logit(p):
-    epsilon = 1e-5
-    return np.log(p + epsilon) - np.log(1 - p + epsilon)
+def calculate_reward(query, response):
+    encoded_input = reward_tokenizer(query + response, return_tensors='pt').to(device)
+    output = reward_model(**encoded_input)
+    return output.logits[0, 1]
 
 
 ppo_trainer = PPOTrainer(gpt2_model, gpt2_model_ref, gpt2_tokenizer, **config)
@@ -109,20 +111,25 @@ for epoch, batch in tqdm(zip(range(total_ppo_epochs), iter(dataloader))):
     #### Get response from gpt2
     t = time.time()
     response_tensors = []
-    for i in range(config["batch_size"]):
-        gen_len = config["output_size"]
+    for i in range(len(query_tensors)):
+        query_len = len(query_tensors[i])
         response = gpt2_model.generate(
-            query_tensors[i].unsqueeze(dim=0), max_new_tokens=gen_len, **gen_kwargs
-        )
-        response_tensors.append(response.squeeze()[-gen_len:])
-    batch["response"] = [gpt2_tokenizer.decode(r.squeeze()) for r in response_tensors]
+            query_tensors[i].unsqueeze(dim=0), max_length=query_len + config["output_size"], **gen_kwargs
+        ).squeeze()[query_len:]
+
+        stop_idx = (response == torch.tensor(198)).nonzero().flatten()
+        if len(stop_idx) > 0:
+            response = response[:stop_idx[0]]
+        response_tensors.append(response)
+
+    batch["response"] = [gpt2_tokenizer.decode(r) for r in response_tensors]
     timing["time/get_response"] = time.time() - t
 
     #### Compute reward score
     t = time.time()
-    rewards = torch.tensor(
-        [logit(r.count("a") / len(r)) for r in batch["response"]]
-    ).to(device)
+    rewards = torch.tensor([
+        calculate_reward(q, r) for q, r in zip(batch["reward_input"], batch["response"])
+    ]).to(device)
     timing["time/get_reward_preds"] = time.time() - t
 
     #### Run PPO step

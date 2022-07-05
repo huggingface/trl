@@ -36,7 +36,7 @@ config = {
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 pipe_device = 0 if torch.cuda.is_available() else -1
 
-wandb.init(name="run-test", project="gpt2-test", config=config)
+wandb.init(name="run-test", project="gpt2-ppo", config=config)
 
 ds = load_dataset(
     "ChaiML/user_model_inputs",
@@ -71,7 +71,6 @@ gen_kwargs = {
     "top_p": 1.0,
     "do_sample": True,
     "pad_token_id": gpt2_tokenizer.eos_token_id,
-    "eos_token_id": 198,
 }
 
 
@@ -106,14 +105,16 @@ for epoch, batch in tqdm(zip(range(total_ppo_epochs), iter(dataloader))):
     #### Get response from gpt2
     t = time.time()
     response_tensors = []
-    for i in range(config["batch_size"]):
+    for i in range(len(query_tensors)):
         query_len = len(query_tensors[i])
         response = gpt2_model.generate(
             query_tensors[i].unsqueeze(dim=0), max_length=query_len + config["output_size"], **gen_kwargs
         ).squeeze()[query_len:]
 
-        # stop_idx = (response == torch.tensor(198)).nonzero().flatten()
-        # response_tensors.append(response[:stop_idx[0] if len(stop_idx) > 0 else -1])
+        stop_idx = (response == torch.tensor(198)).nonzero().flatten()
+        if len(stop_idx) > 0:
+            response = response[:stop_idx[0]]
+        response_tensors.append(response)
 
     batch["response"] = [gpt2_tokenizer.decode(r) for r in response_tensors]
     timing["time/get_response"] = time.time() - t
