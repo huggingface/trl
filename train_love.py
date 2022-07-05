@@ -15,8 +15,8 @@ from trl.core import build_bert_batch_from_txt, listify_batch
 
 config = {
     "model_name": "gpt2",
-    "cls_model_name": "RobertIrv938/rewardModel60kEpoch3Balanced",
-    "cls_tokenizer_name": "roberta-large",
+    "cls_model_name": "bhadresh-savani/bert-base-uncased-emotion",
+    "cls_tokenizer_name": "bhadresh-savani/bert-base-uncased-emotion",
     "auth_token": "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",
     "wandb_key": "f3c2ba6991e7af7c6225908adad8f098296d7433",
     "steps": 20000,
@@ -25,8 +25,8 @@ config = {
     "ppo_epochs": 4,
     "input_size": 960,
     "output_size": 32,
-    "lr": 5e-6,
-    "init_kl_coef": 0.8,
+    "lr": 1e-5,
+    "init_kl_coef": 0.2,
     "target": 6,
     "horizon": 10000,
     "gamma": 1,
@@ -39,7 +39,7 @@ config = {
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 wandb.login(key=config["wandb_key"])
-wandb.init(name="run-balanced", project="gpt2-ppo", config=config)
+wandb.init(name="run-love", project="gpt2-ppo", config=config)
 
 ds = load_dataset(
     "ChaiML/user_model_inputs",
@@ -93,10 +93,12 @@ dataloader = torch.utils.data.DataLoader(
 )
 
 
-def calculate_reward(query, response):
-    encoded_input = reward_tokenizer(query + response, return_tensors='pt').to(device)
+def calculate_reward(response):
+    encoded_input = reward_tokenizer(response, return_tensors='pt').to(device)
+    if encoded_input["input_ids"].shape[-1] <= 1:
+        return torch.tensor(-4.0).to(device)
     output = reward_model(**encoded_input)
-    return output.logits[0, 1]
+    return output.logits[0, 2]
 
 
 ppo_trainer = PPOTrainer(gpt2_model, gpt2_model_ref, gpt2_tokenizer, **config)
@@ -128,7 +130,7 @@ for epoch, batch in tqdm(zip(range(total_ppo_epochs), iter(dataloader))):
     #### Compute reward score
     t = time.time()
     rewards = torch.tensor([
-        calculate_reward(q, r) for q, r in zip(batch["reward_input"], batch["response"])
+        calculate_reward(r) for r in batch["response"]
     ]).to(device)
     timing["time/get_reward_preds"] = time.time() - t
 
