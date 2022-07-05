@@ -25,8 +25,8 @@ config = {
     "ppo_epochs": 4,
     "input_size": 960,
     "output_size": 32,
-    "lr": 5e-6,
-    "init_kl_coef": 0.8,
+    "lr": 1e-5,
+    "init_kl_coef": 0.2,
     "target": 6,
     "horizon": 10000,
     "gamma": 1,
@@ -77,6 +77,7 @@ ds = ds.map(tokenize, batched=False)
 
 gen_kwargs = {
     "min_length": -1,
+    "temperature": 0.5,
     "top_k": 0.0,
     "top_p": 1.0,
     "do_sample": True,
@@ -94,6 +95,8 @@ dataloader = torch.utils.data.DataLoader(
 
 
 def calculate_reward(query, response):
+    if response == "<|endoftext|>" or not response.strip():
+        return torch.tensor(-4.0).to(device)
     encoded_input = reward_tokenizer(query + response, return_tensors='pt').to(device)
     output = reward_model(**encoded_input)
     return output.logits[0, 1]

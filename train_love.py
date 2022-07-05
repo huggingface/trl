@@ -77,6 +77,7 @@ ds = ds.map(tokenize, batched=False)
 
 gen_kwargs = {
     "min_length": -1,
+    "temperature": 0.5,
     "top_k": 0.0,
     "top_p": 1.0,
     "do_sample": True,
@@ -94,9 +95,9 @@ dataloader = torch.utils.data.DataLoader(
 
 
 def calculate_reward(response):
-    encoded_input = reward_tokenizer(response, return_tensors='pt').to(device)
-    if encoded_input["input_ids"].shape[-1] <= 1:
+    if response == "<|endoftext|>" or not response.strip():
         return torch.tensor(-4.0).to(device)
+    encoded_input = reward_tokenizer(response, return_tensors='pt').to(device)
     output = reward_model(**encoded_input)
     return output.logits[0, 2]
 
