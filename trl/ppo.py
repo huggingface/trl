@@ -240,7 +240,8 @@ class PPOTrainer:
         advantages = torch.stack(advantages_reversed[::-1]).transpose(0, 1)
 
         returns = advantages + values
-        advantages = whiten(advantages)
+        if gen_len > 1:
+            advantages = whiten(advantages)
         advantages = advantages.detach()
 
         logits, _, vpred = self.model(model_input)

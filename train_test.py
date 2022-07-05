@@ -67,7 +67,6 @@ ds = ds.map(tokenize, batched=False)
 
 gen_kwargs = {
     "min_length": -1,
-    "max_length": config["input_size"] + config["output_size"],
     "top_k": 0.0,
     "top_p": 1.0,
     "do_sample": True,
@@ -108,10 +107,10 @@ for epoch, batch in tqdm(zip(range(total_ppo_epochs), iter(dataloader))):
     t = time.time()
     response_tensors = []
     for i in range(config["batch_size"]):
-        gen_len = config["output_size"]
+        query_len = len(query_tensors[i])
         response = gpt2_model.generate(
-            query_tensors[i].unsqueeze(dim=0), max_new_tokens=gen_len, **gen_kwargs
-        ).squeeze()[len(query_tensors[i]):]
+            query_tensors[i].unsqueeze(dim=0), max_length=query_len + config["output_size"], **gen_kwargs
+        ).squeeze()[query_len:]
 
         stop_idx = (response == torch.tensor(198)).nonzero().flatten()
         response_tensors.append(response[:stop_idx[0] if len(stop_idx) > 0 else -1])
