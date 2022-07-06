@@ -26,7 +26,7 @@ config = {
     "input_size": 960,
     "output_size": 32,
     "lr": 1e-5,
-    "init_kl_coef": 0.2,
+    "init_kl_coef": 1.0,
     "target": 6,
     "horizon": 10000,
     "gamma": 1,
@@ -39,7 +39,7 @@ config = {
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 wandb.login(key=config["wandb_key"])
-wandb.init(name="run-test", project="gpt2-ppo", config=config)
+wandb.init(name="run-debug", project="gpt2-ppo", config=config)
 
 ds = load_dataset(
     "ChaiML/user_model_inputs",
@@ -72,8 +72,8 @@ def tokenize(sample):
     return sample
 
 
-# ds = ds.filter(lambda x: np.random.uniform() < 0.1)
-ds = ds.map(tokenize, batched=False)
+ds = ds.filter(lambda x: np.random.uniform() < 0.1)
+ds = ds.map(tokenize, batched=False).shuffle(seed=42)
 
 gen_kwargs = {
     "min_length": -1,
@@ -95,11 +95,11 @@ dataloader = torch.utils.data.DataLoader(
 
 
 def calculate_reward(query, response):
-    if response == "<|endoftext|>" or not response.strip():
-        return torch.tensor(2.0).to(device)
+    # if response == "<|endoftext|>" or not response.strip():
+    #     return torch.tensor(2.0).to(device)
     encoded_input = reward_tokenizer(query + response, return_tensors="pt").to(device)
     output = reward_model(**encoded_input)
-    return output.logits[0, 1]
+    return output.logits[0, 1] - 4
 
 
 def evaluate(eval_batch):
@@ -111,12 +111,18 @@ def evaluate(eval_batch):
     response_tensors_ref, response_tensors = [], []
     for i in range(len(query_tensors)):
         query_len = len(query_tensors[i])
+
         output_ref = gpt2_model_ref.generate(
-            query_tensors[i].unsqueeze(dim=0).to(device), **gen_kwargs
+            query_tensors[i].unsqueeze(dim=0).to(device),
+            max_length=query_len + config["output_size"],
+            **gen_kwargs
         ).squeeze()
         response_tensors_ref.append(clip_response(output_ref, query_len))
+
         output = gpt2_model.generate(
-            query_tensors[i].unsqueeze(dim=0).to(device), **gen_kwargs
+            query_tensors[i].unsqueeze(dim=0).to(device),
+            max_length=query_len + config["output_size"],
+            **gen_kwargs
         ).squeeze()
         response_tensors.append(clip_response(output, query_len))
 
@@ -125,36 +131,29 @@ def evaluate(eval_batch):
     game_data["response"] = [gpt2_tokenizer.decode(r) for r in response_tensors]
 
     #### sentiment analysis of query/response pairs before/after
-    game_data["rewards_ref"] = [
-        calculate_reward(q, r)
-        for q, r in zip(game_data["query"], game_data["response_ref"])
-    ]
-    game_data["rewards"] = [
-        calculate_reward(q, r)
-        for q, r in zip(game_data["query"], game_data["response"])
-    ]
+    rewards_ref = torch.tensor(
+        [
+            calculate_reward(q, r)
+            for q, r in zip(eval_batch["reward_input"], game_data["response_ref"])
+        ]
+    )
+    game_data["rewards_ref"] = rewards_ref.cpu().tolist()
+
+    rewards = torch.tensor(
+        [
+            calculate_reward(q, r).cpu()
+            for q, r in zip(eval_batch["reward_input"], game_data["response"])
+        ]
+    )
+    game_data["rewards"] = rewards.cpu().tolist()
 
     # store results in a dataframe
     df_results = pd.DataFrame(game_data)
 
     logs = dict()
-    logs.update({"evaluation/comparison_table": wandb.Table(dataframe=df_results)})
-    logs.update(
-        {
-            "evaluation/mean_reward_ref": torch.mean(
-                torch.tensor(game_data["rewards_ref"])
-            )
-            .cpu()
-            .numpy()
-        }
-    )
-    logs.update(
-        {
-            "evaluation/mean_reward": torch.mean(torch.tensor(game_data["rewards"]))
-            .cpu()
-            .numpy()
-        }
-    )
+    logs.update({"eval/comparison_table": wandb.Table(dataframe=df_results)})
+    logs["eval/mean_reward_ref"] = torch.mean(rewards_ref).cpu().numpy()
+    logs["eval/mean_reward"] = torch.mean(rewards).cpu().numpy()
 
     return logs
 
