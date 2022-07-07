@@ -26,7 +26,7 @@ config = {
     "input_size": 960,
     "output_size": 32,
     "lr": 1e-5,
-    "init_kl_coef": 1.0,
+    "init_kl_coef": 0.2,
     "target": 6,
     "horizon": 10000,
     "gamma": 1,
@@ -72,12 +72,12 @@ def tokenize(sample):
     return sample
 
 
-ds = ds.filter(lambda x: np.random.uniform() < 0.1)
+# ds = ds.filter(lambda x: np.random.uniform() < 0.1)
 ds = ds.map(tokenize, batched=False).shuffle(seed=42)
 
 gen_kwargs = {
     "min_length": -1,
-    "temperature": 0.5,
+    "temperature": 0.1,
     "top_k": 0.0,
     "top_p": 1.0,
     "do_sample": True,
@@ -94,6 +94,7 @@ dataloader = torch.utils.data.DataLoader(
 )
 
 
+@torch.no_grad()
 def calculate_reward(query, response):
     # if response == "<|endoftext|>" or not response.strip():
     #     return torch.tensor(2.0).to(device)
