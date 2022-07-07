@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from datasets import load_dataset
-from transformers import AutoTokenizer, pipeline
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 from trl.gpt2 import GPT2HeadWithValueModel, respond_to_batch
 from trl.ppo import PPOTrainer
@@ -38,7 +38,7 @@ config = {
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 pipe_device = 0 if torch.cuda.is_available() else -1
 
-wandb.init(name="run-imdb-test", project="gpt2-test", config=config)
+wandb.init(name="run-imdb", project="gpt2-test", config=config)
 
 ds = load_dataset("imdb", split="train")
 ds = ds.rename_columns({"text": "review", "label": "sentiment"})
@@ -50,9 +50,11 @@ sent_kwargs = {
     "batch_size": config["forward_batch_size"],
 }
 
-sentiment_pipe = pipeline(
-    "sentiment-analysis", "lvwerra/distilbert-imdb", device=pipe_device, return_all_scores=True
-)
+sentiment_model = AutoModelForSequenceClassification.from_pretrained(
+    config["cls_model_name"]
+).to(device)
+
+sentiment_tokenizer = AutoTokenizer.from_pretrained(config["cls_model_name"])
 
 gpt2_model = GPT2HeadWithValueModel.from_pretrained(config["model_name"])
 gpt2_model_ref = GPT2HeadWithValueModel.from_pretrained(config["model_name"])
@@ -104,15 +106,10 @@ dataloader = torch.utils.data.DataLoader(
 )
 
 
-def calculate_reward(pipe_output):
-    output_dict = {}
-    for result_dict in pipe_output:
-        output_dict[result_dict["label"]] = result_dict["score"]
-    return logit(output_dict["POSITIVE"])
-
-
-def logit(p):
-    return np.log(p) - np.log(1 - p)
+def calculate_reward(query, response):
+    encoded_input = sentiment_tokenizer(query + response, return_tensors="pt").to(device)
+    output = sentiment_model(**encoded_input)
+    return output.logits[0, 1]
 
 
 ppo_trainer = PPOTrainer(gpt2_model, gpt2_model_ref, gpt2_tokenizer, **config)
@@ -138,9 +135,12 @@ for epoch, batch in tqdm(zip(range(total_ppo_epochs), iter(dataloader))):
 
     #### Compute sentiment score
     t = time.time()
-    texts = [q + r for q, r in zip(batch["query"], batch["response"])]
-    pipe_outputs = sentiment_pipe(texts, **sent_kwargs)
-    rewards = torch.tensor([calculate_reward(output) for output in pipe_outputs]).to(device)
+    rewards = torch.tensor(
+        [
+            calculate_reward(q, r)
+            for q, r in zip(batch["query"], batch["response"])
+        ]
+    ).to(device)
     timing["time/get_sentiment_preds"] = time.time() - t
 
     #### Run PPO step
