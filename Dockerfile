@@ -27,13 +27,19 @@ RUN pip3 install -r /app/requirements.txt
 
 # no questions about trusting key
 RUN mkdir -p /root/.ssh && \
-   chmod 0700 /root/.ssh && \
-   ssh-keyscan gitlab.com > /root/.ssh/known_hosts
+    chmod 0700 /root/.ssh && \
+    ssh-keyscan gitlab.com > /root/.ssh/known_hosts
 
 # making sure image has deploy key
 RUN echo "$ssh_priv_key" > /root/.ssh/id_rsa && \
-   chmod 600 /root/.ssh/id_rsa && \
-   ssh-keygen -y -f ~/.ssh/id_rsa > ~/.ssh/id_rsa.pub && \
-   chmod 600 /root/.ssh/id_rsa.pub
+    chmod 600 /root/.ssh/id_rsa && \
+    ssh-keygen -y -f ~/.ssh/id_rsa > ~/.ssh/id_rsa.pub && \
+    chmod 600 /root/.ssh/id_rsa.pub
+
+RUN alias py='python3 -m IPython -i --'
+RUN alias python='python3'
+
+RUN git config --global user.name "Ziyi Zhu"
+RUN git config --global user.email "zhu.ziyi@outlook.com"
 
 CMD ["sleep", "infinity"]
