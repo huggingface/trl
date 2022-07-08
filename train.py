@@ -19,17 +19,18 @@ config = {
     "cls_tokenizer_name": "roberta-large-mnli",
     "auth_token": "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",
     "wandb_key": "f3c2ba6991e7af7c6225908adad8f098296d7433",
-    "steps": 20000,
+    "steps": 50000,
     "batch_size": 64,
     "forward_batch_size": 16,
     "ppo_epochs": 4,
     "input_size": 960,
     "output_size": 32,
     "lr": 1e-5,
-    "init_kl_coef": 0.2,
+    "init_kl_coef": 0.05,
     "target": 6,
     "horizon": 10000,
     "gamma": 1,
+    "adapt_kl_ctrl": False,
     "lam": 0.95,
     "cliprange": 0.2,
     "cliprange_value": 0.2,
@@ -39,7 +40,7 @@ config = {
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 wandb.login(key=config["wandb_key"])
-wandb.init(name="run-debug", project="gpt2-ppo", config=config)
+wandb.init(name="run-penalty", project="gpt2-ppo", config=config)
 
 ds = load_dataset(
     "ChaiML/user_model_inputs",
@@ -77,7 +78,7 @@ ds = ds.map(tokenize, batched=False).shuffle(seed=42)
 
 gen_kwargs = {
     "min_length": -1,
-    "temperature": 0.1,
+    "temperature": 1.0,
     "top_k": 0.0,
     "top_p": 1.0,
     "do_sample": True,
@@ -95,11 +96,9 @@ dataloader = torch.utils.data.DataLoader(
 
 
 def calculate_reward(query, response, return_preds=False):
-    # if response == "<|endoftext|>" or not response.strip():
-    #     return torch.tensor(2.0).to(device)
     encoded_input = reward_tokenizer(query + response, return_tensors="pt").to(device)
     output = reward_model(**encoded_input)
-    reward = output.logits[0, 1] - 4
+    reward = output.logits[0, 1] - 4 - 1.2 * np.exp(-response.count(" "))
 
     if return_preds:
         return reward, torch.softmax(output.logits, dim=1)[0, 1]
