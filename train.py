@@ -94,32 +94,17 @@ dataloader = torch.utils.data.DataLoader(
 )
 
 
-def calculate_reward(query, response):
+def calculate_reward(query, response, return_preds=False):
     # if response == "<|endoftext|>" or not response.strip():
     #     return torch.tensor(2.0).to(device)
     encoded_input = reward_tokenizer(query + response, return_tensors="pt").to(device)
     output = reward_model(**encoded_input)
-    return output.logits[0, 1] - 4
+    reward = output.logits[0, 1] - 4
 
-
-def score_responses(input_texts):
-    """Use reward model to score responses. """
-    reward_tokens = reward_tokenizer(
-        input_texts,
-        return_tensors='pt',
-        return_attention_mask=True,
-        padding='max_length',
-        truncation=True,
-        max_length=512
-    ).to(device)
-
-    logits = reward_model(**reward_tokens).logits
-    rewards = torch.Tensor([i for i in logits[:, 1]])
-    preds = torch.Tensor([float(p[1]) for p in torch.softmax(logits, dim=1)])
-
-    # add bias so has a roughly mean closer to 0 (suggested in paper and by library author)
-    rewards = rewards - 4.0
-    return rewards, preds
+    if return_preds:
+        return reward, torch.softmax(output.logits, dim=1)[0, 1]
+    else:
+        return reward
 
 
 def evaluate(eval_batch):
@@ -151,19 +136,24 @@ def evaluate(eval_batch):
     game_data["rl_model_response"] = [gpt2_tokenizer.decode(r) for r in response_tensors]
 
     # responses using original model
-    texts = [q + r for q, r in zip(eval_batch['reward_input'], game_data['original_model_response'])]
-    rewards, preds = score_responses(texts)
-
-    game_data['original_model_rewards'] = rewards.cpu()
-    game_data['original_model_preds'] = preds.cpu()
+    rewards = torch.tensor(
+        [
+            calculate_reward(q, r, return_preds=True)
+            for q, r in zip(eval_batch["reward_input"], game_data["original_model_response"])
+        ]
+    )
+    game_data['original_model_rewards'] = rewards[:, 0]
+    game_data['original_model_preds'] = rewards[:, 1]
 
     # responses using new RL model
-
-    texts = [q + r for q, r in zip(eval_batch['reward_input'], game_data['rl_model_response'])]
-    rewards, preds = score_responses(texts)
-
-    game_data['rl_model_rewards'] = rewards.cpu()
-    game_data['rl_model_preds'] = preds.cpu()
+    rewards = torch.tensor(
+        [
+            calculate_reward(q, r, return_preds=True)
+            for q, r in zip(eval_batch["reward_input"], game_data["rl_model_response"])
+        ]
+    )
+    game_data['rl_model_rewards'] = rewards[:, 0]
+    game_data['rl_model_preds'] = rewards[:, 1]
 
     # store results in a dataframe
     df_results = pd.DataFrame(game_data)
@@ -173,11 +163,11 @@ def evaluate(eval_batch):
 
     # update rewards and preds how they change over time
 
-    mean_reward_before = torch.mean(torch.tensor(game_data['original_model_rewards']))
-    mean_preds_before = torch.mean(torch.tensor(game_data['original_model_preds']))
+    mean_reward_before = torch.mean(game_data['original_model_rewards'])
+    mean_preds_before = torch.mean(game_data['original_model_preds'])
 
-    mean_reward_after = torch.mean(torch.tensor(game_data['rl_model_rewards']))
-    mean_preds_after = torch.mean(torch.tensor(game_data['rl_model_preds']))
+    mean_reward_after = torch.mean(game_data['rl_model_rewards'])
+    mean_preds_after = torch.mean(game_data['rl_model_preds'])
 
     logs.update({
         'evaluation/original_model_mean_reward': mean_reward_before.cpu().numpy(),
