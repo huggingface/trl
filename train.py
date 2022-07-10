@@ -30,7 +30,7 @@ config = {
     "input_size": int(os.environ.get('INPUT_SIZE', 960)),
     "output_size": int(os.environ.get('OUTPUT_SIZE', 32)),
     "lr": float(os.environ.get('LR', 1e-5)),
-    "adap_kl_ctrl": bool(os.environ.get('ADAP_KL_CTRL', False)),
+    "adap_kl_ctrl": (os.environ.get('ADAP_KL_CTRL', "False") == "True"),
     "init_kl_coef": float(os.environ.get('INIT_KL_COEF', 0.05)),
     "target": int(os.environ.get('TARGET', 6)),
     "horizon": int(os.environ.get('HORIZONT', 10000)),
