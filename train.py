@@ -20,12 +20,14 @@ config = {
     "auth_token": "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",
     "wandb_key": "f3c2ba6991e7af7c6225908adad8f098296d7433",
     "steps": 50000,
+    "eval_interval": 10,
     "batch_size": 64,
     "forward_batch_size": 16,
     "ppo_epochs": 4,
     "input_size": 960,
     "output_size": 32,
     "lr": 1e-5,
+    "adap_kl_ctrl": False,
     "init_kl_coef": 0.05,
     "target": 6,
     "horizon": 10000,
@@ -39,7 +41,7 @@ config = {
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 wandb.login(key=config["wandb_key"])
-wandb.init(name="run-penalty", project="gpt2-ppo", config=config)
+wandb.init(name="run-fast", project="gpt2-ppo", config=config)
 
 ds = load_dataset(
     "ChaiML/user_model_inputs",
@@ -262,5 +264,7 @@ for epoch, batch in tqdm(zip(range(total_ppo_epochs), dataloader_iter)):
             if isinstance(logs[key][0], torch.Tensor):
                 logs[key] = [array.cpu().numpy() for array in logs[key]]
 
-    logs.update(evaluate(eval_batch))
+    if not epoch % config["eval_interval"]:
+        logs.update(evaluate(eval_batch))
+
     wandb.log(logs)
