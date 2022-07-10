@@ -15,6 +15,7 @@ from trl.core import build_bert_batch_from_txt, listify_batch
 
 config = {
     "run_name": str(os.environ.get('RUN_NAME', "run-test")),
+    "project_name": str(os.environ.get('PROJECT_NAME', "gpt2-ppo")),
     "auth_token": "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",
     "wandb_key": "f3c2ba6991e7af7c6225908adad8f098296d7433",
     "model_name": str(os.environ.get('MODEL_NAME', "gpt2")),
@@ -39,12 +40,15 @@ config = {
     "cliprange": float(os.environ.get('CLIPRANGE', 0.2)),
     "cliprange_value": float(os.environ.get('CLIPRANGE_VALUE', 0.2)),
     "vf_coef": float(os.environ.get('VF_COEF', 0.1)),
+    "temperature": float(os.environ.get('TEMPERATURE', 1.0)),
+    "top_k": int(os.environ.get('TOP_K', 0)),
+    "top_p": float(os.environ.get('TOP_P', 1.0)),
 }
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 wandb.login(key=config["wandb_key"])
-wandb.init(name=config["run_name"], project="gpt2-ppo", config=config)
+wandb.init(name=config["run_name"], project=config["project_name"], config=config)
 
 ds = load_dataset(
     "ChaiML/user_model_inputs",
@@ -63,6 +67,14 @@ wandb.watch(gpt2_model, log="all")
 gpt2_model.to(device)
 gpt2_model_ref.to(device)
 
+gen_kwargs = {
+    "min_length": -1,
+    "temperature": config["temperature"],
+    "top_k": config["top_k"],
+    "top_p": config["top_p"],
+    "do_sample": True,
+    "pad_token_id": gpt2_tokenizer.eos_token_id,
+}
 
 reward_model = AutoModelForSequenceClassification.from_pretrained(
     config["cls_model_name"], use_auth_token=config["auth_token"]
@@ -74,22 +86,13 @@ reward_tokenizer = AutoTokenizer.from_pretrained(
 
 
 def tokenize(sample):
-    sample["tokens"] = gpt2_tokenizer.encode(sample["text"])[-config["input_size"] :]
+    sample["tokens"] = gpt2_tokenizer.encode(sample["text"])[-config["input_size"]:]
     sample["query"] = gpt2_tokenizer.decode(sample["tokens"])
     return sample
 
 
 # ds = ds.filter(lambda x: np.random.uniform() < 0.1)
 ds = ds.map(tokenize, batched=False).shuffle(seed=42)
-
-gen_kwargs = {
-    "min_length": -1,
-    "temperature": 1.0,
-    "top_k": 0.0,
-    "top_p": 1.0,
-    "do_sample": True,
-    "pad_token_id": gpt2_tokenizer.eos_token_id,
-}
 
 
 def collater(data):
