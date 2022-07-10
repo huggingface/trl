@@ -30,7 +30,6 @@ config = {
     "target": 6,
     "horizon": 10000,
     "gamma": 1,
-    "adapt_kl_ctrl": False,
     "lam": 0.95,
     "cliprange": 0.2,
     "cliprange_value": 0.2,
@@ -64,7 +63,9 @@ reward_model = AutoModelForSequenceClassification.from_pretrained(
     config["cls_model_name"], use_auth_token=config["auth_token"]
 ).to(device)
 
-reward_tokenizer = AutoTokenizer.from_pretrained(config["cls_tokenizer_name"])
+reward_tokenizer = AutoTokenizer.from_pretrained(
+    config["cls_tokenizer_name"], truncation_side="left", padding_side="left"
+)
 
 
 def tokenize(sample):
@@ -96,7 +97,9 @@ dataloader = torch.utils.data.DataLoader(
 
 
 def calculate_reward(query, response, return_preds=False):
-    encoded_input = reward_tokenizer(query + response, return_tensors="pt").to(device)
+    encoded_input = reward_tokenizer(
+        query + response, max_length=512, truncation=True, return_tensors="pt"
+    ).to(device)
     output = reward_model(**encoded_input)
     reward = output.logits[0, 1] - 4 - 1.2 * np.exp(-response.count(" "))
 
@@ -131,18 +134,24 @@ def evaluate(eval_batch):
         response_tensors.append(clip_response(output, query_len))
 
     #### decode responses
-    game_data["original_model_response"] = [gpt2_tokenizer.decode(r) for r in response_tensors_ref]
-    game_data["rl_model_response"] = [gpt2_tokenizer.decode(r) for r in response_tensors]
+    game_data["original_model_response"] = [
+        gpt2_tokenizer.decode(r) for r in response_tensors_ref
+    ]
+    game_data["rl_model_response"] = [
+        gpt2_tokenizer.decode(r) for r in response_tensors
+    ]
 
     # responses using original model
     rewards = torch.tensor(
         [
             calculate_reward(q, r, return_preds=True)
-            for q, r in zip(eval_batch["reward_input"], game_data["original_model_response"])
+            for q, r in zip(
+                eval_batch["reward_input"], game_data["original_model_response"]
+            )
         ]
     )
-    game_data['original_model_rewards'] = rewards[:, 0]
-    game_data['original_model_preds'] = rewards[:, 1]
+    game_data["original_model_rewards"] = rewards[:, 0]
+    game_data["original_model_preds"] = rewards[:, 1]
 
     # responses using new RL model
     rewards = torch.tensor(
@@ -151,29 +160,31 @@ def evaluate(eval_batch):
             for q, r in zip(eval_batch["reward_input"], game_data["rl_model_response"])
         ]
     )
-    game_data['rl_model_rewards'] = rewards[:, 0]
-    game_data['rl_model_preds'] = rewards[:, 1]
+    game_data["rl_model_rewards"] = rewards[:, 0]
+    game_data["rl_model_preds"] = rewards[:, 1]
 
     # store results in a dataframe
     df_results = pd.DataFrame(game_data)
 
     logs = dict()
-    logs.update({'evaluation/comparison_table': wandb.Table(dataframe=df_results)})
+    logs.update({"evaluation/comparison_table": wandb.Table(dataframe=df_results)})
 
     # update rewards and preds how they change over time
 
-    mean_reward_before = torch.mean(game_data['original_model_rewards'])
-    mean_preds_before = torch.mean(game_data['original_model_preds'])
+    mean_reward_before = torch.mean(game_data["original_model_rewards"])
+    mean_preds_before = torch.mean(game_data["original_model_preds"])
 
-    mean_reward_after = torch.mean(game_data['rl_model_rewards'])
-    mean_preds_after = torch.mean(game_data['rl_model_preds'])
+    mean_reward_after = torch.mean(game_data["rl_model_rewards"])
+    mean_preds_after = torch.mean(game_data["rl_model_preds"])
 
-    logs.update({
-        'evaluation/original_model_mean_reward': mean_reward_before.cpu().numpy(),
-        'evaluation/original_model_mean_preds': mean_preds_before.cpu().numpy(),
-        'evaluation/rl_model_mean_reward': mean_reward_after.cpu().numpy(),
-        'evaluation/rl_model_mean_preds': mean_preds_after.cpu().numpy(),
-    })
+    logs.update(
+        {
+            "evaluation/original_model_mean_reward": mean_reward_before.cpu().numpy(),
+            "evaluation/original_model_mean_preds": mean_preds_before.cpu().numpy(),
+            "evaluation/rl_model_mean_reward": mean_reward_after.cpu().numpy(),
+            "evaluation/rl_model_mean_preds": mean_preds_after.cpu().numpy(),
+        }
+    )
 
     return logs
 
