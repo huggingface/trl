@@ -31,7 +31,7 @@ spec:
       env:
         - name: RUN_NAME
           value: "run-test"
-        - name: ADAP_KL_COEF
+        - name: ADAP_KL_CTRL
           value: "True"
         - name: INIT_KL_COEF
           value: "0.1"

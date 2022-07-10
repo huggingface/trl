@@ -20,7 +20,7 @@ config = {
     "model_name": str(os.environ.get('MODEL_NAME', "gpt2")),
     "cls_model_name": str(os.environ.get('CLS_MODEL_NAME', "ChaiML/rewardModel90kEpoch2K1M3")),
     "cls_tokenizer_name": str(os.environ.get('CLS_TOKENIZER_NAME', "roberta-large-mnli")),
-    "cls_shift": float(os.environ.get('CLS_SHIFT', 4.0)),
+    "cls_shift": float(os.environ.get('CLS_SHIFT', -4.0)),
     "cls_penal_coef": float(os.environ.get('CLS_PENAL_COEF', 1.2)),
     "steps": int(os.environ.get('STEPS', 50000)),
     "eval_interval": int(os.environ.get('EVAL_INTERVAL', 10)),
