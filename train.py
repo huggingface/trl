@@ -34,7 +34,7 @@ config = {
     "adap_kl_ctrl": (os.environ.get('ADAP_KL_CTRL', "False") == "True"),
     "init_kl_coef": float(os.environ.get('INIT_KL_COEF', 0.05)),
     "target": int(os.environ.get('TARGET', 6)),
-    "horizon": int(os.environ.get('HORIZONT', 10000)),
+    "horizon": int(os.environ.get('HORIZON', 10000)),
     "gamma": int(os.environ.get('GAMMA', 1)),
     "lam": float(os.environ.get('LAM', 0.95)),
     "cliprange": float(os.environ.get('CLIPRANGE', 0.2)),

@@ -1,0 +1,81 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    qos.coreweave.cloud/latency: low
+  name: ppo-trainer-ziyi-run-4
+  namespace: tenant-chairesearch-test
+spec:
+  volumes:
+    - name: model-storage
+      persistentVolumeClaim:
+        claimName: model-storage
+  imagePullSecrets:
+      - name: docker-creds
+  containers:
+    - name: ppo-trainer-container-ziyi-run-4
+      image: gcr.io/chai-959f8/training:ppo-trainer-ziyi
+      imagePullPolicy: Always
+      resources:
+        limits:
+          cpu: "1"
+          nvidia.com/gpu: "1"
+          memory: 124Gi
+        requests:
+          cpu: "1"
+          nvidia.com/gpu: "1"
+          memory: 124Gi
+      volumeMounts:
+        - name: model-storage
+          mountPath: /models
+      env:
+        - name: RUN_NAME
+          value: "run-4"
+        - name: PROJECT_NAME
+          value: "ppo-tuning"
+        - name: CLIPRANGE
+          value: "0.1"
+        - name: TARGET
+          value: "4"
+        - name: PPO_EPOCHS
+          value: "8"
+        - name: CLIPRANGE_VALUE
+          value: "0.1"
+        - name: HORIZON
+          value: "5000"
+        - name: STORAGE_URI
+          value: pvc://model-storage/
+      readinessProbe:
+        exec:
+          command:
+            - cat
+            - /tmp/ready
+        failureThreshold: 1
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        timeoutSeconds: 5
+        successThreshold: 1
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 5
+          preference:
+            matchExpressions:
+              - key: topology.kubernetes.io/region
+                operator: In
+                values:
+                  - ORD1
+        - weight: 20
+          preference:
+            matchExpressions:
+              - key: gpu.nvidia.com/class
+                operator: In
+                values:
+                  - A100_PCIE_80GB
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: gpu.nvidia.com/class
+                operator: In
+                values:
+                  - A100_PCIE_80GB
