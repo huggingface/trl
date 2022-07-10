@@ -14,34 +14,37 @@ from trl.ppo import PPOTrainer
 from trl.core import build_bert_batch_from_txt, listify_batch
 
 config = {
-    "model_name": "gpt2",
-    "cls_model_name": "ChaiML/rewardModel90kEpoch2K1M3",
-    "cls_tokenizer_name": "roberta-large-mnli",
+    "run_name": str(os.environ.get('RUN_NAME', "run-test")),
     "auth_token": "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",
     "wandb_key": "f3c2ba6991e7af7c6225908adad8f098296d7433",
-    "steps": 50000,
-    "eval_interval": 10,
-    "batch_size": 64,
-    "forward_batch_size": 16,
-    "ppo_epochs": 4,
-    "input_size": 960,
-    "output_size": 32,
-    "lr": 1e-5,
-    "adap_kl_ctrl": False,
-    "init_kl_coef": 0.05,
-    "target": 6,
-    "horizon": 10000,
-    "gamma": 1,
-    "lam": 0.95,
-    "cliprange": 0.2,
-    "cliprange_value": 0.2,
-    "vf_coef": 0.1,
+    "model_name": str(os.environ.get('MODEL_NAME', "gpt2")),
+    "cls_model_name": str(os.environ.get('CLS_MODEL_NAME', "ChaiML/rewardModel90kEpoch2K1M3")),
+    "cls_tokenizer_name": str(os.environ.get('CLS_TOKENIZER_NAME', "roberta-large-mnli")),
+    "cls_shift": float(os.environ.get('CLS_SHIFT', 4.0)),
+    "cls_penal_coef": float(os.environ.get('CLS_PENAL_COEF', 1.2)),
+    "steps": int(os.environ.get('STEPS', 50000)),
+    "eval_interval": int(os.environ.get('EVAL_INTERVAL', 10)),
+    "batch_size": int(os.environ.get('BATCH_SIZE', 64)),
+    "forward_batch_size": int(os.environ.get('FORWARD_BATCH_SIZE', 16)),
+    "ppo_epochs": int(os.environ.get('PPO_EPOCHS', 4)),
+    "input_size": int(os.environ.get('INPUT_SIZE', 960)),
+    "output_size": int(os.environ.get('OUTPUT_SIZE', 32)),
+    "lr": float(os.environ.get('LR', 1e-5)),
+    "adap_kl_ctrl": bool(os.environ.get('ADAP_KL_CTRL', False)),
+    "init_kl_coef": float(os.environ.get('INIT_KL_COEF', 0.05)),
+    "target": int(os.environ.get('TARGET', 6)),
+    "horizon": int(os.environ.get('HORIZONT', 10000)),
+    "gamma": int(os.environ.get('GAMMA', 1)),
+    "lam": float(os.environ.get('LAM', 0.95)),
+    "cliprange": float(os.environ.get('CLIPRANGE', 0.2)),
+    "cliprange_value": float(os.environ.get('CLIPRANGE_VALUE', 0.2)),
+    "vf_coef": float(os.environ.get('VF_COEF', 0.1)),
 }
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 wandb.login(key=config["wandb_key"])
-wandb.init(name="run-fast", project="gpt2-ppo", config=config)
+wandb.init(name=config["run_name"], project="gpt2-ppo", config=config)
 
 ds = load_dataset(
     "ChaiML/user_model_inputs",
@@ -98,12 +101,16 @@ dataloader = torch.utils.data.DataLoader(
 )
 
 
-def calculate_reward(query, response, return_preds=False):
+def calculate_reward(query, response, response_len, return_preds=False):
     encoded_input = reward_tokenizer(
         query + response, max_length=512, truncation=True, return_tensors="pt"
     ).to(device)
     output = reward_model(**encoded_input)
-    reward = output.logits[0, 1] - 4 - 1.2 * np.exp(-response.count(" "))
+    reward = (
+        output.logits[0, 1]
+        + config["cls_shift"]
+        - config["cls_penal_coef"] * np.exp(1 - response_len)
+    )
 
     if return_preds:
         return reward, torch.softmax(output.logits, dim=1)[0, 1]
@@ -146,9 +153,11 @@ def evaluate(eval_batch):
     # responses using original model
     rewards = torch.tensor(
         [
-            calculate_reward(q, r, return_preds=True)
-            for q, r in zip(
-                eval_batch["reward_input"], game_data["original_model_response"]
+            calculate_reward(q, r, len(rt), return_preds=True)
+            for q, r, rt in zip(
+                eval_batch["reward_input"],
+                game_data["original_model_response"],
+                response_tensors_ref,
             )
         ]
     )
@@ -158,8 +167,12 @@ def evaluate(eval_batch):
     # responses using new RL model
     rewards = torch.tensor(
         [
-            calculate_reward(q, r, return_preds=True)
-            for q, r in zip(eval_batch["reward_input"], game_data["rl_model_response"])
+            calculate_reward(q, r, len(rt), return_preds=True)
+            for q, r, rt in zip(
+                eval_batch["reward_input"],
+                game_data["rl_model_response"],
+                response_tensors,
+            )
         ]
     )
     game_data["rl_model_rewards"] = rewards[:, 0]
@@ -172,7 +185,6 @@ def evaluate(eval_batch):
     logs.update({"evaluation/comparison_table": wandb.Table(dataframe=df_results)})
 
     # update rewards and preds how they change over time
-
     mean_reward_before = torch.mean(game_data["original_model_rewards"])
     mean_preds_before = torch.mean(game_data["original_model_preds"])
 
@@ -230,8 +242,10 @@ for epoch, batch in tqdm(zip(range(total_ppo_epochs), dataloader_iter)):
     t = time.time()
     rewards = torch.tensor(
         [
-            calculate_reward(q, r)
-            for q, r in zip(batch["reward_input"], batch["response"])
+            calculate_reward(q, r, len(rt))
+            for q, r, rt in zip(
+                batch["reward_input"], batch["response"], response_tensors
+            )
         ]
     ).to(device)
     timing["time/get_reward_preds"] = time.time() - t
