@@ -36,8 +36,7 @@ RUN echo "$ssh_priv_key" > /root/.ssh/id_rsa && \
     ssh-keygen -y -f ~/.ssh/id_rsa > ~/.ssh/id_rsa.pub && \
     chmod 600 /root/.ssh/id_rsa.pub
 
-RUN alias py='python3 -m IPython -i --'
-RUN alias python='python3'
+RUN echo "alias py='python3 -m IPython -i --'" >> ~/.bashrc
 
 RUN git config --global user.name "Ziyi Zhu"
 RUN git config --global user.email "zhu.ziyi@outlook.com"
