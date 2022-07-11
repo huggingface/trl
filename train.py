@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from datasets import load_dataset
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, AutoModelForCausalLM
 
 from trl.gpt2 import GPT2HeadWithValueModel, respond_to_batch
 from trl.ppo import PPOTrainer
@@ -19,6 +19,7 @@ config = {
     "auth_token": "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",
     "wandb_key": "f3c2ba6991e7af7c6225908adad8f098296d7433",
     "model_name": str(os.environ.get("MODEL_NAME", "gpt2")),
+    "ref_model_name": str(os.environ.get("REF_MODEL_NAME", "gpt2")),
     "cls_model_name": str(
         os.environ.get("CLS_MODEL_NAME", "ChaiML/rewardModel90kEpoch2K1M3")
     ),
@@ -60,16 +61,16 @@ ds = load_dataset(
     use_auth_token="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",
 )
 
-gpt2_model = GPT2HeadWithValueModel.from_pretrained(config["model_name"])
-gpt2_model_ref = GPT2HeadWithValueModel.from_pretrained(config["model_name"])
+model = GPT2HeadWithValueModel.from_pretrained(config["model_name"])
+model_ref = AutoModelForCausalLM.from_pretrained(config["ref_model_name"])
 
-gpt2_tokenizer = AutoTokenizer.from_pretrained(config["model_name"])
-gpt2_tokenizer.pad_token = gpt2_tokenizer.eos_token
+tokenizer = AutoTokenizer.from_pretrained(config["model_name"])
+tokenizer.pad_token = tokenizer.eos_token
 
-wandb.watch(gpt2_model, log="all")
+wandb.watch(model, log="all")
 
-gpt2_model.to(device)
-gpt2_model_ref.to(device)
+model.to(device)
+model_ref.to(device)
 
 gen_kwargs = {
     "min_length": -1,
@@ -77,7 +78,7 @@ gen_kwargs = {
     "top_k": config["top_k"],
     "top_p": config["top_p"],
     "do_sample": True,
-    "pad_token_id": gpt2_tokenizer.eos_token_id,
+    "pad_token_id": tokenizer.eos_token_id,
 }
 
 reward_model = AutoModelForSequenceClassification.from_pretrained(
@@ -90,8 +91,8 @@ reward_tokenizer = AutoTokenizer.from_pretrained(
 
 
 def tokenize(sample):
-    sample["tokens"] = gpt2_tokenizer.encode(sample["text"])[-config["input_size"] :]
-    sample["query"] = gpt2_tokenizer.decode(sample["tokens"])
+    sample["tokens"] = tokenizer.encode(sample["text"])[-config["input_size"] :]
+    sample["query"] = tokenizer.decode(sample["tokens"])
     return sample
 
 
@@ -145,14 +146,14 @@ def evaluate(eval_batch):
     for i in range(len(query_tensors)):
         query_len = len(query_tensors[i])
 
-        output_ref = gpt2_model_ref.generate(
+        output_ref = model_ref.generate(
             query_tensors[i].unsqueeze(dim=0).to(device),
             max_length=query_len + config["output_size"],
             **gen_kwargs
         ).squeeze()
         response_tensors_ref.append(clip_response(output_ref, query_len))
 
-        output = gpt2_model.generate(
+        output = model.generate(
             query_tensors[i].unsqueeze(dim=0).to(device),
             max_length=query_len + config["output_size"],
             **gen_kwargs
@@ -161,10 +162,10 @@ def evaluate(eval_batch):
 
     #### decode responses
     game_data["original_model_response"] = [
-        gpt2_tokenizer.decode(r) for r in response_tensors_ref
+        tokenizer.decode(r) for r in response_tensors_ref
     ]
     game_data["rl_model_response"] = [
-        gpt2_tokenizer.decode(r) for r in response_tensors
+        tokenizer.decode(r) for r in response_tensors
     ]
 
     # responses using original model
@@ -228,7 +229,7 @@ def clip_response(response, query_len):
     return response
 
 
-ppo_trainer = PPOTrainer(gpt2_model, gpt2_model_ref, gpt2_tokenizer, **config)
+ppo_trainer = PPOTrainer(model, model_ref, tokenizer, **config)
 
 total_ppo_epochs = int(np.ceil(config["steps"] / config["batch_size"]))
 
@@ -245,14 +246,14 @@ for epoch, batch in tqdm(zip(range(total_ppo_epochs), dataloader_iter)):
     response_tensors = []
     for i in range(len(query_tensors)):
         query_len = len(query_tensors[i])
-        response = gpt2_model.generate(
+        response = model.generate(
             query_tensors[i].unsqueeze(dim=0),
             max_length=query_len + config["output_size"],
             **gen_kwargs
         ).squeeze()
         response_tensors.append(clip_response(response, query_len))
 
-    batch["response"] = [gpt2_tokenizer.decode(r) for r in response_tensors]
+    batch["response"] = [tokenizer.decode(r) for r in response_tensors]
     timing["time/get_response"] = time.time() - t
 
     #### Compute reward score

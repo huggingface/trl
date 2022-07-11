@@ -1,0 +1,71 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    qos.coreweave.cloud/latency: low
+  name: ppo-trainer-ziyi-test-2
+  namespace: tenant-chairesearch-test
+spec:
+  volumes:
+    - name: model-storage
+      persistentVolumeClaim:
+        claimName: model-storage
+  imagePullSecrets:
+      - name: docker-creds
+  containers:
+    - name: ppo-trainer-container-ziyi-test-2
+      image: gcr.io/chai-959f8/training:ppo-trainer-ziyi
+      imagePullPolicy: Always
+      resources:
+        limits:
+          cpu: "1"
+          nvidia.com/gpu: "1"
+          memory: 124Gi
+        requests:
+          cpu: "1"
+          nvidia.com/gpu: "1"
+          memory: 124Gi
+      volumeMounts:
+        - name: model-storage
+          mountPath: /models
+      env:
+        - name: RUN_NAME
+          value: "run-exp-len"
+        - name: PROJECT_NAME
+          value: "gpt2-ppo"
+        - name: STORAGE_URI
+          value: pvc://model-storage/
+      readinessProbe:
+        exec:
+          command:
+            - cat
+            - /tmp/ready
+        failureThreshold: 1
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        timeoutSeconds: 5
+        successThreshold: 1
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 5
+          preference:
+            matchExpressions:
+              - key: topology.kubernetes.io/region
+                operator: In
+                values:
+                  - ORD1
+        - weight: 20
+          preference:
+            matchExpressions:
+              - key: gpu.nvidia.com/class
+                operator: In
+                values:
+                  - A100_PCIE_80GB
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: gpu.nvidia.com/class
+                operator: In
+                values:
+                  - A100_PCIE_80GB
