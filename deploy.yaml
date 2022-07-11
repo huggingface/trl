@@ -16,8 +16,6 @@ spec:
     - name: ppo-trainer-container-ziyi
       image: gcr.io/chai-959f8/training:ppo-trainer-ziyi
       imagePullPolicy: Always
-      command: ["sleep"]
-      args: ["infinity"]
       resources:
         limits:
           cpu: "1"
@@ -31,15 +29,12 @@ spec:
         - name: model-storage
           mountPath: /models
       env:
-        - name: BATCH_SIZE
-          value: "1"
-        - name: FORWARD_BATCH_SIZE
-          value: "1"
+        - name: RUN_NAME
+          value: "run-no-kl"
+        - name: PROJECT_NAME
+          value: "gpt2-ppo"
         - name: INIT_KL_COEF
-          value: "0.5"
-        - name: MODEL_NAME
-          value: "gpt2"
-          #value: "gpt2" # /models/gpt-j-6B EleutherAI/gpt-j-6B EleutherAI/gpt-neo-125M gpt2-xl
+          value: "0.0"
         - name: STORAGE_URI
           value: pvc://model-storage/
       readinessProbe:

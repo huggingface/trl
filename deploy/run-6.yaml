@@ -36,13 +36,13 @@ spec:
         - name: LR
           value: "1e-6"
         - name: PPO_EPOCHS
-          value: "10"
+          value: "8"
         - name: ADAP_KL_CTRL
           value: "True"
         - name: INIT_KL_COEF
           value: "0.1"
-        - name: TEMPERATURE
-          value: "0.9"
+        - name: BATCH_SIZE
+          value: "32"
         - name: STORAGE_URI
           value: pvc://model-storage/
       readinessProbe:

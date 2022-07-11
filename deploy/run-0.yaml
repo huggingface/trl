@@ -3,7 +3,7 @@ kind: Pod
 metadata:
   labels:
     qos.coreweave.cloud/latency: low
-  name: ppo-trainer-ziyi-run-1
+  name: ppo-trainer-ziyi-run-0
   namespace: tenant-chairesearch-test
 spec:
   volumes:
@@ -13,7 +13,7 @@ spec:
   imagePullSecrets:
       - name: docker-creds
   containers:
-    - name: ppo-trainer-container-ziyi-run-1
+    - name: ppo-trainer-container-ziyi-run-0
       image: gcr.io/chai-959f8/training:ppo-trainer-ziyi
       imagePullPolicy: Always
       resources:
@@ -30,13 +30,19 @@ spec:
           mountPath: /models
       env:
         - name: RUN_NAME
-          value: "run-test"
-        - name: ADAP_KL_CTRL
-          value: "False"
+          value: "run-0"
+        - name: PROJECT_NAME
+          value: "ppo-tuning"
+        - name: CLS_SHIFT
+          value: "0.0"
+        - name: LR
+          value: "1e-4"
         - name: INIT_KL_COEF
-          value: "0.05"
-        - name: MODEL_NAME
-          value: "gpt2"
+          value: "0.5"
+        - name: TOP_P
+          value: "0.95"
+        - name: TEMPERATURE
+          value: "0.7"
         - name: STORAGE_URI
           value: pvc://model-storage/
       readinessProbe:

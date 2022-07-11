@@ -37,8 +37,8 @@ spec:
           value: "0.1"
         - name: TARGET
           value: "4"
-        - name: PPO_EPOCHS
-          value: "8"
+        - name: TEMPERATURE
+          value: "0.9"
         - name: CLIPRANGE_VALUE
           value: "0.1"
         - name: HORIZON

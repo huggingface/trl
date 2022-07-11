@@ -41,8 +41,8 @@ spec:
           value: "0.9"
         - name: INIT_KL_COEF
           value: "0.1"
-        - name: PPO_EPOCHS
-          value: "6"
+        - name: GAMMA
+          value: "0.6"
         - name: STORAGE_URI
           value: pvc://model-storage/
       readinessProbe:

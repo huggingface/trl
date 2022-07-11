@@ -14,35 +14,39 @@ from trl.ppo import PPOTrainer
 from trl.core import build_bert_batch_from_txt, listify_batch
 
 config = {
-    "run_name": str(os.environ.get('RUN_NAME', "run-test")),
-    "project_name": str(os.environ.get('PROJECT_NAME', "gpt2-ppo")),
+    "run_name": str(os.environ.get("RUN_NAME", "run-test")),
+    "project_name": str(os.environ.get("PROJECT_NAME", "gpt2-ppo")),
     "auth_token": "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",
     "wandb_key": "f3c2ba6991e7af7c6225908adad8f098296d7433",
-    "model_name": str(os.environ.get('MODEL_NAME', "gpt2")),
-    "cls_model_name": str(os.environ.get('CLS_MODEL_NAME', "ChaiML/rewardModel90kEpoch2K1M3")),
-    "cls_tokenizer_name": str(os.environ.get('CLS_TOKENIZER_NAME', "roberta-large-mnli")),
-    "cls_shift": float(os.environ.get('CLS_SHIFT', -4.0)),
-    "cls_penal_coef": float(os.environ.get('CLS_PENAL_COEF', 1.2)),
-    "steps": int(os.environ.get('STEPS', 50000)),
-    "eval_interval": int(os.environ.get('EVAL_INTERVAL', 10)),
-    "batch_size": int(os.environ.get('BATCH_SIZE', 64)),
-    "forward_batch_size": int(os.environ.get('FORWARD_BATCH_SIZE', 16)),
-    "ppo_epochs": int(os.environ.get('PPO_EPOCHS', 4)),
-    "input_size": int(os.environ.get('INPUT_SIZE', 960)),
-    "output_size": int(os.environ.get('OUTPUT_SIZE', 32)),
-    "lr": float(os.environ.get('LR', 1e-5)),
-    "adap_kl_ctrl": (os.environ.get('ADAP_KL_CTRL', "False") == "True"),
-    "init_kl_coef": float(os.environ.get('INIT_KL_COEF', 0.05)),
-    "target": int(os.environ.get('TARGET', 6)),
-    "horizon": int(os.environ.get('HORIZON', 10000)),
-    "gamma": float(os.environ.get('GAMMA', 1.0)),
-    "lam": float(os.environ.get('LAM', 0.95)),
-    "cliprange": float(os.environ.get('CLIPRANGE', 0.2)),
-    "cliprange_value": float(os.environ.get('CLIPRANGE_VALUE', 0.2)),
-    "vf_coef": float(os.environ.get('VF_COEF', 0.1)),
-    "temperature": float(os.environ.get('TEMPERATURE', 1.0)),
-    "top_k": int(os.environ.get('TOP_K', 0)),
-    "top_p": float(os.environ.get('TOP_P', 1.0)),
+    "model_name": str(os.environ.get("MODEL_NAME", "gpt2")),
+    "cls_model_name": str(
+        os.environ.get("CLS_MODEL_NAME", "ChaiML/rewardModel90kEpoch2K1M3")
+    ),
+    "cls_tokenizer_name": str(
+        os.environ.get("CLS_TOKENIZER_NAME", "roberta-large-mnli")
+    ),
+    "cls_shift": float(os.environ.get("CLS_SHIFT", -4.0)),
+    "cls_penal_coef": float(os.environ.get("CLS_PENAL_COEF", 1.2)),
+    "steps": int(os.environ.get("STEPS", 50000)),
+    "eval_interval": int(os.environ.get("EVAL_INTERVAL", 10)),
+    "batch_size": int(os.environ.get("BATCH_SIZE", 64)),
+    "forward_batch_size": int(os.environ.get("FORWARD_BATCH_SIZE", 16)),
+    "ppo_epochs": int(os.environ.get("PPO_EPOCHS", 4)),
+    "input_size": int(os.environ.get("INPUT_SIZE", 960)),
+    "output_size": int(os.environ.get("OUTPUT_SIZE", 32)),
+    "lr": float(os.environ.get("LR", 1e-5)),
+    "adap_kl_ctrl": (os.environ.get("ADAP_KL_CTRL", "False") == "True"),
+    "init_kl_coef": float(os.environ.get("INIT_KL_COEF", 0.05)),
+    "target": int(os.environ.get("TARGET", 6)),
+    "horizon": int(os.environ.get("HORIZON", 10000)),
+    "gamma": float(os.environ.get("GAMMA", 1.0)),
+    "lam": float(os.environ.get("LAM", 0.95)),
+    "cliprange": float(os.environ.get("CLIPRANGE", 0.2)),
+    "cliprange_value": float(os.environ.get("CLIPRANGE_VALUE", 0.2)),
+    "vf_coef": float(os.environ.get("VF_COEF", 0.1)),
+    "temperature": float(os.environ.get("TEMPERATURE", 1.0)),
+    "top_k": int(os.environ.get("TOP_K", 0)),
+    "top_p": float(os.environ.get("TOP_P", 1.0)),
 }
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -86,7 +90,7 @@ reward_tokenizer = AutoTokenizer.from_pretrained(
 
 
 def tokenize(sample):
-    sample["tokens"] = gpt2_tokenizer.encode(sample["text"])[-config["input_size"]:]
+    sample["tokens"] = gpt2_tokenizer.encode(sample["text"])[-config["input_size"] :]
     sample["query"] = gpt2_tokenizer.decode(sample["tokens"])
     return sample
 
@@ -108,17 +112,27 @@ def calculate_reward(query, response, response_len, return_preds=False):
     encoded_input = reward_tokenizer(
         query + response, max_length=512, truncation=True, return_tensors="pt"
     ).to(device)
-    output = reward_model(**encoded_input)
-    reward = (
-        output.logits[0, 1]
+    logits = reward_model(**encoded_input).logits
+    preds = torch.softmax(logits, dim=1)
+    # rewards = shifted_logits_with_penalty(logits, response_len)
+    rewards = expected_length_from_preds(preds)
+
+    if return_preds:
+        return rewards[0, 1], preds[0, 1]
+    else:
+        return rewards[0, 1]
+
+
+def shifted_logits_with_penalty(logits, response_len):
+    return (
+        logits
         + config["cls_shift"]
         - config["cls_penal_coef"] * np.exp(1 - response_len)
     )
 
-    if return_preds:
-        return reward, torch.softmax(output.logits, dim=1)[0, 1]
-    else:
-        return reward
+
+def expected_length_from_preds(preds):
+    return 1 / (1 - preds)
 
 
 def evaluate(eval_batch):
