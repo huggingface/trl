@@ -29,6 +29,7 @@ config = {
     "cls_shift": float(os.environ.get("CLS_SHIFT", -4.0)),
     "cls_penal_coef": float(os.environ.get("CLS_PENAL_COEF", 1.2)),
     "steps": int(os.environ.get("STEPS", 50000)),
+    "epochs": int(os.environ.get("EPOCHS", 5)),
     "eval_interval": int(os.environ.get("EVAL_INTERVAL", 10)),
     "batch_size": int(os.environ.get("BATCH_SIZE", 64)),
     "forward_batch_size": int(os.environ.get("FORWARD_BATCH_SIZE", 16)),
@@ -116,7 +117,6 @@ def calculate_reward(query, response, response_len, return_preds=False):
     logits = reward_model(**encoded_input).logits
     preds = torch.softmax(logits, dim=1)
     rewards = shifted_logits_with_penalty(logits, response_len)
-    # rewards = expected_length_from_preds(preds)
 
     if return_preds:
         return rewards[0, 1], preds[0, 1]
@@ -130,10 +130,6 @@ def shifted_logits_with_penalty(logits, response_len):
         + config["cls_shift"]
         - config["cls_penal_coef"] * np.exp(1 - response_len)
     )
-
-
-def expected_length_from_preds(preds):
-    return 1 / (1 - preds)
 
 
 def evaluate(eval_batch):
@@ -231,72 +227,76 @@ def clip_response(response, query_len):
 
 ppo_trainer = PPOTrainer(model, model_ref, tokenizer, **config)
 
-total_ppo_epochs = int(np.ceil(config["steps"] / config["batch_size"]))
+total_ppo_steps = int(np.ceil(config["steps"] / config["batch_size"]))
+total_epochs = config["epochs"]
 
 dataloader_iter = iter(dataloader)
 eval_batch = dataloader_iter.next()
 
-for epoch, batch in tqdm(zip(range(total_ppo_epochs), dataloader_iter)):
-    logs, timing = dict(), dict()
-    t0 = time.time()
-    query_tensors = [torch.tensor(t).long().to(device) for t in batch["tokens"]]
+for epoch in range(total_epochs):
+    print(f"Epoch {epoch + 1}/{total_epochs}")
 
-    #### Get response from gpt2
-    t = time.time()
-    response_tensors = []
-    for i in range(len(query_tensors)):
-        query_len = len(query_tensors[i])
-        response = model.generate(
-            query_tensors[i].unsqueeze(dim=0),
-            max_length=query_len + config["output_size"],
-            **gen_kwargs
-        ).squeeze()
-        response_tensors.append(clip_response(response, query_len))
+    for step, batch in tqdm(zip(range(total_ppo_steps), dataloader_iter)):
+        logs, timing = dict(), dict()
+        t0 = time.time()
+        query_tensors = [torch.tensor(t).long().to(device) for t in batch["tokens"]]
 
-    batch["response"] = [tokenizer.decode(r) for r in response_tensors]
-    timing["time/get_response"] = time.time() - t
+        #### Get response from gpt2
+        t = time.time()
+        response_tensors = []
+        for i in range(len(query_tensors)):
+            query_len = len(query_tensors[i])
+            response = model.generate(
+                query_tensors[i].unsqueeze(dim=0),
+                max_length=query_len + config["output_size"],
+                **gen_kwargs
+            ).squeeze()
+            response_tensors.append(clip_response(response, query_len))
 
-    #### Compute reward score
-    t = time.time()
-    rewards = torch.tensor(
-        [
-            calculate_reward(q, r, len(rt))
-            for q, r, rt in zip(
-                batch["reward_input"], batch["response"], response_tensors
-            )
+        batch["response"] = [tokenizer.decode(r) for r in response_tensors]
+        timing["time/get_response"] = time.time() - t
+
+        #### Compute reward score
+        t = time.time()
+        rewards = torch.tensor(
+            [
+                calculate_reward(q, r, len(rt))
+                for q, r, rt in zip(
+                    batch["reward_input"], batch["response"], response_tensors
+                )
+            ]
+        ).to(device)
+        timing["time/get_reward_preds"] = time.time() - t
+
+        #### Run PPO step
+        t = time.time()
+        stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
+        timing["time/optimization"] = time.time() - t
+
+        #### Log everything
+        timing["time/epoch"] = time.time() - t0
+        table_rows = [
+            list(r) for r in zip(batch["query"], batch["response"], rewards.cpu().tolist())
         ]
-    ).to(device)
-    timing["time/get_reward_preds"] = time.time() - t
+        logs.update(
+            {
+                "game_log": wandb.Table(
+                    columns=["query", "response", "reward"], rows=table_rows
+                )
+            }
+        )
+        logs.update(timing)
+        logs.update(stats)
+        logs["env/reward_mean"] = torch.mean(rewards).cpu().numpy()
+        logs["env/reward_std"] = torch.std(rewards).cpu().numpy()
+        logs["env/reward_dist"] = rewards.cpu().numpy()
 
-    #### Run PPO step
-    t = time.time()
-    stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
-    timing["time/optimization"] = time.time() - t
+        for key in logs:
+            if isinstance(logs[key], list):
+                if isinstance(logs[key][0], torch.Tensor):
+                    logs[key] = [array.cpu().numpy() for array in logs[key]]
 
-    #### Log everything
-    timing["time/epoch"] = time.time() - t0
-    table_rows = [
-        list(r) for r in zip(batch["query"], batch["response"], rewards.cpu().tolist())
-    ]
-    logs.update(
-        {
-            "game_log": wandb.Table(
-                columns=["query", "response", "reward"], rows=table_rows
-            )
-        }
-    )
-    logs.update(timing)
-    logs.update(stats)
-    logs["env/reward_mean"] = torch.mean(rewards).cpu().numpy()
-    logs["env/reward_std"] = torch.std(rewards).cpu().numpy()
-    logs["env/reward_dist"] = rewards.cpu().numpy()
+        if not step % config["eval_interval"]:
+            logs.update(evaluate(eval_batch))
 
-    for key in logs:
-        if isinstance(logs[key], list):
-            if isinstance(logs[key][0], torch.Tensor):
-                logs[key] = [array.cpu().numpy() for array in logs[key]]
-
-    if not epoch % config["eval_interval"]:
-        logs.update(evaluate(eval_batch))
-
-    wandb.log(logs)
+        wandb.log(logs)
