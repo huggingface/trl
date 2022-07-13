@@ -243,6 +243,25 @@ total_epochs = config["epochs"]
 dataloader_iter = iter(dataloader)
 eval_batch = dataloader_iter.next()
 
+
+first, second = [], []
+for step, batch in tqdm(zip(range(2), dataloader_iter)):
+    first.append(batch)
+
+for step, batch in tqdm(zip(range(2), dataloader_iter)):
+    second.append(batch)
+
+
+third, fourth = [], []
+for step, batch in tqdm(zip(range(2), dataloader)):
+    first.append(batch)
+
+for step, batch in tqdm(zip(range(2), dataloader)):
+    second.append(batch)
+
+import pdb; pdb.set_trace()
+
+
 for epoch in range(total_epochs):
     print(f"Epoch {epoch + 1}/{total_epochs}")
 
