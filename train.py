@@ -246,7 +246,7 @@ eval_batch = dataloader_iter.next()
 for epoch in range(total_epochs):
     print(f"Epoch {epoch + 1}/{total_epochs}")
 
-    for step, batch in tqdm(zip(range(total_ppo_steps), dataloader)):
+    for step, batch in tqdm(zip(range(total_ppo_steps), iter(dataloader))):
         logs, timing = dict(), dict()
         t0 = time.time()
         query_tensors = [torch.tensor(t).long().to(device) for t in batch["tokens"]]
