@@ -109,7 +109,7 @@ def tokenize(sample):
     return sample
 
 
-ds = ds.filter(lambda x: np.random.uniform() < 0.01)
+# ds = ds.filter(lambda x: np.random.uniform() < 0.01)
 ds = ds.map(tokenize, batched=False).shuffle(seed=42)
 
 
@@ -128,12 +128,16 @@ def calculate_reward(query, response, response_len, return_preds=False):
     ).to(device)
     logits = reward_model(**encoded_input).logits
     preds = torch.softmax(logits, dim=1)
-    rewards = shifted_logits_with_penalty(logits, response_len)
+    rewards = shifted_logits_with_penalty(inverse_sigmoid(preds), response_len)
 
     if return_preds:
         return rewards[0, 1], preds[0, 1]
     else:
         return rewards[0, 1]
+
+
+def inverse_sigmoid(preds):
+    return torch.log(preds) - torch.log(1 - preds)
 
 
 def shifted_logits_with_penalty(logits, response_len):
