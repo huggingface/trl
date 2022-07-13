@@ -5,6 +5,7 @@ import os
 from tqdm import tqdm
 import numpy as np
 import pandas as pd
+import random
 
 from datasets import load_dataset
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, AutoModelForCausalLM
@@ -12,6 +13,15 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification, Auto
 from trl.gpt2 import GPT2HeadWithValueModel, respond_to_batch
 from trl.ppo import PPOTrainer
 from trl.core import build_bert_batch_from_txt, listify_batch
+
+
+def reduce_randomness(seed=0):
+    torch.manual_seed(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+
+
+reduce_randomness(42)
 
 config = {
     "run_name": str(os.environ.get("RUN_NAME", "run-test")),
