@@ -92,7 +92,7 @@ gen_kwargs = {
     "pad_token_id": tokenizer.eos_token_id,
 }
 
-value_model = GPT2HeadWithValueModel.from_pretrained(config["model_name"])
+value_model = GPT2HeadWithValueModel.from_pretrained(config["model_name"]).to(device)
 
 reward_model = AutoModelForSequenceClassification.from_pretrained(
     config["cls_model_name"], use_auth_token=config["auth_token"]
@@ -109,7 +109,7 @@ def tokenize(sample):
     return sample
 
 
-# ds = ds.filter(lambda x: np.random.uniform() < 0.1)
+ds = ds.filter(lambda x: np.random.uniform() < 0.01)
 ds = ds.map(tokenize, batched=False).shuffle(seed=42)
 
 
