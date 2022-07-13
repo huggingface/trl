@@ -105,7 +105,6 @@ class GPT2HeadWithValueModel(GPT2PreTrainedModel):
         output_attentions=False,
         output_hidden_states=False,
     ):
-        loss=None
         transformer_outputs = self.transformer(
             input_ids,
             past_key_values=past_key_values,
@@ -117,25 +116,9 @@ class GPT2HeadWithValueModel(GPT2PreTrainedModel):
         )
 
         hidden_states = transformer_outputs[0]
-
-        lm_logits = self.lm_head(hidden_states)
         value = self.v_head(hidden_states).squeeze(-1)
 
-
-        if not return_dict:
-            outputs = (lm_logits,) + transformer_outputs[1:] + (value,)
-            return outputs
-
-        return CausalLMOutputWithCrossAttentions(
-            loss=loss,
-            logits=lm_logits,
-            past_key_values=transformer_outputs.past_key_values,
-            hidden_states=transformer_outputs.hidden_states,
-            attentions=transformer_outputs.attentions,
-            cross_attentions=transformer_outputs.cross_attentions,
-            value=value,
-        )
-        return outputs
+        return value
 
 # Cell
 

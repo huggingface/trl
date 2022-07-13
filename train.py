@@ -72,7 +72,7 @@ ds = load_dataset(
     use_auth_token="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",
 )
 
-model = GPT2HeadWithValueModel.from_pretrained(config["model_name"])
+model = AutoModelForCausalLM.from_pretrained(config["model_name"])
 model_ref = AutoModelForCausalLM.from_pretrained(config["ref_model_name"])
 
 tokenizer = AutoTokenizer.from_pretrained(config["model_name"])
@@ -91,6 +91,8 @@ gen_kwargs = {
     "do_sample": True,
     "pad_token_id": tokenizer.eos_token_id,
 }
+
+value_model = GPT2HeadWithValueModel.from_pretrained(config["model_name"])
 
 reward_model = AutoModelForSequenceClassification.from_pretrained(
     config["cls_model_name"], use_auth_token=config["auth_token"]
@@ -235,7 +237,7 @@ def clip_response(response, query_len):
     return response
 
 
-ppo_trainer = PPOTrainer(model, model_ref, tokenizer, **config)
+ppo_trainer = PPOTrainer(model, model_ref, value_model, tokenizer, **config)
 
 total_ppo_steps = int(np.ceil(config["steps"] / config["batch_size"]))
 total_epochs = config["epochs"]
