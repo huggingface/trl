@@ -107,7 +107,7 @@ def tokenize(sample):
     return sample
 
 
-# ds = ds.filter(lambda x: np.random.uniform() < 0.1)
+ds = ds.filter(lambda x: np.random.uniform() < 0.1)
 ds = ds.map(tokenize, batched=False).shuffle(seed=42)
 
 
