@@ -107,7 +107,7 @@ def tokenize(sample):
     return sample
 
 
-ds = ds.filter(lambda x: np.random.uniform() < 0.1)
+# ds = ds.filter(lambda x: np.random.uniform() < 0.1)
 ds = ds.map(tokenize, batched=False).shuffle(seed=42)
 
 
@@ -243,29 +243,10 @@ total_epochs = config["epochs"]
 dataloader_iter = iter(dataloader)
 eval_batch = dataloader_iter.next()
 
-
-first, second = [], []
-for step, batch in tqdm(zip(range(2), dataloader_iter)):
-    first.append(batch)
-
-for step, batch in tqdm(zip(range(2), dataloader_iter)):
-    second.append(batch)
-
-
-third, fourth = [], []
-for step, batch in tqdm(zip(range(2), dataloader)):
-    third.append(batch)
-
-for step, batch in tqdm(zip(range(2), dataloader)):
-    fourth.append(batch)
-
-import pdb; pdb.set_trace()
-
-
 for epoch in range(total_epochs):
     print(f"Epoch {epoch + 1}/{total_epochs}")
 
-    for step, batch in tqdm(zip(range(total_ppo_steps), dataloader_iter)):
+    for step, batch in tqdm(zip(range(total_ppo_steps), dataloader)):
         logs, timing = dict(), dict()
         t0 = time.time()
         query_tensors = [torch.tensor(t).long().to(device) for t in batch["tokens"]]

@@ -3,7 +3,7 @@ kind: Pod
 metadata:
   labels:
     qos.coreweave.cloud/latency: low
-  name: ppo-trainer-ziyi-debug
+  name: ppo-trainer-ziyi-debug-4
   namespace: tenant-chairesearch-test
 spec:
   volumes:
@@ -13,7 +13,7 @@ spec:
   imagePullSecrets:
       - name: docker-creds
   containers:
-    - name: ppo-trainer-container-ziyi-debug
+    - name: ppo-trainer-container-ziyi-debug-4
       image: gcr.io/chai-959f8/training:ppo-trainer-ziyi
       imagePullPolicy: Always
       resources:
@@ -36,7 +36,7 @@ spec:
         - name: ADAP_KL_CTRL
           value: "True"
         - name: INIT_KL_COEF
-          value: "0.01"
+          value: "0.005"
         - name: TARGET
           value: "50"
         - name: HORIZON
