@@ -254,10 +254,10 @@ for step, batch in tqdm(zip(range(2), dataloader_iter)):
 
 third, fourth = [], []
 for step, batch in tqdm(zip(range(2), dataloader)):
-    first.append(batch)
+    third.append(batch)
 
 for step, batch in tqdm(zip(range(2), dataloader)):
-    second.append(batch)
+    fourth.append(batch)
 
 import pdb; pdb.set_trace()
 
