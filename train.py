@@ -109,7 +109,7 @@ def tokenize(sample):
     return sample
 
 
-# ds = ds.filter(lambda x: np.random.uniform() < 0.01)
+ds = ds.filter(lambda x: np.random.uniform() < 0.01)
 ds = ds.map(tokenize, batched=False).shuffle(seed=42)
 
 
@@ -152,6 +152,8 @@ def evaluate(eval_batch):
     game_data = dict()
     game_data["query"] = eval_batch["query"]
     query_tensors = [torch.tensor(t).long().to(device) for t in eval_batch["tokens"]]
+
+    model.eval()
 
     #### get response from gpt2 and gpt2_ref
     response_tensors_ref, response_tensors = [], []
@@ -256,6 +258,8 @@ for epoch in range(total_epochs):
         logs, timing = dict(), dict()
         t0 = time.time()
         query_tensors = [torch.tensor(t).long().to(device) for t in batch["tokens"]]
+
+        model.train()
 
         #### Get response from gpt2
         t = time.time()
