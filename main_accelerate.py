@@ -11,12 +11,14 @@ from datasets import load_dataset
 
 from transformers import AutoTokenizer, pipeline
 
-from trl.gpt2 import GPT2HeadWithValueModel
-from trl.accelerate_ppo import AcceleratePPOTrainer as PPOTrainer
+# from trl.models.gpt2 import GPT2HeadWithValueModel
+from trl.models import OPTHeadWithValueModel
+from trl.accelerate_ppo import AcceleratePPOTrainer
 from trl.core import build_bert_batch_from_txt, listify_batch
 
 config = {
-    "model_name": "lvwerra/gpt2-imdb",
+    # "model_name": "lvwerra/gpt2-imdb",
+    "model_name": "facebook/opt-350m",
     "cls_model_name": "lvwerra/distilbert-imdb",
     "steps": 20000,
     "batch_size": 256,
@@ -55,8 +57,8 @@ sent_kwargs = {
 
 sentiment_pipe = pipeline("sentiment-analysis","lvwerra/distilbert-imdb", device=pipe_device)
 
-gpt2_model = GPT2HeadWithValueModel.from_pretrained(config['model_name'])
-gpt2_model_ref = GPT2HeadWithValueModel.from_pretrained(config['model_name'])
+gpt2_model = OPTHeadWithValueModel.from_pretrained(config['model_name'])
+gpt2_model_ref = OPTHeadWithValueModel.from_pretrained(config['model_name'])
 
 gpt2_tokenizer = AutoTokenizer.from_pretrained(config['model_name'])
 gpt2_tokenizer.pad_token = gpt2_tokenizer.eos_token
@@ -92,7 +94,7 @@ def collater(data):
 
 dataloader = torch.utils.data.DataLoader(ds, batch_size=config['batch_size'], collate_fn=collater)
 
-ppo_trainer = PPOTrainer(gpt2_model, gpt2_model_ref, gpt2_tokenizer, **config)
+ppo_trainer = AcceleratePPOTrainer(gpt2_model, gpt2_model_ref, gpt2_tokenizer, **config)
 dataloader = ppo_trainer.accelerator.prepare(dataloader)
 
 total_ppo_epochs = int(np.ceil(config["steps"]/config['batch_size']))
@@ -107,7 +109,7 @@ for epoch, batch in tqdm(zip(range(total_ppo_epochs), iter(dataloader))):
     response_tensors = []
     for i in range(config['batch_size']):
         gen_len = output_size()
-        response = gpt2_model.generate(query_tensors[i].unsqueeze(dim=0),
+        response = ppo_trainer.model.generate(query_tensors[i].unsqueeze(dim=0),
                                        max_new_tokens=gen_len, **gen_kwargs)
         response_tensors.append(response.squeeze()[-gen_len:])
     batch['response'] = [gpt2_tokenizer.decode(r.squeeze()) for r in response_tensors]
