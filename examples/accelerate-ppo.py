@@ -4,21 +4,15 @@ import time
 import os
 from tqdm import tqdm
 import numpy as np
-import pandas as pd
 tqdm.pandas()
 
-from datasets import load_dataset
+from transformers import pipeline
 
-from transformers import AutoTokenizer, pipeline
-
-# from trl.models.gpt2 import GPT2HeadWithValueModel
-from trl.models import OPTHeadWithValueModel
-from trl.accelerate_ppo import AcceleratePPOTrainer
-from trl.core import build_bert_batch_from_txt, listify_batch
+from trl.trainer.accelerate_ppo import AcceleratePPOTrainer
 
 config = {
-    # "model_name": "lvwerra/gpt2-imdb",
-    "model_name": "facebook/opt-350m",
+    "model_name": "lvwerra/gpt2-imdb",
+    # "model_name": "facebook/opt-350m",
     "cls_model_name": "lvwerra/distilbert-imdb",
     "steps": 20000,
     "batch_size": 256,
@@ -44,11 +38,6 @@ pipe_device = 0 if torch.cuda.is_available() else -1
 
 wandb.init(name='run-42', project='gpt2-test', config=config)
 
-# load imdb with datasets
-ds = load_dataset('imdb', split='train')
-ds = ds.rename_columns({'text': 'review', 'label': 'sentiment'})
-ds = ds.filter(lambda x: len(x["review"])>200, batched=False)
-
 sent_kwargs = {
     "return_all_scores": True,
     "function_to_apply": "none",
@@ -57,62 +46,28 @@ sent_kwargs = {
 
 sentiment_pipe = pipeline("sentiment-analysis","lvwerra/distilbert-imdb", device=pipe_device)
 
-gpt2_model = OPTHeadWithValueModel.from_pretrained(config['model_name'])
-gpt2_model_ref = OPTHeadWithValueModel.from_pretrained(config['model_name'])
-
-gpt2_tokenizer = AutoTokenizer.from_pretrained(config['model_name'])
-gpt2_tokenizer.pad_token = gpt2_tokenizer.eos_token
-
-wandb.watch(gpt2_model, log='all')
-
-class LengthSampler:
-    def __init__(self, min_value, max_value):
-        self.values = list(range(min_value, max_value))
-    def __call__(self):
-        return np.random.choice(self.values)
-    
-input_size = LengthSampler(config["txt_in_min_len"], config["txt_in_max_len"])
-output_size = LengthSampler(config["txt_out_min_len"], config["txt_out_max_len"])
-
-def tokenize(sample):
-    sample["tokens"] = gpt2_tokenizer.encode(sample["review"])[:input_size()]
-    sample["query"] = gpt2_tokenizer.decode(sample["tokens"])
-    return sample
-
-ds = ds.map(tokenize, batched=False)
+ppo_trainer = AcceleratePPOTrainer(**config)
+tokenizer = ppo_trainer.tokenizer
 
 gen_kwargs = {
     "min_length":-1,
     "top_k": 0.0,
     "top_p": 1.0,
     "do_sample": True,
-    "pad_token_id": gpt2_tokenizer.eos_token_id
+    "pad_token_id": tokenizer.eos_token_id
 }
-
-def collater(data):
-    return dict((key, [d[key] for d in data]) for key in data[0])
-
-dataloader = torch.utils.data.DataLoader(ds, batch_size=config['batch_size'], collate_fn=collater)
-
-ppo_trainer = AcceleratePPOTrainer(gpt2_model, gpt2_model_ref, gpt2_tokenizer, **config)
-dataloader = ppo_trainer.accelerator.prepare(dataloader)
 
 total_ppo_epochs = int(np.ceil(config["steps"]/config['batch_size']))
 
-for epoch, batch in tqdm(zip(range(total_ppo_epochs), iter(dataloader))):
+for epoch, batch in tqdm(zip(range(total_ppo_epochs), iter(ppo_trainer.dataloader))):
     logs, timing = dict(), dict()
     t0 = time.time()
     query_tensors = [torch.tensor(t).long().to(device) for t in batch["tokens"]]
     
     #### Get response from gpt2
     t = time.time()
-    response_tensors = []
-    for i in range(config['batch_size']):
-        gen_len = output_size()
-        response = ppo_trainer.model.generate(query_tensors[i].unsqueeze(dim=0),
-                                       max_new_tokens=gen_len, **gen_kwargs)
-        response_tensors.append(response.squeeze()[-gen_len:])
-    batch['response'] = [gpt2_tokenizer.decode(r.squeeze()) for r in response_tensors]
+    response_tensors = ppo_trainer.get_response(query_tensors, **gen_kwargs)
+    batch['response'] = [tokenizer.decode(r.squeeze()) for r in response_tensors]
     timing['time/get_response'] = time.time()-t
 
     #### Compute sentiment score

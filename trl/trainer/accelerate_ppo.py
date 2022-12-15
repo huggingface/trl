@@ -3,61 +3,29 @@
 __all__ = ['AdaptiveKLController', 'FixedKLController', 'PPOTrainer']
 
 from accelerate import Accelerator
-from transformers import top_k_top_p_filtering
+from datasets import load_dataset
 
-# Cell
-import numpy as np
-import torch.nn.functional as F
 from torch.optim import Adam
 import torch
-import collections
 import time
 import random
+import wandb
 
-from transformers import DataCollatorForLanguageModeling
+from transformers import DataCollatorForLanguageModeling, AutoModelForCausalLM, AutoTokenizer
 
-from .core import (logprobs_from_logits,
+from trl.core import (logprobs_from_logits,
                       whiten,
                       clip_by_value,
                       entropy_from_logits,
                       flatten_dict,
-                      average_torch_dicts,
                       stats_to_np,
                       stack_dicts,
-                      add_suffix,
                       WANDB_PADDING)
+from trl.trainer import BaseTrainer, AdaptiveKLController, FixedKLController, LengthSampler
+from trl.models import AutoRegressiveLMWithValueHead
 
-# Cell
 
-class AdaptiveKLController:
-    """
-    Adaptive KL controller described in the paper:
-    https://arxiv.org/pdf/1909.08593.pdf
-    """
-    def __init__(self, init_kl_coef, target, horizon):
-        self.value = init_kl_coef
-        self.target = target
-        self.horizon = horizon
-
-    def update(self, current, n_steps):
-        target = self.target
-        proportional_error = np.clip(current / target - 1, -0.2, 0.2)
-        mult = 1 + proportional_error * n_steps / self.horizon
-        self.value *= mult
-
-# Cell
-
-class FixedKLController:
-    """Fixed KL controller."""
-    def __init__(self, kl_coef):
-        self.value = kl_coef
-
-    def update(self, current, n_steps):
-        pass
-
-# Cell
-
-class AcceleratePPOTrainer:
+class AcceleratePPOTrainer(BaseTrainer):
     """
     The PPO_trainer uses Proximal Policy Optimization to optimise language models.
     """
@@ -78,7 +46,7 @@ class AcceleratePPOTrainer:
         "ppo_epochs": 4,
     }
 
-    def __init__(self, model, ref_model, tokenizer, **ppo_params):
+    def __init__(self, **config):
         """
         Initialize PPOTrainer.
 
@@ -102,25 +70,100 @@ class AcceleratePPOTrainer:
                 'horizon' (float): Horizon for adaptive KL control, default: 10000
 
         """
+        super().__init__(self.default_params)
+
+        # Step 1: Initialize Accelerator
         self.accelerator = Accelerator(log_with="wandb")
-        self.ppo_params = self.default_params
-        self.ppo_params.update(ppo_params)
+        self.config.update(config)
 
-        self.ref_model = ref_model
-        self.model = model
-        self.tokenizer = tokenizer
-        self.data_collator = DataCollatorForLanguageModeling(tokenizer, mlm=False)
+        # Step 2: Initialize model, tokenizer and dataset
+        self._build_models_and_tokenizer()
+        self._build_dataset()
 
-        self.optimizer = Adam(model.parameters(), lr=self.ppo_params['lr'])
 
-        if self.ppo_params['adap_kl_ctrl']:
-            self.kl_ctl = AdaptiveKLController(self.ppo_params['init_kl_coef'],
-                                               self.ppo_params['target'],
-                                               self.ppo_params['horizon'])
+        # Step 3: Initialize optimizer and data collator        
+        self.data_collator = DataCollatorForLanguageModeling(self.tokenizer, mlm=False)
+        self.optimizer = Adam(self.model.parameters(), lr=self.config['lr'])
+
+        if self.config['adap_kl_ctrl']:
+            self.kl_ctl = AdaptiveKLController(self.config['init_kl_coef'],
+                                               self.config['target'],
+                                               self.config['horizon'])
         else:
-            self.kl_ctl = FixedKLController(self.ppo_params['init_kl_coef'])
+            self.kl_ctl = FixedKLController(self.config['init_kl_coef'])
 
-        self.model, self.ref_model, self.optimizer, self.data_collator = self.accelerator.prepare(self.model, self.ref_model, self.optimizer, self.data_collator)
+        self.model, self.ref_model, self.optimizer, self.data_collator, self.dataloader = self.accelerator.prepare(self.model, self.ref_model, self.optimizer, self.data_collator, self.dataloader)
+    
+    def _build_dataset(self, dataset_name="imdb"):
+        r"""
+        Build dataset for training. This builds the dataset from `load_dataset`, one should 
+        customize this function to train the model on its own dataset.
+        
+        Args:
+            dataset_name (str): The name of the dataset to be loaded.
+        """
+        # load imdb with datasets
+        ds = load_dataset(dataset_name, split='train')
+        ds = ds.rename_columns({'text': 'review', 'label': 'sentiment'})
+        ds = ds.filter(lambda x: len(x["review"])>200, batched=False)
+
+            
+        self.input_size = LengthSampler(self.config["txt_in_min_len"], self.config["txt_in_max_len"])
+        self.output_size = LengthSampler(self.config["txt_out_min_len"], self.config["txt_out_max_len"])
+
+        def tokenize(sample):
+            sample["tokens"] = self.tokenizer.encode(sample["review"])[:self.input_size()]
+            sample["query"] = self.tokenizer.decode(sample["tokens"])
+            return sample
+
+        ds = ds.map(tokenize, batched=False)
+
+        def collater(data):
+            return dict((key, [d[key] for d in data]) for key in data[0])
+
+        self.dataloader = torch.utils.data.DataLoader(ds, batch_size=self.config['batch_size'], collate_fn=collater)
+    
+    def get_response(self, query_tensors, **gen_kwargs):
+        r"""
+        Generate response given query.
+
+        Args:
+            query_tensors (torch.Tensor): A tensor of shape (batch_size, seq_len) containing query tokens.
+            gen_kwargs (dict): Keyword arguments for generation.
+        """
+        response_tensors = []
+        for i in range(self.config['batch_size']):
+            gen_len = self.output_size()
+            response = self.model.generate(query_tensors[i].unsqueeze(dim=0),
+                                        max_new_tokens=gen_len, **gen_kwargs)
+            response_tensors.append(response.squeeze()[-gen_len:])
+        return response_tensors
+
+    def _build_models_and_tokenizer(self):
+        r"""
+        Build models for training. This builds the reference model
+        together with the model to be trained.
+        """
+        target_dtype_dict = {
+            "fp16": torch.float16,
+            "bf16": torch.bfloat16,
+        }
+        target_dtype = torch.float32 if self.accelerator.mixed_precision not in target_dtype_dict else target_dtype_dict[self.accelerator.mixed_precision]
+
+        # We don't cast the base model that is trained since autocast will do it under the hood for us
+        # Check: https://discuss.pytorch.org/t/valueerror-attemting-to-unscale-fp16-gradients/81372/4
+        base_model = AutoModelForCausalLM.from_pretrained(self.config['model_name'])
+        # But we can cast the reference model since the weights are not updated - we do that to save memory
+        base_model_ref = AutoModelForCausalLM.from_pretrained(self.config['model_name'], torch_dtype=target_dtype)
+
+        self.tokenizer = AutoTokenizer.from_pretrained(self.config['model_name'])
+        # HACK: do we really need this?
+        self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        self.model = AutoRegressiveLMWithValueHead(base_model)
+        self.ref_model = AutoRegressiveLMWithValueHead(base_model_ref)
+
+        wandb.watch(self.model, log='all')
 
 
     def step(self, queries, responses, scores):
@@ -136,7 +179,7 @@ class AcceleratePPOTrainer:
             train_stats (dict): a summary of the training statistics
         """
 
-        bs = self.ppo_params['batch_size']
+        bs = self.config['batch_size']
         assert bs == len(queries), f"Batch size ({bs}) does not match number of examples ({len(queries)})"
 
         timing = dict()
@@ -157,7 +200,7 @@ class AcceleratePPOTrainer:
         t = time.time()
         all_stats = []
         idxs = list(range(bs))
-        for _ in range(self.ppo_params['ppo_epochs']):
+        for _ in range(self.config['ppo_epochs']):
             random.shuffle(idxs)
             for i in range(bs):
                 idx = idxs[i]
@@ -182,7 +225,7 @@ class AcceleratePPOTrainer:
         stats = stats_to_np(stats)
         timing['time/ppo/calc_stats'] = time.time()-t
 
-        self.kl_ctl.update(stats['objective/kl'], self.ppo_params['batch_size'])
+        self.kl_ctl.update(stats['objective/kl'], self.config['batch_size'])
 
         timing['time/ppo/total'] = time.time()-t0
         stats.update(timing)
@@ -190,8 +233,8 @@ class AcceleratePPOTrainer:
 
     def batched_forward_pass(self, queries, responses):
         """Calculate model outputs in multiple batches."""
-        bs = self.ppo_params['batch_size']
-        fbs = self.ppo_params['forward_batch_size']
+        bs = self.config['batch_size']
+        fbs = self.config['forward_batch_size']
         all_logprobs = []
         all_ref_logprobs = []
         all_values = []
@@ -242,8 +285,8 @@ class AcceleratePPOTrainer:
 
         for t in reversed(range(gen_len)):
             nextvalues = values[:, t + 1] if t < gen_len - 1 else 0.0
-            delta = rewards[:, t] + self.ppo_params['gamma'] * nextvalues - values[:, t]
-            lastgaelam = delta + self.ppo_params['gamma'] * self.ppo_params['lam'] * lastgaelam
+            delta = rewards[:, t] + self.config['gamma'] * nextvalues - values[:, t]
+            lastgaelam = delta + self.config['gamma'] * self.config['lam'] * lastgaelam
             advantages_reversed.append(lastgaelam)
         advantages = torch.stack(advantages_reversed[::-1]).transpose(0, 1)
 
@@ -258,8 +301,8 @@ class AcceleratePPOTrainer:
         logprob, vpred = logprob[:, -gen_len:], vpred[:,-gen_len-1:-1]
 
         vpredclipped = clip_by_value(vpred,
-                                     values - self.ppo_params["cliprange_value"],
-                                     values + self.ppo_params["cliprange_value"])
+                                     values - self.config["cliprange_value"],
+                                     values + self.config["cliprange_value"])
 
         vf_losses1 = (vpred - returns)**2
         vf_losses2 = (vpredclipped - returns)**2
@@ -273,13 +316,13 @@ class AcceleratePPOTrainer:
 
         pg_losses = -advantages * ratio
         pg_losses2 = -advantages * torch.clamp(ratio,
-                                               1.0 - self.ppo_params['cliprange'],
-                                               1.0 + self.ppo_params['cliprange'])
+                                               1.0 - self.config['cliprange'],
+                                               1.0 + self.config['cliprange'])
 
         pg_loss = torch.mean(torch.max(pg_losses, pg_losses2))
         pg_clipfrac = torch.mean(torch.gt(pg_losses2, pg_losses).double())
 
-        loss = pg_loss + self.ppo_params['vf_coef'] * vf_loss
+        loss = pg_loss + self.config['vf_coef'] * vf_loss
 
         entropy = torch.mean(entropy_from_logits(logits))
         approxkl = .5 * torch.mean((logprob - old_logprobs)**2)
@@ -295,7 +338,7 @@ class AcceleratePPOTrainer:
             val=dict(vpred=torch.mean(vpred), error=torch.mean((vpred - returns) ** 2),
                      clipfrac=vf_clipfrac, mean=value_mean, var=value_var),
         )
-        return pg_loss, self.ppo_params['vf_coef'] * vf_loss, flatten_dict(stats)
+        return pg_loss, self.config['vf_coef'] * vf_loss, flatten_dict(stats)
 
 
     def record_step_stats(self, kl_coef, **data):
@@ -318,17 +361,3 @@ class AcceleratePPOTrainer:
             stats[f'ppo/{k}'] = torch.mean(v, axis=0)
         stats['ppo/val/var_explained'] = 1 - stats['ppo/val/error'] / stats['ppo/returns/var']
         return stats
-    
-    def respond_to_batch(self, model, queries, txt_len=20, top_k=0, top_p=1.0):
-        """Sample text from language model."""
-        input_ids = queries.to(self.accelerator.device)
-        for i in range(txt_len):
-            # Get Logits
-            outputs = model(input_ids)
-            next_token_logits = outputs[0][:, -1, :]
-            next_token_logits = top_k_top_p_filtering(next_token_logits, top_k=top_k, top_p=top_p)
-            # Sample
-            probs = F.softmax(next_token_logits, dim=-1)
-            next_token = torch.multinomial(probs, num_samples=1).squeeze(1)
-            input_ids = torch.cat([input_ids, next_token.unsqueeze(-1)], dim=-1)
-        return input_ids[:, -txt_len:]

@@ -27,3 +27,7 @@ dist: clean
 
 clean:
 	rm -rf dist
+
+style:
+	black .
+	isort .
