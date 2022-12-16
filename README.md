@@ -21,7 +21,7 @@ This process is illustrated in the sketch below:
 
 
 <div style="text-align: center">
-<img src="nbs/images/trl_overview.png" width="800">
+<img src="examples/images/trl_overview.png" width="800">
 <p style="text-align: center;"> <b>Figure:</b> Sketch of the workflow. </p>
 </div>
 
