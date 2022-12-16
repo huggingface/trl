@@ -104,6 +104,7 @@ class GPT2HeadWithValueModel(GPT2PreTrainedModel):
         return_dict=False,
         output_attentions=False,
         output_hidden_states=False,
+        use_cache=True,
     ):
         loss=None
         transformer_outputs = self.transformer(
@@ -114,6 +115,7 @@ class GPT2HeadWithValueModel(GPT2PreTrainedModel):
             position_ids=position_ids,
             head_mask=head_mask,
             inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
         )
 
         hidden_states = transformer_outputs[0]
@@ -123,7 +125,7 @@ class GPT2HeadWithValueModel(GPT2PreTrainedModel):
 
 
         if not return_dict:
-            outputs = (lm_logits,) + transformer_outputs[1:] + (value,)
+            outputs = (lm_logits, loss, value,)
             return outputs
 
         return CausalLMOutputWithCrossAttentions(
@@ -135,7 +137,34 @@ class GPT2HeadWithValueModel(GPT2PreTrainedModel):
             cross_attentions=transformer_outputs.cross_attentions,
             value=value,
         )
-        return outputs
+
+    def prepare_inputs_for_generation(self, input_ids, past=None, **kwargs):
+        token_type_ids = kwargs.get("token_type_ids", None)
+        # only last token for inputs_ids if past is defined in kwargs
+        if past:
+            input_ids = input_ids[:, -1].unsqueeze(-1)
+            if token_type_ids is not None:
+                token_type_ids = token_type_ids[:, -1].unsqueeze(-1)
+
+        attention_mask = kwargs.get("attention_mask", None)
+        position_ids = kwargs.get("position_ids", None)
+
+        if attention_mask is not None and position_ids is None:
+            # create position_ids on the fly for batch generation
+            position_ids = attention_mask.long().cumsum(-1) - 1
+            position_ids.masked_fill_(attention_mask == 0, 1)
+            if past:
+                position_ids = position_ids[:, -1].unsqueeze(-1)
+        else:
+            position_ids = None
+        return {
+            "input_ids": input_ids,
+            "past_key_values": past,
+            "use_cache": kwargs.get("use_cache"),
+            "position_ids": position_ids,
+            "attention_mask": attention_mask,
+            "token_type_ids": token_type_ids,
+        }
 
 # Cell
 
