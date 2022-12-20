@@ -21,7 +21,7 @@ This process is illustrated in the sketch below:
 
 
 <div style="text-align: center">
-<img src="nbs/images/trl_overview.png" width="800">
+<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl_overview.png" width="800">
 <p style="text-align: center;"> <b>Figure:</b> Sketch of the workflow. </p>
 </div>
 
@@ -94,7 +94,7 @@ train_stats = ppo_trainer.step([query_tensor[0]], [response_tensor[0]], reward)
 For a detailed example check out the notebook `04-gpt2-sentiment-ppo-training.ipynb`, where GPT2 is fine-tuned to generate positive movie reviews. An few examples from the language models before and after optimisation are given below:
 
 <div style="text-align: center">
-<img src="nbs/images/table_imdb_preview.png" width="800">
+<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/table_imdb_preview.png" width="800">
 <p style="text-align: center;"> <b>Figure:</b> A few review continuations before and after optimisation. </p>
 </div>
 
