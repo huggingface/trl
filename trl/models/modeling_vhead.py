@@ -75,10 +75,11 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
             or any model mapped inside the `AutoModelForCausalLM` class.
     """
     transformers_parent_class = AutoModelForCausalLM
+    lm_head_namings = ["lm_head", "embed_out"]
     def __init__(self, pretrained_model):
         super().__init__(pretrained_model)
 
-        if not hasattr(self.pretrained_model, "lm_head"):
+        if not any(hasattr(self.pretrained_model, attribute) for attribute in self.lm_head_namings):
             raise ValueError("The model does not have a language model head, please use a model that has one.")
 
         self.v_head = ValueHead(self.pretrained_model.config)

@@ -13,6 +13,8 @@
 # limitations under the License.
 import torch.nn as nn
 
+from transformers import PreTrainedModel
+
 class PreTrainedModelWrapper(nn.Module):
     r"""
     A wrapper class around a (`transformers.PreTrainedModel`) to be compatible with the
@@ -26,9 +28,7 @@ class PreTrainedModelWrapper(nn.Module):
     parent_class: (`transformers.PreTrainedModel`)
         The parent class of the model to be wrapped.
     """
-    pretrained_model = None
     transformers_parent_class = None
-    
 
     def __init__(self, pretrained_model=None, **kwargs):
         super().__init__()
@@ -41,7 +41,7 @@ class PreTrainedModelWrapper(nn.Module):
 
         Parameters
         ----------
-        pretrained_model_name_or_path: (`str`)
+        pretrained_model_name_or_path: (`str` or `transformers.PreTrainedModel`)
             The path to the pretrained model or its name.
         **kwargs:
             Additional keyword arguments passed along to the underlying model's
@@ -49,15 +49,23 @@ class PreTrainedModelWrapper(nn.Module):
         """
         # First, load the pre-trained model using the parent-class
         # either `AutoModelForCausalLM` or `AutoModelForSeq2SeqLM`
-        pretrained_model = cls.transformers_parent_class.from_pretrained(
-            pretrained_model_name_or_path, **kwargs
-        )
+        if isinstance(pretrained_model_name_or_path, str):
+            pretrained_model = cls.transformers_parent_class.from_pretrained(
+                pretrained_model_name_or_path, **kwargs
+            )
+        elif isinstance(pretrained_model_name_or_path, PreTrainedModel):
+            pretrained_model = pretrained_model_name_or_path
+        else:
+            raise ValueError(
+                "pretrained_model_name_or_path should be a string or a PreTrainedModel, "
+                f"but is {type(pretrained_model_name_or_path)}"
+            )
 
         # Then, create the full model by instantiating the wrapper class
         model = cls(pretrained_model, **kwargs)
 
         return model
-    
+
     def push_to_hub(self, *args, **kwargs):
         r"""
         Push the model to the hub.
@@ -69,3 +77,10 @@ class PreTrainedModelWrapper(nn.Module):
         Save the model to a directory.
         """
         return self.pretrained_model.save_pretrained(*args, **kwargs)
+    
+    def state_dict(self, *args, **kwargs):
+        r"""
+        Return the state dictionary of the model. Do not return any 
+        head or additional layers.
+        """
+        return self.pretrained_model.state_dict(*args, **kwargs)
