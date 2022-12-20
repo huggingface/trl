@@ -11,7 +11,13 @@ from datasets import load_dataset
 
 from transformers import AutoTokenizer, pipeline
 
+<<<<<<< HEAD
 from trl import AutoModelForCausalLMWithValueHead
+=======
+
+from trl import AutoModelForCausalLMWithValueHead
+
+>>>>>>> e9081736e14bc7b2b67825581c0f90d95fd25bc3
 from trl.ppo import PPOTrainer
 from trl.core import build_bert_batch_from_txt, listify_batch
 
@@ -55,8 +61,15 @@ sent_kwargs = {
 
 sentiment_pipe = pipeline("sentiment-analysis","lvwerra/distilbert-imdb", device=pipe_device)
 
+<<<<<<< HEAD
 gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(config['model_name'])
 gpt2_model_ref = AutoModelForCausalLMWithValueHead.from_pretrained(config['model_name'])
+=======
+
+gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(config['model_name'])
+gpt2_model_ref = AutoModelForCausalLMWithValueHead.from_pretrained(config['model_name'])
+
+>>>>>>> e9081736e14bc7b2b67825581c0f90d95fd25bc3
 
 gpt2_tokenizer = AutoTokenizer.from_pretrained(config['model_name'])
 gpt2_tokenizer.pad_token = gpt2_tokenizer.eos_token
