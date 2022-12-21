@@ -29,13 +29,16 @@ class PreTrainedModelWrapper(nn.Module):
         The parent class of the model to be wrapped.
     """
     transformers_parent_class = None
+    supported_args = (
+        "summary_dropout_prob",
+    )
 
     def __init__(self, pretrained_model=None, **kwargs):
         super().__init__()
         self.pretrained_model = pretrained_model
 
     @classmethod
-    def from_pretrained(cls, pretrained_model_name_or_path, **kwargs):
+    def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
         r"""
         Instantiates a new model from a pretrained model.
 
@@ -43,15 +46,26 @@ class PreTrainedModelWrapper(nn.Module):
         ----------
         pretrained_model_name_or_path: (`str` or `transformers.PreTrainedModel`)
             The path to the pretrained model or its name.
+        *model_args:
+            Additional positional arguments passed along to the underlying model's
+            `from_pretrained` method.
         **kwargs:
             Additional keyword arguments passed along to the underlying model's
-            `from_pretrained` method.
+            `from_pretrained` method. We also pre-process the kwargs to extract 
+            the arguments that are specific to the `transformers.PreTrainedModel`
+            class and the arguments that are specific to trl models.
         """
+        if kwargs is not None:
+            trl_model_args, pretrained_kwargs = cls._split_kwargs(kwargs)
+        else:
+            trl_model_args = {}
+            pretrained_kwargs = {}
+
         # First, load the pre-trained model using the parent-class
         # either `AutoModelForCausalLM` or `AutoModelForSeq2SeqLM`
         if isinstance(pretrained_model_name_or_path, str):
             pretrained_model = cls.transformers_parent_class.from_pretrained(
-                pretrained_model_name_or_path, **kwargs
+                pretrained_model_name_or_path, *model_args, **pretrained_kwargs
             )
         elif isinstance(pretrained_model_name_or_path, PreTrainedModel):
             pretrained_model = pretrained_model_name_or_path
@@ -62,9 +76,28 @@ class PreTrainedModelWrapper(nn.Module):
             )
 
         # Then, create the full model by instantiating the wrapper class
-        model = cls(pretrained_model, **kwargs)
+        model = cls(pretrained_model, **trl_model_args)
 
         return model
+
+    @classmethod
+    def _split_kwargs(cls, kwargs):
+        """
+        Separate the kwargs from the arguments that we support inside
+        `supported_args` and the ones that we don't.
+        """
+        supported_kwargs = {}
+        unsupported_kwargs = {}
+
+        for key, value in kwargs.items():
+            if key in cls.supported_args:
+                supported_kwargs[key] = value
+            else:
+                unsupported_kwargs[key] = value
+
+        return supported_kwargs, unsupported_kwargs
+
+
 
     def push_to_hub(self, *args, **kwargs):
         r"""

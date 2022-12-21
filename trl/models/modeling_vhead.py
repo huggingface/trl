@@ -20,45 +20,26 @@ class ValueHead(nn.Module):
     r"""
     The ValueHead class implements a head for GPT2 that returns a scalar for each output token.
     """
-    def __init__(self, config):
+    def __init__(self, config, **kwargs):
         super().__init__()
-        self.detach_head = False
-        self.summary_type = config.summary_type if hasattr(config, "summary_type") else "last"
-        if self.summary_type == "attn":
-            raise NotImplementedError
+        if not hasattr(config, "summary_dropout_prob"):
+            summary_dropout_prob = kwargs.pop("summary_dropout_prob", None)
+        else:
+            summary_dropout_prob = config.summary_dropout_prob
 
-        self.summary = nn.Identity()
-        if hasattr(config, "summary_use_proj") and config.summary_use_proj:
-            if hasattr(config, "summary_proj_to_labels") and config.summary_proj_to_labels and config.num_labels > 0:
-                num_classes = config.num_labels
-            else:
-                num_classes = config.hidden_size
-            self.summary = nn.Linear(config.hidden_size, num_classes)
-
-        self.activation = nn.Identity()
-        if hasattr(config, "summary_activation") and config.summary_activation == "tanh":
-            self.activation = nn.Tanh()
-
-        self.first_dropout = nn.Identity()
-        if hasattr(config, "summary_first_dropout") and config.summary_first_dropout > 0:
-            self.first_dropout = nn.Dropout(config.summary_first_dropout)
-
-        self.last_dropout = nn.Identity()
-        if hasattr(config, "summary_last_dropout") and config.summary_last_dropout > 0:
-            self.last_dropout = nn.Dropout(config.summary_last_dropout)
+        if hasattr(config, "summary_proj_to_labels") and config.summary_proj_to_labels and config.num_labels > 0:
+            num_classes = config.num_labels
+        else:
+            num_classes = config.hidden_size
+        
+        self.dropout = nn.Dropout(summary_dropout_prob) if summary_dropout_prob else nn.Identity()
+        self.summary = nn.Linear(config.hidden_size, num_classes)
 
         self.flatten = nn.Flatten()
 
     def forward(self, hidden_states):
-        if self.detach_head:
-            output = hidden_states.detach()
-        else:
-            output = hidden_states
-        output = self.first_dropout(output)
+        output = self.dropout(hidden_states)
         output = self.summary(output)
-        output = self.activation(output)
-        output = self.last_dropout(output)
-
         return output
 
 class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
@@ -73,16 +54,18 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
         pretrained_model (`transformers.PreTrainedModel`):
             The model to wrap. It should be a causal language model such as GPT2.
             or any model mapped inside the `AutoModelForCausalLM` class.
+        kwargs:
+            Additional keyword arguments passed along to the `ValueHead` class.
     """
     transformers_parent_class = AutoModelForCausalLM
     lm_head_namings = ["lm_head", "embed_out"]
-    def __init__(self, pretrained_model):
+    def __init__(self, pretrained_model, **kwargs):
         super().__init__(pretrained_model)
 
         if not any(hasattr(self.pretrained_model, attribute) for attribute in self.lm_head_namings):
             raise ValueError("The model does not have a language model head, please use a model that has one.")
 
-        self.v_head = ValueHead(self.pretrained_model.config)
+        self.v_head = ValueHead(self.pretrained_model.config, **kwargs)
     
     def forward(
         self,

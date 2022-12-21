@@ -1,10 +1,11 @@
 import unittest
+import tempfile
 import torch
+
 from transformers import AutoModelForCausalLM
 
 from trl import AutoModelForCausalLMWithValueHead
 
-from .utils import BaseModelTester
 
 ALL_CAUSAL_LM_MODELS = [
     "trl-internal-testing/tiny-random-CodeGenForCausalLM",
@@ -15,6 +16,25 @@ ALL_CAUSAL_LM_MODELS = [
     "trl-internal-testing/tiny-random-BloomForCausalLM",
     "trl-internal-testing/tiny-random-GPT2LMHeadModel",
 ]
+
+class BaseModelTester:
+    all_model_names = None
+    trl_model_class = None
+
+    def test_from_save(self):
+        """
+        Test if the model can be saved and loaded from a directory and get the same weights
+        """
+        for model_name in self.all_model_names:
+            model = self.trl_model_class.from_pretrained(model_name)
+            
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                model.save_pretrained(tmp_dir)
+                model_from_save = self.trl_model_class.from_pretrained(tmp_dir)
+            
+            # Check if the weights are the same 
+            for key in model_from_save.state_dict():
+                self.assertTrue(torch.allclose(model_from_save.state_dict()[key], model.state_dict()[key]))
 
 class VHeadModelTester(BaseModelTester, unittest.TestCase):
     """
@@ -55,6 +75,37 @@ class VHeadModelTester(BaseModelTester, unittest.TestCase):
             # Check if the outputs are of the right size - here 
             # we always output 3 values - logits, loss, and value states
             self.assertEqual(len(outputs), EXPECTED_OUTPUT_SIZE)
+    
+    def test_dropout_config(self):
+        r"""
+        Test if we instantiate a model by adding `summary_drop_prob` to the config
+        it will be added to the vhead
+        """
+        for model_name in self.all_model_names:
+            pretrained_model = AutoModelForCausalLM.from_pretrained(model_name)
+            pretrained_model.config.summary_dropout_prob = 0.5
+            model = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model)
+
+            # Check if v head of the model has the same dropout as the config
+            self.assertEqual(model.v_head.dropout.p, pretrained_model.config.summary_dropout_prob)
+    
+    def test_dropout_kwargs(self):
+        r"""
+        Test if we instantiate a model by adding `summary_drop_prob` to the config
+        it will be added to the vhead
+        """
+        for model_name in self.all_model_names:
+            v_head_kwargs = {"summary_dropout_prob": 0.5}
+
+            model = AutoModelForCausalLMWithValueHead.from_pretrained(model_name, **v_head_kwargs)
+
+            # Check if v head of the model has the same dropout as the config
+            self.assertEqual(model.v_head.dropout.p, 0.5)
+
+            model = AutoModelForCausalLMWithValueHead.from_pretrained(model_name, summary_dropout_prob=0.5)
+
+            # Check if v head of the model has the same dropout as the config
+            self.assertEqual(model.v_head.dropout.p, 0.5)
     
     def test_generate(self):
         r"""
