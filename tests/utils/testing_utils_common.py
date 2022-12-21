@@ -6,7 +6,7 @@ class BaseModelTester:
     trl_model_class = None
 
     def test_from_save(self):
-        r"""
+        """
         Test if the model can be saved and loaded from a directory and get the same weights
         """
         for model_name in self.all_model_names:

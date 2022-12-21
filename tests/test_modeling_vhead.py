@@ -17,7 +17,7 @@ ALL_CAUSAL_LM_MODELS = [
 ]
 
 class VHeadModelTester(BaseModelTester, unittest.TestCase):
-    r"""
+    """
     Testing suite for v-head models.   
     """
     all_model_names = ALL_CAUSAL_LM_MODELS
