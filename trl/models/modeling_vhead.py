@@ -33,12 +33,25 @@ class ValueHead(nn.Module):
             num_classes = config.hidden_size
         
         self.dropout = nn.Dropout(summary_dropout_prob) if summary_dropout_prob else nn.Identity()
-        self.summary = nn.Linear(config.hidden_size, num_classes)
+
+        # some models such as OPT have a projection layer before the word embeddings - e.g. OPT-350m
+        if hasattr(config, "word_embed_proj_dim"):
+            hidden_size = config.word_embed_proj_dim
+        else:
+            hidden_size = config.hidden_size
+
+        self.summary = nn.Linear(hidden_size, num_classes)
 
         self.flatten = nn.Flatten()
 
     def forward(self, hidden_states):
         output = self.dropout(hidden_states)
+
+        # For now force upcast in fp32 if needed. Let's keep the 
+        # output in fp32 for numerical stability.
+        if output.dtype != self.summary.weight.dtype:
+            output = output.to(self.summary.weight.dtype)
+
         output = self.summary(output)
         return output
 
