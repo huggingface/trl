@@ -59,13 +59,30 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
     """
     transformers_parent_class = AutoModelForCausalLM
     lm_head_namings = ["lm_head", "embed_out"]
+    supported_args = (
+        "summary_dropout_prob",
+        "v_head_initializer_range",
+    )
+
     def __init__(self, pretrained_model, **kwargs):
         super().__init__(pretrained_model)
+        v_head_kwargs, _ = self._split_kwargs(kwargs)
 
         if not any(hasattr(self.pretrained_model, attribute) for attribute in self.lm_head_namings):
             raise ValueError("The model does not have a language model head, please use a model that has one.")
 
-        self.v_head = ValueHead(self.pretrained_model.config, **kwargs)
+        self.v_head = ValueHead(self.pretrained_model.config, **v_head_kwargs)
+
+        self._init_weights(**v_head_kwargs)
+    
+    def _init_weights(self, **kwargs):
+        r"""
+        We initialize the weights of the value head.
+        """
+        initializer_range = kwargs.pop("initializer_range", 0.2)
+
+        self.v_head.summary.weight.data.normal_(mean=0.0, std=initializer_range)
+        self.v_head.summary.bias.data.zero_()
     
     def forward(
         self,

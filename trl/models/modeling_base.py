@@ -29,9 +29,6 @@ class PreTrainedModelWrapper(nn.Module):
         The parent class of the model to be wrapped.
     """
     transformers_parent_class = None
-    supported_args = (
-        "summary_dropout_prob",
-    )
 
     def __init__(self, pretrained_model=None, **kwargs):
         super().__init__()
@@ -97,23 +94,14 @@ class PreTrainedModelWrapper(nn.Module):
 
         return supported_kwargs, unsupported_kwargs
 
-
-
     def push_to_hub(self, *args, **kwargs):
         r"""
-        Push the model to the hub.
+        Push the pretrained model to the hub.
         """
         return self.pretrained_model.push_to_hub(*args, **kwargs)
     
     def save_pretrained(self, *args, **kwargs):
         r"""
-        Save the model to a directory.
+        Save the pretrained model to a directory.
         """
         return self.pretrained_model.save_pretrained(*args, **kwargs)
-    
-    def state_dict(self, *args, **kwargs):
-        r"""
-        Return the state dictionary of the model. Do not return any 
-        head or additional layers.
-        """
-        return self.pretrained_model.state_dict(*args, **kwargs)
