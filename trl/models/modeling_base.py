@@ -27,8 +27,11 @@ class PreTrainedModelWrapper(nn.Module):
         The model to be wrapped.
     parent_class: (`transformers.PreTrainedModel`)
         The parent class of the model to be wrapped.
+    supported_args: (`list`)
+        The list of arguments that are supported by the wrapper class.
     """
     transformers_parent_class = None
+    supported_args = None
 
     def __init__(self, pretrained_model=None, **kwargs):
         super().__init__()
