@@ -4,7 +4,7 @@ from transformers import AutoModelForCausalLM
 
 from trl import AutoModelForCausalLMWithValueHead
 
-from . import BaseModelTester
+from .utils import BaseModelTester
 
 ALL_CAUSAL_LM_MODELS = [
     "trl-internal-testing/tiny-random-CodeGenForCausalLM",
@@ -45,6 +45,8 @@ class VHeadModelTester(BaseModelTester, unittest.TestCase):
         Test if the model can be used for inference and outputs 3 values 
         - logits, loss, and value states   
         """
+        EXPECTED_OUTPUT_SIZE = 3
+
         for model_name in self.all_model_names:
             model = AutoModelForCausalLMWithValueHead.from_pretrained(model_name)
             input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
@@ -52,7 +54,7 @@ class VHeadModelTester(BaseModelTester, unittest.TestCase):
 
             # Check if the outputs are of the right size - here 
             # we always output 3 values - logits, loss, and value states
-            self.assertEqual(len(outputs), 3)
+            self.assertEqual(len(outputs), EXPECTED_OUTPUT_SIZE)
     
     def test_generate(self):
         r"""
