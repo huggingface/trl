@@ -14,7 +14,11 @@ docs: $(SRC)
 	touch docs
 
 test:
-	nbdev_test_nbs
+	pytest tests
+
+format:
+	black --line-length 119 --target-version py36 tests trl examples 
+	isort tests trl examples 
 
 release: pypi
 	nbdev_bump_version
