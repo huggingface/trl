@@ -3,7 +3,7 @@
 
 
 ## What is it?
-With `trl` you can train transformer language models with Proximal Policy Optimization (PPO). The library is built on top of the [`transformer`](https://github.com/huggingface/transformers) library by  🤗 Hugging Face. Therefore, pre-trained language models can be directly loaded via `transformers`. At this point only decoder architectures such as GTP2 are implemented.
+With `trl` you can train transformer language models with Proximal Policy Optimization (PPO). The library is built on top of the [`transformer`](https://github.com/huggingface/transformers) library by  🤗 Hugging Face. Therefore, pre-trained language models can be directly loaded via `transformers`. At this point only decoder architectures such as GPT2 are implemented.
 
 **Highlights:**
 - PPOTrainer: A PPO trainer for language models that just needs (query, response, reward) triplets to optimise the language model.
@@ -37,7 +37,7 @@ pip install trl
 If you want to run the examples in the repository a few additional libraries are required. Clone the repository and install it with pip:
 ```bash
 git clone https://github.com/lvwerra/trl.git
-cd tlr/
+cd trl/
 pip install -r requirements.txt
 ```
 ### Jupyter notebooks
@@ -58,7 +58,7 @@ jupyter labextension install @jupyter-widgets/jupyterlab-manager
 ### Example
 This is a basic example on how to use the library. Based on a query the language model creates a response which is then evaluated. The evaluation could be a human in the loop or another model's output.
 
-```
+```python
 # imports
 import torch
 from transformers import GPT2Tokenizer
