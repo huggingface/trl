@@ -11,3 +11,4 @@ jobs:
     with:
       pr_number: ${{ github.event.number }}
       package: trl
+      repo_owner: rwightman

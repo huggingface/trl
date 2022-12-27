@@ -13,5 +13,6 @@ jobs:
     with:
       commit_sha: ${{ github.sha }}
       package: trl
+      repo_owner: rwightman
     secrets:
       token: ${{ secrets.HUGGINGFACE_PUSH }}
