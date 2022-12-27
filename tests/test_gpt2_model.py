@@ -4,7 +4,7 @@ import torch
 from transformers import GPT2Tokenizer
 
 from trl import AutoModelForCausalLMWithValueHead
-from trl.gpt2 import respond_to_batch
+from trl.core import respond_to_batch
 
 from trl import PPOTrainer
 

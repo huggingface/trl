@@ -1,6 +1,7 @@
 import torch
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
+from transformers import top_k_top_p_filtering
 
 import collections
 import numpy as np
@@ -123,3 +124,17 @@ def build_bert_batch_from_txt(text_list, tokenizer, device):
     attention_masks = torch.cat(attention_masks)
 
     return padded_tensors, attention_masks
+
+def respond_to_batch(model, queries, txt_len=20, top_k=0, top_p=1.0):
+    """Sample text from language model."""
+    input_ids = queries
+    for i in range(txt_len):
+        # Get Logits
+        outputs = model(input_ids)
+        next_token_logits = outputs[0][:, -1, :]
+        next_token_logits = top_k_top_p_filtering(next_token_logits, top_k=top_k, top_p=top_p)
+        # Sample
+        probs = F.softmax(next_token_logits, dim=-1)
+        next_token = torch.multinomial(probs, num_samples=1).squeeze(1)
+        input_ids = torch.cat([input_ids, next_token.unsqueeze(-1)], dim=-1)
+    return input_ids[:, -txt_len:]
