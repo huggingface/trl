@@ -2,14 +2,17 @@
 import pytest
 import torch
 from transformers import GPT2Tokenizer
-from trl.gpt2 import GPT2HeadWithValueModel, respond_to_batch
+
+from trl import AutoModelForCausalLMWithValueHead
+from trl.gpt2 import respond_to_batch
+
 from trl.ppo import PPOTrainer
 
 
 def test_gpt2_model():
     # get models
-    gpt2_model = GPT2HeadWithValueModel.from_pretrained("gpt2")
-    gpt2_model_ref = GPT2HeadWithValueModel.from_pretrained("gpt2")
+    gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained("gpt2")
+    gpt2_model_ref = AutoModelForCausalLMWithValueHead.from_pretrained("gpt2")
     gpt2_tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
 
     # initialize trainer
