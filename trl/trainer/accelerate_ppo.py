@@ -11,16 +11,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from typing import Dict, List, Optional, Tuple
 from accelerate import Accelerator
 from datasets import load_dataset
 
 from torch.optim import Adam
+import torch.nn as nn
 import torch
 import time
 import random
 import wandb
 
-from transformers import DataCollatorForLanguageModeling, AutoTokenizer
+from transformers import DataCollatorForLanguageModeling, AutoTokenizer, PreTrainedTokenizer
 
 from trl.core import (logprobs_from_logits,
                       whiten,
@@ -55,7 +57,13 @@ class AcceleratePPOTrainer(BaseTrainer):
         "ppo_epochs": 4,
     }
 
-    def __init__(self, model=None, ref_model=None, tokenizer=None, **config):
+    def __init__(
+        self,
+        model: Optional[nn.Module]=None, 
+        ref_model: Optional[nn.Module]=None, 
+        tokenizer: Optional[PreTrainedTokenizer]=None, 
+        **config
+    ):
         """
         Initialize PPOTrainer.
         Args:
@@ -111,13 +119,14 @@ class AcceleratePPOTrainer(BaseTrainer):
             wandb.init(name='run-42', project='gpt2-test', config=config)
             wandb.watch(self.model, log='all')
 
-    def _build_dataset(self, dataset_name="imdb"):
+    def _build_dataset(self, dataset_name: str="imdb"):
         """
         Build dataset for training. This builds the dataset from `load_dataset`, one should 
         customize this function to train the model on its own dataset.
         
         Args:
-            dataset_name (str): The name of the dataset to be loaded.
+            dataset_name (`str`): 
+                The name of the dataset to be loaded.
         """
         # load imdb with datasets
         ds = load_dataset(dataset_name, split='train')
@@ -140,16 +149,28 @@ class AcceleratePPOTrainer(BaseTrainer):
 
         self.dataloader = torch.utils.data.DataLoader(ds, batch_size=self.config['batch_size'], collate_fn=collater)
 
-    def get_response(self, query_tensors, **gen_kwargs):
+    def get_response(self, query_tensors: torch.Tensor, **gen_kwargs):
         """
         Generate response given query.
+
+
         Args:
-            query_tensors (torch.Tensor): A tensor of shape (batch_size, seq_len) containing query tokens.
-            gen_kwargs (dict): Keyword arguments for generation.
+            query_tensors (`torch.LongTensor`): 
+                A tensor of shape (`batch_size`, `seq_len`) containing query tokens.
+            gen_kwargs (dict[str, Any]): 
+                Keyword arguments for generation.
+        
+        Returns: 
+            response_tensors (`torch.LongTensor`): 
+                A tensor of shape (`batch_size`, `gen_len`) containing response tokens. `gen_len` 
+                is the length of the generated response that is sampled from `LengthSampler`.
         """
         response_tensors = []
         for i in range(self.config['batch_size']):
             gen_len = self.output_size()
+
+            # In a multi-GPU setup the model is wrapped inside a DistributedDataParallel object.
+            # this means that the model needs to be called with the module attribute.
             if self.accelerator.distributed_type == "MULTI_GPU":
                 response = self.model.module.generate(query_tensors[i].unsqueeze(dim=0),
                                         max_new_tokens=gen_len, **gen_kwargs)
@@ -159,10 +180,28 @@ class AcceleratePPOTrainer(BaseTrainer):
             response_tensors.append(response.squeeze()[-gen_len:])
         return response_tensors
 
-    def _build_models_and_tokenizer(self, model, ref_model, tokenizer):
+    def _build_models_and_tokenizer(
+        self, 
+        model: Optional[nn.Module] = None, 
+        ref_model: Optional[nn.Module] = None , 
+        tokenizer: Optional[PreTrainedTokenizer] = None
+    ):
         """
         Build models for training. This builds the reference model
         together with the model to be trained.
+
+        Args:
+            model (`nn.Module`, *optional*):
+                The model to be trained. If `None` is passed, the model will be loaded from
+                the pretrained model specified in the config.
+            ref_model (`nn.Module`, *optional*): 
+                The reference model. If `None` is passed, the model will be loaded from
+                the pretrained model specified in the config. For mixed precision setup, 
+                the reference model will be loaded in half precision according to the 
+                `accelerator.mixed_precision` flag to save memory.
+            tokenizer (`transformers.PreTrainedTokenizer`, *optional*): 
+                The tokenizer to be used. If `None` is passed, the tokenizer will be loaded from
+                the pretrained model specified in the config.
         """
         target_dtype_dict = {
             "fp16": torch.float16,
@@ -189,19 +228,26 @@ class AcceleratePPOTrainer(BaseTrainer):
             self.tokenizer.pad_token = self.tokenizer.eos_token
         else:
             self.tokenizer = tokenizer
-        
-        
 
 
-    def step(self, queries, responses, scores):
+    def step(self, 
+        queries: List[torch.LongTensor], 
+        responses: List[torch.LongTensor], 
+        scores: List[torch.FloatTensor]):
         """
         Run a PPO optimisation step.
-        args:
-            queries (List): List of tensors containing the encoded queries, shape [query_length]
-            responses (List): List of tensors containing the encoded responses, shape [response_length]
-            scores (List): tensor containing the scores, shape [batch_size]
-        returns:
-            train_stats (dict): a summary of the training statistics
+        
+        Args:
+            queries (List[`torch.LongTensor`]): 
+                List of tensors containing the encoded queries of shape (`query_length`)
+            responses (List[`torch.LongTensor`]): 
+                List of tensors containing the encoded responses of shape (`response_length`)
+            scores (List[`torch.FloatTensor`]): 
+                List of tensors containing the scores of shape (`batch_size`)
+        
+        Returns:
+            train_stats (dict[str, Any]): 
+                a summary of the training statistics
         """
 
         bs = self.config['batch_size']
@@ -255,12 +301,23 @@ class AcceleratePPOTrainer(BaseTrainer):
 
         self.kl_ctl.update(stats['objective/kl'], self.config['batch_size'])
 
+        # Log the total ppo time
         timing['time/ppo/total'] = time.time()-t0
         stats.update(timing)
         return stats
     
     def gather_stats(self, stats):
-        """Gather stats from all processes."""
+        """
+        Gather stats from all processes. Useful in the context of distributed training.
+
+        Args:
+            stats (dict[str, Any]): 
+            a dictionary of stats to be gathered. The stats should contain torch tensors.
+        
+        Returns:
+            stats (dict[str, Any]): 
+                a dictionary of stats with the tensors gathered.
+        """
         import torch.distributed as dist
 
         # Wait for all processes to finish
@@ -270,14 +327,30 @@ class AcceleratePPOTrainer(BaseTrainer):
             # We don't update the `'objective/kl'` since it is needed by each independent process
             # TODO: ask if it makes sense to average everything or just the objective (loss? reward?)
             if isinstance(v, torch.Tensor) and k != 'objective/kl':
-                # tensor_list = [torch.zeros_like(v) for _ in range(self.accelerator.num_processes)]
                 dist.all_reduce(v, dist.ReduceOp.SUM)
                 v /= self.accelerator.num_processes
             stats[k] = v
         return stats
 
-    def batched_forward_pass(self, queries, responses):
-        """Calculate model outputs in multiple batches."""
+    def batched_forward_pass(self, queries: torch.Tensor, responses: torch.Tensor):
+        """
+        Calculate model outputs in multiple batches.
+        
+        Args:
+            queries (`torch.LongTensor`): 
+                List of tensors containing the encoded queries, shape (`batch_size`, `query_length`)
+            responses (`torch.LongTensor`): 
+                List of tensors containing the encoded responses, shape (`batch_size`, `response_length`)
+        
+        Returns:
+            all_logprobs (`torch.FloatTensor`): 
+                List of tensors containing the logprobs, shape (`batch_size`, `response_length`)
+            all_ref_logprobs (`torch.FloatTensor`): 
+                List of tensors containing the logprobs from the reference model, shape (`batch_size`, `response_length`)
+            all_values (`torch.FloatTensor`): 
+                List of tensors containing the output from the value head, shape (`batch_size`, `response_length`)
+
+        """
         bs = self.config['batch_size']
         fbs = self.config['forward_batch_size']
         all_logprobs = []
@@ -301,13 +374,43 @@ class AcceleratePPOTrainer(BaseTrainer):
                 all_ref_logprobs.append(ref_logprobs[j, start:end])
         return all_logprobs, all_ref_logprobs, all_values
 
-    def train_minibatch(self, logprobs, values, rewards, query, response, model_input):
-        """Train one PPO minibatch"""
+    def train_minibatch(
+        self, 
+        logprobs: torch.FloatTensor, 
+        values: torch.FloatTensor, 
+        rewards: torch.FloatTensor, 
+        query: torch.LongTensor, 
+        response: torch.LongTensor, 
+        model_input: torch.LongTensor,
+    ):
+        """
+        Train one PPO minibatch
+        
+        Args:
+            logprobs (`torch.FloatTensor`): 
+                Log probabilities of the model, shape [batch_size, response_length]
+            values (`torch.FloatTensor`): 
+                Values of the value head, shape [batch_size, response_length]
+            rewards (`torch.FloatTensor`): 
+                Rewards from the reward model, shape [batch_size, response_length]
+            query (`torch.LongTensor`): 
+                Encoded queries, shape [batch_size, query_length]
+            response (`torch.LongTensor`): 
+                Encoded responses, shape [batch_size, response_length]
+            model_input (`torch.LongTensor`): 
+                Concatenated queries and responses, shape [batch_size, query_length+response_length]
+        
+        Returns:
+            train_stats (dict[str, `torch.Tensor`]): 
+                Dictionary of training statistics
+        """
         loss_p, loss_v, train_stats = self.loss(logprobs, values, rewards, query, response, model_input)
         loss = loss_p + loss_v
         self.optimizer.zero_grad()
         self.accelerator.backward(loss)
+        t = time.time()
         self.optimizer.step()
+        train_stats['time/ppo/optimizer_step'] = torch.Tensor([time.time()-t]).to(self.accelerator.device)
         return train_stats
 
     def compute_rewards(self, scores, logprobs, ref_logprobs):
@@ -408,9 +511,25 @@ class AcceleratePPOTrainer(BaseTrainer):
         return stats
     
 
-    def log_stats(self, stats, timing, batch, rewards, t0, t, logs):
-        timing['time/optimization'] = time.time()-t
-        #### Log everything
+    def log_stats(self, stats, timing, batch, rewards, t0, logs):
+        """
+        A function that logs all the training stats. Call it at the end of each epoch.
+
+        Args:
+            stats (dict[str, Any]): 
+                A dictionary of training stats.
+            timing (dict[str, Any]): 
+                A dictionary of timing stats.
+            batch (dict[str, Any]): 
+                A dictionary of batch data, this containes the queries and responses.
+            rewards (`torch.FloatTensor`): 
+                A tensor of rewards.
+            t0 (`float`): 
+                The time at the start of the epoch.
+            logs (dict[str, Any]): 
+                A dictionary of logs.
+        """
+        # Log only if we are in the main process
         if self.accelerator.is_main_process:
             timing['time/epoch'] = time.time()-t0
             table_rows = [list(r) for r in zip(batch['query'], batch['response'], rewards.cpu().tolist())]

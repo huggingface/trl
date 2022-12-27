@@ -13,7 +13,7 @@ config = {
     # "model_name": "facebook/opt-350m",
     "cls_model_name": "lvwerra/distilbert-imdb",
     "steps": 20000,
-    "batch_size": 128,
+    "batch_size": 256,
     "forward_batch_size": 16,
     "ppo_epochs": 4,   
     "txt_in_min_len": 2,
@@ -78,5 +78,7 @@ for epoch, batch in tqdm(zip(range(total_ppo_epochs), iter(ppo_trainer.dataloade
     #### Run PPO step 
     t = time.time()
     stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
-    ppo_trainer.log_stats(stats, timing, batch, rewards, t0, t, logs)
+    ppo_trainer.log_stats(stats, timing, batch, rewards, t0, logs)
+    # Log the timing of the whole optimization step.
+    timing['time/optimization'] = time.time()-t
     
