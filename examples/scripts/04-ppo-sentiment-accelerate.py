@@ -11,6 +11,7 @@ from trl import AcceleratePPOTrainer
 config = {
     "model_name": "lvwerra/gpt2-imdb",
     # "model_name": "facebook/opt-350m",
+    "dataset_name": "imdb",
     "cls_model_name": "lvwerra/distilbert-imdb",
     "steps": 20000,
     "batch_size": 256,
@@ -38,6 +39,7 @@ sent_kwargs = {
 }
 
 ppo_trainer = AcceleratePPOTrainer(**config)
+dataloader = ppo_trainer.dataloader
 tokenizer = ppo_trainer.tokenizer
 
 device = ppo_trainer.accelerator.device
@@ -57,7 +59,7 @@ gen_kwargs = {
 
 total_ppo_epochs = int(np.ceil(config["steps"]/config['batch_size']))
 
-for epoch, batch in tqdm(zip(range(total_ppo_epochs), iter(ppo_trainer.dataloader))):
+for epoch, batch in tqdm(zip(range(total_ppo_epochs), iter(dataloader))):
     logs, timing = dict(), dict()
     t0 = time.time()
     query_tensors = [torch.tensor(t).long().to(device) for t in batch["tokens"]]

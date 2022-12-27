@@ -62,6 +62,7 @@ class AcceleratePPOTrainer(BaseTrainer):
         model: Optional[nn.Module]=None, 
         ref_model: Optional[nn.Module]=None, 
         tokenizer: Optional[PreTrainedTokenizer]=None, 
+        dataloader: Optional[torch.utils.data.DataLoader]=None,
         **config
     ):
         """
@@ -93,7 +94,10 @@ class AcceleratePPOTrainer(BaseTrainer):
 
         # Step 2: Initialize model, tokenizer and dataset        
         self.model, self.ref_model, self.tokenizer = self._build_models_and_tokenizer(model, ref_model, tokenizer)
-        self._build_dataset()
+        # build dataset if no dataloader is provided - using `datasets` library
+        if dataloader is None:
+            dataloader = self._build_dataset(self.config["dataset_name"])
+        self.dataloader = dataloader
 
 
         # Step 3: Initialize optimizer and data collator        
@@ -127,6 +131,10 @@ class AcceleratePPOTrainer(BaseTrainer):
         Args:
             dataset_name (`str`): 
                 The name of the dataset to be loaded.
+        
+        Returns:
+            dataloader (`torch.utils.data.DataLoader`):
+                The dataloader for the dataset.
         """
         # load imdb with datasets
         ds = load_dataset(dataset_name, split='train')
@@ -147,7 +155,9 @@ class AcceleratePPOTrainer(BaseTrainer):
         def collater(data):
             return dict((key, [d[key] for d in data]) for key in data[0])
 
-        self.dataloader = torch.utils.data.DataLoader(ds, batch_size=self.config['batch_size'], collate_fn=collater)
+        dataloader = torch.utils.data.DataLoader(ds, batch_size=self.config['batch_size'], collate_fn=collater)
+        return dataloader
+        
 
     def generate(self, query_tensors: torch.Tensor, **gen_kwargs):
         """
