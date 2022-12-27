@@ -55,8 +55,8 @@ sent_kwargs = {
 
 sentiment_pipe = pipeline("sentiment-analysis","lvwerra/distilbert-imdb", device=pipe_device)
 
-gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(config['model_name'], summary_dropout_prob=0.1)
-gpt2_model_ref = AutoModelForCausalLMWithValueHead.from_pretrained(config['model_name'], summary_dropout_prob=0.1)
+gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(config['model_name'])
+gpt2_model_ref = AutoModelForCausalLMWithValueHead.from_pretrained(config['model_name'])
 
 gpt2_tokenizer = AutoTokenizer.from_pretrained(config['model_name'])
 gpt2_tokenizer.pad_token = gpt2_tokenizer.eos_token

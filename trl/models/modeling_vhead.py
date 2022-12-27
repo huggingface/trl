@@ -23,7 +23,7 @@ class ValueHead(nn.Module):
     def __init__(self, config, **kwargs):
         super().__init__()
         if not hasattr(config, "summary_dropout_prob"):
-            summary_dropout_prob = kwargs.pop("summary_dropout_prob", None)
+            summary_dropout_prob = kwargs.pop("summary_dropout_prob", 0.1)
         else:
             summary_dropout_prob = config.summary_dropout_prob
 
