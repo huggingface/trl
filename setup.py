@@ -22,8 +22,8 @@ py_versions = '2.0 2.1 2.2 2.3 2.4 2.5 2.6 2.7 3.0 3.1 3.2 3.3 3.4 3.5 3.6 3.7 3
 
 requirements = cfg.get('requirements','').split()
 extras = {
-    "test" : ["pytest","pytest-xdist","accelerate"],
-    "dev" : ["pytest","pytest-xdist", "black", "isort", "flake8>=3.8.3", "accelerate"],
+    "test" : ["pytest","pytest-xdist","accelerate", "datasets"],
+    "dev" : ["pytest","pytest-xdist", "black", "isort", "flake8>=3.8.3", "accelerate", "datasets"],
 }
 lic = licenses[cfg['license']]
 min_python = cfg['min_python']
