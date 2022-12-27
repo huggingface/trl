@@ -92,7 +92,7 @@ class AcceleratePPOTrainer(BaseTrainer):
         self.config.update(config)
 
         # Step 2: Initialize model, tokenizer and dataset        
-        self._build_models_and_tokenizer(model, ref_model, tokenizer)
+        self.model, self.ref_model, self.tokenizer = self._build_models_and_tokenizer(model, ref_model, tokenizer)
         self._build_dataset()
 
 
