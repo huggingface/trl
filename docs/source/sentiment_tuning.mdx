@@ -1,11 +1,9 @@
 # Tune GPT2 to generate positive reviews
-> Optimise GPT2 to produce positive IMDB movie reviews using a BERT sentiment classifier as a reward function.
+Optimise GPT2 to produce positive IMDB movie reviews using a BERT sentiment classifier as a reward function. 
 
-<div style="text-align: center">
+Experiment setup to tune GPT2. The yellow arrows are outside the scope of this notebook, but the trained models are available through Hugging Face:
+
 <img src='https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/gpt2_bert_training.png' width='600'/>
-<p style="text-align: center;"> <b>Figure:</b> Experiment setup to tune GPT2. The yellow arrows are outside the scope of this notebook, but the trained models are available through Hugging Face. </p>
-</div>
-
 
 In this notebook we fine-tune GPT2 (small) to generate positive movie reviews based on the IMDB dataset. The model gets the start of a real review and is tasked to produce positive continuations. To reward positive continuations we use a BERT classifier to analyse the sentiment of the produced sentences and use the classifier's outputs as rewards signals for PPO training.
 
@@ -93,7 +91,6 @@ The IMDB dataset contains 50k movie review annotated with "positive"/"negative" 
 
 
 ```python
-# load imdb with datasets
 ds = load_dataset('imdb', split='train')
 ds = ds.rename_columns({'text': 'review', 'label': 'sentiment'})
 ds = ds.filter(lambda x: len(x["review"])>200, batched=False)
@@ -293,10 +290,8 @@ for epoch, batch in tqdm(zip(range(total_ppo_epochs), iter(dataloader))):
 ### Training progress
 If you are tracking the training progress with Weights&Biases you should see a plot similar to the one below. Check out the interactive sample report on wandb.ai: [link](https://app.wandb.ai/lvwerra/trl-showcase/runs/1jtvxb1m/).
 
-<div style="text-align: center">
+Reward mean and distribution evolution during training:
 <img src='https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/gpt2_tuning_progress.png' width='800'/>
-<p style="text-align: center;"> <b>Figure:</b> Reward mean and distribution evolution during training. </p>
-</div>
 
 One can observe how the model starts to generate more positive outputs after a few optimisation steps.
 
@@ -342,166 +337,6 @@ game_data['rewards (after)'] = [output[1]["score"] for output in sentiment_pipe(
 df_results = pd.DataFrame(game_data)
 df_results
 ```
-
-
-<div>
-<style scoped>
-    .dataframe tbody tr th:only-of-type {
-        vertical-align: middle;
-    }
-
-    .dataframe tbody tr th {
-        vertical-align: top;
-    }
-
-    .dataframe thead th {
-        text-align: right;
-    }
-</style>
-<table border="1" class="dataframe">
-  <thead>
-    <tr style="text-align: right;">
-      <th></th>
-      <th>query</th>
-      <th>response (before)</th>
-      <th>response (after)</th>
-      <th>rewards (before)</th>
-      <th>rewards (after)</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <th>0</th>
-      <td>Oh dear,</td>
-      <td>what are I saying?! I fast-forwarded through</td>
-      <td>I must say that I are hanging my head on this</td>
-      <td>-0.858954</td>
-      <td>-1.007609</td>
-    </tr>
-    <tr>
-      <th>1</th>
-      <td>I've seen</td>
-      <td>it, as well.&lt;br</td>
-      <td>three million dialogue throughout, and</td>
-      <td>1.996807</td>
-      <td>2.240883</td>
-    </tr>
-    <tr>
-      <th>2</th>
-      <td>Hi:&lt;br /&gt;&lt;br</td>
-      <td>/&gt;This movie is a turkey though when it comes to</td>
-      <td>/&gt;I also like that movie. It's so funny</td>
-      <td>-0.438191</td>
-      <td>2.415630</td>
-    </tr>
-    <tr>
-      <th>3</th>
-      <td>I'm a writer</td>
-      <td>and I'm not going to be asked to</td>
-      <td>, not a screenwriter. I've written</td>
-      <td>-0.655991</td>
-      <td>-0.724324</td>
-    </tr>
-    <tr>
-      <th>4</th>
-      <td>If you</td>
-      <td>absolutely love sensitive romance, the plot a...</td>
-      <td>are looking at the cinematography, the acting,</td>
-      <td>2.221309</td>
-      <td>0.148751</td>
-    </tr>
-    <tr>
-      <th>5</th>
-      <td>OMG this</td>
-      <td>casting cast. Obi cult breezy, this is</td>
-      <td>movie was totally wonderful, I it was the ide...</td>
-      <td>-1.533139</td>
-      <td>2.590190</td>
-    </tr>
-    <tr>
-      <th>6</th>
-      <td>It's</td>
-      <td>unrealistic; the guy who was supposed to be E...</td>
-      <td>a very good film. It reminds us about over</td>
-      <td>-2.097017</td>
-      <td>2.835831</td>
-    </tr>
-    <tr>
-      <th>7</th>
-      <td>There is a really</td>
-      <td>awful laptop game!&lt;br /&gt;&lt;br /&gt;I used to</td>
-      <td>interesting story that set us the journey. Th...</td>
-      <td>-2.341743</td>
-      <td>2.282939</td>
-    </tr>
-    <tr>
-      <th>8</th>
-      <td>This is</td>
-      <td>my favorite part about</td>
-      <td>a well thought well</td>
-      <td>2.554794</td>
-      <td>2.734139</td>
-    </tr>
-    <tr>
-      <th>9</th>
-      <td>Wasn't</td>
-      <td>Wasn't it clichéd?&lt;|endoftext|&gt;</td>
-      <td>anyone else interested in this movie? It's a ...</td>
-      <td>-1.790802</td>
-      <td>2.631960</td>
-    </tr>
-    <tr>
-      <th>10</th>
-      <td>This film is another of director Tim</td>
-      <td>Burton's masterpieces</td>
-      <td>Curry's best bombs</td>
-      <td>2.622917</td>
-      <td>2.544106</td>
-    </tr>
-    <tr>
-      <th>11</th>
-      <td>I thought this movie</td>
-      <td>was excellent. I actually laughed 6 times and...</td>
-      <td>was perfect, and I believe it's almost overlo...</td>
-      <td>2.548022</td>
-      <td>2.601913</td>
-    </tr>
-    <tr>
-      <th>12</th>
-      <td>This early John Wayne</td>
-      <td>films looked like an abandoned police beating</td>
-      <td>film is a realistic portrayal of what</td>
-      <td>-1.742279</td>
-      <td>2.609762</td>
-    </tr>
-    <tr>
-      <th>13</th>
-      <td>I was</td>
-      <td>given an experience-a big one, almost 25</td>
-      <td>very happy with all the reflections and this ...</td>
-      <td>2.250709</td>
-      <td>2.558540</td>
-    </tr>
-    <tr>
-      <th>14</th>
-      <td>Embarrassingly, I</td>
-      <td>am more at a strict conformity after getting ...</td>
-      <td>had never seen a movie before. There was one ...</td>
-      <td>-2.021666</td>
-      <td>-1.803383</td>
-    </tr>
-    <tr>
-      <th>15</th>
-      <td>I am a fan</td>
-      <td>of living on simple islands, and we have visi...</td>
-      <td>of many things and learned how to appreciate ...</td>
-      <td>1.791297</td>
-      <td>2.324461</td>
-    </tr>
-  </tbody>
-</table>
-</div>
-
 
 
 Looking at the reward mean/median of the generated sequences we observe a significant difference.
