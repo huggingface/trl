@@ -78,8 +78,10 @@ def build_dataset(config):
     return dataloader
 
 dataloader = build_dataset(config)
-
 ppo_trainer = PPOTrainer(dataloader, **config)
+
+dataloader = ppo_trainer.dataloader
+
 tokenizer = ppo_trainer.tokenizer
 
 device = ppo_trainer.accelerator.device
