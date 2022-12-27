@@ -40,7 +40,7 @@ def test_gpt2_model():
 
     # create a dummy dataset
     min_length = min(len(query_tensor[0]), len(response_tensor[0]))
-    dummy_dataset = DummyDataset([query_tensor[:, :min_length] for _ in range(2)], [response_tensor[:, :min_length] for _ in range(2)])
+    dummy_dataset = DummyDataset([query_tensor[:, :min_length].squeeze(0) for _ in range(2)], [response_tensor[:, :min_length].squeeze(0) for _ in range(2)])
     dummy_dataloader = torch.utils.data.DataLoader(
         dummy_dataset, batch_size=2, shuffle=True
     )
@@ -51,10 +51,9 @@ def test_gpt2_model():
     for query_tensor, response_tensor in dummy_dataloader:
         # define a reward for response
         # (this could be any reward such as human feedback or output from another model)
-        reward = [torch.tensor(1.0) for _ in range(len(query_tensor[0, 0]))]
-
+        reward = torch.Tensor([1.0]* 2) 
         # train model
-        train_stats = ppo_trainer.step(query_tensor, response_tensor, reward)
+        train_stats = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
         break
 
     EXPECTED_STATS = [

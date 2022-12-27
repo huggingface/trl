@@ -128,7 +128,7 @@ class PPOTrainer(BaseTrainer):
         self.is_distributed = self.accelerator.distributed_type == "MULTI_GPU"
 
         # init wandb on the main process:
-        if self.accelerator.is_main_process and hasattr(config, "wandb"):
+        if self.accelerator.is_main_process and self.config["log_with_wandb"]:
             wandb.init(name='run-42', project='gpt2-test', config=config)
             wandb.watch(self.model, log='all')
         
