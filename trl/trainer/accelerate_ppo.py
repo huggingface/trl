@@ -54,6 +54,7 @@ class PPOTrainer(BaseTrainer):
         "batch_size": 256,
         "forward_batch_size": 16,
         "ppo_epochs": 4,
+        "log_with_wandb": True,
     }
 
     def __init__(
@@ -102,8 +103,11 @@ class PPOTrainer(BaseTrainer):
         if not isinstance(dataloader, torch.utils.data.DataLoader):
             raise ValueError("dataloader must be a torch.utils.data.DataLoader")
         self.dataloader = dataloader
-        self.output_size = LengthSampler(self.config["txt_out_min_len"], self.config["txt_out_max_len"])
 
+        if hasattr(config, "txt_in_min_len"):
+            self.output_size = LengthSampler(self.config["txt_out_min_len"], self.config["txt_out_max_len"])
+        else:
+            self.output_size = None
 
         # Step 3: Initialize optimizer and data collator        
         self.data_collator = DataCollatorForLanguageModeling(self.tokenizer, mlm=False)
@@ -124,7 +128,7 @@ class PPOTrainer(BaseTrainer):
         self.is_distributed = self.accelerator.distributed_type == "MULTI_GPU"
 
         # init wandb on the main process:
-        if self.accelerator.is_main_process:
+        if self.accelerator.is_main_process and hasattr(config, "wandb"):
             wandb.init(name='run-42', project='gpt2-test', config=config)
             wandb.watch(self.model, log='all')
         
@@ -147,7 +151,7 @@ class PPOTrainer(BaseTrainer):
         """
         response_tensors = []
         for i in range(self.config['batch_size']):
-            gen_len = self.output_size()
+            gen_len = self.output_size() if self.output_size is not None else 10
 
             # In a multi-GPU setup the model is wrapped inside a DistributedDataParallel object.
             # this means that the model needs to be called with the module attribute.
