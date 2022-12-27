@@ -46,7 +46,7 @@ def test_gpt2_model():
     )
 
     ppo_trainer = PPOTrainer(model=gpt2_model, ref_model=gpt2_model_ref, tokenizer=gpt2_tokenizer, dataloader=dummy_dataloader, **ppo_config)
-
+    dummy_dataloader = ppo_trainer.dataloader
     # train model with ppo
     for query_tensor, response_tensor in dummy_dataloader:
         # define a reward for response

@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional
 from accelerate import Accelerator
 
 from torch.optim import Adam
@@ -221,7 +221,7 @@ class PPOTrainer(BaseTrainer):
         queries: List[torch.LongTensor], 
         responses: List[torch.LongTensor], 
         scores: List[torch.FloatTensor]
-        ):
+    ):
         """
         Run a PPO optimisation step.
         
@@ -244,11 +244,8 @@ class PPOTrainer(BaseTrainer):
         timing = dict()
         t0 = time.time()
 
-        response_lengths = [len(r) for r in responses]
-
         t = time.time()
-        queries = [q.to(self.accelerator.device) for q in queries]
-        responses = [r.to(self.accelerator.device) for r in responses]
+
         logprobs, ref_logprobs, values = self.batched_forward_pass(queries, responses)
         timing['time/ppo/forward_pass'] = time.time()-t
 
