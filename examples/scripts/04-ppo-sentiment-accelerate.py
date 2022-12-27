@@ -4,9 +4,11 @@ from tqdm import tqdm
 import numpy as np
 tqdm.pandas()
 
-from transformers import pipeline
+from transformers import pipeline, AutoTokenizer
+from datasets import load_dataset
 
-from trl import AcceleratePPOTrainer
+from trl import PPOTrainer
+from trl.trainer import LengthSampler
 
 config = {
     "model_name": "lvwerra/gpt2-imdb",
@@ -38,13 +40,51 @@ sent_kwargs = {
     "batch_size": config["forward_batch_size"]
 }
 
-ppo_trainer = AcceleratePPOTrainer(**config)
-dataloader = ppo_trainer.dataloader
+def build_dataset(config):
+    """
+    Build dataset for training. This builds the dataset from `load_dataset`, one should 
+    customize this function to train the model on its own dataset.
+    
+    Args:
+        dataset_name (`str`): 
+            The name of the dataset to be loaded.
+    
+    Returns:
+        dataloader (`torch.utils.data.DataLoader`):
+            The dataloader for the dataset.
+    """
+    dataset_name = config["dataset_name"]
+    tokenizer = AutoTokenizer.from_pretrained(config["model_name"])
+    tokenizer.pad_token = tokenizer.eos_token
+    # load imdb with datasets
+    ds = load_dataset(dataset_name, split='train')
+    ds = ds.rename_columns({'text': 'review', 'label': 'sentiment'})
+    ds = ds.filter(lambda x: len(x["review"])>200, batched=False)
+
+
+    input_size = LengthSampler(config["txt_in_min_len"], config["txt_in_max_len"])
+
+    def tokenize(sample):
+        sample["tokens"] = tokenizer.encode(sample["review"])[:input_size()]
+        sample["query"] = tokenizer.decode(sample["tokens"])
+        return sample
+
+    ds = ds.map(tokenize, batched=False)
+
+    def collater(data):
+        return dict((key, [d[key] for d in data]) for key in data[0])
+
+    dataloader = torch.utils.data.DataLoader(ds, batch_size=config['batch_size'], collate_fn=collater)
+    return dataloader
+
+dataloader = build_dataset(config)
+
+ppo_trainer = PPOTrainer(dataloader, **config)
 tokenizer = ppo_trainer.tokenizer
 
 device = ppo_trainer.accelerator.device
 if device.index is None:
-    # single GPU - maybe introduce this hack inside AcceleratePPOTrainer?
+    # single GPU - maybe introduce this hack inside PPOTrainer?
     device = 0
 sentiment_pipe = pipeline("sentiment-analysis","lvwerra/distilbert-imdb", device=device)
 

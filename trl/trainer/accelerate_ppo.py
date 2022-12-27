@@ -13,7 +13,6 @@
 # limitations under the License.
 from typing import Dict, List, Optional, Tuple
 from accelerate import Accelerator
-from datasets import load_dataset
 
 from torch.optim import Adam
 import torch.nn as nn
@@ -36,7 +35,7 @@ from trl.trainer import BaseTrainer, AdaptiveKLController, FixedKLController, Le
 from trl import AutoModelForCausalLMWithValueHead
 
 
-class AcceleratePPOTrainer(BaseTrainer):
+class PPOTrainer(BaseTrainer):
     """
     The PPO_trainer uses Proximal Policy Optimization to optimise language models.
     """
@@ -59,18 +58,23 @@ class AcceleratePPOTrainer(BaseTrainer):
 
     def __init__(
         self,
+        dataloader: torch.utils.data.DataLoader,
         model: Optional[nn.Module]=None, 
         ref_model: Optional[nn.Module]=None, 
         tokenizer: Optional[PreTrainedTokenizer]=None, 
-        dataloader: Optional[torch.utils.data.DataLoader]=None,
         **config
     ):
         """
         Initialize PPOTrainer.
         Args:
-            model (torch.model): Hugging Face transformer GPT2 model with value head
-            ref_model (torch.model): Hugging Face transformer GPT2 refrence model used for KL penalty
-            tokenizer (tokenizer): Hugging Face tokenizer
+            data_loader (`torch.utils.data.DataLoader`): 
+                PyTorch dataloader
+            model (`torch.nn.Module`): 
+                Hugging Face transformer model with a value head.
+            ref_model (`torch.nn.Module`):
+                Hugging Face transformer GPT2 refrence model used for KL penalty
+            tokenizer (`transformers.PreTrainedTokenizer`): 
+                Hugging Face tokenizer
             ppo_params (dict or None): PPO parameters for training. Can include following keys:
                 'lr' (float): Adam learning rate, default: 1.41e-5
                 'batch_size' (int): Number of samples per optimisation step, default: 256
@@ -95,9 +99,10 @@ class AcceleratePPOTrainer(BaseTrainer):
         # Step 2: Initialize model, tokenizer and dataset        
         self.model, self.ref_model, self.tokenizer = self._build_models_and_tokenizer(model, ref_model, tokenizer)
         # build dataset if no dataloader is provided - using `datasets` library
-        if dataloader is None:
-            dataloader = self._build_dataset(self.config["dataset_name"])
+        if not isinstance(dataloader, torch.utils.data.DataLoader):
+            raise ValueError("dataloader must be a torch.utils.data.DataLoader")
         self.dataloader = dataloader
+        self.output_size = LengthSampler(self.config["txt_out_min_len"], self.config["txt_out_max_len"])
 
 
         # Step 3: Initialize optimizer and data collator        
@@ -122,41 +127,6 @@ class AcceleratePPOTrainer(BaseTrainer):
         if self.accelerator.is_main_process:
             wandb.init(name='run-42', project='gpt2-test', config=config)
             wandb.watch(self.model, log='all')
-
-    def _build_dataset(self, dataset_name: str="imdb"):
-        """
-        Build dataset for training. This builds the dataset from `load_dataset`, one should 
-        customize this function to train the model on its own dataset.
-        
-        Args:
-            dataset_name (`str`): 
-                The name of the dataset to be loaded.
-        
-        Returns:
-            dataloader (`torch.utils.data.DataLoader`):
-                The dataloader for the dataset.
-        """
-        # load imdb with datasets
-        ds = load_dataset(dataset_name, split='train')
-        ds = ds.rename_columns({'text': 'review', 'label': 'sentiment'})
-        ds = ds.filter(lambda x: len(x["review"])>200, batched=False)
-
-
-        self.input_size = LengthSampler(self.config["txt_in_min_len"], self.config["txt_in_max_len"])
-        self.output_size = LengthSampler(self.config["txt_out_min_len"], self.config["txt_out_max_len"])
-
-        def tokenize(sample):
-            sample["tokens"] = self.tokenizer.encode(sample["review"])[:self.input_size()]
-            sample["query"] = self.tokenizer.decode(sample["tokens"])
-            return sample
-
-        ds = ds.map(tokenize, batched=False)
-
-        def collater(data):
-            return dict((key, [d[key] for d in data]) for key in data[0])
-
-        dataloader = torch.utils.data.DataLoader(ds, batch_size=self.config['batch_size'], collate_fn=collater)
-        return dataloader
         
 
     def generate(self, query_tensors: torch.Tensor, **gen_kwargs):
@@ -242,10 +212,12 @@ class AcceleratePPOTrainer(BaseTrainer):
         return self.model, self.ref_model, self.tokenizer
 
 
-    def step(self, 
+    def step(
+        self, 
         queries: List[torch.LongTensor], 
         responses: List[torch.LongTensor], 
-        scores: List[torch.FloatTensor]):
+        scores: List[torch.FloatTensor]
+        ):
         """
         Run a PPO optimisation step.
         
@@ -425,8 +397,24 @@ class AcceleratePPOTrainer(BaseTrainer):
         train_stats['time/ppo/optimizer_step'] = torch.Tensor([time.time()-t]).to(self.accelerator.device)
         return train_stats
 
-    def compute_rewards(self, scores, logprobs, ref_logprobs):
-        """Compute per token rewards from scores and KL-penalty."""
+    def compute_rewards(
+        self, 
+        scores: torch.FloatTensor, 
+        logprobs: torch.FloatTensor, 
+        ref_logprobs: torch.FloatTensor
+    ):
+        """
+        Compute per token rewards from scores and KL-penalty.
+        
+        
+        Args:
+            scores (`torch.FloatTensor`):
+                Scores from the reward model, shape (`batch_size`)
+            logprobs (`torch.FloatTensor`):
+                Log probabilities of the model, shape (`batch_size`, `response_length`)
+            ref_logprobs (`torch.FloatTensor`):
+                Log probabilities of the reference model, shape (`batch_size`, `response_length`)
+        """
         rewards, non_score_rewards = [], []
         for score, logprob, ref_logprob in zip(scores, logprobs, ref_logprobs):
             kl = logprob - ref_logprob
@@ -437,8 +425,33 @@ class AcceleratePPOTrainer(BaseTrainer):
             rewards.append(reward)
         return rewards, non_score_rewards
 
-    def loss(self, old_logprobs, values, rewards, query, response, model_input):
-        """Calculate policy and value losses."""
+    def loss(
+        self, 
+        old_logprobs: torch.FloatTensor, 
+        values: torch.FloatTensor, 
+        rewards: torch.FloatTensor,
+        query: torch.LongTensor,
+        response: torch.LongTensor,
+        model_input: torch.LongTensor,
+    ):
+        """
+        Calculate policy and value losses.
+        
+        
+        Args:
+            old_logprobs (`torch.FloatTensor`):
+                Log probabilities of the model, shape (`batch_size`, `response_length`)
+            values (`torch.FloatTensor`):
+                Values of the value head, shape (`batch_size`, `hidden_dim`)
+            rewards (`torch.FloatTensor`):
+                Rewards from the reward model, shape (`batch_size`)
+            query (`torch.LongTensor`):
+                Encoded queries, shape (`batch_size`, `query_length`)
+            response (`torch.LongTensor`):
+                Encoded responses, shape (`batch_size`, `response_length`)
+            model_input (`torch.LongTensor`):
+                Concatenated queries and responses, shape (`batch_size`, `query_length+response_length`)
+        """
         lastgaelam = 0
         advantages_reversed = []
         gen_len = response.shape[1]
@@ -501,8 +514,21 @@ class AcceleratePPOTrainer(BaseTrainer):
         return pg_loss, self.config['vf_coef'] * vf_loss, flatten_dict(stats)
 
 
-    def record_step_stats(self, kl_coef, **data):
-        """Record training step statistics."""
+    def record_step_stats(self, kl_coef: float, **data):
+        """
+        Record training step statistics.
+        
+        
+        Args:
+            kl_coef (`float`):
+                KL coefficient
+            data (`dict`):
+                Dictionary of training step data
+        
+        Returns:
+            stats (`dict`): 
+                Dictionary of training step statistics
+        """
         kl_list = [logprobs-ref_logprobs for logprobs, ref_logprobs in zip(data['logprobs'], data['ref_logprobs'])]
         mean_kl = torch.mean(torch.stack([torch.sum(kl) for kl in kl_list]))
         mean_entropy = torch.mean(torch.stack([torch.sum(-log_probs) for log_probs in data['logprobs']]))
