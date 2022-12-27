@@ -149,7 +149,7 @@ class AcceleratePPOTrainer(BaseTrainer):
 
         self.dataloader = torch.utils.data.DataLoader(ds, batch_size=self.config['batch_size'], collate_fn=collater)
 
-    def get_response(self, query_tensors: torch.Tensor, **gen_kwargs):
+    def generate(self, query_tensors: torch.Tensor, **gen_kwargs):
         """
         Generate response given query.
 

@@ -64,9 +64,9 @@ for epoch, batch in tqdm(zip(range(total_ppo_epochs), iter(ppo_trainer.dataloade
 
     #### Get response from gpt2
     t = time.time()
-    response_tensors = ppo_trainer.get_response(query_tensors, **gen_kwargs)
+    response_tensors = ppo_trainer.generate(query_tensors, **gen_kwargs)
     batch['response'] = [tokenizer.decode(r.squeeze()) for r in response_tensors]
-    timing['time/get_response'] = time.time()-t
+    timing['time/generate'] = time.time()-t
 
     #### Compute sentiment score
     t = time.time()
