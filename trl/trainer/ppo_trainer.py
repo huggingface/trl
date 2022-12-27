@@ -67,6 +67,7 @@ class PPOTrainer(BaseTrainer):
     ):
         """
         Initialize PPOTrainer.
+
         Args:
             data_loader (`torch.utils.data.DataLoader`): 
                 PyTorch dataloader
@@ -136,7 +137,6 @@ class PPOTrainer(BaseTrainer):
     def generate(self, query_tensors: torch.Tensor, **gen_kwargs):
         """
         Generate response given query.
-
 
         Args:
             query_tensors (`torch.LongTensor`): 
@@ -407,7 +407,6 @@ class PPOTrainer(BaseTrainer):
         """
         Compute per token rewards from scores and KL-penalty.
         
-        
         Args:
             scores (`torch.FloatTensor`):
                 Scores from the reward model, shape (`batch_size`)
@@ -437,7 +436,6 @@ class PPOTrainer(BaseTrainer):
     ):
         """
         Calculate policy and value losses.
-        
         
         Args:
             old_logprobs (`torch.FloatTensor`):
