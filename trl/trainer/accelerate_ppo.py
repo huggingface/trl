@@ -228,6 +228,8 @@ class AcceleratePPOTrainer(BaseTrainer):
             self.tokenizer.pad_token = self.tokenizer.eos_token
         else:
             self.tokenizer = tokenizer
+        
+        return self.model, self.ref_model, self.tokenizer
 
 
     def step(self, 
