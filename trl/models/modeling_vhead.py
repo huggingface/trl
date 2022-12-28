@@ -26,11 +26,6 @@ class ValueHead(nn.Module):
             summary_dropout_prob = kwargs.pop("summary_dropout_prob", 0.1)
         else:
             summary_dropout_prob = config.summary_dropout_prob
-
-        if hasattr(config, "summary_proj_to_labels") and config.summary_proj_to_labels and config.num_labels > 0:
-            num_classes = config.num_labels
-        else:
-            num_classes = config.hidden_size
         
         self.dropout = nn.Dropout(summary_dropout_prob) if summary_dropout_prob else nn.Identity()
 
@@ -40,7 +35,7 @@ class ValueHead(nn.Module):
         else:
             hidden_size = config.hidden_size
 
-        self.summary = nn.Linear(hidden_size, num_classes)
+        self.summary = nn.Linear(hidden_size, 1)
 
         self.flatten = nn.Flatten()
 
