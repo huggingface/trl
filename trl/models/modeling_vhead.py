@@ -75,7 +75,6 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
     supported_args = (
         "summary_dropout_prob",
         "v_head_initializer_range",
-        "v_head_init_strategy",
     )
 
     def __init__(self, pretrained_model, **kwargs):
