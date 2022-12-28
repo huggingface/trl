@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import List, Optional
+from typing import Any, List, Optional
 from accelerate import Accelerator
 
 from torch.optim import Adam
@@ -214,13 +214,44 @@ class PPOTrainer(BaseTrainer):
             self.tokenizer = tokenizer
         
         return self.model, self.ref_model, self.tokenizer
+    
+    def _step_safety_checker(
+        self,
+        queries: List[torch.LongTensor],
+        responses: List[torch.LongTensor],
+        scores: torch.FloatTensor,
+    ):
+        """
+        Check if the input data is valid for training.
+
+        Args:
+            queries (List[`torch.LongTensor`]): 
+                List of tensors containing the encoded queries of shape (`query_length`)
+            responses (List[`torch.LongTensor`]): 
+                List of tensors containing the encoded responses of shape (`response_length`)
+            scores (`torch.FloatTensor`): 
+                List of tensors containing the scores of shape (`batch_size`)
+        """
+        # Check if list of tensors is passed
+        if not isinstance(queries, list) or not isinstance(responses, list):
+            raise ValueError("queries and responses must be lists of tensors")
+
+        # safety checker for scores
+        if not isinstance(scores, torch.Tensor):
+            raise ValueError("scores must be a tensor")
+
+        # Check if tensors inside list
+        if not all([isinstance(q, torch.Tensor) for q in queries]):
+            raise ValueError("queries must be a list of tensors")
+        if not all([isinstance(r, torch.Tensor) for r in responses]):
+            raise ValueError("responses must be a list of tensors")
 
 
     def step(
         self, 
         queries: List[torch.LongTensor], 
         responses: List[torch.LongTensor], 
-        scores: List[torch.FloatTensor]
+        scores: torch.FloatTensor,
     ):
         """
         Run a PPO optimisation step.
@@ -239,7 +270,11 @@ class PPOTrainer(BaseTrainer):
         """
 
         bs = self.config['batch_size']
-        assert bs == len(queries), f"Batch size ({bs}) does not match number of examples ({len(queries)})"
+        
+        if bs != len(queries):
+            raise ValueError(f"Batch size ({bs}) does not match number of examples ({len(queries)})")
+        
+        self._step_safety_checker(queries, responses, scores)
 
         timing = dict()
         t0 = time.time()
