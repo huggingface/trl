@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Union
 from accelerate import Accelerator
 
 from torch.optim import Adam
@@ -21,7 +21,7 @@ import time
 import random
 import wandb
 
-from transformers import DataCollatorForLanguageModeling, AutoTokenizer, PreTrainedTokenizer
+from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizer, PreTrainedTokenizerFast
 
 from trl.core import (logprobs_from_logits,
                       whiten,
@@ -32,7 +32,7 @@ from trl.core import (logprobs_from_logits,
                       stack_dicts,
                       WANDB_PADDING)
 from trl.trainer import BaseTrainer, AdaptiveKLController, FixedKLController, LengthSampler
-from trl import AutoModelForCausalLMWithValueHead
+from trl.models import PreTrainedModelWrapper, SUPPORTED_ARCHITECTURES
 
 
 class PPOTrainer(BaseTrainer):
@@ -59,24 +59,24 @@ class PPOTrainer(BaseTrainer):
 
     def __init__(
         self,
+        model: PreTrainedModelWrapper, 
+        ref_model: PreTrainedModelWrapper, 
+        tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast], 
         dataloader: torch.utils.data.DataLoader,
-        model: Optional[nn.Module]=None, 
-        ref_model: Optional[nn.Module]=None, 
-        tokenizer: Optional[PreTrainedTokenizer]=None, 
         **config
     ):
         """
         Initialize PPOTrainer.
 
         Args:
-            data_loader (`torch.utils.data.DataLoader`): 
-                PyTorch dataloader
-            model (`torch.nn.Module`): 
+            model (`PreTrainedModelWrapper`): 
                 Hugging Face transformer model with a value head.
-            ref_model (`torch.nn.Module`):
+            ref_model (`PreTrainedModelWrapper`):
                 Hugging Face transformer GPT2 refrence model used for KL penalty
             tokenizer (`transformers.PreTrainedTokenizer`): 
                 Hugging Face tokenizer
+            data_loader (`torch.utils.data.DataLoader`): 
+                PyTorch dataloader
             ppo_params (dict or None): PPO parameters for training. Can include following keys:
                 'lr' (float): Adam learning rate, default: 1.41e-5
                 'batch_size' (int): Number of samples per optimisation step, default: 256
@@ -98,9 +98,19 @@ class PPOTrainer(BaseTrainer):
         self.accelerator = Accelerator(log_with="wandb")
         self.config.update(config)
 
-        # Step 2: Initialize model, tokenizer and dataset        
-        self.model, self.ref_model, self.tokenizer = self._build_models_and_tokenizer(model, ref_model, tokenizer)
-        # build dataset if no dataloader is provided - using `datasets` library
+        # Step 2: Initialize model, tokenizer, and dataloader
+        if not isinstance(model, PreTrainedModelWrapper):
+            raise ValueError(f"model must be a PreTrainedModelWrapper, got {type(model)} - supported architectures are: {SUPPORTED_ARCHITECTURES}")
+        self.model = model
+
+        if not isinstance(ref_model, PreTrainedModelWrapper):
+            raise ValueError(f"model must be a PreTrainedModelWrapper, got {type(ref_model)} - supported architectures are: {SUPPORTED_ARCHITECTURES}")
+        self.ref_model = ref_model
+
+        if not (isinstance(tokenizer, PreTrainedTokenizer) or isinstance(tokenizer, PreTrainedTokenizerFast)):
+            raise ValueError("tokenizer must be a transformers.PreTrainedTokenizer or transformers.PreTrainedTokenizerFast")
+        self.tokenizer = tokenizer
+
         if not isinstance(dataloader, torch.utils.data.DataLoader):
             raise ValueError("dataloader must be a torch.utils.data.DataLoader")
         self.dataloader = dataloader
@@ -164,94 +174,41 @@ class PPOTrainer(BaseTrainer):
             response_tensors.append(response.squeeze()[-gen_len:])
         return response_tensors
 
-    def _build_models_and_tokenizer(
-        self, 
-        model: Optional[nn.Module] = None, 
-        ref_model: Optional[nn.Module] = None , 
-        tokenizer: Optional[PreTrainedTokenizer] = None
-    ):
-        """
-        Build models for training. This builds the reference model
-        together with the model to be trained.
-
-        Args:
-            model (`nn.Module`, *optional*):
-                The model to be trained. If `None` is passed, the model will be loaded from
-                the pretrained model specified in the config.
-            ref_model (`nn.Module`, *optional*): 
-                The reference model. If `None` is passed, the model will be loaded from
-                the pretrained model specified in the config. For mixed precision setup, 
-                the reference model will be loaded in half precision according to the 
-                `accelerator.mixed_precision` flag to save memory.
-            tokenizer (`transformers.PreTrainedTokenizer`, *optional*): 
-                The tokenizer to be used. If `None` is passed, the tokenizer will be loaded from
-                the pretrained model specified in the config.
-        """
-        target_dtype_dict = {
-            "fp16": torch.float16,
-            "bf16": torch.bfloat16,
-        }
-        target_dtype = torch.float32 if self.accelerator.mixed_precision not in target_dtype_dict else target_dtype_dict[self.accelerator.mixed_precision]
-
-        # We don't cast the base model that is trained since autocast will do it under the hood for us
-        # Check: https://discuss.pytorch.org/t/valueerror-attemting-to-unscale-fp16-gradients/81372/4
-        if model is None:
-            self.model = AutoModelForCausalLMWithValueHead.from_pretrained(self.config['model_name'])
-        else:
-            self.model = model
-        # But we can cast the reference model since the weights are not updated - we do that to save memory
-        if ref_model is None:
-            self.ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(self.config['model_name'], torch_dtype=target_dtype)
-        else:
-            self.ref_model = ref_model
-
-        # tokenizer
-        if tokenizer is None:
-            self.tokenizer = AutoTokenizer.from_pretrained(self.config['model_name'])
-            # HACK: do we really need this?
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-        else:
-            self.tokenizer = tokenizer
-        
-        return self.model, self.ref_model, self.tokenizer
     
     def _step_safety_checker(
         self,
+        batch_size: int,
         queries: List[torch.LongTensor],
         responses: List[torch.LongTensor],
-        scores: torch.FloatTensor,
+        scores: List[torch.FloatTensor],
     ):
         """
         Check if the input data is valid for training.
 
         Args:
+            batch_size (int):
+                Batch size
             queries (List[`torch.LongTensor`]): 
                 List of tensors containing the encoded queries of shape (`query_length`)
             responses (List[`torch.LongTensor`]): 
                 List of tensors containing the encoded responses of shape (`response_length`)
-            scores (`torch.FloatTensor`): 
-                List of tensors containing the scores of shape (`batch_size`)
+            scores (List[`torch.FloatTensor`]): 
+                List of tensors containing the scores.
         """
-        # Check if list of tensors is passed
-        if not isinstance(queries, list) or not isinstance(responses, list):
-            raise ValueError("queries and responses must be lists of tensors")
-
-        # safety checker for scores
-        if not isinstance(scores, torch.Tensor):
-            raise ValueError("scores must be a tensor")
-
-        # Check if tensors inside list
-        if not all([isinstance(q, torch.Tensor) for q in queries]):
-            raise ValueError("queries must be a list of tensors")
-        if not all([isinstance(r, torch.Tensor) for r in responses]):
-            raise ValueError("responses must be a list of tensors")
+        for name, tensor_list in zip(["queries", "responses", "scores"], [queries, responses, scores]):
+            if not isinstance(tensor_list, list):
+                raise ValueError(f"{name} must be a list of tensors - got {type(tensor_list)}")
+            if not isinstance(tensor_list[0], torch.Tensor):
+                raise ValueError(f"Elements in {name} must tensors - got {type(tensor_list[0])}")
+            if len(tensor_list) != batch_size:
+                raise ValueError(f"Batch size ({batch_size}) does not match number of examples - but got {len(tensor_list)} for: {name}")
 
 
     def step(
         self, 
         queries: List[torch.LongTensor], 
         responses: List[torch.LongTensor], 
-        scores: torch.FloatTensor,
+        scores: List[torch.FloatTensor],
     ):
         """
         Run a PPO optimisation step.
@@ -262,7 +219,7 @@ class PPOTrainer(BaseTrainer):
             responses (List[`torch.LongTensor`]): 
                 List of tensors containing the encoded responses of shape (`response_length`)
             scores (List[`torch.FloatTensor`]): 
-                List of tensors containing the scores of shape (`batch_size`)
+                List of tensors containing the scores.
         
         Returns:
             train_stats (dict[str, Any]): 
@@ -271,10 +228,7 @@ class PPOTrainer(BaseTrainer):
 
         bs = self.config['batch_size']
         
-        if bs != len(queries):
-            raise ValueError(f"Batch size ({bs}) does not match number of examples ({len(queries)})")
-        
-        self._step_safety_checker(queries, responses, scores)
+        self._step_safety_checker(bs, queries, responses, scores)
 
         timing = dict()
         t0 = time.time()
@@ -580,27 +534,41 @@ class PPOTrainer(BaseTrainer):
         return stats
     
 
-    def log_stats(self, stats, timing, batch, rewards, t0, logs):
+    def log_stats(
+        self, 
+        stats: dict, 
+        batch: dict, 
+        rewards: List[torch.FloatTensor], 
+        logs: dict, 
+        timing: dict=None, 
+        t0: float=None
+    ):
         """
         A function that logs all the training stats. Call it at the end of each epoch.
 
         Args:
             stats (dict[str, Any]): 
                 A dictionary of training stats.
-            timing (dict[str, Any]): 
-                A dictionary of timing stats.
             batch (dict[str, Any]): 
                 A dictionary of batch data, this containes the queries and responses.
-            rewards (`torch.FloatTensor`): 
+            rewards (`List[torch.FloatTensor]`): 
                 A tensor of rewards.
-            t0 (`float`): 
-                The time at the start of the epoch.
             logs (dict[str, Any]): 
                 A dictionary of logs.
+            timing (dict[str, Any], optional): 
+                A dictionary of timing stats.
+            t0 (`float`, optional): 
+                The time at the start of the epoch.
         """
         # Log only if we are in the main process
         if self.accelerator.is_main_process:
-            timing['time/epoch'] = time.time()-t0
+            # Log timing
+            if timing is not None and t0 is not None:
+                timing['time/epoch'] = time.time()-t0
+
+            # Log stats
+            if not isinstance(rewards, torch.Tensor):
+                rewards = torch.tensor(rewards)
             table_rows = [list(r) for r in zip(batch['query'], batch['response'], rewards.cpu().tolist())]
             logs.update({'game_log': wandb.Table(columns=['query', 'response', 'reward'], rows=table_rows)})
             logs.update(timing)

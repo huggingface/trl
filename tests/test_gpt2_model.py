@@ -51,7 +51,7 @@ def test_gpt2_model():
     for query_tensor, response_tensor in dummy_dataloader:
         # define a reward for response
         # (this could be any reward such as human feedback or output from another model)
-        reward = torch.Tensor([1.0]* 2) 
+        reward = [torch.tensor(1.0), torch.tensor(0.0)]
         # train model
         train_stats = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
         break
