@@ -483,9 +483,6 @@ class PPOTrainer(BaseTrainer):
 
         ratio = torch.exp(logprob - old_logprobs)
 
-        if len(ratio.size()) != len(advantages.size()):
-            ratio = ratio.unsqueeze(-1)
-
         pg_losses = -advantages * ratio
         pg_losses2 = -advantages * torch.clamp(ratio,
                                                1.0 - self.config['cliprange'],
