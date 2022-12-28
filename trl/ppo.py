@@ -260,8 +260,6 @@ class PPOTrainer:
 
         ratio = torch.exp(logprob - old_logprobs)
 
-        if len(ratio.shape) == 2:
-            ratio = ratio.unsqueeze(-1)
 
         pg_losses = -advantages * ratio
         pg_losses2 = -advantages * torch.clamp(ratio,
