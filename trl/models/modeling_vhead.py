@@ -93,10 +93,13 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
         r"""
         We initialize the weights of the value head.
         """
-        initializer_range = kwargs.pop("initializer_range", 0.2)
+        initializer_range = kwargs.pop("v_head_initializer_range", 0.2)
         # random init by default
-        init_strategy = kwargs.pop("init_strategy", None)
-        if init_strategy == "normal":
+        init_strategy = kwargs.pop("v_head_init_strategy", None)
+        if init_strategy is None:
+            # do nothing
+            pass
+        elif init_strategy == "normal":
             self.v_head.summary.weight.data.normal_(mean=0.0, std=initializer_range)
             self.v_head.summary.bias.data.zero_()
     
