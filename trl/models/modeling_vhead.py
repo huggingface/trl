@@ -75,6 +75,7 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
     supported_args = (
         "summary_dropout_prob",
         "v_head_initializer_range",
+        "v_head_init_strategy",
     )
 
     def __init__(self, pretrained_model, **kwargs):
@@ -92,10 +93,15 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
         r"""
         We initialize the weights of the value head.
         """
-        initializer_range = kwargs.pop("initializer_range", 0.2)
-
-        self.v_head.summary.weight.data.normal_(mean=0.0, std=initializer_range)
-        self.v_head.summary.bias.data.zero_()
+        initializer_range = kwargs.pop("v_head_initializer_range", 0.2)
+        # random init by default
+        init_strategy = kwargs.pop("v_head_init_strategy", None)
+        if init_strategy is None:
+            # do nothing
+            pass
+        elif init_strategy == "normal":
+            self.v_head.summary.weight.data.normal_(mean=0.0, std=initializer_range)
+            self.v_head.summary.bias.data.zero_()
     
     def forward(
         self,
