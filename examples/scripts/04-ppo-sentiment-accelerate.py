@@ -118,9 +118,6 @@ dataloader = ppo_trainer.dataloader
 # sentiment analysis pipeline arguments. Let's also make sure to set the device
 # to the same device as the PPOTrainer.
 device = ppo_trainer.accelerator.device
-if device.index is None:
-    # single GPU - maybe introduce this hack inside PPOTrainer?
-    device = 0
 sentiment_pipe = pipeline("sentiment-analysis","lvwerra/distilbert-imdb", device=device)
 
 # We then define the arguments to pass to the `generate` function. These arguments
