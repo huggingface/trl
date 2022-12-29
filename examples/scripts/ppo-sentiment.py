@@ -85,7 +85,7 @@ def build_dataset(config, dataset_name="imdb", input_min_text_length=2, input_ma
         return sample
 
     ds = ds.map(tokenize, batched=False)
-    ds.set_format(type='torch', columns=['input_ids'])
+    ds.set_format(type='torch')
     return ds
 
 # We retrieve the dataloader by calling the `build_dataset` function.
