@@ -46,7 +46,7 @@ def test_gpt2_model():
         dummy_dataset, batch_size=2, shuffle=True
     )
 
-    ppo_trainer = PPOTrainer(config=ppo_config, model=gpt2_model, ref_model=gpt2_model_ref, tokenizer=gpt2_tokenizer, dataloader=dummy_dataloader)
+    ppo_trainer = PPOTrainer(config=ppo_config, model=gpt2_model, ref_model=gpt2_model_ref, tokenizer=gpt2_tokenizer, dataset=dummy_dataset)
     dummy_dataloader = ppo_trainer.dataloader
     # train model with ppo
     for query_tensor, response_tensor in dummy_dataloader:
