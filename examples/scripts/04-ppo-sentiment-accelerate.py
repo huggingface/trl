@@ -20,7 +20,7 @@ from transformers import pipeline, AutoTokenizer
 from datasets import load_dataset
 
 from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead
-from trl.trainer import LengthSampler
+from trl.core import LengthSampler
 
 ########################################################################
 # This is a fully working simple example to use trl with accelerate.
@@ -116,19 +116,21 @@ sentiment_pipe = pipeline("sentiment-analysis", "lvwerra/distilbert-imdb", devic
 # We then define the arguments to pass to the `generate` function. These arguments
 # are passed to the `generate` function of the PPOTrainer, which is a wrapper around 
 # the `generate` function of the trained model.
-gen_kwargs = {
+generation_kwargs = {
     "min_length":-1,
     "top_k": 0.0,
     "top_p": 1.0,
     "do_sample": True,
     "pad_token_id": tokenizer.eos_token_id
 }
+output_length_sampler = LengthSampler(config.txt_out_min_len, config.txt_out_max_len)
 
 for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     query_tensors = [torch.tensor(t).long().to(device) for t in batch["input_ids"]]
 
     #### Get response from gpt2
-    response_tensors = ppo_trainer.generate(query_tensors, **gen_kwargs)
+    generation_kwargs["max_new_tokens"] = output_length_sampler()
+    response_tensors = ppo_trainer.generate(query_tensors, **generation_kwargs)
     batch['response'] = [tokenizer.decode(r.squeeze()) for r in response_tensors]
 
     #### Compute sentiment score

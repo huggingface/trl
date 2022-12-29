@@ -35,7 +35,7 @@ from trl.core import (logprobs_from_logits,
                       stats_to_np,
                       stack_dicts,
                       WANDB_PADDING)
-from trl.trainer import BaseTrainer, AdaptiveKLController, FixedKLController, LengthSampler
+from trl.trainer import BaseTrainer, AdaptiveKLController, FixedKLController
 from trl.models import PreTrainedModelWrapper, SUPPORTED_ARCHITECTURES
 
 
@@ -93,11 +93,6 @@ class PPOTrainer(BaseTrainer):
         self.dataset = dataset
         self._signature_columns = None
         self.dataloader = self.prepare_dataloader(self.dataset, data_collator)
-
-        # if self.config.use_length_sampler is set to `True` this will behave as a random sampler
-        # otherwise, it will behave as a fixed sampler with a fixed length - here config.txt_out_max_len
-        self.output_size = LengthSampler(self.config.txt_out_min_len, self.config.txt_out_max_len, is_random=self.config.use_length_sampler)
-
 
         # Step 3: Initialize optimizer and data collator        
         self.data_collator = DataCollatorForLanguageModeling(self.tokenizer, mlm=False)
@@ -175,7 +170,7 @@ class PPOTrainer(BaseTrainer):
             return dataset.remove_columns(ignored_columns)
         
 
-    def generate(self, query_tensors: torch.Tensor, **gen_kwargs):
+    def generate(self, query_tensors: torch.Tensor, **generation_kwargs):
         """
         Generate response given query.
 
@@ -187,15 +182,15 @@ class PPOTrainer(BaseTrainer):
         
         Returns: 
             response_tensors (`torch.LongTensor`): 
-                A tensor of shape (`batch_size`, `gen_len`) containing response tokens. `gen_len` 
-                is the length of the generated response that is sampled from `LengthSampler`.
+                A tensor of shape (`batch_size`, `gen_len`) containing response tokens. 
         """
         response_tensors = []
-        for i in range(self.config.batch_size):
-            gen_len = self.output_size()
 
-            response = self.accelerator.unwrap_model(self.model).generate(query_tensors[i].unsqueeze(dim=0),
-                                        max_new_tokens=gen_len, **gen_kwargs)
+        gen_len = generation_kwargs.get("max_new_tokens", 10)
+
+        for i in range(self.config.batch_size):
+
+            response = self.accelerator.unwrap_model(self.model).generate(query_tensors[i].unsqueeze(dim=0),**generation_kwargs)
 
             response_tensors.append(response.squeeze()[-gen_len:])
         return response_tensors
