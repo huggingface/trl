@@ -57,7 +57,7 @@ sent_kwargs = {
 # Below is an example function to build the dataset. In our case, we use the IMDB dataset
 # from the `datasets` library. One should customize this function to train the model on
 # its own dataset.
-def build_dataset(config, dataset_name="imdb"):
+def build_dataset(config, dataset_name="imdb", input_min_text_length=2, input_max_text_length=8):
     """
     Build dataset for training. This builds the dataset from `load_dataset`, one should 
     customize this function to train the model on its own dataset.
@@ -77,7 +77,7 @@ def build_dataset(config, dataset_name="imdb"):
     ds = ds.rename_columns({'text': 'review'})
     ds = ds.filter(lambda x: len(x["review"])>200, batched=False)
 
-    input_size = LengthSampler(config.txt_in_min_len, config.txt_in_max_len)
+    input_size = LengthSampler(input_min_text_length, input_max_text_length)
 
     def tokenize(sample):
         sample["input_ids"] = tokenizer.encode(sample["review"])[:input_size()]
@@ -91,7 +91,15 @@ def build_dataset(config, dataset_name="imdb"):
 dataset = build_dataset(config)
 
 def collater(data):
-    return dict((key, [d[key] for d in data]) for key in data[0])
+    output_dict = {}
+    for key in data[0]:
+        output_array = []
+        for d in data:
+            if key == "input_ids":
+                d[key] = torch.LongTensor(d[key])
+            output_array.append(d[key])
+        output_dict[key] = output_array
+    return output_dict
 
 # Now let's build the model, the reference model, and the tokenizer.
 model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name)
@@ -123,10 +131,12 @@ generation_kwargs = {
     "do_sample": True,
     "pad_token_id": tokenizer.eos_token_id
 }
-output_length_sampler = LengthSampler(config.txt_out_min_len, config.txt_out_max_len)
+output_min_length = 4
+output_max_length = 16
+output_length_sampler = LengthSampler(output_min_length, output_max_length)
 
 for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
-    query_tensors = [torch.tensor(t).long().to(device) for t in batch["input_ids"]]
+    query_tensors = batch['input_ids']
 
     #### Get response from gpt2
     generation_kwargs["max_new_tokens"] = output_length_sampler()
