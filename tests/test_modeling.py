@@ -17,7 +17,7 @@ import torch
 
 from transformers import AutoModelForCausalLM
 
-from trl import AutoModelForCausalLMWithValueHead
+from trl import AutoModelForCausalLMWithValueHead, create_reference_model
 
 
 ALL_CAUSAL_LM_MODELS = [
@@ -176,3 +176,77 @@ class VHeadModelTester(BaseModelTester, unittest.TestCase):
         with self.assertRaises(ValueError):
             pretrained_model = AutoModelForCausalLM.from_pretrained(model_id)
             _ = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model.transformer)
+
+
+class ReferenceModelTest(unittest.TestCase):
+
+    def setUp(self):
+        self.model = AutoModelForCausalLMWithValueHead.from_pretrained("hf-internal-testing/tiny-random-GPT2Model")
+        self.test_input = torch.tensor([[0, 1, 2, 3]])
+        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=1)
+        self.layer_format = "pretrained_model.transformer.h.{layer}.attn.c_attn.weight"
+
+    def test_independent_reference(self):
+        layer_0 = self.layer_format.format(layer=0)
+        layer_5 = self.layer_format.format(layer=4)
+
+        ref_model = create_reference_model(self.model)
+
+        first_layer_before = self.model.get_parameter(layer_0).data.clone()
+        last_layer_before = self.model.get_parameter(layer_5).data.clone()
+
+        first_ref_layer_before = ref_model.get_parameter(layer_0).data.clone()
+        last_ref_layer_before = ref_model.get_parameter(layer_5).data.clone()
+
+        output = self.model(input_ids=self.test_input, labels=self.test_input)
+        output[1].backward()
+        self.optimizer.step()
+
+        first_layer_after = self.model.get_parameter(layer_0).data.clone()
+        last_layer_after = self.model.get_parameter(layer_5).data.clone()
+
+        first_ref_layer_after = ref_model.get_parameter(layer_0).data.clone()
+        last_ref_layer_after = ref_model.get_parameter(layer_5).data.clone()
+
+        # before optimization ref and model are identical
+        self.assertTrue((first_layer_before==first_ref_layer_before).all())
+        self.assertTrue((last_layer_before==last_ref_layer_before).all())
+        # ref model stays identical after optimization
+        self.assertTrue((first_ref_layer_before==first_ref_layer_after).all())
+        self.assertTrue((last_ref_layer_before==last_ref_layer_after).all())
+        # optimized model changes
+        self.assertTrue(not (first_layer_before==first_layer_after).all())
+        self.assertTrue(not (last_layer_before==last_layer_after).all())
+
+    def test_shared_layers(self):
+        layer_0 = self.layer_format.format(layer=0)
+        layer_1 = self.layer_format.format(layer=1)
+
+        ref_model = create_reference_model(self.model, share_layers=1)
+
+        first_layer_before = self.model.get_parameter(layer_0).data.clone()
+        second_layer_before = self.model.get_parameter(layer_1).data.clone()
+
+        first_ref_layer_before = ref_model.get_parameter(layer_0).data.clone()
+        second_ref_layer_before = ref_model.get_parameter(layer_1).data.clone()
+
+        output = self.model(input_ids=self.test_input, labels=self.test_input)
+        output[1].backward()
+        self.optimizer.step()
+
+        first_layer_after = self.model.get_parameter(layer_0).data.clone()
+        second_layer_after = self.model.get_parameter(layer_1).data.clone()
+
+        first_ref_layer_after = ref_model.get_parameter(layer_0).data.clone()
+        second_ref_layer_after = ref_model.get_parameter(layer_1).data.clone()
+
+        # before optimization ref and model are identical
+        self.assertTrue((first_layer_before==first_ref_layer_before).all())
+        self.assertTrue((second_layer_before==second_ref_layer_before).all())
+        # ref model stays identical after optimization
+        self.assertTrue((first_ref_layer_before==first_ref_layer_after).all())
+        self.assertTrue((second_ref_layer_before==second_ref_layer_after).all())
+        # first layer of optimized model stays the same
+        self.assertTrue((first_layer_before==first_layer_after).all())
+        # other layers in optimized model change
+        self.assertTrue(not (second_layer_before==second_layer_after).all())
