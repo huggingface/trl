@@ -127,26 +127,17 @@ gen_kwargs = {
 }
 
 for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
-    timing = dict()
-    t0 = time.time()
     query_tensors = [torch.tensor(t).long().to(device) for t in batch["input_ids"]]
 
     #### Get response from gpt2
-    t = time.time()
     response_tensors = ppo_trainer.generate(query_tensors, **gen_kwargs)
     batch['response'] = [tokenizer.decode(r.squeeze()) for r in response_tensors]
-    timing['time/generate'] = time.time()-t
 
     #### Compute sentiment score
-    t = time.time()
     texts = [q + r for q,r in zip(batch['query'], batch['response'])]
     pipe_outputs = sentiment_pipe(texts, **sent_kwargs)
     rewards = [torch.tensor(output[1]["score"]).to(device) for output in pipe_outputs]
-    timing['time/get_sentiment_preds'] = time.time()-t
 
     #### Run PPO step 
-    t = time.time()
     stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
-    ppo_trainer.log_stats(stats, batch, rewards, timing, t0)
-    # Log the timing of the whole optimization step.
-    timing['time/optimization'] = time.time()-t
+    ppo_trainer.log_stats(stats, batch, rewards)

@@ -565,8 +565,6 @@ class PPOTrainer(BaseTrainer):
         stats: dict, 
         batch: dict, 
         rewards: List[torch.FloatTensor], 
-        timing: dict=None, 
-        t0: float=None
     ):
         """
         A function that logs all the training stats. Call it at the end of each epoch.
@@ -578,18 +576,10 @@ class PPOTrainer(BaseTrainer):
                 A dictionary of batch data, this containes the queries and responses.
             rewards (`List[torch.FloatTensor]`): 
                 A tensor of rewards.
-            timing (dict[str, Any], optional): 
-                A dictionary of timing stats.
-            t0 (`float`, optional): 
-                The time at the start of the epoch.
         """
         # Log only if we are in the main process
         if self.accelerator.is_main_process:
             wandb_logs = {}
-
-            # Log timing
-            if timing is not None and t0 is not None:
-                timing['time/epoch'] = time.time()-t0
 
             # Log stats
             if not isinstance(rewards, torch.Tensor):
@@ -612,14 +602,12 @@ class PPOTrainer(BaseTrainer):
                 rewards /= self.accelerator.num_processes
 
             if self.config.log_with_wandb:
-                wandb_logs.update(timing)
                 wandb_logs.update(stats)
                 wandb_logs['env/reward_mean'] = torch.mean(rewards).cpu().numpy()
                 wandb_logs['env/reward_std'] = torch.std(rewards).cpu().numpy()
                 wandb_logs['env/reward_dist'] = rewards.cpu().numpy()
                 wandb.log(wandb_logs)
             else:
-                stats.update(timing)
                 stats['env/reward_mean'] = torch.mean(rewards).cpu().numpy()
                 stats['env/reward_std'] = torch.std(rewards).cpu().numpy()
                 stats['env/reward_dist'] = rewards.cpu().numpy()
