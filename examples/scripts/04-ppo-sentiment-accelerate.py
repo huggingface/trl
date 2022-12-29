@@ -139,8 +139,12 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     query_tensors = batch['input_ids']
 
     #### Get response from gpt2
-    generation_kwargs["max_new_tokens"] = output_length_sampler()
-    response_tensors = ppo_trainer.generate(query_tensors, **generation_kwargs)
+    response_tensors = []
+    for query in query_tensors:
+        gen_len = output_length_sampler()
+        generation_kwargs["max_new_tokens"] = gen_len
+        response = ppo_trainer.generate(query, **generation_kwargs)
+        response_tensors.append(response.squeeze()[-gen_len:])
     batch['response'] = [tokenizer.decode(r.squeeze()) for r in response_tensors]
 
     #### Compute sentiment score

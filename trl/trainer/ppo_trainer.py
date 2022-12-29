@@ -171,33 +171,23 @@ class PPOTrainer(BaseTrainer):
             return dataset.remove_columns(ignored_columns)
         
 
-    def generate(self, query_tensors: torch.Tensor, **generation_kwargs):
+    def generate(self, query_tensor: torch.Tensor, **generation_kwargs):
         """
         Generate response given query.
 
         Args:
-            query_tensors (`torch.LongTensor`): 
+            query_tensor (`torch.LongTensor`): 
                 A tensor of shape (`batch_size`, `seq_len`) containing query tokens.
             gen_kwargs (dict[str, Any]): 
                 Keyword arguments for generation.
         
         Returns: 
-            response_tensors (`torch.LongTensor`): 
+            response (`torch.LongTensor`): 
                 A tensor of shape (`batch_size`, `gen_len`) containing response tokens. 
         """
-        response_tensors = []
+        response = self.accelerator.unwrap_model(self.model).generate(query_tensor.unsqueeze(dim=0),**generation_kwargs)
 
-        gen_len = generation_kwargs.get("max_new_tokens", None)
-
-        for i in range(self.config.batch_size):
-
-            response = self.accelerator.unwrap_model(self.model).generate(query_tensors[i].unsqueeze(dim=0),**generation_kwargs).squeeze()
-
-            if gen_len is not None:
-                response = response[-gen_len:]
-
-            response_tensors.append(response)
-        return response_tensors
+        return response
 
     
     def _step_safety_checker(
