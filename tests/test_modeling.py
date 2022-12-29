@@ -181,7 +181,7 @@ class VHeadModelTester(BaseModelTester, unittest.TestCase):
 class ReferenceModelTest(unittest.TestCase):
 
     def setUp(self):
-        self.model = AutoModelForCausalLMWithValueHead.from_pretrained("hf-internal-testing/tiny-random-GPT2Model")
+        self.model = AutoModelForCausalLMWithValueHead.from_pretrained("trl-internal-testing/tiny-random-GPT2LMHeadModel")
         self.test_input = torch.tensor([[0, 1, 2, 3]])
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=1)
         self.layer_format = "pretrained_model.transformer.h.{layer}.attn.c_attn.weight"
