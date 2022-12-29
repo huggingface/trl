@@ -13,9 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import torch
-import time
 from tqdm import tqdm
-import numpy as np
 tqdm.pandas()
 
 from transformers import pipeline, AutoTokenizer

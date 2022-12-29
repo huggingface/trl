@@ -143,7 +143,6 @@ class PPOTrainer(BaseTrainer):
             dataset,
             batch_size=self.config.batch_size,
             collate_fn=data_collator,
-            shuffle=True,
         )
         return dataloader
     
