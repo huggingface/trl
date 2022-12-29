@@ -76,26 +76,24 @@ def build_dataset(config, dataset_name="imdb"):
     tokenizer.pad_token = tokenizer.eos_token
     # load imdb with datasets
     ds = load_dataset(dataset_name, split='train')
-    ds = ds.rename_columns({'text': 'review', 'label': 'sentiment'})
+    ds = ds.rename_columns({'text': 'review'})
     ds = ds.filter(lambda x: len(x["review"])>200, batched=False)
 
     input_size = LengthSampler(config.txt_in_min_len, config.txt_in_max_len)
 
     def tokenize(sample):
-        sample["tokens"] = tokenizer.encode(sample["review"])[:input_size()]
-        sample["query"] = tokenizer.decode(sample["tokens"])
+        sample["input_ids"] = tokenizer.encode(sample["review"])[:input_size()]
+        sample["query"] = tokenizer.decode(sample["input_ids"])
         return sample
 
     ds = ds.map(tokenize, batched=False)
-
-    def collater(data):
-        return dict((key, [d[key] for d in data]) for key in data[0])
-
-    dataloader = torch.utils.data.DataLoader(ds, batch_size=config.batch_size, collate_fn=collater)
-    return dataloader
+    return ds
 
 # We retrieve the dataloader by calling the `build_dataset` function.
-dataloader = build_dataset(config)
+dataset = build_dataset(config)
+
+def collater(data):
+    return dict((key, [d[key] for d in data]) for key in data[0])
 
 # Now let's build the model, the reference model, and the tokenizer.
 model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name)
@@ -107,18 +105,15 @@ tokenizer = AutoTokenizer.from_pretrained(config.model_name)
 tokenizer.pad_token = tokenizer.eos_token
 
 # We then build the PPOTrainer, passing the model, the reference model, the tokenizer
-ppo_trainer = PPOTrainer(config, model, ref_model, tokenizer, dataloader)
-
-# the PPOTrainer has a dataloader attribute, which we can use to get the dataloader - 
-# this step is important in a distributed setting, as the dataloader needs to be
-# converted to a distributed dataloader.
-dataloader = ppo_trainer.dataloader
+ppo_trainer = PPOTrainer(config, model, ref_model, tokenizer, dataset=dataset, data_collator=collater)
 
 # We then build the sentiment analysis pipeline, passing the model name and the
 # sentiment analysis pipeline arguments. Let's also make sure to set the device
 # to the same device as the PPOTrainer.
 device = ppo_trainer.accelerator.device
-sentiment_pipe = pipeline("sentiment-analysis","lvwerra/distilbert-imdb", device=device)
+if ppo_trainer.accelerator.num_processes == 1:
+   device = 0 if torch.cuda.is_available() else "cpu" # to avoid a `pipeline` bug
+sentiment_pipe = pipeline("sentiment-analysis", "lvwerra/distilbert-imdb", device=device)
 
 # We then define the arguments to pass to the `generate` function. These arguments
 # are passed to the `generate` function of the PPOTrainer, which is a wrapper around 
@@ -131,12 +126,10 @@ gen_kwargs = {
     "pad_token_id": tokenizer.eos_token_id
 }
 
-total_ppo_epochs = int(np.ceil(config.steps/config.batch_size))
-
-for epoch, batch in tqdm(zip(range(total_ppo_epochs), iter(dataloader))):
-    logs, timing = dict(), dict()
+for epoch, batch in tqdm(ppo_trainer.rollout()):
+    timing = dict()
     t0 = time.time()
-    query_tensors = [torch.tensor(t).long().to(device) for t in batch["tokens"]]
+    query_tensors = [torch.tensor(t).long().to(device) for t in batch["input_ids"]]
 
     #### Get response from gpt2
     t = time.time()
@@ -154,7 +147,6 @@ for epoch, batch in tqdm(zip(range(total_ppo_epochs), iter(dataloader))):
     #### Run PPO step 
     t = time.time()
     stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
-    ppo_trainer.log_stats(stats, batch, rewards, logs, timing, t0)
+    ppo_trainer.log_stats(stats, batch, rewards, timing, t0)
     # Log the timing of the whole optimization step.
     timing['time/optimization'] = time.time()-t
-    

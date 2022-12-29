@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import numpy as np
 from dataclasses import dataclass
 from typing import Optional
 
@@ -60,6 +61,8 @@ class PPOConfig(object):
             Number of samples forward passed through model at a time
         ppo_epochs (`int`, *optional*, defaults to 4):
             Number of optimisation epochs per batch of samples
+        remove_unused_columns (`bool`, *optional*, defaults to True):
+            Remove unused columns from the dataset if `datasets.Dataset` is used
         log_with_wandb (`bool`, *optional*, defaults to True):
             Log with wandb
         wandb_project (`str`, *optional*, defaults to "trl"):
@@ -87,6 +90,7 @@ class PPOConfig(object):
         batch_size: Optional[int] = 256,
         forward_batch_size: Optional[int] = 16,
         ppo_epochs: Optional[int] = 4,
+        remove_unused_columns: Optional[bool] = True,
         log_with_wandb: Optional[bool] = True,
         wandb_project: Optional[str] = "trl",
     ):
@@ -110,8 +114,11 @@ class PPOConfig(object):
         self.batch_size = batch_size
         self.forward_batch_size = forward_batch_size
         self.ppo_epochs = ppo_epochs
+        self.remove_unused_columns = remove_unused_columns
         self.log_with_wandb = log_with_wandb
         self.wandb_project = wandb_project
+
+        self.total_ppo_epochs = int(np.ceil(steps/batch_size))
 
     def to_dict(self):
         output_dict = {}

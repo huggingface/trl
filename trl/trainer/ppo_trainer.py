@@ -11,11 +11,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from packaging import version
+import inspect
+import warnings
 from typing import Any, List, Optional, Union
 from accelerate import Accelerator
+import datasets
+from datasets import Dataset
 
 from torch.optim import Adam
-import torch.nn as nn
 import torch
 import time
 import random
@@ -45,7 +49,8 @@ class PPOTrainer(BaseTrainer):
         model: PreTrainedModelWrapper, 
         ref_model: PreTrainedModelWrapper, 
         tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast], 
-        dataloader: torch.utils.data.DataLoader,
+        dataset: Union[torch.utils.data.Dataset, Dataset],
+        data_collator = None,
     ):
         """
         Initialize PPOTrainer.
@@ -59,8 +64,11 @@ class PPOTrainer(BaseTrainer):
                 Hugging Face transformer model with a casual language modelling head. Used for KL penalty
             tokenizer (`transformers.PreTrainedTokenizer`): 
                 Hugging Face tokenizer
-            data_loader (`torch.utils.data.DataLoader`): 
-                PyTorch dataloader
+            dataset (Union[`torch.utils.data.Dataset`, `datasets.Dataset`]): 
+                PyTorch dataset or Hugging Face dataset. If a Hugging Face dataset is passed, the dataset
+                will be preprocessed by removing the columns that are not used by the model.
+            data_collator (Optional[function]):
+                Data collator function.
         """
         super().__init__(config)
 
@@ -80,9 +88,11 @@ class PPOTrainer(BaseTrainer):
             raise ValueError("tokenizer must be a transformers.PreTrainedTokenizer or transformers.PreTrainedTokenizerFast")
         self.tokenizer = tokenizer
 
-        if not isinstance(dataloader, torch.utils.data.DataLoader):
-            raise ValueError("dataloader must be a torch.utils.data.DataLoader")
-        self.dataloader = dataloader
+        if not (isinstance(dataset, torch.utils.data.Dataset) or isinstance(dataset, Dataset)):
+            raise ValueError("dataloader must be a torch.utils.data.Dataset or datasets.Dataset")
+        self.dataset = dataset
+        self._signature_columns = None
+        self.dataloader = self.prepare_dataloader(self.dataset, data_collator)
 
         # if self.config.use_length_sampler is set to `True` this will behave as a random sampler
         # otherwise, it will behave as a fixed sampler with a fixed length - here config.txt_out_max_len
@@ -111,6 +121,66 @@ class PPOTrainer(BaseTrainer):
         if self.accelerator.is_main_process and self.config.log_with_wandb:
             wandb.init(name='run-42', project=self.config.wandb_project, config=config)
             wandb.watch(self.model, log='all')
+    
+    def prepare_dataloader(self, dataset: Union[torch.utils.data.Dataset, Dataset], data_collator = None):
+        """
+        Prepare the dataloader for training.
+
+        Args:
+            dataset (Union[`torch.utils.data.Dataset`, `datasets.Dataset`]): 
+                PyTorch dataset or Hugging Face dataset. If a Hugging Face dataset is passed, the dataset
+                will be preprocessed by removing the columns that are not used by the model.
+            data_collator (Optional[function]):
+                Data collator function.
+
+        Returns:
+            `torch.utils.data.DataLoader`: 
+                PyTorch dataloader
+        """
+        if isinstance(dataset, Dataset):
+            dataset = self._remove_unused_columns(dataset)
+        dataloader = torch.utils.data.DataLoader(
+            dataset,
+            batch_size=self.config.batch_size,
+            collate_fn=data_collator,
+            shuffle=True,
+        )
+        return dataloader
+    
+    # Adapted from transformers.Trainer._set_signature_columns_if_needed
+    def _set_signature_columns_if_needed(self):
+        if self._signature_columns is None:
+            # Inspect model forward signature to keep only the arguments it accepts.
+            signature = inspect.signature(self.model.forward)
+            self._signature_columns = list(signature.parameters.keys())
+            # label => sentiment | we need query and response for logging purpose
+            self._signature_columns += list(set(["label", "query", "response"]))
+    
+    # Adapted from transformers.Trainer._remove_unused_columns
+    def _remove_unused_columns(self, dataset: "Dataset"):
+        if not self.config.remove_unused_columns:
+            return dataset
+        self._set_signature_columns_if_needed()
+        signature_columns = self._signature_columns
+
+        ignored_columns = list(set(dataset.column_names) - set(signature_columns))
+
+        columns = [k for k in signature_columns if k in dataset.column_names]
+
+        if version.parse(datasets.__version__) < version.parse("1.4.0"):
+            dataset.set_format(
+                type=dataset.format["type"], columns=columns, format_kwargs=dataset.format["format_kwargs"]
+            )
+            return dataset
+        else:
+            return dataset.remove_columns(ignored_columns)
+    
+    def rollout(self):
+        """
+        Yield the next batch of data. One can alternatively directly use `self.dataloader` to iterate
+        """
+        return enumerate(self.dataloader)
+
         
 
     def generate(self, query_tensors: torch.Tensor, **gen_kwargs):
@@ -349,6 +419,7 @@ class PPOTrainer(BaseTrainer):
         train_stats['time/ppo/optimizer_step'] = torch.Tensor([time.time()-t]).to(self.accelerator.device)
         return train_stats
 
+
     def compute_rewards(
         self, 
         scores: torch.FloatTensor, 
@@ -501,7 +572,6 @@ class PPOTrainer(BaseTrainer):
         stats: dict, 
         batch: dict, 
         rewards: List[torch.FloatTensor], 
-        logs: dict, 
         timing: dict=None, 
         t0: float=None
     ):
@@ -515,8 +585,6 @@ class PPOTrainer(BaseTrainer):
                 A dictionary of batch data, this containes the queries and responses.
             rewards (`List[torch.FloatTensor]`): 
                 A tensor of rewards.
-            logs (dict[str, Any]): 
-                A dictionary of logs.
             timing (dict[str, Any], optional): 
                 A dictionary of timing stats.
             t0 (`float`, optional): 
@@ -524,6 +592,8 @@ class PPOTrainer(BaseTrainer):
         """
         # Log only if we are in the main process
         if self.accelerator.is_main_process:
+            wandb_logs = {}
+
             # Log timing
             if timing is not None and t0 is not None:
                 timing['time/epoch'] = time.time()-t0
@@ -531,11 +601,13 @@ class PPOTrainer(BaseTrainer):
             # Log stats
             if not isinstance(rewards, torch.Tensor):
                 rewards = torch.tensor(rewards).to(self.accelerator.device)
-            table_rows = [list(r) for r in zip(batch['query'], batch['response'], rewards.cpu().tolist())]
-            logs.update({'game_log': wandb.Table(columns=['query', 'response', 'reward'], rows=table_rows)})
-            logs.update(timing)
-            logs.update(stats)
-
+            
+            if ("query" not in batch.keys() and "response" not in batch.keys()):
+                # warn the user that the game logs will not be logged
+                warnings.warn("The game logs will not be logged because the batch does not contain the keys 'query' and 'response'.")
+            elif self.config.log_with_wandb:
+                table_rows = [list(r) for r in zip(batch['query'], batch['response'], rewards.cpu().tolist())]
+                wandb_logs.update({'game_log': wandb.Table(columns=['query', 'response', 'reward'], rows=table_rows)})
             # All reduce rewards if distributed
             if self.is_distributed:
                 import torch.distributed as dist 
@@ -546,10 +618,19 @@ class PPOTrainer(BaseTrainer):
                 dist.all_reduce(rewards, op=torch.distributed.ReduceOp.SUM) 
                 rewards /= self.accelerator.num_processes
 
-            logs['env/reward_mean'] = torch.mean(rewards).cpu().numpy()
-            logs['env/reward_std'] = torch.std(rewards).cpu().numpy()
-            logs['env/reward_dist'] = rewards.cpu().numpy()
-            wandb.log(logs)
+            if self.config.log_with_wandb:
+                wandb_logs.update(timing)
+                wandb_logs.update(stats)
+                wandb_logs['env/reward_mean'] = torch.mean(rewards).cpu().numpy()
+                wandb_logs['env/reward_std'] = torch.std(rewards).cpu().numpy()
+                wandb_logs['env/reward_dist'] = rewards.cpu().numpy()
+                wandb.log(wandb_logs)
+            else:
+                stats.update(timing)
+                stats['env/reward_mean'] = torch.mean(rewards).cpu().numpy()
+                stats['env/reward_std'] = torch.std(rewards).cpu().numpy()
+                stats['env/reward_dist'] = rewards.cpu().numpy()
+            
         else:
             if self.is_distributed:
                 import torch.distributed as dist
