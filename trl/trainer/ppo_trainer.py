@@ -530,7 +530,7 @@ class PPOTrainer(BaseTrainer):
 
             # Log stats
             if not isinstance(rewards, torch.Tensor):
-                rewards = torch.tensor(rewards)
+                rewards = torch.tensor(rewards).to(self.accelerator.device)
             table_rows = [list(r) for r in zip(batch['query'], batch['response'], rewards.cpu().tolist())]
             logs.update({'game_log': wandb.Table(columns=['query', 'response', 'reward'], rows=table_rows)})
             logs.update(timing)
@@ -550,3 +550,12 @@ class PPOTrainer(BaseTrainer):
             logs['env/reward_std'] = torch.std(rewards).cpu().numpy()
             logs['env/reward_dist'] = rewards.cpu().numpy()
             wandb.log(logs)
+        else:
+            if self.is_distributed:
+                import torch.distributed as dist
+                if not isinstance(rewards, torch.Tensor):
+                    rewards = torch.tensor(rewards).to(self.accelerator.device)
+                
+                dist.barrier()
+                dist.all_reduce(rewards, op=torch.distributed.ReduceOp.SUM) 
+
