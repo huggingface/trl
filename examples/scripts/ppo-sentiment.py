@@ -85,21 +85,14 @@ def build_dataset(config, dataset_name="imdb", input_min_text_length=2, input_ma
         return sample
 
     ds = ds.map(tokenize, batched=False)
+    ds.set_format(type='torch', columns=['input_ids'])
     return ds
 
 # We retrieve the dataloader by calling the `build_dataset` function.
 dataset = build_dataset(config)
 
 def collater(data):
-    output_dict = {}
-    for key in data[0]:
-        output_array = []
-        for d in data:
-            if key == "input_ids":
-                d[key] = torch.LongTensor(d[key])
-            output_array.append(d[key])
-        output_dict[key] = output_array
-    return output_dict
+    return dict((key, [d[key] for d in data]) for key in data[0])
 
 # Now let's build the model, the reference model, and the tokenizer.
 model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name)
