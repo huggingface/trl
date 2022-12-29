@@ -37,7 +37,7 @@ from trl.models import PreTrainedModelWrapper, SUPPORTED_ARCHITECTURES
 
 class PPOTrainer(BaseTrainer):
     """
-    The PPO_trainer uses Proximal Policy Optimization to optimise language models.
+    The PPOTrainer uses Proximal Policy Optimization to optimise language models.
     """
 
     default_params = {
@@ -72,7 +72,7 @@ class PPOTrainer(BaseTrainer):
             model (`PreTrainedModelWrapper`): 
                 Hugging Face transformer model with a value head.
             ref_model (`PreTrainedModelWrapper`):
-                Hugging Face transformer GPT2 refrence model used for KL penalty
+                Hugging Face transformer model with a casual language modelling head. Used for KL penalty
             tokenizer (`transformers.PreTrainedTokenizer`): 
                 Hugging Face tokenizer
             data_loader (`torch.utils.data.DataLoader`): 
