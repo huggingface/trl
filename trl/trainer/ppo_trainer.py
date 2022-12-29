@@ -39,36 +39,20 @@ class PPOTrainer(BaseTrainer):
     """
     The PPOTrainer uses Proximal Policy Optimization to optimise language models.
     """
-
-    default_params = {
-        "lr": 1.41e-5,
-        "adap_kl_ctrl": True,
-        "init_kl_coef":0.2,
-        "target": 6,
-        "horizon":10000,
-        "gamma":1,
-        "lam":0.95,
-        "cliprange": .2,
-        "cliprange_value":.2,
-        "vf_coef":.1,
-        "batch_size": 256,
-        "forward_batch_size": 16,
-        "ppo_epochs": 4,
-        "log_with_wandb": True,
-    }
-
     def __init__(
         self,
+        config,
         model: PreTrainedModelWrapper, 
         ref_model: PreTrainedModelWrapper, 
         tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast], 
         dataloader: torch.utils.data.DataLoader,
-        **config
     ):
         """
         Initialize PPOTrainer.
 
         Args:
+            config (`PPOConfig`):
+                Configuration object for PPOTrainer. Check the documentation of `PPOConfig` for more details.
             model (`PreTrainedModelWrapper`): 
                 Hugging Face transformer model with a value head.
             ref_model (`PreTrainedModelWrapper`):
@@ -77,26 +61,11 @@ class PPOTrainer(BaseTrainer):
                 Hugging Face tokenizer
             data_loader (`torch.utils.data.DataLoader`): 
                 PyTorch dataloader
-            ppo_params (dict or None): PPO parameters for training. Can include following keys:
-                'lr' (float): Adam learning rate, default: 1.41e-5
-                'batch_size' (int): Number of samples per optimisation step, default: 256
-                'forward_batch_size' (int): Number of samples forward passed through model at a time, default: 16
-                'ppo_epochs' (int): Number of optimisation epochs per batch of samples, default: 4
-                'gamma' (float)): Gamma parameter for advantage calculation, default: 1.
-                'lam' (float): Lambda parameter for advantage calcualation, default: 0.95
-                'cliprange_value' (float): Range for clipping values in loss calculation, default: 0.2
-                'cliprange' (float): Range for clipping in PPO policy gradient loss, default: 0.2
-                'vf_coef' (float): Scaling factor for value loss, default: 0.1
-                'adap_kl_ctrl' (bool): Use adaptive KL control, otherwise linear, default: True
-                'init_kl_coef' (float): Initial KL penalty coefficient (used for adaptive and linear control), default: 0.2
-                'target' (float): Target KL value for adaptive KL control, default: 6.0
-                'horizon' (float): Horizon for adaptive KL control, default: 10000
         """
-        super().__init__(self.default_params)
+        super().__init__(config)
 
         # Step 1: Initialize Accelerator
         self.accelerator = Accelerator(log_with="wandb")
-        self.config.update(config)
 
         # Step 2: Initialize model, tokenizer, and dataloader
         if not isinstance(model, PreTrainedModelWrapper):
@@ -115,21 +84,21 @@ class PPOTrainer(BaseTrainer):
             raise ValueError("dataloader must be a torch.utils.data.DataLoader")
         self.dataloader = dataloader
 
-        if hasattr(config, "txt_in_min_len"):
-            self.output_size = LengthSampler(self.config["txt_out_min_len"], self.config["txt_out_max_len"])
-        else:
-            self.output_size = None
+        # if self.config.use_length_sampler is set to `True` this will behave as a random sampler
+        # otherwise, it will behave as a fixed sampler with a fixed length - here config.txt_out_max_len
+        self.output_size = LengthSampler(self.config.txt_out_min_len, self.config.txt_out_max_len, is_random=self.config.use_length_sampler)
+
 
         # Step 3: Initialize optimizer and data collator        
         self.data_collator = DataCollatorForLanguageModeling(self.tokenizer, mlm=False)
-        self.optimizer = Adam(self.model.parameters(), lr=self.config['lr'])
+        self.optimizer = Adam(self.model.parameters(), lr=self.config.learning_rate)
 
-        if self.config['adap_kl_ctrl']:
-            self.kl_ctl = AdaptiveKLController(self.config['init_kl_coef'],
-                                               self.config['target'],
-                                               self.config['horizon'])
+        if self.config.adap_kl_ctrl:
+            self.kl_ctl = AdaptiveKLController(self.config.init_kl_coef,
+                                               self.config.target,
+                                               self.config.horizon)
         else:
-            self.kl_ctl = FixedKLController(self.config['init_kl_coef'])
+            self.kl_ctl = FixedKLController(self.config.init_kl_coef)
 
         self.model, self.ref_model, self.optimizer, self.data_collator, self.dataloader = self.accelerator.prepare(self.model, self.ref_model, self.optimizer, self.data_collator, self.dataloader)
 
@@ -139,8 +108,8 @@ class PPOTrainer(BaseTrainer):
         self.is_distributed = self.accelerator.distributed_type == "MULTI_GPU"
 
         # init wandb on the main process:
-        if self.accelerator.is_main_process and self.config["log_with_wandb"]:
-            wandb.init(name='run-42', project='gpt2-test', config=config)
+        if self.accelerator.is_main_process and self.config.log_with_wandb:
+            wandb.init(name='run-42', project=self.config.wandb_project, config=config)
             wandb.watch(self.model, log='all')
         
 
@@ -160,17 +129,12 @@ class PPOTrainer(BaseTrainer):
                 is the length of the generated response that is sampled from `LengthSampler`.
         """
         response_tensors = []
-        for i in range(self.config['batch_size']):
-            gen_len = self.output_size() if self.output_size is not None else 10
+        for i in range(self.config.batch_size):
+            gen_len = self.output_size()
 
-            # In a multi-GPU setup the model is wrapped inside a DistributedDataParallel object.
-            # this means that the model needs to be called with the module attribute.
-            if self.accelerator.distributed_type == "MULTI_GPU":
-                response = self.model.module.generate(query_tensors[i].unsqueeze(dim=0),
+            response = self.accelerator.unwrap_model(self.model).generate(query_tensors[i].unsqueeze(dim=0),
                                         max_new_tokens=gen_len, **gen_kwargs)
-            else:
-                response = self.model.generate(query_tensors[i].unsqueeze(dim=0),
-                                            max_new_tokens=gen_len, **gen_kwargs)
+
             response_tensors.append(response.squeeze()[-gen_len:])
         return response_tensors
 
@@ -203,7 +167,6 @@ class PPOTrainer(BaseTrainer):
             if len(tensor_list) != batch_size:
                 raise ValueError(f"Batch size ({batch_size}) does not match number of examples - but got {len(tensor_list)} for: {name}")
 
-
     def step(
         self, 
         queries: List[torch.LongTensor], 
@@ -226,7 +189,7 @@ class PPOTrainer(BaseTrainer):
                 a summary of the training statistics
         """
 
-        bs = self.config['batch_size']
+        bs = self.config.batch_size
         
         self._step_safety_checker(bs, queries, responses, scores)
 
@@ -245,7 +208,7 @@ class PPOTrainer(BaseTrainer):
         t = time.time()
         all_stats = []
         idxs = list(range(bs))
-        for _ in range(self.config['ppo_epochs']):
+        for _ in range(self.config.ppo_epochs):
             random.shuffle(idxs)
             for i in range(bs):
                 idx = idxs[i]
@@ -273,7 +236,8 @@ class PPOTrainer(BaseTrainer):
         stats = stats_to_np(stats)
         timing['time/ppo/calc_stats'] = time.time()-t
 
-        self.kl_ctl.update(stats['objective/kl'], self.config['batch_size'])
+        # Update the KL control - multiply the batch_size by the number of processes
+        self.kl_ctl.update(stats['objective/kl'], self.config.batch_size * self.accelerator.num_processes)
 
         # Log the total ppo time
         timing['time/ppo/total'] = time.time()-t0
@@ -298,9 +262,7 @@ class PPOTrainer(BaseTrainer):
         dist.barrier()
 
         for k, v in stats.items():
-            # We don't update the `'objective/kl'` since it is needed by each independent process
-            # TODO: ask if it makes sense to average everything or just the objective (loss? reward?)
-            if isinstance(v, torch.Tensor) and k != 'objective/kl':
+            if isinstance(v, torch.Tensor):
                 dist.all_reduce(v, dist.ReduceOp.SUM)
                 v /= self.accelerator.num_processes
             stats[k] = v
@@ -325,8 +287,8 @@ class PPOTrainer(BaseTrainer):
                 List of tensors containing the output from the value head, shape (`batch_size`, `response_length`)
 
         """
-        bs = self.config['batch_size']
-        fbs = self.config['forward_batch_size']
+        bs = self.config.batch_size
+        fbs = self.config.forward_batch_size
         all_logprobs = []
         all_ref_logprobs = []
         all_values = []
@@ -446,8 +408,8 @@ class PPOTrainer(BaseTrainer):
 
         for t in reversed(range(gen_len)):
             nextvalues = values[:, t + 1] if t < gen_len - 1 else 0.0
-            delta = rewards[:, t] + self.config['gamma'] * nextvalues - values[:, t]
-            lastgaelam = delta + self.config['gamma'] * self.config['lam'] * lastgaelam
+            delta = rewards[:, t] + self.config.gamma * nextvalues - values[:, t]
+            lastgaelam = delta + self.config.gamma * self.config.lam * lastgaelam
             advantages_reversed.append(lastgaelam)
         advantages = torch.stack(advantages_reversed[::-1]).transpose(0, 1)
 
@@ -462,8 +424,8 @@ class PPOTrainer(BaseTrainer):
         logprob, vpred = logprob[:, -gen_len:], vpred[:,-gen_len-1:-1]
 
         vpredclipped = clip_by_value(vpred,
-                                     values - self.config["cliprange_value"],
-                                     values + self.config["cliprange_value"])
+                                     values - self.config.cliprange_value,
+                                     values + self.config.cliprange_value)
 
         vf_losses1 = (vpred - returns)**2
         vf_losses2 = (vpredclipped - returns)**2
@@ -474,13 +436,13 @@ class PPOTrainer(BaseTrainer):
 
         pg_losses = -advantages * ratio
         pg_losses2 = -advantages * torch.clamp(ratio,
-                                               1.0 - self.config['cliprange'],
-                                               1.0 + self.config['cliprange'])
+                                               1.0 - self.config.cliprange,
+                                               1.0 + self.config.cliprange)
 
         pg_loss = torch.mean(torch.max(pg_losses, pg_losses2))
         pg_clipfrac = torch.mean(torch.gt(pg_losses2, pg_losses).double())
 
-        loss = pg_loss + self.config['vf_coef'] * vf_loss
+        loss = pg_loss + self.config.vf_coef * vf_loss
 
         entropy = torch.mean(entropy_from_logits(logits))
         approxkl = .5 * torch.mean((logprob - old_logprobs)**2)
@@ -496,7 +458,7 @@ class PPOTrainer(BaseTrainer):
             val=dict(vpred=torch.mean(vpred), error=torch.mean((vpred - returns) ** 2),
                      clipfrac=vf_clipfrac, mean=value_mean, var=value_var),
         )
-        return pg_loss, self.config['vf_coef'] * vf_loss, flatten_dict(stats)
+        return pg_loss, self.config.vf_coef * vf_loss, flatten_dict(stats)
 
 
     def record_step_stats(self, kl_coef: float, **data):
@@ -573,6 +535,17 @@ class PPOTrainer(BaseTrainer):
             logs.update({'game_log': wandb.Table(columns=['query', 'response', 'reward'], rows=table_rows)})
             logs.update(timing)
             logs.update(stats)
+
+            # All reduce rewards if distributed
+            if self.is_distributed:
+                import torch.distributed as dist 
+
+                dist.barrier()
+
+
+                dist.all_reduce(rewards, op=torch.distributed.ReduceOp.SUM) 
+                rewards /= self.accelerator.num_processes
+
             logs['env/reward_mean'] = torch.mean(rewards).cpu().numpy()
             logs['env/reward_std'] = torch.std(rewards).cpu().numpy()
             logs['env/reward_dist'] = rewards.cpu().numpy()

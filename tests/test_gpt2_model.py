@@ -6,7 +6,7 @@ from transformers import GPT2Tokenizer
 from trl import AutoModelForCausalLMWithValueHead
 from trl.core import respond_to_batch
 
-from trl import PPOTrainer
+from trl import PPOTrainer, PPOConfig
 
 class DummyDataset(torch.utils.data.Dataset):
     def __init__(self, query_data, response_data):
@@ -28,6 +28,7 @@ def test_gpt2_model():
 
     # initialize trainer
     ppo_config = {"batch_size": 2, "forward_batch_size": 1, "log_with_wandb": False}
+    ppo_config = PPOConfig(**ppo_config)
 
     # encode a query
     query_txt = "This morning I went to the "
@@ -45,7 +46,7 @@ def test_gpt2_model():
         dummy_dataset, batch_size=2, shuffle=True
     )
 
-    ppo_trainer = PPOTrainer(model=gpt2_model, ref_model=gpt2_model_ref, tokenizer=gpt2_tokenizer, dataloader=dummy_dataloader, **ppo_config)
+    ppo_trainer = PPOTrainer(config=ppo_config, model=gpt2_model, ref_model=gpt2_model_ref, tokenizer=gpt2_tokenizer, dataloader=dummy_dataloader)
     dummy_dataloader = ppo_trainer.dataloader
     # train model with ppo
     for query_tensor, response_tensor in dummy_dataloader:

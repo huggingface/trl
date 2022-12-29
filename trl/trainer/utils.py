@@ -38,7 +38,16 @@ class FixedKLController:
         pass
 
 class LengthSampler:
-    def __init__(self, min_value, max_value):
+    """
+    Samples a length for the rollout. If is_random is True, samples from a uniform distribution
+    between min_value and max_value. If is_random is False, returns max_value.
+    """
+    def __init__(self, min_value, max_value, is_random=True):
         self.values = list(range(min_value, max_value))
+        self.is_random = is_random
+        self.max_value = max_value
     def __call__(self):
-        return np.random.choice(self.values)
+        if self.is_random:
+            return np.random.choice(self.values)
+        else:
+            return self.max_value

@@ -21,7 +21,7 @@ tqdm.pandas()
 from transformers import pipeline, AutoTokenizer
 from datasets import load_dataset
 
-from trl import PPOTrainer, AutoModelForCausalLMWithValueHead
+from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead
 from trl.trainer import LengthSampler
 
 ########################################################################
@@ -42,41 +42,24 @@ from trl.trainer import LengthSampler
 
 # We first define the configuration of the experiment, defining the model, the dataset,
 # the training parameters, and the PPO parameters.
-config = {
-    "model_name": "lvwerra/gpt2-imdb",
-    "dataset_name": "imdb",
-    "cls_model_name": "lvwerra/distilbert-imdb",
-    "steps": 20000,
-    "batch_size": 256,
-    "forward_batch_size": 16,
-    "ppo_epochs": 4,   
-    "txt_in_min_len": 2,
-    "txt_in_max_len": 8,
-    "txt_out_min_len": 4,
-    "txt_out_max_len": 16,
-    "lr": 1.41e-5,
-    "init_kl_coef":0.2,
-    "target": 6,
-    "horizon":10000,
-    "gamma":1,
-    "lam":0.95,
-    "cliprange": .2,
-    "cliprange_value":.2,
-    "vf_coef":.1, 
-}
+# Check the default arguments in the `PPOConfig` class for more details.
+config = PPOConfig(
+    model_name="lvwerra/gpt2-imdb",
+    learning_rate=1.41e-5,
+)
 
 # We then define the arguments to pass to the sentiment analysis pipeline.
 # We set `return_all_scores` to True to get the sentiment score for each token.
 sent_kwargs = {
     "return_all_scores": True,
     "function_to_apply": "none",
-    "batch_size": config["forward_batch_size"]
+    "batch_size": config.forward_batch_size
 }
 
 # Below is an example function to build the dataset. In our case, we use the IMDB dataset
 # from the `datasets` library. One should customize this function to train the model on
 # its own dataset.
-def build_dataset(config):
+def build_dataset(config, dataset_name="imdb"):
     """
     Build dataset for training. This builds the dataset from `load_dataset`, one should 
     customize this function to train the model on its own dataset.
@@ -89,15 +72,14 @@ def build_dataset(config):
         dataloader (`torch.utils.data.DataLoader`):
             The dataloader for the dataset.
     """
-    dataset_name = config["dataset_name"]
-    tokenizer = AutoTokenizer.from_pretrained(config["model_name"])
+    tokenizer = AutoTokenizer.from_pretrained(config.model_name)
     tokenizer.pad_token = tokenizer.eos_token
     # load imdb with datasets
     ds = load_dataset(dataset_name, split='train')
     ds = ds.rename_columns({'text': 'review', 'label': 'sentiment'})
     ds = ds.filter(lambda x: len(x["review"])>200, batched=False)
 
-    input_size = LengthSampler(config["txt_in_min_len"], config["txt_in_max_len"])
+    input_size = LengthSampler(config.txt_in_min_len, config.txt_in_max_len)
 
     def tokenize(sample):
         sample["tokens"] = tokenizer.encode(sample["review"])[:input_size()]
@@ -109,21 +91,23 @@ def build_dataset(config):
     def collater(data):
         return dict((key, [d[key] for d in data]) for key in data[0])
 
-    dataloader = torch.utils.data.DataLoader(ds, batch_size=config['batch_size'], collate_fn=collater)
+    dataloader = torch.utils.data.DataLoader(ds, batch_size=config.batch_size, collate_fn=collater)
     return dataloader
 
 # We retrieve the dataloader by calling the `build_dataset` function.
 dataloader = build_dataset(config)
 
 # Now let's build the model, the reference model, and the tokenizer.
-model = AutoModelForCausalLMWithValueHead.from_pretrained(config["model_name"])
-ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(config["model_name"])
-tokenizer = AutoTokenizer.from_pretrained(config["model_name"])
+model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name)
+ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name)
+tokenizer = AutoTokenizer.from_pretrained(config.model_name)
 
+# GPT-2 tokenizer has a pad token, but it is not eos_token by default. We need to set it to eos_token.
+# only for this model.
 tokenizer.pad_token = tokenizer.eos_token
 
 # We then build the PPOTrainer, passing the model, the reference model, the tokenizer
-ppo_trainer = PPOTrainer(model, ref_model, tokenizer, dataloader, **config)
+ppo_trainer = PPOTrainer(config, model, ref_model, tokenizer, dataloader)
 
 # the PPOTrainer has a dataloader attribute, which we can use to get the dataloader - 
 # this step is important in a distributed setting, as the dataloader needs to be
@@ -150,7 +134,7 @@ gen_kwargs = {
     "pad_token_id": tokenizer.eos_token_id
 }
 
-total_ppo_epochs = int(np.ceil(config["steps"]/config['batch_size']))
+total_ppo_epochs = int(np.ceil(config.steps/config.batch_size))
 
 for epoch, batch in tqdm(zip(range(total_ppo_epochs), iter(dataloader))):
     logs, timing = dict(), dict()
