@@ -126,7 +126,7 @@ gen_kwargs = {
     "pad_token_id": tokenizer.eos_token_id
 }
 
-for epoch, batch in tqdm(ppo_trainer.rollout()):
+for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     timing = dict()
     t0 = time.time()
     query_tensors = [torch.tensor(t).long().to(device) for t in batch["input_ids"]]

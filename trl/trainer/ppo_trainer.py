@@ -174,13 +174,6 @@ class PPOTrainer(BaseTrainer):
             return dataset
         else:
             return dataset.remove_columns(ignored_columns)
-    
-    def rollout(self):
-        """
-        Yield the next batch of data. One can alternatively directly use `self.dataloader` to iterate
-        """
-        return enumerate(self.dataloader)
-
         
 
     def generate(self, query_tensors: torch.Tensor, **gen_kwargs):
