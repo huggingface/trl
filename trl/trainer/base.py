@@ -37,9 +37,3 @@ class BaseTrainer(object):
 
     def compute_rewards(self, *args):
         raise NotImplementedError("Not implemented")
-
-    def _build_models_and_tokenizer(self, *args):
-        raise NotImplementedError("Not implemented")
-
-    def _build_dataset(self, *args):
-        raise NotImplementedError("Not implemented")
