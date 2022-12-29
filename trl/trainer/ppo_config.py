@@ -23,16 +23,6 @@ class PPOConfig(object):
     Args:
         model_name (`str`, *optional*, defaults to `None`):
             Name of model to use - used only for tracking purposes
-        use_length_sampler (`bool`, *optional*, defaults to True):
-            Use the `LengthSampler` to sample the length of the input text
-        txt_in_min_len (`int`, *optional*, defaults to 2):
-            Minimum length of input text
-        txt_in_max_len (`int`, *optional*, defaults to 8):
-            Maximum length of input text
-        txt_out_min_len (`int`, *optional*, defaults to 4):
-            Minimum length of output text used by the `LengthSampler`
-        txt_out_max_len (`int`, *optional*, defaults to 16):
-            Maximum length of output text used by the `LengthSampler`
         steps (`int`, *optional*, defaults to 20000):
             Number of training steps
         learning_rate (`float`, *optional*, defaults to 1.41e-5): 
@@ -71,11 +61,6 @@ class PPOConfig(object):
     def __init__(
         self, 
         model_name: Optional[str] = None,
-        use_length_sampler: Optional[bool] = True,
-        txt_in_min_len: Optional[int] = 2,
-        txt_in_max_len: Optional[int] = 8,
-        txt_out_min_len: Optional[int] = 4,
-        txt_out_max_len: Optional[int] = 16,
         steps: Optional[int] = 20000,
         learning_rate: Optional[float] = 1e-5,
         adap_kl_ctrl: Optional[bool] = True,
@@ -95,11 +80,6 @@ class PPOConfig(object):
         wandb_project: Optional[str] = "trl",
     ):
         self.model_name = model_name
-        self.use_length_sampler = use_length_sampler
-        self.txt_in_min_len = txt_in_min_len
-        self.txt_in_max_len = txt_in_max_len
-        self.txt_out_min_len = txt_out_min_len
-        self.txt_out_max_len = txt_out_max_len
         self.steps = steps
         self.learning_rate = learning_rate
         self.adap_kl_ctrl = adap_kl_ctrl

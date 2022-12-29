@@ -16,7 +16,8 @@ from trl.ppo import PPOTrainer
 from trl.core import build_bert_batch_from_txt, listify_batch
 
 config = {
-    "model_name": "lvwerra/gpt2-imdb",
+    # "model_name": "lvwerra/gpt2-imdb",
+    "model_name": "EleutherAI/gpt-neo-125M",
     "cls_model_name": "lvwerra/distilbert-imdb",
     "steps": 20000,
     "batch_size": 256,
