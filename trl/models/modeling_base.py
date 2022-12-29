@@ -11,9 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import torch.nn as nn
 
+import torch.nn as nn
 from transformers import PreTrainedModel
+
 
 class PreTrainedModelWrapper(nn.Module):
     r"""
@@ -51,7 +52,7 @@ class PreTrainedModelWrapper(nn.Module):
             `from_pretrained` method.
         **kwargs:
             Additional keyword arguments passed along to the underlying model's
-            `from_pretrained` method. We also pre-process the kwargs to extract 
+            `from_pretrained` method. We also pre-process the kwargs to extract
             the arguments that are specific to the `transformers.PreTrainedModel`
             class and the arguments that are specific to trl models.
         """
@@ -102,7 +103,7 @@ class PreTrainedModelWrapper(nn.Module):
         Push the pretrained model to the hub.
         """
         return self.pretrained_model.push_to_hub(*args, **kwargs)
-    
+
     def save_pretrained(self, *args, **kwargs):
         r"""
         Save the pretrained model to a directory.

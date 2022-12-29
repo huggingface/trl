@@ -1,11 +1,9 @@
 # imports
-import pytest
 import torch
 from transformers import GPT2Tokenizer
 
 from trl import AutoModelForCausalLMWithValueHead
 from trl.gpt2 import respond_to_batch
-
 from trl.ppo import PPOTrainer
 
 
@@ -26,7 +24,6 @@ def test_gpt2_model():
     # get model response
     response_tensor = respond_to_batch(gpt2_model, query_tensor)
     assert response_tensor.shape == (1, 20)
-    response_txt = gpt2_tokenizer.decode(response_tensor[0, :])
 
     # define a reward for response
     # (this could be any reward such as human feedback or output from another model)
