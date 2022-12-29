@@ -138,6 +138,7 @@ class PPOTrainer(BaseTrainer):
             dataset,
             batch_size=self.config.batch_size,
             collate_fn=data_collator,
+            shuffle=True,
         )
         return dataloader
     
@@ -186,13 +187,16 @@ class PPOTrainer(BaseTrainer):
         """
         response_tensors = []
 
-        gen_len = generation_kwargs.get("max_new_tokens", 10)
+        gen_len = generation_kwargs.get("max_new_tokens", None)
 
         for i in range(self.config.batch_size):
 
-            response = self.accelerator.unwrap_model(self.model).generate(query_tensors[i].unsqueeze(dim=0),**generation_kwargs)
+            response = self.accelerator.unwrap_model(self.model).generate(query_tensors[i].unsqueeze(dim=0),**generation_kwargs).squeeze()
 
-            response_tensors.append(response.squeeze()[-gen_len:])
+            if gen_len is not None:
+                response = response[-gen_len:]
+
+            response_tensors.append(response)
         return response_tensors
 
     
