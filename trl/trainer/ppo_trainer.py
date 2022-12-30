@@ -54,7 +54,7 @@ class PPOTrainer(BaseTrainer):
         tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast],
         dataset: Union[torch.utils.data.Dataset, Dataset],
         data_collator=None,
-        **kwargs,
+        num_shared_layers=None,
     ):
         """
         Initialize PPOTrainer.
