@@ -222,7 +222,7 @@ class ReferenceModelTest(unittest.TestCase):
         layer_0 = self.layer_format.format(layer=0)
         layer_1 = self.layer_format.format(layer=1)
 
-        ref_model = create_reference_model(self.model, share_layers=1)
+        ref_model = create_reference_model(self.model, num_shared_layers=1)
 
         first_layer_before = self.model.get_parameter(layer_0).data.clone()
         second_layer_before = self.model.get_parameter(layer_1).data.clone()

@@ -114,7 +114,7 @@ class PreTrainedModelWrapper(nn.Module):
         return self.pretrained_model.save_pretrained(*args, **kwargs)
 
 
-def create_reference_model(model: PreTrainedModelWrapper, share_layers: int = None, pattern: str = None) -> PreTrainedModelWrapper:
+def create_reference_model(model: PreTrainedModelWrapper, num_shared_layers: int = None, pattern: str = None) -> PreTrainedModelWrapper:
     """
     Creates a static reference copy of a model. Note that model will be in `.eval()` mode.
     
@@ -132,7 +132,7 @@ def create_reference_model(model: PreTrainedModelWrapper, share_layers: int = No
     ref_model = deepcopy(model)
 
     # if no layers are shared, return copy of model
-    if share_layers is None:
+    if num_shared_layers is None:
         for param_name in parameter_names:
             param = ref_model.get_parameter(param_name)
             param.requires_grad = False
@@ -140,10 +140,10 @@ def create_reference_model(model: PreTrainedModelWrapper, share_layers: int = No
 
     # identify layer name pattern
     if pattern is not None:
-        pattern = pattern.format(layer=share_layers)
+        pattern = pattern.format(layer=num_shared_layers)
     else:
         for pattern_candidate in LAYER_PATTERNS:
-            pattern_candidate = pattern_candidate.format(layer=share_layers)
+            pattern_candidate = pattern_candidate.format(layer=num_shared_layers)
             if any([pattern_candidate in name for name in parameter_names]):
                 pattern = pattern_candidate
                 break
