@@ -37,7 +37,8 @@ from trl.core import (
     whiten,
 )
 from trl.models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper
-from trl.trainer import AdaptiveKLController, BaseTrainer, FixedKLController
+from trl.trainer import BaseTrainer
+from trl.trainer.utils import AdaptiveKLController, FixedKLController
 
 
 class PPOTrainer(BaseTrainer):
