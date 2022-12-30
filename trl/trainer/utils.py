@@ -13,11 +13,13 @@
 # limitations under the License.
 import numpy as np
 
+
 class AdaptiveKLController:
     """
     Adaptive KL controller described in the paper:
     https://arxiv.org/pdf/1909.08593.pdf
     """
+
     def __init__(self, init_kl_coef, target, horizon):
         self.value = init_kl_coef
         self.target = target
@@ -29,8 +31,10 @@ class AdaptiveKLController:
         mult = 1 + proportional_error * n_steps / self.horizon
         self.value *= mult
 
+
 class FixedKLController:
     """Fixed KL controller."""
+
     def __init__(self, kl_coef):
         self.value = kl_coef
 
