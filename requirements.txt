@@ -1,4 +1,4 @@
-datasets==1.17.0
+datasets>=1.17.0
 torch>=1.4.0
 tqdm
 transformers
