@@ -69,14 +69,14 @@ class BaseModelTester:
             for key in transformers_model.state_dict():
                 self.assertTrue(torch.allclose(transformers_model_from_save.state_dict()[key], transformers_model.state_dict()[key]))
 
-class VHeadModelTester(BaseModelTester, unittest.TestCase):
+class ValueHeadModelTester(BaseModelTester, unittest.TestCase):
     """
     Testing suite for v-head models.   
     """
     all_model_names = ALL_CAUSAL_LM_MODELS
     trl_model_class = AutoModelForCausalLMWithValueHead
 
-    def test_vhead(self):
+    def test_value_head(self):
         r"""
         Test if the v-head is added to the model succesfully
         """
@@ -84,7 +84,7 @@ class VHeadModelTester(BaseModelTester, unittest.TestCase):
             model = AutoModelForCausalLMWithValueHead.from_pretrained(model_name)
             self.assertTrue(hasattr(model, "v_head"))
     
-    def test_vhead_nb_classes(self):
+    def test_value_head_shape(self):
         r"""
         Test if the v-head has the correct shape
         """
@@ -92,7 +92,7 @@ class VHeadModelTester(BaseModelTester, unittest.TestCase):
             model = AutoModelForCausalLMWithValueHead.from_pretrained(model_name)
             self.assertTrue(model.v_head.summary.weight.shape[0] == 1)
     
-    def test_vhead_init_random(self):
+    def test_value_head_init_random(self):
         r"""
         Test if the v-head has been randomly initialized. 
         We can check that by making sure the bias is different 
@@ -102,7 +102,7 @@ class VHeadModelTester(BaseModelTester, unittest.TestCase):
             model = AutoModelForCausalLMWithValueHead.from_pretrained(model_name)
             self.assertFalse(torch.allclose(model.v_head.summary.bias, torch.zeros_like(model.v_head.summary.bias))) 
     
-    def test_vhead_not_str(self):
+    def test_value_head_not_str(self):
         r"""
         Test if the v-head is added to the model succesfully
         """
