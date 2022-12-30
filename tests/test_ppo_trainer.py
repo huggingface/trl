@@ -1,12 +1,13 @@
 # imports
+import re
 import unittest
+
 import torch
 from transformers import GPT2Tokenizer
 
-from trl import AutoModelForCausalLMWithValueHead
+from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer
 from trl.core import respond_to_batch
 
-from trl import PPOTrainer, PPOConfig
 
 EXPECTED_STATS = [
     "objective/kl",
@@ -41,6 +42,7 @@ EXPECTED_STATS = [
     "time/ppo/total",
 ]
 
+
 class DummyDataset(torch.utils.data.Dataset):
     def __init__(self, query_data, response_data):
         self.query_data = query_data
@@ -52,10 +54,12 @@ class DummyDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         return self.query_data[idx], self.response_data[idx]
 
+
 class PPOTrainerTester(unittest.TestCase):
     """
-        A wrapper class for testing PPOTrainer    
+    A wrapper class for testing PPOTrainer
     """
+
     def _init_dummy_dataset(self):
         # encode a query
         query_txt = "This morning I went to the "
@@ -67,7 +71,10 @@ class PPOTrainerTester(unittest.TestCase):
 
         # create a dummy dataset
         min_length = min(len(query_tensor[0]), len(response_tensor[0]))
-        dummy_dataset = DummyDataset([query_tensor[:, :min_length].squeeze(0) for _ in range(2)], [response_tensor[:, :min_length].squeeze(0) for _ in range(2)])
+        dummy_dataset = DummyDataset(
+            [query_tensor[:, :min_length].squeeze(0) for _ in range(2)],
+            [response_tensor[:, :min_length].squeeze(0) for _ in range(2)],
+        )
 
         return dummy_dataset
 
@@ -88,9 +95,15 @@ class PPOTrainerTester(unittest.TestCase):
 
     def test_ppo_step(self):
         # initialize dataset
-        dummy_dataset = self._init_dummy_dataset()    
+        dummy_dataset = self._init_dummy_dataset()
 
-        ppo_trainer = PPOTrainer(config=self.ppo_config, model=self.gpt2_model, ref_model=self.gpt2_model_ref, tokenizer=self.gpt2_tokenizer, dataset=dummy_dataset)
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=self.gpt2_model,
+            ref_model=self.gpt2_model_ref,
+            tokenizer=self.gpt2_tokenizer,
+            dataset=dummy_dataset,
+        )
         dummy_dataloader = ppo_trainer.dataloader
         # train model with ppo
         for query_tensor, response_tensor in dummy_dataloader:
@@ -100,19 +113,24 @@ class PPOTrainerTester(unittest.TestCase):
             # train model
             train_stats = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
             break
-            
+
         for param in ppo_trainer.model.parameters():
             assert param.grad is not None
 
         for stat in EXPECTED_STATS:
             assert stat in train_stats.keys()
-        
 
     def test_ppo_step_with_no_ref(self):
         # initialize dataset
-        dummy_dataset = self._init_dummy_dataset()    
+        dummy_dataset = self._init_dummy_dataset()
 
-        ppo_trainer = PPOTrainer(config=self.ppo_config, model=self.gpt2_model, ref_model=None, tokenizer=self.gpt2_tokenizer, dataset=dummy_dataset)
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=self.gpt2_model,
+            ref_model=None,
+            tokenizer=self.gpt2_tokenizer,
+            dataset=dummy_dataset,
+        )
         dummy_dataloader = ppo_trainer.dataloader
         # train model with ppo
         for query_tensor, response_tensor in dummy_dataloader:
@@ -125,44 +143,69 @@ class PPOTrainerTester(unittest.TestCase):
 
         for name, param in ppo_trainer.model.named_parameters():
             self.assertTrue(param.grad is not None, f"Parameter {name} has no gradient")
-        
+
         # ref model should not be trained
         for name, param in ppo_trainer.ref_model.named_parameters():
             self.assertTrue(param.grad is None, f"Parameter {name} has a gradient")
-        
+
         # initialize a new gpt2 model:
         model = AutoModelForCausalLMWithValueHead.from_pretrained("gpt2")
         for name, param in ppo_trainer.ref_model.named_parameters():
-            if 'v_head' not in name:
-                self.assertTrue(torch.allclose(param.cpu(), model.state_dict()[name].cpu()), f"Parameter {name} has changed from the original model")
+            if "v_head" not in name:
+                self.assertTrue(
+                    torch.allclose(param.cpu(), model.state_dict()[name].cpu()),
+                    f"Parameter {name} has changed from the original model",
+                )
 
         # Finally check stats
         for stat in EXPECTED_STATS:
             assert stat in train_stats.keys()
-    
-    # def test_ppo_step_with_no_ref_custom_layers(self):
-    #     # initialize dataset
-    #     dummy_dataset = self._init_dummy_dataset()    
 
-    #     num_shared_layers = 6
+    def test_ppo_step_with_no_ref_custom_layers(self):
+        """
+        Test PPO step with no reference model and custom layers
+        For shared layers configuration, all the layers after the `num_shared_layers` are considered as custom layers
+        therefore the gradients should be computed for these layers only.
+        """
+        # initialize dataset
+        dummy_dataset = self._init_dummy_dataset()
 
-    #     ppo_trainer = PPOTrainer(config=self.ppo_config, model=self.gpt2_model, ref_model=None, tokenizer=self.gpt2_tokenizer, dataset=dummy_dataset, num_shared_layers=num_shared_layers)
-    #     dummy_dataloader = ppo_trainer.dataloader
-    #     # train model with ppo
-    #     for query_tensor, response_tensor in dummy_dataloader:
-    #         # define a reward for response
-    #         # (this could be any reward such as human feedback or output from another model)
-    #         reward = [torch.tensor(1.0), torch.tensor(0.0)]
-    #         # train model
-    #         train_stats = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
-    #         break
+        num_shared_layers = 6
 
-    #     for name, param in ppo_trainer.model.named_parameters():
-    #         self.assertTrue(param.grad is not None, f"Parameter {name} has no gradient")
-        
-    #     # ref model should not be trained
-    #     for name, param in ppo_trainer.ref_model.named_parameters():
-    #         self.assertTrue(param.grad is None, f"Parameter {name} has a gradient")
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=self.gpt2_model,
+            ref_model=None,
+            tokenizer=self.gpt2_tokenizer,
+            dataset=dummy_dataset,
+            num_shared_layers=num_shared_layers,
+        )
+        dummy_dataloader = ppo_trainer.dataloader
+        # train model with ppo
+        for query_tensor, response_tensor in dummy_dataloader:
+            # define a reward for response
+            # (this could be any reward such as human feedback or output from another model)
+            reward = [torch.tensor(1.0), torch.tensor(0.0)]
+            # train model
+            train_stats = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+            break
 
-    #     for stat in EXPECTED_STATS:
-    #         assert stat in train_stats.keys()
+        pattern = r".*transformer\.h\.(\d+)\..*"
+        final_layers = ["ln_f", "v_head", "lm_head"]
+
+        for name, param in ppo_trainer.model.named_parameters():
+            if re.match(pattern, name):
+                layer_number = int(re.match(pattern, name).groups(0)[0])
+                if layer_number < num_shared_layers:
+                    self.assertTrue(param.grad is None, f"Parameter {name} has a gradient")
+                else:
+                    self.assertTrue(param.grad is not None, f"Parameter {name} has no gradient")
+            elif any([layer in name for layer in final_layers]):
+                self.assertTrue(param.grad is not None, f"Parameter {name} has no gradient")
+
+        # ref model should not be trained
+        for name, param in ppo_trainer.ref_model.named_parameters():
+            self.assertTrue(param.grad is None, f"Parameter {name} has a gradient")
+
+        for stat in EXPECTED_STATS:
+            assert stat in train_stats.keys()

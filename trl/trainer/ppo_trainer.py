@@ -19,23 +19,26 @@ from typing import List, Union
 
 import datasets
 import torch
-import wandb
 from accelerate import Accelerator
 from datasets import Dataset
 from packaging import version
 from torch.optim import Adam
 from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizer, PreTrainedTokenizerFast
 
-from trl.core import (logprobs_from_logits,
-                      whiten,
-                      clip_by_value,
-                      entropy_from_logits,
-                      flatten_dict,
-                      stats_to_np,
-                      stack_dicts,
-                      WANDB_PADDING)
-from trl.trainer import BaseTrainer, AdaptiveKLController, FixedKLController
-from trl.models import PreTrainedModelWrapper, SUPPORTED_ARCHITECTURES, create_reference_model
+import wandb
+from trl.core import (
+    WANDB_PADDING,
+    clip_by_value,
+    entropy_from_logits,
+    flatten_dict,
+    logprobs_from_logits,
+    stack_dicts,
+    stats_to_np,
+    whiten,
+)
+from trl.models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper, create_reference_model
+from trl.trainer import BaseTrainer
+from trl.trainer.utils import AdaptiveKLController, FixedKLController
 
 
 class PPOTrainer(BaseTrainer):
@@ -50,7 +53,7 @@ class PPOTrainer(BaseTrainer):
         ref_model: PreTrainedModelWrapper,
         tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast],
         dataset: Union[torch.utils.data.Dataset, Dataset],
-        data_collator = None,
+        data_collator=None,
         **kwargs,
     ):
         """
@@ -91,7 +94,9 @@ class PPOTrainer(BaseTrainer):
             create_reference_model_func_kwargs = self._filter_kwargs(kwargs, create_reference_model)
             self.ref_model = create_reference_model(self.model, **create_reference_model_func_kwargs)
         else:
-            raise ValueError(f"ref_model must be a PreTrainedModelWrapper or `None`, got {type(ref_model)} - supported architectures are: {SUPPORTED_ARCHITECTURES}")
+            raise ValueError(
+                f"ref_model must be a PreTrainedModelWrapper or `None`, got {type(ref_model)} - supported architectures are: {SUPPORTED_ARCHITECTURES}"
+            )
 
         if not (isinstance(tokenizer, PreTrainedTokenizer) or isinstance(tokenizer, PreTrainedTokenizerFast)):
             raise ValueError(
@@ -125,9 +130,9 @@ class PPOTrainer(BaseTrainer):
 
         # init wandb on the main process:
         if self.accelerator.is_main_process and self.config.log_with_wandb:
-            wandb.init(name='run-42', project=self.config.wandb_project, config=config)
-            wandb.watch(self.model, log='all')
-    
+            wandb.init(name="run-42", project=self.config.wandb_project, config=config)
+            wandb.watch(self.model, log="all")
+
     def _filter_kwargs(self, kwargs, target_func):
         """
         filter the keyword arguments that are supported by the target function.
@@ -139,8 +144,8 @@ class PPOTrainer(BaseTrainer):
                 Target function
         """
         return {k: v for k, v in kwargs.items() if k in inspect.signature(target_func).parameters.keys()}
-    
-    def prepare_dataloader(self, dataset: Union[torch.utils.data.Dataset, Dataset], data_collator = None):
+
+    def prepare_dataloader(self, dataset: Union[torch.utils.data.Dataset, Dataset], data_collator=None):
         """
         Prepare the dataloader for training.
 
