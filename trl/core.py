@@ -134,6 +134,7 @@ def build_bert_batch_from_txt(text_list, tokenizer, device):
 
     return padded_tensors, attention_masks
 
+
 def respond_to_batch(model, queries, txt_len=20, top_k=0, top_p=1.0):
     """Sample text from language model."""
     input_ids = queries
@@ -148,11 +149,14 @@ def respond_to_batch(model, queries, txt_len=20, top_k=0, top_p=1.0):
         input_ids = torch.cat([input_ids, next_token.unsqueeze(-1)], dim=-1)
     return input_ids[:, -txt_len:]
 
+
 class LengthSampler:
     """
-    Samples a length 
+    Samples a length
     """
+
     def __init__(self, min_value, max_value):
         self.values = list(range(min_value, max_value))
+
     def __call__(self):
         return np.random.choice(self.values)

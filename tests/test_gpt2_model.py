@@ -2,10 +2,9 @@
 import torch
 from transformers import GPT2Tokenizer
 
-from trl import AutoModelForCausalLMWithValueHead
+from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer
 from trl.core import respond_to_batch
 
-from trl import PPOTrainer, PPOConfig
 
 class DummyDataset(torch.utils.data.Dataset):
     def __init__(self, query_data, response_data):
@@ -39,12 +38,15 @@ def test_gpt2_model():
 
     # create a dummy dataset
     min_length = min(len(query_tensor[0]), len(response_tensor[0]))
-    dummy_dataset = DummyDataset([query_tensor[:, :min_length].squeeze(0) for _ in range(2)], [response_tensor[:, :min_length].squeeze(0) for _ in range(2)])
-    dummy_dataloader = torch.utils.data.DataLoader(
-        dummy_dataset, batch_size=2, shuffle=True
+    dummy_dataset = DummyDataset(
+        [query_tensor[:, :min_length].squeeze(0) for _ in range(2)],
+        [response_tensor[:, :min_length].squeeze(0) for _ in range(2)],
     )
+    dummy_dataloader = torch.utils.data.DataLoader(dummy_dataset, batch_size=2, shuffle=True)
 
-    ppo_trainer = PPOTrainer(config=ppo_config, model=gpt2_model, ref_model=gpt2_model_ref, tokenizer=gpt2_tokenizer, dataset=dummy_dataset)
+    ppo_trainer = PPOTrainer(
+        config=ppo_config, model=gpt2_model, ref_model=gpt2_model_ref, tokenizer=gpt2_tokenizer, dataset=dummy_dataset
+    )
     dummy_dataloader = ppo_trainer.dataloader
     # train model with ppo
     for query_tensor, response_tensor in dummy_dataloader:

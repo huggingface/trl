@@ -12,11 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 class BaseTrainer(object):
     r"""
     Base class for all trainers - this base class implements the basic functions that we
-    need for a trainer. 
-    
+    need for a trainer.
+
     The trainer needs to have the following functions:
         - step: takes in a batch of data and performs a step of training
         - loss: takes in a batch of data and returns the loss
@@ -26,6 +27,7 @@ class BaseTrainer(object):
     Each user is expected to implement their own trainer class that inherits from this base
     if they want to use a new training algorithm.
     """
+
     def __init__(self, config):
         self.config = config
 
