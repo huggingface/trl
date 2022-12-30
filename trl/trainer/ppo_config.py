@@ -11,9 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import numpy as np
 from dataclasses import dataclass
 from typing import Optional
+
+import numpy as np
+
 
 @dataclass
 class PPOConfig(object):
@@ -25,7 +27,7 @@ class PPOConfig(object):
             Name of model to use - used only for tracking purposes
         steps (`int`, *optional*, defaults to 20000):
             Number of training steps
-        learning_rate (`float`, *optional*, defaults to 1.41e-5): 
+        learning_rate (`float`, *optional*, defaults to 1.41e-5):
             Adam learning rate
         adap_kl_ctrl (`bool`, *optional*, defaults to True):
             Use adaptive KL control, otherwise linear
@@ -58,8 +60,9 @@ class PPOConfig(object):
         wandb_project (`str`, *optional*, defaults to "trl"):
             Name of wandb project
     """
+
     def __init__(
-        self, 
+        self,
         model_name: Optional[str] = None,
         steps: Optional[int] = 20000,
         learning_rate: Optional[float] = 1e-5,
@@ -98,7 +101,7 @@ class PPOConfig(object):
         self.log_with_wandb = log_with_wandb
         self.wandb_project = wandb_project
 
-        self.total_ppo_epochs = int(np.ceil(steps/batch_size))
+        self.total_ppo_epochs = int(np.ceil(steps / batch_size))
 
     def to_dict(self):
         output_dict = {}

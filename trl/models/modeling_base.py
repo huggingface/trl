@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from copy import deepcopy
-import torch.nn as nn
 
+import torch.nn as nn
 from transformers import PreTrainedModel
+
 
 LAYER_PATTERNS = ["transformer.h.{layer}", "model.decoder.layers.{layer}", "gpt_neox.layers.{layer}"]
 
@@ -55,7 +56,7 @@ class PreTrainedModelWrapper(nn.Module):
             `from_pretrained` method.
         **kwargs:
             Additional keyword arguments passed along to the underlying model's
-            `from_pretrained` method. We also pre-process the kwargs to extract 
+            `from_pretrained` method. We also pre-process the kwargs to extract
             the arguments that are specific to the `transformers.PreTrainedModel`
             class and the arguments that are specific to trl models.
         """
@@ -106,7 +107,7 @@ class PreTrainedModelWrapper(nn.Module):
         Push the pretrained model to the hub.
         """
         return self.pretrained_model.push_to_hub(*args, **kwargs)
-    
+
     def save_pretrained(self, *args, **kwargs):
         r"""
         Save the pretrained model to a directory.
@@ -114,14 +115,16 @@ class PreTrainedModelWrapper(nn.Module):
         return self.pretrained_model.save_pretrained(*args, **kwargs)
 
 
-def create_reference_model(model: PreTrainedModelWrapper, num_shared_layers: int = None, pattern: str = None) -> PreTrainedModelWrapper:
+def create_reference_model(
+    model: PreTrainedModelWrapper, num_shared_layers: int = None, pattern: str = None
+) -> PreTrainedModelWrapper:
     """
     Creates a static reference copy of a model. Note that model will be in `.eval()` mode.
-    
+
     Args:
         model (`PreTrainedModelWrapper`): The model to be copied.
-        num_shared_layers (`int`, *optional*): The number of initial layers that are shared between both models and kept frozen. 
-        pattern (`str`, *optional*): The shared layers are selected with a string pattern 
+        num_shared_layers (`int`, *optional*): The number of initial layers that are shared between both models and kept frozen.
+        pattern (`str`, *optional*): The shared layers are selected with a string pattern
             (e.g. "transformer.h.{layer}" for GPT2) and if a custom pattern is necessary it can be passed here.
 
     Returns
@@ -169,8 +172,8 @@ def create_reference_model(model: PreTrainedModelWrapper, num_shared_layers: int
         param = model.get_parameter(param_name)
         param.requires_grad = False
 
-        ref_param = ref_model.get_parameter(param_name)
-        ref_param = param
+        ref_param = ref_model.get_parameter(param_name)  # noqa
+        ref_param = param  # noqa
 
     # for all other parameters just make sure they don't use gradients
     for param_name in unshared_param_list:
