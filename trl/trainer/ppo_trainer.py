@@ -15,7 +15,7 @@ import inspect
 import random
 import time
 import warnings
-from typing import List, Union
+from typing import List, Optional, Union
 
 import datasets
 import torch
@@ -54,7 +54,7 @@ class PPOTrainer(BaseTrainer):
         tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast],
         dataset: Union[torch.utils.data.Dataset, Dataset],
         data_collator=None,
-        num_shared_layers=None,
+        num_shared_layers: Optional[int] = None,
     ):
         """
         Initialize PPOTrainer.
@@ -73,8 +73,9 @@ class PPOTrainer(BaseTrainer):
                 will be preprocessed by removing the columns that are not used by the model.
             data_collator (Optional[function]):
                 Data collator function.
-            kwargs:
-                Additional keyword arguments - mainly used for `create_reference_model` function.
+            num_shared_layers (Optional[int]):
+                Number of shared layers between the model and the reference model. If `None`, all layers are shared.
+                used only if `ref_model` is `None`.
         """
         super().__init__(config)
 
@@ -90,9 +91,13 @@ class PPOTrainer(BaseTrainer):
 
         if isinstance(ref_model, PreTrainedModelWrapper):
             self.ref_model = ref_model
+            if num_shared_layers is not None:
+                warnings.warn(
+                    "num_shared_layers is ignored when ref_model is provided. Two different models are used for the model and the reference model and no layers are shared.",
+                    UserWarning,
+                )
         elif ref_model is None:
-            create_reference_model_func_kwargs = self._filter_kwargs(kwargs, create_reference_model)
-            self.ref_model = create_reference_model(self.model, **create_reference_model_func_kwargs)
+            self.ref_model = create_reference_model(self.model, num_shared_layers=num_shared_layers)
         else:
             raise ValueError(
                 f"ref_model must be a PreTrainedModelWrapper or `None`, got {type(ref_model)} - supported architectures are: {SUPPORTED_ARCHITECTURES}"
