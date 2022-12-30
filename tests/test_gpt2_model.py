@@ -3,8 +3,20 @@ import torch
 from transformers import GPT2Tokenizer
 
 from trl import AutoModelForCausalLMWithValueHead
-from trl.gpt2 import respond_to_batch
-from trl.ppo import PPOTrainer
+from trl.core import respond_to_batch
+
+from trl import PPOTrainer, PPOConfig
+
+class DummyDataset(torch.utils.data.Dataset):
+    def __init__(self, query_data, response_data):
+        self.query_data = query_data
+        self.response_data = response_data
+
+    def __len__(self):
+        return len(self.query_data)
+
+    def __getitem__(self, idx):
+        return self.query_data[idx], self.response_data[idx]
 
 
 def test_gpt2_model():
@@ -14,8 +26,8 @@ def test_gpt2_model():
     gpt2_tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
 
     # initialize trainer
-    ppo_config = {"batch_size": 1, "forward_batch_size": 1}
-    ppo_trainer = PPOTrainer(gpt2_model, gpt2_model_ref, gpt2_tokenizer, **ppo_config)
+    ppo_config = {"batch_size": 2, "forward_batch_size": 1, "log_with_wandb": False}
+    ppo_config = PPOConfig(**ppo_config)
 
     # encode a query
     query_txt = "This morning I went to the "
@@ -25,12 +37,23 @@ def test_gpt2_model():
     response_tensor = respond_to_batch(gpt2_model, query_tensor)
     assert response_tensor.shape == (1, 20)
 
-    # define a reward for response
-    # (this could be any reward such as human feedback or output from another model)
-    reward = [torch.tensor(1.0)]
+    # create a dummy dataset
+    min_length = min(len(query_tensor[0]), len(response_tensor[0]))
+    dummy_dataset = DummyDataset([query_tensor[:, :min_length].squeeze(0) for _ in range(2)], [response_tensor[:, :min_length].squeeze(0) for _ in range(2)])
+    dummy_dataloader = torch.utils.data.DataLoader(
+        dummy_dataset, batch_size=2, shuffle=True
+    )
 
+    ppo_trainer = PPOTrainer(config=ppo_config, model=gpt2_model, ref_model=gpt2_model_ref, tokenizer=gpt2_tokenizer, dataset=dummy_dataset)
+    dummy_dataloader = ppo_trainer.dataloader
     # train model with ppo
-    train_stats = ppo_trainer.step([query_tensor[0]], [response_tensor[0]], reward)
+    for query_tensor, response_tensor in dummy_dataloader:
+        # define a reward for response
+        # (this could be any reward such as human feedback or output from another model)
+        reward = [torch.tensor(1.0), torch.tensor(0.0)]
+        # train model
+        train_stats = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+        break
 
     EXPECTED_STATS = [
         "objective/kl",

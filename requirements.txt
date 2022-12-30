@@ -5,5 +5,6 @@ datasets==1.17.0
 torch>=1.4.0
 tqdm
 transformers
+accelerate
 wandb==0.10.20
 matplotlib==3.5.1

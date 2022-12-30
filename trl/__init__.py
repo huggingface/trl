@@ -2,4 +2,5 @@
 
 __version__ = "0.1.1"
 
-from .models import AutoModelForCausalLMWithValueHead
+from .models import AutoModelForCausalLMWithValueHead, create_reference_model
+from .trainer import PPOTrainer, PPOConfig
