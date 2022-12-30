@@ -11,22 +11,25 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import torch.nn as nn
 from transformers import AutoModelForCausalLM
 
 from .modeling_base import PreTrainedModelWrapper
 
+
 class ValueHead(nn.Module):
     r"""
     The ValueHead class implements a head for GPT2 that returns a scalar for each output token.
     """
+
     def __init__(self, config, **kwargs):
         super().__init__()
         if not hasattr(config, "summary_dropout_prob"):
             summary_dropout_prob = kwargs.pop("summary_dropout_prob", 0.1)
         else:
             summary_dropout_prob = config.summary_dropout_prob
-        
+
         self.dropout = nn.Dropout(summary_dropout_prob) if summary_dropout_prob else nn.Identity()
 
         # some models such as OPT have a projection layer before the word embeddings - e.g. OPT-350m
@@ -42,13 +45,14 @@ class ValueHead(nn.Module):
     def forward(self, hidden_states):
         output = self.dropout(hidden_states)
 
-        # For now force upcast in fp32 if needed. Let's keep the 
+        # For now force upcast in fp32 if needed. Let's keep the
         # output in fp32 for numerical stability.
         if output.dtype != self.summary.weight.dtype:
             output = output.to(self.summary.weight.dtype)
 
         output = self.summary(output)
         return output
+
 
 class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
     r"""
@@ -83,7 +87,7 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
         self.v_head = ValueHead(self.pretrained_model.config, **v_head_kwargs)
 
         self._init_weights(**v_head_kwargs)
-    
+
     def _init_weights(self, **kwargs):
         r"""
         We initialize the weights of the value head.
@@ -97,7 +101,7 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
         elif init_strategy == "normal":
             self.v_head.summary.weight.data.normal_(mean=0.0, std=initializer_range)
             self.v_head.summary.bias.data.zero_()
-    
+
     def forward(
         self,
         input_ids=None,
@@ -109,7 +113,7 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
             input_ids=input_ids,
             past_key_values=past_key_values,
             attention_mask=attention_mask,
-            output_hidden_states=True, # We force the model to output hidden states
+            output_hidden_states=True,  # We force the model to output hidden states
             **kwargs,
         )
 

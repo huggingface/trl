@@ -1,17 +1,18 @@
+import collections
+
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 from transformers import top_k_top_p_filtering
 
-import collections
-import numpy as np
-
 
 WANDB_PADDING = -1
 
 
-def flatten_dict(nested, sep='/'):
+def flatten_dict(nested, sep="/"):
     """Flatten dictionary and concatenate nested keys with separator."""
+
     def rec(nest, prefix, into):
         for k, v in nest.items():
             if sep in k:
@@ -20,9 +21,11 @@ def flatten_dict(nested, sep='/'):
                 rec(v, prefix + k + sep, into)
             else:
                 into[prefix + k] = v
+
     flat = {}
-    rec(nested, '', flat)
+    rec(nested, "", flat)
     return flat
+
 
 def stack_dicts(stats_dicts):
     """Stack the values of a dict."""
@@ -32,18 +35,20 @@ def stack_dicts(stats_dicts):
         results[k] = pad_sequence(stats_list, batch_first=True, padding_value=WANDB_PADDING)
     return results
 
+
 def add_suffix(input_dict, suffix):
     """Add suffix to dict keys."""
-    return dict((k + suffix, v) for k,v in input_dict.items())
+    return dict((k + suffix, v) for k, v in input_dict.items())
 
 
 def pad_to_size(tensor, size, dim=1, padding=50256):
     """Pad tensor to size."""
     t_size = tensor.size()[dim]
-    if t_size==size:
+    if t_size == size:
         return tensor
     else:
-        return torch.nn.functional.pad(tensor, (0,size-t_size), 'constant', padding)
+        return torch.nn.functional.pad(tensor, (0, size - t_size), "constant", padding)
+
 
 def logprobs_from_logits(logits, labels):
     """
@@ -62,6 +67,7 @@ def whiten(values, shift_mean=True):
         whitened += mean
     return whitened
 
+
 def clip_by_value(x, tensor_min, tensor_max):
     """
     Tensor extenstion to torch.clamp
@@ -70,10 +76,11 @@ def clip_by_value(x, tensor_min, tensor_max):
     clipped = torch.max(torch.min(x, tensor_max), tensor_min)
     return clipped
 
+
 def entropy_from_logits(logits):
     """Calculate entropy from logits."""
     pd = torch.nn.functional.softmax(logits, dim=-1)
-    entropy = torch.logsumexp(logits, axis=-1) - torch.sum(pd*logits, axis=-1)
+    entropy = torch.logsumexp(logits, axis=-1) - torch.sum(pd * logits, axis=-1)
     return entropy
 
 
@@ -83,6 +90,7 @@ def average_torch_dicts(list_of_dicts):
     for key in list_of_dicts[0].keys():
         average_dict[key] = torch.mean(torch.stack([d[key] for d in list_of_dicts]), axis=0)
     return average_dict
+
 
 def stats_to_np(stats_dict):
     """Cast all torch.tensors in dict to numpy arrays."""
@@ -95,6 +103,7 @@ def stats_to_np(stats_dict):
         if np.isscalar(new_dict[k]):
             new_dict[k] = float(new_dict[k])
     return new_dict
+
 
 def listify_batch(tensor):
     """Turns the first dimension of a tensor into a list."""
@@ -125,6 +134,7 @@ def build_bert_batch_from_txt(text_list, tokenizer, device):
 
     return padded_tensors, attention_masks
 
+
 def respond_to_batch(model, queries, txt_len=20, top_k=0, top_p=1.0):
     """Sample text from language model."""
     input_ids = queries
@@ -139,11 +149,14 @@ def respond_to_batch(model, queries, txt_len=20, top_k=0, top_p=1.0):
         input_ids = torch.cat([input_ids, next_token.unsqueeze(-1)], dim=-1)
     return input_ids[:, -txt_len:]
 
+
 class LengthSampler:
     """
-    Samples a length 
+    Samples a length
     """
+
     def __init__(self, min_value, max_value):
         self.values = list(range(min_value, max_value))
+
     def __call__(self):
         return np.random.choice(self.values)
