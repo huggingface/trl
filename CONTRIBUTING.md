@@ -5,7 +5,7 @@
 Before you start contributing make sure you installed all the dev tools:
 
 ```bash
-pip install "trl[dev]"
+pip install -e ".[dev]"
 ```
 
 ## Did you find a bug?
@@ -44,5 +44,5 @@ make style && make quality
 
 ## Do you want to contribute to the documentation?
 
-* Docs are are in the `docs/` folder and can be updated there.
+* Docs are in the `docs/` folder and can be updated there.
 
