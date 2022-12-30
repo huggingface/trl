@@ -90,7 +90,7 @@ class ValueHeadModelTester(BaseModelTester, unittest.TestCase):
         for model_name in self.all_model_names:
             model = AutoModelForCausalLMWithValueHead.from_pretrained(model_name)
             self.assertTrue(hasattr(model, "v_head"))
-    
+
     def test_value_head_shape(self):
         r"""
         Test if the v-head has the correct shape
@@ -98,7 +98,7 @@ class ValueHeadModelTester(BaseModelTester, unittest.TestCase):
         for model_name in self.all_model_names:
             model = AutoModelForCausalLMWithValueHead.from_pretrained(model_name)
             self.assertTrue(model.v_head.summary.weight.shape[0] == 1)
-    
+
     def test_value_head_init_random(self):
         r"""
         Test if the v-head has been randomly initialized.
@@ -107,8 +107,8 @@ class ValueHeadModelTester(BaseModelTester, unittest.TestCase):
         """
         for model_name in self.all_model_names:
             model = AutoModelForCausalLMWithValueHead.from_pretrained(model_name)
-            self.assertFalse(torch.allclose(model.v_head.summary.bias, torch.zeros_like(model.v_head.summary.bias))) 
-    
+            self.assertFalse(torch.allclose(model.v_head.summary.bias, torch.zeros_like(model.v_head.summary.bias)))
+
     def test_value_head_not_str(self):
         r"""
         Test if the v-head is added to the model succesfully
