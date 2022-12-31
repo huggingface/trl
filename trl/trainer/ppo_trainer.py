@@ -66,7 +66,14 @@ python -m pip install trl
 You can then run inference as follows:
 
 ```python
-FILL ME OUT
+from transformers import AutoTokenizer
+from trl import AutoModelForCausalLMWithValueHead
+
+tokenizer = AutoTokenizer.from_pretrained({model_name})
+model = AutoModelForCausalLMWithValueHead.from_pretrained({model_name})
+
+inputs = tokenizer("Hello, my llama is cute", return_tensors="pt")
+outputs = model(**inputs, labels=inputs["input_ids"])
 ```
 """
 
