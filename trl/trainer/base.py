@@ -12,8 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from huggingface_hub import PyTorchModelHubMixin
 
-class BaseTrainer(object):
+
+class BaseTrainer(PyTorchModelHubMixin):
     r"""
     Base class for all trainers - this base class implements the basic functions that we
     need for a trainer.
@@ -38,4 +40,7 @@ class BaseTrainer(object):
         raise NotImplementedError("Not implemented")
 
     def compute_rewards(self, *args):
+        raise NotImplementedError("Not implemented")
+
+    def _save_pretrained(self, save_directory):
         raise NotImplementedError("Not implemented")

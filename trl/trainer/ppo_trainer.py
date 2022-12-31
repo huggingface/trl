@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import inspect
+import os
 import random
 import time
 import warnings
@@ -19,13 +20,13 @@ from typing import List, Optional, Union
 
 import datasets
 import torch
-import wandb
 from accelerate import Accelerator
 from datasets import Dataset
 from packaging import version
 from torch.optim import Adam
 from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizer, PreTrainedTokenizerFast
 
+import wandb
 from trl.core import (
     WANDB_PADDING,
     clip_by_value,
@@ -39,6 +40,35 @@ from trl.core import (
 from trl.models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper, create_reference_model
 from trl.trainer import BaseTrainer
 from trl.trainer.utils import AdaptiveKLController, FixedKLController
+
+
+MODEL_CARD_TEMPLATE = """---
+license: apache-2.0
+tags:
+- trl
+- transformers
+- reinforcement-learning
+- human-feedback
+---
+
+# {model_name}
+
+This is a [TRL model](https://github.com/lvwerra/trl) that can be used for FILL ME OUT.
+
+## Usage
+
+To use this model for inference, first install the TRL library:
+
+```bash
+python -m pip install trl
+```
+
+You can then run inference as follows:
+
+```python
+FILL ME OUT
+```
+"""
 
 
 class PPOTrainer(BaseTrainer):
@@ -658,3 +688,22 @@ class PPOTrainer(BaseTrainer):
 
                 dist.barrier()
                 dist.all_reduce(rewards, op=torch.distributed.ReduceOp.SUM)
+
+    def create_model_card(self, path: str, model_name: Optional[str] = "TRL Model") -> None:
+        """Creates and saves a model card for a TRL model.
+
+        Args:
+            path (`str`): The path to save the model card to.
+            model_name (`str`, *optional*): The name of the model, defaults to `TRL Model`.
+        """
+        if not os.path.exists(path):
+            os.makedirs(path)
+
+        model_card_content = MODEL_CARD_TEMPLATE.format(model_name=model_name)
+        with open(os.path.join(path, "README.md"), "w", encoding="utf-8") as f:
+            f.write(model_card_content)
+
+    def _save_pretrained(self, save_directory: str) -> None:
+        self.model.save_pretrained(save_directory)
+        self.tokenizer.save_pretrained(save_directory)
+        self.create_model_card(save_directory)
