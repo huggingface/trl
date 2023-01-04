@@ -5,7 +5,7 @@ test:
 
 quality:
 	black --check --line-length 119 --target-version py38 tests trl
-	isort --check-only tests trl
+	isort --verbose --check-only tests trl
 	flake8  tests trl
 
 style:
