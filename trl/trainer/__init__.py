@@ -14,7 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# isort: off
+from .utils import AdaptiveKLController, FixedKLController
+
+# isort: on
+
 from .base import BaseTrainer
 from .ppo_config import PPOConfig
 from .ppo_trainer import PPOTrainer
-from .utils import AdaptiveKLController, FixedKLController
