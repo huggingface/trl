@@ -50,13 +50,14 @@ This is a basic example on how to use the library. Based on a query the language
 # imports
 import torch
 from transformers import AutoTokenizer
-from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead
+from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead, create_reference_model
 from trl.core import respond_to_batch
 
 # get models
-gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained('gpt2')
-gpt2_model_ref = AutoModelForCausalLMWithValueHead.from_pretrained('gpt2')
-gpt2_tokenizer = AutoTokenizer.from_pretrained('gpt2')
+model = AutoModelForCausalLMWithValueHead.from_pretrained('gpt2')
+model_ref = create_reference_model(model)
+
+tokenizer = AutoTokenizer.from_pretrained('gpt2')
 
 # initialize trainer
 ppo_config = PPOConfig(
@@ -66,11 +67,11 @@ ppo_config = PPOConfig(
 
 # encode a query
 query_txt = "This morning I went to the "
-query_tensor = gpt2_tokenizer.encode(query_txt, return_tensors="pt")
+query_tensor = tokenizer.encode(query_txt, return_tensors="pt")
 
 # get model response
-response_tensor  = respond_to_batch(gpt2_model_ref, query_tensor)
-response_txt = gpt2_tokenizer.decode(response_tensor[0,:])
+response_tensor  = respond_to_batch(model_ref, query_tensor)
+response_txt = tokenizer.decode(response_tensor[0,:])
 
 # create a dummy dataset
 class DummyDataset(torch.utils.data.Dataset):
@@ -84,17 +85,14 @@ class DummyDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         return self.query_data[idx], self.response_data[idx]
 
-dummy_dataset = torch.utils.data.Dataset()
-
 min_length = min(len(query_tensor[0]), len(response_tensor[0]))
-
 dummy_dataset = DummyDataset(
     [query_tensor[:, :min_length].squeeze(0) for _ in range(2)],
     [response_tensor[:, :min_length].squeeze(0) for _ in range(2)],
 )
 
 # create a ppo trainer
-ppo_trainer = PPOTrainer(ppo_config, gpt2_model, gpt2_model_ref, gpt2_tokenizer, dummy_dataset)
+ppo_trainer = PPOTrainer(ppo_config, model, model_ref, tokenizer, dummy_dataset)
 device = ppo_trainer.accelerator.device
 
 # define a reward for response

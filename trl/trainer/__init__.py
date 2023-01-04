@@ -14,8 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# There is a circular import in the PPOTrainer if we let isort sort these
 # isort: off
-from .utils import AdaptiveKLController, FixedKLController
+from .utils import AdaptiveKLController, FixedKLController 
 
 # isort: on
 
