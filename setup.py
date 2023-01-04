@@ -6,10 +6,11 @@ REQUIRED_PKGS = [
     "torch>=1.4.0",
     "transformers>=4.18.0",
     "numpy>=1.18.2",
+    "accelerate",
 ]
 EXTRAS = {
     "test" : ["pytest","pytest-xdist","accelerate", "datasets", "wandb"],
-    "dev" : ["pytest","pytest-xdist", "black", "isort", "flake8>=3.8.3", "accelerate", "datasets", "wandb"],
+    "dev" : ["pytest","pytest-xdist", "black", "isort", "flake8>=3.8.3", "datasets", "wandb"],
 }
 
 setup(
