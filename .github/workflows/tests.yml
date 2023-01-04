@@ -10,8 +10,6 @@ jobs:
 
   check_code_quality:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
     steps:
       - uses: actions/checkout@v3
       - name: Set up Python
