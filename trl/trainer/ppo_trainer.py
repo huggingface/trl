@@ -254,7 +254,7 @@ class PPOTrainer(BaseTrainer):
                 raise ValueError(
                     f"Batch size ({batch_size}) does not match number of examples - but got {len(tensor_list)} for: {name}"
                 )
-            
+
             # add queries, scores and responses on the correct device
             tensor_list = [tensor.to(self.accelerator.device) for tensor in tensor_list]
 
