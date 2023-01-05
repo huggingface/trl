@@ -230,3 +230,42 @@ class PPOTrainerTester(unittest.TestCase):
                 dataset=dummy_dataset,
                 num_shared_layers=num_shared_layers,
             )
+
+    def test_ppo_step_rewards_shape(self):
+        """
+        Test if the rewards shape is correct by asserting that if a wrong reward shape is passed, we get
+        a value error.
+        """
+
+        # initialize dataset
+        dummy_dataset = self._init_dummy_dataset()
+
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=self.gpt2_model,
+            ref_model=None,
+            tokenizer=self.gpt2_tokenizer,
+            dataset=dummy_dataset,
+        )
+        dummy_dataloader = ppo_trainer.dataloader
+        # train model with ppo
+        for query_tensor, response_tensor in dummy_dataloader:
+            # define a reward for response
+            # (this could be any reward such as human feedback or output from another model)
+            reward = [torch.tensor([[1.0]]), torch.tensor([[0.0]])]
+            # train model - this should raise an error
+            with self.assertRaises(ValueError):
+                _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+
+            reward = [torch.tensor([1.0]), torch.tensor([0.0])]
+            # train model - this should work
+            _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+            break
+
+        # check if the gradients are computed for the model
+        for name, param in ppo_trainer.model.named_parameters():
+            self.assertTrue(param.grad is not None, f"Parameter {name} has no gradient")
+
+        # ref model should not be trained
+        for name, param in ppo_trainer.ref_model.named_parameters():
+            self.assertTrue(param.grad is None, f"Parameter {name} has a gradient")

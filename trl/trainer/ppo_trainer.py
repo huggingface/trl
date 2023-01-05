@@ -19,12 +19,13 @@ from typing import List, Optional, Union
 
 import datasets
 import torch
-import wandb
 from accelerate import Accelerator
 from datasets import Dataset
 from packaging import version
 from torch.optim import Adam
 from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizer, PreTrainedTokenizerFast
+
+import wandb
 
 from ..core import (
     WANDB_PADDING,
@@ -241,6 +242,9 @@ class PPOTrainer(BaseTrainer):
                 List of tensors containing the encoded responses of shape (`response_length`)
             scores (List[`torch.FloatTensor`]):
                 List of tensors containing the scores.
+        Returns:
+            queries, responses, scores (List[`torch.LongTensor`], List[`torch.LongTensor`], List[`torch.FloatTensor`]):
+                The input processed data.
         """
         for name, tensor_list in zip(["queries", "responses", "scores"], [queries, responses, scores]):
             if not isinstance(tensor_list, list):
@@ -251,6 +255,17 @@ class PPOTrainer(BaseTrainer):
                 raise ValueError(
                     f"Batch size ({batch_size}) does not match number of examples - but got {len(tensor_list)} for: {name}"
                 )
+
+            # set scores on the correct device
+            if name == "scores":
+                scores = [score.to(self.accelerator.device) for score in scores]
+                for i, score in enumerate(scores):
+                    if score.dim() > 1:
+                        raise ValueError(f"Scores must be 1-dimensional - got {score.dim()} for {score}")
+                    elif score.dim() == 1:
+                        scores[i] = score.squeeze()
+
+        return queries, responses, scores
 
     def step(
         self,
@@ -276,7 +291,7 @@ class PPOTrainer(BaseTrainer):
 
         bs = self.config.batch_size
 
-        self._step_safety_checker(bs, queries, responses, scores)
+        queries, responses, scores = self._step_safety_checker(bs, queries, responses, scores)
 
         timing = dict()
         t0 = time.time()

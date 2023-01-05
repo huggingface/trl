@@ -143,7 +143,7 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     #### Compute sentiment score
     texts = [q + r for q,r in zip(batch['query'], batch['response'])]
     pipe_outputs = sentiment_pipe(texts, **sent_kwargs)
-    rewards = [torch.tensor(output[1]["score"]).to(device) for output in pipe_outputs]
+    rewards = [torch.tensor([[output[1]["score"]]]) for output in pipe_outputs]
 
     #### Run PPO step 
     stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
