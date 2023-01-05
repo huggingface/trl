@@ -255,22 +255,17 @@ class PPOTrainer(BaseTrainer):
                     f"Batch size ({batch_size}) does not match number of examples - but got {len(tensor_list)} for: {name}"
                 )
 
-            # add queries, scores and responses on the correct device
-            tensor_list = [tensor.to(self.accelerator.device) for tensor in tensor_list]
-
-            # assign the correct tensor list
-            if name == "queries":
-                queries = tensor_list
-            elif name == "responses":
-                responses = tensor_list
-            else:
-                scores = tensor_list
-                # squeeze scores if needed
-                for i, score in enumerate(scores):
-                    if score.dim() > 1:
-                        raise ValueError(f"Scores must be 1-dimensional - got {score.dim()} for {score}")
-                    elif score.dim() == 1:
-                        scores[i] = score.squeeze()
+        # add queries, scores and responses on the correct device
+        queries = [tensor.to(self.accelerator.device) for tensor in queries]
+        responses = [tensor.to(self.accelerator.device) for tensor in responses]
+        scores = [tensor.to(self.accelerator.device) for tensor in scores]
+    
+        # squeeze scores if needed
+        for i, score in enumerate(scores):
+            if score.dim() > 1:
+                raise ValueError(f"Scores must be 1-dimensional - got {score.dim()} for {score}")
+            elif score.dim() == 1:
+                    scores[i] = score.squeeze()
 
         return queries, responses, scores
 
