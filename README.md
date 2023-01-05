@@ -97,10 +97,10 @@ device = ppo_trainer.accelerator.device
 
 # define a reward for response
 # (this could be any reward such as human feedback or output from another model)
-reward = [torch.tensor(1.0).to(device)]
+reward = [torch.tensor(1.0)]
 
 # train model for one step with ppo
-train_stats = ppo_trainer.step([query_tensor[0].to(device)], [response_tensor[0].to(device)], reward)
+train_stats = ppo_trainer.step([query_tensor[0]], [response_tensor[0]], reward)
 ```
 
 ### Advanced example: IMDB sentiment
