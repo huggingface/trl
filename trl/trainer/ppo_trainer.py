@@ -72,7 +72,7 @@ class PPOTrainer(BaseTrainer):
                 PyTorch dataset or Hugging Face dataset. If a Hugging Face dataset is passed, the dataset
                 will be preprocessed by removing the columns that are not used by the model.
             optimizer (Optional[`torch.optim.Optimizer`]):
-                Optimizer used for training. If `None`, the default optimizer is used.
+                Optimizer used for training. If `None`, the `Adam` is used as default.
             data_collator (Optional[function]):
                 Data collator function.
             num_shared_layers (Optional[int]):
