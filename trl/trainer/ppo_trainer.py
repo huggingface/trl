@@ -52,6 +52,7 @@ class PPOTrainer(BaseTrainer):
         ref_model: PreTrainedModelWrapper,
         tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast],
         dataset: Union[torch.utils.data.Dataset, Dataset],
+        optimizer: Optional[torch.optim.Optimizer] = None,
         data_collator=None,
         num_shared_layers: Optional[int] = None,
     ):
@@ -70,6 +71,8 @@ class PPOTrainer(BaseTrainer):
             dataset (Union[`torch.utils.data.Dataset`, `datasets.Dataset`]):
                 PyTorch dataset or Hugging Face dataset. If a Hugging Face dataset is passed, the dataset
                 will be preprocessed by removing the columns that are not used by the model.
+            optimizer (Optional[`torch.optim.Optimizer`]):
+                Optimizer used for training. If `None`, the default optimizer is used.
             data_collator (Optional[function]):
                 Data collator function.
             num_shared_layers (Optional[int]):
@@ -116,7 +119,10 @@ class PPOTrainer(BaseTrainer):
 
         # Step 3: Initialize optimizer and data collator
         self.data_collator = DataCollatorForLanguageModeling(self.tokenizer, mlm=False)
-        self.optimizer = Adam(self.model.parameters(), lr=self.config.learning_rate)
+        if optimizer is None:
+            self.optimizer = Adam(self.model.parameters(), lr=self.config.learning_rate)
+        else:
+            self.optimizer = optimizer
 
         if self.config.adap_kl_ctrl:
             self.kl_ctl = AdaptiveKLController(self.config.init_kl_coef, self.config.target, self.config.horizon)
