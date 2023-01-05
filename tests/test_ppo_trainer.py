@@ -297,6 +297,9 @@ class PPOTrainerTester(unittest.TestCase):
                 bs, [q for q in query_tensor], [r for r in response_tensor], reward
             )
 
+            self.assertTrue(isinstance(queries, list), f"queries should be a list, got {type(queries)}")
+            self.assertTrue(isinstance(responses, list), f"responses should be a list, got {type(responses)}")
+
             # check the shapes
             for i in range(bs):
                 self.assertEqual(queries[i].shape, torch.Size([7]))
