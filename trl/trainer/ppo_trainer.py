@@ -15,7 +15,7 @@ import inspect
 import random
 import time
 import warnings
-from typing import List, Union
+from typing import List, Optional, Union
 
 import datasets
 import torch
@@ -36,7 +36,7 @@ from trl.core import (
     stats_to_np,
     whiten,
 )
-from trl.models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper
+from trl.models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper, create_reference_model
 from trl.trainer import BaseTrainer
 from trl.trainer.utils import AdaptiveKLController, FixedKLController
 
@@ -54,6 +54,7 @@ class PPOTrainer(BaseTrainer):
         tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast],
         dataset: Union[torch.utils.data.Dataset, Dataset],
         data_collator=None,
+        num_shared_layers: Optional[int] = None,
     ):
         """
         Initialize PPOTrainer.
@@ -72,6 +73,9 @@ class PPOTrainer(BaseTrainer):
                 will be preprocessed by removing the columns that are not used by the model.
             data_collator (Optional[function]):
                 Data collator function.
+            num_shared_layers (Optional[int]):
+                Number of shared layers between the model and the reference model. If `None`, all layers are shared.
+                used only if `ref_model` is `None`.
         """
         super().__init__(config)
 
@@ -86,11 +90,19 @@ class PPOTrainer(BaseTrainer):
         self.model = model
         self.is_encoder_decoder = hasattr(self.model, "is_encoder_decoder")
 
-        if not isinstance(ref_model, PreTrainedModelWrapper):
+        if isinstance(ref_model, PreTrainedModelWrapper):
+            self.ref_model = ref_model
+            if num_shared_layers is not None:
+                warnings.warn(
+                    "num_shared_layers is ignored when ref_model is provided. Two different models are used for the model and the reference model and no layers are shared.",
+                    UserWarning,
+                )
+        elif ref_model is None:
+            self.ref_model = create_reference_model(self.model, num_shared_layers=num_shared_layers)
+        else:
             raise ValueError(
-                f"model must be a PreTrainedModelWrapper, got {type(ref_model)} - supported architectures are: {SUPPORTED_ARCHITECTURES}"
+                f"ref_model must be a PreTrainedModelWrapper or `None`, got {type(ref_model)} - supported architectures are: {SUPPORTED_ARCHITECTURES}"
             )
-        self.ref_model = ref_model
 
         if not (isinstance(tokenizer, PreTrainedTokenizer) or isinstance(tokenizer, PreTrainedTokenizerFast)):
             raise ValueError(
@@ -126,6 +138,18 @@ class PPOTrainer(BaseTrainer):
         if self.accelerator.is_main_process and self.config.log_with_wandb:
             wandb.init(name="run-42", project=self.config.wandb_project, config=config)
             wandb.watch(self.model, log="all")
+
+    def _filter_kwargs(self, kwargs, target_func):
+        """
+        filter the keyword arguments that are supported by the target function.
+
+        Args:
+            kwargs (dict):
+                Keyword arguments
+            target_func (function):
+                Target function
+        """
+        return {k: v for k, v in kwargs.items() if k in inspect.signature(target_func).parameters.keys()}
 
     def prepare_dataloader(self, dataset: Union[torch.utils.data.Dataset, Dataset], data_collator=None):
         """
