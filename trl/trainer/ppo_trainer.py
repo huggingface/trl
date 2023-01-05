@@ -227,6 +227,9 @@ class PPOTrainer(BaseTrainer):
             query_tensor.unsqueeze(dim=0), **generation_kwargs
         )
 
+        if self.is_encoder_decoder:
+            response = torch.cat([query_tensor.unsqueeze(0), response[:, 1:]], dim=-1)
+
         return response
 
     def _step_safety_checker(
@@ -413,7 +416,7 @@ class PPOTrainer(BaseTrainer):
 
         for i in range(int(bs / fbs)):
             query_batch = queries[i * fbs : (i + 1) * fbs]
-            response_batch = responses[i * fbs : (i + 1) * fbs]        
+            response_batch = responses[i * fbs : (i + 1) * fbs]
 
             if self.is_encoder_decoder:
                 input_ids = self.data_collator(query_batch)["input_ids"]
@@ -557,18 +560,15 @@ class PPOTrainer(BaseTrainer):
         }
 
         if self.is_encoder_decoder:
+            input_kwargs["input_ids"] = query
             input_kwargs["decoder_input_ids"] = response
+            model_input = response
 
         logits, _, vpred = self.model(**input_kwargs)
-        if self.is_encoder_decoder:
-            logprob = logprobs_from_logits(logits[:, :-1, :], response[:, 1:])
-        else:
-            logprob = logprobs_from_logits(logits, model_input)
 
-        if not self.is_encoder_decoder:
-            logprob, vpred = logprob[:, -gen_len:], vpred[:, -gen_len - 1 : -1]
-        else:
-            vpred = vpred[:, -gen_len - 1 : -1]
+        logprob = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
+
+        logprob, vpred = logprob[:, -gen_len:], vpred[:, -gen_len - 1 : -1]
 
         vpredclipped = clip_by_value(vpred, values - self.config.cliprange_value, values + self.config.cliprange_value)
 

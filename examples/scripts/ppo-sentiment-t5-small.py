@@ -42,7 +42,7 @@ from trl.core import LengthSampler
 # the training parameters, and the PPO parameters.
 # Check the default arguments in the `PPOConfig` class for more details.
 config = PPOConfig(
-    model_name="t5-small",
+    model_name="google/flan-t5-small",
     learning_rate=1.41e-5,
 )
 
