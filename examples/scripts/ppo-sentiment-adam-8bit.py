@@ -19,6 +19,8 @@ tqdm.pandas()
 from transformers import pipeline, AutoTokenizer
 from datasets import load_dataset
 
+import bitsandbytes as bnb
+
 from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead
 from trl.core import LengthSampler
 
@@ -43,7 +45,7 @@ from trl.core import LengthSampler
 # Check the default arguments in the `PPOConfig` class for more details.
 config = PPOConfig(
     model_name="lvwerra/gpt2-imdb",
-    learning_rate=1.41e-5,
+    learning_rate=1.41e-6,
 )
 
 # We then define the arguments to pass to the sentiment analysis pipeline.
@@ -98,13 +100,14 @@ def collater(data):
 model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name)
 ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name)
 tokenizer = AutoTokenizer.from_pretrained(config.model_name)
+optimizer = bnb.optim.Adam8bit(model.parameters(), lr=config.learning_rate)
 
 # GPT-2 tokenizer has a pad token, but it is not eos_token by default. We need to set it to eos_token.
 # only for this model.
 tokenizer.pad_token = tokenizer.eos_token
 
 # We then build the PPOTrainer, passing the model, the reference model, the tokenizer
-ppo_trainer = PPOTrainer(config, model, ref_model, tokenizer, dataset=dataset, data_collator=collater)
+ppo_trainer = PPOTrainer(config, model, ref_model, tokenizer, dataset=dataset, data_collator=collater, optimizer=optimizer)
 
 # We then build the sentiment analysis pipeline, passing the model name and the
 # sentiment analysis pipeline arguments. Let's also make sure to set the device
@@ -143,7 +146,7 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     #### Compute sentiment score
     texts = [q + r for q,r in zip(batch['query'], batch['response'])]
     pipe_outputs = sentiment_pipe(texts, **sent_kwargs)
-    rewards = [torch.tensor(output[1]["score"]) for output in pipe_outputs]
+    rewards = [torch.tensor(output[1]["score"]).to(device) for output in pipe_outputs]
 
     #### Run PPO step 
     stats = ppo_trainer.step(query_tensors, response_tensors, rewards)

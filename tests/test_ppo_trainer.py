@@ -120,6 +120,43 @@ class PPOTrainerTester(unittest.TestCase):
         for stat in EXPECTED_STATS:
             assert stat in train_stats.keys()
 
+    def test_ppo_step_with_no_ref_sgd(self):
+        # initialize dataset
+        dummy_dataset = self._init_dummy_dataset()
+        optimizer = torch.optim.SGD(self.gpt2_model.parameters(), lr=0.01)
+
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=self.gpt2_model,
+            ref_model=None,
+            optimizer=optimizer,
+            tokenizer=self.gpt2_tokenizer,
+            dataset=dummy_dataset,
+        )
+        dummy_dataloader = ppo_trainer.dataloader
+
+        self.assertTrue(isinstance(ppo_trainer.optimizer.optimizer, torch.optim.SGD))
+
+        # train model with ppo
+        for query_tensor, response_tensor in dummy_dataloader:
+            # define a reward for response
+            # (this could be any reward such as human feedback or output from another model)
+            reward = [torch.tensor(1.0), torch.tensor(0.0)]
+            # train model
+            train_stats = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+            break
+
+        for name, param in ppo_trainer.model.named_parameters():
+            self.assertTrue(param.grad is not None, f"Parameter {name} has no gradient")
+
+        # ref model should not be trained
+        for name, param in ppo_trainer.ref_model.named_parameters():
+            self.assertTrue(param.grad is None, f"Parameter {name} has a gradient")
+
+        # Finally check stats
+        for stat in EXPECTED_STATS:
+            assert stat in train_stats.keys()
+
     def test_ppo_step_with_no_ref(self):
         # initialize dataset
         dummy_dataset = self._init_dummy_dataset()
@@ -230,3 +267,78 @@ class PPOTrainerTester(unittest.TestCase):
                 dataset=dummy_dataset,
                 num_shared_layers=num_shared_layers,
             )
+
+    def test_ppo_step_rewards_shape(self):
+        """
+        Test if the rewards shape is correct by asserting that if a wrong reward shape is passed, we get
+        a value error.
+        """
+
+        # initialize dataset
+        dummy_dataset = self._init_dummy_dataset()
+
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=self.gpt2_model,
+            ref_model=None,
+            tokenizer=self.gpt2_tokenizer,
+            dataset=dummy_dataset,
+        )
+        dummy_dataloader = ppo_trainer.dataloader
+        # train model with ppo
+        for query_tensor, response_tensor in dummy_dataloader:
+            # define a reward for response
+            # (this could be any reward such as human feedback or output from another model)
+            reward = [torch.tensor([[1.0]]), torch.tensor([[0.0]])]
+            # train model - this should raise an error
+            with self.assertRaises(ValueError):
+                _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+
+            reward = [torch.tensor([1.0]), torch.tensor([0.0])]
+            # train model - this should work
+            _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+            break
+
+        # check if the gradients are computed for the model
+        for name, param in ppo_trainer.model.named_parameters():
+            self.assertTrue(param.grad is not None, f"Parameter {name} has no gradient")
+
+        # ref model should not be trained
+        for name, param in ppo_trainer.ref_model.named_parameters():
+            self.assertTrue(param.grad is None, f"Parameter {name} has a gradient")
+
+    def test_ppo_step_input_shape(self):
+        """
+        Test if the shape of the expected inputs are correct
+        """
+        # initialize dataset
+        dummy_dataset = self._init_dummy_dataset()
+
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=self.gpt2_model,
+            ref_model=None,
+            tokenizer=self.gpt2_tokenizer,
+            dataset=dummy_dataset,
+        )
+        dummy_dataloader = ppo_trainer.dataloader
+        # train model with ppo
+        for query_tensor, response_tensor in dummy_dataloader:
+            # define a reward for response
+            # (this could be any reward such as human feedback or output from another model)
+            reward = [torch.tensor([1.0]), torch.tensor([0.0])]
+            # train model - this should raise an error
+            bs = ppo_trainer.config.batch_size
+
+            queries, responses, _ = ppo_trainer._step_safety_checker(
+                bs, [q for q in query_tensor], [r for r in response_tensor], reward
+            )
+
+            self.assertTrue(isinstance(queries, list), f"queries should be a list, got {type(queries)}")
+            self.assertTrue(isinstance(responses, list), f"responses should be a list, got {type(responses)}")
+
+            # check the shapes
+            for i in range(bs):
+                self.assertEqual(queries[i].shape, torch.Size([7]))
+                self.assertEqual(responses[i].size(), torch.Size([7]))
+            break

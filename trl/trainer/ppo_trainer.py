@@ -26,7 +26,7 @@ from packaging import version
 from torch.optim import Adam
 from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizer, PreTrainedTokenizerFast
 
-from trl.core import (
+from ..core import (
     WANDB_PADDING,
     clip_by_value,
     entropy_from_logits,
@@ -36,9 +36,8 @@ from trl.core import (
     stats_to_np,
     whiten,
 )
-from trl.models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper, create_reference_model
-from trl.trainer import BaseTrainer
-from trl.trainer.utils import AdaptiveKLController, FixedKLController
+from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper, create_reference_model
+from . import AdaptiveKLController, BaseTrainer, FixedKLController
 
 
 class PPOTrainer(BaseTrainer):
@@ -53,6 +52,7 @@ class PPOTrainer(BaseTrainer):
         ref_model: PreTrainedModelWrapper,
         tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast],
         dataset: Union[torch.utils.data.Dataset, Dataset],
+        optimizer: Optional[torch.optim.Optimizer] = None,
         data_collator=None,
         num_shared_layers: Optional[int] = None,
     ):
@@ -71,6 +71,8 @@ class PPOTrainer(BaseTrainer):
             dataset (Union[`torch.utils.data.Dataset`, `datasets.Dataset`]):
                 PyTorch dataset or Hugging Face dataset. If a Hugging Face dataset is passed, the dataset
                 will be preprocessed by removing the columns that are not used by the model.
+            optimizer (Optional[`torch.optim.Optimizer`]):
+                Optimizer used for training. If `None`, the `Adam` is used as default.
             data_collator (Optional[function]):
                 Data collator function.
             num_shared_layers (Optional[int]):
@@ -118,7 +120,10 @@ class PPOTrainer(BaseTrainer):
 
         # Step 3: Initialize optimizer and data collator
         self.data_collator = DataCollatorForLanguageModeling(self.tokenizer, mlm=False)
-        self.optimizer = Adam(self.model.parameters(), lr=self.config.learning_rate)
+        if optimizer is None:
+            self.optimizer = Adam(self.model.parameters(), lr=self.config.learning_rate)
+        else:
+            self.optimizer = optimizer
 
         if self.config.adap_kl_ctrl:
             self.kl_ctl = AdaptiveKLController(self.config.init_kl_coef, self.config.target, self.config.horizon)
@@ -243,6 +248,9 @@ class PPOTrainer(BaseTrainer):
                 List of tensors containing the encoded responses of shape (`response_length`)
             scores (List[`torch.FloatTensor`]):
                 List of tensors containing the scores.
+        Returns:
+            queries, responses, scores (List[`torch.LongTensor`], List[`torch.LongTensor`], List[`torch.FloatTensor`]):
+                The input processed data.
         """
         for name, tensor_list in zip(["queries", "responses", "scores"], [queries, responses, scores]):
             if not isinstance(tensor_list, list):
@@ -253,6 +261,20 @@ class PPOTrainer(BaseTrainer):
                 raise ValueError(
                     f"Batch size ({batch_size}) does not match number of examples - but got {len(tensor_list)} for: {name}"
                 )
+
+        # add queries, scores and responses on the correct device
+        queries = [tensor.to(self.accelerator.device) for tensor in queries]
+        responses = [tensor.to(self.accelerator.device) for tensor in responses]
+        scores = [tensor.to(self.accelerator.device) for tensor in scores]
+
+        # squeeze scores if needed
+        for i, score in enumerate(scores):
+            if score.dim() > 1:
+                raise ValueError(f"Scores must be 1-dimensional - got {score.dim()} for {score}")
+            elif score.dim() == 1:
+                scores[i] = score.squeeze()
+
+        return queries, responses, scores
 
     def step(
         self,
@@ -278,7 +300,7 @@ class PPOTrainer(BaseTrainer):
 
         bs = self.config.batch_size
 
-        self._step_safety_checker(bs, queries, responses, scores)
+        queries, responses, scores = self._step_safety_checker(bs, queries, responses, scores)
 
         timing = dict()
         t0 = time.time()
