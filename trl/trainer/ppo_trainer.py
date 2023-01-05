@@ -20,13 +20,13 @@ from typing import List, Optional, Union
 
 import datasets
 import torch
+import wandb
 from accelerate import Accelerator
 from datasets import Dataset
 from packaging import version
 from torch.optim import Adam
 from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizer, PreTrainedTokenizerFast
 
-import wandb
 from trl.core import (
     WANDB_PADDING,
     clip_by_value,
