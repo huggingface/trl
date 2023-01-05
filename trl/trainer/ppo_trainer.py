@@ -259,13 +259,13 @@ class PPOTrainer(BaseTrainer):
         queries = [tensor.to(self.accelerator.device) for tensor in queries]
         responses = [tensor.to(self.accelerator.device) for tensor in responses]
         scores = [tensor.to(self.accelerator.device) for tensor in scores]
-    
+
         # squeeze scores if needed
         for i, score in enumerate(scores):
             if score.dim() > 1:
                 raise ValueError(f"Scores must be 1-dimensional - got {score.dim()} for {score}")
             elif score.dim() == 1:
-                    scores[i] = score.squeeze()
+                scores[i] = score.squeeze()
 
         return queries, responses, scores
 

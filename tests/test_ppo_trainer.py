@@ -269,3 +269,36 @@ class PPOTrainerTester(unittest.TestCase):
         # ref model should not be trained
         for name, param in ppo_trainer.ref_model.named_parameters():
             self.assertTrue(param.grad is None, f"Parameter {name} has a gradient")
+
+    def test_ppo_step_input_shape(self):
+        """
+        Test if the shape of the expected inputs are correct
+        """
+        # initialize dataset
+        dummy_dataset = self._init_dummy_dataset()
+
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=self.gpt2_model,
+            ref_model=None,
+            tokenizer=self.gpt2_tokenizer,
+            dataset=dummy_dataset,
+        )
+        dummy_dataloader = ppo_trainer.dataloader
+        # train model with ppo
+        for query_tensor, response_tensor in dummy_dataloader:
+            # define a reward for response
+            # (this could be any reward such as human feedback or output from another model)
+            reward = [torch.tensor([1.0]), torch.tensor([0.0])]
+            # train model - this should raise an error
+            bs = ppo_trainer.config.batch_size
+
+            queries, responses, _ = ppo_trainer._step_safety_checker(
+                bs, [q for q in query_tensor], [r for r in response_tensor], reward
+            )
+
+            # check the shapes
+            for i in range(bs):
+                self.assertEqual(queries[i].shape, torch.Size([7]))
+                self.assertEqual(responses[i].size(), torch.Size([7]))
+            break
