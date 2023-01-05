@@ -26,7 +26,7 @@ from packaging import version
 from torch.optim import Adam
 from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizer, PreTrainedTokenizerFast
 
-from trl.core import (
+from ..core import (
     WANDB_PADDING,
     clip_by_value,
     entropy_from_logits,
@@ -36,9 +36,8 @@ from trl.core import (
     stats_to_np,
     whiten,
 )
-from trl.models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper, create_reference_model
-from trl.trainer import BaseTrainer
-from trl.trainer.utils import AdaptiveKLController, FixedKLController
+from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper, create_reference_model
+from . import AdaptiveKLController, BaseTrainer, FixedKLController
 
 
 class PPOTrainer(BaseTrainer):
