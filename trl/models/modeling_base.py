@@ -11,8 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import inspect
+import os
 from copy import deepcopy
 
+import torch
 import torch.nn as nn
 from transformers import PreTrainedModel
 
@@ -66,6 +69,8 @@ class PreTrainedModelWrapper(nn.Module):
             trl_model_args = {}
             pretrained_kwargs = {}
 
+        resume_training = trl_model_args.get("resume_training", False)
+
         # First, load the pre-trained model using the parent-class
         # either `AutoModelForCausalLM` or `AutoModelForSeq2SeqLM`
         if isinstance(pretrained_model_name_or_path, str):
@@ -79,9 +84,24 @@ class PreTrainedModelWrapper(nn.Module):
                 "pretrained_model_name_or_path should be a string or a PreTrainedModel, "
                 f"but is {type(pretrained_model_name_or_path)}"
             )
-
         # Then, create the full model by instantiating the wrapper class
         model = cls(pretrained_model, **trl_model_args)
+
+        # if resume_training, load the state_dict again - this is ok since the
+        # state_dict is removed from the model after loading it.
+        # since this is only done in edge cases we force the user to do it only
+        # if they explicitly set resume_training to True
+        if resume_training:
+            if isinstance(pretrained_model_name_or_path, str):
+                # TODO: Deal with sharded case!
+                state_dict = torch.load(
+                    os.path.join(pretrained_model_name_or_path, "pytorch_model.bin"), map_location="cpu"
+                )
+            else:
+                state_dict = pretrained_model_name_or_path.state_dict()
+
+            # TODO: pop unused keys
+            model.post_init(state_dict=state_dict)
 
         return model
 
@@ -95,7 +115,10 @@ class PreTrainedModelWrapper(nn.Module):
         unsupported_kwargs = {}
 
         for key, value in kwargs.items():
-            if key in cls.supported_args:
+            if (
+                key in cls.supported_args
+                or key not in inspect.signature(cls.transformers_parent_class.from_pretrained).parameters.keys()
+            ):
                 supported_kwargs[key] = value
             else:
                 unsupported_kwargs[key] = value
@@ -110,9 +133,29 @@ class PreTrainedModelWrapper(nn.Module):
 
     def save_pretrained(self, *args, **kwargs):
         r"""
-        Save the pretrained model to a directory.
+        Save the pretrained model to a directory. Manually add the state_dict
+        to the kwargs.
         """
+        state_dict = kwargs.pop("state_dict", None)
+        if state_dict is None:
+            state_dict = self.state_dict()
+            kwargs["state_dict"] = state_dict
+
         return self.pretrained_model.save_pretrained(*args, **kwargs)
+
+    def state_dict(self, *args, **kwargs):
+        r"""
+        Return the state_dict of the pretrained model.
+        """
+        raise NotImplementedError
+
+    def post_init(self, *args, **kwargs):
+        r"""
+        Post initialization method. This method is called after the model is
+        instantiated and loaded from a checkpoint. It can be used to perform
+        additional operations such as loading the state_dict.
+        """
+        raise NotImplementedError
 
 
 def create_reference_model(

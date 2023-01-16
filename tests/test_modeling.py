@@ -53,6 +53,24 @@ class BaseModelTester:
             for key in model_from_save.state_dict():
                 self.assertTrue(torch.allclose(model_from_save.state_dict()[key], model.state_dict()[key]))
 
+    def test_from_save_after_training(self):
+        """
+        Test if the model can be saved and loaded from a directory and get the same weights
+        Here we add the argument `resume_training=True` to the `from_pretrained` method
+        to load also the `v_head` weights.
+        """
+        for model_name in self.all_model_names:
+            model = self.trl_model_class.from_pretrained(model_name)
+
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                model.save_pretrained(tmp_dir)
+
+                model_from_save = self.trl_model_class.from_pretrained(tmp_dir, resume_training=True)
+
+            # Check if the weights are the same
+            for key in model_from_save.state_dict():
+                self.assertTrue(torch.allclose(model_from_save.state_dict()[key], model.state_dict()[key]))
+
     def test_from_save_transformers(self):
         """
         Test if the model can be saved and loaded using transformers and get the same weights
