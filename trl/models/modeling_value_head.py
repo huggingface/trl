@@ -142,6 +142,11 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
             pretrained_model_state_dict[f"v_head.{k}"] = v
         return pretrained_model_state_dict
 
+    def push_to_hub(self, *args, **kwargs):
+        setattr(self.pretrained_model, "v_head", self.v_head)
+
+        return self.pretrained_model.push_to_hub(*args, **kwargs)
+
     def post_init(self, state_dict):
         r"""
         We add the state dictionary of the value head to the state dictionary of the wrapped model

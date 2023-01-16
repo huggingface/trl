@@ -18,6 +18,7 @@ from copy import deepcopy
 import torch
 import torch.nn as nn
 from transformers import PreTrainedModel
+from transformers.utils import cached_file, download_url, is_remote_url
 
 
 LAYER_PATTERNS = ["transformer.h.{layer}", "model.decoder.layers.{layer}", "gpt_neox.layers.{layer}"]
@@ -94,13 +95,19 @@ class PreTrainedModelWrapper(nn.Module):
         if resume_training:
             if isinstance(pretrained_model_name_or_path, str):
                 # TODO: Deal with sharded case!
-                state_dict = torch.load(
-                    os.path.join(pretrained_model_name_or_path, "pytorch_model.bin"), map_location="cpu"
-                )
+                filename = os.path.join(pretrained_model_name_or_path, "pytorch_model.bin")
+
+                if not os.path.exists(filename):
+                    if is_remote_url(pretrained_model_name_or_path):
+                        filename = download_url(pretrained_model_name_or_path)
+                    else:
+                        filename = cached_file(pretrained_model_name_or_path, "pytorch_model.bin")
+
+                state_dict = torch.load(filename, map_location="cpu")
+
             else:
                 state_dict = pretrained_model_name_or_path.state_dict()
 
-            # TODO: pop unused keys
             model.post_init(state_dict=state_dict)
 
         return model
@@ -129,7 +136,7 @@ class PreTrainedModelWrapper(nn.Module):
         r"""
         Push the pretrained model to the hub.
         """
-        return self.pretrained_model.push_to_hub(*args, **kwargs)
+        raise NotImplementedError
 
     def save_pretrained(self, *args, **kwargs):
         r"""
