@@ -202,6 +202,24 @@ class ValueHeadModelTester(BaseModelTester, unittest.TestCase):
             pretrained_model = AutoModelForCausalLM.from_pretrained(model_id)
             _ = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model.transformer)
 
+    @unittest.skip("This test needs to be run manually due to HF token issue.")
+    def test_push_to_hub(self):
+        for model_name in self.all_model_names:
+            model = AutoModelForCausalLMWithValueHead.from_pretrained(model_name)
+            model.push_to_hub(model_name + "-ppo", use_auth_token=True)
+
+            model_from_pretrained = AutoModelForCausalLMWithValueHead.from_pretrained(
+                model_name + "-ppo", resume_training=True
+            )
+            # check all keys
+            self.assertEqual(model.state_dict().keys(), model_from_pretrained.state_dict().keys())
+
+            for name, param in model.state_dict().items():
+                self.assertTrue(
+                    torch.allclose(param, model_from_pretrained.state_dict()[name]),
+                    f"Parameter {name} is not the same after push_to_hub and from_pretrained",
+                )
+
 
 class ReferenceModelTest(unittest.TestCase):
     def setUp(self):
