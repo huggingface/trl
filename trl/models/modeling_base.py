@@ -47,7 +47,7 @@ class PreTrainedModelWrapper(nn.Module):
         Instantiates a new model from a pretrained model.
 
         Args:
-            pretrained_model_name_or_path: (`str` or `transformers.PreTrainedModel`)
+            pretrained_model_name_or_path (`str` or `transformers.PreTrainedModel`):
                 The path to the pretrained model or its name.
             *model_args (`list`, *optional*)):
                 Additional positional arguments passed along to the underlying model's
@@ -107,10 +107,10 @@ class PreTrainedModelWrapper(nn.Module):
         of `transformers.PreTrainedModel.push_to_hub` for more information.
 
         Args:
-            *args: (`list`, *optional*)
+            *args (`list`, *optional*):
                 Positional arguments passed along to the underlying model's
                 `push_to_hub` method.
-            **kwargs: (`dict`, *optional*)
+            **kwargs (`dict`, *optional*):
                 Keyword arguments passed along to the underlying model's
                 `push_to_hub` method.
         """
@@ -123,10 +123,10 @@ class PreTrainedModelWrapper(nn.Module):
         of `transformers.PreTrainedModel.save_pretrained` for more information.
 
         Args:
-            *args: (`list`, *optional*)
+            *args (`list`, *optional*):
                 Positional arguments passed along to the underlying model's
                 `save_pretrained` method.
-            **kwargs: (`dict`, *optional*)
+            **kwargs (`dict`, *optional*):
                 Keyword arguments passed along to the underlying model's
                 `save_pretrained` method.
         """
