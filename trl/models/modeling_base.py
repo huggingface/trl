@@ -26,14 +26,13 @@ class PreTrainedModelWrapper(nn.Module):
     (`~transformers.PreTrained`) class in order to keep some attributes and methods of the
     (`~transformers.PreTrainedModel`) class.
 
-    Attributes
-    ----------
-    pretrained_model: (`transformers.PreTrainedModel`)
-        The model to be wrapped.
-    parent_class: (`transformers.PreTrainedModel`)
-        The parent class of the model to be wrapped.
-    supported_args: (`list`)
-        The list of arguments that are supported by the wrapper class.
+    Attributes:
+        pretrained_model: (`transformers.PreTrainedModel`)
+            The model to be wrapped.
+        parent_class: (`transformers.PreTrainedModel`)
+            The parent class of the model to be wrapped.
+        supported_args: (`list`)
+            The list of arguments that are supported by the wrapper class.
     """
     transformers_parent_class = None
     supported_args = None
@@ -47,18 +46,17 @@ class PreTrainedModelWrapper(nn.Module):
         r"""
         Instantiates a new model from a pretrained model.
 
-        Parameters
-        ----------
-        pretrained_model_name_or_path: (`str` or `transformers.PreTrainedModel`)
-            The path to the pretrained model or its name.
-        *model_args:
-            Additional positional arguments passed along to the underlying model's
-            `from_pretrained` method.
-        **kwargs:
-            Additional keyword arguments passed along to the underlying model's
-            `from_pretrained` method. We also pre-process the kwargs to extract
-            the arguments that are specific to the `transformers.PreTrainedModel`
-            class and the arguments that are specific to trl models.
+        Args:
+            pretrained_model_name_or_path: (`str` or `transformers.PreTrainedModel`)
+                The path to the pretrained model or its name.
+            *model_args (`list`, *optional*)):
+                Additional positional arguments passed along to the underlying model's
+                `from_pretrained` method.
+            **kwargs (`dict`, *optional*):
+                Additional keyword arguments passed along to the underlying model's
+                `from_pretrained` method. We also pre-process the kwargs to extract
+                the arguments that are specific to the `transformers.PreTrainedModel`
+                class and the arguments that are specific to trl models.
         """
         if kwargs is not None:
             trl_model_args, pretrained_kwargs = cls._split_kwargs(kwargs)
