@@ -72,14 +72,14 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
             by the `ValueHead` class. Currently the supported args are:
             - **summary_dropout_prob** (`float`, `optional`, defaults to `None`) -- The dropout probability for the
                 `ValueHead` class.
-            - **v_head_initializer_range** (`float`, `optional`, defaults to `None`) -- The initializer range for the
+            - **v_head_initializer_range** (`float`, `optional`, defaults to `0.2`) -- The initializer range for the
                 `ValueHead` if a specific initialization strategy is selected.
             - **v_head_init_strategy** (`str`, `optional`, defaults to `None`) -- The initialization strategy for the
                 `ValueHead`. Currently supported strategies are:
-                - **"random"** -- Initializes the weights of the `ValueHead` with a random distribution. This is the default
+                - **`None`** -- Initializes the weights of the `ValueHead` with a random distribution. This is the default
                     strategy.
                 - **"normal"** -- Initializes the weights of the `ValueHead` with a normal distribution.
-        
+
     """
     transformers_parent_class = AutoModelForCausalLM
     lm_head_namings = ["lm_head", "embed_out"]
