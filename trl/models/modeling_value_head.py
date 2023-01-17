@@ -113,6 +113,7 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
         **kwargs,
     ):
         r"""
+        Applies a forward pass to the wrapped model and returns the logits of the value head.
 
         Args:
             input_ids (`torch.LongTensor` of shape `(batch_size, sequence_length)`):
