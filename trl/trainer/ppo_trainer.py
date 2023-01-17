@@ -37,17 +37,43 @@ from ..core import (
     whiten,
 )
 from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper, create_reference_model
-from . import AdaptiveKLController, BaseTrainer, FixedKLController
+from . import AdaptiveKLController, BaseTrainer, FixedKLController, PPOConfig
 
 
 class PPOTrainer(BaseTrainer):
     """
     The PPOTrainer uses Proximal Policy Optimization to optimise language models.
+
+    Class attributes:
+        config (`PPOConfig`):
+            Configuration object for PPOTrainer. Check the documentation of `PPOConfig` for more details.
+        model (`PreTrainedModelWrapper`):
+            Model to be optimized, Hugging Face transformer model with a value head. Check the documentation
+            of `PreTrainedModelWrapper` for more details.
+        ref_model (`PreTrainedModelWrapper`, *optional*):
+            Reference model to be used for KL penalty, Hugging Face transformer model with a casual language modelling head.
+            Check the documentation of `PreTrainedModelWrapper` for more details. If no reference model is provided, the
+            trainer will create a reference model with the same architecture as the model to be optimized with shared layers.
+        tokenizer (`Union[PreTrainedTokenizer, PreTrainedTokenizerFast]`):
+            Tokenizer to be used for encoding the data. Check the documentation of `transformers.PreTrainedTokenizer` and
+            `transformers.PreTrainedTokenizerFast` for more details.
+        dataset (Union[`torch.utils.data.Dataset`, `datasets.Dataset`], *optional*):
+            PyTorch dataset or Hugging Face dataset. This is used to create a PyTorch dataloader. If no dataset is provided,
+            the dataloader must be created outside the trainer users needs to design their own dataloader and make sure the batch
+            size that is used is the same as the one specified in the configuration object.
+        optimizer (`torch.optim.Optimizer`, *optional*):
+            Optimizer to be used for training. If no optimizer is provided, the trainer will create an Adam optimizer with
+            the learning rate specified in the configuration object.
+        data_collator (DataCollatorForLanguageModeling, *optional*):
+            Data collator to be used for training and passed along the dataloader
+        num_shared_layers (int, *optional*):
+            Number of layers to be shared between the model and the reference model, if no reference model is passed. If no number is provided, all the layers
+            will be shared.
     """
 
     def __init__(
         self,
-        config,
+        config: PPOConfig,
         model: PreTrainedModelWrapper,
         ref_model: PreTrainedModelWrapper,
         tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast],
@@ -167,8 +193,7 @@ class PPOTrainer(BaseTrainer):
                 Data collator function.
 
         Returns:
-            `torch.utils.data.DataLoader`:
-                PyTorch dataloader
+            `torch.utils.data.DataLoader`: PyTorch dataloader
         """
         if isinstance(dataset, Dataset):
             dataset = self._remove_unused_columns(dataset)
@@ -210,7 +235,8 @@ class PPOTrainer(BaseTrainer):
 
     def generate(self, query_tensor: torch.Tensor, **generation_kwargs):
         """
-        Generate response given query.
+        Generate response given the query tensor. First unwrap the model from the accelerator and then
+        call the `generate` method of the model.
 
         Args:
             query_tensor (`torch.LongTensor`):
@@ -219,8 +245,7 @@ class PPOTrainer(BaseTrainer):
                 Keyword arguments for generation.
 
         Returns:
-            response (`torch.LongTensor`):
-                A tensor of shape (`batch_size`, `gen_len`) containing response tokens.
+            `torch.LongTensor`: A tensor of shape (`batch_size`, `gen_len`) containing response tokens.
         """
         response = self.accelerator.unwrap_model(self.model).generate(
             query_tensor.unsqueeze(dim=0), **generation_kwargs
@@ -248,8 +273,7 @@ class PPOTrainer(BaseTrainer):
             scores (List[`torch.FloatTensor`]):
                 List of tensors containing the scores.
         Returns:
-            queries, responses, scores (List[`torch.LongTensor`], List[`torch.LongTensor`], List[`torch.FloatTensor`]):
-                The input processed data.
+            `tuple`: The input processed data.
         """
         for name, tensor_list in zip(["queries", "responses", "scores"], [queries, responses, scores]):
             if not isinstance(tensor_list, list):
@@ -282,7 +306,8 @@ class PPOTrainer(BaseTrainer):
         scores: List[torch.FloatTensor],
     ):
         """
-        Run a PPO optimisation step.
+        Run a PPO optimisation step given the input data. The input data is first checked for validity
+        and then the forward pass is run.
 
         Args:
             queries (List[`torch.LongTensor`]):
@@ -293,8 +318,7 @@ class PPOTrainer(BaseTrainer):
                 List of tensors containing the scores.
 
         Returns:
-            train_stats (dict[str, Any]):
-                a summary of the training statistics
+            `dict[str, Any]`: A summary of the training statistics
         """
 
         bs = self.config.batch_size
@@ -370,8 +394,7 @@ class PPOTrainer(BaseTrainer):
             a dictionary of stats to be gathered. The stats should contain torch tensors.
 
         Returns:
-            stats (dict[str, Any]):
-                a dictionary of stats with the tensors gathered.
+            `dict[str, Any]`: A dictionary of stats with the tensors gathered.
         """
         import torch.distributed as dist
 
@@ -396,13 +419,10 @@ class PPOTrainer(BaseTrainer):
                 List of tensors containing the encoded responses, shape (`batch_size`, `response_length`)
 
         Returns:
-            all_logprobs (`torch.FloatTensor`):
-                List of tensors containing the logprobs, shape (`batch_size`, `response_length`)
-            all_ref_logprobs (`torch.FloatTensor`):
-                List of tensors containing the logprobs from the reference model, shape (`batch_size`, `response_length`)
-            all_values (`torch.FloatTensor`):
-                List of tensors containing the output from the value head, shape (`batch_size`, `response_length`)
-
+            (tuple):
+                - all_logprobs (`torch.FloatTensor`): Log probabilities of the responses, shape (`batch_size`, `response_length`)
+                - all_ref_logprobs (`torch.FloatTensor`): Log probabilities of the responses, shape (`batch_size`, `response_length`)
+                - all_values (`torch.FloatTensor`): Values of the responses, shape (`batch_size`, `response_length`)
         """
         bs = self.config.batch_size
         fbs = self.config.forward_batch_size
