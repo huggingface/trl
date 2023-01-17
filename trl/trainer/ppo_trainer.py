@@ -51,7 +51,7 @@ class PPOTrainer(BaseTrainer):
         model: PreTrainedModelWrapper,
         ref_model: PreTrainedModelWrapper,
         tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast],
-        dataset: Union[torch.utils.data.Dataset, Dataset],
+        dataset: Optional[Union[torch.utils.data.Dataset, Dataset]] = None,
         optimizer: Optional[torch.optim.Optimizer] = None,
         data_collator=None,
         num_shared_layers: Optional[int] = None,
@@ -68,9 +68,10 @@ class PPOTrainer(BaseTrainer):
                 Hugging Face transformer model with a casual language modelling head. Used for KL penalty
             tokenizer (`transformers.PreTrainedTokenizer`):
                 Hugging Face tokenizer
-            dataset (Union[`torch.utils.data.Dataset`, `datasets.Dataset`]):
+            dataset (Union[`torch.utils.data.Dataset`, `datasets.Dataset`], *optional*):
                 PyTorch dataset or Hugging Face dataset. If a Hugging Face dataset is passed, the dataset
-                will be preprocessed by removing the columns that are not used by the model.
+                will be preprocessed by removing the columns that are not used by the model. If none is passed,
+                a warning will be raised in a multi-GPU setting.
             optimizer (Optional[`torch.optim.Optimizer`]):
                 Optimizer used for training. If `None`, the `Adam` is used as default.
             data_collator (Optional[function]):
@@ -111,11 +112,28 @@ class PPOTrainer(BaseTrainer):
             )
         self.tokenizer = tokenizer
 
-        if not (isinstance(dataset, torch.utils.data.Dataset) or isinstance(dataset, Dataset)):
+        if dataset is not None and not (isinstance(dataset, torch.utils.data.Dataset) or isinstance(dataset, Dataset)):
             raise ValueError("dataloader must be a torch.utils.data.Dataset or datasets.Dataset")
+        elif dataset is None:
+            warnings.warn(
+                "No dataset is provided. Make sure to set config.batch_size to the correct value before training.",
+                UserWarning,
+            )
         self.dataset = dataset
         self._signature_columns = None
-        self.dataloader = self.prepare_dataloader(self.dataset, data_collator)
+        if self.dataset is not None:
+            self.dataloader = self.prepare_dataloader(self.dataset, data_collator)
+        elif self.dataset is None and self.accelerator.num_processes > 1:
+            warnings.warn(
+                "No dataset is provided. In a multi-GPU setting, this will lead to an error. You should",
+                " prepare your dataloader yourself with `dataloader = ppo_trainer.accelerator.prepare(dataloader)`",
+                " and using `torch.utils.data.DataLoader`, or pass a dataset to the `PPOTrainer`. Please ",
+                " refer to the documentation for more details.",
+                UserWarning,
+            )
+            self.dataloader = None
+        else:
+            self.dataloader = None
 
         # Step 3: Initialize optimizer and data collator
         self.data_collator = DataCollatorForLanguageModeling(self.tokenizer, mlm=False)
@@ -240,7 +258,7 @@ class PPOTrainer(BaseTrainer):
 
         Args:
             batch_size (int):
-                Batch size
+                Batch size from the config file.
             queries (List[`torch.LongTensor`]):
                 List of tensors containing the encoded queries of shape (`query_length`)
             responses (List[`torch.LongTensor`]):
@@ -256,7 +274,7 @@ class PPOTrainer(BaseTrainer):
                 raise ValueError(f"{name} must be a list of tensors - got {type(tensor_list)}")
             if not isinstance(tensor_list[0], torch.Tensor):
                 raise ValueError(f"Elements in {name} must tensors - got {type(tensor_list[0])}")
-            if len(tensor_list) != batch_size:
+            if batch_size is not None and len(tensor_list) != batch_size:
                 raise ValueError(
                     f"Batch size ({batch_size}) does not match number of examples - but got {len(tensor_list)} for: {name}"
                 )
@@ -296,7 +314,6 @@ class PPOTrainer(BaseTrainer):
             train_stats (dict[str, Any]):
                 a summary of the training statistics
         """
-
         bs = self.config.batch_size
 
         queries, responses, scores = self._step_safety_checker(bs, queries, responses, scores)
@@ -385,7 +402,11 @@ class PPOTrainer(BaseTrainer):
             stats[k] = v
         return stats
 
-    def batched_forward_pass(self, queries: torch.Tensor, responses: torch.Tensor):
+    def batched_forward_pass(
+        self,
+        queries: torch.Tensor,
+        responses: torch.Tensor,
+    ):
         """
         Calculate model outputs in multiple batches.
 
@@ -394,7 +415,6 @@ class PPOTrainer(BaseTrainer):
                 List of tensors containing the encoded queries, shape (`batch_size`, `query_length`)
             responses (`torch.LongTensor`):
                 List of tensors containing the encoded responses, shape (`batch_size`, `response_length`)
-
         Returns:
             all_logprobs (`torch.FloatTensor`):
                 List of tensors containing the logprobs, shape (`batch_size`, `response_length`)
