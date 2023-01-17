@@ -227,8 +227,8 @@ class PPOTrainer(BaseTrainer):
             query_tensor.unsqueeze(dim=0), **generation_kwargs
         )
 
-        if self.is_encoder_decoder:
-            response = torch.cat([query_tensor.unsqueeze(0), response[:, 1:]], dim=-1)
+        #if self.is_encoder_decoder:
+            #response = torch.cat([query_tensor.unsqueeze(0), response[:, 1:]], dim=-1)
 
         return response
 
@@ -434,7 +434,7 @@ class PPOTrainer(BaseTrainer):
                 input_kwargs = {
                     "input_ids": input_ids,
                 }
-
+                
             with torch.no_grad():
                 logits, _, v = self.model(**input_kwargs)
                 ref_logits, _, _ = self.ref_model(**input_kwargs)
@@ -445,12 +445,24 @@ class PPOTrainer(BaseTrainer):
             else:
                 logprobs = logprobs_from_logits(logits[:, :-1, :], input_ids[:, 1:])
                 ref_logprobs = logprobs_from_logits(ref_logits[:, :-1, :], input_ids[:, 1:])
+                
             for j in range(fbs):
-                start = len(query_batch[j]) - 1
-                end = len(query_batch[j]) + len(response_batch[j]) - 1
-                all_values.append(v[j, start - 1 : end - 1])
+                if self.is_encoder_decoder:
+                    # Decoder sentence starts always in the index 0 in the Enc-Dec Models
+                    start = 1
+                    end = response_batch[j].shape[-1] - 1
+                    #print(len(response_batch))
+                else:
+                    start = len(query_batch[j]) - 1
+                    end = len(query_batch[j]) + len(response_batch[j]) - 1
+                
+                all_values.append(v[j, start - 1:end - 1])
                 all_logprobs.append(logprobs[j, start:end])
+                if len(logprobs[j, start:end])<2:
+                    print("error")
+                    print(input_ids[j], decoder_input_ids[j], response_batch[j])
                 all_ref_logprobs.append(ref_logprobs[j, start:end])
+                
         return all_logprobs, all_ref_logprobs, all_values
 
     def train_minibatch(
@@ -542,7 +554,7 @@ class PPOTrainer(BaseTrainer):
         """
         lastgaelam = 0
         advantages_reversed = []
-        gen_len = response.shape[1]
+        gen_len = rewards.shape[-1]
 
         for t in reversed(range(gen_len)):
             nextvalues = values[:, t + 1] if t < gen_len - 1 else 0.0
@@ -566,9 +578,14 @@ class PPOTrainer(BaseTrainer):
 
         logits, _, vpred = self.model(**input_kwargs)
 
-        logprob = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
-
-        logprob, vpred = logprob[:, -gen_len:], vpred[:, -gen_len - 1 : -1]
+        if self.is_encoder_decoder:
+            logprob = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
+            start, end = 1, response.shape[-1] -1
+            vpred = vpred[:, start - 1 : end - 1]
+            logprob = logprob[:, start:end]
+        else:
+            logprob = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
+            logprob, vpred = logprob[:, -gen_len:], vpred[:, -gen_len - 1 : -1]
 
         vpredclipped = clip_by_value(vpred, values - self.config.cliprange_value, values + self.config.cliprange_value)
 
@@ -576,9 +593,11 @@ class PPOTrainer(BaseTrainer):
         vf_losses2 = (vpredclipped - returns) ** 2
         vf_loss = 0.5 * torch.mean(torch.max(vf_losses1, vf_losses2))
         vf_clipfrac = torch.mean(torch.gt(vf_losses2, vf_losses1).double())
-
+        #print("new:", logprob)
+        #print("res:", response)
+        #print("old", old_logprobs)
         ratio = torch.exp(logprob - old_logprobs)
-
+        #print(ratio)
         pg_losses = -advantages * ratio
         pg_losses2 = -advantages * torch.clamp(ratio, 1.0 - self.config.cliprange, 1.0 + self.config.cliprange)
 
