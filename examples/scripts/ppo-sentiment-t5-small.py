@@ -44,6 +44,8 @@ from trl.core import LengthSampler
 config = PPOConfig(
     model_name="google/flan-t5-small",
     learning_rate=1.41e-5,
+    batch_size=32,
+    forward_batch_size=32
 )
 
 # We then define the arguments to pass to the sentiment analysis pipeline.
@@ -80,7 +82,8 @@ def build_dataset(config, dataset_name="imdb", input_min_text_length=2, input_ma
     input_size = LengthSampler(input_min_text_length, input_max_text_length)
 
     def tokenize(sample):
-        sample["input_ids"] = tokenizer.encode(sample["review"])[:input_size()]
+        #sample["input_ids"] = tokenizer.encode(sample["review"])[:input_size()] + [tokenizer.eos_token_id]
+        sample["input_ids"] = tokenizer.encode("Write a movie review:")
         sample["query"] = tokenizer.decode(sample["input_ids"])
         return sample
 
@@ -101,7 +104,11 @@ tokenizer = AutoTokenizer.from_pretrained(config.model_name)
 
 # GPT-2 tokenizer has a pad token, but it is not eos_token by default. We need to set it to eos_token.
 # only for this model.
-tokenizer.pad_token = tokenizer.eos_token
+#tokenizer.pad_token = tokenizer.eos_token
+#tokenizer.padding_side = "left"
+#tokenizer.truncation_side = "right"
+#tokenizer.sep_token = "<sep>"
+
 
 # We then build the PPOTrainer, passing the model, the reference model, the tokenizer
 ppo_trainer = PPOTrainer(config, model, ref_model, tokenizer, dataset=dataset, data_collator=collater)
@@ -122,9 +129,9 @@ generation_kwargs = {
     "top_k": 0.0,
     "top_p": 1.0,
     "do_sample": True,
-    "pad_token_id": tokenizer.eos_token_id
+    "eos_token_id":-1,
 }
-output_min_length = 4
+output_min_length = 6
 output_max_length = 16
 output_length_sampler = LengthSampler(output_min_length, output_max_length)
 
@@ -137,8 +144,8 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
         gen_len = output_length_sampler()
         generation_kwargs["max_new_tokens"] = gen_len
         response = ppo_trainer.generate(query, **generation_kwargs)
-        response_tensors.append(response.squeeze()[-gen_len:])
-    batch['response'] = [tokenizer.decode(r.squeeze()) for r in response_tensors]
+        response_tensors.append(response.squeeze())
+    batch['response'] = [tokenizer.decode(r[1:].squeeze()) for r in response_tensors]
 
     #### Compute sentiment score
     texts = [q + r for q,r in zip(batch['query'], batch['response'])]
