@@ -224,10 +224,10 @@ We use a dataloader to return the batches of queries used for each PPO epoch:
 
 
 ```python
-def collater(data):
+def collator(data):
     return dict((key, [d[key] for d in data]) for key in data[0])
 
-dataloader = torch.utils.data.DataLoader(ds, batch_size=config['batch_size'], collate_fn=collater)
+dataloader = torch.utils.data.DataLoader(ds, batch_size=config['batch_size'], collate_fn=collator)
 ```
 
 ### Training loop
