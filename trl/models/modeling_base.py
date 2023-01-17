@@ -44,7 +44,12 @@ class PreTrainedModelWrapper(nn.Module):
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
         r"""
-        Instantiates a new model from a pretrained model.
+        Instantiates a new model from a pretrained model from `transformers`. The
+        pretrained model is loaded using the `from_pretrained` method of the
+        `transformers.PreTrainedModel` class. The arguments that are specific to the
+        `transformers.PreTrainedModel` class are passed along this method and filtered
+        out from the `kwargs` argument.
+
 
         Args:
             pretrained_model_name_or_path (`str` or `transformers.PreTrainedModel`):
