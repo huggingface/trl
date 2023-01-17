@@ -93,7 +93,7 @@ def build_dataset(config, dataset_name="imdb", input_min_text_length=2, input_ma
 # We retrieve the dataloader by calling the `build_dataset` function.
 dataset = build_dataset(config)
 
-def collater(data):
+def collator(data):
     return dict((key, [d[key] for d in data]) for key in data[0])
 
 # Now let's build the model, the reference model, and the tokenizer.
@@ -107,7 +107,7 @@ optimizer = bnb.optim.Adam8bit(model.parameters(), lr=config.learning_rate)
 tokenizer.pad_token = tokenizer.eos_token
 
 # We then build the PPOTrainer, passing the model, the reference model, the tokenizer
-ppo_trainer = PPOTrainer(config, model, ref_model, tokenizer, dataset=dataset, data_collator=collater, optimizer=optimizer)
+ppo_trainer = PPOTrainer(config, model, ref_model, tokenizer, dataset=dataset, data_collator=collator, optimizer=optimizer)
 
 # We then build the sentiment analysis pipeline, passing the model name and the
 # sentiment analysis pipeline arguments. Let's also make sure to set the device
