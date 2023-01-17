@@ -71,28 +71,9 @@ query_tensor = tokenizer.encode(query_txt, return_tensors="pt")
 
 # get model response
 response_tensor  = respond_to_batch(model_ref, query_tensor)
-response_txt = tokenizer.decode(response_tensor[0,:])
-
-# create a dummy dataset
-class DummyDataset(torch.utils.data.Dataset):
-    def __init__(self, query_data, response_data):
-        self.query_data = query_data
-        self.response_data = response_data
-
-    def __len__(self):
-        return len(self.query_data)
-
-    def __getitem__(self, idx):
-        return self.query_data[idx], self.response_data[idx]
-
-min_length = min(len(query_tensor[0]), len(response_tensor[0]))
-dummy_dataset = DummyDataset(
-    [query_tensor[:, :min_length].squeeze(0) for _ in range(2)],
-    [response_tensor[:, :min_length].squeeze(0) for _ in range(2)],
-)
 
 # create a ppo trainer
-ppo_trainer = PPOTrainer(ppo_config, model, model_ref, tokenizer, dummy_dataset)
+ppo_trainer = PPOTrainer(ppo_config, model, model_ref, tokenizer)
 device = ppo_trainer.accelerator.device
 
 # define a reward for response
