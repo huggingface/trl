@@ -91,7 +91,7 @@ def build_dataset(config, dataset_name="imdb", input_min_text_length=2, input_ma
 # We retrieve the dataloader by calling the `build_dataset` function.
 dataset = build_dataset(config)
 
-def collater(data):
+def collator(data):
     return dict((key, [d[key] for d in data]) for key in data[0])
 
 # Now let's build the model, the reference model, and the tokenizer.
@@ -104,7 +104,7 @@ tokenizer = AutoTokenizer.from_pretrained(config.model_name)
 tokenizer.pad_token = tokenizer.eos_token
 
 # We then build the PPOTrainer, passing the model, the reference model, the tokenizer
-ppo_trainer = PPOTrainer(config, model, ref_model, tokenizer, dataset=dataset, data_collator=collater)
+ppo_trainer = PPOTrainer(config, model, ref_model, tokenizer, dataset=dataset, data_collator=collator)
 
 # We then build the sentiment analysis pipeline, passing the model name and the
 # sentiment analysis pipeline arguments. Let's also make sure to set the device
@@ -112,7 +112,7 @@ ppo_trainer = PPOTrainer(config, model, ref_model, tokenizer, dataset=dataset, d
 device = ppo_trainer.accelerator.device
 if ppo_trainer.accelerator.num_processes == 1:
    device = 0 if torch.cuda.is_available() else "cpu" # to avoid a `pipeline` bug
-sentiment_pipe = pipeline("sentiment-analysis", "lvwerra/distilbert-imdb", device=device)
+sentiment_pipe = pipeline("sentiment-analysis", model="lvwerra/distilbert-imdb", device=device)
 
 # We then define the arguments to pass to the `generate` function. These arguments
 # are passed to the `generate` function of the PPOTrainer, which is a wrapper around 

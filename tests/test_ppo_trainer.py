@@ -344,3 +344,38 @@ class PPOTrainerTester(unittest.TestCase):
                 self.assertEqual(queries[i].shape, torch.Size([7]))
                 self.assertEqual(responses[i].size(), torch.Size([7]))
             break
+
+    def test_ppo_step_no_dataset(self):
+        """
+        Test if the training loop works fine without passing a dataset
+        """
+        query_txt = "This morning I went to the "
+        query_tensor = self.gpt2_tokenizer.encode(query_txt, return_tensors="pt")
+        self.ppo_config.batch_size = 1
+
+        response_tensor = respond_to_batch(self.gpt2_model, query_tensor)
+
+        # Check that this warns the user about batch size
+        with self.assertWarns(UserWarning):
+            ppo_trainer = PPOTrainer(
+                config=self.ppo_config,
+                model=self.gpt2_model,
+                ref_model=self.gpt2_model_ref,
+                tokenizer=self.gpt2_tokenizer,
+            )
+        # train model with ppo
+        reward = [torch.tensor([1.0])]
+        # train model - this should work fine
+        train_stats = ppo_trainer.step([query_tensor[0]], [response_tensor[0]], reward)
+
+        # check gradients
+        for name, param in ppo_trainer.model.named_parameters():
+            self.assertTrue(param.grad is not None, f"Parameter {name} has no gradient")
+
+        # ref model should not be trained
+        for name, param in ppo_trainer.ref_model.named_parameters():
+            self.assertTrue(param.grad is None, f"Parameter {name} has a gradient")
+
+        # check train stats
+        for stat in EXPECTED_STATS:
+            self.assertTrue(stat in train_stats, f"Train stats should contain {stat}")

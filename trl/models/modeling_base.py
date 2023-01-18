@@ -30,14 +30,13 @@ class PreTrainedModelWrapper(nn.Module):
     (`~transformers.PreTrained`) class in order to keep some attributes and methods of the
     (`~transformers.PreTrainedModel`) class.
 
-    Attributes
-    ----------
-    pretrained_model: (`transformers.PreTrainedModel`)
-        The model to be wrapped.
-    parent_class: (`transformers.PreTrainedModel`)
-        The parent class of the model to be wrapped.
-    supported_args: (`list`)
-        The list of arguments that are supported by the wrapper class.
+    Attributes:
+        pretrained_model: (`transformers.PreTrainedModel`)
+            The model to be wrapped.
+        parent_class: (`transformers.PreTrainedModel`)
+            The parent class of the model to be wrapped.
+        supported_args: (`list`)
+            The list of arguments that are supported by the wrapper class.
     """
     transformers_parent_class = None
     supported_args = None
@@ -49,20 +48,24 @@ class PreTrainedModelWrapper(nn.Module):
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
         r"""
-        Instantiates a new model from a pretrained model.
+        Instantiates a new model from a pretrained model from `transformers`. The
+        pretrained model is loaded using the `from_pretrained` method of the
+        `transformers.PreTrainedModel` class. The arguments that are specific to the
+        `transformers.PreTrainedModel` class are passed along this method and filtered
+        out from the `kwargs` argument.
 
-        Parameters
-        ----------
-        pretrained_model_name_or_path: (`str` or `transformers.PreTrainedModel`)
-            The path to the pretrained model or its name.
-        *model_args:
-            Additional positional arguments passed along to the underlying model's
-            `from_pretrained` method.
-        **kwargs:
-            Additional keyword arguments passed along to the underlying model's
-            `from_pretrained` method. We also pre-process the kwargs to extract
-            the arguments that are specific to the `transformers.PreTrainedModel`
-            class and the arguments that are specific to trl models.
+
+        Args:
+            pretrained_model_name_or_path (`str` or `transformers.PreTrainedModel`):
+                The path to the pretrained model or its name.
+            *model_args (`list`, *optional*)):
+                Additional positional arguments passed along to the underlying model's
+                `from_pretrained` method.
+            **kwargs (`dict`, *optional*):
+                Additional keyword arguments passed along to the underlying model's
+                `from_pretrained` method. We also pre-process the kwargs to extract
+                the arguments that are specific to the `transformers.PreTrainedModel`
+                class and the arguments that are specific to trl models.
         """
         if kwargs is not None:
             trl_model_args, pretrained_kwargs = cls._split_kwargs(kwargs)
@@ -134,14 +137,33 @@ class PreTrainedModelWrapper(nn.Module):
 
     def push_to_hub(self, *args, **kwargs):
         r"""
-        Push the pretrained model to the hub.
+        Push the pretrained model to the hub. This method is a wrapper around
+        `transformers.PreTrainedModel.push_to_hub`. Please refer to the documentation
+        of `transformers.PreTrainedModel.push_to_hub` for more information.
+
+        Args:
+            *args (`list`, *optional*):
+                Positional arguments passed along to the underlying model's
+                `push_to_hub` method.
+            **kwargs (`dict`, *optional*):
+                Keyword arguments passed along to the underlying model's
+                `push_to_hub` method.
         """
         raise NotImplementedError
 
     def save_pretrained(self, *args, **kwargs):
         r"""
-        Save the pretrained model to a directory. Manually add the state_dict
-        to the kwargs.
+        Save the pretrained model to a directory. This method is a wrapper around
+        `transformers.PreTrainedModel.save_pretrained`. Please refer to the documentation
+        of `transformers.PreTrainedModel.save_pretrained` for more information.
+
+        Args:
+            *args (`list`, *optional*):
+                Positional arguments passed along to the underlying model's
+                `save_pretrained` method.
+            **kwargs (`dict`, *optional*):
+                Keyword arguments passed along to the underlying model's
+                `save_pretrained` method.
         """
         state_dict = kwargs.pop("state_dict", None)
         if state_dict is None:

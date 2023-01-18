@@ -59,15 +59,27 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
     An autoregressive model with a value head in addition to the language model head.
     This class inherits from `~trl.PreTrainedModelWrapper` and wraps a
     `transformers.PreTrainedModel` class. The wrapper class supports classic functions
-    such as `from_pretrained` and `push_to_hub` and also provides some additional
-    functionalities such as `generate`.
+    such as `from_pretrained`, `push_to_hub` and `generate`. To call a method of the wrapped
+    model, simply manipulate the `pretrained_model` attribute of this class.
 
-    Args:
-        pretrained_model (`transformers.PreTrainedModel`):
-            The model to wrap. It should be a causal language model such as GPT2.
-            or any model mapped inside the `AutoModelForCausalLM` class.
-        kwargs:
-            Additional keyword arguments passed along to the `ValueHead` class.
+    Class attributes:
+        - **transformers_parent_class** (`transformers.PreTrainedModel`) -- The parent class of the wrapped model. This
+            should be set to `transformers.AutoModelForCausalLM` for this class.
+        - **lm_head_namings** (`tuple`) -- A tuple of strings that are used to identify the language model head of the
+            wrapped model. This is set to `("lm_head", "embed_out")` for this class but can be changed for other models
+            in the future
+        - **supported_args** (`tuple`) -- A tuple of strings that are used to identify the arguments that are supported
+            by the `ValueHead` class. Currently the supported args are:
+            - **summary_dropout_prob** (`float`, `optional`, defaults to `None`) -- The dropout probability for the
+                `ValueHead` class.
+            - **v_head_initializer_range** (`float`, `optional`, defaults to `0.2`) -- The initializer range for the
+                `ValueHead` if a specific initialization strategy is selected.
+            - **v_head_init_strategy** (`str`, `optional`, defaults to `None`) -- The initialization strategy for the
+                `ValueHead`. Currently supported strategies are:
+                - **`None`** -- Initializes the weights of the `ValueHead` with a random distribution. This is the default
+                    strategy.
+                - **"normal"** -- Initializes the weights of the `ValueHead` with a normal distribution.
+
     """
     transformers_parent_class = AutoModelForCausalLM
     lm_head_namings = ["lm_head", "embed_out"]
@@ -78,6 +90,16 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
     )
 
     def __init__(self, pretrained_model, **kwargs):
+        r"""
+        Initializes the model.
+
+        Args:
+            pretrained_model (`transformers.PreTrainedModel`):
+                The model to wrap. It should be a causal language model such as GPT2.
+                or any model mapped inside the `AutoModelForCausalLM` class.
+            kwargs (`dict`, `optional`):
+                Additional keyword arguments, that are passed to the `ValueHead` class.
+        """
         super().__init__(pretrained_model)
         v_head_kwargs, _ = self._split_kwargs(kwargs)
 
@@ -90,7 +112,16 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
 
     def _init_weights(self, **kwargs):
         r"""
-        We initialize the weights of the value head.
+        Initializes the weights of the value head. The default initialization strategy is random.
+        Users can pass a different initialization strategy by passing the `v_head_init_strategy` argument
+        when calling `.from_pretrained`. Supported strategies are:
+        - `normal`: initializes the weights with a normal distribution.
+
+        Args:
+            **kwargs (`dict`, `optional`):
+                Additional keyword arguments, that are passed to the `ValueHead` class. These arguments
+                can contain the `v_head_init_strategy` argument as well as the `v_head_initializer_range`
+                argument.
         """
         initializer_range = kwargs.pop("v_head_initializer_range", 0.2)
         # random init by default
@@ -109,6 +140,22 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
         attention_mask=None,
         **kwargs,
     ):
+        r"""
+        Applies a forward pass to the wrapped model and returns the logits of the value head.
+
+        Args:
+            input_ids (`torch.LongTensor` of shape `(batch_size, sequence_length)`):
+                Indices of input sequence tokens in the vocabulary.
+            past_key_values (`tuple(tuple(torch.FloatTensor))`, `optional`):
+                Contains pre-computed hidden-states (key and values in the attention blocks) as computed by the model
+                (see `past_key_values` input) to speed up sequential decoding.
+            attention_mask (`torch.FloatTensor` of shape `(batch_size, sequence_length)`, `optional`):
+                Mask to avoid performing attention on padding token indices. Mask values selected in ``[0, 1]``:
+                - 1 for tokens that are **not masked**,
+                - 0 for tokens that are **masked**.
+            kwargs (`dict`, `optional`):
+                Additional keyword arguments, that are passed to the wrapped model.
+        """
         base_model_output = self.pretrained_model(
             input_ids=input_ids,
             past_key_values=past_key_values,
@@ -127,7 +174,15 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
 
     def generate(self, *args, **kwargs):
         r"""
-        We call `generate` on the wrapped model.
+        A simple wrapper around the `generate` method of the wrapped model.
+        Please refer to the [`generate`](https://huggingface.co/docs/transformers/internal/generation_utils)
+        method of the wrapped model for more information about the supported arguments.
+
+        Args:
+            *args (`list`, *optional*):
+                Positional arguments passed to the `generate` method of the wrapped model.
+            **kwargs (`dict`, *optional*):
+                Keyword arguments passed to the `generate` method of the wrapped model.
         """
         return self.pretrained_model.generate(*args, **kwargs)
 
