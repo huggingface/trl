@@ -638,7 +638,7 @@ class PPOTrainer(BaseTrainer):
         """
         # Log only if we are in the main process
         if self.accelerator.is_main_process:
-            wandb_logs = {}
+            logs = {}
 
             # Log stats
             if not isinstance(rewards, torch.Tensor):
@@ -653,7 +653,7 @@ class PPOTrainer(BaseTrainer):
                 import wandb
 
                 table_rows = [list(r) for r in zip(batch["query"], batch["response"], rewards.cpu().tolist())]
-                wandb_logs.update({"game_log": wandb.Table(columns=["query", "response", "reward"], rows=table_rows)})
+                logs.update({"game_log": wandb.Table(columns=["query", "response", "reward"], rows=table_rows)})
             # All reduce rewards if distributed
             if self.is_distributed:
                 import torch.distributed as dist
@@ -663,16 +663,12 @@ class PPOTrainer(BaseTrainer):
                 dist.all_reduce(rewards, op=torch.distributed.ReduceOp.SUM)
                 rewards /= self.accelerator.num_processes
 
-            if self.config.log_with == "wandb":
-                wandb_logs.update(stats)
-                wandb_logs["env/reward_mean"] = torch.mean(rewards).cpu().numpy()
-                wandb_logs["env/reward_std"] = torch.std(rewards).cpu().numpy()
-                wandb_logs["env/reward_dist"] = rewards.cpu().numpy()
-                self.accelerator.log(wandb_logs)
-            else:
-                stats["env/reward_mean"] = torch.mean(rewards).cpu().numpy()
-                stats["env/reward_std"] = torch.std(rewards).cpu().numpy()
-                stats["env/reward_dist"] = rewards.cpu().numpy()
+            logs.update(stats)
+            logs["env/reward_mean"] = torch.mean(rewards).cpu().numpy()
+            logs["env/reward_std"] = torch.std(rewards).cpu().numpy()
+            logs["env/reward_dist"] = rewards.cpu().numpy()
+
+            self.accelerator.log(logs)
 
         else:
             if self.is_distributed:
