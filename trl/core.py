@@ -27,7 +27,7 @@ def flatten_dict(nested, sep="/"):
     return flat
 
 
-def convert_for_tensorboard(stats):
+def convert_to_scalar(stats):
     """
     Converts the stats from a flattened dict to single scalar dicts
     """

@@ -28,7 +28,7 @@ from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizer, P
 from ..core import (
     WANDB_PADDING,
     clip_by_value,
-    convert_for_tensorboard,
+    convert_to_scalar,
     entropy_from_logits,
     flatten_dict,
     logprobs_from_logits,
@@ -365,9 +365,9 @@ class PPOTrainer(BaseTrainer):
         timing["time/ppo/total"] = time.time() - t0
         stats.update(timing)
 
-        # post-process stats for tensorboard
-        if self.config.log_with == "tensorboard":
-            stats = convert_for_tensorboard(stats)
+        # post-process stats for tensorboard and other loggers
+        if self.config.log_with != "wandb":
+            stats = convert_to_scalar(stats)
 
         return stats
 
