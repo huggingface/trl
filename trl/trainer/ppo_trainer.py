@@ -28,6 +28,7 @@ from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizer, P
 from ..core import (
     WANDB_PADDING,
     clip_by_value,
+    convert_for_tensorboard,
     entropy_from_logits,
     flatten_dict,
     logprobs_from_logits,
@@ -81,8 +82,8 @@ class PPOTrainer(BaseTrainer):
         super().__init__(config)
 
         # Step 1: Initialize Accelerator
-        self.accelerator = Accelerator(log_with=config.log_with)
-        self.accelerator.init_trackers(config.tracker_project_name, config=config, **config.tracker_kwargs)
+        self.accelerator = Accelerator(log_with=config.log_with, **config.accelerator_kwargs)
+        self.accelerator.init_trackers(config.tracker_project_name, config=config.to_dict(), **config.tracker_kwargs)
 
         # Step 2: Initialize model, tokenizer, and dataloader
         if not isinstance(model, PreTrainedModelWrapper):
@@ -137,6 +138,9 @@ class PPOTrainer(BaseTrainer):
         # check: https://pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html
         # or: https://discuss.pytorch.org/t/use-distributed-data-parallel-correctly/82500/11
         self.is_distributed = self.accelerator.distributed_type == "MULTI_GPU"
+
+        # init the current step
+        self.current_step = 0
 
         # init wandb on the main process:
         if self.accelerator.is_main_process and self.config.log_with == "wandb":
@@ -360,6 +364,11 @@ class PPOTrainer(BaseTrainer):
         # Log the total ppo time
         timing["time/ppo/total"] = time.time() - t0
         stats.update(timing)
+
+        # post-process stats for tensorboard
+        if self.config.log_with == "tensorboard":
+            stats = convert_for_tensorboard(stats)
+
         return stats
 
     def gather_stats(self, stats):
@@ -664,11 +673,15 @@ class PPOTrainer(BaseTrainer):
                 rewards /= self.accelerator.num_processes
 
             logs.update(stats)
-            logs["env/reward_mean"] = torch.mean(rewards).cpu().numpy()
-            logs["env/reward_std"] = torch.std(rewards).cpu().numpy()
+            logs["env/reward_mean"] = torch.mean(rewards).cpu().numpy().item()
+            logs["env/reward_std"] = torch.std(rewards).cpu().numpy().item()
             logs["env/reward_dist"] = rewards.cpu().numpy()
 
-            self.accelerator.log(logs)
+            if self.config.log_with == "tensorboard":
+                # update the current step
+                self.current_step += 1
+
+            self.accelerator.log(logs, step=self.current_step if self.config.log_with == "tensorboard" else None)
 
         else:
             if self.is_distributed:

@@ -16,6 +16,8 @@ from typing import Optional
 
 import numpy as np
 
+from ..core import flatten_dict
+
 
 @dataclass
 class PPOConfig(object):
@@ -58,6 +60,8 @@ class PPOConfig(object):
         log_with (`str`, *optional*, defaults to "wandb"):
             Log with either "wandb" or "tensorboard", check
             https://huggingface.co/docs/accelerate/usage_guides/tracking for more details
+        accelerator_kwargs (`dict`, *optional*, defaults to {}):
+            Keyword arguments for the accelerator (e.g. `logging_dir`)
         tracker_kwargs (`dict`, *optional*, defaults to {}):
             Keyword arguments for the tracker (e.g. wandb_project)
         tracker_project_name (`str`, *optional*, defaults to "trl"):
@@ -84,6 +88,7 @@ class PPOConfig(object):
         remove_unused_columns: Optional[bool] = True,
         log_with: Optional[str] = "wandb",
         tracker_kwargs: Optional[dict] = {},
+        accelerator_kwargs: Optional[dict] = {},
         tracker_project_name: Optional[str] = "trl",
     ):
         self.model_name = model_name
@@ -115,6 +120,7 @@ class PPOConfig(object):
                 )
 
         self.tracker_kwargs = tracker_kwargs
+        self.accelerator_kwargs = accelerator_kwargs
         self.tracker_project_name = tracker_project_name
 
         self.total_ppo_epochs = int(np.ceil(steps / batch_size))
@@ -123,4 +129,4 @@ class PPOConfig(object):
         output_dict = {}
         for key, value in self.__dict__.items():
             output_dict[key] = value
-        return output_dict
+        return flatten_dict(output_dict)
