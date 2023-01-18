@@ -227,7 +227,7 @@ class PPOTrainer(BaseTrainer):
 
     def generate(self, query_tensor: torch.Tensor, **generation_kwargs):
         """
-        Generate response given the query tensor. First unwrap the model from the accelerator and then
+        Generate response with the model given the query tensor.
         call the `generate` method of the model.
 
         Args:
@@ -298,8 +298,7 @@ class PPOTrainer(BaseTrainer):
         scores: List[torch.FloatTensor],
     ):
         """
-        Run a PPO optimisation step given the input data. The input data is first checked for validity
-        and then the forward pass is run.
+        Run a PPO optimisation step given a list of queries, model responses, and rewards.
 
         Args:
             queries (List[`torch.LongTensor`]):
