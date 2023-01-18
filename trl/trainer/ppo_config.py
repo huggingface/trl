@@ -55,10 +55,13 @@ class PPOConfig(object):
             Number of optimisation epochs per batch of samples
         remove_unused_columns (`bool`, *optional*, defaults to True):
             Remove unused columns from the dataset if `datasets.Dataset` is used
-        log_with_wandb (`bool`, *optional*, defaults to True):
-            Log with wandb
-        wandb_project (`str`, *optional*, defaults to "trl"):
-            Name of wandb project
+        log_with (`str`, *optional*, defaults to "wandb"):
+            Log with either "wandb" or "tensorboard", check
+            https://huggingface.co/docs/accelerate/usage_guides/tracking for more details
+        tracker_kwargs (`dict`, *optional*, defaults to {}):
+            Keyword arguments for the tracker (e.g. wandb_project)
+        tracker_project_name (`str`, *optional*, defaults to "trl"):
+            Name of project to use for tracking
     """
 
     def __init__(
@@ -79,8 +82,9 @@ class PPOConfig(object):
         forward_batch_size: Optional[int] = 16,
         ppo_epochs: Optional[int] = 4,
         remove_unused_columns: Optional[bool] = True,
-        log_with_wandb: Optional[bool] = True,
-        wandb_project: Optional[str] = "trl",
+        log_with: Optional[str] = "wandb",
+        tracker_kwargs: Optional[dict] = {},
+        tracker_project_name: Optional[str] = "trl",
     ):
         self.model_name = model_name
         self.steps = steps
@@ -98,8 +102,20 @@ class PPOConfig(object):
         self.forward_batch_size = forward_batch_size
         self.ppo_epochs = ppo_epochs
         self.remove_unused_columns = remove_unused_columns
-        self.log_with_wandb = log_with_wandb
-        self.wandb_project = wandb_project
+
+        self.log_with = log_with
+        # check if wandb is installed
+        if self.log_with == "wandb":
+            # raise error if wandb is not installed
+            try:
+                import wandb  # noqa: F401
+            except ImportError:
+                raise ImportError(
+                    "Please install wandb to use wandb logging. You can do this by running `pip install wandb`."
+                )
+
+        self.tracker_kwargs = tracker_kwargs
+        self.tracker_project_name = tracker_project_name
 
         self.total_ppo_epochs = int(np.ceil(steps / batch_size))
 

@@ -44,6 +44,7 @@ from trl.core import LengthSampler
 config = PPOConfig(
     model_name="lvwerra/gpt2-imdb",
     learning_rate=1.41e-5,
+    log_with="wandb",
 )
 
 # We then define the arguments to pass to the sentiment analysis pipeline.

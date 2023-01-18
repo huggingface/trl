@@ -19,7 +19,6 @@ from typing import List, Optional, Union
 
 import datasets
 import torch
-import wandb
 from accelerate import Accelerator
 from datasets import Dataset
 from packaging import version
@@ -82,7 +81,8 @@ class PPOTrainer(BaseTrainer):
         super().__init__(config)
 
         # Step 1: Initialize Accelerator
-        self.accelerator = Accelerator(log_with="wandb")
+        self.accelerator = Accelerator(log_with=config.log_with)
+        self.accelerator.init_trackers(config.tracker_project_name, config=config, **config.tracker_kwargs)
 
         # Step 2: Initialize model, tokenizer, and dataloader
         if not isinstance(model, PreTrainedModelWrapper):
@@ -139,8 +139,9 @@ class PPOTrainer(BaseTrainer):
         self.is_distributed = self.accelerator.distributed_type == "MULTI_GPU"
 
         # init wandb on the main process:
-        if self.accelerator.is_main_process and self.config.log_with_wandb:
-            wandb.init(name="run-42", project=self.config.wandb_project, config=config)
+        if self.accelerator.is_main_process and self.config.log_with == "wandb":
+            import wandb
+
             wandb.watch(self.model, log="all")
 
     def _filter_kwargs(self, kwargs, target_func):
@@ -648,7 +649,9 @@ class PPOTrainer(BaseTrainer):
                 warnings.warn(
                     "The game logs will not be logged because the batch does not contain the keys 'query' and 'response'."
                 )
-            elif self.config.log_with_wandb:
+            elif self.config.log_with == "wandb":
+                import wandb
+
                 table_rows = [list(r) for r in zip(batch["query"], batch["response"], rewards.cpu().tolist())]
                 wandb_logs.update({"game_log": wandb.Table(columns=["query", "response", "reward"], rows=table_rows)})
             # All reduce rewards if distributed
@@ -660,12 +663,12 @@ class PPOTrainer(BaseTrainer):
                 dist.all_reduce(rewards, op=torch.distributed.ReduceOp.SUM)
                 rewards /= self.accelerator.num_processes
 
-            if self.config.log_with_wandb:
+            if self.config.log_with == "wandb":
                 wandb_logs.update(stats)
                 wandb_logs["env/reward_mean"] = torch.mean(rewards).cpu().numpy()
                 wandb_logs["env/reward_std"] = torch.std(rewards).cpu().numpy()
                 wandb_logs["env/reward_dist"] = rewards.cpu().numpy()
-                wandb.log(wandb_logs)
+                self.accelerator.log(wandb_logs)
             else:
                 stats["env/reward_mean"] = torch.mean(rewards).cpu().numpy()
                 stats["env/reward_std"] = torch.std(rewards).cpu().numpy()
