@@ -19,7 +19,6 @@ from typing import List, Optional, Union
 
 import datasets
 import torch
-import wandb
 from accelerate import Accelerator
 from datasets import Dataset
 from packaging import version
@@ -29,6 +28,7 @@ from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizer, P
 from ..core import (
     WANDB_PADDING,
     clip_by_value,
+    convert_to_scalar,
     entropy_from_logits,
     flatten_dict,
     logprobs_from_logits,
@@ -101,7 +101,8 @@ class PPOTrainer(BaseTrainer):
         super().__init__(config)
 
         # Step 1: Initialize Accelerator
-        self.accelerator = Accelerator(log_with="wandb")
+        self.accelerator = Accelerator(log_with=config.log_with, **config.accelerator_kwargs)
+        self.accelerator.init_trackers(config.tracker_project_name, config=config.to_dict(), **config.tracker_kwargs)
 
         # Step 2: Initialize model, tokenizer, and dataloader
         if not isinstance(model, PreTrainedModelWrapper):
@@ -174,9 +175,13 @@ class PPOTrainer(BaseTrainer):
         # or: https://discuss.pytorch.org/t/use-distributed-data-parallel-correctly/82500/11
         self.is_distributed = self.accelerator.distributed_type == "MULTI_GPU"
 
+        # init the current step
+        self.current_step = 0
+
         # init wandb on the main process:
-        if self.accelerator.is_main_process and self.config.log_with_wandb:
-            wandb.init(name="run-42", project=self.config.wandb_project, config=config)
+        if self.accelerator.is_main_process and self.config.log_with == "wandb":
+            import wandb
+
             wandb.watch(self.model, log="all")
 
     def _filter_kwargs(self, kwargs, target_func):
@@ -391,6 +396,11 @@ class PPOTrainer(BaseTrainer):
         # Log the total ppo time
         timing["time/ppo/total"] = time.time() - t0
         stats.update(timing)
+
+        # post-process stats for tensorboard and other loggers
+        if self.config.log_with != "wandb":
+            stats = convert_to_scalar(stats)
+
         return stats
 
     def gather_stats(self, stats):
@@ -668,7 +678,7 @@ class PPOTrainer(BaseTrainer):
         """
         # Log only if we are in the main process
         if self.accelerator.is_main_process:
-            wandb_logs = {}
+            logs = {}
 
             # Log stats
             if not isinstance(rewards, torch.Tensor):
@@ -679,9 +689,11 @@ class PPOTrainer(BaseTrainer):
                 warnings.warn(
                     "The game logs will not be logged because the batch does not contain the keys 'query' and 'response'."
                 )
-            elif self.config.log_with_wandb:
+            elif self.config.log_with == "wandb":
+                import wandb
+
                 table_rows = [list(r) for r in zip(batch["query"], batch["response"], rewards.cpu().tolist())]
-                wandb_logs.update({"game_log": wandb.Table(columns=["query", "response", "reward"], rows=table_rows)})
+                logs.update({"game_log": wandb.Table(columns=["query", "response", "reward"], rows=table_rows)})
             # All reduce rewards if distributed
             if self.is_distributed:
                 import torch.distributed as dist
@@ -691,16 +703,16 @@ class PPOTrainer(BaseTrainer):
                 dist.all_reduce(rewards, op=torch.distributed.ReduceOp.SUM)
                 rewards /= self.accelerator.num_processes
 
-            if self.config.log_with_wandb:
-                wandb_logs.update(stats)
-                wandb_logs["env/reward_mean"] = torch.mean(rewards).cpu().numpy()
-                wandb_logs["env/reward_std"] = torch.std(rewards).cpu().numpy()
-                wandb_logs["env/reward_dist"] = rewards.cpu().numpy()
-                wandb.log(wandb_logs)
-            else:
-                stats["env/reward_mean"] = torch.mean(rewards).cpu().numpy()
-                stats["env/reward_std"] = torch.std(rewards).cpu().numpy()
-                stats["env/reward_dist"] = rewards.cpu().numpy()
+            logs.update(stats)
+            logs["env/reward_mean"] = torch.mean(rewards).cpu().numpy().item()
+            logs["env/reward_std"] = torch.std(rewards).cpu().numpy().item()
+            logs["env/reward_dist"] = rewards.cpu().numpy()
+
+            if self.config.log_with == "tensorboard":
+                # update the current step
+                self.current_step += 1
+
+            self.accelerator.log(logs, step=self.current_step if self.config.log_with == "tensorboard" else None)
 
         else:
             if self.is_distributed:

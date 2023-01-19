@@ -9,8 +9,8 @@ REQUIRED_PKGS = [
     "accelerate",
 ]
 EXTRAS = {
-    "test" : ["pytest","pytest-xdist","accelerate", "datasets", "wandb"],
-    "dev" : ["pytest","pytest-xdist", "black", "isort", "flake8>=3.8.3", "datasets", "wandb"],
+    "test" : ["pytest","pytest-xdist","accelerate", "datasets"],
+    "dev" : ["pytest","pytest-xdist", "black", "isort", "flake8>=3.8.3", "datasets"],
 }
 
 setup(
