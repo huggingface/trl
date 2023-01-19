@@ -88,7 +88,7 @@ class PPOTrainerTester(unittest.TestCase):
         self.gpt2_tokenizer = GPT2Tokenizer.from_pretrained(model_id)
 
         # initialize trainer
-        ppo_config = {"batch_size": 2, "forward_batch_size": 1, "log_with_wandb": False}
+        ppo_config = {"batch_size": 2, "forward_batch_size": 1, "log_with": None}
         self.ppo_config = PPOConfig(**ppo_config)
 
         return super().setUp()

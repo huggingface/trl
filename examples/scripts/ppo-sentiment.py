@@ -41,6 +41,8 @@ from trl.core import LengthSampler
 # We first define the configuration of the experiment, defining the model, the dataset,
 # the training parameters, and the PPO parameters.
 # Check the default arguments in the `PPOConfig` class for more details.
+# If you want to log with tensorboard, add the kwarg
+# `accelerator_kwargs={"logging_dir": PATH_TO_LOGS}` to the PPOConfig.
 config = PPOConfig(
     model_name="lvwerra/gpt2-imdb",
     learning_rate=1.41e-5,

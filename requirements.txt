@@ -3,4 +3,3 @@ torch>=1.4.0
 tqdm
 transformers
 accelerate
-wandb>=0.10.20
