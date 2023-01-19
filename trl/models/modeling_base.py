@@ -17,8 +17,8 @@ from copy import deepcopy
 
 import torch
 import torch.nn as nn
+from huggingface_hub import hf_hub_download
 from transformers import PreTrainedModel
-from transformers.utils import cached_file, download_url, is_remote_url
 
 
 LAYER_PATTERNS = ["transformer.h.{layer}", "model.decoder.layers.{layer}", "gpt_neox.layers.{layer}"]
@@ -73,8 +73,6 @@ class PreTrainedModelWrapper(nn.Module):
             trl_model_args = {}
             pretrained_kwargs = {}
 
-        resume_training = trl_model_args.get("resume_training", False)
-
         # First, load the pre-trained model using the parent-class
         # either `AutoModelForCausalLM` or `AutoModelForSeq2SeqLM`
         if isinstance(pretrained_model_name_or_path, str):
@@ -93,25 +91,19 @@ class PreTrainedModelWrapper(nn.Module):
 
         # if resume_training, load the state_dict again - this is ok since the
         # state_dict is removed from the model after loading it.
-        # since this is only done in edge cases we force the user to do it only
-        # if they explicitly set resume_training to True
-        if resume_training:
-            if isinstance(pretrained_model_name_or_path, str):
-                # TODO: Deal with sharded case!
-                filename = os.path.join(pretrained_model_name_or_path, "pytorch_model.bin")
+        if isinstance(pretrained_model_name_or_path, str):
+            # TODO: Deal with sharded case!
+            filename = os.path.join(pretrained_model_name_or_path, "pytorch_model.bin")
 
-                if not os.path.exists(filename):
-                    if is_remote_url(pretrained_model_name_or_path):
-                        filename = download_url(pretrained_model_name_or_path)
-                    else:
-                        filename = cached_file(pretrained_model_name_or_path, "pytorch_model.bin")
+            if not os.path.exists(filename):
+                filename = hf_hub_download(pretrained_model_name_or_path, "pytorch_model.bin")
 
-                state_dict = torch.load(filename, map_location="cpu")
+            state_dict = torch.load(filename, map_location="cpu")
 
-            else:
-                state_dict = pretrained_model_name_or_path.state_dict()
+        else:
+            state_dict = pretrained_model_name_or_path.state_dict()
 
-            model.post_init(state_dict=state_dict)
+        model.post_init(state_dict=state_dict)
 
         return model
 
