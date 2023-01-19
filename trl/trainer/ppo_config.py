@@ -57,7 +57,7 @@ class PPOConfig(object):
             Number of optimisation epochs per batch of samples
         remove_unused_columns (`bool`, *optional*, defaults to True):
             Remove unused columns from the dataset if `datasets.Dataset` is used
-        log_with (`str`, *optional*, defaults to "wandb"):
+        log_with (`str`, *optional*, defaults to `None`):
             Log with either "wandb" or "tensorboard", check
             https://huggingface.co/docs/accelerate/usage_guides/tracking for more details
         accelerator_kwargs (`dict`, *optional*, defaults to {}):
@@ -86,7 +86,7 @@ class PPOConfig(object):
         forward_batch_size: Optional[int] = 16,
         ppo_epochs: Optional[int] = 4,
         remove_unused_columns: Optional[bool] = True,
-        log_with: Optional[str] = "wandb",
+        log_with: Optional[str] = None,
         tracker_kwargs: Optional[dict] = {},
         accelerator_kwargs: Optional[dict] = {},
         tracker_project_name: Optional[str] = "trl",
