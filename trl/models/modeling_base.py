@@ -11,9 +11,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import inspect
+import json
+import os
 from copy import deepcopy
 
+import torch
 import torch.nn as nn
+from huggingface_hub import hf_hub_download
 from transformers import PreTrainedModel
 
 
@@ -36,6 +41,7 @@ class PreTrainedModelWrapper(nn.Module):
     """
     transformers_parent_class = None
     supported_args = None
+    supported_modules = ("v_head",)
 
     def __init__(self, pretrained_model=None, **kwargs):
         super().__init__()
@@ -82,9 +88,50 @@ class PreTrainedModelWrapper(nn.Module):
                 "pretrained_model_name_or_path should be a string or a PreTrainedModel, "
                 f"but is {type(pretrained_model_name_or_path)}"
             )
-
         # Then, create the full model by instantiating the wrapper class
         model = cls(pretrained_model, **trl_model_args)
+
+        # if resume_training, load the state_dict again - this is ok since the
+        # state_dict is removed from the model after loading it.
+        if isinstance(pretrained_model_name_or_path, str):
+            filename = os.path.join(pretrained_model_name_or_path, "pytorch_model.bin")
+            sharded_index_filename = os.path.join(pretrained_model_name_or_path, "pytorch_model.bin.index.json")
+            is_shared = False
+
+            if not os.path.exists(filename):
+                try:
+                    filename = hf_hub_download(pretrained_model_name_or_path, "pytorch_model.bin")
+                # sharded
+                except:  # noqa
+                    if os.path.exists(sharded_index_filename):
+                        index_file_name = sharded_index_filename
+                    else:
+                        index_file_name = hf_hub_download(
+                            pretrained_model_name_or_path, "pytorch_model.bin.index.json"
+                        )
+                    # load json
+                    with open(index_file_name, "r") as f:
+                        index = json.load(f)
+                    # check filename with `v_head` or any known extra module:
+                    files_to_download = set()
+                    for k, v in index["weight_map"].items():
+                        if any([module in k for module in cls.supported_modules]):
+                            files_to_download.add(v)
+                    is_shared = True
+
+            if is_shared:
+                # dowload each file and add it to the state_dict
+                state_dict = {}
+                for shard_file in files_to_download:
+                    filename = hf_hub_download(pretrained_model_name_or_path, shard_file)
+                    state_dict.update(torch.load(filename, map_location="cpu"))
+            else:
+                state_dict = torch.load(filename, map_location="cpu")
+
+        else:
+            state_dict = pretrained_model_name_or_path.state_dict()
+
+        model.post_init(state_dict=state_dict)
 
         return model
 
@@ -98,7 +145,10 @@ class PreTrainedModelWrapper(nn.Module):
         unsupported_kwargs = {}
 
         for key, value in kwargs.items():
-            if key in cls.supported_args:
+            if (
+                key in cls.supported_args
+                or key not in inspect.signature(cls.transformers_parent_class.from_pretrained).parameters.keys()
+            ):
                 supported_kwargs[key] = value
             else:
                 unsupported_kwargs[key] = value
@@ -119,7 +169,7 @@ class PreTrainedModelWrapper(nn.Module):
                 Keyword arguments passed along to the underlying model's
                 `push_to_hub` method.
         """
-        return self.pretrained_model.push_to_hub(*args, **kwargs)
+        raise NotImplementedError
 
     def save_pretrained(self, *args, **kwargs):
         r"""
@@ -135,7 +185,26 @@ class PreTrainedModelWrapper(nn.Module):
                 Keyword arguments passed along to the underlying model's
                 `save_pretrained` method.
         """
+        state_dict = kwargs.pop("state_dict", None)
+        if state_dict is None:
+            state_dict = self.state_dict()
+            kwargs["state_dict"] = state_dict
+
         return self.pretrained_model.save_pretrained(*args, **kwargs)
+
+    def state_dict(self, *args, **kwargs):
+        r"""
+        Return the state_dict of the pretrained model.
+        """
+        raise NotImplementedError
+
+    def post_init(self, *args, **kwargs):
+        r"""
+        Post initialization method. This method is called after the model is
+        instantiated and loaded from a checkpoint. It can be used to perform
+        additional operations such as loading the state_dict.
+        """
+        raise NotImplementedError
 
 
 def create_reference_model(
