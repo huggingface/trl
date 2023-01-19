@@ -28,6 +28,7 @@ ALL_CAUSAL_LM_MODELS = [
     "trl-internal-testing/tiny-random-OPTForCausalLM",
     "trl-internal-testing/tiny-random-BloomForCausalLM",
     "trl-internal-testing/tiny-random-GPT2LMHeadModel",
+    "trl-internal-testing/tiny-random-CodeGenForCausalLM-sharded",
 ]
 
 
@@ -35,19 +36,34 @@ class BaseModelTester:
     all_model_names = None
     trl_model_class = None
 
-    def test_from_save(self):
+    def test_from_save_trl(self):
         """
         Test if the model can be saved and loaded from a directory and get the same weights
+        Including the additional modules (e.g. v_head)
         """
         for model_name in self.all_model_names:
-            torch.manual_seed(0)
             model = self.trl_model_class.from_pretrained(model_name)
 
             with tempfile.TemporaryDirectory() as tmp_dir:
                 model.save_pretrained(tmp_dir)
 
-                torch.manual_seed(0)
                 model_from_save = self.trl_model_class.from_pretrained(tmp_dir)
+
+            # Check if the weights are the same
+            for key in model_from_save.state_dict():
+                self.assertTrue(torch.allclose(model_from_save.state_dict()[key], model.state_dict()[key]))
+
+    def test_from_save_trl_sharded(self):
+        """
+        Test if the model can be saved and loaded from a directory and get the same weights - sharded case
+        """
+        for model_name in self.all_model_names:
+            model = self.trl_model_class.from_pretrained(model_name)
+
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                model.save_pretrained(tmp_dir)
+
+                model_from_save = self.trl_model_class.from_pretrained(tmp_dir, max_shard_size="1MB")
 
             # Check if the weights are the same
             for key in model_from_save.state_dict():
@@ -64,6 +80,27 @@ class BaseModelTester:
 
             with tempfile.TemporaryDirectory() as tmp_dir:
                 trl_model.save_pretrained(tmp_dir)
+                transformers_model_from_save = self.trl_model_class.transformers_parent_class.from_pretrained(tmp_dir)
+
+            # Check if the weights are the same
+            for key in transformers_model.state_dict():
+                self.assertTrue(
+                    torch.allclose(
+                        transformers_model_from_save.state_dict()[key], transformers_model.state_dict()[key]
+                    )
+                )
+
+    def test_from_save_transformers_sharded(self):
+        """
+        Test if the model can be saved and loaded using transformers and get the same weights - sharded case
+        """
+        for model_name in self.all_model_names:
+            transformers_model = self.trl_model_class.transformers_parent_class.from_pretrained(model_name)
+
+            trl_model = self.trl_model_class.from_pretrained(model_name)
+
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                trl_model.save_pretrained(tmp_dir, max_shard_size="1MB")
                 transformers_model_from_save = self.trl_model_class.transformers_parent_class.from_pretrained(tmp_dir)
 
             # Check if the weights are the same
@@ -183,6 +220,60 @@ class ValueHeadModelTester(BaseModelTester, unittest.TestCase):
         with self.assertRaises(ValueError):
             pretrained_model = AutoModelForCausalLM.from_pretrained(model_id)
             _ = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model.transformer)
+
+    @unittest.skip("This test needs to be run manually due to HF token issue.")
+    def test_push_to_hub(self):
+        for model_name in self.all_model_names:
+            model = AutoModelForCausalLMWithValueHead.from_pretrained(model_name)
+            if "sharded" in model_name:
+                model.push_to_hub(model_name + "-ppo", use_auth_token=True, max_shard_size="1MB")
+            else:
+                model.push_to_hub(model_name + "-ppo", use_auth_token=True)
+
+            model_from_pretrained = AutoModelForCausalLMWithValueHead.from_pretrained(model_name + "-ppo")
+            # check all keys
+            self.assertEqual(model.state_dict().keys(), model_from_pretrained.state_dict().keys())
+
+            for name, param in model.state_dict().items():
+                self.assertTrue(
+                    torch.allclose(param, model_from_pretrained.state_dict()[name]),
+                    f"Parameter {name} is not the same after push_to_hub and from_pretrained",
+                )
+
+    def test_from_save_transformers(self):
+        """
+        Test if the model can be saved and loaded using transformers and get the same weights.
+        We override the test of the super class to check if the weights are the same.
+        """
+        for model_name in self.all_model_names:
+            transformers_model = self.trl_model_class.transformers_parent_class.from_pretrained(model_name)
+
+            trl_model = self.trl_model_class.from_pretrained(model_name)
+
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                trl_model.save_pretrained(tmp_dir)
+                transformers_model_from_save = self.trl_model_class.transformers_parent_class.from_pretrained(tmp_dir)
+
+            # Check if the weights are the same
+            for key in transformers_model.state_dict():
+                self.assertTrue(
+                    torch.allclose(
+                        transformers_model_from_save.state_dict()[key], transformers_model.state_dict()[key]
+                    )
+                )
+
+            # Check if the trl model has the same keys as the transformers model
+            # except the v_head
+            for key in trl_model.state_dict():
+                if "v_head" not in key:
+                    self.assertTrue(key in transformers_model.state_dict())
+                    # check if the weights are the same
+                    self.assertTrue(torch.allclose(trl_model.state_dict()[key], transformers_model.state_dict()[key]))
+
+            # check if they have the same modules
+            self.assertTrue(
+                set(transformers_model_from_save.state_dict().keys()) == set(transformers_model.state_dict().keys())
+            )
 
 
 class ReferenceModelTest(unittest.TestCase):

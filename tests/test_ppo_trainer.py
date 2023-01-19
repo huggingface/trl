@@ -189,6 +189,8 @@ class PPOTrainerTester(unittest.TestCase):
         model = AutoModelForCausalLMWithValueHead.from_pretrained("gpt2")
         for name, param in ppo_trainer.ref_model.named_parameters():
             if "v_head" not in name:
+                name = name.replace("pretrained_model.", "")
+
                 self.assertTrue(
                     torch.allclose(param.cpu(), model.state_dict()[name].cpu()),
                     f"Parameter {name} has changed from the original model",
