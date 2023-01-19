@@ -94,8 +94,8 @@ class PreTrainedModelWrapper(nn.Module):
         # if resume_training, load the state_dict again - this is ok since the
         # state_dict is removed from the model after loading it.
         if isinstance(pretrained_model_name_or_path, str):
-            # TODO: Deal with sharded case!
             filename = os.path.join(pretrained_model_name_or_path, "pytorch_model.bin")
+            sharded_index_filename = os.path.join(pretrained_model_name_or_path, "pytorch_model.bin.index.json")
             is_shared = False
 
             if not os.path.exists(filename):
@@ -103,7 +103,12 @@ class PreTrainedModelWrapper(nn.Module):
                     filename = hf_hub_download(pretrained_model_name_or_path, "pytorch_model.bin")
                 # sharded
                 except:  # noqa
-                    index_file_name = hf_hub_download(pretrained_model_name_or_path, "pytorch_model.bin.index.json")
+                    if os.path.exists(sharded_index_filename):
+                        index_file_name = sharded_index_filename
+                    else:
+                        index_file_name = hf_hub_download(
+                            pretrained_model_name_or_path, "pytorch_model.bin.index.json"
+                        )
                     # load json
                     with open(index_file_name, "r") as f:
                         index = json.load(f)
