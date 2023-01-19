@@ -67,3 +67,11 @@ from transformers import AutoModelForCausalLM
 
 model = AutoModelForCausalLM.from_pretrained("my-fine-tuned-model-ppo")
 ```
+
+You can also load your model with `AutoModelForCausalLMWithValueHead` if you want to use the value head, for example to continue a training.
+
+```python
+from trl.model import AutoModelForCausalLMWithValueHead
+
+model = AutoModelForCausalLMWithValueHead.from_pretrained("my-fine-tuned-model-ppo")
+```
