@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import inspect
+import json
 import os
 from copy import deepcopy
 
@@ -40,6 +41,7 @@ class PreTrainedModelWrapper(nn.Module):
     """
     transformers_parent_class = None
     supported_args = None
+    supported_modules = ("v_head",)
 
     def __init__(self, pretrained_model=None, **kwargs):
         super().__init__()
@@ -94,11 +96,32 @@ class PreTrainedModelWrapper(nn.Module):
         if isinstance(pretrained_model_name_or_path, str):
             # TODO: Deal with sharded case!
             filename = os.path.join(pretrained_model_name_or_path, "pytorch_model.bin")
+            is_shared = False
 
             if not os.path.exists(filename):
-                filename = hf_hub_download(pretrained_model_name_or_path, "pytorch_model.bin")
+                try:
+                    filename = hf_hub_download(pretrained_model_name_or_path, "pytorch_model.bin")
+                # sharded
+                except:  # noqa
+                    index_file_name = hf_hub_download(pretrained_model_name_or_path, "pytorch_model.bin.index.json")
+                    # load json
+                    with open(index_file_name, "r") as f:
+                        index = json.load(f)
+                    # check filename with `v_head` or any known extra module:
+                    files_to_download = set()
+                    for k, v in index["weight_map"].items():
+                        if any([module in k for module in cls.supported_modules]):
+                            files_to_download.add(v)
+                    is_shared = True
 
-            state_dict = torch.load(filename, map_location="cpu")
+            if is_shared:
+                # dowload each file and add it to the state_dict
+                state_dict = {}
+                for shard_file in files_to_download:
+                    filename = hf_hub_download(pretrained_model_name_or_path, shard_file)
+                    state_dict.update(torch.load(filename, map_location="cpu"))
+            else:
+                state_dict = torch.load(filename, map_location="cpu")
 
         else:
             state_dict = pretrained_model_name_or_path.state_dict()

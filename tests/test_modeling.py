@@ -28,6 +28,7 @@ ALL_CAUSAL_LM_MODELS = [
     "trl-internal-testing/tiny-random-OPTForCausalLM",
     "trl-internal-testing/tiny-random-BloomForCausalLM",
     "trl-internal-testing/tiny-random-GPT2LMHeadModel",
+    "trl-internal-testing/tiny-random-CodeGenForCausalLM-sharded",
 ]
 
 
@@ -204,7 +205,10 @@ class ValueHeadModelTester(BaseModelTester, unittest.TestCase):
     def test_push_to_hub(self):
         for model_name in self.all_model_names:
             model = AutoModelForCausalLMWithValueHead.from_pretrained(model_name)
-            model.push_to_hub(model_name + "-ppo", use_auth_token=True)
+            if "sharded" in model_name:
+                model.push_to_hub(model_name + "-ppo", use_auth_token=True, max_shard_size="1MB")
+            else:
+                model.push_to_hub(model_name + "-ppo", use_auth_token=True)
 
             model_from_pretrained = AutoModelForCausalLMWithValueHead.from_pretrained(model_name + "-ppo")
             # check all keys
