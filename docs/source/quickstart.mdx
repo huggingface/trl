@@ -49,7 +49,7 @@ train_stats = ppo_trainer.step([query_tensor[0]], [response_tensor[0]], reward)
 
 In general, you would run steps 3-6 in a for-loop and run it on many diverse queries. You can find a more realistic examples in the examples section. 
 
-## How to use the model
+## How to use a trained model
 
 After training a `AutoModelForCausalLMWithValueHead`, you can directly use the model in `transformers`.
 ```python
