@@ -44,7 +44,7 @@ config = PPOConfig(
     model_name="lvwerra/t5-imdb",
     learning_rate=5e-5,
     batch_size=256,
-    forward_batch_size=16,
+    forward_batch_size=1
 )
 # We then define the arguments to pass to the sentiment analysis pipeline.
 # We set `return_all_scores` to True to get the sentiment score for each token.
@@ -101,12 +101,9 @@ tokenizer = AutoTokenizer.from_pretrained(config.model_name)
 query = tokenizer("I really liked this movie because", return_tensors="pt")["input_ids"]
 
 generation_kwargs = {
-    #"min_length":-1,
-#    "max_new_tokens": 8,
     "top_k": 0.0,
     "top_p": 1.0,
     "do_sample": True,
-    #"temperature": 0.2,
     "eos_token_id": -1
 }
 
