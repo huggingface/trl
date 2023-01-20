@@ -25,8 +25,6 @@ from packaging import version
 from torch.optim import Adam
 from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizer, PreTrainedTokenizerFast
 
-import wandb
-
 from ..core import (
     WANDB_PADDING,
     clip_by_value,
