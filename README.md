@@ -2,7 +2,7 @@
 <img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl_banner_dark.png">
 </div>
 
-# Transformer Reinforcement Learning
+# TRL - Transformer Reinforcement Learning
 > Train transformer language models with reinforcement learning.
 
 
