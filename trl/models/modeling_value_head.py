@@ -250,6 +250,18 @@ class AutoModelForSeq2SeqLMWithValueHead(PreTrainedModelWrapper):
 
         self._init_weights(**v_head_kwargs)
 
+    def post_init(self, state_dict):
+        r"""
+        We add the state dictionary of the value head to the state dictionary of the wrapped model
+        by preprending the key with `v_head.`. This function removes the `v_head.` prefix from the
+        keys of the value head state dictionary.
+        """
+        for k in list(state_dict.keys()):
+            if "v_head." in k:
+                state_dict[k.replace("v_head.", "")] = state_dict.pop(k)
+        self.v_head.load_state_dict(state_dict, strict=False)
+        del state_dict
+
     def _init_weights(self, **kwargs):
         r"""
         We initialize the weights of the value head.
