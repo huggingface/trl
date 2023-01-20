@@ -15,16 +15,16 @@
 import torch
 from tqdm import tqdm
 tqdm.pandas()
-from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM
+from transformers import pipeline, AutoTokenizer
 from datasets import load_dataset
 
 from trl import PPOTrainer, PPOConfig, AutoModelForSeq2SeqLMWithValueHead
-from trl.core import LengthSampler, logprobs_from_logits
+from trl.core import LengthSampler
 
 ########################################################################
 # This is a fully working simple example to use trl with accelerate.
 #
-# This example fine-tunes a GPT2 model on the IMDB dataset using PPO 
+# This example fine-tunes a T5 model on the IMDB dataset using PPO 
 # (proximal policy optimization).
 # in any of the following settings (with the same script):
 #   - single CPU or single GPU
@@ -33,7 +33,8 @@ from trl.core import LengthSampler, logprobs_from_logits
 #   - fp16 (mixed-precision) or fp32 (normal precision)
 #
 # To run it in each of these various modes, first initialize the accelerate
-# configuration with `accelerate config`
+# configuration with `accelerate config` then run the script with 
+# `accelerate launch ppo-sentiment-t5-small.py`
 #
 ########################################################################
 
@@ -56,21 +57,7 @@ sent_kwargs = {
 # Below is an example function to build the dataset. In our case, we use the IMDB dataset
 # from the `datasets` library. One should customize this function to train the model on
 # its own dataset.
-def build_dataset(config, dataset_name="imdb", input_min_text_length=2, input_max_text_length=8):
-    """
-    Build dataset for training. This builds the dataset from `load_dataset`, one should 
-    customize this function to train the model on its own dataset.
-    
-    Args:
-        dataset_name (`str`): 
-            The name of the dataset to be loaded.
-    
-    Returns:
-        dataloader (`torch.utils.data.DataLoader`):
-            The dataloader for the dataset.
-    """
-    tokenizer = AutoTokenizer.from_pretrained(config.model_name)
-    #tokenizer.pad_token = tokenizer.eos_token
+def build_dataset(tokenizer, dataset_name="imdb", input_min_text_length=2, input_max_text_length=8):
     # load imdb with datasets
     ds = load_dataset(dataset_name, split='train')
     ds = ds.rename_columns({'text': 'review'})
@@ -87,9 +74,6 @@ def build_dataset(config, dataset_name="imdb", input_min_text_length=2, input_ma
     ds.set_format(type='torch')
     return ds
 
-# We retrieve the dataloader by calling the `build_dataset` function.
-dataset = build_dataset(config)
-
 def collater(data):
     return dict((key, [d[key] for d in data]) for key in data[0])
 
@@ -97,6 +81,9 @@ def collater(data):
 model = AutoModelForSeq2SeqLMWithValueHead.from_pretrained(config.model_name)
 ref_model = AutoModelForSeq2SeqLMWithValueHead.from_pretrained(config.model_name)
 tokenizer = AutoTokenizer.from_pretrained(config.model_name)
+
+# We retrieve the dataloader by calling the `build_dataset` function.
+dataset = build_dataset(tokenizer)
 
 query = tokenizer("I really liked this movie because", return_tensors="pt")["input_ids"]
 
