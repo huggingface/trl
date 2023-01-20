@@ -15,9 +15,9 @@ import tempfile
 import unittest
 
 import torch
-from transformers import AutoModelForCausalLM
+from transformers import AutoModel, AutoModelForCausalLM, AutoModelForSeq2SeqLM
 
-from trl import AutoModelForCausalLMWithValueHead, create_reference_model
+from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead, create_reference_model
 
 
 ALL_CAUSAL_LM_MODELS = [
@@ -31,10 +31,68 @@ ALL_CAUSAL_LM_MODELS = [
     "trl-internal-testing/tiny-random-CodeGenForCausalLM-sharded",
 ]
 
+ALL_SEQ2SEQ_MODELS = [
+    "trl-internal-testing/tiny-random-BartForConditionalGeneration",
+    "trl-internal-testing/tiny-random-BigBirdPegasusForConditionalGeneration",
+    "trl-internal-testing/tiny-random-BlenderbotForConditionalGeneration",
+    "trl-internal-testing/tiny-random-BlenderbotSmallForConditionalGeneration",
+    "trl-internal-testing/tiny-random-FSMTForConditionalGeneration",
+    "trl-internal-testing/tiny-random-LEDForConditionalGeneration",
+    "trl-internal-testing/tiny-random-LongT5ForConditionalGeneration",
+    "trl-internal-testing/tiny-random-M2M100ForConditionalGeneration",
+    "trl-internal-testing/tiny-random-MarianMTModel",
+    "trl-internal-testing/tiny-random-MBartForConditionalGeneration",
+    "trl-internal-testing/tiny-random-MT5ForConditionalGeneration",
+    "trl-internal-testing/tiny-random-MvpForConditionalGeneration",
+    "trl-internal-testing/tiny-random-PegasusForConditionalGeneration",
+    "trl-internal-testing/tiny-random-PegasusXForConditionalGeneration",
+    "trl-internal-testing/tiny-random-PLBartForConditionalGeneration",
+    "trl-internal-testing/tiny-random-ProphetNetForConditionalGeneration",
+    "trl-internal-testing/tiny-random-SwitchTransformersForConditionalGeneration",
+    "trl-internal-testing/tiny-random-T5ForConditionalGeneration",
+]
 
-class BaseModelTester:
+
+class VHeadModelTester:
     all_model_names = None
     trl_model_class = None
+    transformers_model_class = None
+
+    def test_value_head(self):
+        r"""
+        Test if the v-head is added to the model succesfully
+        """
+        for model_name in self.all_model_names:
+            model = self.trl_model_class.from_pretrained(model_name)
+            self.assertTrue(hasattr(model, "v_head"))
+
+    def test_value_head_shape(self):
+        r"""
+        Test if the v-head has the correct shape
+        """
+        for model_name in self.all_model_names:
+            model = self.trl_model_class.from_pretrained(model_name)
+            self.assertTrue(model.v_head.summary.weight.shape[0] == 1)
+
+    def test_value_head_init_random(self):
+        r"""
+        Test if the v-head has been randomly initialized.
+        We can check that by making sure the bias is different
+        than zeros by default.
+        """
+        for model_name in self.all_model_names:
+            model = self.trl_model_class.from_pretrained(model_name)
+            self.assertFalse(torch.allclose(model.v_head.summary.bias, torch.zeros_like(model.v_head.summary.bias)))
+
+    def test_value_head_not_str(self):
+        r"""
+        Test if the v-head is added to the model succesfully, by passing a non `PretrainedModel`
+        as an argument to `from_pretrained`.
+        """
+        for model_name in self.all_model_names:
+            pretrained_model = self.transformers_model_class.from_pretrained(model_name)
+            model = self.trl_model_class.from_pretrained(pretrained_model)
+            self.assertTrue(hasattr(model, "v_head"))
 
     def test_from_save_trl(self):
         """
@@ -69,27 +127,6 @@ class BaseModelTester:
             for key in model_from_save.state_dict():
                 self.assertTrue(torch.allclose(model_from_save.state_dict()[key], model.state_dict()[key]))
 
-    def test_from_save_transformers(self):
-        """
-        Test if the model can be saved and loaded using transformers and get the same weights
-        """
-        for model_name in self.all_model_names:
-            transformers_model = self.trl_model_class.transformers_parent_class.from_pretrained(model_name)
-
-            trl_model = self.trl_model_class.from_pretrained(model_name)
-
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                trl_model.save_pretrained(tmp_dir)
-                transformers_model_from_save = self.trl_model_class.transformers_parent_class.from_pretrained(tmp_dir)
-
-            # Check if the weights are the same
-            for key in transformers_model.state_dict():
-                self.assertTrue(
-                    torch.allclose(
-                        transformers_model_from_save.state_dict()[key], transformers_model.state_dict()[key]
-                    )
-                )
-
     def test_from_save_transformers_sharded(self):
         """
         Test if the model can be saved and loaded using transformers and get the same weights - sharded case
@@ -109,135 +146,6 @@ class BaseModelTester:
                     torch.allclose(
                         transformers_model_from_save.state_dict()[key], transformers_model.state_dict()[key]
                     )
-                )
-
-
-class ValueHeadModelTester(BaseModelTester, unittest.TestCase):
-    """
-    Testing suite for v-head models.
-    """
-
-    all_model_names = ALL_CAUSAL_LM_MODELS
-    trl_model_class = AutoModelForCausalLMWithValueHead
-
-    def test_value_head(self):
-        r"""
-        Test if the v-head is added to the model succesfully
-        """
-        for model_name in self.all_model_names:
-            model = AutoModelForCausalLMWithValueHead.from_pretrained(model_name)
-            self.assertTrue(hasattr(model, "v_head"))
-
-    def test_value_head_shape(self):
-        r"""
-        Test if the v-head has the correct shape
-        """
-        for model_name in self.all_model_names:
-            model = AutoModelForCausalLMWithValueHead.from_pretrained(model_name)
-            self.assertTrue(model.v_head.summary.weight.shape[0] == 1)
-
-    def test_value_head_init_random(self):
-        r"""
-        Test if the v-head has been randomly initialized.
-        We can check that by making sure the bias is different
-        than zeros by default.
-        """
-        for model_name in self.all_model_names:
-            model = AutoModelForCausalLMWithValueHead.from_pretrained(model_name)
-            self.assertFalse(torch.allclose(model.v_head.summary.bias, torch.zeros_like(model.v_head.summary.bias)))
-
-    def test_value_head_not_str(self):
-        r"""
-        Test if the v-head is added to the model succesfully
-        """
-        for model_name in self.all_model_names:
-            pretrained_model = AutoModelForCausalLM.from_pretrained(model_name)
-            model = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model)
-            self.assertTrue(hasattr(model, "v_head"))
-
-    def test_inference(self):
-        r"""
-        Test if the model can be used for inference and outputs 3 values
-        - logits, loss, and value states
-        """
-        EXPECTED_OUTPUT_SIZE = 3
-
-        for model_name in self.all_model_names:
-            model = AutoModelForCausalLMWithValueHead.from_pretrained(model_name)
-            input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
-            outputs = model(input_ids)
-
-            # Check if the outputs are of the right size - here
-            # we always output 3 values - logits, loss, and value states
-            self.assertEqual(len(outputs), EXPECTED_OUTPUT_SIZE)
-
-    def test_dropout_config(self):
-        r"""
-        Test if we instantiate a model by adding `summary_drop_prob` to the config
-        it will be added to the vhead
-        """
-        for model_name in self.all_model_names:
-            pretrained_model = AutoModelForCausalLM.from_pretrained(model_name)
-            pretrained_model.config.summary_dropout_prob = 0.5
-            model = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model)
-
-            # Check if v head of the model has the same dropout as the config
-            self.assertEqual(model.v_head.dropout.p, pretrained_model.config.summary_dropout_prob)
-
-    def test_dropout_kwargs(self):
-        r"""
-        Test if we instantiate a model by adding `summary_drop_prob` to the config
-        it will be added to the vhead
-        """
-        for model_name in self.all_model_names:
-            v_head_kwargs = {"summary_dropout_prob": 0.5}
-
-            model = AutoModelForCausalLMWithValueHead.from_pretrained(model_name, **v_head_kwargs)
-
-            # Check if v head of the model has the same dropout as the config
-            self.assertEqual(model.v_head.dropout.p, 0.5)
-
-            model = AutoModelForCausalLMWithValueHead.from_pretrained(model_name, summary_dropout_prob=0.5)
-
-            # Check if v head of the model has the same dropout as the config
-            self.assertEqual(model.v_head.dropout.p, 0.5)
-
-    def test_generate(self):
-        r"""
-        Test if `generate` works for every model
-        """
-        for model_name in self.all_model_names:
-            model = AutoModelForCausalLMWithValueHead.from_pretrained(model_name)
-            input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
-
-            # Just check if the generation works
-            _ = model.generate(input_ids)
-
-    def test_raise_error_not_causallm(self):
-        # Test with a model without a LM head
-        model_id = "hf-internal-testing/tiny-random-GPT2Model"
-        # This should raise a ValueError
-        with self.assertRaises(ValueError):
-            pretrained_model = AutoModelForCausalLM.from_pretrained(model_id)
-            _ = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model.transformer)
-
-    @unittest.skip("This test needs to be run manually due to HF token issue.")
-    def test_push_to_hub(self):
-        for model_name in self.all_model_names:
-            model = AutoModelForCausalLMWithValueHead.from_pretrained(model_name)
-            if "sharded" in model_name:
-                model.push_to_hub(model_name + "-ppo", use_auth_token=True, max_shard_size="1MB")
-            else:
-                model.push_to_hub(model_name + "-ppo", use_auth_token=True)
-
-            model_from_pretrained = AutoModelForCausalLMWithValueHead.from_pretrained(model_name + "-ppo")
-            # check all keys
-            self.assertEqual(model.state_dict().keys(), model_from_pretrained.state_dict().keys())
-
-            for name, param in model.state_dict().items():
-                self.assertTrue(
-                    torch.allclose(param, model_from_pretrained.state_dict()[name]),
-                    f"Parameter {name} is not the same after push_to_hub and from_pretrained",
                 )
 
     def test_from_save_transformers(self):
@@ -274,6 +182,198 @@ class ValueHeadModelTester(BaseModelTester, unittest.TestCase):
             self.assertTrue(
                 set(transformers_model_from_save.state_dict().keys()) == set(transformers_model.state_dict().keys())
             )
+
+
+class CausalLMValueHeadModelTester(VHeadModelTester, unittest.TestCase):
+    """
+    Testing suite for v-head models.
+    """
+
+    all_model_names = ALL_CAUSAL_LM_MODELS
+    trl_model_class = AutoModelForCausalLMWithValueHead
+    transformers_model_class = AutoModelForCausalLM
+
+    def test_inference(self):
+        r"""
+        Test if the model can be used for inference and outputs 3 values
+        - logits, loss, and value states
+        """
+        EXPECTED_OUTPUT_SIZE = 3
+
+        for model_name in self.all_model_names:
+            model = self.trl_model_class.from_pretrained(model_name)
+            input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
+            outputs = model(input_ids)
+
+            # Check if the outputs are of the right size - here
+            # we always output 3 values - logits, loss, and value states
+            self.assertEqual(len(outputs), EXPECTED_OUTPUT_SIZE)
+
+    def test_dropout_config(self):
+        r"""
+        Test if we instantiate a model by adding `summary_drop_prob` to the config
+        it will be added to the vhead
+        """
+        for model_name in self.all_model_names:
+            pretrained_model = self.transformers_model_class.from_pretrained(model_name)
+            pretrained_model.config.summary_dropout_prob = 0.5
+            model = self.trl_model_class.from_pretrained(pretrained_model)
+
+            # Check if v head of the model has the same dropout as the config
+            self.assertEqual(model.v_head.dropout.p, pretrained_model.config.summary_dropout_prob)
+
+    def test_dropout_kwargs(self):
+        r"""
+        Test if we instantiate a model by adding `summary_drop_prob` to the config
+        it will be added to the vhead
+        """
+        for model_name in self.all_model_names:
+            v_head_kwargs = {"summary_dropout_prob": 0.5}
+
+            model = self.trl_model_class.from_pretrained(model_name, **v_head_kwargs)
+
+            # Check if v head of the model has the same dropout as the config
+            self.assertEqual(model.v_head.dropout.p, 0.5)
+
+            model = self.trl_model_class.from_pretrained(model_name, summary_dropout_prob=0.5)
+
+            # Check if v head of the model has the same dropout as the config
+            self.assertEqual(model.v_head.dropout.p, 0.5)
+
+    def test_generate(self):
+        r"""
+        Test if `generate` works for every model
+        """
+        for model_name in self.all_model_names:
+            model = self.trl_model_class.from_pretrained(model_name)
+            input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
+
+            # Just check if the generation works
+            _ = model.generate(input_ids)
+
+    def test_raise_error_not_causallm(self):
+        # Test with a model without a LM head
+        model_id = "trl-internal-testing/tiny-random-GPT2Model"
+        # This should raise a ValueError
+        with self.assertRaises(ValueError):
+            pretrained_model = AutoModelForCausalLM.from_pretrained(model_id)
+            _ = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model.transformer)
+
+    @unittest.skip("This test needs to be run manually due to HF token issue.")
+    def test_push_to_hub(self):
+        for model_name in self.all_model_names:
+            model = AutoModelForCausalLMWithValueHead.from_pretrained(model_name)
+            if "sharded" in model_name:
+                model.push_to_hub(model_name + "-ppo", use_auth_token=True, max_shard_size="1MB")
+            else:
+                model.push_to_hub(model_name + "-ppo", use_auth_token=True)
+
+            model_from_pretrained = AutoModelForCausalLMWithValueHead.from_pretrained(model_name + "-ppo")
+            # check all keys
+            self.assertEqual(model.state_dict().keys(), model_from_pretrained.state_dict().keys())
+
+            for name, param in model.state_dict().items():
+                self.assertTrue(
+                    torch.allclose(param, model_from_pretrained.state_dict()[name]),
+                    f"Parameter {name} is not the same after push_to_hub and from_pretrained",
+                )
+
+
+class Seq2SeqValueHeadModelTester(VHeadModelTester, unittest.TestCase):
+    """
+    Testing suite for v-head models.
+    """
+
+    all_model_names = ALL_SEQ2SEQ_MODELS
+    trl_model_class = AutoModelForSeq2SeqLMWithValueHead
+    transformers_model_class = AutoModelForSeq2SeqLM
+
+    def test_inference(self):
+        r"""
+        Test if the model can be used for inference and outputs 3 values
+        - logits, loss, and value states
+        """
+        EXPECTED_OUTPUT_SIZE = 3
+
+        for model_name in self.all_model_names:
+            model = self.trl_model_class.from_pretrained(model_name)
+            input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
+            decoder_input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
+            outputs = model(input_ids, decoder_input_ids=decoder_input_ids)
+
+            # Check if the outputs are of the right size - here
+            # we always output 3 values - logits, loss, and value states
+            self.assertEqual(len(outputs), EXPECTED_OUTPUT_SIZE)
+
+    def test_dropout_config(self):
+        r"""
+        Test if we instantiate a model by adding `summary_drop_prob` to the config
+        it will be added to the vhead
+        """
+        for model_name in self.all_model_names:
+            pretrained_model = self.transformers_model_class.from_pretrained(model_name)
+            pretrained_model.config.summary_dropout_prob = 0.5
+            model = self.trl_model_class.from_pretrained(pretrained_model)
+
+            # Check if v head of the model has the same dropout as the config
+            self.assertEqual(model.v_head.dropout.p, pretrained_model.config.summary_dropout_prob)
+
+    def test_dropout_kwargs(self):
+        r"""
+        Test if we instantiate a model by adding `summary_drop_prob` to the config
+        it will be added to the vhead
+        """
+        for model_name in self.all_model_names:
+            v_head_kwargs = {"summary_dropout_prob": 0.5}
+
+            model = self.trl_model_class.from_pretrained(model_name, **v_head_kwargs)
+
+            # Check if v head of the model has the same dropout as the config
+            self.assertEqual(model.v_head.dropout.p, 0.5)
+
+            model = self.trl_model_class.from_pretrained(model_name, summary_dropout_prob=0.5)
+
+            # Check if v head of the model has the same dropout as the config
+            self.assertEqual(model.v_head.dropout.p, 0.5)
+
+    def test_generate(self):
+        r"""
+        Test if `generate` works for every model
+        """
+        for model_name in self.all_model_names:
+            model = self.trl_model_class.from_pretrained(model_name)
+            input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
+            decoder_input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
+
+            # Just check if the generation works
+            _ = model.generate(input_ids, decoder_input_ids=decoder_input_ids)
+
+    def test_raise_error_not_causallm(self):
+        # Test with a model without a LM head
+        model_id = "trl-internal-testing/tiny-random-T5Model"
+        # This should raise a ValueError
+        with self.assertRaises(ValueError):
+            pretrained_model = AutoModel.from_pretrained(model_id)
+            _ = self.trl_model_class.from_pretrained(pretrained_model)
+
+    @unittest.skip("This test needs to be run manually due to HF token issue.")
+    def test_push_to_hub(self):
+        for model_name in self.all_model_names:
+            model = self.trl_model_class.from_pretrained(model_name)
+            if "sharded" in model_name:
+                model.push_to_hub(model_name + "-ppo", use_auth_token=True, max_shard_size="1MB")
+            else:
+                model.push_to_hub(model_name + "-ppo", use_auth_token=True)
+
+            model_from_pretrained = self.trl_model_class.from_pretrained(model_name + "-ppo")
+            # check all keys
+            self.assertEqual(model.state_dict().keys(), model_from_pretrained.state_dict().keys())
+
+            for name, param in model.state_dict().items():
+                self.assertTrue(
+                    torch.allclose(param, model_from_pretrained.state_dict()[name]),
+                    f"Parameter {name} is not the same after push_to_hub and from_pretrained",
+                )
 
 
 class ReferenceModelTest(unittest.TestCase):

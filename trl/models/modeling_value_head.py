@@ -231,7 +231,7 @@ class AutoModelForSeq2SeqLMWithValueHead(PreTrainedModelWrapper):
             Additional keyword arguments passed along to the `ValueHead` class.
     """
     transformers_parent_class = AutoModelForSeq2SeqLM
-    lm_head_namings = ["lm_head", "embed_out"]
+    lm_head_namings = ["lm_head", "embed_out", "output_projection"]
     supported_args = (
         "summary_dropout_prob",
         "v_head_initializer_range",
@@ -243,12 +243,19 @@ class AutoModelForSeq2SeqLMWithValueHead(PreTrainedModelWrapper):
         v_head_kwargs, _ = self._split_kwargs(kwargs)
         self.is_encoder_decoder = True
 
-        if not any(hasattr(self.pretrained_model, attribute) for attribute in self.lm_head_namings):
+        if not self._has_lm_head():
             raise ValueError("The model does not have a language model head, please use a model that has one.")
 
         self.v_head = ValueHead(self.pretrained_model.config, **v_head_kwargs)
 
         self._init_weights(**v_head_kwargs)
+
+    def _has_lm_head(self):
+        # check module names of all modules inside `pretrained_model` to find the language model head
+        for name, module in self.pretrained_model.named_modules():
+            if any(attribute in name for attribute in self.lm_head_namings):
+                return True
+        return False
 
     def post_init(self, state_dict):
         r"""
@@ -261,6 +268,22 @@ class AutoModelForSeq2SeqLMWithValueHead(PreTrainedModelWrapper):
                 state_dict[k.replace("v_head.", "")] = state_dict.pop(k)
         self.v_head.load_state_dict(state_dict, strict=False)
         del state_dict
+
+    def state_dict(self, *args, **kwargs):
+        r"""
+        Returns the state dictionary of the model. We add the state dictionary of the value head
+        to the state dictionary of the wrapped model by preprending the key with `v_head.`.
+        """
+        pretrained_model_state_dict = self.pretrained_model.state_dict(*args, **kwargs)
+        v_head_state_dict = self.v_head.state_dict(*args, **kwargs)
+        for k, v in v_head_state_dict.items():
+            pretrained_model_state_dict[f"v_head.{k}"] = v
+        return pretrained_model_state_dict
+
+    def push_to_hub(self, *args, **kwargs):
+        setattr(self.pretrained_model, "v_head", self.v_head)
+
+        return self.pretrained_model.push_to_hub(*args, **kwargs)
 
     def _init_weights(self, **kwargs):
         r"""
