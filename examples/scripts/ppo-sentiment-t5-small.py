@@ -15,17 +15,16 @@
 import torch
 from tqdm import tqdm
 tqdm.pandas()
-
-from transformers import pipeline, AutoTokenizer
+from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM
 from datasets import load_dataset
 
 from trl import PPOTrainer, PPOConfig, AutoModelForSeq2SeqLMWithValueHead
-from trl.core import LengthSampler
+from trl.core import LengthSampler, logprobs_from_logits
 
 ########################################################################
 # This is a fully working simple example to use trl with accelerate.
 #
-# This example fine-tunes a T5 model on the IMDB dataset using PPO 
+# This example fine-tunes a GPT2 model on the IMDB dataset using PPO 
 # (proximal policy optimization).
 # in any of the following settings (with the same script):
 #   - single CPU or single GPU
@@ -34,8 +33,7 @@ from trl.core import LengthSampler
 #   - fp16 (mixed-precision) or fp32 (normal precision)
 #
 # To run it in each of these various modes, first initialize the accelerate
-# configuration with `accelerate config` then run the script with 
-# `accelerate launch ppo-sentiment-t5-small.py`
+# configuration with `accelerate config`
 #
 ########################################################################
 
@@ -45,22 +43,34 @@ from trl.core import LengthSampler
 config = PPOConfig(
     model_name="lvwerra/t5-imdb",
     learning_rate=5e-5,
-    batch_size=512,
-    forward_batch_size=16
+    batch_size=256,
+    forward_batch_size=16,
 )
-
 # We then define the arguments to pass to the sentiment analysis pipeline.
 # We set `return_all_scores` to True to get the sentiment score for each token.
 sent_kwargs = {
-    "top_k": None,
+    "return_all_scores": True,
     "function_to_apply": "none",
     "batch_size": config.forward_batch_size
 }
-
 # Below is an example function to build the dataset. In our case, we use the IMDB dataset
 # from the `datasets` library. One should customize this function to train the model on
 # its own dataset.
-def build_dataset(tokenizer, dataset_name="imdb", input_min_text_length=2, input_max_text_length=8):
+def build_dataset(config, dataset_name="imdb", input_min_text_length=2, input_max_text_length=8):
+    """
+    Build dataset for training. This builds the dataset from `load_dataset`, one should 
+    customize this function to train the model on its own dataset.
+    
+    Args:
+        dataset_name (`str`): 
+            The name of the dataset to be loaded.
+    
+    Returns:
+        dataloader (`torch.utils.data.DataLoader`):
+            The dataloader for the dataset.
+    """
+    tokenizer = AutoTokenizer.from_pretrained(config.model_name)
+    #tokenizer.pad_token = tokenizer.eos_token
     # load imdb with datasets
     ds = load_dataset(dataset_name, split='train')
     ds = ds.rename_columns({'text': 'review'})
@@ -77,16 +87,29 @@ def build_dataset(tokenizer, dataset_name="imdb", input_min_text_length=2, input
     ds.set_format(type='torch')
     return ds
 
+# We retrieve the dataloader by calling the `build_dataset` function.
+dataset = build_dataset(config)
+
+def collater(data):
+    return dict((key, [d[key] for d in data]) for key in data[0])
+
 # Now let's build the model, the reference model, and the tokenizer.
 model = AutoModelForSeq2SeqLMWithValueHead.from_pretrained(config.model_name)
 ref_model = AutoModelForSeq2SeqLMWithValueHead.from_pretrained(config.model_name)
 tokenizer = AutoTokenizer.from_pretrained(config.model_name)
 
-# We retrieve the dataloader by calling the `build_dataset` function.
-dataset = build_dataset(tokenizer)
+query = tokenizer("I really liked this movie because", return_tensors="pt")["input_ids"]
 
-def collater(data):
-    return dict((key, [d[key] for d in data]) for key in data[0])
+generation_kwargs = {
+    #"min_length":-1,
+#    "max_new_tokens": 8,
+    "top_k": 0.0,
+    "top_p": 1.0,
+    "do_sample": True,
+    #"temperature": 0.2,
+    "eos_token_id": -1
+}
+
 
 # We then build the PPOTrainer, passing the model, the reference model, the tokenizer
 ppo_trainer = PPOTrainer(config, model, ref_model, tokenizer, dataset=dataset, data_collator=collater)
@@ -102,15 +125,9 @@ sentiment_pipe = pipeline("sentiment-analysis", "lvwerra/distilbert-imdb", devic
 # We then define the arguments to pass to the `generate` function. These arguments
 # are passed to the `generate` function of the PPOTrainer, which is a wrapper around 
 # the `generate` function of the trained model.
-generation_kwargs = {
-    "top_k": 0.0,
-    "top_p": 1.0,
-    "do_sample": True,
-    "eos_token_id":-1, # we don't want the model to stop generation early
-}
-
-
-output_length_sampler = LengthSampler(16, 32)
+output_min_length = 16
+output_max_length = 32
+output_length_sampler = LengthSampler(output_min_length, output_max_length)
 
 for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     query_tensors = batch['input_ids']
