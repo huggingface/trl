@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import gc
 import tempfile
 import unittest
 
@@ -193,6 +194,10 @@ class CausalLMValueHeadModelTester(VHeadModelTester, unittest.TestCase):
     trl_model_class = AutoModelForCausalLMWithValueHead
     transformers_model_class = AutoModelForCausalLM
 
+    def tearDown(self):
+        # free memory
+        gc.collect()
+
     def test_inference(self):
         r"""
         Test if the model can be used for inference and outputs 3 values
@@ -287,6 +292,10 @@ class Seq2SeqValueHeadModelTester(VHeadModelTester, unittest.TestCase):
     all_model_names = ALL_SEQ2SEQ_MODELS
     trl_model_class = AutoModelForSeq2SeqLMWithValueHead
     transformers_model_class = AutoModelForSeq2SeqLM
+
+    def tearDown(self):
+        # free memory
+        gc.collect()
 
     def test_inference(self):
         r"""

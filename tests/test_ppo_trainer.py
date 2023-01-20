@@ -60,6 +60,10 @@ class PPOTrainerTester(unittest.TestCase):
     A wrapper class for testing PPOTrainer
     """
 
+    def tearDown(self):
+        # free memory
+        gc.collect()
+
     def _init_dummy_dataset(self):
         # encode a query
         query_txt = "This morning I went to the "
