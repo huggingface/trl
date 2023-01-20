@@ -19,12 +19,13 @@ from typing import List, Optional, Union
 
 import datasets
 import torch
-import wandb
 from accelerate import Accelerator
 from datasets import Dataset
 from packaging import version
 from torch.optim import Adam
 from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizer, PreTrainedTokenizerFast
+
+import wandb
 
 from ..core import (
     WANDB_PADDING,
@@ -431,7 +432,7 @@ class PPOTrainer(BaseTrainer):
                 input_kwargs = {
                     "input_ids": input_ids,
                 }
-                
+
             with torch.no_grad():
                 logits, _, v = self.model(**input_kwargs)
                 ref_logits, _, _ = self.ref_model(**input_kwargs)
@@ -442,7 +443,7 @@ class PPOTrainer(BaseTrainer):
             else:
                 logprobs = logprobs_from_logits(logits[:, :-1, :], input_ids[:, 1:])
                 ref_logprobs = logprobs_from_logits(ref_logits[:, :-1, :], input_ids[:, 1:])
-                
+
             for j in range(fbs):
                 if self.is_encoder_decoder:
                     # Decoder sentence starts always in the index 1 after padding in the Enc-Dec Models
@@ -451,14 +452,14 @@ class PPOTrainer(BaseTrainer):
                 else:
                     start = len(query_batch[j]) - 1
                     end = len(query_batch[j]) + len(response_batch[j]) - 1
-                
-                if len(logprobs[j, start:end])<2:
+
+                if len(logprobs[j, start:end]) < 2:
                     raise ValueError("Responses are too short. Make sure they are at least 4 tokens long.")
 
-                all_values.append(v[j, start - 1:end - 1])
+                all_values.append(v[j, start - 1 : end - 1])
                 all_logprobs.append(logprobs[j, start:end])
                 all_ref_logprobs.append(ref_logprobs[j, start:end])
-                
+
         return all_logprobs, all_ref_logprobs, all_values
 
     def train_minibatch(
@@ -576,7 +577,7 @@ class PPOTrainer(BaseTrainer):
 
         if self.is_encoder_decoder:
             logprob = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
-            start, end = 1, response.shape[-1] -1
+            start, end = 1, response.shape[-1] - 1
             vpred = vpred[:, start - 1 : end - 1]
             logprob = logprob[:, start:end]
         else:
@@ -589,7 +590,7 @@ class PPOTrainer(BaseTrainer):
         vf_losses2 = (vpredclipped - returns) ** 2
         vf_loss = 0.5 * torch.mean(torch.max(vf_losses1, vf_losses2))
         vf_clipfrac = torch.mean(torch.gt(vf_losses2, vf_losses1).double())
-        
+
         ratio = torch.exp(logprob - old_logprobs)
         pg_losses = -advantages * ratio
         pg_losses2 = -advantages * torch.clamp(ratio, 1.0 - self.config.cliprange, 1.0 + self.config.cliprange)
