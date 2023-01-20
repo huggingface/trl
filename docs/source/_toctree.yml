@@ -6,6 +6,12 @@
   - local: installation
     title: Installation
   title: Get started
+- sections:
+  - local: models
+    title: Model Classes
+  - local: trainer
+    title: Trainer Classes
+  title: API
 - sections: 
   - local: sentiment_tuning
     title: Sentiment Tuning

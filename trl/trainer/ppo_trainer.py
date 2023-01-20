@@ -30,6 +30,7 @@ import wandb
 from ..core import (
     WANDB_PADDING,
     clip_by_value,
+    convert_to_scalar,
     entropy_from_logits,
     flatten_dict,
     logprobs_from_logits,
@@ -38,21 +39,39 @@ from ..core import (
     whiten,
 )
 from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper, create_reference_model
-from . import AdaptiveKLController, BaseTrainer, FixedKLController
+from . import AdaptiveKLController, BaseTrainer, FixedKLController, PPOConfig
 
 
 class PPOTrainer(BaseTrainer):
     """
     The PPOTrainer uses Proximal Policy Optimization to optimise language models.
+
+    Attributes:
+        **config** (`PPOConfig`) -- Configuration object for PPOTrainer. Check the documentation of `PPOConfig` for more details.
+        **model** (`PreTrainedModelWrapper`) -- Model to be optimized, Hugging Face transformer model with a value head.
+            Check the documentation of `PreTrainedModelWrapper` for more details.
+        **ref_model** (`PreTrainedModelWrapper`, *optional*) -- Reference model to be used for KL penalty, Hugging Face transformer model with a casual language modelling head.
+            Check the documentation of `PreTrainedModelWrapper` for more details. If no reference model is provided, the
+            trainer will create a reference model with the same architecture as the model to be optimized with shared layers.
+        **tokenizer** (`Union[PreTrainedTokenizer, PreTrainedTokenizerFast]`) -- Tokenizer to be used for encoding the data. Check the documentation of `transformers.PreTrainedTokenizer` and
+            `transformers.PreTrainedTokenizerFast` for more details.
+        **dataset** (Union[`torch.utils.data.Dataset`, `datasets.Dataset`], *optional*) -- PyTorch dataset or Hugging Face dataset. This is used to create a PyTorch dataloader. If no dataset is provided,
+            the dataloader must be created outside the trainer users needs to design their own dataloader and make sure the batch
+            size that is used is the same as the one specified in the configuration object.
+        **optimizer** (`torch.optim.Optimizer`, *optional*) -- Optimizer to be used for training. If no optimizer is provided, the trainer will create an Adam optimizer with
+            the learning rate specified in the configuration object.
+        **data_collator** (DataCollatorForLanguageModeling, *optional*) -- Data collator to be used for training and passed along the dataloader
+        **num_shared_layers** (int, *optional*) -- Number of layers to be shared between the model and the reference model, if no reference model is passed. If no number is provided, all the layers
+            will be shared.
     """
 
     def __init__(
         self,
-        config,
+        config: PPOConfig,
         model: PreTrainedModelWrapper,
         ref_model: PreTrainedModelWrapper,
         tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast],
-        dataset: Union[torch.utils.data.Dataset, Dataset],
+        dataset: Optional[Union[torch.utils.data.Dataset, Dataset]] = None,
         optimizer: Optional[torch.optim.Optimizer] = None,
         data_collator=None,
         num_shared_layers: Optional[int] = None,
@@ -69,9 +88,10 @@ class PPOTrainer(BaseTrainer):
                 Hugging Face transformer model with a casual language modelling head. Used for KL penalty
             tokenizer (`transformers.PreTrainedTokenizer`):
                 Hugging Face tokenizer
-            dataset (Union[`torch.utils.data.Dataset`, `datasets.Dataset`]):
+            dataset (Union[`torch.utils.data.Dataset`, `datasets.Dataset`], *optional*):
                 PyTorch dataset or Hugging Face dataset. If a Hugging Face dataset is passed, the dataset
-                will be preprocessed by removing the columns that are not used by the model.
+                will be preprocessed by removing the columns that are not used by the model. If none is passed,
+                a warning will be raised in a multi-GPU setting.
             optimizer (Optional[`torch.optim.Optimizer`]):
                 Optimizer used for training. If `None`, the `Adam` is used as default.
             data_collator (Optional[function]):
@@ -83,7 +103,8 @@ class PPOTrainer(BaseTrainer):
         super().__init__(config)
 
         # Step 1: Initialize Accelerator
-        self.accelerator = Accelerator(log_with="wandb")
+        self.accelerator = Accelerator(log_with=config.log_with, **config.accelerator_kwargs)
+        self.accelerator.init_trackers(config.tracker_project_name, config=config.to_dict(), **config.tracker_kwargs)
 
         # Step 2: Initialize model, tokenizer, and dataloader
         if not isinstance(model, PreTrainedModelWrapper):
@@ -113,11 +134,28 @@ class PPOTrainer(BaseTrainer):
             )
         self.tokenizer = tokenizer
 
-        if not (isinstance(dataset, torch.utils.data.Dataset) or isinstance(dataset, Dataset)):
+        if dataset is not None and not (isinstance(dataset, torch.utils.data.Dataset) or isinstance(dataset, Dataset)):
             raise ValueError("dataloader must be a torch.utils.data.Dataset or datasets.Dataset")
+        elif dataset is None:
+            warnings.warn(
+                "No dataset is provided. Make sure to set config.batch_size to the correct value before training.",
+                UserWarning,
+            )
         self.dataset = dataset
         self._signature_columns = None
-        self.dataloader = self.prepare_dataloader(self.dataset, data_collator)
+        if self.dataset is not None:
+            self.dataloader = self.prepare_dataloader(self.dataset, data_collator)
+        elif self.dataset is None and self.accelerator.num_processes > 1:
+            warnings.warn(
+                "No dataset is provided. In a multi-GPU setting, this will lead to an error. You should",
+                " prepare your dataloader yourself with `dataloader = ppo_trainer.accelerator.prepare(dataloader)`",
+                " and using `torch.utils.data.DataLoader`, or pass a dataset to the `PPOTrainer`. Please ",
+                " refer to the documentation for more details.",
+                UserWarning,
+            )
+            self.dataloader = None
+        else:
+            self.dataloader = None
 
         # Step 3: Initialize optimizer and data collator
         self.data_collator = DataCollatorForLanguageModeling(self.tokenizer, mlm=False)
@@ -140,9 +178,13 @@ class PPOTrainer(BaseTrainer):
         # or: https://discuss.pytorch.org/t/use-distributed-data-parallel-correctly/82500/11
         self.is_distributed = self.accelerator.distributed_type == "MULTI_GPU"
 
+        # init the current step
+        self.current_step = 0
+
         # init wandb on the main process:
-        if self.accelerator.is_main_process and self.config.log_with_wandb:
-            wandb.init(name="run-42", project=self.config.wandb_project, config=config)
+        if self.accelerator.is_main_process and self.config.log_with == "wandb":
+            import wandb
+
             wandb.watch(self.model, log="all")
 
     def _filter_kwargs(self, kwargs, target_func):
@@ -169,8 +211,7 @@ class PPOTrainer(BaseTrainer):
                 Data collator function.
 
         Returns:
-            `torch.utils.data.DataLoader`:
-                PyTorch dataloader
+            `torch.utils.data.DataLoader`: PyTorch dataloader
         """
         if isinstance(dataset, Dataset):
             dataset = self._remove_unused_columns(dataset)
@@ -212,7 +253,8 @@ class PPOTrainer(BaseTrainer):
 
     def generate(self, query_tensor: torch.Tensor, **generation_kwargs):
         """
-        Generate response given query.
+        Generate response with the model given the query tensor.
+        call the `generate` method of the model.
 
         Args:
             query_tensor (`torch.LongTensor`):
@@ -221,8 +263,7 @@ class PPOTrainer(BaseTrainer):
                 Keyword arguments for generation.
 
         Returns:
-            response (`torch.LongTensor`):
-                A tensor of shape (`batch_size`, `gen_len`) containing response tokens.
+            `torch.LongTensor`: A tensor of shape (`batch_size`, `gen_len`) containing response tokens.
         """
         response = self.accelerator.unwrap_model(self.model).generate(
             query_tensor.unsqueeze(dim=0), **generation_kwargs
@@ -242,7 +283,7 @@ class PPOTrainer(BaseTrainer):
 
         Args:
             batch_size (int):
-                Batch size
+                Batch size from the config file.
             queries (List[`torch.LongTensor`]):
                 List of tensors containing the encoded queries of shape (`query_length`)
             responses (List[`torch.LongTensor`]):
@@ -250,15 +291,14 @@ class PPOTrainer(BaseTrainer):
             scores (List[`torch.FloatTensor`]):
                 List of tensors containing the scores.
         Returns:
-            queries, responses, scores (List[`torch.LongTensor`], List[`torch.LongTensor`], List[`torch.FloatTensor`]):
-                The input processed data.
+            `tuple`: The input processed data.
         """
         for name, tensor_list in zip(["queries", "responses", "scores"], [queries, responses, scores]):
             if not isinstance(tensor_list, list):
                 raise ValueError(f"{name} must be a list of tensors - got {type(tensor_list)}")
             if not isinstance(tensor_list[0], torch.Tensor):
                 raise ValueError(f"Elements in {name} must tensors - got {type(tensor_list[0])}")
-            if len(tensor_list) != batch_size:
+            if batch_size is not None and len(tensor_list) != batch_size:
                 raise ValueError(
                     f"Batch size ({batch_size}) does not match number of examples - but got {len(tensor_list)} for: {name}"
                 )
@@ -284,7 +324,7 @@ class PPOTrainer(BaseTrainer):
         scores: List[torch.FloatTensor],
     ):
         """
-        Run a PPO optimisation step.
+        Run a PPO optimisation step given a list of queries, model responses, and rewards.
 
         Args:
             queries (List[`torch.LongTensor`]):
@@ -295,10 +335,8 @@ class PPOTrainer(BaseTrainer):
                 List of tensors containing the scores.
 
         Returns:
-            train_stats (dict[str, Any]):
-                a summary of the training statistics
+            `dict[str, Any]`: A summary of the training statistics
         """
-
         bs = self.config.batch_size
 
         queries, responses, scores = self._step_safety_checker(bs, queries, responses, scores)
@@ -361,6 +399,11 @@ class PPOTrainer(BaseTrainer):
         # Log the total ppo time
         timing["time/ppo/total"] = time.time() - t0
         stats.update(timing)
+
+        # post-process stats for tensorboard and other loggers
+        if self.config.log_with != "wandb":
+            stats = convert_to_scalar(stats)
+
         return stats
 
     def gather_stats(self, stats):
@@ -372,8 +415,7 @@ class PPOTrainer(BaseTrainer):
             a dictionary of stats to be gathered. The stats should contain torch tensors.
 
         Returns:
-            stats (dict[str, Any]):
-                a dictionary of stats with the tensors gathered.
+            `dict[str, Any]`: A dictionary of stats with the tensors gathered.
         """
         import torch.distributed as dist
 
@@ -387,7 +429,11 @@ class PPOTrainer(BaseTrainer):
             stats[k] = v
         return stats
 
-    def batched_forward_pass(self, queries: torch.Tensor, responses: torch.Tensor):
+    def batched_forward_pass(
+        self,
+        queries: torch.Tensor,
+        responses: torch.Tensor,
+    ):
         """
         Calculate model outputs in multiple batches.
 
@@ -396,15 +442,11 @@ class PPOTrainer(BaseTrainer):
                 List of tensors containing the encoded queries, shape (`batch_size`, `query_length`)
             responses (`torch.LongTensor`):
                 List of tensors containing the encoded responses, shape (`batch_size`, `response_length`)
-
         Returns:
-            all_logprobs (`torch.FloatTensor`):
-                List of tensors containing the logprobs, shape (`batch_size`, `response_length`)
-            all_ref_logprobs (`torch.FloatTensor`):
-                List of tensors containing the logprobs from the reference model, shape (`batch_size`, `response_length`)
-            all_values (`torch.FloatTensor`):
-                List of tensors containing the output from the value head, shape (`batch_size`, `response_length`)
-
+            (tuple):
+                - all_logprobs (`torch.FloatTensor`): Log probabilities of the responses, shape (`batch_size`, `response_length`)
+                - all_ref_logprobs (`torch.FloatTensor`): Log probabilities of the responses, shape (`batch_size`, `response_length`)
+                - all_values (`torch.FloatTensor`): Values of the responses, shape (`batch_size`, `response_length`)
         """
         bs = self.config.batch_size
         fbs = self.config.forward_batch_size
@@ -683,7 +725,7 @@ class PPOTrainer(BaseTrainer):
         """
         # Log only if we are in the main process
         if self.accelerator.is_main_process:
-            wandb_logs = {}
+            logs = {}
 
             # Log stats
             if not isinstance(rewards, torch.Tensor):
@@ -694,9 +736,11 @@ class PPOTrainer(BaseTrainer):
                 warnings.warn(
                     "The game logs will not be logged because the batch does not contain the keys 'query' and 'response'."
                 )
-            elif self.config.log_with_wandb:
+            elif self.config.log_with == "wandb":
+                import wandb
+
                 table_rows = [list(r) for r in zip(batch["query"], batch["response"], rewards.cpu().tolist())]
-                wandb_logs.update({"game_log": wandb.Table(columns=["query", "response", "reward"], rows=table_rows)})
+                logs.update({"game_log": wandb.Table(columns=["query", "response", "reward"], rows=table_rows)})
             # All reduce rewards if distributed
             if self.is_distributed:
                 import torch.distributed as dist
@@ -706,16 +750,16 @@ class PPOTrainer(BaseTrainer):
                 dist.all_reduce(rewards, op=torch.distributed.ReduceOp.SUM)
                 rewards /= self.accelerator.num_processes
 
-            if self.config.log_with_wandb:
-                wandb_logs.update(stats)
-                wandb_logs["env/reward_mean"] = torch.mean(rewards).cpu().numpy()
-                wandb_logs["env/reward_std"] = torch.std(rewards).cpu().numpy()
-                wandb_logs["env/reward_dist"] = rewards.cpu().numpy()
-                wandb.log(wandb_logs)
-            else:
-                stats["env/reward_mean"] = torch.mean(rewards).cpu().numpy()
-                stats["env/reward_std"] = torch.std(rewards).cpu().numpy()
-                stats["env/reward_dist"] = rewards.cpu().numpy()
+            logs.update(stats)
+            logs["env/reward_mean"] = torch.mean(rewards).cpu().numpy().item()
+            logs["env/reward_std"] = torch.std(rewards).cpu().numpy().item()
+            logs["env/reward_dist"] = rewards.cpu().numpy()
+
+            if self.config.log_with == "tensorboard":
+                # update the current step
+                self.current_step += 1
+
+            self.accelerator.log(logs, step=self.current_step if self.config.log_with == "tensorboard" else None)
 
         else:
             if self.is_distributed:

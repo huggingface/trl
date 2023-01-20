@@ -48,3 +48,30 @@ train_stats = ppo_trainer.step([query_tensor[0]], [response_tensor[0]], reward)
 ```
 
 In general, you would run steps 3-6 in a for-loop and run it on many diverse queries. You can find a more realistic examples in the examples section. 
+
+## How to use a trained model
+
+After training a `AutoModelForCausalLMWithValueHead`, you can directly use the model in `transformers`.
+```python
+
+# .. Let's assume we have a trained model using `PPOTrainer` and `AutoModelForCausalLMWithValueHead`
+
+# push the model on the Hub
+model.push_to_hub("my-fine-tuned-model-ppo")
+
+# or save it locally
+model.save_pretrained("my-fine-tuned-model-ppo")
+
+# load the model from the Hub
+from transformers import AutoModelForCausalLM
+
+model = AutoModelForCausalLM.from_pretrained("my-fine-tuned-model-ppo")
+```
+
+You can also load your model with `AutoModelForCausalLMWithValueHead` if you want to use the value head, for example to continue a training.
+
+```python
+from trl.model import AutoModelForCausalLMWithValueHead
+
+model = AutoModelForCausalLMWithValueHead.from_pretrained("my-fine-tuned-model-ppo")
+```

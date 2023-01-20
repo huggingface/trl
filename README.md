@@ -3,7 +3,7 @@
 
 
 ## What is it?
-With `trl` you can train transformer language models with Proximal Policy Optimization (PPO). The library is built on top of the [`transformer`](https://github.com/huggingface/transformers) library by  🤗 Hugging Face. Therefore, pre-trained language models can be directly loaded via `transformers`. At this point only decoder architectures such as GPT2 are implemented.
+With `trl` you can train transformer language models with Proximal Policy Optimization (PPO). The library is built on top of the [`transformers`](https://github.com/huggingface/transformers) library by  🤗 Hugging Face. Therefore, pre-trained language models can be directly loaded via `transformers`. At this point only decoder architectures such as GPT2 are implemented.
 
 **Highlights:**
 - PPOTrainer: A PPO trainer for language models that just needs (query, response, reward) triplets to optimise the language model.
@@ -71,28 +71,9 @@ query_tensor = tokenizer.encode(query_txt, return_tensors="pt")
 
 # get model response
 response_tensor  = respond_to_batch(model_ref, query_tensor)
-response_txt = tokenizer.decode(response_tensor[0,:])
-
-# create a dummy dataset
-class DummyDataset(torch.utils.data.Dataset):
-    def __init__(self, query_data, response_data):
-        self.query_data = query_data
-        self.response_data = response_data
-
-    def __len__(self):
-        return len(self.query_data)
-
-    def __getitem__(self, idx):
-        return self.query_data[idx], self.response_data[idx]
-
-min_length = min(len(query_tensor[0]), len(response_tensor[0]))
-dummy_dataset = DummyDataset(
-    [query_tensor[:, :min_length].squeeze(0) for _ in range(2)],
-    [response_tensor[:, :min_length].squeeze(0) for _ in range(2)],
-)
 
 # create a ppo trainer
-ppo_trainer = PPOTrainer(ppo_config, model, model_ref, tokenizer, dummy_dataset)
+ppo_trainer = PPOTrainer(ppo_config, model, model_ref, tokenizer)
 device = ppo_trainer.accelerator.device
 
 # define a reward for response
