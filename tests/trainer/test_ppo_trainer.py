@@ -76,7 +76,7 @@ class PPOTrainerTester(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        for model in ["test-ppo-trainer"]:
+        for model in [f"{CI_HUB_USER}/test-ppo-trainer"]:
             try:
                 delete_repo(token=cls._token, repo_id=model)
             except HTTPError:
