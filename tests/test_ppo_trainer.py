@@ -41,6 +41,7 @@ EXPECTED_STATS = [
     "time/ppo/optimize_step",
     "time/ppo/calc_stats",
     "time/ppo/total",
+    "ppo/learning_rate",
 ]
 
 
@@ -161,6 +162,50 @@ class PPOTrainerTester(unittest.TestCase):
         # Finally check stats
         for stat in EXPECTED_STATS:
             assert stat in train_stats.keys()
+
+    def test_ppo_step_with_no_ref_sgd_lr_scheduler(self):
+        # initialize dataset
+        dummy_dataset = self._init_dummy_dataset()
+        optimizer = torch.optim.SGD(self.gpt2_model.parameters(), lr=0.01)
+        lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
+
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=self.gpt2_model,
+            ref_model=None,
+            optimizer=optimizer,
+            tokenizer=self.gpt2_tokenizer,
+            dataset=dummy_dataset,
+            lr_scheduler=lr_scheduler,
+        )
+        dummy_dataloader = ppo_trainer.dataloader
+
+        self.assertTrue(isinstance(ppo_trainer.optimizer.optimizer, torch.optim.SGD))
+        self.assertTrue(isinstance(ppo_trainer.lr_scheduler.scheduler, torch.optim.lr_scheduler.ExponentialLR))
+
+        # train model with ppo
+        for query_tensor, response_tensor in dummy_dataloader:
+            # define a reward for response
+            # (this could be any reward such as human feedback or output from another model)
+            reward = [torch.tensor(1.0), torch.tensor(0.0)]
+            # train model
+            _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+            train_stats = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+            break
+
+        for name, param in ppo_trainer.model.named_parameters():
+            self.assertTrue(param.grad is not None, f"Parameter {name} has no gradient")
+
+        # ref model should not be trained
+        for name, param in ppo_trainer.ref_model.named_parameters():
+            self.assertTrue(param.grad is None, f"Parameter {name} has a gradient")
+
+        # Finally check stats
+        for stat in EXPECTED_STATS:
+            assert stat in train_stats.keys()
+
+        # assert that the LR has increased for exponential decay
+        self.assertTrue(train_stats["ppo/learning_rate"] > self.ppo_config.learning_rate)
 
     def test_ppo_step_with_no_ref(self):
         # initialize dataset
