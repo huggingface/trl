@@ -1,4 +1,3 @@
-# imports
 import fnmatch
 import gc
 import re
@@ -6,9 +5,10 @@ import tempfile
 import unittest
 
 import torch
-from huggingface_hub import HfApi, HfFolder, delete_repo, set_access_token
+from huggingface_hub import HfApi, HfFolder, delete_repo, login
 from requests.exceptions import HTTPError
 from transformers import GPT2Tokenizer
+from transformers.testing_utils import is_staging_test
 
 from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer
 from trl.core import respond_to_batch
@@ -70,9 +70,9 @@ class PPOTrainerTester(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls._token = CI_HUB_USER_TOKEN
-        set_access_token(CI_HUB_USER_TOKEN)
-        HfFolder.save_token(CI_HUB_USER_TOKEN)
         cls._api = HfApi(endpoint=CI_HUB_ENDPOINT)
+        cls._api.set_access_token(CI_HUB_USER_TOKEN)
+        HfFolder.save_token(CI_HUB_USER_TOKEN)
 
     @classmethod
     def tearDownClass(cls):
@@ -406,6 +406,7 @@ class PPOTrainerTester(unittest.TestCase):
         for stat in EXPECTED_STATS:
             self.assertTrue(stat in train_stats, f"Train stats should contain {stat}")
 
+    @is_staging_test
     def test_push_to_hub(self):
         REPO_NAME = "test-ppo-trainer"
         repo_id = f"{CI_HUB_USER}/{REPO_NAME}"
