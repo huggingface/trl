@@ -57,7 +57,7 @@ sent_kwargs = {
 # Below is an example function to build the dataset. In our case, we use the IMDB dataset
 # from the `datasets` library. One should customize this function to train the model on
 # its own dataset.
-def build_dataset(tokenizer, dataset_name="imdb", input_min_text_length=2, input_max_text_length=8):
+def build_imdb_dataset(tokenizer, input_min_text_length=2, input_max_text_length=8):
     # load imdb with datasets
     ds = load_dataset(dataset_name, split='train')
     ds = ds.rename_columns({'text': 'review'})
@@ -83,7 +83,7 @@ ref_model = AutoModelForSeq2SeqLMWithValueHead.from_pretrained(config.model_name
 tokenizer = AutoTokenizer.from_pretrained(config.model_name)
 
 # We retrieve the dataloader by calling the `build_dataset` function.
-dataset = build_dataset(tokenizer)
+dataset = build_imdb_dataset(tokenizer)
 
 query = tokenizer("I really liked this movie because", return_tensors="pt")["input_ids"]
 
