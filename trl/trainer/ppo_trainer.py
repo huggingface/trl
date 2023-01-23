@@ -65,10 +65,10 @@ class PPOTrainer(BaseTrainer):
 
     def __init__(
         self,
-        config: PPOConfig,
-        model: PreTrainedModelWrapper,
-        ref_model: PreTrainedModelWrapper,
-        tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast],
+        config: PPOConfig = None,
+        model: PreTrainedModelWrapper = None,
+        ref_model: PreTrainedModelWrapper = None,
+        tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast] = None,
         dataset: Optional[Union[torch.utils.data.Dataset, Dataset]] = None,
         optimizer: Optional[torch.optim.Optimizer] = None,
         data_collator=None,
