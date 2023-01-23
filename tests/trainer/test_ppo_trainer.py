@@ -74,6 +74,14 @@ class PPOTrainerTester(unittest.TestCase):
         HfFolder.save_token(CI_HUB_USER_TOKEN)
         cls._api = HfApi(endpoint=CI_HUB_ENDPOINT)
 
+        # get models and tokenizer
+        model_id = "gpt2"
+        cls.gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(model_id)
+        cls.gpt2_model_ref = AutoModelForCausalLMWithValueHead.from_pretrained(model_id)
+        cls.gpt2_tokenizer = GPT2Tokenizer.from_pretrained(model_id)
+
+        cls.ppo_config = PPOConfig(batch_size=2, forward_batch_size=1, log_with=None)
+
     @classmethod
     def tearDownClass(cls):
         for model in [f"{CI_HUB_USER}/test-ppo-trainer"]:
@@ -81,22 +89,6 @@ class PPOTrainerTester(unittest.TestCase):
                 delete_repo(token=cls._token, repo_id=model)
             except HTTPError:
                 pass
-
-    def setUp(self):
-
-        # model_id
-        model_id = "gpt2"
-
-        # get models and tokenizer
-        self.gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(model_id)
-        self.gpt2_model_ref = AutoModelForCausalLMWithValueHead.from_pretrained(model_id)
-        self.gpt2_tokenizer = GPT2Tokenizer.from_pretrained(model_id)
-
-        # initialize trainer
-        ppo_config = {"batch_size": 2, "forward_batch_size": 1, "log_with": None}
-        self.ppo_config = PPOConfig(**ppo_config)
-
-        return super().setUp()
 
     def tearDown(self):
         # free memory
