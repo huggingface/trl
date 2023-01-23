@@ -530,7 +530,7 @@ class PPOTrainer(BaseTrainer):
         else:
             input_ids = input_kwargs["input_ids"]
 
-        if hasattr(self.tokenizer, "pad_token_id"):
+        if hasattr(self.tokenizer, "pad_token_id") and self.tokenizer.pad_token_id is not None:
             mask = (input_ids != self.tokenizer.pad_token_id).float()
 
             logits = logits * mask.unsqueeze(-1)
@@ -646,7 +646,10 @@ class PPOTrainer(BaseTrainer):
             input_kwargs["decoder_input_ids"] = response
             model_input = response
 
-        attention_mask = model_input.ne(self.tokenizer.pad_token_id)
+        if hasattr(self.tokenizer, "pad_token_id") and self.tokenizer.pad_token_id is not None:
+            attention_mask = model_input.ne(self.tokenizer.pad_token_id)
+        else:
+            attention_mask = torch.ones_like(model_input)
 
         logits, _, vpred = self.model(**input_kwargs)
 
