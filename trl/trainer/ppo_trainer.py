@@ -15,7 +15,7 @@ import inspect
 import random
 import time
 import warnings
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 import datasets
 import torch
@@ -477,6 +477,9 @@ class PPOTrainer(BaseTrainer):
                 logits, _, v = self.model(**input_kwargs)
                 ref_logits, _, _ = self.ref_model(**input_kwargs)
 
+            # mask out pad tokens
+            logits, ref_logits, v = self.remove_padding(logits, ref_logits, v, input_kwargs)
+
             if self.is_encoder_decoder:
                 logprobs = logprobs_from_logits(logits[:, :-1, :], decoder_input_ids[:, 1:])
                 ref_logprobs = logprobs_from_logits(ref_logits[:, :-1, :], decoder_input_ids[:, 1:])
@@ -501,6 +504,39 @@ class PPOTrainer(BaseTrainer):
                 all_ref_logprobs.append(ref_logprobs[j, start:end])
 
         return all_logprobs, all_ref_logprobs, all_values
+
+    def remove_padding(
+        self,
+        logits: torch.FloatTensor,
+        ref_logits: torch.FloatTensor,
+        values: torch.FloatTensor,
+        input_kwargs: Dict[str, torch.LongTensor],
+    ):
+        """
+        Remove padding from logits and values.
+
+        Args:
+            logits (`torch.FloatTensor`):
+                Logits from the model, shape (`batch_size`, `response_length`, `vocab_size`)
+            ref_logits (`torch.FloatTensor`):
+                Logits from the reference model, shape (`batch_size`, `response_length`, `vocab_size`)
+            values (`torch.FloatTensor`):
+                Values from the value head, shape (`batch_size`, `response_length`)
+            input_kwargs (`Dict[str, torch.LongTensor]`):
+                Input kwargs for the model
+        """
+        if "decoder_input_ids" in input_kwargs:
+            input_ids = input_kwargs["decoder_input_ids"]
+        else:
+            input_ids = input_kwargs["input_ids"]
+
+        mask = (input_ids != self.tokenizer.pad_token_id).float()
+
+        logits = logits * mask.unsqueeze(-1)
+        ref_logits = ref_logits * mask.unsqueeze(-1)
+        values = values * mask
+
+        return logits, ref_logits, values
 
     def train_minibatch(
         self,
@@ -600,10 +636,6 @@ class PPOTrainer(BaseTrainer):
             advantages_reversed.append(lastgaelam)
         advantages = torch.stack(advantages_reversed[::-1]).transpose(0, 1)
 
-        returns = advantages + values
-        advantages = whiten(advantages)
-        advantages = advantages.detach()
-
         input_kwargs = {
             "input_ids": model_input,
         }
@@ -613,7 +645,20 @@ class PPOTrainer(BaseTrainer):
             input_kwargs["decoder_input_ids"] = response
             model_input = response
 
+        attention_mask = model_input.ne(self.tokenizer.pad_token_id)
+
         logits, _, vpred = self.model(**input_kwargs)
+
+        # advantages = advantages * attention_mask
+        # values = values * attention_mask
+
+        logits = logits * attention_mask.unsqueeze(-1)
+        old_logprobs = old_logprobs * attention_mask.unsqueeze(-1)
+        values = values * attention_mask.unsqueeze(-1)
+
+        returns = advantages + values
+        advantages = whiten(advantages)
+        advantages = advantages.detach()
 
         if self.is_encoder_decoder:
             logprob = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
@@ -628,15 +673,15 @@ class PPOTrainer(BaseTrainer):
 
         vf_losses1 = (vpred - returns) ** 2
         vf_losses2 = (vpredclipped - returns) ** 2
-        vf_loss = 0.5 * torch.mean(torch.max(vf_losses1, vf_losses2))
-        vf_clipfrac = torch.mean(torch.gt(vf_losses2, vf_losses1).double())
+        vf_loss = 0.5 * torch.mean(torch.max(vf_losses1, vf_losses2) * attention_mask.unsqueeze(-1))
+        vf_clipfrac = torch.mean(torch.gt(vf_losses2, vf_losses1).double() * attention_mask.unsqueeze(-1))
 
         ratio = torch.exp(logprob - old_logprobs)
         pg_losses = -advantages * ratio
         pg_losses2 = -advantages * torch.clamp(ratio, 1.0 - self.config.cliprange, 1.0 + self.config.cliprange)
 
-        pg_loss = torch.mean(torch.max(pg_losses, pg_losses2))
-        pg_clipfrac = torch.mean(torch.gt(pg_losses2, pg_losses).double())
+        pg_loss = torch.mean(torch.max(pg_losses, pg_losses2) * attention_mask.unsqueeze(-1))
+        pg_clipfrac = torch.mean(torch.gt(pg_losses2, pg_losses).double() * attention_mask.unsqueeze(-1))
 
         loss = pg_loss + self.config.vf_coef * vf_loss
 

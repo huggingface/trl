@@ -306,6 +306,9 @@ class AutoModelForSeq2SeqLMWithValueHead(PreTrainedModelWrapper):
         attention_mask=None,
         **kwargs,
     ):
+        if attention_mask is None:
+            attention_mask = input_ids.ne(self.pretrained_model.config.pad_token_id)
+
         base_model_output = self.pretrained_model(
             input_ids=input_ids,
             past_key_values=past_key_values,

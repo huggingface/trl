@@ -45,7 +45,7 @@ config = PPOConfig(
     model_name="lvwerra/t5-imdb",
     learning_rate=5e-5,
     batch_size=256,
-    forward_batch_size=1
+    forward_batch_size=16,
 )
 # We then define the arguments to pass to the sentiment analysis pipeline.
 # We set `return_all_scores` to True to get the sentiment score for each token.
