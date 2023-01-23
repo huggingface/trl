@@ -27,6 +27,22 @@ def flatten_dict(nested, sep="/"):
     return flat
 
 
+def convert_to_scalar(stats):
+    """
+    Converts the stats from a flattened dict to single scalar dicts
+    """
+    tensorboard_stats = {}
+    for k, v in stats.items():
+        # for tensorboard compatibility - arrays and tensors are ignored with tensorboard
+        # therefore we convert single element tensors to scalars
+        if (isinstance(v, torch.Tensor) or isinstance(v, np.ndarray)) and (
+            len(v.shape) == 0 or (len(v.shape) == 1 and v.shape[0] == 1)
+        ):
+            v = v.item()
+        tensorboard_stats[k] = v
+    return tensorboard_stats
+
+
 def stack_dicts(stats_dicts):
     """Stack the values of a dict."""
     results = dict()
