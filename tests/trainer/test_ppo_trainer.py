@@ -1,13 +1,19 @@
 # imports
 import gc
 import re
+import tempfile
 import unittest
 
 import torch
+from huggingface_hub import HfFolder, delete_repo, set_access_token
+from requests.exceptions import HTTPError
 from transformers import GPT2Tokenizer
+from transformers.testing_utils import is_staging_test
 
 from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer
 from trl.core import respond_to_batch
+
+from ..testing_constants import CI_HUB_ENDPOINT, CI_HUB_USER, CI_HUB_USER_TOKEN
 
 
 EXPECTED_STATS = [
@@ -61,9 +67,34 @@ class PPOTrainerTester(unittest.TestCase):
     A wrapper class for testing PPOTrainer
     """
 
+    def setUp(self):
+        self._token = CI_HUB_USER_TOKEN
+        set_access_token(CI_HUB_USER_TOKEN)
+        HfFolder.save_token(CI_HUB_USER_TOKEN)
+
+        # model_id
+        model_id = "gpt2"
+
+        # get models and tokenizer
+        self.gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(model_id)
+        self.gpt2_model_ref = AutoModelForCausalLMWithValueHead.from_pretrained(model_id)
+        self.gpt2_tokenizer = GPT2Tokenizer.from_pretrained(model_id)
+
+        # initialize trainer
+        ppo_config = {"batch_size": 2, "forward_batch_size": 1, "log_with": None}
+        self.ppo_config = PPOConfig(**ppo_config)
+
+        return super().setUp()
+
     def tearDown(self):
         # free memory
         gc.collect()
+
+        for model in ["test-ppo-trainer"]:
+            try:
+                delete_repo(token=self._token, repo_id=model)
+            except HTTPError:
+                pass
 
     def _init_dummy_dataset(self):
         # encode a query
@@ -82,21 +113,6 @@ class PPOTrainerTester(unittest.TestCase):
         )
 
         return dummy_dataset
-
-    def setUp(self):
-        # model_id
-        model_id = "gpt2"
-
-        # get models and tokenizer
-        self.gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(model_id)
-        self.gpt2_model_ref = AutoModelForCausalLMWithValueHead.from_pretrained(model_id)
-        self.gpt2_tokenizer = GPT2Tokenizer.from_pretrained(model_id)
-
-        # initialize trainer
-        ppo_config = {"batch_size": 2, "forward_batch_size": 1, "log_with": None}
-        self.ppo_config = PPOConfig(**ppo_config)
-
-        return super().setUp()
 
     def test_ppo_step(self):
         # initialize dataset
@@ -384,3 +400,22 @@ class PPOTrainerTester(unittest.TestCase):
         # check train stats
         for stat in EXPECTED_STATS:
             self.assertTrue(stat in train_stats, f"Train stats should contain {stat}")
+
+    @is_staging_test
+    def test_push_to_hub(self):
+
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=self.gpt2_model,
+            ref_model=None,
+            tokenizer=self.gpt2_tokenizer,
+            dataset=self._init_dummy_dataset(),
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            url = ppo_trainer.push_to_hub(repo_path_or_name="test-ppo-trainer")
+            # Extract repo_name from the url
+            re_search = re.search(CI_HUB_ENDPOINT + r"/([^/]+/[^/]+)/", url)
+            self.assertTrue(re_search is not None)
+            repo_name = re_search.groups()[0]
+
+            self.assertEqual(repo_name, f"{CI_HUB_USER}/test-ppo-trainer")
