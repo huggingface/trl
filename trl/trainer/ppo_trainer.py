@@ -107,6 +107,7 @@ class PPOTrainer(BaseTrainer):
         **data_collator** (DataCollatorForLanguageModeling, *optional*) -- Data collator to be used for training and passed along the dataloader
         **num_shared_layers** (int, *optional*) -- Number of layers to be shared between the model and the reference model, if no reference model is passed. If no number is provided, all the layers
             will be shared.
+        **lr_scheduler** (`torch.optim.lr_scheduler`, *optional*) -- Learning rate scheduler to be used for training.
     """
 
     def __init__(
@@ -119,6 +120,7 @@ class PPOTrainer(BaseTrainer):
         optimizer: Optional[torch.optim.Optimizer] = None,
         data_collator=None,
         num_shared_layers: Optional[int] = None,
+        lr_scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
     ):
         """
         Initialize PPOTrainer.
@@ -143,6 +145,8 @@ class PPOTrainer(BaseTrainer):
             num_shared_layers (Optional[int]):
                 Number of shared layers between the model and the reference model. If `None`, all layers are shared.
                 used only if `ref_model` is `None`.
+            lr_scheduler (Optional[`torch.optim.lr_scheduler`]):
+                Learning rate scheduler used for training.
         """
         super().__init__(config)
 
@@ -208,13 +212,25 @@ class PPOTrainer(BaseTrainer):
         else:
             self.optimizer = optimizer
 
+        self.lr_scheduler = lr_scheduler
+        if self.lr_scheduler is not None:
+            if not isinstance(self.lr_scheduler, torch.optim.lr_scheduler._LRScheduler):
+                raise ValueError("lr_scheduler must be a torch.optim.lr_scheduler._LRScheduler")
+
         if self.config.adap_kl_ctrl:
             self.kl_ctl = AdaptiveKLController(self.config.init_kl_coef, self.config.target, self.config.horizon)
         else:
             self.kl_ctl = FixedKLController(self.config.init_kl_coef)
 
-        self.model, self.ref_model, self.optimizer, self.data_collator, self.dataloader = self.accelerator.prepare(
-            self.model, self.ref_model, self.optimizer, self.data_collator, self.dataloader
+        (
+            self.model,
+            self.ref_model,
+            self.optimizer,
+            self.data_collator,
+            self.dataloader,
+            self.lr_scheduler,
+        ) = self.accelerator.prepare(
+            self.model, self.ref_model, self.optimizer, self.data_collator, self.dataloader, self.lr_scheduler
         )
 
         # In a distributed setup, only logging needs to be performed on the main process
@@ -436,6 +452,7 @@ class PPOTrainer(BaseTrainer):
             stats = self.gather_stats(stats)
         stats = stats_to_np(stats)
         timing["time/ppo/calc_stats"] = time.time() - t
+        stats["ppo/learning_rate"] = self.optimizer.param_groups[0]["lr"]
 
         # Update the KL control - multiply the batch_size by the number of processes
         self.kl_ctl.update(stats["objective/kl"], self.config.batch_size * self.accelerator.num_processes)
@@ -447,6 +464,9 @@ class PPOTrainer(BaseTrainer):
         # post-process stats for tensorboard and other loggers
         if self.config.log_with != "wandb":
             stats = convert_to_scalar(stats)
+
+        if self.lr_scheduler is not None:
+            self.lr_scheduler.step()
 
         return stats
 
