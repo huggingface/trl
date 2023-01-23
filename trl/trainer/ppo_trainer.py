@@ -110,6 +110,7 @@ class PPOTrainer(BaseTrainer):
                 f"model must be a PreTrainedModelWrapper, got {type(model)} - supported architectures are: {SUPPORTED_ARCHITECTURES}"
             )
         self.model = model
+        self.is_encoder_decoder = hasattr(self.model, "is_encoder_decoder")
 
         if isinstance(ref_model, PreTrainedModelWrapper):
             self.ref_model = ref_model
@@ -454,20 +455,51 @@ class PPOTrainer(BaseTrainer):
         for i in range(int(bs / fbs)):
             query_batch = queries[i * fbs : (i + 1) * fbs]
             response_batch = responses[i * fbs : (i + 1) * fbs]
-            input_ids = self.data_collator([torch.cat([q, r]) for q, r in zip(query_batch, response_batch)])[
-                "input_ids"
-            ]
+
+            if self.is_encoder_decoder:
+                input_ids = self.data_collator(query_batch)["input_ids"]
+                decoder_input_ids = self.data_collator(response_batch)["input_ids"]
+
+                input_kwargs = {
+                    "input_ids": input_ids,
+                    "decoder_input_ids": decoder_input_ids,
+                }
+            else:
+                input_ids = self.data_collator([torch.cat([q, r]) for q, r in zip(query_batch, response_batch)])[
+                    "input_ids"
+                ]
+
+                input_kwargs = {
+                    "input_ids": input_ids,
+                }
+
             with torch.no_grad():
-                logits, _, v = self.model(input_ids)
-                ref_logits, _, _ = self.ref_model(input_ids)
-            logprobs = logprobs_from_logits(logits[:, :-1, :], input_ids[:, 1:])
-            ref_logprobs = logprobs_from_logits(ref_logits[:, :-1, :], input_ids[:, 1:])
+                logits, _, v = self.model(**input_kwargs)
+                ref_logits, _, _ = self.ref_model(**input_kwargs)
+
+            if self.is_encoder_decoder:
+                logprobs = logprobs_from_logits(logits[:, :-1, :], decoder_input_ids[:, 1:])
+                ref_logprobs = logprobs_from_logits(ref_logits[:, :-1, :], decoder_input_ids[:, 1:])
+            else:
+                logprobs = logprobs_from_logits(logits[:, :-1, :], input_ids[:, 1:])
+                ref_logprobs = logprobs_from_logits(ref_logits[:, :-1, :], input_ids[:, 1:])
+
             for j in range(fbs):
-                start = len(query_batch[j]) - 1
-                end = len(query_batch[j]) + len(response_batch[j]) - 1
+                if self.is_encoder_decoder:
+                    # Decoder sentence starts always in the index 1 after padding in the Enc-Dec Models
+                    start = 1
+                    end = response_batch[j].shape[-1] - 1
+                else:
+                    start = len(query_batch[j]) - 1
+                    end = len(query_batch[j]) + len(response_batch[j]) - 1
+
+                if len(logprobs[j, start:end]) < 2:
+                    raise ValueError("Responses are too short. Make sure they are at least 4 tokens long.")
+
                 all_values.append(v[j, start - 1 : end - 1])
                 all_logprobs.append(logprobs[j, start:end])
                 all_ref_logprobs.append(ref_logprobs[j, start:end])
+
         return all_logprobs, all_ref_logprobs, all_values
 
     def train_minibatch(
@@ -559,7 +591,7 @@ class PPOTrainer(BaseTrainer):
         """
         lastgaelam = 0
         advantages_reversed = []
-        gen_len = response.shape[1]
+        gen_len = rewards.shape[-1]
 
         for t in reversed(range(gen_len)):
             nextvalues = values[:, t + 1] if t < gen_len - 1 else 0.0
@@ -572,11 +604,25 @@ class PPOTrainer(BaseTrainer):
         advantages = whiten(advantages)
         advantages = advantages.detach()
 
-        logits, _, vpred = self.model(model_input)
-        logprob = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
+        input_kwargs = {
+            "input_ids": model_input,
+        }
 
-        # only the generation part of the values/logprobs is needed
-        logprob, vpred = logprob[:, -gen_len:], vpred[:, -gen_len - 1 : -1]
+        if self.is_encoder_decoder:
+            input_kwargs["input_ids"] = query
+            input_kwargs["decoder_input_ids"] = response
+            model_input = response
+
+        logits, _, vpred = self.model(**input_kwargs)
+
+        if self.is_encoder_decoder:
+            logprob = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
+            start, end = 1, response.shape[-1] - 1
+            vpred = vpred[:, start - 1 : end - 1]
+            logprob = logprob[:, start:end]
+        else:
+            logprob = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
+            logprob, vpred = logprob[:, -gen_len:], vpred[:, -gen_len - 1 : -1]
 
         vpredclipped = clip_by_value(vpred, values - self.config.cliprange_value, values + self.config.cliprange_value)
 
@@ -586,7 +632,6 @@ class PPOTrainer(BaseTrainer):
         vf_clipfrac = torch.mean(torch.gt(vf_losses2, vf_losses1).double())
 
         ratio = torch.exp(logprob - old_logprobs)
-
         pg_losses = -advantages * ratio
         pg_losses2 = -advantages * torch.clamp(ratio, 1.0 - self.config.cliprange, 1.0 + self.config.cliprange)
 

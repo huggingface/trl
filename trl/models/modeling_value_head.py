@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import torch.nn as nn
-from transformers import AutoModelForCausalLM
+from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM
 
 from .modeling_base import PreTrainedModelWrapper
 
@@ -213,3 +213,117 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
                 state_dict[k.replace("v_head.", "")] = state_dict.pop(k)
         self.v_head.load_state_dict(state_dict, strict=False)
         del state_dict
+
+
+class AutoModelForSeq2SeqLMWithValueHead(PreTrainedModelWrapper):
+    r"""
+    A seq2seq model with a value head in addition to the language model head.
+    This class inherits from `~trl.PreTrainedModelWrapper` and wraps a
+    `transformers.PreTrainedModel` class. The wrapper class supports classic functions
+    such as `from_pretrained` and `push_to_hub` and also provides some additional
+    functionalities such as `generate`.
+
+    Args:
+        pretrained_model (`transformers.PreTrainedModel`):
+            The model to wrap. It should be a causal language model such as GPT2.
+            or any model mapped inside the `AutoModelForSeq2SeqLM` class.
+        kwargs:
+            Additional keyword arguments passed along to the `ValueHead` class.
+    """
+    transformers_parent_class = AutoModelForSeq2SeqLM
+    lm_head_namings = ["lm_head", "embed_out", "output_projection"]
+    supported_args = (
+        "summary_dropout_prob",
+        "v_head_initializer_range",
+        "v_head_init_strategy",
+    )
+
+    def __init__(self, pretrained_model, **kwargs):
+        super().__init__(pretrained_model)
+        v_head_kwargs, _ = self._split_kwargs(kwargs)
+        self.is_encoder_decoder = True
+
+        if not self._has_lm_head():
+            raise ValueError("The model does not have a language model head, please use a model that has one.")
+
+        self.v_head = ValueHead(self.pretrained_model.config, **v_head_kwargs)
+
+        self._init_weights(**v_head_kwargs)
+
+    def _has_lm_head(self):
+        # check module names of all modules inside `pretrained_model` to find the language model head
+        for name, module in self.pretrained_model.named_modules():
+            if any(attribute in name for attribute in self.lm_head_namings):
+                return True
+        return False
+
+    def post_init(self, state_dict):
+        r"""
+        We add the state dictionary of the value head to the state dictionary of the wrapped model
+        by preprending the key with `v_head.`. This function removes the `v_head.` prefix from the
+        keys of the value head state dictionary.
+        """
+        for k in list(state_dict.keys()):
+            if "v_head." in k:
+                state_dict[k.replace("v_head.", "")] = state_dict.pop(k)
+        self.v_head.load_state_dict(state_dict, strict=False)
+        del state_dict
+
+    def state_dict(self, *args, **kwargs):
+        r"""
+        Returns the state dictionary of the model. We add the state dictionary of the value head
+        to the state dictionary of the wrapped model by preprending the key with `v_head.`.
+        """
+        pretrained_model_state_dict = self.pretrained_model.state_dict(*args, **kwargs)
+        v_head_state_dict = self.v_head.state_dict(*args, **kwargs)
+        for k, v in v_head_state_dict.items():
+            pretrained_model_state_dict[f"v_head.{k}"] = v
+        return pretrained_model_state_dict
+
+    def push_to_hub(self, *args, **kwargs):
+        setattr(self.pretrained_model, "v_head", self.v_head)
+
+        return self.pretrained_model.push_to_hub(*args, **kwargs)
+
+    def _init_weights(self, **kwargs):
+        r"""
+        We initialize the weights of the value head.
+        """
+        initializer_range = kwargs.pop("v_head_initializer_range", 0.2)
+        # random init by default
+        init_strategy = kwargs.pop("v_head_init_strategy", None)
+        if init_strategy is None:
+            # do nothing
+            pass
+        elif init_strategy == "normal":
+            self.v_head.summary.weight.data.normal_(mean=0.0, std=initializer_range)
+            self.v_head.summary.bias.data.zero_()
+
+    def forward(
+        self,
+        input_ids=None,
+        past_key_values=None,
+        attention_mask=None,
+        **kwargs,
+    ):
+        base_model_output = self.pretrained_model(
+            input_ids=input_ids,
+            past_key_values=past_key_values,
+            attention_mask=attention_mask,
+            output_hidden_states=True,  # We force the model to output hidden states
+            **kwargs,
+        )
+
+        last_hidden_state = base_model_output.decoder_hidden_states[-1]
+        lm_logits = base_model_output.logits
+        loss = base_model_output.loss
+
+        value = self.v_head(last_hidden_state).squeeze(-1)
+
+        return (lm_logits, loss, value)
+
+    def generate(self, *args, **kwargs):
+        r"""
+        We call `generate` on the wrapped model.
+        """
+        return self.pretrained_model.generate(*args, **kwargs)
