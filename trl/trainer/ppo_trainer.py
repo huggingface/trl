@@ -70,7 +70,7 @@ generator = pipeline("text-generation", model={model_name})
 outputs = generator("Hello, my llama is cute")
 ```
 
-If you want to use the model directly for training, load the model with a value head as follows:
+If you want to use the model for training or to obtain the outputs from the value head, load the model as follows:
 
 ```python
 from transformers import AutoTokenizer
