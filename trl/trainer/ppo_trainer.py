@@ -530,11 +530,12 @@ class PPOTrainer(BaseTrainer):
         else:
             input_ids = input_kwargs["input_ids"]
 
-        mask = (input_ids != self.tokenizer.pad_token_id).float()
+        if hasattr(self.tokenizer, "pad_token_id"):
+            mask = (input_ids != self.tokenizer.pad_token_id).float()
 
-        logits = logits * mask.unsqueeze(-1)
-        ref_logits = ref_logits * mask.unsqueeze(-1)
-        values = values * mask
+            logits = logits * mask.unsqueeze(-1)
+            ref_logits = ref_logits * mask.unsqueeze(-1)
+            values = values * mask
 
         return logits, ref_logits, values
 
