@@ -59,7 +59,7 @@ sent_kwargs = {
 # its own dataset.
 def build_imdb_dataset(tokenizer, input_min_text_length=2, input_max_text_length=8):
     # load imdb with datasets
-    ds = load_dataset(dataset_name, split='train')
+    ds = load_dataset("imdb", split='train')
     ds = ds.rename_columns({'text': 'review'})
     ds = ds.filter(lambda x: len(x["review"])>200, batched=False)
 
