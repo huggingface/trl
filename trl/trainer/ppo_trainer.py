@@ -78,7 +78,7 @@ from transformers import AutoTokenizer
 from trl import AutoModelForCausalLMWithValueHead
 
 tokenizer = AutoTokenizer.from_pretrained("{model_id}")
-model = AutoModelForCausalLMWithValueHead.from_pretrained"("{model_id}")
+model = AutoModelForCausalLMWithValueHead.from_pretrained("{model_id}")
 
 inputs = tokenizer("Hello, my llama is cute", return_tensors="pt")
 outputs = model(**inputs, labels=inputs["input_ids"])
