@@ -22,6 +22,7 @@ import datasets
 import torch
 from accelerate import Accelerator
 from datasets import Dataset
+from huggingface_hub import whoami
 from packaging import version
 from torch.optim import Adam
 from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizer, PreTrainedTokenizerFast
@@ -66,7 +67,7 @@ You can then generate text as follows:
 ```python
 from transformers import pipeline
 
-generator = pipeline("text-generation", model={model_name})
+generator = pipeline("text-generation", model="{model_id}")
 outputs = generator("Hello, my llama is cute")
 ```
 
@@ -76,8 +77,8 @@ If you want to use the model for training or to obtain the outputs from the valu
 from transformers import AutoTokenizer
 from trl import AutoModelForCausalLMWithValueHead
 
-tokenizer = AutoTokenizer.from_pretrained({model_name})
-model = AutoModelForCausalLMWithValueHead.from_pretrained({model_name})
+tokenizer = AutoTokenizer.from_pretrained("{model_id}")
+model = AutoModelForCausalLMWithValueHead.from_pretrained"("{model_id}")
 
 inputs = tokenizer("Hello, my llama is cute", return_tensors="pt")
 outputs = model(**inputs, labels=inputs["input_ids"])
@@ -824,7 +825,8 @@ class PPOTrainer(BaseTrainer):
         if not os.path.exists(path):
             os.makedirs(path)
 
-        model_card_content = MODEL_CARD_TEMPLATE.format(model_name=model_name)
+        user = whoami()["name"]
+        model_card_content = MODEL_CARD_TEMPLATE.format(model_name=model_name, model_id=f"{user}/{path}")
         with open(os.path.join(path, "README.md"), "w", encoding="utf-8") as f:
             f.write(model_card_content)
 
