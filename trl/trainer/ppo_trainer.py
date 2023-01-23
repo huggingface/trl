@@ -22,7 +22,7 @@ import datasets
 import torch
 from accelerate import Accelerator
 from datasets import Dataset
-from huggingface_hub import HfFolder, whoami
+from huggingface_hub import whoami
 from packaging import version
 from torch.optim import Adam
 from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizer, PreTrainedTokenizerFast
