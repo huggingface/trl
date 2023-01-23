@@ -41,7 +41,7 @@ EXPECTED_STATS = [
     "time/ppo/optimize_step",
     "time/ppo/calc_stats",
     "time/ppo/total",
-    "learning_rate",
+    "ppo/learning_rate",
 ]
 
 
@@ -189,6 +189,7 @@ class PPOTrainerTester(unittest.TestCase):
             # (this could be any reward such as human feedback or output from another model)
             reward = [torch.tensor(1.0), torch.tensor(0.0)]
             # train model
+            _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
             train_stats = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
             break
 
@@ -202,6 +203,9 @@ class PPOTrainerTester(unittest.TestCase):
         # Finally check stats
         for stat in EXPECTED_STATS:
             assert stat in train_stats.keys()
+
+        # assert that the LR has increased for exponential decay
+        self.assertTrue(train_stats["ppo/learning_rate"] > self.ppo_config.learning_rate)
 
     def test_ppo_step_with_no_ref(self):
         # initialize dataset
