@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 import torch
-from huggingface_hub import HfApi, HfFolder, delete_repo, login
+from huggingface_hub import HfApi, HfFolder, delete_repo
 from requests.exceptions import HTTPError
 from transformers import GPT2Tokenizer
 from transformers.testing_utils import is_staging_test
