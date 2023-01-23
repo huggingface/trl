@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from .modeling_base import PreTrainedModelWrapper, create_reference_model
-from .modeling_value_head import AutoModelForCausalLMWithValueHead
+from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
 
 
-SUPPORTED_ARCHITECTURES = (AutoModelForCausalLMWithValueHead,)
+SUPPORTED_ARCHITECTURES = (AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead)
