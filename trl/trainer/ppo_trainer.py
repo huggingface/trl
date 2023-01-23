@@ -48,12 +48,11 @@ tags:
 - trl
 - transformers
 - reinforcement-learning
-- human-feedback
 ---
 
 # {model_name}
 
-This is a [TRL model](https://github.com/lvwerra/trl) that can be used for FILL ME OUT.
+This is a [TRL language model](https://github.com/lvwerra/trl) that has been fine-tuned with reinforcement learning to guide the model outputs according to a value, function, or human feedback. The model can be used for text generation.
 
 ## Usage
 
@@ -63,7 +62,16 @@ To use this model for inference, first install the TRL library:
 python -m pip install trl
 ```
 
-You can then run inference as follows:
+You can then generate text as follows:
+
+```python
+from transformers import pipeline
+
+generator = pipeline("text-generation", model={model_name})
+outputs = generator("Hello, my llama is cute")
+```
+
+If you want to use the model directly for training, load the model with a value head as follows:
 
 ```python
 from transformers import AutoTokenizer
