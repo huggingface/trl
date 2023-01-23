@@ -99,16 +99,21 @@ class PPOTrainer(BaseTrainer):
                 used only if `ref_model` is `None`.
         """
         super().__init__(config)
-
-        # Step 1: Initialize Accelerator
-        self.accelerator = Accelerator(log_with=config.log_with, **config.accelerator_kwargs)
-        self.accelerator.init_trackers(config.tracker_project_name, config=config.to_dict(), **config.tracker_kwargs)
-
-        # Step 2: Initialize model, tokenizer, and dataloader
+        # Step 0: check positional arguments validity
+        if not isinstance(config, PPOConfig):
+            raise ValueError(f"config must be a PPOConfig, got {type(config)}")
+        if not isinstance(tokenizer, (PreTrainedTokenizer, PreTrainedTokenizerFast)):
+            raise ValueError(
+                f"tokenizer must be a PreTrainedTokenizer or PreTrainedTokenizerFast, got {type(tokenizer)}"
+            )
         if not isinstance(model, PreTrainedModelWrapper):
             raise ValueError(
                 f"model must be a PreTrainedModelWrapper, got {type(model)} - supported architectures are: {SUPPORTED_ARCHITECTURES}"
             )
+        # Step 1: Initialize Accelerator
+        self.accelerator = Accelerator(log_with=config.log_with, **config.accelerator_kwargs)
+        self.accelerator.init_trackers(config.tracker_project_name, config=config.to_dict(), **config.tracker_kwargs)
+
         self.model = model
         self.is_encoder_decoder = hasattr(self.model, "is_encoder_decoder")
 
