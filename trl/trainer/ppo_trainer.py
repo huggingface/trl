@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import inspect
+import os
 import random
 import time
 import warnings
@@ -21,6 +22,7 @@ import datasets
 import torch
 from accelerate import Accelerator
 from datasets import Dataset
+from huggingface_hub import whoami
 from packaging import version
 from torch.optim import Adam
 from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizer, PreTrainedTokenizerFast
@@ -38,6 +40,50 @@ from ..core import (
 )
 from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper, create_reference_model
 from . import AdaptiveKLController, BaseTrainer, FixedKLController, PPOConfig
+
+
+MODEL_CARD_TEMPLATE = """---
+license: apache-2.0
+tags:
+- trl
+- transformers
+- reinforcement-learning
+---
+
+# {model_name}
+
+This is a [TRL language model](https://github.com/lvwerra/trl) that has been fine-tuned with reinforcement learning to guide the model outputs according to a value, function, or human feedback. The model can be used for text generation.
+
+## Usage
+
+To use this model for inference, first install the TRL library:
+
+```bash
+python -m pip install trl
+```
+
+You can then generate text as follows:
+
+```python
+from transformers import pipeline
+
+generator = pipeline("text-generation", model="{model_id}")
+outputs = generator("Hello, my llama is cute")
+```
+
+If you want to use the model for training or to obtain the outputs from the value head, load the model as follows:
+
+```python
+from transformers import AutoTokenizer
+from trl import AutoModelForCausalLMWithValueHead
+
+tokenizer = AutoTokenizer.from_pretrained("{model_id}")
+model = AutoModelForCausalLMWithValueHead.from_pretrained("{model_id}")
+
+inputs = tokenizer("Hello, my llama is cute", return_tensors="pt")
+outputs = model(**inputs, labels=inputs["input_ids"])
+```
+"""
 
 
 class PPOTrainer(BaseTrainer):
@@ -793,3 +839,23 @@ class PPOTrainer(BaseTrainer):
 
                 dist.barrier()
                 dist.all_reduce(rewards, op=torch.distributed.ReduceOp.SUM)
+
+    def create_model_card(self, path: str, model_name: Optional[str] = "TRL Model") -> None:
+        """Creates and saves a model card for a TRL model.
+
+        Args:
+            path (`str`): The path to save the model card to.
+            model_name (`str`, *optional*): The name of the model, defaults to `TRL Model`.
+        """
+        if not os.path.exists(path):
+            os.makedirs(path)
+
+        user = whoami()["name"]
+        model_card_content = MODEL_CARD_TEMPLATE.format(model_name=model_name, model_id=f"{user}/{path}")
+        with open(os.path.join(path, "README.md"), "w", encoding="utf-8") as f:
+            f.write(model_card_content)
+
+    def _save_pretrained(self, save_directory: str) -> None:
+        self.model.save_pretrained(save_directory)
+        self.tokenizer.save_pretrained(save_directory)
+        self.create_model_card(save_directory)
