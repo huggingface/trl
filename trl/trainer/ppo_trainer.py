@@ -66,10 +66,10 @@ class PPOTrainer(BaseTrainer):
 
     def __init__(
         self,
-        config: PPOConfig,
-        model: PreTrainedModelWrapper,
-        ref_model: PreTrainedModelWrapper,
-        tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast],
+        config: PPOConfig = None,
+        model: PreTrainedModelWrapper = None,
+        ref_model: PreTrainedModelWrapper = None,
+        tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast] = None,
         dataset: Optional[Union[torch.utils.data.Dataset, Dataset]] = None,
         optimizer: Optional[torch.optim.Optimizer] = None,
         data_collator=None,
@@ -103,16 +103,21 @@ class PPOTrainer(BaseTrainer):
                 Learning rate scheduler used for training.
         """
         super().__init__(config)
-
-        # Step 1: Initialize Accelerator
-        self.accelerator = Accelerator(log_with=config.log_with, **config.accelerator_kwargs)
-        self.accelerator.init_trackers(config.tracker_project_name, config=config.to_dict(), **config.tracker_kwargs)
-
-        # Step 2: Initialize model, tokenizer, and dataloader
+        # Step 0: check positional arguments validity
+        if not isinstance(config, PPOConfig):
+            raise ValueError(f"config must be a PPOConfig, got {type(config)}")
+        if not isinstance(tokenizer, (PreTrainedTokenizer, PreTrainedTokenizerFast)):
+            raise ValueError(
+                f"tokenizer must be a PreTrainedTokenizer or PreTrainedTokenizerFast, got {type(tokenizer)}"
+            )
         if not isinstance(model, PreTrainedModelWrapper):
             raise ValueError(
                 f"model must be a PreTrainedModelWrapper, got {type(model)} - supported architectures are: {SUPPORTED_ARCHITECTURES}"
             )
+        # Step 1: Initialize Accelerator
+        self.accelerator = Accelerator(log_with=config.log_with, **config.accelerator_kwargs)
+        self.accelerator.init_trackers(config.tracker_project_name, config=config.to_dict(), **config.tracker_kwargs)
+
         self.model = model
         self.is_encoder_decoder = hasattr(self.model, "is_encoder_decoder")
 
