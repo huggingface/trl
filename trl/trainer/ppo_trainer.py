@@ -464,6 +464,7 @@ class PPOTrainer(BaseTrainer):
                     "input_ids": input_ids,
                     "decoder_input_ids": decoder_input_ids,
                 }
+                model_input = decoder_input_ids
             else:
                 input_ids = self.data_collator([torch.cat([q, r]) for q, r in zip(query_batch, response_batch)])[
                     "input_ids"
@@ -472,6 +473,7 @@ class PPOTrainer(BaseTrainer):
                 input_kwargs = {
                     "input_ids": input_ids,
                 }
+                model_input = input_ids
 
             with torch.no_grad():
                 logits, _, v = self.model(**input_kwargs)
@@ -480,12 +482,8 @@ class PPOTrainer(BaseTrainer):
             # mask out pad tokens
             logits, ref_logits, v = self.remove_padding(logits, ref_logits, v, input_kwargs)
 
-            if self.is_encoder_decoder:
-                logprobs = logprobs_from_logits(logits[:, :-1, :], decoder_input_ids[:, 1:])
-                ref_logprobs = logprobs_from_logits(ref_logits[:, :-1, :], decoder_input_ids[:, 1:])
-            else:
-                logprobs = logprobs_from_logits(logits[:, :-1, :], input_ids[:, 1:])
-                ref_logprobs = logprobs_from_logits(ref_logits[:, :-1, :], input_ids[:, 1:])
+            logprobs = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
+            ref_logprobs = logprobs_from_logits(ref_logits[:, :-1, :], model_input[:, 1:])
 
             for j in range(fbs):
                 if self.is_encoder_decoder:
@@ -495,6 +493,15 @@ class PPOTrainer(BaseTrainer):
                 else:
                     start = len(query_batch[j]) - 1
                     end = len(query_batch[j]) + len(response_batch[j]) - 1
+
+                if self.tokenizer.padding_side == "left":
+                    offset = len(torch.where(model_input[j] == self.tokenizer.pad_token_id)[0])
+                    start += offset
+                    end += offset
+                    end = min(end, model_input[j].shape[-1] - 1)
+                # start, end = self._return_slice_index(model_input[j], query_batch[j])
+                # indexes = torch.where(model_input[j] != self.tokenizer.eos_token_id)[0]
+                # start, end = indexes[0], indexes[-1]
 
                 if len(logprobs[j, start:end]) < 2:
                     raise ValueError("Responses are too short. Make sure they are at least 4 tokens long.")
@@ -647,7 +654,7 @@ class PPOTrainer(BaseTrainer):
             model_input = response
 
         if hasattr(self.tokenizer, "pad_token_id") and self.tokenizer.pad_token_id is not None:
-            attention_mask = model_input.ne(self.tokenizer.pad_token_id)
+            attention_mask = model_input.ne(self.tokenizer.pad_token_id).float()
         else:
             attention_mask = torch.ones_like(model_input)
 
@@ -663,6 +670,14 @@ class PPOTrainer(BaseTrainer):
         returns = advantages + values
         advantages = whiten(advantages)
         advantages = advantages.detach()
+
+        # logprob = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
+        # start, end = self._return_slice_index(model_input, query)
+        # indexes = torch.where(model_input != self.tokenizer.pad_token_id)[0]
+        # start, end = indexes[0], indexes[-1]
+
+        # logprob = logprob[:, start:end]
+        # vpred = vpred[:, start - 1 : end - 1]
 
         if self.is_encoder_decoder:
             logprob = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
@@ -716,6 +731,44 @@ class PPOTrainer(BaseTrainer):
             ),
         )
         return pg_loss, self.config.vf_coef * vf_loss, flatten_dict(stats)
+
+    def _return_slice_index(
+        self,
+        model_input,
+        query=None,
+    ):
+        """
+        Return slice index for the query and response. This is used to slice the
+        logits and values to match the length of the response. For encoder-decoder
+
+
+        Args:
+            model_input (`torch.LongTensor`):
+                Model input tensor - either `input_ids` or `decoder_input_ids`
+                depending on the model type
+            query (`torch.LongTensor`, optional):
+                Query input tensor. Only used for decoder models. Defaults to None.
+        """
+        if self.is_encoder_decoder:
+            # Enc-Dec models have a special token at the beginning of the response
+            # that we need to manually remove
+            indexes = torch.where(model_input != self.tokenizer.pad_token_id)[0]
+            start = 1
+            if len(indexes) > 1:
+                end = indexes[1].item() - 1
+            else:
+                end = model_input.shape[-1] - 1
+        else:
+            indexes = torch.where(model_input == self.tokenizer.pad_token_id)[0]
+            if hasattr(self.tokenizer, "padding_side") and self.tokenizer.padding_side == "left":
+                start = indexes[-1].item() + 1 if len(indexes) > 0 else 0
+                end = model_input.shape[-1] - 1
+            else:
+                # For decoder based models, always start with the first token of the query
+                start = max(query.shape) - 1
+                # .. and finish in the first occurence of `pad` token.
+                end = indexes[0].item() - 1 if len(indexes) > 0 else model_input.shape[-1] - 1
+        return start, end
 
     def record_step_stats(self, kl_coef: float, **data):
         """
