@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
+import logging
 
 from ..core import flatten_dict
 
@@ -51,7 +52,7 @@ class PPOConfig(object):
             Scaling factor for value loss
         batch_size (`int`, *optional*, defaults to 256):
             Number of samples per optimisation step
-        forward_batch_size (`int`, *optional*, defaults to 16):
+        forward_batch_size (`int`, *optional*, defaults to 1):
             Number of samples forward passed through model at a time
         ppo_epochs (`int`, *optional*, defaults to 4):
             Number of optimisation epochs per batch of samples
@@ -83,7 +84,7 @@ class PPOConfig(object):
         cliprange_value: Optional[float] = 0.2,
         vf_coef: Optional[float] = 0.1,
         batch_size: Optional[int] = 256,
-        forward_batch_size: Optional[int] = 16,
+        forward_batch_size: Optional[int] = 1,
         ppo_epochs: Optional[int] = 4,
         remove_unused_columns: Optional[bool] = True,
         log_with: Optional[str] = None,
@@ -124,6 +125,13 @@ class PPOConfig(object):
         self.tracker_project_name = tracker_project_name
 
         self.total_ppo_epochs = int(np.ceil(steps / batch_size))
+
+        if forward_batch_size > 1:
+            # warn users that this is not well supported yet
+            logging.warning(
+                "Forward batch size > 1 is not well supported yet. This can lead to unexpected behaviour."
+                " therefore, we recommend using forward_batch_size=1."
+            )
 
     def to_dict(self):
         output_dict = {}
