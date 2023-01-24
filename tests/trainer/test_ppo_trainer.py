@@ -8,7 +8,6 @@ import torch
 from huggingface_hub import HfApi, HfFolder, delete_repo
 from requests.exceptions import HTTPError
 from transformers import GPT2Tokenizer
-from transformers.testing_utils import is_staging_test
 
 from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer
 from trl.core import respond_to_batch
@@ -451,7 +450,7 @@ class PPOTrainerTester(unittest.TestCase):
         for stat in EXPECTED_STATS:
             self.assertTrue(stat in train_stats, f"Train stats should contain {stat}")
 
-    @is_staging_test
+    @unittest.skip("Fix by either patching `whomai()` to work in the staging endpoint or use a dummy prod user.")
     def test_push_to_hub(self):
         REPO_NAME = "test-ppo-trainer"
         repo_id = f"{CI_HUB_USER}/{REPO_NAME}"
