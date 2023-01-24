@@ -99,6 +99,37 @@ class PPOTrainerTester(unittest.TestCase):
 
         return super().setUp()
 
+    def test_raise_unvalid_args(self):
+        # initialize dataset
+        dummy_dataset = self._init_dummy_dataset()
+
+        with self.assertRaises(ValueError):
+            _ = PPOTrainer(
+                config={},
+                model=self.gpt2_model,
+                ref_model=self.gpt2_model_ref,
+                tokenizer=self.gpt2_tokenizer,
+                dataset=dummy_dataset,
+            )
+
+        with self.assertRaises(ValueError):
+            _ = PPOTrainer(
+                config=self.ppo_config,
+                model=self.gpt2_model,
+                ref_model=self.gpt2_model_ref,
+                tokenizer=None,
+                dataset=dummy_dataset,
+            )
+
+        with self.assertRaises(ValueError):
+            _ = PPOTrainer(
+                config=self.ppo_config,
+                model=None,
+                ref_model=self.gpt2_model_ref,
+                tokenizer=self.gpt2_tokenizer,
+                dataset=dummy_dataset,
+            )
+
     def test_ppo_step(self):
         # initialize dataset
         dummy_dataset = self._init_dummy_dataset()
