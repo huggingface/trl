@@ -307,7 +307,7 @@ class AutoModelForSeq2SeqLMWithValueHead(PreTrainedModelWrapper):
         **kwargs,
     ):
         if attention_mask is None:
-            attention_mask = input_ids.ne(self.pretrained_model.config.pad_token_id)
+            attention_mask = input_ids.ne(self.pretrained_model.config.pad_token_id).float()
 
         base_model_output = self.pretrained_model(
             input_ids=input_ids,
