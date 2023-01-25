@@ -61,7 +61,7 @@ class VHeadModelTester:
 
     def test_value_head(self):
         r"""
-        Test if the v-head is added to the model succesfully
+        Test if the v-head is added to the model successfully
         """
         for model_name in self.all_model_names:
             model = self.trl_model_class.from_pretrained(model_name)
@@ -87,7 +87,7 @@ class VHeadModelTester:
 
     def test_value_head_not_str(self):
         r"""
-        Test if the v-head is added to the model succesfully, by passing a non `PretrainedModel`
+        Test if the v-head is added to the model successfully, by passing a non `PretrainedModel`
         as an argument to `from_pretrained`.
         """
         for model_name in self.all_model_names:
@@ -217,7 +217,7 @@ class CausalLMValueHeadModelTester(VHeadModelTester, unittest.TestCase):
     def test_dropout_config(self):
         r"""
         Test if we instantiate a model by adding `summary_drop_prob` to the config
-        it will be added to the vhead
+        it will be added to the v_head
         """
         for model_name in self.all_model_names:
             pretrained_model = self.transformers_model_class.from_pretrained(model_name)
@@ -230,7 +230,7 @@ class CausalLMValueHeadModelTester(VHeadModelTester, unittest.TestCase):
     def test_dropout_kwargs(self):
         r"""
         Test if we instantiate a model by adding `summary_drop_prob` to the config
-        it will be added to the vhead
+        it will be added to the v_head
         """
         for model_name in self.all_model_names:
             v_head_kwargs = {"summary_dropout_prob": 0.5}
@@ -317,7 +317,7 @@ class Seq2SeqValueHeadModelTester(VHeadModelTester, unittest.TestCase):
     def test_dropout_config(self):
         r"""
         Test if we instantiate a model by adding `summary_drop_prob` to the config
-        it will be added to the vhead
+        it will be added to the v_head
         """
         for model_name in self.all_model_names:
             pretrained_model = self.transformers_model_class.from_pretrained(model_name)
@@ -330,7 +330,7 @@ class Seq2SeqValueHeadModelTester(VHeadModelTester, unittest.TestCase):
     def test_dropout_kwargs(self):
         r"""
         Test if we instantiate a model by adding `summary_drop_prob` to the config
-        it will be added to the vhead
+        it will be added to the v_head
         """
         for model_name in self.all_model_names:
             v_head_kwargs = {"summary_dropout_prob": 0.5}
