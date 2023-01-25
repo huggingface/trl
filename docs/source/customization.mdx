@@ -108,8 +108,7 @@ Read more about 8-bit model loading in `transformers` [here](https://huggingface
 # pip install bitsandbytes
 import torch
 from transformers import AutoTokenizer
-from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead, create_reference_model
-from trl.core import respond_to_batch
+from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead
 
 # 1. load a pretrained model
 model = AutoModelForCausalLMWithValueHead.from_pretrained('bigscience/bloom-560m')
