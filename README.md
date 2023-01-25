@@ -7,7 +7,7 @@
 
 
 ## What is it?
-With `trl` you can train transformer language models with Proximal Policy Optimization (PPO). The library is built on top of the [`transformers`](https://github.com/huggingface/transformers) library by  🤗 Hugging Face. Therefore, pre-trained language models can be directly loaded via `transformers`. At this point all decoder architectures and encoder-decoder architectures are supported. 
+With `trl` you can train transformer language models with Proximal Policy Optimization (PPO). The library is built on top of the [`transformers`](https://github.com/huggingface/transformers) library by  🤗 Hugging Face. Therefore, pre-trained language models can be directly loaded via `transformers`. At this point most of decoder architectures and encoder-decoder architectures are supported. 
 
 **Highlights:**
 - `PPOTrainer`: A PPO trainer for language models that just needs (query, response, reward) triplets to optimise the language model.
