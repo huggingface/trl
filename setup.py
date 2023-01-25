@@ -1,6 +1,6 @@
 from setuptools import setup, find_packages
 
-__version__ = "0.1.1"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
+__version__ = "0.1.1.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
 
 REQUIRED_PKGS = [
     "torch>=1.4.0",
@@ -9,8 +9,8 @@ REQUIRED_PKGS = [
     "accelerate",
 ]
 EXTRAS = {
-    "test" : ["pytest","pytest-xdist","accelerate", "datasets", "wandb"],
-    "dev" : ["pytest","pytest-xdist", "black", "isort", "flake8>=3.8.3", "datasets", "wandb"],
+    "test" : ["pytest","pytest-xdist","accelerate", "datasets"],
+    "dev" : ["pytest","pytest-xdist", "black", "isort", "flake8>=3.8.3", "datasets"],
 }
 
 setup(

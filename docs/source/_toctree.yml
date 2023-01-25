@@ -5,7 +5,15 @@
     title: Quickstart
   - local: installation
     title: Installation
+  - local: customization
+    title: Customize your training
   title: Get started
+- sections:
+  - local: models
+    title: Model Classes
+  - local: trainer
+    title: Trainer Classes
+  title: API
 - sections: 
   - local: sentiment_tuning
     title: Sentiment Tuning
