@@ -5,7 +5,7 @@ At `trl` we provide the possibility to give enough modularity to users to be abl
 ## Use different optimizers
 
 By default, the `PPOTrainer` creates a `torch.optim.Adam` optimizer. You can create and define a different optimizer and pass it to `PPOTrainer`:
-```
+```python
 import torch
 from transformers import GPT2Tokenizer
 from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead
@@ -30,7 +30,7 @@ ppo_trainer = PPOTrainer(config, model, model_ref, tokenizer, optimizer=optimize
 
 For memory efficient fine-tuning, you can also pass `Adam8bit` optimizer from `bitsandbytes`:
 
-```
+```python
 import torch
 import bitsandbytes as bnb
 
@@ -57,7 +57,7 @@ ppo_trainer = PPOTrainer(config, model, model_ref, tokenizer, optimizer=optimize
 ## Add a learning rate scheduler
 
 You can also play with your training by adding learning rate schedulers!
-```
+```python
 import torch
 from transformers import GPT2Tokenizer
 from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead
@@ -83,7 +83,7 @@ ppo_trainer = PPOTrainer(config, model, model_ref, tokenizer, optimizer=optimize
 ## Memory efficient fine-tuning by sharing layers
 
 Another tool you can use for more memory efficient fine-tuning is to share layers between the reference model and the model you want to train.
-```
+```python
 import torch
 from transformers import AutoTokenizer
 from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead, create_reference_model
@@ -103,7 +103,7 @@ ppo_trainer = PPOTrainer(config, model, model_ref, tokenizer)
  
 Since `trl` supports all key word arguments when loading a model from `transformers` using `from_pretrained`, you can also leverage `load_in_8bit` from `transformers` for more memory efficient fine-tuning. 
 Read more about 8-bit model loading in `transformers` [here](https://huggingface.co/docs/transformers/perf_infer_gpu_one#bitsandbytes-integration-for-int8-mixedprecision-matrix-decomposition).
-```
+```python
 # 0. imports
 # pip install bitsandbytes
 import torch
