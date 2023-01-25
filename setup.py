@@ -63,10 +63,11 @@ REQUIRED_PKGS = [
     "transformers>=4.18.0",
     "numpy>=1.18.2",
     "accelerate",
+    "datasets",
 ]
 EXTRAS = {
-    "test" : ["pytest","pytest-xdist","accelerate", "datasets"],
-    "dev" : ["pytest","pytest-xdist", "black", "isort", "flake8>=3.8.3", "datasets"],
+    "test" : ["pytest","pytest-xdist","accelerate"],
+    "dev" : ["pytest","pytest-xdist", "black", "isort", "flake8>=3.8.3"],
 }
 
 setup(
