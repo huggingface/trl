@@ -51,7 +51,7 @@ class PPOConfig(object):
             Scaling factor for value loss
         batch_size (`int`, *optional*, defaults to 256):
             Number of samples per optimisation step
-        forward_batch_size (`int`, *optional*, defaults to 16):
+        forward_batch_size (`int`, *optional*, defaults to 1):
             Number of samples forward passed through model at a time
         ppo_epochs (`int`, *optional*, defaults to 4):
             Number of optimisation epochs per batch of samples
@@ -83,7 +83,7 @@ class PPOConfig(object):
         cliprange_value: Optional[float] = 0.2,
         vf_coef: Optional[float] = 0.1,
         batch_size: Optional[int] = 256,
-        forward_batch_size: Optional[int] = 16,
+        forward_batch_size: Optional[int] = 1,
         ppo_epochs: Optional[int] = 4,
         remove_unused_columns: Optional[bool] = True,
         log_with: Optional[str] = None,
