@@ -1,8 +1,8 @@
-## Training customization
+# Training customization
 
 At `trl` we provide the possibility to give enough modularity to users to be able to efficiently customize the training loop for their needs. Below are some examples on how you can apply and test different techniques.
 
-### Use different optimizers
+## Use different optimizers
 
 By default, the `PPOTrainer` creates a `torch.optim.Adam` optimizer. You can create and define a different optimizer and pass it to `PPOTrainer`:
 ```
@@ -54,7 +54,7 @@ optimizer = bnb.optim.Adam8bit(model.parameters(), lr=config.learning_rate)
 ppo_trainer = PPOTrainer(config, model, model_ref, tokenizer, optimizer=optimizer)
 ```
 
-### Add a learning rate scheduler
+## Add a learning rate scheduler
 
 You can also play with your training by adding learning rate schedulers!
 ```
@@ -80,7 +80,7 @@ lr_scheduler = lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, 
 ppo_trainer = PPOTrainer(config, model, model_ref, tokenizer, optimizer=optimizer, lr_scheduler=lr_scheduler)
 ```
 
-### Memory efficient fine-tuning by sharing layers
+## Memory efficient fine-tuning by sharing layers
 
 Another tool you can use for more memory efficient fine-tuning is to share layers between the reference model and the model you want to train.
 ```
@@ -99,7 +99,7 @@ config = PPOConfig(**ppo_config)
 ppo_trainer = PPOTrainer(config, model, model_ref, tokenizer)
 ```
 
-### Pass 8-bit reference models 
+## Pass 8-bit reference models 
  
 Since `trl` supports all key word arguments when loading a model from `transformers` using `from_pretrained`, you can also leverage `load_in_8bit` from `transformers` for more memory efficient fine-tuning. 
 Read more about 8-bit model loading in `transformers` [here](https://huggingface.co/docs/transformers/perf_infer_gpu_one#bitsandbytes-integration-for-int8-mixedprecision-matrix-decomposition).
