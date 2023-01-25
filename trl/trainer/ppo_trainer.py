@@ -52,8 +52,8 @@ tags:
 
 # {model_name}
 
-This is a [TRL language model](https://github.com/lvwerra/trl) that has been fine-tuned with reinforcement learning to 
-guide the model outputs according to a value, function, or human feedback. The model can be used for text generation.
+This is a [TRL language model](https://github.com/lvwerra/trl) that has been fine-tuned with reinforcement learning to
+ guide the model outputs according to a value, function, or human feedback. The model can be used for text generation.
 
 ## Usage
 
