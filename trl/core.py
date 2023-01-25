@@ -12,13 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import collections
-
 import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 from transformers import top_k_top_p_filtering
+
 
 try:
     from collections.abc import Mapping
