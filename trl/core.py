@@ -6,10 +6,10 @@ from transformers import top_k_top_p_filtering
 
 
 try:
-     from collections.abc import Mapping
- except ImportError:
-     from collections import Mapping
-        
+    from collections.abc import Mapping
+except ImportError:
+    from collections import Mapping
+
 
 WANDB_PADDING = -1
 
