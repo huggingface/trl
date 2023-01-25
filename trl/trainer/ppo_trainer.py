@@ -13,6 +13,7 @@
 # limitations under the License.
 import inspect
 import logging
+import os
 import random
 import time
 import warnings
@@ -22,6 +23,7 @@ import datasets
 import torch
 from accelerate import Accelerator
 from datasets import Dataset
+from huggingface_hub import whoami
 from packaging import version
 from torch.optim import Adam
 from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizer, PreTrainedTokenizerFast
@@ -39,6 +41,50 @@ from ..core import (
 )
 from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper, create_reference_model
 from . import AdaptiveKLController, BaseTrainer, FixedKLController, PPOConfig
+
+
+MODEL_CARD_TEMPLATE = """---
+license: apache-2.0
+tags:
+- trl
+- transformers
+- reinforcement-learning
+---
+
+# {model_name}
+
+This is a [TRL language model](https://github.com/lvwerra/trl) that has been fine-tuned with reinforcement learning to guide the model outputs according to a value, function, or human feedback. The model can be used for text generation.
+
+## Usage
+
+To use this model for inference, first install the TRL library:
+
+```bash
+python -m pip install trl
+```
+
+You can then generate text as follows:
+
+```python
+from transformers import pipeline
+
+generator = pipeline("text-generation", model="{model_id}")
+outputs = generator("Hello, my llama is cute")
+```
+
+If you want to use the model for training or to obtain the outputs from the value head, load the model as follows:
+
+```python
+from transformers import AutoTokenizer
+from trl import AutoModelForCausalLMWithValueHead
+
+tokenizer = AutoTokenizer.from_pretrained("{model_id}")
+model = AutoModelForCausalLMWithValueHead.from_pretrained("{model_id}")
+
+inputs = tokenizer("Hello, my llama is cute", return_tensors="pt")
+outputs = model(**inputs, labels=inputs["input_ids"])
+```
+"""
 
 
 class PPOTrainer(BaseTrainer):
@@ -62,18 +108,20 @@ class PPOTrainer(BaseTrainer):
         **data_collator** (DataCollatorForLanguageModeling, *optional*) -- Data collator to be used for training and passed along the dataloader
         **num_shared_layers** (int, *optional*) -- Number of layers to be shared between the model and the reference model, if no reference model is passed. If no number is provided, all the layers
             will be shared.
+        **lr_scheduler** (`torch.optim.lr_scheduler`, *optional*) -- Learning rate scheduler to be used for training.
     """
 
     def __init__(
         self,
-        config: PPOConfig,
-        model: PreTrainedModelWrapper,
-        ref_model: PreTrainedModelWrapper,
-        tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast],
+        config: PPOConfig = None,
+        model: PreTrainedModelWrapper = None,
+        ref_model: PreTrainedModelWrapper = None,
+        tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast] = None,
         dataset: Optional[Union[torch.utils.data.Dataset, Dataset]] = None,
         optimizer: Optional[torch.optim.Optimizer] = None,
         data_collator=None,
         num_shared_layers: Optional[int] = None,
+        lr_scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
     ):
         """
         Initialize PPOTrainer.
@@ -98,18 +146,25 @@ class PPOTrainer(BaseTrainer):
             num_shared_layers (Optional[int]):
                 Number of shared layers between the model and the reference model. If `None`, all layers are shared.
                 used only if `ref_model` is `None`.
+            lr_scheduler (Optional[`torch.optim.lr_scheduler`]):
+                Learning rate scheduler used for training.
         """
         super().__init__(config)
-
-        # Step 1: Initialize Accelerator
-        self.accelerator = Accelerator(log_with=config.log_with, **config.accelerator_kwargs)
-        self.accelerator.init_trackers(config.tracker_project_name, config=config.to_dict(), **config.tracker_kwargs)
-
-        # Step 2: Initialize model, tokenizer, and dataloader
+        # Step 0: check positional arguments validity
+        if not isinstance(config, PPOConfig):
+            raise ValueError(f"config must be a PPOConfig, got {type(config)}")
+        if not isinstance(tokenizer, (PreTrainedTokenizer, PreTrainedTokenizerFast)):
+            raise ValueError(
+                f"tokenizer must be a PreTrainedTokenizer or PreTrainedTokenizerFast, got {type(tokenizer)}"
+            )
         if not isinstance(model, PreTrainedModelWrapper):
             raise ValueError(
                 f"model must be a PreTrainedModelWrapper, got {type(model)} - supported architectures are: {SUPPORTED_ARCHITECTURES}"
             )
+        # Step 1: Initialize Accelerator
+        self.accelerator = Accelerator(log_with=config.log_with, **config.accelerator_kwargs)
+        self.accelerator.init_trackers(config.tracker_project_name, config=config.to_dict(), **config.tracker_kwargs)
+
         self.model = model
         self.is_encoder_decoder = hasattr(self.model, "is_encoder_decoder")
 
@@ -163,13 +218,25 @@ class PPOTrainer(BaseTrainer):
         else:
             self.optimizer = optimizer
 
+        self.lr_scheduler = lr_scheduler
+        if self.lr_scheduler is not None:
+            if not isinstance(self.lr_scheduler, torch.optim.lr_scheduler._LRScheduler):
+                raise ValueError("lr_scheduler must be a torch.optim.lr_scheduler._LRScheduler")
+
         if self.config.adap_kl_ctrl:
             self.kl_ctl = AdaptiveKLController(self.config.init_kl_coef, self.config.target, self.config.horizon)
         else:
             self.kl_ctl = FixedKLController(self.config.init_kl_coef)
 
-        self.model, self.ref_model, self.optimizer, self.data_collator, self.dataloader = self.accelerator.prepare(
-            self.model, self.ref_model, self.optimizer, self.data_collator, self.dataloader
+        (
+            self.model,
+            self.ref_model,
+            self.optimizer,
+            self.data_collator,
+            self.dataloader,
+            self.lr_scheduler,
+        ) = self.accelerator.prepare(
+            self.model, self.ref_model, self.optimizer, self.data_collator, self.dataloader, self.lr_scheduler
         )
 
         # In a distributed setup, only logging needs to be performed on the main process
@@ -398,6 +465,7 @@ class PPOTrainer(BaseTrainer):
             stats = self.gather_stats(stats)
         stats = stats_to_np(stats)
         timing["time/ppo/calc_stats"] = time.time() - t
+        stats["ppo/learning_rate"] = self.optimizer.param_groups[0]["lr"]
 
         # Update the KL control - multiply the batch_size by the number of processes
         self.kl_ctl.update(stats["objective/kl"], self.config.batch_size * self.accelerator.num_processes)
@@ -409,6 +477,9 @@ class PPOTrainer(BaseTrainer):
         # post-process stats for tensorboard and other loggers
         if self.config.log_with != "wandb":
             stats = convert_to_scalar(stats)
+
+        if self.lr_scheduler is not None:
+            self.lr_scheduler.step()
 
         return stats
 
@@ -776,3 +847,23 @@ class PPOTrainer(BaseTrainer):
 
                 dist.barrier()
                 dist.all_reduce(rewards, op=torch.distributed.ReduceOp.SUM)
+
+    def create_model_card(self, path: str, model_name: Optional[str] = "TRL Model") -> None:
+        """Creates and saves a model card for a TRL model.
+
+        Args:
+            path (`str`): The path to save the model card to.
+            model_name (`str`, *optional*): The name of the model, defaults to `TRL Model`.
+        """
+        if not os.path.exists(path):
+            os.makedirs(path)
+
+        user = whoami()["name"]
+        model_card_content = MODEL_CARD_TEMPLATE.format(model_name=model_name, model_id=f"{user}/{path}")
+        with open(os.path.join(path, "README.md"), "w", encoding="utf-8") as f:
+            f.write(model_card_content)
+
+    def _save_pretrained(self, save_directory: str) -> None:
+        self.model.save_pretrained(save_directory)
+        self.tokenizer.save_pretrained(save_directory)
+        self.create_model_card(save_directory)

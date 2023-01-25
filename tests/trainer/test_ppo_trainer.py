@@ -1,13 +1,18 @@
-# imports
+import fnmatch
 import gc
 import re
+import tempfile
 import unittest
 
 import torch
+from huggingface_hub import HfApi, HfFolder, delete_repo
+from requests.exceptions import HTTPError
 from transformers import GPT2Tokenizer
 
 from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer
 from trl.core import respond_to_batch
+
+from ..testing_constants import CI_HUB_ENDPOINT, CI_HUB_USER, CI_HUB_USER_TOKEN
 
 
 EXPECTED_STATS = [
@@ -41,6 +46,7 @@ EXPECTED_STATS = [
     "time/ppo/optimize_step",
     "time/ppo/calc_stats",
     "time/ppo/total",
+    "ppo/learning_rate",
 ]
 
 
@@ -60,6 +66,36 @@ class PPOTrainerTester(unittest.TestCase):
     """
     A wrapper class for testing PPOTrainer
     """
+
+    @classmethod
+    def setUpClass(cls):
+        cls._token = CI_HUB_USER_TOKEN
+        cls._api = HfApi(endpoint=CI_HUB_ENDPOINT)
+        cls._api.set_access_token(CI_HUB_USER_TOKEN)
+        HfFolder.save_token(CI_HUB_USER_TOKEN)
+
+    @classmethod
+    def tearDownClass(cls):
+        for model in [f"{CI_HUB_USER}/test-ppo-trainer"]:
+            try:
+                delete_repo(token=cls._token, repo_id=model)
+            except HTTPError:
+                pass
+
+    def setUp(self):
+
+        # model_id
+        model_id = "gpt2"
+
+        # get models and tokenizer
+        self.gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(model_id)
+        self.gpt2_model_ref = AutoModelForCausalLMWithValueHead.from_pretrained(model_id)
+        self.gpt2_tokenizer = GPT2Tokenizer.from_pretrained(model_id)
+
+        # initialize trainer
+        self.ppo_config = PPOConfig(batch_size=2, forward_batch_size=1, log_with=None)
+
+        return super().setUp()
 
     def tearDown(self):
         # free memory
@@ -82,21 +118,6 @@ class PPOTrainerTester(unittest.TestCase):
         )
 
         return dummy_dataset
-
-    def setUp(self):
-        # model_id
-        model_id = "gpt2"
-
-        # get models and tokenizer
-        self.gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(model_id)
-        self.gpt2_model_ref = AutoModelForCausalLMWithValueHead.from_pretrained(model_id)
-        self.gpt2_tokenizer = GPT2Tokenizer.from_pretrained(model_id)
-
-        # initialize trainer
-        ppo_config = {"batch_size": 2, "forward_batch_size": 1, "log_with": None}
-        self.ppo_config = PPOConfig(**ppo_config)
-
-        return super().setUp()
 
     def test_ppo_step(self):
         # initialize dataset
@@ -161,6 +182,50 @@ class PPOTrainerTester(unittest.TestCase):
         # Finally check stats
         for stat in EXPECTED_STATS:
             assert stat in train_stats.keys()
+
+    def test_ppo_step_with_no_ref_sgd_lr_scheduler(self):
+        # initialize dataset
+        dummy_dataset = self._init_dummy_dataset()
+        optimizer = torch.optim.SGD(self.gpt2_model.parameters(), lr=0.01)
+        lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
+
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=self.gpt2_model,
+            ref_model=None,
+            optimizer=optimizer,
+            tokenizer=self.gpt2_tokenizer,
+            dataset=dummy_dataset,
+            lr_scheduler=lr_scheduler,
+        )
+        dummy_dataloader = ppo_trainer.dataloader
+
+        self.assertTrue(isinstance(ppo_trainer.optimizer.optimizer, torch.optim.SGD))
+        self.assertTrue(isinstance(ppo_trainer.lr_scheduler.scheduler, torch.optim.lr_scheduler.ExponentialLR))
+
+        # train model with ppo
+        for query_tensor, response_tensor in dummy_dataloader:
+            # define a reward for response
+            # (this could be any reward such as human feedback or output from another model)
+            reward = [torch.tensor(1.0), torch.tensor(0.0)]
+            # train model
+            _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+            train_stats = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+            break
+
+        for name, param in ppo_trainer.model.named_parameters():
+            self.assertTrue(param.grad is not None, f"Parameter {name} has no gradient")
+
+        # ref model should not be trained
+        for name, param in ppo_trainer.ref_model.named_parameters():
+            self.assertTrue(param.grad is None, f"Parameter {name} has a gradient")
+
+        # Finally check stats
+        for stat in EXPECTED_STATS:
+            assert stat in train_stats.keys()
+
+        # assert that the LR has increased for exponential decay
+        self.assertTrue(train_stats["ppo/learning_rate"] > self.ppo_config.learning_rate)
 
     def test_ppo_step_with_no_ref(self):
         # initialize dataset
@@ -384,3 +449,42 @@ class PPOTrainerTester(unittest.TestCase):
         # check train stats
         for stat in EXPECTED_STATS:
             self.assertTrue(stat in train_stats, f"Train stats should contain {stat}")
+
+    @unittest.skip("Fix by either patching `whomai()` to work in the staging endpoint or use a dummy prod user.")
+    def test_push_to_hub(self):
+        REPO_NAME = "test-ppo-trainer"
+        repo_id = f"{CI_HUB_USER}/{REPO_NAME}"
+
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=self.gpt2_model,
+            ref_model=None,
+            tokenizer=self.gpt2_tokenizer,
+            dataset=self._init_dummy_dataset(),
+        )
+        with tempfile.TemporaryDirectory():
+            url = ppo_trainer.push_to_hub(repo_id=repo_id, token=self._token, api_endpoint=CI_HUB_ENDPOINT)
+            # Extract repo_name from the url
+            re_search = re.search(CI_HUB_ENDPOINT + r"/([^/]+/[^/]+)/", url)
+            self.assertTrue(re_search is not None)
+            hub_repo_id = re_search.groups()[0]
+            # Check we created a Hub repo
+            self.assertEqual(hub_repo_id, repo_id)
+            # Ensure all files are present
+            files = sorted(self._api.list_repo_files(hub_repo_id))
+            assert all(
+                fnmatch.fnmatch(file, expected_file)
+                for file, expected_file in zip(
+                    files,
+                    [
+                        ".gitattributes",
+                        "README.md",
+                        "config.json",
+                        "merges.txt",
+                        "pytorch_model.bin",
+                        "special_tokens_map.json",
+                        "tokenizer_config.json",
+                        "vocab.json",
+                    ],
+                )
+            )
