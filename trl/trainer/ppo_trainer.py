@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import inspect
+import logging
 import random
 import time
 import warnings
@@ -184,6 +185,13 @@ class PPOTrainer(BaseTrainer):
             import wandb
 
             wandb.watch(self.model, log="all")
+
+        if self.config.forward_batch_size > 1 and (self.is_encoder_decoder or self.tokenizer.padding_side == "left"):
+            # warn users that this is not well supported yet
+            logging.warning(
+                "Forward batch size > 1 is not well supported yet for encoder-decoder models and when using `tokenizer.padding_side='left'`. This can lead to unexpected behaviour."
+                " therefore, we recommend using forward_batch_size=1."
+            )
 
     def _filter_kwargs(self, kwargs, target_func):
         """

@@ -11,7 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import logging
 from dataclasses import dataclass
 from typing import Optional
 
@@ -125,13 +124,6 @@ class PPOConfig(object):
         self.tracker_project_name = tracker_project_name
 
         self.total_ppo_epochs = int(np.ceil(steps / batch_size))
-
-        if forward_batch_size > 1:
-            # warn users that this is not well supported yet
-            logging.warning(
-                "Forward batch size > 1 is not well supported yet. This can lead to unexpected behaviour."
-                " therefore, we recommend using forward_batch_size=1."
-            )
 
     def to_dict(self):
         output_dict = {}
