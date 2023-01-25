@@ -38,8 +38,8 @@ from transformers import GPT2Tokenizer
 from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead
 
 # 1. load a pretrained model
-model = AutoModelWithValueModel.from_pretrained('gpt2')
-model_ref = AutoModelWithValueModel.from_pretrained('gpt2')
+model = AutoModelForCausalLMWithValueHead.from_pretrained('gpt2')
+model_ref = AutoModelForCausalLMWithValueHead.from_pretrained('gpt2')
 tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
 
 # 2. define config
