@@ -1,10 +1,14 @@
-import collections
-
 import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 from transformers import top_k_top_p_filtering
+
+
+try:
+    from collections.abc import Mapping
+except ImportError:
+    from collections import Mapping
 
 
 WANDB_PADDING = -1
@@ -17,7 +21,7 @@ def flatten_dict(nested, sep="/"):
         for k, v in nest.items():
             if sep in k:
                 raise ValueError(f"separator '{sep}' not allowed to be in key '{k}'")
-            if isinstance(v, collections.Mapping):
+            if isinstance(v, Mapping):
                 rec(v, prefix + k + sep, into)
             else:
                 into[prefix + k] = v
