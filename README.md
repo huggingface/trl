@@ -7,11 +7,11 @@
 
 
 ## What is it?
-With `trl` you can train transformer language models with Proximal Policy Optimization (PPO). The library is built on top of the [`transformers`](https://github.com/huggingface/transformers) library by  🤗 Hugging Face. Therefore, pre-trained language models can be directly loaded via `transformers`. At this point only decoder architectures such as GPT2 are implemented.
+With `trl` you can train transformer language models with Proximal Policy Optimization (PPO). The library is built on top of the [`transformers`](https://github.com/huggingface/transformers) library by  🤗 Hugging Face. Therefore, pre-trained language models can be directly loaded via `transformers`. At this point all decoder architectures and encoder-decoder architectures are supported. 
 
 **Highlights:**
-- PPOTrainer: A PPO trainer for language models that just needs (query, response, reward) triplets to optimise the language model.
-- AutoModelForCausalLMWithValueHead: A transformer model with an additional scalar output for each token which can be used as a value function in reinforcement learning.
+- `PPOTrainer`: A PPO trainer for language models that just needs (query, response, reward) triplets to optimise the language model.
+- `AutoModelForCausalLMWithValueHead` & `AutoModelForSeq2SeqLMWithValueHead`: A transformer model with an additional scalar output for each token which can be used as a value function in reinforcement learning.
 - Example: Train GPT2 to generate positive movie reviews with a BERT sentiment classifier.
 
 ## How it works
@@ -78,7 +78,6 @@ response_tensor  = respond_to_batch(model_ref, query_tensor)
 
 # create a ppo trainer
 ppo_trainer = PPOTrainer(ppo_config, model, model_ref, tokenizer)
-device = ppo_trainer.accelerator.device
 
 # define a reward for response
 # (this could be any reward such as human feedback or output from another model)
