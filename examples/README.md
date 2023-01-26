@@ -40,7 +40,7 @@ Here's an overview of the files:
 
 | File | Description |
 |---|---|
-| `scripts/reward_summarization.py` | For tuning the reward model |
+| `scripts/reward_summarization.py` | For tuning the reward model. |
 | `scripts/ds3_reward_summarization_example_config.json` | Can be used with the reward model script to scale it up to arbitrarily big models that don't fit on a single GPU. |
 
 
@@ -54,9 +54,9 @@ pip install deepspeed
 ```
 
 ```bash
-# Note that this script is an example of training a model similar to the reward model from the "Learning to Summarize from Human Feedback" paper: https://arxiv.org/abs/2009.01325.
-# If you want your reward model to follow the paper closely, then tune a GPT model on summarization and then instantiate the reward model with it. In other words, pass in the 
-# name of your summarization-finetuned gpt on the hub, instead of the name of the pretrained gpt2 like we do in the following examples of how to run this script.
+# If you want your reward model to follow the Learning to Summarize from Human Feedback paper closely, then tune a GPT model on summarization and then instantiate the reward model
+# with it. In other words, pass in the name of your summarization-finetuned gpt on the hub, instead of the name of the pretrained gpt2 like we do in the following examples of how
+# to run this script.
 
 # Example of running this script with the small size gpt2 on a 40GB A100 (A100's support bf16). Here, the global batch size will be 64:
 python -m torch.distributed.launch --nproc_per_node=1 reward_summarization.py --bf16
