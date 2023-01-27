@@ -42,7 +42,7 @@ class PPOConfig(object):
         gamma (`float`, *optional*, defaults to 1):
             Gamma parameter for advantage calculation
         lam (`float`, *optional*, defaults to 0.95):
-            Lambda parameter for advantage calcualation
+            Lambda parameter for advantage calculation
         cliprange (`float`, *optional*, defaults to 0.2):
             Range for clipping in PPO policy gradient loss
         cliprange_value (`float`, *optional*, defaults to 0.2):
