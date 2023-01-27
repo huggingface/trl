@@ -9,5 +9,5 @@ quality:
 	flake8  tests trl
 
 style:
-	black --line-length 119 --target-version py38 tests trl
+	black --line-length 119 --target-version py38 tests trl examples setup.py
 	isort tests trl

@@ -45,6 +45,11 @@ cd trl/
 pip install .
 ```
 
+If you wish to develop TRL, you should install in editable mode:
+```bash
+pip install -e .
+```
+
 ## How to use
 
 ### Example
