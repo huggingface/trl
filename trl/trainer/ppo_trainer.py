@@ -157,6 +157,12 @@ class PPOTrainer(BaseTrainer):
                 Learning rate scheduler used for training.
         """
         super().__init__(config)
+
+        # initial seed for reproducible experiments
+        random.seed(config.seed)
+        torch.manual_seed(config.seed)
+        # note, must add np.random.seed(config.seed) if add numpy sampling / random functions
+
         # Step 0: check positional arguments validity
         if not isinstance(config, PPOConfig):
             raise ValueError(f"config must be a PPOConfig, got {type(config)}")
