@@ -691,7 +691,7 @@ class PPOTrainer(BaseTrainer):
         advantages = torch.stack(advantages_reversed[::-1]).transpose(0, 1)
 
         returns = advantages + values
-        advantages = whiten(advantages)
+        advantages = whiten(advantages)     # normalize advantages
         advantages = advantages.detach()
 
         input_kwargs = {
