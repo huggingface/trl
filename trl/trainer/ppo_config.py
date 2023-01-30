@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
+import torch
 
 from ..core import flatten_dict
 
@@ -55,6 +56,8 @@ class PPOConfig(object):
             Number of samples forward passed through model at a time
         ppo_epochs (`int`, *optional*, defaults to 4):
             Number of optimisation epochs per batch of samples
+        residual_value_pred (`bool`, *optional*, defaults to False:
+            Adds residual predictions to the clipped value network
         remove_unused_columns (`bool`, *optional*, defaults to True):
             Remove unused columns from the dataset if `datasets.Dataset` is used
         log_with (`str`, *optional*, defaults to `None`):
@@ -85,6 +88,7 @@ class PPOConfig(object):
         batch_size: Optional[int] = 256,
         forward_batch_size: Optional[int] = 1,
         ppo_epochs: Optional[int] = 4,
+        residual_value_pred: Optional[bool] = False,
         remove_unused_columns: Optional[bool] = True,
         log_with: Optional[str] = None,
         tracker_kwargs: Optional[dict] = {},
@@ -101,11 +105,12 @@ class PPOConfig(object):
         self.gamma = gamma
         self.lam = lam
         self.cliprange = cliprange
-        self.cliprange_value = cliprange_value
+        self.cliprange_value = torch.tensor(cliprange_value)
         self.vf_coef = vf_coef
         self.batch_size = batch_size
         self.forward_batch_size = forward_batch_size
         self.ppo_epochs = ppo_epochs
+        self.residual_value_pred = residual_value_pred
         self.remove_unused_columns = remove_unused_columns
 
         self.log_with = log_with

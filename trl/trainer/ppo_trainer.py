@@ -714,7 +714,10 @@ class PPOTrainer(BaseTrainer):
             logprob = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
             logprob, vpred = logprob[:, -gen_len:], vpred[:, -gen_len - 1 : -1]
 
-        vpredclipped = clip_by_value(vpred, values - self.config.cliprange_value, values + self.config.cliprange_value)
+        if self.config.residual_value_pred:
+            vpredclipped = values + clip_by_value(vpred - values, -self.config.cliprange_value, self.config.cliprange_value)
+        else:
+            vpredclipped = clip_by_value(vpred, values - self.config.cliprange_value, values + self.config.cliprange_value)
 
         vf_losses1 = (vpred - returns) ** 2
         vf_losses2 = (vpredclipped - returns) ** 2
