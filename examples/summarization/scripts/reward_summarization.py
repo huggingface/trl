@@ -40,13 +40,14 @@ class GPTRewardModel(nn.Module):
         super().__init__()
         model = AutoModelForCausalLM.from_pretrained(config)
         self.config = model.config
-        # gpt-neo models have hidden_size instead of n_embd.
+        # Optional internal config change: gpt-neo models use hidden_size instead of n_embd.
         self.config.n_embd = (
             self.config.hidden_size
             if hasattr(self.config, "hidden_size")
             else self.config.n_embd
         )
         self.transformer = model.transformer
+        # Key to reward models: output a scalar reward
         self.v_head = nn.Linear(self.config.n_embd, 1)
 
     def forward(
