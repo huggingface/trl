@@ -110,7 +110,7 @@ class PPOConfig(object):
         self.forward_batch_size = forward_batch_size
         self.ppo_epochs = ppo_epochs
         self.remove_unused_columns = remove_unused_columns
-        self.seed = 0
+        self.seed = seed
 
         self.log_with = log_with
         # check if wandb is installed

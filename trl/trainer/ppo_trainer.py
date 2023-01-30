@@ -159,9 +159,7 @@ class PPOTrainer(BaseTrainer):
         super().__init__(config)
 
         # initial seed for reproducible experiments
-        random.seed(config.seed)
-        torch.manual_seed(config.seed)
-        # note, must add np.random.seed(config.seed) if add numpy sampling / random functions
+        self.set_seed(config.seed)
 
         # Step 0: check positional arguments validity
         if not isinstance(config, PPOConfig):
@@ -880,6 +878,17 @@ class PPOTrainer(BaseTrainer):
         model_card_content = MODEL_CARD_TEMPLATE.format(model_name=model_name, model_id=f"{user}/{path}")
         with open(os.path.join(path, "README.md"), "w", encoding="utf-8") as f:
             f.write(model_card_content)
+
+    def set_seed(seed: int):
+        """
+        Helper function for reproducible behavior to set the seed in `random`, `numpy`, `torch` and/or `tf` (if installed).
+        Args:
+            seed (`int`): The seed to set.
+        """
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
 
     def _save_pretrained(self, save_directory: str) -> None:
         self.model.save_pretrained(save_directory)
