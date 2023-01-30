@@ -886,7 +886,7 @@ class PPOTrainer(BaseTrainer):
             seed (`int`): The seed to set.
         """
         random.seed(seed)
-        np.random.seed(seed)
+        # np.random.seed(seed)      # if np is added to functionality, add this line
         torch.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
 
