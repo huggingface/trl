@@ -879,7 +879,7 @@ class PPOTrainer(BaseTrainer):
         with open(os.path.join(path, "README.md"), "w", encoding="utf-8") as f:
             f.write(model_card_content)
 
-    def set_seed(seed: int):
+    def set_seed(self, seed: Optional[int]):
         """
         Helper function for reproducible behavior to set the seed in `random`, `numpy`, `torch` and/or `tf` (if installed).
         Args:
