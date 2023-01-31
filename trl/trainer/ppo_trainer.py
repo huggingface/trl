@@ -724,7 +724,10 @@ class PPOTrainer(BaseTrainer):
         vf_loss = 0.5 * torch.mean(torch.max(vf_losses1, vf_losses2))
         vf_clipfrac = torch.mean(torch.gt(vf_losses2, vf_losses1).double())
 
-        ratio = torch.exp(logprob - old_logprobs)
+
+        log_ratio = (logprob - old_logprobs)
+        ratio = torch.exp(log_ratio)
+
         pg_losses = -advantages * ratio
         pg_losses2 = -advantages * torch.clamp(ratio, 1.0 - self.config.cliprange, 1.0 + self.config.cliprange)
 
@@ -734,7 +737,16 @@ class PPOTrainer(BaseTrainer):
         loss = pg_loss + self.config.vf_coef * vf_loss
 
         entropy = torch.mean(entropy_from_logits(logits))
-        approxkl = 0.5 * torch.mean((logprob - old_logprobs) ** 2)
+
+        # try advanced KL term
+        if False:
+            # Unbiased KL-div estimates (`k3`). Ref: http://joschu.net/blog/kl-approx.html
+            with torch.no_grad():
+                approxkl = torch.mean((ratio - 1) - log_ratio)
+        else:
+            # original KL constraint
+            approxkl = 0.5 * torch.mean((logprob - old_logprobs) ** 2)
+
         policykl = torch.mean(logprob - old_logprobs)
         return_mean, return_var = torch.mean(returns), torch.var(returns)
         value_mean, value_var = torch.mean(values), torch.var(values)

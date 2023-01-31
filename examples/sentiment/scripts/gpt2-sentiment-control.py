@@ -14,6 +14,7 @@
 # limitations under the License.
 import torch
 from tqdm import tqdm
+from random import choices
 
 tqdm.pandas()
 
@@ -46,10 +47,13 @@ from trl.core import LengthSampler
 # `accelerator_kwargs={"logging_dir": PATH_TO_LOGS}` to the PPOConfig.
 config = PPOConfig(
     model_name="lvwerra/gpt2-imdb",
+    steps=51200,
     learning_rate=1.41e-5,
+    remove_unused_columns=False,
     log_with="wandb",
-    residual_value_pred=True,
+    residual_value_pred=False,
 )
+
 
 # We then define the arguments to pass to the sentiment analysis pipeline.
 # We set `return_all_scores` to True to get the sentiment score for each token.
@@ -132,23 +136,33 @@ output_min_length = 4
 output_max_length = 16
 output_length_sampler = LengthSampler(output_min_length, output_max_length)
 
-for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
-    query_tensors = batch["input_ids"]
+# Add controls
+ctrl_str = ['[negative]', '[neutral]', '[positive]']
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu") # this should be handled by accelerate
+ctrl_tokens = dict((s, tokenizer.encode(s, return_tensors="pt").squeeze().to(device)) for s in ctrl_str)
 
-    #### Get response from gpt2
+
+for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
+    logs, game_data, = dict(), dict()
+
+    #### prepend a random control token
+    task_list = choices(ctrl_str, k=config.batch_size)
+    game_data['query'] = [t + q for t, q in zip(task_list, batch['query'])]
+    query_tensors = [torch.cat((ctrl_tokens[t], input_ids)) for t, input_ids in zip(task_list, batch["input_ids"])]
+
+    #### get response from gpt2
     response_tensors = []
     for query in query_tensors:
-        gen_len = output_length_sampler()
-        generation_kwargs["max_new_tokens"] = gen_len
         response = ppo_trainer.generate(query, **generation_kwargs)
-        response_tensors.append(response.squeeze()[-gen_len:])
-    batch["response"] = [tokenizer.decode(r.squeeze()) for r in response_tensors]
+        response_tensors.append(response.squeeze()[-txt_out_len:])
+    game_data['response'] = [gpt2_tokenizer.decode(r.squeeze()) for r in response_tensors]
 
-    #### Compute sentiment score
-    texts = [q + r for q, r in zip(batch["query"], batch["response"])]
-    pipe_outputs = sentiment_pipe(texts, **sent_kwargs)
-    rewards = [torch.tensor(output[1]["score"]) for output in pipe_outputs]
+    #### sentiment analysis
+    texts = [q + r for q, r in zip(batch['query'], game_data['response'])]
+    logits = [torch.tensor(output[1]["score"]) for output in sentiment_pipe(texts, **sentiment_pipe_kwargs)]
+    rewards = pos_logit_to_reward(logits, task_list)
 
-    #### Run PPO step
+    #### Run PPO training
+    t = time.time()
     stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
-    ppo_trainer.log_stats(stats, batch, rewards)
+    ppo_trainer.log_stats(stats, game_data, rewards)
