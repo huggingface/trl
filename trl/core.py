@@ -188,7 +188,7 @@ def respond_to_batch(model, queries, txt_len=20, top_k=0, top_p=1.0):
 
 def set_seed(seed: int):
     """
-    Helper function for reproducible behavior to set the seed in `random`, `numpy`, `torch` and/or `tf` (if installed).
+    Helper function for reproducible behavior to set the seed in `random`, `numpy`, and `torch`.
 
     Args:
         seed (`int`): The seed to set.

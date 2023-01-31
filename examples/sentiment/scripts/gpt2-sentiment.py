@@ -21,7 +21,7 @@ from transformers import pipeline, AutoTokenizer
 from datasets import load_dataset
 
 from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead
-from trl.core import LengthSampler
+from trl.core import LengthSampler, set_seed
 
 ########################################################################
 # This is a fully working simple example to use trl with accelerate.
@@ -95,6 +95,9 @@ dataset = build_dataset(config)
 def collator(data):
     return dict((key, [d[key] for d in data]) for key in data[0])
 
+
+# set seed before initializing value head for deterministic eval
+set_seed(PPOConfig.seed)
 
 # Now let's build the model, the reference model, and the tokenizer.
 model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name)
