@@ -19,8 +19,8 @@ tqdm.pandas()
 from transformers import pipeline, AutoTokenizer
 from datasets import load_dataset
 
-from trl import PPOTrainer, PPOConfig, AutoModelForSeq2SeqLMWithValueHead
-from trl.core import LengthSampler, set_seed
+from trl import PPOTrainer, PPOConfig, AutoModelForSeq2SeqLMWithValueHead, set_seed
+from trl.core import LengthSampler
 
 ########################################################################
 # This is a fully working simple example to use trl with accelerate.
