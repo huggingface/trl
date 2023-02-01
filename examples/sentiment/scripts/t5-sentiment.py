@@ -20,7 +20,7 @@ from transformers import pipeline, AutoTokenizer
 from datasets import load_dataset
 
 from trl import PPOTrainer, PPOConfig, AutoModelForSeq2SeqLMWithValueHead
-from trl.core import LengthSampler
+from trl.core import LengthSampler, set_seed
 
 ########################################################################
 # This is a fully working simple example to use trl with accelerate.
@@ -70,6 +70,9 @@ def build_imdb_dataset(tokenizer, input_min_text_length=2, input_max_text_length
 def collater(data):
     return dict((key, [d[key] for d in data]) for key in data[0])
 
+
+# set seed before initializing value head for deterministic eval
+set_seed(PPOConfig.seed)
 
 # Now let's build the model, the reference model, and the tokenizer.
 model = AutoModelForSeq2SeqLMWithValueHead.from_pretrained(config.model_name)
