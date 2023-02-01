@@ -66,8 +66,8 @@ REQUIRED_PKGS = [
     "datasets",
 ]
 EXTRAS = {
-    "test" : ["pytest","pytest-xdist","accelerate"],
-    "dev" : ["pytest","pytest-xdist", "black", "isort", "flake8>=3.8.3"],
+    "test": ["pytest", "pytest-xdist", "accelerate"],
+    "dev": ["pytest", "pytest-xdist", "black", "isort", "flake8>=3.8.3"],
 }
 
 setup(

@@ -35,6 +35,7 @@ from ..core import (
     entropy_from_logits,
     flatten_dict,
     logprobs_from_logits,
+    set_seed,
     stack_dicts,
     stats_to_np,
     whiten,
@@ -157,6 +158,10 @@ class PPOTrainer(BaseTrainer):
                 Learning rate scheduler used for training.
         """
         super().__init__(config)
+
+        # initial seed for reproducible experiments
+        set_seed(config.seed)
+
         # Step 0: check positional arguments validity
         if not isinstance(config, PPOConfig):
             raise ValueError(f"config must be a PPOConfig, got {type(config)}")
