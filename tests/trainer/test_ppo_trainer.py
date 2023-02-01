@@ -97,7 +97,6 @@ class PPOTrainerTester(unittest.TestCase):
                 pass
 
     def setUp(self):
-
         # model_id
         model_id = "gpt2"
 
