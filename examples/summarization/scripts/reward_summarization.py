@@ -68,7 +68,7 @@ def turn_into_text_classification_format(examples):
 
     return new_examples
 
-num_proc = 100 # Can adjust to be higher if you have more processors.
+num_proc = 100 # Can adjust to be higher if you have more processors. Should work even if you don't have 100 CPUs, though.
 original_columns = ds["train"].column_names
 ds = ds.map(turn_into_text_classification_format, batched=True, num_proc=num_proc, remove_columns=original_columns)
 
