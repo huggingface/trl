@@ -62,5 +62,5 @@ pip install deepspeed
 python -m torch.distributed.launch --nproc_per_node=1 reward_summarization.py --bf16
 
 # Example of running this script with the xl size gpt2 on 16 40GB A100's. Here the global batch size will still be 64:
-python -m torch.distributed.launch --nproc_per_node=16 reward_summarization.py --per_device_train_batch_size=1 --per_device_eval_batch_size=1 --gradient_accumulation_steps=4 --gpt_model_name=gpt2-xl --bf16
+python -m torch.distributed.launch --nproc_per_node=16 reward_summarization.py --per_device_train_batch_size=1 --per_device_eval_batch_size=1 --gradient_accumulation_steps=4 --gpt_model_name=gpt2-xl --bf16 --deepspeed=ds3_reward_summarization_example_config.json
 ```
