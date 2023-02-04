@@ -12,6 +12,7 @@ from typing import Optional, Union, List, Dict, Any
 import evaluate
 from dataclasses import dataclass, field
 import torch.nn as nn
+import numpy as np
 
 # Define and parse arguments.
 @dataclass
