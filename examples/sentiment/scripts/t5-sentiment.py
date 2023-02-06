@@ -72,7 +72,7 @@ def collater(data):
 
 
 # set seed before initializing value head for deterministic eval
-set_seed(PPOConfig.seed)
+set_seed(config.seed)
 
 # Now let's build the model, the reference model, and the tokenizer.
 model = AutoModelForSeq2SeqLMWithValueHead.from_pretrained(config.model_name)
