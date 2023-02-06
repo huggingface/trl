@@ -675,7 +675,6 @@ class PPOTrainer(BaseTrainer):
         model_input,
         query: torch.LongTensor,
         response: torch.LongTensor,
-        gen_len: int,
     ):
         input_kwargs = {
             "input_ids": model_input,
@@ -687,6 +686,7 @@ class PPOTrainer(BaseTrainer):
             model_input = response
 
         logits, _, vpred = self.model(**input_kwargs)
+        gen_len = vpred.shape[-1]
 
         if self.is_encoder_decoder:
             logprob = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
@@ -697,16 +697,13 @@ class PPOTrainer(BaseTrainer):
             logprob = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
             logprob, vpred = logprob[:, -gen_len:], vpred[:, -gen_len - 1 : -1]
         
-        return logits, vpred
+        return logprob, vpred, logits
 
     def loss(
         self,
         old_logprobs: torch.FloatTensor,
         values: torch.FloatTensor,
         rewards: torch.FloatTensor,
-        # query: torch.LongTensor,
-        # response: torch.LongTensor,
-        # model_input: torch.LongTensor,
         logits: torch.FloatTensor,
         vpred: torch.FloatTensor,
         logprob: torch.FloatTensor,
@@ -721,12 +718,6 @@ class PPOTrainer(BaseTrainer):
                 Values of the value head, shape (`batch_size`, `hidden_dim`)
             rewards (`torch.FloatTensor`):
                 Rewards from the reward model, shape (`batch_size`)
-            query (`torch.LongTensor`):
-                Encoded queries, shape (`batch_size`, `query_length`)
-            response (`torch.LongTensor`):
-                Encoded responses, shape (`batch_size`, `response_length`)
-            model_input (`torch.LongTensor`):
-                Concatenated queries and responses, shape (`batch_size`, `query_length+response_length`)
             logits (`torch.FloatTensor`):
                 Logits of the model, shape (`batch_size`, `response_length`, `vocab_size`)
             v_pred (`torch.FloatTensor`):
