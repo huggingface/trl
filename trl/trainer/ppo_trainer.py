@@ -599,7 +599,7 @@ class PPOTrainer(BaseTrainer):
 
     def train_minibatch(
         self,
-        logprobs: torch.FloatTensor,
+        old_logprobs: torch.FloatTensor,
         values: torch.FloatTensor,
         rewards: torch.FloatTensor,
         query: torch.LongTensor,
@@ -627,7 +627,19 @@ class PPOTrainer(BaseTrainer):
             train_stats (dict[str, `torch.Tensor`]):
                 Dictionary of training statistics
         """
-        loss_p, loss_v, train_stats = self.loss(logprobs, values, rewards, query, response, model_input)
+
+        # old_logprobs: torch.FloatTensor,
+        # values: torch.FloatTensor,
+        # rewards: torch.FloatTensor,
+        # # query: torch.LongTensor,
+        # # response: torch.LongTensor,
+        # # model_input: torch.LongTensor,
+        # logits: torch.FloatTensor,
+        # vpred: torch.FloatTensor,
+        # logprob: torch.FloatTensor,
+        logprobs, vpred, logits = self.compute_logits_vpred(query, response, model_input)
+        
+        loss_p, loss_v, train_stats = self.loss(old_logprobs, values, rewards, logits, vpred, logprobs)
         loss = loss_p + loss_v
         self.optimizer.zero_grad()
         self.accelerator.backward(loss)
@@ -658,47 +670,13 @@ class PPOTrainer(BaseTrainer):
             rewards.append(reward)
         return rewards, non_score_rewards
 
-    def loss(
+    def compute_logits_vpred(
         self,
-        old_logprobs: torch.FloatTensor,
-        values: torch.FloatTensor,
-        rewards: torch.FloatTensor,
+        model_input,
         query: torch.LongTensor,
         response: torch.LongTensor,
-        model_input: torch.LongTensor,
+        gen_len: int,
     ):
-        """
-        Calculate policy and value losses.
-
-        Args:
-            old_logprobs (`torch.FloatTensor`):
-                Log probabilities of the model, shape (`batch_size`, `response_length`)
-            values (`torch.FloatTensor`):
-                Values of the value head, shape (`batch_size`, `hidden_dim`)
-            rewards (`torch.FloatTensor`):
-                Rewards from the reward model, shape (`batch_size`)
-            query (`torch.LongTensor`):
-                Encoded queries, shape (`batch_size`, `query_length`)
-            response (`torch.LongTensor`):
-                Encoded responses, shape (`batch_size`, `response_length`)
-            model_input (`torch.LongTensor`):
-                Concatenated queries and responses, shape (`batch_size`, `query_length+response_length`)
-        """
-        lastgaelam = 0
-        advantages_reversed = []
-        gen_len = rewards.shape[-1]
-
-        for t in reversed(range(gen_len)):
-            nextvalues = values[:, t + 1] if t < gen_len - 1 else 0.0
-            delta = rewards[:, t] + self.config.gamma * nextvalues - values[:, t]
-            lastgaelam = delta + self.config.gamma * self.config.lam * lastgaelam
-            advantages_reversed.append(lastgaelam)
-        advantages = torch.stack(advantages_reversed[::-1]).transpose(0, 1)
-
-        returns = advantages + values
-        advantages = whiten(advantages)
-        advantages = advantages.detach()
-
         input_kwargs = {
             "input_ids": model_input,
         }
@@ -718,6 +696,58 @@ class PPOTrainer(BaseTrainer):
         else:
             logprob = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
             logprob, vpred = logprob[:, -gen_len:], vpred[:, -gen_len - 1 : -1]
+        
+        return logits, vpred
+
+    def loss(
+        self,
+        old_logprobs: torch.FloatTensor,
+        values: torch.FloatTensor,
+        rewards: torch.FloatTensor,
+        # query: torch.LongTensor,
+        # response: torch.LongTensor,
+        # model_input: torch.LongTensor,
+        logits: torch.FloatTensor,
+        vpred: torch.FloatTensor,
+        logprob: torch.FloatTensor,
+    ):
+        """
+        Calculate policy and value losses.
+
+        Args:
+            old_logprobs (`torch.FloatTensor`):
+                Log probabilities of the model, shape (`batch_size`, `response_length`)
+            values (`torch.FloatTensor`):
+                Values of the value head, shape (`batch_size`, `hidden_dim`)
+            rewards (`torch.FloatTensor`):
+                Rewards from the reward model, shape (`batch_size`)
+            query (`torch.LongTensor`):
+                Encoded queries, shape (`batch_size`, `query_length`)
+            response (`torch.LongTensor`):
+                Encoded responses, shape (`batch_size`, `response_length`)
+            model_input (`torch.LongTensor`):
+                Concatenated queries and responses, shape (`batch_size`, `query_length+response_length`)
+            logits (`torch.FloatTensor`):
+                Logits of the model, shape (`batch_size`, `response_length`, `vocab_size`)
+            v_pred (`torch.FloatTensor`):
+                Values of the value head, shape (`batch_size`, `response_length`)
+            logprobs (`torch.FloatTensor`):
+                Log probabilities of the model, shape (`batch_size`, `response_length`)
+        """
+        lastgaelam = 0
+        advantages_reversed = []
+        gen_len = rewards.shape[-1]
+
+        for t in reversed(range(gen_len)):
+            nextvalues = values[:, t + 1] if t < gen_len - 1 else 0.0
+            delta = rewards[:, t] + self.config.gamma * nextvalues - values[:, t]
+            lastgaelam = delta + self.config.gamma * self.config.lam * lastgaelam
+            advantages_reversed.append(lastgaelam)
+        advantages = torch.stack(advantages_reversed[::-1]).transpose(0, 1)
+
+        returns = advantages + values
+        advantages = whiten(advantages)
+        advantages = advantages.detach()
 
         vpredclipped = clip_by_value(vpred, values - self.config.cliprange_value, values + self.config.cliprange_value)
 
