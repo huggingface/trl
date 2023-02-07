@@ -637,7 +637,7 @@ class PPOTrainer(BaseTrainer):
         # logits: torch.FloatTensor,
         # vpred: torch.FloatTensor,
         # logprob: torch.FloatTensor,
-        logprobs, vpred, logits = self.compute_logits_vpred(query, response, model_input)
+        logprobs, vpred, logits = self.compute_logits_vpred(model_input, query, response, rewards)
         
         loss_p, loss_v, train_stats = self.loss(old_logprobs, values, rewards, logits, vpred, logprobs)
         loss = loss_p + loss_v
@@ -675,6 +675,7 @@ class PPOTrainer(BaseTrainer):
         model_input,
         query: torch.LongTensor,
         response: torch.LongTensor,
+        rewards,
     ):
         input_kwargs = {
             "input_ids": model_input,
@@ -686,7 +687,7 @@ class PPOTrainer(BaseTrainer):
             model_input = response
 
         logits, _, vpred = self.model(**input_kwargs)
-        gen_len = vpred.shape[-1]
+        gen_len = rewards.shape[-1]
 
         if self.is_encoder_decoder:
             logprob = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
