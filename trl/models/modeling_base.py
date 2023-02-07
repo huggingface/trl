@@ -120,7 +120,7 @@ class PreTrainedModelWrapper(nn.Module):
                     is_shared = True
 
             if is_shared:
-                # dowload each file and add it to the state_dict
+                # download each file and add it to the state_dict
                 state_dict = {}
                 for shard_file in files_to_download:
                     filename = hf_hub_download(pretrained_model_name_or_path, shard_file)

@@ -121,7 +121,7 @@ def entropy_from_logits(logits):
 
 
 def average_torch_dicts(list_of_dicts):
-    """Average values of a list of dicts wiht torch tensors."""
+    """Average values of a list of dicts with torch tensors."""
     average_dict = dict()
     for key in list_of_dicts[0].keys():
         average_dict[key] = torch.mean(torch.stack([d[key] for d in list_of_dicts]), axis=0)
