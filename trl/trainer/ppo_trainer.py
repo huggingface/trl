@@ -41,7 +41,7 @@ from ..core import (
     whiten,
 )
 from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper, create_reference_model
-from . import AdaptiveKLController, BaseTrainer, FixedKLController, PPOConfig
+from . import AdaptiveKLController, BaseTrainer, FixedKLController, PPOConfig, ContextManagers
 
 
 MODEL_CARD_TEMPLATE = """---
@@ -520,6 +520,46 @@ class PPOTrainer(BaseTrainer):
             stats[k] = v
         return stats
 
+    def wrapped_forward_pass(
+        self,
+        model_input,
+        input_kwargs,
+        no_grad: bool = False,
+        use_ref: bool = False,
+    ):
+        """
+        Run a forward pass through the model.
+
+        Args:
+            model_input (`torch.LongTensor`):
+                A tensor containing the encoded queries, shape (`batch_size`, `query_length`)
+            input_kwargs (`dict[str, Any]`):
+                A dictionary of additional inputs to the model.
+            no_grad (`bool`, optional):
+                Whether to run the forward pass with no gradient tracking. Defaults to `False`.
+            use_ref (`bool`, optional):
+                Whether to use the reference model. Defaults to `False`.
+
+        Returns:
+            (tuple):
+                - logprobs (`torch.FloatTensor`): Log probabilities of the responses,
+                    shape (`batch_size`, `response_length`)
+                - values (`torch.FloatTensor`): Values of the responses,
+                    shape (`batch_size`, `response_length`)
+        """
+        contexts = [torch.no_grad()] if no_grad else []
+
+        with ContextManagers(contexts):
+            if use_ref:
+                logits, loss, values = self.ref_model(**input_kwargs)
+            else:
+                logits, loss, values = self.model(**input_kwargs)
+
+        logprobs = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
+        
+        return logprobs, logits, loss, values
+
+
     def batched_forward_pass(
         self,
         queries: torch.Tensor,
@@ -559,6 +599,7 @@ class PPOTrainer(BaseTrainer):
                     "input_ids": input_ids,
                     "decoder_input_ids": decoder_input_ids,
                 }
+                model_input = decoder_input_ids
             else:
                 input_ids = self.data_collator([torch.cat([q, r]) for q, r in zip(query_batch, response_batch)])[
                     "input_ids"
@@ -567,17 +608,20 @@ class PPOTrainer(BaseTrainer):
                 input_kwargs = {
                     "input_ids": input_ids,
                 }
+                model_input = input_ids
 
-            with torch.no_grad():
-                logits, _, v = self.model(**input_kwargs)
-                ref_logits, _, _ = self.ref_model(**input_kwargs)
+            # with torch.no_grad():
+            #     logits, _, v = self.model(**input_kwargs)
+            #     ref_logits, _, _ = self.ref_model(**input_kwargs)
 
-            if self.is_encoder_decoder:
-                logprobs = logprobs_from_logits(logits[:, :-1, :], decoder_input_ids[:, 1:])
-                ref_logprobs = logprobs_from_logits(ref_logits[:, :-1, :], decoder_input_ids[:, 1:])
-            else:
-                logprobs = logprobs_from_logits(logits[:, :-1, :], input_ids[:, 1:])
-                ref_logprobs = logprobs_from_logits(ref_logits[:, :-1, :], input_ids[:, 1:])
+            # if self.is_encoder_decoder:
+            #     logprobs = logprobs_from_logits(logits[:, :-1, :], decoder_input_ids[:, 1:])
+            #     ref_logprobs = logprobs_from_logits(ref_logits[:, :-1, :], decoder_input_ids[:, 1:])
+            # else:
+            #     logprobs = logprobs_from_logits(logits[:, :-1, :], input_ids[:, 1:])
+            #     ref_logprobs = logprobs_from_logits(ref_logits[:, :-1, :], input_ids[:, 1:])
+            ref_logprobs, _, _, _ = self.wrapped_forward_pass(model_input, input_kwargs, no_grad=True, use_ref=True)
+            logprobs, _, _, v = self.wrapped_forward_pass(model_input, input_kwargs, no_grad=True, use_ref=False)
 
             for j in range(fbs):
                 if self.is_encoder_decoder:
@@ -627,17 +671,7 @@ class PPOTrainer(BaseTrainer):
             train_stats (dict[str, `torch.Tensor`]):
                 Dictionary of training statistics
         """
-
-        # old_logprobs: torch.FloatTensor,
-        # values: torch.FloatTensor,
-        # rewards: torch.FloatTensor,
-        # # query: torch.LongTensor,
-        # # response: torch.LongTensor,
-        # # model_input: torch.LongTensor,
-        # logits: torch.FloatTensor,
-        # vpred: torch.FloatTensor,
-        # logprob: torch.FloatTensor,
-        logprobs, vpred, logits = self.compute_logits_vpred(query, response, model_input)
+        logprobs, vpred, logits = self.compute_logits_vpred(query, response, model_input, rewards)
         
         loss_p, loss_v, train_stats = self.loss(old_logprobs, values, rewards, logits, vpred, logprobs)
         loss = loss_p + loss_v
@@ -675,6 +709,7 @@ class PPOTrainer(BaseTrainer):
         model_input,
         query: torch.LongTensor,
         response: torch.LongTensor,
+        rewards: torch.FloatTensor,
     ):
         input_kwargs = {
             "input_ids": model_input,
@@ -685,16 +720,17 @@ class PPOTrainer(BaseTrainer):
             input_kwargs["decoder_input_ids"] = response
             model_input = response
 
-        logits, _, vpred = self.model(**input_kwargs)
-        gen_len = vpred.shape[-1]
+        # logits, _, vpred = self.model(**input_kwargs)
+        logprob, logits, _, vpred = self.wrapped_forward_pass(model_input, input_kwargs, no_grad=False, use_ref=False)
+        gen_len = rewards.shape[-1]
 
         if self.is_encoder_decoder:
-            logprob = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
+            # logprob = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
             start, end = 1, response.shape[-1] - 1
             vpred = vpred[:, start - 1 : end - 1]
             logprob = logprob[:, start:end]
         else:
-            logprob = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
+            # logprob = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
             logprob, vpred = logprob[:, -gen_len:], vpred[:, -gen_len - 1 : -1]
         
         return logprob, vpred, logits

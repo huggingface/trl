@@ -16,7 +16,7 @@
 
 # There is a circular import in the PPOTrainer if we let isort sort these
 # isort: off
-from .utils import AdaptiveKLController, FixedKLController
+from .utils import AdaptiveKLController, FixedKLController, ContextManagers
 
 # isort: on
 
