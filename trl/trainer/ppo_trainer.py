@@ -730,7 +730,9 @@ class PPOTrainer(BaseTrainer):
 
         ratio = torch.exp(logprob - old_logprobs)
         pg_losses = -advantages * ratio
-        pg_losses2 = -advantages * torch.clamp(ratio, 1.0 - self.config.cliprange_loss, 1.0 + self.config.cliprange_loss)
+        pg_losses2 = -advantages * torch.clamp(
+            ratio, 1.0 - self.config.cliprange_loss, 1.0 + self.config.cliprange_loss
+        )
 
         pg_loss = torch.mean(torch.max(pg_losses, pg_losses2))
         pg_clipfrac = torch.mean(torch.gt(pg_losses2, pg_losses).double())
