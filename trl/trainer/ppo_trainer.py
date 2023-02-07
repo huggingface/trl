@@ -240,7 +240,7 @@ class PPOTrainer(BaseTrainer):
                 raise ValueError("lr_scheduler must be a torch.optim.lr_scheduler._LRScheduler")
 
         if self.config.adap_kl_ctrl:
-            self.kl_ctl = AdaptiveKLController(self.config.init_kl_coef, self.config.kl_target, self.config.kl_horizon)
+            self.kl_ctl = AdaptiveKLController(self.config.init_kl_coef, self.config.target, self.config.horizon)
         else:
             self.kl_ctl = FixedKLController(self.config.init_kl_coef)
 
@@ -731,7 +731,7 @@ class PPOTrainer(BaseTrainer):
         ratio = torch.exp(logprob - old_logprobs)
         pg_losses = -advantages * ratio
         pg_losses2 = -advantages * torch.clamp(
-            ratio, 1.0 - self.config.cliprange_loss, 1.0 + self.config.cliprange_loss
+            ratio, 1.0 - self.config.cliprange, 1.0 + self.config.cliprange
         )
 
         pg_loss = torch.mean(torch.max(pg_losses, pg_losses2))

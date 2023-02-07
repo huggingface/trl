@@ -35,15 +35,15 @@ class PPOConfig(object):
             Use adaptive KL control, otherwise linear
         init_kl_coef (`float`, *optional*, defaults to 0.2):
             Initial KL penalty coefficient (used for adaptive and linear control)
-        kl_target (`float`, *optional*, defaults to 6):
+        target (`float`, *optional*, defaults to 6):
             Target KL value for adaptive KL control
-        kl_horizon (`float`, *optional*, defaults to 10000):
+        horizon (`float`, *optional*, defaults to 10000):
             Horizon for adaptive KL control
         gamma (`float`, *optional*, defaults to 1):
             Gamma parameter for advantage calculation
         lam (`float`, *optional*, defaults to 0.95):
             Lambda parameter for advantage calculation
-        cliprange_loss (`float`, *optional*, defaults to 0.2):
+        cliprange (`float`, *optional*, defaults to 0.2):
             Range for clipping in PPO policy gradient loss
         cliprange_value (`float`, *optional*, defaults to 0.2):
             Range for clipping values in loss calculation
@@ -77,11 +77,11 @@ class PPOConfig(object):
         learning_rate: Optional[float] = 1e-5,
         adap_kl_ctrl: Optional[bool] = True,
         init_kl_coef: Optional[float] = 0.2,
-        kl_target: Optional[float] = 6,
-        kl_horizon: Optional[float] = 10000,
+        target: Optional[float] = 6,
+        horizon: Optional[float] = 10000,
         gamma: Optional[float] = 1,
         lam: Optional[float] = 0.95,
-        cliprange_loss: Optional[float] = 0.2,
+        cliprange: Optional[float] = 0.2,
         cliprange_value: Optional[float] = 0.2,
         vf_coef: Optional[float] = 0.1,
         batch_size: Optional[int] = 256,
@@ -99,11 +99,11 @@ class PPOConfig(object):
         self.learning_rate = learning_rate
         self.adap_kl_ctrl = adap_kl_ctrl
         self.init_kl_coef = init_kl_coef
-        self.kl_target = kl_target
-        self.kl_horizon = kl_horizon
+        self.target = target
+        self.horizon = horizon
         self.gamma = gamma
         self.lam = lam
-        self.cliprange_loss = cliprange_loss
+        self.cliprange = cliprange
         self.cliprange_value = cliprange_value
         self.vf_coef = vf_coef
         self.batch_size = batch_size
