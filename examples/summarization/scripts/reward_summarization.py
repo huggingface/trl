@@ -86,8 +86,8 @@ model.config.pad_token_id = tokenizer.eos_token_id
 def turn_into_text_classification_format(examples):
     new_examples = {"text_j": [], "text_k": []}
     for info, summaries, choice in zip(examples["info"], examples["summaries"], examples["choice"]):
-        assert len(summaries) == 2
-        assert choice in (0, 1)
+        if len(summaries) != 2 or choice not in (0, 1):
+            raise ValueError(f"There should be two summaries with a choice that's either 0 or 1. Received {len(summaries} summaries and choice={choice}.")
         original_text_field = "post" if info["post"] is not None else "article"
         new_examples["text_j"].append(
             summaries[choice]["text"] + " " + tokenizer.bos_token + " " + info[original_text_field]
