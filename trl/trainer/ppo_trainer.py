@@ -671,7 +671,7 @@ class PPOTrainer(BaseTrainer):
             train_stats (dict[str, `torch.Tensor`]):
                 Dictionary of training statistics
         """
-        logprobs, vpred, logits = self.compute_logits_vpred(query, response, model_input, rewards)
+        logprobs, vpred, logits = self.compute_logits_vpred(model_input, query, response, rewards)
         
         loss_p, loss_v, train_stats = self.loss(old_logprobs, values, rewards, logits, vpred, logprobs)
         loss = loss_p + loss_v
