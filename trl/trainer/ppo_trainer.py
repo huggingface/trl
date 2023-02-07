@@ -35,6 +35,7 @@ from ..core import (
     entropy_from_logits,
     flatten_dict,
     logprobs_from_logits,
+    set_seed,
     stack_dicts,
     stats_to_np,
     whiten,
@@ -53,7 +54,8 @@ tags:
 
 # {model_name}
 
-This is a [TRL language model](https://github.com/lvwerra/trl) that has been fine-tuned with reinforcement learning to guide the model outputs according to a value, function, or human feedback. The model can be used for text generation.
+This is a [TRL language model](https://github.com/lvwerra/trl) that has been fine-tuned with reinforcement learning to
+ guide the model outputs according to a value, function, or human feedback. The model can be used for text generation.
 
 ## Usage
 
@@ -92,22 +94,28 @@ class PPOTrainer(BaseTrainer):
     The PPOTrainer uses Proximal Policy Optimization to optimise language models.
 
     Attributes:
-        **config** (`PPOConfig`) -- Configuration object for PPOTrainer. Check the documentation of `PPOConfig` for more details.
+        **config** (`PPOConfig`) -- Configuration object for PPOTrainer. Check the documentation of `PPOConfig` for more
+         details.
         **model** (`PreTrainedModelWrapper`) -- Model to be optimized, Hugging Face transformer model with a value head.
             Check the documentation of `PreTrainedModelWrapper` for more details.
-        **ref_model** (`PreTrainedModelWrapper`, *optional*) -- Reference model to be used for KL penalty, Hugging Face transformer model with a casual language modelling head.
-            Check the documentation of `PreTrainedModelWrapper` for more details. If no reference model is provided, the
-            trainer will create a reference model with the same architecture as the model to be optimized with shared layers.
-        **tokenizer** (`Union[PreTrainedTokenizer, PreTrainedTokenizerFast]`) -- Tokenizer to be used for encoding the data. Check the documentation of `transformers.PreTrainedTokenizer` and
+        **ref_model** (`PreTrainedModelWrapper`, *optional*) -- Reference model to be used for KL penalty, Hugging Face
+            transformer model with a casual language modelling head. Check the documentation of `PreTrainedModelWrapper`
+            for more details. If no reference model is provided, the trainer will create a reference model with the same
+             architecture as the model to be optimized with shared layers.
+        **tokenizer** (`Union[PreTrainedTokenizer, PreTrainedTokenizerFast]`) -- Tokenizer to be used for encoding the
+            data. Check the documentation of `transformers.PreTrainedTokenizer` and
             `transformers.PreTrainedTokenizerFast` for more details.
-        **dataset** (Union[`torch.utils.data.Dataset`, `datasets.Dataset`], *optional*) -- PyTorch dataset or Hugging Face dataset. This is used to create a PyTorch dataloader. If no dataset is provided,
-            the dataloader must be created outside the trainer users needs to design their own dataloader and make sure the batch
+        **dataset** (Union[`torch.utils.data.Dataset`, `datasets.Dataset`], *optional*) -- PyTorch dataset or Hugging
+            Face dataset. This is used to create a PyTorch dataloader. If no dataset is provided, the dataloader must be
+             created outside the trainer users needs to design their own dataloader and make sure the batch
             size that is used is the same as the one specified in the configuration object.
-        **optimizer** (`torch.optim.Optimizer`, *optional*) -- Optimizer to be used for training. If no optimizer is provided, the trainer will create an Adam optimizer with
-            the learning rate specified in the configuration object.
-        **data_collator** (DataCollatorForLanguageModeling, *optional*) -- Data collator to be used for training and passed along the dataloader
-        **num_shared_layers** (int, *optional*) -- Number of layers to be shared between the model and the reference model, if no reference model is passed. If no number is provided, all the layers
-            will be shared.
+        **optimizer** (`torch.optim.Optimizer`, *optional*) -- Optimizer to be used for training. If no optimizer is
+            provided, the trainer will create an Adam optimizer with the learning rate specified in the configuration
+            object.
+        **data_collator** (DataCollatorForLanguageModeling, *optional*) -- Data collator to be used for training and
+            passed along the dataloader
+        **num_shared_layers** (int, *optional*) -- Number of layers to be shared between the model and the reference
+            model, if no reference model is passed. If no number is provided, all the layers will be shared.
         **lr_scheduler** (`torch.optim.lr_scheduler`, *optional*) -- Learning rate scheduler to be used for training.
     """
 
@@ -150,6 +158,10 @@ class PPOTrainer(BaseTrainer):
                 Learning rate scheduler used for training.
         """
         super().__init__(config)
+
+        # initial seed for reproducible experiments
+        set_seed(config.seed)
+
         # Step 0: check positional arguments validity
         if not isinstance(config, PPOConfig):
             raise ValueError(f"config must be a PPOConfig, got {type(config)}")
@@ -172,14 +184,16 @@ class PPOTrainer(BaseTrainer):
             self.ref_model = ref_model
             if num_shared_layers is not None:
                 warnings.warn(
-                    "num_shared_layers is ignored when ref_model is provided. Two different models are used for the model and the reference model and no layers are shared.",
+                    "num_shared_layers is ignored when ref_model is provided. Two different models are used for the "
+                    "model and the reference model and no layers are shared.",
                     UserWarning,
                 )
         elif ref_model is None:
             self.ref_model = create_reference_model(self.model, num_shared_layers=num_shared_layers)
         else:
             raise ValueError(
-                f"ref_model must be a PreTrainedModelWrapper or `None`, got {type(ref_model)} - supported architectures are: {SUPPORTED_ARCHITECTURES}"
+                f"ref_model must be a PreTrainedModelWrapper or `None`, got {type(ref_model)} - supported "
+                f"architectures are: {SUPPORTED_ARCHITECTURES} "
             )
 
         if not (isinstance(tokenizer, PreTrainedTokenizer) or isinstance(tokenizer, PreTrainedTokenizerFast)):
@@ -521,8 +535,10 @@ class PPOTrainer(BaseTrainer):
                 List of tensors containing the encoded responses, shape (`batch_size`, `response_length`)
         Returns:
             (tuple):
-                - all_logprobs (`torch.FloatTensor`): Log probabilities of the responses, shape (`batch_size`, `response_length`)
-                - all_ref_logprobs (`torch.FloatTensor`): Log probabilities of the responses, shape (`batch_size`, `response_length`)
+                - all_logprobs (`torch.FloatTensor`): Log probabilities of the responses,
+                    shape (`batch_size`, `response_length`)
+                - all_ref_logprobs (`torch.FloatTensor`): Log probabilities of the responses,
+                    shape (`batch_size`, `response_length`)
                 - all_values (`torch.FloatTensor`): Values of the responses, shape (`batch_size`, `response_length`)
         """
         bs = self.config.batch_size
@@ -575,7 +591,7 @@ class PPOTrainer(BaseTrainer):
                 if len(logprobs[j, start:end]) < 2:
                     raise ValueError("Responses are too short. Make sure they are at least 4 tokens long.")
 
-                all_values.append(v[j, start - 1 : end - 1])
+                all_values.append(v[j, start:end])
                 all_logprobs.append(logprobs[j, start:end])
                 all_ref_logprobs.append(ref_logprobs[j, start:end])
 
@@ -697,11 +713,11 @@ class PPOTrainer(BaseTrainer):
         if self.is_encoder_decoder:
             logprob = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
             start, end = 1, response.shape[-1] - 1
-            vpred = vpred[:, start - 1 : end - 1]
+            vpred = vpred[:, start:end]
             logprob = logprob[:, start:end]
         else:
             logprob = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
-            logprob, vpred = logprob[:, -gen_len:], vpred[:, -gen_len - 1 : -1]
+            logprob, vpred = logprob[:, -gen_len:], vpred[:, -gen_len:]
 
         vpredclipped = clip_by_value(vpred, values - self.config.cliprange_value, values + self.config.cliprange_value)
 
@@ -811,7 +827,8 @@ class PPOTrainer(BaseTrainer):
             if "query" not in batch.keys() and "response" not in batch.keys():
                 # warn the user that the game logs will not be logged
                 warnings.warn(
-                    "The game logs will not be logged because the batch does not contain the keys 'query' and 'response'."
+                    "The game logs will not be logged because the batch does not contain the keys 'query' and "
+                    "'response'. "
                 )
             elif self.config.log_with == "wandb":
                 import wandb

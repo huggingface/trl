@@ -69,13 +69,13 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
             wrapped model. This is set to `("lm_head", "embed_out")` for this class but can be changed for other models
             in the future
         - **supported_args** (`tuple`) -- A tuple of strings that are used to identify the arguments that are supported
-            by the `ValueHead` class. Currently the supported args are:
+            by the `ValueHead` class. Currently, the supported args are:
             - **summary_dropout_prob** (`float`, `optional`, defaults to `None`) -- The dropout probability for the
                 `ValueHead` class.
             - **v_head_initializer_range** (`float`, `optional`, defaults to `0.2`) -- The initializer range for the
                 `ValueHead` if a specific initialization strategy is selected.
             - **v_head_init_strategy** (`str`, `optional`, defaults to `None`) -- The initialization strategy for the
-                `ValueHead`. Currently supported strategies are:
+                `ValueHead`. Currently, the supported strategies are:
                 - **`None`** -- Initializes the weights of the `ValueHead` with a random distribution. This is the default
                     strategy.
                 - **"normal"** -- Initializes the weights of the `ValueHead` with a normal distribution.

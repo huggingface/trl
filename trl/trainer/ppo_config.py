@@ -42,7 +42,7 @@ class PPOConfig(object):
         gamma (`float`, *optional*, defaults to 1):
             Gamma parameter for advantage calculation
         lam (`float`, *optional*, defaults to 0.95):
-            Lambda parameter for advantage calcualation
+            Lambda parameter for advantage calculation
         cliprange (`float`, *optional*, defaults to 0.2):
             Range for clipping in PPO policy gradient loss
         cliprange_value (`float`, *optional*, defaults to 0.2):
@@ -66,6 +66,8 @@ class PPOConfig(object):
             Keyword arguments for the tracker (e.g. wandb_project)
         tracker_project_name (`str`, *optional*, defaults to "trl"):
             Name of project to use for tracking
+        seed (`int`, *optional*, defaults to 0):
+            Seed value for random generations
     """
 
     def __init__(
@@ -90,6 +92,7 @@ class PPOConfig(object):
         tracker_kwargs: Optional[dict] = {},
         accelerator_kwargs: Optional[dict] = {},
         tracker_project_name: Optional[str] = "trl",
+        seed: Optional[int] = 0,
     ):
         self.model_name = model_name
         self.steps = steps
@@ -107,6 +110,7 @@ class PPOConfig(object):
         self.forward_batch_size = forward_batch_size
         self.ppo_epochs = ppo_epochs
         self.remove_unused_columns = remove_unused_columns
+        self.seed = seed
 
         self.log_with = log_with
         # check if wandb is installed
