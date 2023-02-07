@@ -628,7 +628,7 @@ class PPOTrainer(BaseTrainer):
                 Dictionary of training statistics
         """
         logprobs, vpred, logits = self.compute_logits_vpred(model_input, query, response, rewards)
-        
+
         loss_p, loss_v, train_stats = self.loss(old_logprobs, values, rewards, logits, vpred, logprobs)
         loss = loss_p + loss_v
         self.optimizer.zero_grad()
@@ -687,7 +687,7 @@ class PPOTrainer(BaseTrainer):
         else:
             logprob = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
             logprob, vpred = logprob[:, -gen_len:], vpred[:, -gen_len - 1 : -1]
-        
+
         return logprob, vpred, logits
 
     def loss(
