@@ -98,7 +98,7 @@ class PPOTrainerTester(unittest.TestCase):
 
     def setUp(self):
         # model_id
-        model_id = "gpt2"
+        model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
 
         # get models and tokenizer
         self.gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(model_id)
