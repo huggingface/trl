@@ -20,10 +20,11 @@ import unittest
 
 import torch
 from huggingface_hub import HfApi, HfFolder, delete_repo
+from parameterized import parameterized
 from requests.exceptions import HTTPError
-from transformers import GPT2Tokenizer
+from transformers import AutoTokenizer
 
-from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer
+from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead, PPOConfig, PPOTrainer
 from trl.core import logprobs_from_logits, respond_to_batch
 
 from ..testing_constants import CI_HUB_ENDPOINT, CI_HUB_USER, CI_HUB_USER_TOKEN
@@ -103,7 +104,18 @@ class PPOTrainerTester(unittest.TestCase):
         # get models and tokenizer
         self.gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(model_id)
         self.gpt2_model_ref = AutoModelForCausalLMWithValueHead.from_pretrained(model_id)
-        self.gpt2_tokenizer = GPT2Tokenizer.from_pretrained(model_id)
+        self.gpt2_tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        self.gpt2_tokenizer.pad_token = self.gpt2_tokenizer.eos_token
+
+        # get bloom as right padding examples:
+        model_id = "trl-internal-testing/tiny-BloomForCausalLM-correct-vocab"
+        self.bloom_model = AutoModelForCausalLMWithValueHead.from_pretrained(model_id)
+        self.bloom_tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        model_id = "t5-small"
+        self.t5_model = AutoModelForSeq2SeqLMWithValueHead.from_pretrained(model_id)
+        self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         # initialize trainer
         self.ppo_config = PPOConfig(batch_size=2, forward_batch_size=1, log_with=None)
@@ -503,6 +515,53 @@ class PPOTrainerTester(unittest.TestCase):
             rewards=rewards,
             vpred=vpred,
         )
+
+    @parameterized.expand(
+        [
+            ["gpt2"],
+            ["bloom"],
+            ["t5"],
+        ]
+    )
+    def test_batched_forward_pass(self, name):
+        """
+        Test if the loss trainer works fine
+        """
+        # initialize dataset
+        dummy_dataset = self._init_dummy_dataset()
+
+        dummy_queries = [torch.tensor([1, 2, 3, 4]), torch.tensor([1, 2, 3, 4, 5, 6, 7])]
+        dummy_responses = [torch.tensor([5, 6, 7, 8, 9]), torch.tensor([8, 9, 10, 11, 12, 13])]
+
+        if name == "gpt2":
+            model = self.gpt2_model
+            tokenizer = self.gpt2_tokenizer
+        elif name == "bloom":
+            model = self.bloom_model
+            tokenizer = self.bloom_tokenizer
+        elif name == "t5":
+            model = self.t5_model
+            tokenizer = self.t5_model
+
+        model.eval()
+
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=model,
+            ref_model=None,
+            tokenizer=tokenizer,
+            dataset=dummy_dataset,
+        )
+
+        ppo_trainer.config.forward_batch_size = 1
+        logprobs_1, ref_logprobs_1, values_1 = ppo_trainer.batched_forward_pass(dummy_queries, dummy_responses)
+
+        ppo_trainer.config.forward_batch_size = 2
+        logprobs_2, ref_logprobs_2, values_2 = ppo_trainer.batched_forward_pass(dummy_queries, dummy_responses)
+
+        self.assertLessEqual(abs(sum([(l1 - l2).sum() for l1, l2 in zip(logprobs_1, logprobs_2)])), 1e-4)
+        self.assertLessEqual(abs(sum([(l1 - l2).sum() for l1, l2 in zip(ref_logprobs_1, ref_logprobs_2)])), 1e-4)
+        self.assertLessEqual(abs(sum([(v1 - v2).sum() for v1, v2 in zip(values_1, values_2)])), 1e-4)
 
     @unittest.skip("Fix by either patching `whomai()` to work in the staging endpoint or use a dummy prod user.")
     def test_push_to_hub(self):
