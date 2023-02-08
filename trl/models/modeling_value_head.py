@@ -189,7 +189,7 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
     def state_dict(self, *args, **kwargs):
         r"""
         Returns the state dictionary of the model. We add the state dictionary of the value head
-        to the state dictionary of the wrapped model by preprending the key with `v_head.`.
+        to the state dictionary of the wrapped model by prepending the key with `v_head.`.
         """
         pretrained_model_state_dict = self.pretrained_model.state_dict(*args, **kwargs)
         v_head_state_dict = self.v_head.state_dict(*args, **kwargs)
@@ -205,7 +205,7 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
     def post_init(self, state_dict):
         r"""
         We add the state dictionary of the value head to the state dictionary of the wrapped model
-        by preprending the key with `v_head.`. This function removes the `v_head.` prefix from the
+        by prepending the key with `v_head.`. This function removes the `v_head.` prefix from the
         keys of the value head state dictionary.
         """
         for k in list(state_dict.keys()):
@@ -260,7 +260,7 @@ class AutoModelForSeq2SeqLMWithValueHead(PreTrainedModelWrapper):
     def post_init(self, state_dict):
         r"""
         We add the state dictionary of the value head to the state dictionary of the wrapped model
-        by preprending the key with `v_head.`. This function removes the `v_head.` prefix from the
+        by prepending the key with `v_head.`. This function removes the `v_head.` prefix from the
         keys of the value head state dictionary.
         """
         for k in list(state_dict.keys()):
@@ -272,7 +272,7 @@ class AutoModelForSeq2SeqLMWithValueHead(PreTrainedModelWrapper):
     def state_dict(self, *args, **kwargs):
         r"""
         Returns the state dictionary of the model. We add the state dictionary of the value head
-        to the state dictionary of the wrapped model by preprending the key with `v_head.`.
+        to the state dictionary of the wrapped model by prepending the key with `v_head.`.
         """
         pretrained_model_state_dict = self.pretrained_model.state_dict(*args, **kwargs)
         v_head_state_dict = self.v_head.state_dict(*args, **kwargs)
