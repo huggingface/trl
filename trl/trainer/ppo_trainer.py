@@ -601,7 +601,7 @@ class PPOTrainer(BaseTrainer):
 
     def train_minibatch(
         self,
-        logprobs: torch.FloatTensor,
+        old_logprobs: torch.FloatTensor,
         values: torch.FloatTensor,
         rewards: torch.FloatTensor,
         query: torch.LongTensor,
@@ -629,7 +629,9 @@ class PPOTrainer(BaseTrainer):
             train_stats (dict[str, `torch.Tensor`]):
                 Dictionary of training statistics
         """
-        loss_p, loss_v, train_stats = self.loss(logprobs, values, rewards, query, response, model_input)
+        logprobs, vpred, logits = self.compute_logits_vpred(model_input, query, response, rewards)
+
+        loss_p, loss_v, train_stats = self.loss(old_logprobs, values, rewards, logits, vpred, logprobs)
         loss = loss_p + loss_v
         self.optimizer.zero_grad()
         self.accelerator.backward(loss)
@@ -660,14 +662,44 @@ class PPOTrainer(BaseTrainer):
             rewards.append(reward)
         return rewards, non_score_rewards
 
+    def compute_logits_vpred(
+        self,
+        model_input,
+        query: torch.LongTensor,
+        response: torch.LongTensor,
+        rewards,
+    ):
+        input_kwargs = {
+            "input_ids": model_input,
+        }
+
+        if self.is_encoder_decoder:
+            input_kwargs["input_ids"] = query
+            input_kwargs["decoder_input_ids"] = response
+            model_input = response
+
+        logits, _, vpred = self.model(**input_kwargs)
+        gen_len = rewards.shape[-1]
+
+        if self.is_encoder_decoder:
+            logprob = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
+            start, end = 1, response.shape[-1] - 1
+            vpred = vpred[:, start:end]
+            logprob = logprob[:, start:end]
+        else:
+            logprob = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
+            logprob, vpred = logprob[:, -gen_len:], vpred[:, -gen_len:]
+
+        return logprob, vpred, logits
+
     def loss(
         self,
         old_logprobs: torch.FloatTensor,
         values: torch.FloatTensor,
         rewards: torch.FloatTensor,
-        query: torch.LongTensor,
-        response: torch.LongTensor,
-        model_input: torch.LongTensor,
+        logits: torch.FloatTensor,
+        vpred: torch.FloatTensor,
+        logprob: torch.FloatTensor,
     ):
         """
         Calculate policy and value losses.
@@ -679,12 +711,12 @@ class PPOTrainer(BaseTrainer):
                 Values of the value head, shape (`batch_size`, `hidden_dim`)
             rewards (`torch.FloatTensor`):
                 Rewards from the reward model, shape (`batch_size`)
-            query (`torch.LongTensor`):
-                Encoded queries, shape (`batch_size`, `query_length`)
-            response (`torch.LongTensor`):
-                Encoded responses, shape (`batch_size`, `response_length`)
-            model_input (`torch.LongTensor`):
-                Concatenated queries and responses, shape (`batch_size`, `query_length+response_length`)
+            logits (`torch.FloatTensor`):
+                Logits of the model, shape (`batch_size`, `response_length`, `vocab_size`)
+            v_pred (`torch.FloatTensor`):
+                Values of the value head, shape (`batch_size`, `response_length`)
+            logprobs (`torch.FloatTensor`):
+                Log probabilities of the model, shape (`batch_size`, `response_length`)
         """
         lastgaelam = 0
         advantages_reversed = []
@@ -700,26 +732,6 @@ class PPOTrainer(BaseTrainer):
         returns = advantages + values
         advantages = whiten(advantages)
         advantages = advantages.detach()
-
-        input_kwargs = {
-            "input_ids": model_input,
-        }
-
-        if self.is_encoder_decoder:
-            input_kwargs["input_ids"] = query
-            input_kwargs["decoder_input_ids"] = response
-            model_input = response
-
-        logits, _, vpred = self.model(**input_kwargs)
-
-        if self.is_encoder_decoder:
-            logprob = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
-            start, end = 1, response.shape[-1] - 1
-            vpred = vpred[:, start:end]
-            logprob = logprob[:, start:end]
-        else:
-            logprob = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
-            logprob, vpred = logprob[:, -gen_len:], vpred[:, -gen_len:]
 
         vpredclipped = clip_by_value(vpred, values - self.config.cliprange_value, values + self.config.cliprange_value)
 

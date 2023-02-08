@@ -24,7 +24,7 @@ from requests.exceptions import HTTPError
 from transformers import GPT2Tokenizer
 
 from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer
-from trl.core import respond_to_batch
+from trl.core import logprobs_from_logits, respond_to_batch
 
 from ..testing_constants import CI_HUB_ENDPOINT, CI_HUB_USER, CI_HUB_USER_TOKEN
 
@@ -462,6 +462,47 @@ class PPOTrainerTester(unittest.TestCase):
         # check train stats
         for stat in EXPECTED_STATS:
             self.assertTrue(stat in train_stats, f"Train stats should contain {stat}")
+
+    def test_loss_trainer(self):
+        """
+        Test if the loss trainer works fine
+        """
+        # initialize dataset
+        dummy_dataset = self._init_dummy_dataset()
+
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=self.gpt2_model,
+            ref_model=None,
+            tokenizer=self.gpt2_tokenizer,
+            dataset=dummy_dataset,
+        )
+
+        dummy_model_input = torch.tensor([[1, 2, 3, 4, 5, 6, 7]])
+        dummy_query = torch.tensor([[1, 2, 3, 4]])
+        dummy_response = torch.tensor([[5, 6, 7]])
+        rewards = torch.tensor([[0, 1, 0]])
+        gen_len = rewards.shape[-1]
+
+        old_logits, _, values = ppo_trainer.ref_model(dummy_model_input)
+        old_logprobs = logprobs_from_logits(old_logits[:, :-1, :], dummy_model_input[:, 1:])
+        values = values[:, -gen_len - 1 : -1]
+        old_logprobs = old_logprobs[:, -gen_len:]
+
+        # logprobs, logits, vpred = ppo_trainer.model(dummy_tokens)
+        logprobs, vpred, logits = ppo_trainer.compute_logits_vpred(
+            dummy_model_input, dummy_query, dummy_response, rewards
+        )
+
+        # just make sure a dummy loss is computed
+        pg_loss, vf_loss, _ = ppo_trainer.loss(
+            old_logprobs=old_logprobs,
+            logprob=logprobs,
+            logits=logits,
+            values=values,
+            rewards=rewards,
+            vpred=vpred,
+        )
 
     @unittest.skip("Fix by either patching `whomai()` to work in the staging endpoint or use a dummy prod user.")
     def test_push_to_hub(self):
