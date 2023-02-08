@@ -17,4 +17,6 @@
 - sections: 
   - local: sentiment_tuning
     title: Sentiment Tuning
+  - local: summarization_reward_tuning
+    title: Summarization Reward Tuning
   title: Examples
