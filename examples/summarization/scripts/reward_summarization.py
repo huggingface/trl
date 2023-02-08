@@ -35,6 +35,7 @@ class ScriptArguments:
     per_device_eval_batch_size: Optional[int] = field(default=16)
     gradient_accumulation_steps: Optional[int] = field(default=4)
     learning_rate: Optional[int] = field(default=2e-5)
+    weight_decay: Optional[int] = field(default=0.001)
     model_name: Optional[str] = field(
         default="gpt2",
         metadata={
@@ -46,6 +47,12 @@ class ScriptArguments:
         metadata={
             "help": "This essentially cuts the training time in half if you want to sacrifice a little precision and have a supported GPU."
         },
+    )
+    num_train_epochs: Optional[int] = field(
+        default="5",
+        metadata={
+            "help": "The number of training epochs for the reward model. OpenAI used 5."
+        }
     )
 
 
@@ -61,13 +68,11 @@ training_args = TrainingArguments(
     learning_rate=script_args.learning_rate,
     per_device_train_batch_size=script_args.per_device_train_batch_size,
     per_device_eval_batch_size=script_args.per_device_eval_batch_size,
-    num_train_epochs=5,
-    weight_decay=0.001,
+    num_train_epochs=script_args.num_train_epochs,
+    weight_decay=script_args.weight_decay,
     evaluation_strategy="epoch",
     save_strategy="epoch",
     gradient_accumulation_steps=script_args.gradient_accumulation_steps,
-    load_best_model_at_end=True,
-    push_to_hub=True,
     deepspeed=script_args.deepspeed,
     local_rank=script_args.local_rank,
     remove_unused_columns=False,
@@ -87,7 +92,7 @@ def turn_into_text_classification_format(examples):
     new_examples = {"text_j": [], "text_k": []}
     for info, summaries, choice in zip(examples["info"], examples["summaries"], examples["choice"]):
         if len(summaries) != 2 or choice not in (0, 1):
-            raise ValueError(f"There should be two summaries with a choice that's either 0 or 1. Received {len(summaries} summaries and choice={choice}.")
+            raise ValueError(f"There should be two summaries with a choice that's either 0 or 1. Received {len(summaries)} summaries and choice={choice}.")
         original_text_field = "post" if info["post"] is not None else "article"
         new_examples["text_j"].append(
             summaries[choice]["text"] + " " + tokenizer.bos_token + " " + info[original_text_field]
@@ -100,8 +105,8 @@ def turn_into_text_classification_format(examples):
 
 
 num_proc = (
-    100
-)  # Can adjust to be higher if you have more processors. Should work even if you don't have 100 CPUs, though.
+    8
+)  # Can adjust to be higher if you have more processors. Should work even if you don't have 8 CPUs, though.
 original_columns = ds["train"].column_names
 ds = ds.map(turn_into_text_classification_format, batched=True, num_proc=num_proc, remove_columns=original_columns)
 
@@ -196,4 +201,5 @@ trainer = RewardTrainer(
 trainer.train(script_args.resume_from_checkpoint)
 
 # Push to the hub so you can share it with people :D
-trainer.push_to_hub()
+model.push_to_hub(script_args.model_name)
+tokenizer.push_to_hub(script_args.model_name)
