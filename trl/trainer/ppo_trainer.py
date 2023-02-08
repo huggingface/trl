@@ -92,6 +92,8 @@ outputs = model(**inputs, labels=inputs["input_ids"])
 class PPOTrainer(BaseTrainer):
     """
     The PPOTrainer uses Proximal Policy Optimization to optimise language models.
+    Note, this trainer is heavily inspired by the original OpenAI learning to summarize work here:
+    https://github.com/openai/summarize-from-feedback
 
     Attributes:
         **config** (`PPOConfig`) -- Configuration object for PPOTrainer. Check the documentation of `PPOConfig` for more
@@ -346,7 +348,7 @@ class PPOTrainer(BaseTrainer):
         Args:
             query_tensor (`torch.LongTensor`):
                 A tensor of shape (`batch_size`, `seq_len`) containing query tokens.
-            gen_kwargs (dict[str, Any]):
+            generation_kwargs (dict[str, Any]):
                 Keyword arguments for generation.
 
         Returns:
@@ -812,7 +814,7 @@ class PPOTrainer(BaseTrainer):
             stats (dict[str, Any]):
                 A dictionary of training stats.
             batch (dict[str, Any]):
-                A dictionary of batch data, this containes the queries and responses.
+                A dictionary of batch data, this contains the queries and responses.
             rewards (`List[torch.FloatTensor]`):
                 A tensor of rewards.
         """
