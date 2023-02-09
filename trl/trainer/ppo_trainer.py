@@ -549,7 +549,7 @@ class PPOTrainer(BaseTrainer):
         all_ref_logprobs = []
         all_values = []
 
-        # attention_masks are create with the same shape as inputs and are 
+        # attention_masks are create with the same shape as inputs and are
         # automatically padded by the datacollator to indicate padding tokens
         if self.is_encoder_decoder:
             input_data = self.data_collator(
