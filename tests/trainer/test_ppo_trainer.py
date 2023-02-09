@@ -284,7 +284,7 @@ class PPOTrainerTester(unittest.TestCase):
             self.assertTrue(param.grad is None, f"Parameter {name} has a gradient")
 
         # initialize a new gpt2 model:
-        model = AutoModelForCausalLMWithValueHead.from_pretrained("gpt2")
+        model = AutoModelForCausalLMWithValueHead.from_pretrained(self.model_id)
         for name, param in ppo_trainer.ref_model.named_parameters():
             if "v_head" not in name:
                 name = name.replace("pretrained_model.", "")
@@ -307,7 +307,7 @@ class PPOTrainerTester(unittest.TestCase):
         # initialize dataset
         dummy_dataset = self._init_dummy_dataset()
 
-        num_shared_layers = 6
+        num_shared_layers = 1
 
         ppo_trainer = PPOTrainer(
             config=self.ppo_config,
