@@ -553,7 +553,18 @@ class PPOTrainerTester(unittest.TestCase):
             dataset=dummy_dataset,
         )
 
+        # we test all combinations of fwd_bs and bs:
+        # if fwd_bs=bs=1: no padding is applied and only one forward pass
+        # if fwd_bs=1/bs=2: padding is applied and results computed in two fwd passes
+        # if fwd_bs=bs=2: padding is applied and results computed in one fwd pass
+
         ppo_trainer.config.forward_batch_size = 1
+        ppo_trainer.config.batch_size = 1
+
+        logprobs_0, ref_logprobs_0, values_0 = ppo_trainer.batched_forward_pass(
+            [dummy_queries[0]], [dummy_responses[0]]
+        )
+        ppo_trainer.config.batch_size = 2
         logprobs_1, ref_logprobs_1, values_1 = ppo_trainer.batched_forward_pass(dummy_queries, dummy_responses)
 
         ppo_trainer.config.forward_batch_size = 2
@@ -562,6 +573,10 @@ class PPOTrainerTester(unittest.TestCase):
         self.assertLessEqual(abs(sum([(l1 - l2).sum() for l1, l2 in zip(logprobs_1, logprobs_2)])), 1e-4)
         self.assertLessEqual(abs(sum([(l1 - l2).sum() for l1, l2 in zip(ref_logprobs_1, ref_logprobs_2)])), 1e-4)
         self.assertLessEqual(abs(sum([(v1 - v2).sum() for v1, v2 in zip(values_1, values_2)])), 1e-4)
+
+        self.assertLessEqual(abs((logprobs_0[0] - logprobs_2[0]).sum()), 1e-4)
+        self.assertLessEqual(abs((ref_logprobs_0[0] - ref_logprobs_2[0]).sum()), 1e-4)
+        self.assertLessEqual(abs((values_0[0] - values_2[0]).sum()), 1e-4)
 
     @unittest.skip("Fix by either patching `whomai()` to work in the staging endpoint or use a dummy prod user.")
     def test_push_to_hub(self):
