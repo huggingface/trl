@@ -549,46 +549,59 @@ class PPOTrainer(BaseTrainer):
         all_ref_logprobs = []
         all_values = []
 
+        if self.is_encoder_decoder:
+            input_data = self.data_collator(
+                [{"input_ids": q, "attention_mask": torch.ones_like(q).to(self.accelerator.device)} for q in queries]
+            )
+
+            attention_mask = [torch.ones_like(r) for r in responses]
+            decoder_inputs = self.data_collator(
+                [{"input_ids": r, "attention_mask": torch.ones_like(r).to(self.accelerator.device)} for r in responses]
+            )
+
+            input_data["decoder_input_ids"] = decoder_inputs["input_ids"]
+            input_data["decoder_attention_mask"] = decoder_inputs["attention_mask"]
+
+            input_data.pop("labels")  # we don't want to compute LM losses
+
+        else:
+            input_ids = [torch.cat([q, r]) for q, r in zip(queries, responses)]
+            input_data = self.data_collator(
+                [
+                    {"input_ids": ids, "attention_mask": torch.ones_like(ids).to(self.accelerator.device)}
+                    for ids in input_ids
+                ]
+            )
+
         for i in range(int(bs / fbs)):
+            input_kwargs = {key: value[i * fbs : (i + 1) * fbs] for key, value in input_data.items()}
             query_batch = queries[i * fbs : (i + 1) * fbs]
             response_batch = responses[i * fbs : (i + 1) * fbs]
-
-            if self.is_encoder_decoder:
-                input_ids = self.data_collator(query_batch)["input_ids"]
-                decoder_input_ids = self.data_collator(response_batch)["input_ids"]
-
-                input_kwargs = {
-                    "input_ids": input_ids,
-                    "decoder_input_ids": decoder_input_ids,
-                }
-            else:
-                input_ids = self.data_collator([torch.cat([q, r]) for q, r in zip(query_batch, response_batch)])[
-                    "input_ids"
-                ]
-
-                input_kwargs = {
-                    "input_ids": input_ids,
-                }
 
             with torch.no_grad():
                 logits, _, v = self.model(**input_kwargs)
                 ref_logits, _, _ = self.ref_model(**input_kwargs)
 
             if self.is_encoder_decoder:
-                logprobs = logprobs_from_logits(logits[:, :-1, :], decoder_input_ids[:, 1:])
-                ref_logprobs = logprobs_from_logits(ref_logits[:, :-1, :], decoder_input_ids[:, 1:])
+                input_ids = input_kwargs["decoder_input_ids"]
+                attention_mask = input_kwargs["decoder_attention_mask"]
             else:
-                logprobs = logprobs_from_logits(logits[:, :-1, :], input_ids[:, 1:])
-                ref_logprobs = logprobs_from_logits(ref_logits[:, :-1, :], input_ids[:, 1:])
+                input_ids = input_kwargs["input_ids"]
+                attention_mask = input_kwargs["attention_mask"]
+
+            logprobs = logprobs_from_logits(logits[:, :-1, :], input_ids[:, 1:])
+            ref_logprobs = logprobs_from_logits(ref_logits[:, :-1, :], input_ids[:, 1:])
 
             for j in range(fbs):
                 if self.is_encoder_decoder:
                     # Decoder sentence starts always in the index 1 after padding in the Enc-Dec Models
                     start = 1
-                    end = response_batch[j].shape[-1] - 1
+                    end = attention_mask[j, :].sum() - 1
                 else:
                     start = len(query_batch[j]) - 1
-                    end = len(query_batch[j]) + len(response_batch[j]) - 1
+                    if attention_mask[j, 0] == 0:  # offset left padding
+                        start += attention_mask[j, :].nonzero()[0]
+                    end = start + len(response_batch[j])
 
                 if len(logprobs[j, start:end]) < 2:
                     raise ValueError("Responses are too short. Make sure they are at least 4 tokens long.")
