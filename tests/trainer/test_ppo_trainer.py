@@ -258,6 +258,7 @@ class PPOTrainerTester(unittest.TestCase):
     def test_ppo_step_with_no_ref(self):
         # initialize dataset
         dummy_dataset = self._init_dummy_dataset()
+        self.gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(self.model_id)
 
         ppo_trainer = PPOTrainer(
             config=self.ppo_config,
@@ -306,7 +307,7 @@ class PPOTrainerTester(unittest.TestCase):
         """
         # initialize dataset
         dummy_dataset = self._init_dummy_dataset()
-
+        self.gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(self.model_id)
         num_shared_layers = 1
 
         ppo_trainer = PPOTrainer(
