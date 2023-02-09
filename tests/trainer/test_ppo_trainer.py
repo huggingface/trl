@@ -89,6 +89,28 @@ class PPOTrainerTester(unittest.TestCase):
         cls._api.set_access_token(CI_HUB_USER_TOKEN)
         HfFolder.save_token(CI_HUB_USER_TOKEN)
 
+        # model_id
+        cls.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+
+        # get models and tokenizer
+        cls.gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(cls.model_id)
+        cls.gpt2_model_ref = AutoModelForCausalLMWithValueHead.from_pretrained(cls.model_id)
+        cls.gpt2_tokenizer = AutoTokenizer.from_pretrained(cls.model_id)
+
+        cls.gpt2_tokenizer.pad_token = cls.gpt2_tokenizer.eos_token
+
+        # get bloom as right padding examples:
+        model_id = "trl-internal-testing/tiny-BloomForCausalLM-correct-vocab"
+        cls.bloom_model = AutoModelForCausalLMWithValueHead.from_pretrained(model_id)
+        cls.bloom_tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration-correct-vocab"
+        cls.t5_model = AutoModelForSeq2SeqLMWithValueHead.from_pretrained(model_id)
+        cls.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        # initialize trainer
+        cls.ppo_config = PPOConfig(batch_size=2, forward_batch_size=1, log_with=None)
+
     @classmethod
     def tearDownClass(cls):
         for model in [f"{CI_HUB_USER}/test-ppo-trainer"]:
@@ -98,25 +120,6 @@ class PPOTrainerTester(unittest.TestCase):
                 pass
 
     def setUp(self):
-        # model_id
-        model_id = "gpt2"
-
-        # get models and tokenizer
-        self.gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(model_id)
-        self.gpt2_model_ref = AutoModelForCausalLMWithValueHead.from_pretrained(model_id)
-        self.gpt2_tokenizer = AutoTokenizer.from_pretrained(model_id)
-
-        self.gpt2_tokenizer.pad_token = self.gpt2_tokenizer.eos_token
-
-        # get bloom as right padding examples:
-        model_id = "trl-internal-testing/tiny-BloomForCausalLM-correct-vocab"
-        self.bloom_model = AutoModelForCausalLMWithValueHead.from_pretrained(model_id)
-        self.bloom_tokenizer = AutoTokenizer.from_pretrained(model_id)
-
-        model_id = "t5-small"
-        self.t5_model = AutoModelForSeq2SeqLMWithValueHead.from_pretrained(model_id)
-        self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
-
         # initialize trainer
         self.ppo_config = PPOConfig(batch_size=2, forward_batch_size=1, log_with=None)
 
