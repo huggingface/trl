@@ -541,7 +541,7 @@ class PPOTrainerTester(unittest.TestCase):
             tokenizer = self.bloom_tokenizer
         elif name == "t5":
             model = self.t5_model
-            tokenizer = self.t5_model
+            tokenizer = self.t5_tokenizer
 
         model.eval()
 
