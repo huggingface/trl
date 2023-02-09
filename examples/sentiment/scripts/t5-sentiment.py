@@ -42,7 +42,7 @@ from trl.core import LengthSampler
 # We first define the configuration of the experiment, defining the model, the dataset,
 # the training parameters, and the PPO parameters.
 # Check the default arguments in the `PPOConfig` class for more details.
-config = PPOConfig(model_name="lvwerra/t5-imdb", learning_rate=5e-5, batch_size=256, forward_batch_size=1)
+config = PPOConfig(model_name="lvwerra/t5-imdb", learning_rate=5e-5, batch_size=256)
 # We then define the arguments to pass to the sentiment analysis pipeline.
 # We set `return_all_scores` to True to get the sentiment score for each token.
 sent_kwargs = {"return_all_scores": True, "function_to_apply": "none", "batch_size": config.forward_batch_size}
