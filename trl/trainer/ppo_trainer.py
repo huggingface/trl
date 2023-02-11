@@ -568,10 +568,7 @@ class PPOTrainer(BaseTrainer):
         else:
             input_ids = [torch.cat([q, r]) for q, r in zip(queries, responses)]
             input_data = self.data_collator(
-                [
-                    {"input_ids": ids, "attention_mask": torch.ones_like(ids)}
-                    for ids in input_ids
-                ]
+                [{"input_ids": ids, "attention_mask": torch.ones_like(ids)} for ids in input_ids]
             ).to(self.accelerator.device)
 
         for i in range(int(bs / fbs)):
