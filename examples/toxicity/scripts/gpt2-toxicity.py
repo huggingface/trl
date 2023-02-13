@@ -49,7 +49,7 @@ from trl.core import LengthSampler
 # `accelerator_kwargs={"logging_dir": PATH_TO_LOGS}` to the PPOConfig.
 config = PPOConfig(
     model_name="gpt2",
-    learning_rate=1.41e-5,
+    learning_rate=1.0e-5,
     log_with="wandb",
     batch_size=128,
 )
@@ -101,7 +101,9 @@ def build_dataset(config, dataset_name="allenai/real-toxicity-prompts", input_mi
 
 
 # We retrieve the dataloader by calling the `build_dataset` function.
-dataset = build_dataset(config)
+min_input_length = 15
+max_input_length = 20
+dataset = build_dataset(config, input_min_text_length=min_input_length, input_max_text_length=max_input_length)
 
 
 def collator(data):
@@ -125,8 +127,9 @@ ppo_trainer = PPOTrainer(config, model, ref_model=None, tokenizer=tokenizer, dat
 # We then build the sentiment analysis pipeline, passing the model name and the
 # sentiment analysis pipeline arguments. Let's also make sure to set the device
 # to the same device as the PPOTrainer.
-toxicity_tokenizer = RobertaTokenizer.from_pretrained('s-nlp/roberta_toxicity_classifier')
-toxicity_model = RobertaForSequenceClassification.from_pretrained('s-nlp/roberta_toxicity_classifier', torch_dtype=torch.float16).to(ppo_trainer.accelerator.device)
+toxicity_model_id = "facebook/roberta-hate-speech-dynabench-r4-target"
+toxicity_tokenizer = RobertaTokenizer.from_pretrained(toxicity_model_id)
+toxicity_model = RobertaForSequenceClassification.from_pretrained(toxicity_model_id, torch_dtype=torch.float16).to(ppo_trainer.accelerator.device)
 
 
 # We then define the arguments to pass to the `generate` function. These arguments
@@ -139,8 +142,8 @@ generation_kwargs = {
     "do_sample": True,
     "pad_token_id": tokenizer.eos_token_id,
 }
-output_min_length = 10
-output_max_length = 25
+output_min_length = 20
+output_max_length = 30
 output_length_sampler = LengthSampler(output_min_length, output_max_length)
 
 for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
@@ -156,15 +159,14 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     batch["response"] = [tokenizer.decode(r.squeeze()) for r in response_tensors]
 
     #### Compute sentiment score
-    texts = [q + r for q, r in zip(batch["query"], batch["response"])]
+    texts = batch["response"]
     toxicity_inputs = toxicity_tokenizer(texts, padding=True, truncation=True, return_tensors="pt").to(ppo_trainer.accelerator.device)
-    toxicity_labels = toxicity_model(**toxicity_inputs).logits.softmax(dim=1)[:, 1].float().tolist()
-    rewards = [1 - torch.tensor(output) for output in toxicity_labels]
-    # normalize between -3 and 3
-    rewards = [(r - 0.5) * 6 for r in rewards]
+    toxicity_labels = toxicity_model(**toxicity_inputs).logits.softmax(dim=1)[:, 0].float().tolist()
+    rewards = [torch.log(torch.tensor(output)) for output in toxicity_labels]
 
     #### Run PPO step
     stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
     ppo_trainer.log_stats(stats, batch, rewards)
 
-ppo_trainer.push_to_hub("ybelkada/gpt2-detoxified")
+ppo_trainer.save_pretrained("./gpt2-detoxified-long-context-log")
+ppo_trainer.push_to_hub("ybelkada/gpt2-detoxified-long-context-log")
