@@ -553,13 +553,12 @@ class PPOTrainer(BaseTrainer):
         # automatically padded by the datacollator to indicate padding tokens
         if self.is_encoder_decoder:
             input_data = self.data_collator(
-                [{"input_ids": q, "attention_mask": torch.ones_like(q).to(self.accelerator.device)} for q in queries]
-            )
+                [{"input_ids": q, "attention_mask": torch.ones_like(q)} for q in queries]
+            ).to(self.accelerator.device)
 
-            attention_mask = [torch.ones_like(r) for r in responses]
             decoder_inputs = self.data_collator(
-                [{"input_ids": r, "attention_mask": torch.ones_like(r).to(self.accelerator.device)} for r in responses]
-            )
+                [{"input_ids": r, "attention_mask": torch.ones_like(r)} for r in responses]
+            ).to(self.accelerator.device)
 
             input_data["decoder_input_ids"] = decoder_inputs["input_ids"]
             input_data["decoder_attention_mask"] = decoder_inputs["attention_mask"]
@@ -569,11 +568,8 @@ class PPOTrainer(BaseTrainer):
         else:
             input_ids = [torch.cat([q, r]) for q, r in zip(queries, responses)]
             input_data = self.data_collator(
-                [
-                    {"input_ids": ids, "attention_mask": torch.ones_like(ids).to(self.accelerator.device)}
-                    for ids in input_ids
-                ]
-            )
+                [{"input_ids": ids, "attention_mask": torch.ones_like(ids)} for ids in input_ids]
+            ).to(self.accelerator.device)
 
         for i in range(int(bs / fbs)):
             input_kwargs = {key: value[i * fbs : (i + 1) * fbs] for key, value in input_data.items()}
