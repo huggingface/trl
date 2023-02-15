@@ -18,7 +18,7 @@ import random
 import time
 import warnings
 from typing import List, Optional, Union
-
+import peft
 import datasets
 import torch
 from accelerate import Accelerator
@@ -171,7 +171,7 @@ class PPOTrainer(BaseTrainer):
             raise ValueError(
                 f"tokenizer must be a PreTrainedTokenizer or PreTrainedTokenizerFast, got {type(tokenizer)}"
             )
-        if not isinstance(model, PreTrainedModelWrapper):
+        if not isinstance(model, (PreTrainedModelWrapper, peft.peft_model.PeftModelForCausalLM)):
             raise ValueError(
                 f"model must be a PreTrainedModelWrapper, got {type(model)} - supported architectures are: {SUPPORTED_ARCHITECTURES}"
             )
@@ -350,7 +350,7 @@ class PPOTrainer(BaseTrainer):
             `torch.LongTensor`: A tensor of shape (`batch_size`, `gen_len`) containing response tokens.
         """
         response = self.accelerator.unwrap_model(self.model).generate(
-            query_tensor.unsqueeze(dim=0), **generation_kwargs
+            input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs
         )
 
         return response

@@ -156,11 +156,12 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
             kwargs (`dict`, `optional`):
                 Additional keyword arguments, that are passed to the wrapped model.
         """
+        kwargs["output_hidden_states"] = True # this has already been set by LORA / PEFT
         base_model_output = self.pretrained_model(
             input_ids=input_ids,
             past_key_values=past_key_values,
             attention_mask=attention_mask,
-            output_hidden_states=True,  # We force the model to output hidden states
+            #output_hidden_states=True,  # We force the model to output hidden states
             **kwargs,
         )
 
