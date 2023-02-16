@@ -409,7 +409,7 @@ class Seq2SeqValueHeadModelTester(VHeadModelTester, unittest.TestCase):
                     f"Parameter {name} is not the same after push_to_hub and from_pretrained",
                 )
 
-    def test_transformers_kwargs(self):
+    def test_transformers_bf16_kwargs(self):
         r"""
         Test if the transformers kwargs are correctly passed
         Here we check that loading a model in half precision works as expected, i.e. the weights of
