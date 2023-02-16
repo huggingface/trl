@@ -19,7 +19,7 @@ import torch
 from tqdm import tqdm
 import torch.nn as nn
 import bitsandbytes as bnb
-from peft import LoraConfig, get_peft_model 
+from peft import LoraConfig, get_peft_model, prepare_model_for_training
 tqdm.pandas()
 
 from transformers import pipeline, AutoTokenizer, HfArgumentParser
@@ -65,7 +65,7 @@ class ScriptArguments:
     """
     The name of the gpt2 model we wish to fine with PPO
     """
-    model_name: Optional[str] = field(default="gpt2-xl", metadata={"help": "the model name"})
+    model_name: Optional[str] = field(default="facebook/opt-350m", metadata={"help": "the model name"})
     log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
 
 
@@ -75,7 +75,8 @@ script_args = parser.parse_args_into_dataclasses()[0]
 config = PPOConfig(
     model_name=script_args.model_name,
     learning_rate=1.41e-5,
-    log_with=script_args.log_with
+    log_with=script_args.log_with,
+    batch_size=16,
 )
 
 # We then define the arguments to pass to the sentiment analysis pipeline.
@@ -135,18 +136,17 @@ ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name,
                                                                 device_map='auto')
 tokenizer = AutoTokenizer.from_pretrained(config.model_name)
 
-# disable grad in just the pretrained model part, so we can learn to value head 
-for param in ref_model.pretrained_model.parameters():
-    print(param)
-    param.requires_grad = False  # freeze the model - train adapters later
-    if param.ndim == 1:
-    # cast the small parameters (e.g. layernorm) to fp32 for stability
-        param.data = param.data.to(torch.float32)
+# # disable grad in just the pretrained model part, so we can learn to value head 
+# for param in ref_model.pretrained_model.parameters():
+#     param.requires_grad = False  # freeze the model - train adapters later
+#     if param.ndim == 1:
+#     # cast the small parameters (e.g. layernorm) to fp32 for stability
+#         param.data = param.data.to(torch.float32)
 
-ref_model.pretrained_model.gradient_checkpointing_enable()  # reduce number of stored activations
-class CastOutputToFloat(nn.Sequential):
-    def forward(self, x): return super().forward(x).to(torch.float32)
-ref_model.pretrained_model.lm_head = CastOutputToFloat(ref_model.pretrained_model.lm_head)
+# ref_model.pretrained_model.gradient_checkpointing_enable()  # reduce number of stored activations
+# class CastOutputToFloat(nn.Sequential):
+#     def forward(self, x): return super().forward(x).to(torch.float32)
+# ref_model.pretrained_model.lm_head = CastOutputToFloat(ref_model.pretrained_model.lm_head)
 
 
 """### Apply LoRA
@@ -171,15 +171,18 @@ def print_trainable_parameters(model):
 lora_config = LoraConfig(
     r=16,
     lora_alpha=32,
-    target_modules=["c_attn"], # Are these the correct layers to target with LoRA ?
+    target_modules=["k_proj", "v_proj", "q_proj",], # Are these the correct layers to target with LoRA ?
     lora_dropout=0.05,
     bias="none",
     task_type="CAUSAL_LM",
+    modules_to_save=["v_head"]
 )
 
 ref_model.config = ref_model.pretrained_model.config # We should probably change the AutoModelForCausalLMWithValueHead to have a config property 
 ref_model.prepare_inputs_for_generation = ref_model.pretrained_model.prepare_inputs_for_generation # Again, this is required by LoRA, should we also add this method to AutoModelForCausalLMWithValueHead?
+ref_model.pretrained_model = prepare_model_for_training(ref_model.pretrained_model)
 model = get_peft_model(ref_model, lora_config)
+
 print_trainable_parameters(model)
 
 # GPT-2 tokenizer has a pad token, but it is not eos_token by default. We need to set it to eos_token.
@@ -214,22 +217,24 @@ output_length_sampler = LengthSampler(output_min_length, output_max_length)
 for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     query_tensors = batch["input_ids"]
 
-    #### Get response from gpt2
-    response_tensors = []
-    for query in query_tensors:
-        gen_len = output_length_sampler()
-        generation_kwargs["max_new_tokens"] = gen_len
-        response = ppo_trainer.generate(query, **generation_kwargs)
-        response_tensors.append(response.squeeze()[-gen_len:])
-    batch["response"] = [tokenizer.decode(r.squeeze()) for r in response_tensors]
+    with torch.cuda.amp.autocast():
+        #model(input_ids=query_tensors[0].unsqueeze(0)) # if you don't include this line backprop does not work in ppo_trainer.step. Try it!
+        #### Get response from gpt2
+        response_tensors = []
+        for query in query_tensors:
+            gen_len = output_length_sampler()
+            generation_kwargs["max_new_tokens"] = gen_len
+            response = ppo_trainer.generate(query, **generation_kwargs)
+            response_tensors.append(response.squeeze()[-gen_len:])
+        batch["response"] = [tokenizer.decode(r.squeeze()) for r in response_tensors]
 
-    #### Compute sentiment score
-    texts = [q + r for q, r in zip(batch["query"], batch["response"])]
-    pipe_outputs = sentiment_pipe(texts, **sent_kwargs)
-    rewards = [torch.tensor(output[1]["score"]) for output in pipe_outputs]
+        #### Compute sentiment score
+        texts = [q + r for q, r in zip(batch["query"], batch["response"])]
+        pipe_outputs = sentiment_pipe(texts, **sent_kwargs)
+        rewards = [torch.tensor(output[1]["score"]) for output in pipe_outputs]
 
-    #### Run PPO step
-    stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
+        #### Run PPO step
+        stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
     ppo_trainer.log_stats(stats, batch, rewards)
 
 
