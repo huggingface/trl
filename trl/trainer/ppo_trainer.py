@@ -263,12 +263,6 @@ class PPOTrainer(BaseTrainer):
         # init the current step
         self.current_step = 0
 
-        # init wandb on the main process:
-        if self.accelerator.is_main_process and self.config.log_with == "wandb":
-            import wandb
-
-            wandb.watch(self.model, log="all")
-
         if self.config.forward_batch_size > 1 and (self.is_encoder_decoder or self.tokenizer.padding_side == "left"):
             # warn users that this is not well supported yet
             logging.warning(
