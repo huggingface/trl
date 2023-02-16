@@ -264,7 +264,7 @@ class CausalLMValueHeadModelTester(VHeadModelTester, unittest.TestCase):
             pretrained_model = AutoModelForCausalLM.from_pretrained(model_id)
             _ = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model.transformer)
 
-    def test_transformers_kwargs(self):
+    def test_transformers_bf16_kwargs(self):
         r"""
         Test if the transformers kwargs are correctly passed
         Here we check that loading a model in half precision works as expected, i.e. the weights of
