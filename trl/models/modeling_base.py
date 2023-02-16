@@ -11,7 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import inspect
 import json
 import os
 from copy import deepcopy
@@ -145,10 +144,7 @@ class PreTrainedModelWrapper(nn.Module):
         unsupported_kwargs = {}
 
         for key, value in kwargs.items():
-            if (
-                key in cls.supported_args
-                or key not in inspect.signature(cls.transformers_parent_class.from_pretrained).parameters.keys()
-            ):
+            if key in cls.supported_args:
                 supported_kwargs[key] = value
             else:
                 unsupported_kwargs[key] = value
