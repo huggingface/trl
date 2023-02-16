@@ -147,6 +147,22 @@ class PPOTrainerTester(unittest.TestCase):
 
         return dummy_dataset
 
+    def test_drop_last_dataloader(self):
+        self.ppo_config = PPOConfig(batch_size=3, forward_batch_size=1, log_with=None)
+
+        dummy_dataset = self._init_dummy_dataset()
+
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=self.gpt2_model,
+            ref_model=self.gpt2_model_ref,
+            tokenizer=self.gpt2_tokenizer,
+            dataset=dummy_dataset,
+        )
+        dummy_dataloader = ppo_trainer.dataloader
+
+        self.assertEqual(len(dummy_dataloader), 0)
+
     def test_ppo_step(self):
         # initialize dataset
         dummy_dataset = self._init_dummy_dataset()
