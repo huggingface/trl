@@ -122,7 +122,7 @@ class VHeadModelTester:
             with tempfile.TemporaryDirectory() as tmp_dir:
                 model.save_pretrained(tmp_dir)
 
-                model_from_save = self.trl_model_class.from_pretrained(tmp_dir, max_shard_size="1MB")
+                model_from_save = self.trl_model_class.from_pretrained(tmp_dir)
 
             # Check if the weights are the same
             for key in model_from_save.state_dict():
@@ -264,6 +264,31 @@ class CausalLMValueHeadModelTester(VHeadModelTester, unittest.TestCase):
             pretrained_model = AutoModelForCausalLM.from_pretrained(model_id)
             _ = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model.transformer)
 
+    def test_transformers_bf16_kwargs(self):
+        r"""
+        Test if the transformers kwargs are correctly passed
+        Here we check that loading a model in half precision works as expected, i.e. the weights of
+        the `pretrained_model` attribute is loaded in half precision and you can run a dummy
+        forward pass without any issue.
+        """
+        for model_name in self.all_model_names:
+            trl_model = self.trl_model_class.from_pretrained(model_name, torch_dtype=torch.bfloat16)
+
+            lm_head_namings = self.trl_model_class.lm_head_namings
+
+            self.assertTrue(
+                any(hasattr(trl_model.pretrained_model, lm_head_naming) for lm_head_naming in lm_head_namings)
+            )
+
+            for lm_head_naming in lm_head_namings:
+                if hasattr(trl_model.pretrained_model, lm_head_naming):
+                    self.assertTrue(getattr(trl_model.pretrained_model, lm_head_naming).weight.dtype == torch.bfloat16)
+
+            dummy_input = torch.LongTensor([[0, 1, 0, 1]])
+
+            # check dummy forward pass works in half precision
+            _ = trl_model(dummy_input)
+
     @unittest.skip("This test needs to be run manually due to HF token issue.")
     def test_push_to_hub(self):
         for model_name in self.all_model_names:
@@ -383,6 +408,35 @@ class Seq2SeqValueHeadModelTester(VHeadModelTester, unittest.TestCase):
                     torch.allclose(param, model_from_pretrained.state_dict()[name]),
                     f"Parameter {name} is not the same after push_to_hub and from_pretrained",
                 )
+
+    def test_transformers_bf16_kwargs(self):
+        r"""
+        Test if the transformers kwargs are correctly passed
+        Here we check that loading a model in half precision works as expected, i.e. the weights of
+        the `pretrained_model` attribute is loaded in half precision and you can run a dummy
+        forward pass without any issue.
+        """
+        for model_name in self.all_model_names:
+            trl_model = self.trl_model_class.from_pretrained(model_name, torch_dtype=torch.bfloat16)
+
+            lm_head_namings = self.trl_model_class.lm_head_namings
+
+            if model_name == "trl-internal-testing/tiny-random-FSMTForConditionalGeneration":
+                # skip the test for FSMT as it does not support mixed-prec
+                continue
+
+            self.assertTrue(
+                any(hasattr(trl_model.pretrained_model, lm_head_naming) for lm_head_naming in lm_head_namings)
+            )
+
+            for lm_head_naming in lm_head_namings:
+                if hasattr(trl_model.pretrained_model, lm_head_naming):
+                    self.assertTrue(getattr(trl_model.pretrained_model, lm_head_naming).weight.dtype == torch.bfloat16)
+
+            dummy_input = torch.LongTensor([[0, 1, 0, 1]])
+
+            # check dummy forward pass works in half precision
+            _ = trl_model(input_ids=dummy_input, decoder_input_ids=dummy_input)
 
 
 class ReferenceModelTest(unittest.TestCase):
