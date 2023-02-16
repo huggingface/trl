@@ -9,5 +9,4 @@ from .models import (
     PreTrainedModelWrapper,
     create_reference_model,
 )
-from .optimizer import Lion
 from .trainer import PPOConfig, PPOTrainer
