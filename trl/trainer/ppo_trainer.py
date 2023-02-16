@@ -906,6 +906,7 @@ class PPOTrainer(BaseTrainer):
             f.write(model_card_content)
 
     def _save_pretrained(self, save_directory: str) -> None:
+        self.accelerator.unwrap_model(self.model).save_pretrained(save_directory)
         self.model.save_pretrained(save_directory)
         self.tokenizer.save_pretrained(save_directory)
         self.create_model_card(save_directory)
