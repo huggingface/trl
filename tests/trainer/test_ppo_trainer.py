@@ -513,11 +513,11 @@ class PPOTrainerTester(unittest.TestCase):
         # just make sure a dummy loss is computed
         pg_loss, vf_loss, _ = ppo_trainer.loss(
             old_logprobs=old_logprobs,
-            logprob=logprobs,
+            logprobs=logprobs,
             logits=logits,
             values=values,
             rewards=rewards,
-            vpred=vpred,
+            vpreds=vpred,
         )
 
     @parameterized.expand(

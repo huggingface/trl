@@ -14,7 +14,6 @@
 import inspect
 import logging
 import os
-import random
 import time
 import warnings
 from typing import List, Optional, Union
@@ -35,10 +34,12 @@ from ..core import (
     entropy_from_logits,
     flatten_dict,
     logprobs_from_logits,
+    masked_mean,
+    masked_var,
+    masked_whiten,
     set_seed,
     stack_dicts,
     stats_to_np,
-    whiten,
 )
 from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper, create_reference_model
 from . import AdaptiveKLController, BaseTrainer, FixedKLController, PPOConfig
@@ -435,27 +436,51 @@ class PPOTrainer(BaseTrainer):
 
         t = time.time()
 
-        logprobs, ref_logprobs, values = self.batched_forward_pass(queries, responses)
+        model_inputs = self.prepare_model_inputs(queries, responses)
+        model_inputs_names = list(model_inputs.keys())
+
+        with torch.no_grad():
+            logprobs, _, values, mask = self.batched_forward_pass(queries, responses, model_inputs)
+            ref_logprobs, _, _, _ = self.batched_forward_pass(queries, responses, model_inputs)
+
         timing["time/ppo/forward_pass"] = time.time() - t
 
         t = time.time()
         rewards, non_score_reward = self.compute_rewards(scores, logprobs, ref_logprobs)
         timing["time/ppo/compute_rewards"] = time.time() - t
 
+        minibatch_dict = {
+            "queries": queries,
+            "responses": responses,
+            "logprobs": logprobs,
+            "values": values,
+            "rewards": rewards,
+            "mask": mask,
+        }
+        minibatch_dict.update(model_inputs)
+        minibatch_data = Dataset.from_dict(minibatch_dict)
+        minibatch_dataloader = torch.utils.data.DataLoader(
+            minibatch_data,
+            batch_size=self.config.forward_batch_size,
+            shuffle=True,
+        )
+
         t = time.time()
         all_stats = []
-        idxs = list(range(bs))
         for _ in range(self.config.ppo_epochs):
-            random.shuffle(idxs)
-            for i in range(bs):
-                idx = idxs[i]
+            for batch in minibatch_dataloader:
+                model_inputs = {k: batch[k] for k in model_inputs_names}
+                logprobs, logits, vpreds, _ = self.batched_forward_pass(
+                    batch["queries"], batch["responses"], model_inputs
+                )
+
                 train_stats = self.train_minibatch(
-                    logprobs[idx].unsqueeze(0),
-                    values[idx].unsqueeze(0),
-                    rewards[idx].unsqueeze(0),
-                    queries[idx].unsqueeze(0),
-                    responses[idx].unsqueeze(0),
-                    torch.cat([queries[idx], responses[idx]]).unsqueeze(0),
+                    batch["logprobs"],
+                    batch["values"],
+                    batch["rewards"],
+                    logprobs,
+                    logits,
+                    vpreds,
                 )
                 all_stats.append(train_stats)
         timing["time/ppo/optimize_step"] = time.time() - t
@@ -522,10 +547,35 @@ class PPOTrainer(BaseTrainer):
             stats[k] = v
         return stats
 
+    def prepare_model_inputs(self, queries: torch.Tensor, responses: torch.Tensor):
+        if self.is_encoder_decoder:
+            input_data = self.data_collator(
+                [{"input_ids": q, "attention_mask": torch.ones_like(q).to(self.accelerator.device)} for q in queries]
+            )
+
+            decoder_inputs = self.data_collator(
+                [{"input_ids": r, "attention_mask": torch.ones_like(r).to(self.accelerator.device)} for r in responses]
+            )
+
+            input_data["decoder_input_ids"] = decoder_inputs["input_ids"]
+            input_data["decoder_attention_mask"] = decoder_inputs["attention_mask"]
+
+            input_data.pop("labels")  # we don't want to compute LM losses
+
+        else:
+            input_ids = [torch.cat([q, r]) for q, r in zip(queries, responses)]
+            input_data = self.data_collator(
+                [
+                    {"input_ids": ids, "attention_mask": torch.ones_like(ids).to(self.accelerator.device)}
+                    for ids in input_ids
+                ]
+            )
+
     def batched_forward_pass(
         self,
         queries: torch.Tensor,
         responses: torch.Tensor,
+        model_inputs: dict,
     ):
         """
         Calculate model outputs in multiple batches.
@@ -546,43 +596,16 @@ class PPOTrainer(BaseTrainer):
         bs = self.config.batch_size
         fbs = self.config.forward_batch_size
         all_logprobs = []
-        all_ref_logprobs = []
+        all_logits = []
+        all_masks = []
         all_values = []
 
-        # attention_masks are create with the same shape as inputs and are
-        # automatically padded by the datacollator to indicate padding tokens
-        if self.is_encoder_decoder:
-            input_data = self.data_collator(
-                [{"input_ids": q, "attention_mask": torch.ones_like(q).to(self.accelerator.device)} for q in queries]
-            )
-
-            attention_mask = [torch.ones_like(r) for r in responses]
-            decoder_inputs = self.data_collator(
-                [{"input_ids": r, "attention_mask": torch.ones_like(r).to(self.accelerator.device)} for r in responses]
-            )
-
-            input_data["decoder_input_ids"] = decoder_inputs["input_ids"]
-            input_data["decoder_attention_mask"] = decoder_inputs["attention_mask"]
-
-            input_data.pop("labels")  # we don't want to compute LM losses
-
-        else:
-            input_ids = [torch.cat([q, r]) for q, r in zip(queries, responses)]
-            input_data = self.data_collator(
-                [
-                    {"input_ids": ids, "attention_mask": torch.ones_like(ids).to(self.accelerator.device)}
-                    for ids in input_ids
-                ]
-            )
-
         for i in range(int(bs / fbs)):
-            input_kwargs = {key: value[i * fbs : (i + 1) * fbs] for key, value in input_data.items()}
+            input_kwargs = {key: value[i * fbs : (i + 1) * fbs] for key, value in model_inputs.items()}
             query_batch = queries[i * fbs : (i + 1) * fbs]
             response_batch = responses[i * fbs : (i + 1) * fbs]
 
-            with torch.no_grad():
-                logits, _, v = self.model(**input_kwargs)
-                ref_logits, _, _ = self.ref_model(**input_kwargs)
+            logits, _, values = self.model(**input_kwargs)
 
             if self.is_encoder_decoder:
                 input_ids = input_kwargs["decoder_input_ids"]
@@ -592,7 +615,7 @@ class PPOTrainer(BaseTrainer):
                 attention_mask = input_kwargs["attention_mask"]
 
             logprobs = logprobs_from_logits(logits[:, :-1, :], input_ids[:, 1:])
-            ref_logprobs = logprobs_from_logits(ref_logits[:, :-1, :], input_ids[:, 1:])
+            masks = attention_mask.copy()
 
             for j in range(fbs):
                 if self.is_encoder_decoder:
@@ -608,20 +631,25 @@ class PPOTrainer(BaseTrainer):
                 if len(logprobs[j, start:end]) < 2:
                     raise ValueError("Responses are too short. Make sure they are at least 4 tokens long.")
 
-                all_values.append(v[j, start:end])
-                all_logprobs.append(logprobs[j, start:end])
-                all_ref_logprobs.append(ref_logprobs[j, start:end])
+                masks[j, :start] = 0
+                masks[j, end:] = 0
 
-        return all_logprobs, all_ref_logprobs, all_values
+            all_logits.append(logits)
+            all_values.append(values)
+            all_logprobs.append(logprobs)
+            all_masks.append(masks)
+
+        return torch.cat(all_logprobs), torch.cat(all_logits), torch.cat(all_values), torch.cat(all_masks)
 
     def train_minibatch(
         self,
         old_logprobs: torch.FloatTensor,
         values: torch.FloatTensor,
         rewards: torch.FloatTensor,
-        query: torch.LongTensor,
-        response: torch.LongTensor,
-        model_input: torch.LongTensor,
+        logprobs: torch.FloatTensor,
+        logits: torch.FloatTensor,
+        vpreds: torch.FloatTensor,
+        mask: torch.LongTensor,
     ):
         """
         Train one PPO minibatch
@@ -644,9 +672,8 @@ class PPOTrainer(BaseTrainer):
             train_stats (dict[str, `torch.Tensor`]):
                 Dictionary of training statistics
         """
-        logprobs, vpred, logits = self.compute_logits_vpred(model_input, query, response, rewards)
 
-        loss_p, loss_v, train_stats = self.loss(old_logprobs, values, rewards, logits, vpred, logprobs)
+        loss_p, loss_v, train_stats = self.loss(old_logprobs, values, rewards, logits, vpreds, logprobs, mask)
         loss = loss_p + loss_v
         self.optimizer.zero_grad()
         self.accelerator.backward(loss)
@@ -677,44 +704,15 @@ class PPOTrainer(BaseTrainer):
             rewards.append(reward)
         return rewards, non_score_rewards
 
-    def compute_logits_vpred(
-        self,
-        model_input,
-        query: torch.LongTensor,
-        response: torch.LongTensor,
-        rewards,
-    ):
-        input_kwargs = {
-            "input_ids": model_input,
-        }
-
-        if self.is_encoder_decoder:
-            input_kwargs["input_ids"] = query
-            input_kwargs["decoder_input_ids"] = response
-            model_input = response
-
-        logits, _, vpred = self.model(**input_kwargs)
-        gen_len = rewards.shape[-1]
-
-        if self.is_encoder_decoder:
-            logprob = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
-            start, end = 1, response.shape[-1] - 1
-            vpred = vpred[:, start:end]
-            logprob = logprob[:, start:end]
-        else:
-            logprob = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
-            logprob, vpred = logprob[:, -gen_len:], vpred[:, -gen_len:]
-
-        return logprob, vpred, logits
-
     def loss(
         self,
         old_logprobs: torch.FloatTensor,
         values: torch.FloatTensor,
         rewards: torch.FloatTensor,
         logits: torch.FloatTensor,
-        vpred: torch.FloatTensor,
-        logprob: torch.FloatTensor,
+        vpreds: torch.FloatTensor,
+        logprobs: torch.FloatTensor,
+        mask: torch.LongTensor,
     ):
         """
         Calculate policy and value losses.
@@ -745,30 +743,32 @@ class PPOTrainer(BaseTrainer):
         advantages = torch.stack(advantages_reversed[::-1]).transpose(0, 1)
 
         returns = advantages + values
-        advantages = whiten(advantages)
+        advantages = masked_whiten(advantages)
         advantages = advantages.detach()
 
-        vpredclipped = clip_by_value(vpred, values - self.config.cliprange_value, values + self.config.cliprange_value)
+        vpredclipped = clip_by_value(
+            vpreds, values - self.config.cliprange_value, values + self.config.cliprange_value
+        )
 
-        vf_losses1 = (vpred - returns) ** 2
+        vf_losses1 = (vpreds - returns) ** 2
         vf_losses2 = (vpredclipped - returns) ** 2
-        vf_loss = 0.5 * torch.mean(torch.max(vf_losses1, vf_losses2))
-        vf_clipfrac = torch.mean(torch.gt(vf_losses2, vf_losses1).double())
+        vf_loss = 0.5 * masked_mean(torch.max(vf_losses1, vf_losses2), mask)
+        vf_clipfrac = masked_mean(torch.gt(vf_losses2, vf_losses1).double(), mask)
 
-        ratio = torch.exp(logprob - old_logprobs)
+        ratio = torch.exp(logprobs - old_logprobs)
         pg_losses = -advantages * ratio
         pg_losses2 = -advantages * torch.clamp(ratio, 1.0 - self.config.cliprange, 1.0 + self.config.cliprange)
 
-        pg_loss = torch.mean(torch.max(pg_losses, pg_losses2))
-        pg_clipfrac = torch.mean(torch.gt(pg_losses2, pg_losses).double())
+        pg_loss = masked_mean(torch.max(pg_losses, pg_losses2), mask)
+        pg_clipfrac = masked_mean(torch.gt(pg_losses2, pg_losses).double(), mask)
 
         loss = pg_loss + self.config.vf_coef * vf_loss
 
-        entropy = torch.mean(entropy_from_logits(logits))
-        approxkl = 0.5 * torch.mean((logprob - old_logprobs) ** 2)
-        policykl = torch.mean(logprob - old_logprobs)
-        return_mean, return_var = torch.mean(returns), torch.var(returns)
-        value_mean, value_var = torch.mean(values), torch.var(values)
+        entropy = masked_mean(entropy_from_logits(logits), mask)
+        approxkl = 0.5 * masked_mean((logprobs - old_logprobs) ** 2, mask)
+        policykl = masked_mean(logprobs - old_logprobs, mask)
+        return_mean, return_var = masked_mean(returns, mask), masked_var(returns, mask)
+        value_mean, value_var = masked_mean(values, mask), masked_var(values, mask)
 
         stats = dict(
             loss=dict(policy=pg_loss, value=vf_loss, total=loss),
@@ -778,13 +778,13 @@ class PPOTrainer(BaseTrainer):
                 policykl=policykl,
                 clipfrac=pg_clipfrac,
                 advantages=advantages,
-                advantages_mean=torch.mean(advantages),
+                advantages_mean=masked_mean(advantages),
                 ratio=ratio,
             ),
             returns=dict(mean=return_mean, var=return_var),
             val=dict(
-                vpred=torch.mean(vpred),
-                error=torch.mean((vpred - returns) ** 2),
+                vpred=masked_mean(vpreds),
+                error=masked_mean((vpreds - returns) ** 2),
                 clipfrac=vf_clipfrac,
                 mean=value_mean,
                 var=value_var,
@@ -808,9 +808,9 @@ class PPOTrainer(BaseTrainer):
                 Dictionary of training step statistics
         """
         kl_list = [logprobs - ref_logprobs for logprobs, ref_logprobs in zip(data["logprobs"], data["ref_logprobs"])]
-        mean_kl = torch.mean(torch.stack([torch.sum(kl) for kl in kl_list]))
-        mean_entropy = torch.mean(torch.stack([torch.sum(-log_probs) for log_probs in data["logprobs"]]))
-        mean_non_score_reward = torch.mean(
+        mean_kl = masked_mean(torch.stack([torch.sum(kl) for kl in kl_list]))
+        mean_entropy = masked_mean(torch.stack([torch.sum(-log_probs) for log_probs in data["logprobs"]]))
+        mean_non_score_reward = masked_mean(
             torch.stack([torch.sum(non_score_reward) for non_score_reward in data["non_score_reward"]])
         )
         stats = {
@@ -824,7 +824,7 @@ class PPOTrainer(BaseTrainer):
         }
 
         for k, v in data["train_stats"].items():
-            stats[f"ppo/{k}"] = torch.mean(v, axis=0)
+            stats[f"ppo/{k}"] = masked_mean(v, axis=0)
         stats["ppo/val/var_explained"] = 1 - stats["ppo/val/error"] / stats["ppo/returns/var"]
         return stats
 
@@ -874,7 +874,7 @@ class PPOTrainer(BaseTrainer):
                 rewards /= self.accelerator.num_processes
 
             logs.update(stats)
-            logs["env/reward_mean"] = torch.mean(rewards).cpu().numpy().item()
+            logs["env/reward_mean"] = masked_mean(rewards).cpu().numpy().item()
             logs["env/reward_std"] = torch.std(rewards).cpu().numpy().item()
             logs["env/reward_dist"] = rewards.cpu().numpy()
 

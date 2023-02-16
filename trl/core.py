@@ -104,6 +104,28 @@ def whiten(values, shift_mean=True):
     return whitened
 
 
+def masked_mean(values, mask):
+    """Compute mean of tensor with a masked values."""
+    return (values * mask).sum() / mask.sum()
+
+
+def masked_var(values, mask):
+    """Compute variance of tensor with masked values."""
+    mean = masked_mean(values, mask)
+    centered_values = values - mean
+    variance = masked_mean(centered_values**2)
+    return variance
+
+
+def masked_whiten(values, mask, shift_mean):
+    """Whiten values with masked values."""
+    mean, var = masked_mean(values, mask), masked_var(values, mask)
+    whitened = (values - mean) * torch.rsqrt(var + 1e-8)
+    if not shift_mean:
+        whitened += mean
+    return whitened
+
+
 def clip_by_value(x, tensor_min, tensor_max):
     """
     Tensor extenstion to torch.clamp
