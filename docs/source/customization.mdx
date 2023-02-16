@@ -54,6 +54,20 @@ optimizer = bnb.optim.Adam8bit(model.parameters(), lr=config.learning_rate)
 ppo_trainer = PPOTrainer(config, model, model_ref, tokenizer, optimizer=optimizer)
 ```
 
+### Use LION optimizer
+
+You can use the new LION optimizer from Google as well, first take the source code of the optimizer definition [here](https://github.com/lucidrains/lion-pytorch/blob/main/lion_pytorch/lion_pytorch.py), and copy it so that you can import the optimizer. Make sure to initialize the optimizer by considering the trainable parameters only for a more memory efficient training:
+```python
+optimizer = Lion(filter(lambda p: p.requires_grad, self.model.parameters()), lr=self.config.learning_rate)
+
+...
+ppo_trainer = PPOTrainer(config, model, model_ref, tokenizer, optimizer=optimizer)
+```
+We advice you to use the learning rate that you would use for `Adam` divided by 3 as pointed out [here](https://github.com/lucidrains/lion-pytorch#lion---pytorch). We observed an improvement when using this optimizer compared to classic Adam, check the full logs [here](https://wandb.ai/distill-bloom/trl/runs/lj4bheke?workspace=user-younesbelkada):
+
+![image](https://huggingface.co/datasets/trl-internal-testing/example-images/blob/main/images/trl-lion.png)
+
+
 ## Add a learning rate scheduler
 
 You can also play with your training by adding learning rate schedulers!
