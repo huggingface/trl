@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+import torch
 import torch.nn as nn
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM
 
@@ -170,6 +170,10 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
 
         value = self.v_head(last_hidden_state).squeeze(-1)
 
+        # force upcast in fp32 if logits are in half-precision
+        if lm_logits.dtype != torch.float32:
+            lm_logits = lm_logits.float()
+
         return (lm_logits, loss, value)
 
     def generate(self, *args, **kwargs):
@@ -319,6 +323,10 @@ class AutoModelForSeq2SeqLMWithValueHead(PreTrainedModelWrapper):
         loss = base_model_output.loss
 
         value = self.v_head(last_hidden_state).squeeze(-1)
+
+        # force upcast in fp32 if logits are in half-precision
+        if lm_logits.dtype != torch.float32:
+            lm_logits = lm_logits.float()
 
         return (lm_logits, loss, value)
 
