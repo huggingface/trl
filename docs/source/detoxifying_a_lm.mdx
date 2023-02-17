@@ -1,0 +1,77 @@
+# Detoxifying a LM using PPO
+
+Let us check step by step on how to detoxify a Language Model using PPO, using a dataset of toxic prompts! 
+Read this section to follow our journey on how we managed to detoxify a wide range of LMs, from 125m parameters to 6B parameters! 
+
+Here's an overview of the notebooks and scripts in the [trl repository](https://github.com/lvwerra/trl/tree/main/examples/toxicity):
+
+| File | Description | Colab link |
+|---|---| --- |
+| [`gpt-j-6b-toxicity.py`](https://github.com/lvwerra/trl/blob/main/examples/toxicity/scripts/gpt-j-6b-toxicity.py) | Detoxify `GPT-J-6B` using PPO | x | 
+
+## Context
+
+A Language Model is not initially trained to be toxic, but it can be trained to be toxic by feeding it toxic prompts. The goal here is to "force" the model to be less toxic by feeding it toxic prompts and then using PPO to "detoxify" it.
+We believe that if this technique would be applied to language models that are meant to be toxic (e.g. GPT-4chan) the results would be even more impressive.
+
+### Computing toxicity scores
+
+We used [`facebook/roberta-hate-speech-dynabench-r4-target`](https://huggingface.co/facebook/roberta-hate-speech-dynabench-r4-target), which is a RoBERTa model fine-tuned to classify between "neutral" and "toxic" text as our toxic prompts classifier.
+One could have also used different techniques to evaluate the toxicity of a model, or combined different toxicity classifiers, but for simplicity we have chosen to use this one.
+
+### Selection of models
+
+We have decided to chose these models for our experiments to show that `trl` can be easily scaled to 10B parameters models. We have chosen to use the following models: 
+
+* [`EleutherAI/gpt-neo-125M`](https://huggingface.co/EleutherAI/gpt-neo-125M) (125 million parameters)
+* [`EleutherAI/gpt-neo-2.7B`](EleutherAI/gpt-neo-2.7B) (2.7 billion parameters)
+* [`EleutherAI/gpt-j-6B`](https://huggingface.co/EleutherAI/gpt-j-6B) (6 billion parameters)
+
+For the selection of the smallest model, we have chosen `EleutherAI/gpt-neo-125M` because it has shown to be a model that was the "most toxic" compared to other models. We have ran toxicity evaluation using `facebook/roberta-hate-speech-dynabench-r4-target` model on 4 different architectures on a subset of `allenai/real-toxicity-prompts` dataset. Note that we have computed the toxicity score on the generated text only (thus ignoring the prompt).
+
+| Model | Mean toxicity score |
+|---|---| 
+| `gpt2` | 0.01602 |
+| `facebook/opt-350m` | 0.01628 |
+| `bigscience/bloom-560m` | 0.00767 |
+| `EleutherAI/gpt-neo-125M` | **0.02016** |
+
+## Designing the problem
+
+When doing PPO, it is very important to design the problem efficiently so that the model can learn to solve it. Let's cover the topics that were important for the model to converge.
+
+### Pre-processing the dataset
+
+As we want to enhance the chance for the model to generate toxic prompts we decided to pre-process the dataset to consider only the prompt that has a toxicity score that is greater than a threshold. This can be achieved with few lines of code as shown below:
+```python
+ds = load_dataset("allenai/real-toxicity-prompts", split="train")
+
+def filter_fn(sample):
+    toxicity = sample["prompt"]["toxicity"]
+    return toxicity is not None and toxicity > 0.3
+
+ds = ds.filter(filter_fn, batched=False)
+```
+
+### Reward function
+
+
+The reward function is the most important part of the PPO algorithm. It is the function that will tell the model if it is doing well or not.
+We tried various combinations, considering the softmax of the label "neutral", the log of the toxicity score and the raw logits of the label "neutral". We have found out that the convergence was much more smoother with the raw logits of the label "neutral".
+```python
+logits = toxicity_model(**toxicity_inputs).logits.float()
+toxicity_labels = (logits[:, 0]).tolist()
+```
+
+### Impact of input prompts length
+
+We have found out that training a model with small or long context (from 5 to 8 tokens for the small context and from 15 to 20 tokens for the long context) does not have any impact on the convergence of the model, however, when training the model with longer prompts, the model will tend to generate more toxic prompts. 
+We decided to use a context window of 10 to 15 tokens for the training of the larger models, as we think the results will be more impressive if the model is able to generate toxic prompts even with slightly long contexts.
+
+
+<div style="text-align: center">
+<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl-long-vs-short-context.png">
+</div>
+
+
+## Training the model!
