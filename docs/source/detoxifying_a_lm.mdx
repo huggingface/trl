@@ -24,7 +24,7 @@ One could have also used different techniques to evaluate the toxicity of a mode
 We have decided to chose these models for our experiments to show that `trl` can be easily scaled to 10B parameters models. We have chosen to use the following models: 
 
 * [`EleutherAI/gpt-neo-125M`](https://huggingface.co/EleutherAI/gpt-neo-125M) (125 million parameters)
-* [`EleutherAI/gpt-neo-2.7B`](EleutherAI/gpt-neo-2.7B) (2.7 billion parameters)
+* [`EleutherAI/gpt-neo-2.7B`](https://huggingface.co/EleutherAI/gpt-neo-2.7B) (2.7 billion parameters)
 * [`EleutherAI/gpt-j-6B`](https://huggingface.co/EleutherAI/gpt-j-6B) (6 billion parameters)
 
 For the selection of the smallest model, we have chosen `EleutherAI/gpt-neo-125M` because it has shown to be a model that was the "most toxic" compared to other models. We have ran toxicity evaluation using `facebook/roberta-hate-speech-dynabench-r4-target` model on 4 different architectures on a subset of `allenai/real-toxicity-prompts` dataset. Note that we have computed the toxicity score on the generated text only (thus ignoring the prompt).
