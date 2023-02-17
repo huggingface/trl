@@ -12,12 +12,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from typing import Optional
+from dataclasses import dataclass, field
 import torch
 from tqdm import tqdm
 
 tqdm.pandas()
 
-from transformers import pipeline, AutoTokenizer
+from transformers import pipeline, AutoTokenizer, AutoTokenizer, HfArgumentParser
 from datasets import load_dataset
 
 from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead, set_seed
@@ -39,19 +41,35 @@ from trl.core import LengthSampler
 #
 ########################################################################
 
+
+@dataclass
+class ScriptArguments:
+    """
+    The name of the gpt2 model we wish to fine with PPO
+    """
+
+    model_name: Optional[str] = field(default="lvwerra/gpt2-imdb", metadata={"help": "the model name"})
+    log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
+
+
+parser = HfArgumentParser(ScriptArguments)
+script_args = parser.parse_args_into_dataclasses()[0]
+
 # We first define the configuration of the experiment, defining the model, the dataset,
 # the training parameters, and the PPO parameters.
 # Check the default arguments in the `PPOConfig` class for more details.
 # If you want to log with tensorboard, add the kwarg
 # `accelerator_kwargs={"logging_dir": PATH_TO_LOGS}` to the PPOConfig.
 config = PPOConfig(
-    model_name="lvwerra/gpt2-imdb",
+    model_name=script_args.model_name,
     learning_rate=1.41e-5,
+    log_with=script_args.log_with,
 )
 
 # We then define the arguments to pass to the sentiment analysis pipeline.
 # We set `return_all_scores` to True to get the sentiment score for each token.
 sent_kwargs = {"return_all_scores": True, "function_to_apply": "none", "batch_size": config.forward_batch_size}
+
 
 # Below is an example function to build the dataset. In our case, we use the IMDB dataset
 # from the `datasets` library. One should customize this function to train the model on
