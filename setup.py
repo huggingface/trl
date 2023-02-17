@@ -64,6 +64,7 @@ REQUIRED_PKGS = [
     "numpy>=1.18.2",
     "accelerate",
     "datasets",
+    "peft"
 ]
 EXTRAS = {
     "test": ["parameterized", "pytest", "pytest-xdist", "accelerate"],
