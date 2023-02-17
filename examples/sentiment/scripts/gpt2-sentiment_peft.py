@@ -20,6 +20,7 @@ from tqdm import tqdm
 import torch.nn as nn
 import bitsandbytes as bnb
 from peft import LoraConfig, get_peft_model, prepare_model_for_training
+
 tqdm.pandas()
 
 from transformers import pipeline, AutoTokenizer, HfArgumentParser
@@ -45,10 +46,10 @@ from trl.core import LengthSampler
 ########################################################################
 
 ########################################################################
-# NOTE for to train with a 8-bit model a more recent version of 
+# NOTE for to train with a 8-bit model a more recent version of
 # transformers is required, full dependecies for this example:
 # pip install  bitsandbytes datasets accelerate loralib
-# pip install  git+https://github.com/huggingface/transformers.git@main 
+# pip install  git+https://github.com/huggingface/transformers.git@main
 # pip install git+https://github.com/huggingface/peft.git
 ########################################################################
 
@@ -63,9 +64,12 @@ from trl.core import LengthSampler
 @dataclass
 class ScriptArguments:
     """
-    The name of the gpt2 model we wish to fine with PPO
+    The name of the Casual LM model we wish to fine with PPO
     """
-    model_name: Optional[str] = field(default="facebook/opt-350m", metadata={"help": "the model name"})
+
+    # NOTE: gpt2 models use Conv1D instead of Linear layers which are not yet supported in 8 bit mode
+    # models like gpt-neo* models are more suitable
+    model_name: Optional[str] = field(default="lvwerra/gpt2-imdb", metadata={"help": "the model name"})
     log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
 
 
@@ -76,12 +80,12 @@ config = PPOConfig(
     model_name=script_args.model_name,
     learning_rate=1.41e-5,
     log_with=script_args.log_with,
-    batch_size=16,
 )
 
 # We then define the arguments to pass to the sentiment analysis pipeline.
 # We set `return_all_scores` to True to get the sentiment score for each token.
 sent_kwargs = {"return_all_scores": True, "function_to_apply": "none", "batch_size": config.forward_batch_size}
+
 
 # Below is an example function to build the dataset. In our case, we use the IMDB dataset
 # from the `datasets` library. One should customize this function to train the model on
@@ -130,29 +134,13 @@ def collator(data):
 set_seed(config.seed)
 
 # Now let's build the model, the reference model, and the tokenizer.
-
-ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name,    
-                                                                load_in_8bit=True, 
-                                                                device_map='auto')
+ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name, load_in_8bit=True, device_map="auto")
 tokenizer = AutoTokenizer.from_pretrained(config.model_name)
 
-# # disable grad in just the pretrained model part, so we can learn to value head 
-# for param in ref_model.pretrained_model.parameters():
-#     param.requires_grad = False  # freeze the model - train adapters later
-#     if param.ndim == 1:
-#     # cast the small parameters (e.g. layernorm) to fp32 for stability
-#         param.data = param.data.to(torch.float32)
-
-# ref_model.pretrained_model.gradient_checkpointing_enable()  # reduce number of stored activations
-# class CastOutputToFloat(nn.Sequential):
-#     def forward(self, x): return super().forward(x).to(torch.float32)
-# ref_model.pretrained_model.lm_head = CastOutputToFloat(ref_model.pretrained_model.lm_head)
-
-
 """### Apply LoRA
-
 Here comes the magic with `peft`! Let's load a `PeftModel` and specify that we are going to use low-rank adapters (LoRA) using `get_peft_model` utility function from `peft`.
 """
+
 
 def print_trainable_parameters(model):
     """
@@ -168,18 +156,23 @@ def print_trainable_parameters(model):
         f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param}"
     )
 
+
 lora_config = LoraConfig(
     r=16,
     lora_alpha=32,
-    target_modules=["k_proj", "v_proj", "q_proj",], # Are these the correct layers to target with LoRA ?
+    target_modules=["c_attn"],  # Are these the correct layers to target with LoRA ?
     lora_dropout=0.05,
     bias="none",
     task_type="CAUSAL_LM",
-    modules_to_save=["v_head"]
+    modules_to_save=["v_head"],
 )
 
-ref_model.config = ref_model.pretrained_model.config # We should probably change the AutoModelForCausalLMWithValueHead to have a config property 
-ref_model.prepare_inputs_for_generation = ref_model.pretrained_model.prepare_inputs_for_generation # Again, this is required by LoRA, should we also add this method to AutoModelForCausalLMWithValueHead?
+ref_model.config = (
+    ref_model.pretrained_model.config
+)  # We should probably change the AutoModelForCausalLMWithValueHead to have a config property
+ref_model.prepare_inputs_for_generation = (
+    ref_model.pretrained_model.prepare_inputs_for_generation
+)  # Again, this is required by LoRA, should we also add this method to AutoModelForCausalLMWithValueHead?
 ref_model.pretrained_model = prepare_model_for_training(ref_model.pretrained_model)
 model = get_peft_model(ref_model, lora_config)
 
@@ -218,8 +211,7 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     query_tensors = batch["input_ids"]
 
     with torch.cuda.amp.autocast():
-        #model(input_ids=query_tensors[0].unsqueeze(0)) # if you don't include this line backprop does not work in ppo_trainer.step. Try it!
-        #### Get response from gpt2
+        #### Get response from Causal LM
         response_tensors = []
         for query in query_tensors:
             gen_len = output_length_sampler()
@@ -238,4 +230,4 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     ppo_trainer.log_stats(stats, batch, rewards)
 
 
-model.push_to_hub(f"{script_args.model_name}-ppo-sentiment")
+# model.push_to_hub(f"{script_args.model_name}-ppo-sentiment")
