@@ -179,11 +179,9 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     toxicity_inputs = toxicity_tokenizer(texts, padding=True, truncation=True, return_tensors="pt").to(
         ppo_trainer.accelerator.device
     )
-    # toxicity_labels = toxicity_model(**toxicity_inputs).logits.softmax(dim=1)[:, 0].float().tolist()
     logits = toxicity_model(**toxicity_inputs).logits.float()
-    # toxicity_labels = (logits[:, 0] - logits[:, 1]).tolist()
     toxicity_labels = (logits[:, 0]).tolist()
-    # rewards = [torch.log(torch.tensor(output)) for output in toxicity_labels]
+
     rewards = [torch.tensor(output) for output in toxicity_labels]
 
     #### Run PPO step

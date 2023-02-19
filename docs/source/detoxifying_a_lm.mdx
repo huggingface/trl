@@ -56,7 +56,7 @@ ds = ds.filter(filter_fn, batched=False)
 ### Reward function
 
 
-The reward function is the most important part of the PPO algorithm. It is the function that will tell the model if it is doing well or not.
+The reward function is one of the most important part of the PPO algorithm. It is the function that will tell the model if it is doing well or not.
 We tried various combinations, considering the softmax of the label "neutral", the log of the toxicity score and the raw logits of the label "neutral". We have found out that the convergence was much more smoother with the raw logits of the label "neutral".
 ```python
 logits = toxicity_model(**toxicity_inputs).logits.float()
@@ -73,5 +73,50 @@ We decided to use a context window of 10 to 15 tokens for the training of the la
 <img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl-long-vs-short-context.png">
 </div>
 
+### How to deal with OOM issues
+
+Oour goal was to train models up to 6B parameters, which is about 24GB in float32! Here are few tricks we have used to be able to train the largest model on a single 40GB-RAM GPU:
+
+- Use `bfloat16` precision: Simply load your model in `bfloat16` when calling `from_pretrained` and you can reduce the size of the model by 2:
+
+```python
+model = AutoModelForCausalLM.from_pretrained("EleutherAI/gpt-j-6B", torch_dtype=torch.bfloat16)
+```
+
+- Use shared layers: Since PPO algorithm requires to have both the active and reference model to be on the same device, we have decided to use shared layers to reduce the memory footprint of the model. This can be achieved by just speifying `num_shared_layers` argument when creating a `PPOTrainer`:
+
+<div style="text-align: center">
+<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl-shared-layers.png">
+</div>
+
+```python
+ppo_trainer = PPOTrainer(
+    model=model,
+    tokenizer=tokenizer,
+    num_shared_layers=4,
+    ...
+)
+```
+
+- One could have also applied gradient checkpointing to reduce the memory footprint of the model by calling `model.pretrained_model.enable_gradient_checkpointing()`.
 
 ## Training the model!
+
+We have trained 6 models in total:
+
+- [`ybelkada/gpt-neo-125m-detoxified-small-context`](https://huggingface.co/ybelkada/gpt-neo-125m-detoxified-small-context)
+- [`ybelkada/gpt-neo-125m-detoxified-long-context`](https://huggingface.co/ybelkada/gpt-neo-125m-detoxified-long-context)
+- [`ybelkada/gpt-neo-2B-detoxified-20sh-30steps`](https://huggingface.co/ybelkada/gpt-neo-2B-detoxified-20sh-30steps)
+- [`ybelkada/gpt-neo-2.7B-detoxified-20shdl`](https://huggingface.co/ybelkada/gpt-neo-2.7B-detoxified-20shdl)
+- [`ybelkada/gpt-j-6b-detoxified-24-shdl-400steps`](https://huggingface.co/ybelkada/gpt-j-6b-detoxified-24-shdl-400steps)
+- [`ybelkada/gpt-j-6b-detoxified-1000-20shdl`](https://huggingface.co/ybelkada/gpt-j-6b-detoxified-1000-20shdl)
+
+We have used different learning rates for each model, and have found out that the largest models were quite hard to train and can easily lead to collapse mode if the learning rate is not chosen correctly (i.e. if the learning rate is too high)
+
+<div style="text-align: center">
+<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl-collapse-mode.png">
+</div>
+
+## Results
+
+You can download the model and use it out of the box with `transformers`, or play with the Spaces that compares the output of the models before and after detoxification [here](https://huggingface.co/spaces/ybelkada/detoxified-lms).
