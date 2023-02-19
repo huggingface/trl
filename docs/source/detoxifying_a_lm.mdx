@@ -117,6 +117,14 @@ We have used different learning rates for each model, and have found out that th
 <img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl-collapse-mode.png">
 </div>
 
+The final training run looks like the following for the largest model:
+
+<div style="text-align: center">
+<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl-gpt-j-final-run-2.png">
+</div>
+
+As you can see the model seems to converge quite nicely, but obviously we don't observe a very large improvement from the first step, as the original model is not trained to generate toxic contents. 
+
 ## Results
 
 You can download the model and use it out of the box with `transformers`, or play with the Spaces that compares the output of the models before and after detoxification [here](https://huggingface.co/spaces/ybelkada/detoxified-lms).
