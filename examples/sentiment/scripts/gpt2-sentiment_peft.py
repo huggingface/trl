@@ -231,4 +231,4 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     ppo_trainer.log_stats(stats, batch, rewards)
 
 
-# model.push_to_hub(f"{script_args.model_name}-ppo-sentiment")
+model.push_to_hub(f"{script_args.model_name}-ppo-sentiment")

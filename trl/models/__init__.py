@@ -13,8 +13,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from peft.peft_model import PeftModelForCausalLM, PeftModelForSeq2SeqLM
+
 from .modeling_base import PreTrainedModelWrapper, create_reference_model
 from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
 
 
-SUPPORTED_ARCHITECTURES = (AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead)
+SUPPORTED_ARCHITECTURES = (AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead, PeftModelForCausalLM, PeftModelForSeq2SeqLM)
