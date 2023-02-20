@@ -19,7 +19,7 @@ import torch
 from tqdm import tqdm
 import torch.nn as nn
 import bitsandbytes as bnb
-from peft import LoraConfig, get_peft_model, prepare_model_for_training
+from peft import LoraConfig, get_peft_model, prepare_model_for_int8_training
 
 tqdm.pandas()
 
@@ -174,7 +174,7 @@ ref_model.config = (
 ref_model.prepare_inputs_for_generation = (
     ref_model.pretrained_model.prepare_inputs_for_generation
 )  # Again, this is required by LoRA, should we also add this method to AutoModelForCausalLMWithValueHead?
-ref_model.pretrained_model = prepare_model_for_training(ref_model.pretrained_model)
+ref_model.pretrained_model = prepare_model_for_int8_training(ref_model.pretrained_model)
 model = get_peft_model(ref_model, lora_config)
 
 print_trainable_parameters(model)
