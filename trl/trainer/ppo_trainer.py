@@ -18,7 +18,7 @@ import warnings
 from typing import List, Optional, Union
 
 import datasets
-import peft
+from peft.peft_model import PeftModelForCausalLM
 import torch
 from accelerate import Accelerator
 from datasets import Dataset
