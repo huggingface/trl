@@ -71,6 +71,7 @@ class ScriptArguments:
     # models like gpt-neo* models are more suitable
     model_name: Optional[str] = field(default="lvwerra/gpt2-imdb", metadata={"help": "the model name"})
     log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
+    #peft_modules_to_save: Optional[str] = field(default=["v_head"], metadata={"help": "use 'wandb' to log with wandb"})
 
 
 parser = HfArgumentParser(ScriptArguments)
@@ -160,7 +161,7 @@ def print_trainable_parameters(model):
 lora_config = LoraConfig(
     r=16,
     lora_alpha=32,
-    target_modules=["c_attn"],  # Are these the correct layers to target with LoRA ?
+    target_modules=["k_proj", "v_proj", "q_proj", "out_proj"],  # Are these the correct layers to target with LoRA ?
     lora_dropout=0.05,
     bias="none",
     task_type="CAUSAL_LM",
