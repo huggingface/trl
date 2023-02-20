@@ -53,6 +53,8 @@ class PPOConfig(object):
             Number of samples per optimisation step
         forward_batch_size (`int`, *optional*, defaults to 16):
             Number of samples forward passed through model at a time
+        mini_batch_size (`int`, *optional*, defaults to 1):
+            Number of samples optimized inside PPO together
         ppo_epochs (`int`, *optional*, defaults to 4):
             Number of optimisation epochs per batch of samples
         remove_unused_columns (`bool`, *optional*, defaults to True):
@@ -86,6 +88,7 @@ class PPOConfig(object):
         vf_coef: Optional[float] = 0.1,
         batch_size: Optional[int] = 256,
         forward_batch_size: Optional[int] = 16,
+        mini_batch_size: Optional[int] = 1,
         ppo_epochs: Optional[int] = 4,
         remove_unused_columns: Optional[bool] = True,
         log_with: Optional[str] = None,
@@ -108,6 +111,7 @@ class PPOConfig(object):
         self.vf_coef = vf_coef
         self.batch_size = batch_size
         self.forward_batch_size = forward_batch_size
+        self.mini_batch_size = mini_batch_size
         self.ppo_epochs = ppo_epochs
         self.remove_unused_columns = remove_unused_columns
         self.seed = seed
