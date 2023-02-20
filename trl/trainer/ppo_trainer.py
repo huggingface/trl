@@ -440,15 +440,13 @@ class PPOTrainer(BaseTrainer):
         model_inputs_names = list(model_inputs.keys())
 
         with torch.no_grad():
-            all_logprobs, _, values, mask = self.batched_forward_pass(queries, responses, model_inputs)
-            ref_logprobs, _, _, _ = self.batched_forward_pass(queries, responses, model_inputs)
+            all_logprobs, _, values, mask = self.batched_forward_pass(self.model, queries, responses, model_inputs)
+            ref_logprobs, _, _, _ = self.batched_forward_pass(self.ref_model, queries, responses, model_inputs)
 
         timing["time/ppo/forward_pass"] = time.time() - t
 
         t = time.time()
         rewards, non_score_reward = self.compute_rewards(scores, all_logprobs, ref_logprobs)
-        print("r", rewards.shape, all_logprobs.shape, values.shape)
-
         timing["time/ppo/compute_rewards"] = time.time() - t
 
         minibatch_dict = {
@@ -485,7 +483,7 @@ class PPOTrainer(BaseTrainer):
             for batch in minibatch_dataloader:
                 model_inputs = {k: batch[k] for k in model_inputs_names}
                 logprobs, logits, vpreds, _ = self.batched_forward_pass(
-                    batch["queries"], batch["responses"], model_inputs
+                    self.model, batch["queries"], batch["responses"], model_inputs
                 )
 
                 train_stats = self.train_minibatch(
@@ -590,6 +588,7 @@ class PPOTrainer(BaseTrainer):
 
     def batched_forward_pass(
         self,
+        model: PreTrainedModelWrapper,
         queries: torch.Tensor,
         responses: torch.Tensor,
         model_inputs: dict,
@@ -621,8 +620,7 @@ class PPOTrainer(BaseTrainer):
             input_kwargs = {key: value[i * fbs : (i + 1) * fbs] for key, value in model_inputs.items()}
             query_batch = queries[i * fbs : (i + 1) * fbs]
             response_batch = responses[i * fbs : (i + 1) * fbs]
-            print(input_kwargs["input_ids"].shape, input_kwargs["attention_mask"].shape)
-            logits, _, values = self.model(**input_kwargs)
+            logits, _, values = model(**input_kwargs)
             
             #values = values[:, :-1]
 
@@ -653,14 +651,12 @@ class PPOTrainer(BaseTrainer):
                 masks[j, :start] = 0
                 masks[j, end:] = 0
 
-            print(logits.shape, input_ids.shape, values.shape, logprobs.shape)
-
             all_logits.append(logits)
             all_values.append(values)
             all_logprobs.append(logprobs)
             all_masks.append(masks)
 
-        return torch.cat(all_logprobs), torch.cat(all_logits)[:, :-1], torch.cat(all_values)[:, :-1], torch.cat(all_masks)[:, :-1]
+        return torch.cat(all_logprobs), torch.cat(all_logits)[:, :-1], torch.cat(all_values)[:, :-1], torch.cat(all_masks)[:, 1:]
 
     def train_minibatch(
         self,
@@ -755,7 +751,6 @@ class PPOTrainer(BaseTrainer):
         lastgaelam = 0
         advantages_reversed = []
         gen_len = rewards.shape[-1]
-        print(gen_len, values.shape, rewards.shape)
         for t in reversed(range(gen_len)):
             nextvalues = values[:, t + 1] if t < gen_len - 1 else 0.0
             delta = rewards[:, t] + self.config.gamma * nextvalues - values[:, t]
@@ -830,7 +825,6 @@ class PPOTrainer(BaseTrainer):
         """
         mask = data.pop("mask")
 
-        print(mask.shape, data["logprobs"].shape)
         kl_list = ((data["logprobs"] - data["ref_logprobs"])*mask).sum(axis=-1)
         mean_kl = kl_list.mean()
         mean_entropy = (-data["logprobs"]*mask).sum(axis=-1).mean()
@@ -851,7 +845,7 @@ class PPOTrainer(BaseTrainer):
         }
 
         for k, v in data["train_stats"].items():
-            stats[f"ppo/{k}"] = masked_mean(v, mask, axis=0)
+            stats[f"ppo/{k}"] = torch.mean(v, axis=0)
         stats["ppo/val/var_explained"] = 1 - stats["ppo/val/error"] / stats["ppo/returns/var"]
         return stats
 
@@ -901,7 +895,7 @@ class PPOTrainer(BaseTrainer):
                 rewards /= self.accelerator.num_processes
 
             logs.update(stats)
-            logs["env/reward_mean"] = masked_mean(rewards).cpu().numpy().item()
+            logs["env/reward_mean"] = torch.mean(rewards).cpu().numpy().item()
             logs["env/reward_std"] = torch.std(rewards).cpu().numpy().item()
             logs["env/reward_dist"] = rewards.cpu().numpy()
 
