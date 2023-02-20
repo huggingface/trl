@@ -19,7 +19,7 @@ import torch
 from tqdm import tqdm
 import torch.nn as nn
 import bitsandbytes as bnb
-from peft import LoraConfig, get_peft_model, prepare_model_for_training
+from peft import LoraConfig, get_peft_model, prepare_model_for_int8_training
 
 tqdm.pandas()
 
