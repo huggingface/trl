@@ -161,7 +161,6 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
             input_ids=input_ids,
             past_key_values=past_key_values,
             attention_mask=attention_mask,
-            # output_hidden_states=True,  # We force the model to output hidden states
             **kwargs,
         )
 

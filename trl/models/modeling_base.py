@@ -131,6 +131,9 @@ class PreTrainedModelWrapper(nn.Module):
             state_dict = pretrained_model_name_or_path.state_dict()
 
         model.post_init(state_dict=state_dict)
+        # properties / methods required by PEFT
+        model.config = model.pretrained_model.config
+        model.prepare_inputs_for_generation = model.pretrained_model.prepare_inputs_for_generation
 
         return model
 
