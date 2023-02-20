@@ -71,7 +71,7 @@ class ScriptArguments:
     # models like gpt-neo* models are more suitable
     model_name: Optional[str] = field(default="lvwerra/gpt2-imdb", metadata={"help": "the model name"})
     log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
-    #peft_modules_to_save: Optional[str] = field(default=["v_head"], metadata={"help": "use 'wandb' to log with wandb"})
+    # peft_modules_to_save: Optional[str] = field(default=["v_head"], metadata={"help": "use 'wandb' to log with wandb"})
 
 
 parser = HfArgumentParser(ScriptArguments)
