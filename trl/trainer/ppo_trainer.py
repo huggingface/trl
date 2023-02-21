@@ -263,12 +263,6 @@ class PPOTrainer(BaseTrainer):
         # init the current step
         self.current_step = 0
 
-        # init wandb on the main process:
-        if self.accelerator.is_main_process and self.config.log_with == "wandb":
-            import wandb
-
-            wandb.watch(self.model, log="all")
-
         if self.config.forward_batch_size > 1 and (self.is_encoder_decoder or self.tokenizer.padding_side == "left"):
             # warn users that this is not well supported yet
             logging.warning(
@@ -309,6 +303,7 @@ class PPOTrainer(BaseTrainer):
             batch_size=self.config.batch_size,
             collate_fn=data_collator,
             shuffle=True,
+            drop_last=True,
         )
         return dataloader
 
@@ -870,6 +865,12 @@ class PPOTrainer(BaseTrainer):
                 rewards /= self.accelerator.num_processes
 
             logs.update(stats)
+
+            # manually cast in fp32 for bf16 torch tensors
+            for k, v in logs.items():
+                if isinstance(v, torch.Tensor) and v.dtype == torch.bfloat16:
+                    logs[k] = v.float()
+
             logs["env/reward_mean"] = torch.mean(rewards).cpu().numpy().item()
             logs["env/reward_std"] = torch.std(rewards).cpu().numpy().item()
             logs["env/reward_dist"] = rewards.cpu().numpy()
@@ -906,6 +907,6 @@ class PPOTrainer(BaseTrainer):
             f.write(model_card_content)
 
     def _save_pretrained(self, save_directory: str) -> None:
-        self.model.save_pretrained(save_directory)
+        self.accelerator.unwrap_model(self.model).save_pretrained(save_directory)
         self.tokenizer.save_pretrained(save_directory)
         self.create_model_card(save_directory)
