@@ -50,10 +50,11 @@ from trl.core import LengthSampler
 # If you want to log with tensorboard, add the kwarg
 # `accelerator_kwargs={"logging_dir": PATH_TO_LOGS}` to the PPOConfig.
 config = PPOConfig(
-    model_name="EleutherAI/gpt-j-6B",
+    model_name="ybelkada/gpt-j-6b-sharded-bf16",
     learning_rate=(1.47e-5) * 2,
     log_with="wandb",
     batch_size=32,
+    forward_batch_size=1,
 )
 
 
@@ -98,12 +99,15 @@ def build_dataset(
 
     ds = ds.map(tokenize, batched=False)
     ds.set_format(type="torch")
+
+    ds = ds.train_test_split(test_size=0.2, shuffle=False)["train"]
+
     return ds
 
 
 # We retrieve the dataloader by calling the `build_dataset` function.
-min_input_length = 10
-max_input_length = 15
+min_input_length = 30
+max_input_length = 40
 dataset = build_dataset(config, input_min_text_length=min_input_length, input_max_text_length=max_input_length)
 
 
@@ -160,7 +164,7 @@ output_min_length = 20
 output_max_length = 30
 output_length_sampler = LengthSampler(output_min_length, output_max_length)
 
-model_save_path = "/mnt/disks/younes-disk/models/gpt-j-6B-detoxified-long-context-26-shl-1e4-step-1000-interm"
+model_save_path = "/mnt/disks/younes-disk/models/gpt-j-6B-detoxified-long-context-26-shl-1e4-final"
 
 for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     query_tensors = batch["input_ids"]
@@ -192,3 +196,4 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     if epoch % 100 == 0:
         if ppo_trainer.accelerator.is_main_process:
             ppo_trainer.save_pretrained(model_save_path)
+
