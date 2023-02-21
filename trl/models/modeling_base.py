@@ -134,6 +134,7 @@ class PreTrainedModelWrapper(nn.Module):
         # properties / methods required by PEFT
         model.config = model.pretrained_model.config
         model.prepare_inputs_for_generation = model.pretrained_model.prepare_inputs_for_generation
+        model.is_loaded_in_8bit = getattr(model.pretrained_model, "is_loaded_in_8bit", False)
 
         return model
 
