@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+title: 'TRL: Transformer Reinforcement Learning'
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: Leandro
+    family-names: von Werra
+  - given-names: Younes
+    family-names: Belkada
+  - given-names: Lewis
+    family-names: Tunstall
+  - given-names: Edward
+    family-names: Beeching
+  - given-names: Tristan
+    family-names: Thrush
+  - given-names: Nathan
+    family-names: Lambert
+repository-code: 'https://github.com/lvwerra/trl'
+abstract: "With trl you can train transformer language models with Proximal Policy Optimization (PPO). The library is built on top of the transformers library by \U0001F917 Hugging Face. Therefore, pre-trained language models can be directly loaded via transformers. At this point, most decoder and encoder-decoder architectures are supported."
+keywords:
+  - rlhf
+  - deep-learning
+  - pytorch
+  - transformers
+license: Apache-2.0
+version: 0.2.1
