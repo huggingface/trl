@@ -71,6 +71,7 @@ class ScriptArguments:
     # models like gpt-neo* models are more suitable
     model_name: Optional[str] = field(default="lvwerra/gpt2-imdb", metadata={"help": "the model name"})
     log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
+    learning_rate: Optional[float] = field(default=1.41e-5, metadata={"help": "use 'wandb' to log with wandb"})
     # peft_modules_to_save: Optional[str] = field(default=["v_head"], metadata={"help": "use 'wandb' to log with wandb"})
 
 
@@ -79,9 +80,10 @@ script_args = parser.parse_args_into_dataclasses()[0]
 
 config = PPOConfig(
     model_name=script_args.model_name,
-    learning_rate=1.41e-5,
+    learning_rate=script_args.learning_rate,
     log_with=script_args.log_with,
 )
+print(config)
 
 # We then define the arguments to pass to the sentiment analysis pipeline.
 # We set `return_all_scores` to True to get the sentiment score for each token.
