@@ -437,6 +437,7 @@ class PPOTrainer(BaseTrainer):
         rewards, non_score_reward = self.compute_rewards(scores, logprobs, ref_logprobs)
         timing["time/ppo/compute_rewards"] = time.time() - t
 
+        self.model.train()
         t = time.time()
         all_stats = []
         idxs = list(range(bs))
