@@ -115,7 +115,7 @@ def masked_var(values, mask, unbiased=True):
     centered_values = values - mean
     variance = masked_mean(centered_values**2, mask)
     if unbiased:
-        bessel_correction = mask.sum()/(mask.sum()-1)
+        bessel_correction = mask.sum() / (mask.sum() - 1)
         variance = variance * bessel_correction
     return variance
 
