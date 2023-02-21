@@ -109,11 +109,14 @@ def masked_mean(values, mask, axis=None):
     return (values * mask).sum(axis=axis) / mask.sum(axis=axis)
 
 
-def masked_var(values, mask):
+def masked_var(values, mask, unbiased=True):
     """Compute variance of tensor with masked values."""
     mean = masked_mean(values, mask)
     centered_values = values - mean
     variance = masked_mean(centered_values**2, mask)
+    if unbiased:
+        bessel_correction = mask.sum()/(mask.sum()-1)
+        variance = variance * bessel_correction
     return variance
 
 
