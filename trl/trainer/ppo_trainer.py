@@ -440,7 +440,7 @@ class PPOTrainer(BaseTrainer):
         model_inputs_names = list(model_inputs.keys())
 
         with torch.no_grad():
-            all_logprobs, _, values, mask = self.batched_forward_pass(self.model, queries, responses, model_inputs)
+            all_logprobs, _, values, masks = self.batched_forward_pass(self.model, queries, responses, model_inputs)
             ref_logprobs, _, _, _ = self.batched_forward_pass(self.ref_model, queries, responses, model_inputs)
 
         timing["time/ppo/forward_pass"] = time.time() - t
@@ -455,7 +455,7 @@ class PPOTrainer(BaseTrainer):
             "logprobs": all_logprobs,
             "values": values,
             "rewards": rewards,
-            "mask": mask,
+            "masks": masks,
         }
 
         def collator(data):
@@ -493,7 +493,7 @@ class PPOTrainer(BaseTrainer):
                     logprobs,
                     logits,
                     vpreds,
-                    batch["mask"],
+                    batch["masks"],
                 )
                 all_stats.append(train_stats)
         timing["time/ppo/optimize_step"] = time.time() - t
@@ -513,7 +513,7 @@ class PPOTrainer(BaseTrainer):
             non_score_reward=non_score_reward,
             train_stats=train_stats,
             kl_coef=self.kl_ctl.value,
-            mask=mask,
+            masks=masks,
         )
         # Gather/Reduce stats from all processes
         if self.is_distributed:
@@ -627,7 +627,8 @@ class PPOTrainer(BaseTrainer):
                 attention_mask = input_kwargs["attention_mask"]
 
             logprobs = logprobs_from_logits(logits[:, :-1, :], input_ids[:, 1:])
-            masks = attention_mask.clone()
+            masks = torch.zeros_like(attention_mask)
+            masks[:, :-1] = attention_mask[:, 1:]
 
             for j in range(fbs):
                 if self.is_encoder_decoder:
@@ -651,13 +652,11 @@ class PPOTrainer(BaseTrainer):
             all_logprobs.append(logprobs)
             all_masks.append(masks)
 
-        # model inputs can ignore first element while model outputs ignore last element
-
         return (
             torch.cat(all_logprobs),
             torch.cat(all_logits)[:, :-1],
             torch.cat(all_values)[:, :-1],
-            torch.cat(all_masks)[:, 1:],
+            torch.cat(all_masks)[:, :-1],
         )
 
     def train_minibatch(
