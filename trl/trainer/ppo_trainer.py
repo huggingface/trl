@@ -446,7 +446,7 @@ class PPOTrainer(BaseTrainer):
         timing["time/ppo/forward_pass"] = time.time() - t
 
         t = time.time()
-        rewards, non_score_reward = self.compute_rewards(scores, all_logprobs, ref_logprobs)
+        rewards, non_score_reward = self.compute_rewards(scores, all_logprobs, ref_logprobs, masks)
         timing["time/ppo/compute_rewards"] = time.time() - t
 
         mini_batch_dict = {
@@ -700,7 +700,13 @@ class PPOTrainer(BaseTrainer):
         train_stats["time/ppo/optimizer_step"] = torch.Tensor([time.time() - t]).to(self.accelerator.device)
         return train_stats
 
-    def compute_rewards(self, scores: torch.FloatTensor, logprobs: torch.FloatTensor, ref_logprobs: torch.FloatTensor):
+    def compute_rewards(
+        self,
+        scores: torch.FloatTensor,
+        logprobs: torch.FloatTensor,
+        ref_logprobs: torch.FloatTensor,
+        masks: torch.LongTensor,
+    ):
         """
         Compute per token rewards from scores and KL-penalty.
 
@@ -713,12 +719,13 @@ class PPOTrainer(BaseTrainer):
                 Log probabilities of the reference model, shape (`batch_size`, `response_length`)
         """
         rewards, non_score_rewards = [], []
-        for score, logprob, ref_logprob in zip(scores, logprobs, ref_logprobs):
+        for score, logprob, ref_logprob, mask in zip(scores, logprobs, ref_logprobs, masks):
             kl = logprob - ref_logprob
             non_score_reward = -self.kl_ctl.value * kl
             non_score_rewards.append(non_score_reward)
             reward = non_score_reward.clone()
-            reward[-1] += score
+            last_non_masked_index = mask.nonzero()[-1]
+            reward[last_non_masked_index] += score
             rewards.append(reward)
         return torch.stack(rewards), torch.stack(non_score_rewards)
 
