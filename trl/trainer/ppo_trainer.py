@@ -759,6 +759,10 @@ class PPOTrainer(BaseTrainer):
         lastgaelam = 0
         advantages_reversed = []
         gen_len = rewards.shape[-1]
+
+        values = values * mask
+        rewards = rewards * mask
+
         for t in reversed(range(gen_len)):
             nextvalues = values[:, t + 1] if t < gen_len - 1 else 0.0
             delta = rewards[:, t] + self.config.gamma * nextvalues - values[:, t]
