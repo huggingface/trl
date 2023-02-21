@@ -436,6 +436,7 @@ class PPOTrainer(BaseTrainer):
         rewards, non_score_reward = self.compute_rewards(scores, all_logprobs, ref_logprobs, masks)
         timing["time/ppo/compute_rewards"] = time.time() - t
 
+        self.model.train()
         mini_batch_dict = {
             "queries": queries,
             "responses": responses,
