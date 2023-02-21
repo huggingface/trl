@@ -607,7 +607,7 @@ class PPOTrainer(BaseTrainer):
                 - all_values (`torch.FloatTensor`): Values of the responses, shape (`batch_size`, `response_length`)
         """
         bs = len(queries)
-        fbs = self.config.forward_batch_size
+        fbs = min(bs, self.config.forward_batch_size)
         all_logprobs = []
         all_logits = []
         all_masks = []
@@ -835,7 +835,7 @@ class PPOTrainer(BaseTrainer):
             stats (`dict`):
                 Dictionary of training step statistics
         """
-        mask = data.pop("mask")
+        mask = data.pop("masks")
 
         kl_list = ((data["logprobs"] - data["ref_logprobs"]) * mask).sum(axis=-1)
         mean_kl = kl_list.mean()
