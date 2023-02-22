@@ -757,7 +757,7 @@ class PPOTrainer(BaseTrainer):
 
         entropy = torch.mean(entropy_from_logits(logits))
         approxkl = 0.5 * torch.mean((logprob - old_logprobs) ** 2)
-        policykl = torch.mean(logprob - old_logprobs)
+        policykl = torch.mean(old_logprobs - logprob)
         return_mean, return_var = torch.mean(returns), torch.var(returns)
         value_mean, value_var = torch.mean(values), torch.var(values)
 
