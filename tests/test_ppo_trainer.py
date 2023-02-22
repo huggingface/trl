@@ -126,7 +126,7 @@ class PPOTrainerTester(unittest.TestCase):
         cls.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         # initialize trainer
-        cls.ppo_config = PPOConfig(batch_size=2, mini_batch_size==1, log_with=None)
+        cls.ppo_config = PPOConfig(batch_size=2, mini_batch_size=1, log_with=None)
 
     @classmethod
     def tearDownClass(cls):
