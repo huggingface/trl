@@ -23,7 +23,7 @@ from peft import LoraConfig, get_peft_model, prepare_model_for_int8_training
 
 tqdm.pandas()
 
-from transformers import pipeline, AutoTokenizer, HfArgumentParser
+from transformers import pipeline, AutoTokenizer, HfArgumentParser, AutoModelForCausalLM
 from datasets import load_dataset
 
 from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead, set_seed
@@ -138,8 +138,9 @@ def collator(data):
 set_seed(config.seed)
 
 # Now let's build the model, the reference model, and the tokenizer.
-ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name, load_in_8bit=True, device_map="auto")
-model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name, load_in_8bit=True, device_map="auto")
+# ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name, load_in_8bit=True, device_map="auto")
+# model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name, load_in_8bit=True, device_map="auto")
+pretrained_model = AutoModelForCausalLM.from_pretrained(config.model_name, load_in_8bit=True, device_map="auto")
 
 tokenizer = AutoTokenizer.from_pretrained(config.model_name)
 
@@ -154,7 +155,7 @@ def print_trainable_parameters(model):
     """
     trainable_params = 0
     all_param = 0
-    for _, param in ref_model.named_parameters():
+    for _, param in model.named_parameters():
         all_param += param.numel()
         if param.requires_grad:
             trainable_params += param.numel()
@@ -173,11 +174,18 @@ lora_config = LoraConfig(
     modules_to_save=["v_head"],
 )
 
+pretrained_model = prepare_model_for_int8_training(pretrained_model)
+pretrained_model = get_peft_model(pretrained_model, lora_config)
+
+model = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model)
+
 model.gradient_checkpointing_disable = model.pretrained_model.gradient_checkpointing_disable
 model.gradient_checkpointing_enable = model.pretrained_model.gradient_checkpointing_enable
 
-model.pretrained_model = prepare_model_for_int8_training(ref_model.pretrained_model)
-model.pretrained_model = get_peft_model(model.pretrained_model, lora_config)
+ref_pretrained_model = AutoModelForCausalLM.from_pretrained(config.model_name, load_in_8bit=True, device_map="auto")
+ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(ref_pretrained_model)
+
+print(model)
 
 print_trainable_parameters(model)
 
