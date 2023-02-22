@@ -83,7 +83,6 @@ config = PPOConfig(
     learning_rate=script_args.learning_rate,
     log_with=script_args.log_with,
 )
-print(config)
 
 # We then define the arguments to pass to the sentiment analysis pipeline.
 # We set `return_all_scores` to True to get the sentiment score for each token.
@@ -205,6 +204,7 @@ generation_kwargs = {
     "top_p": 1.0,
     "do_sample": True,
     "pad_token_id": tokenizer.eos_token_id,
+    "use_cache" : False
 }
 output_min_length = 4
 output_max_length = 16
