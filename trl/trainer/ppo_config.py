@@ -85,7 +85,7 @@ class PPOConfig(object):
         cliprange_value: Optional[float] = 0.2,
         vf_coef: Optional[float] = 0.1,
         batch_size: Optional[int] = 256,
-        forward_batch_size: Optional[int] = 1,
+        forward_batch_size: Optional[int] = 16,
         ppo_epochs: Optional[int] = 4,
         remove_unused_columns: Optional[bool] = True,
         log_with: Optional[str] = None,
