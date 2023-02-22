@@ -95,6 +95,8 @@ Our goal is to train models up to 6B parameters, which is about 24GB in float32!
 model = AutoModelForCausalLM.from_pretrained("EleutherAI/gpt-j-6B", torch_dtype=torch.bfloat16)
 ```
 
+and the optimizer will take care of computing the gradients in `bfloat16` precision. Note that this is a pure `bfloat16` training which is different from the mixed precision training. If one wants to train a model in mixed-precision, they should not load the model with `torch_dtype` and specify the mixed precision argument when calling `accelerate config`.
+
 - Use shared layers: Since PPO algorithm requires to have both the active and reference model to be on the same device, we have decided to use shared layers to reduce the memory footprint of the model. This can be achieved by just speifying `num_shared_layers` argument when creating a `PPOTrainer`:
 
 <div style="text-align: center">
@@ -109,6 +111,8 @@ ppo_trainer = PPOTrainer(
     ...
 )
 ```
+
+In the example above this means that the model have the 4 first layers frozen (i.e. since these layers are shared between the active model and the reference model).
 
 - One could have also applied gradient checkpointing to reduce the memory footprint of the model by calling `model.pretrained_model.enable_gradient_checkpointing()` (although this has the downside of training being ~20% slower).
 
