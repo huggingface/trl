@@ -126,7 +126,7 @@ class PPOTrainerTester(unittest.TestCase):
         cls.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         # initialize trainer
-        cls.ppo_config = PPOConfig(batch_size=2, forward_batch_size=1, log_with=None)
+        cls.ppo_config = PPOConfig(batch_size=2, mini_batch_size==1, log_with=None)
 
     @classmethod
     def tearDownClass(cls):
@@ -138,7 +138,7 @@ class PPOTrainerTester(unittest.TestCase):
 
     def setUp(self):
         # initialize trainer
-        self.ppo_config = PPOConfig(batch_size=2, forward_batch_size=1, log_with=None)
+        self.ppo_config = PPOConfig(batch_size=2, mini_batch_size=1, log_with=None)
         self.gpt2_model.train()
         return super().setUp()
 
@@ -165,7 +165,7 @@ class PPOTrainerTester(unittest.TestCase):
         return dummy_dataset
 
     def test_drop_last_dataloader(self):
-        self.ppo_config = PPOConfig(batch_size=3, forward_batch_size=1, log_with=None)
+        self.ppo_config = PPOConfig(batch_size=3, mini_batch_size=1, log_with=None)
 
         dummy_dataset = self._init_dummy_dataset()
 
@@ -533,7 +533,7 @@ class PPOTrainerTester(unittest.TestCase):
         dummy_responses = [torch.tensor([5, 6, 7, 8, 9]), torch.tensor([8, 9, 10, 11, 12, 13])]
         dummy_scores = torch.Tensor([1, 2])
 
-        ppo_trainer.config.forward_batch_size = 1
+        ppo_trainer.config.mini_batch_size = 1
         ppo_trainer.config.batch_size = 1
         model_inputs = ppo_trainer.prepare_model_inputs(dummy_queries, dummy_responses)
         all_logprobs, _, values, mask = ppo_trainer.batched_forward_pass(
@@ -617,7 +617,7 @@ class PPOTrainerTester(unittest.TestCase):
         # if fwd_bs=1/bs=2: padding is applied and results computed in two fwd passes
         # if fwd_bs=bs=2: padding is applied and results computed in one fwd pass
 
-        ppo_trainer.config.forward_batch_size = 1
+        ppo_trainer.config.mini_batch_size = 1
         ppo_trainer.config.batch_size = 1
 
         model_inputs = ppo_trainer.prepare_model_inputs([dummy_queries[0]], [dummy_responses[0]])
@@ -631,7 +631,7 @@ class PPOTrainerTester(unittest.TestCase):
             model, dummy_queries, dummy_responses, model_inputs
         )
 
-        ppo_trainer.config.forward_batch_size = 2
+        ppo_trainer.config.mini_batch_size = 2
         model_inputs = ppo_trainer.prepare_model_inputs(dummy_queries, dummy_responses)
         logprobs_2, logits_2, values_2, mask_2 = ppo_trainer.batched_forward_pass(
             model, dummy_queries, dummy_responses, model_inputs

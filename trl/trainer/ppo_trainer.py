@@ -602,7 +602,7 @@ class PPOTrainer(BaseTrainer):
                 - all_values (`torch.FloatTensor`): Values of the responses, shape (`batch_size`, `response_length`)
         """
         bs = len(queries)
-        fbs = min(bs, self.config.forward_batch_size)
+        fbs = self.config.mini_batch_size
         all_logprobs = []
         all_logits = []
         all_masks = []

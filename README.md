@@ -71,7 +71,6 @@ tokenizer = AutoTokenizer.from_pretrained('gpt2')
 # initialize trainer
 ppo_config = PPOConfig(
     batch_size=1,
-    forward_batch_size=1
 )
 
 # encode a query
