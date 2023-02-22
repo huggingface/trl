@@ -1,7 +1,7 @@
 # Detoxifying a LM using PPO
 
 Let us check step by step on how to detoxify a Language Model using PPO, using a dataset of toxic prompts! 
-Read this section to follow our journey on how we managed to detoxify a wide range of LMs, from 125m parameters to 6B parameters! 
+Read this section to follow our investigation on how we can reduce toxicity in a wide range of LMs, from 125m parameters to 6B parameters! 
 
 Here's an overview of the notebooks and scripts in the [trl repository](https://github.com/lvwerra/trl/tree/main/examples/toxicity):
 
@@ -11,8 +11,7 @@ Here's an overview of the notebooks and scripts in the [trl repository](https://
 
 ## Context
 
-A Language Model is not initially trained to be toxic, but it can be trained to be toxic by feeding it toxic prompts. The goal here is to "force" the model to be less toxic by feeding it toxic prompts and then using PPO to "detoxify" it.
-We believe that if this technique would be applied to language models that are meant to be toxic (e.g. GPT-4chan) the results would be even more impressive.
+Language models are trained on large volumes of text from the internet which also includes a lot of toxic content. Naturally,  language models pick up the toxic patterns during training. Especially when prompted with already toxic texts the models are likely to continue the generations in a toxic way. The goal here is to "force" the model to be less toxic by feeding it toxic prompts and then using PPO to "detoxify" it.
 
 ### Computing toxicity scores
 
@@ -21,7 +20,7 @@ One could have also used different techniques to evaluate the toxicity of a mode
 
 ### Selection of models
 
-We have decided to chose these models for our experiments to show that `trl` can be easily scaled to 10B parameters models. We have chosen to use the following models: 
+We selected the following models for our experiments to show that `trl` can be easily scaled to 10B parameters models: 
 
 * [`EleutherAI/gpt-neo-125M`](https://huggingface.co/EleutherAI/gpt-neo-125M) (125 million parameters)
 * [`EleutherAI/gpt-neo-2.7B`](https://huggingface.co/EleutherAI/gpt-neo-2.7B) (2.7 billion parameters)
@@ -42,7 +41,7 @@ When doing PPO, it is very important to design the problem efficiently so that t
 
 ### Pre-processing the dataset
 
-As we want to enhance the chance for the model to generate toxic prompts we decided to pre-process the dataset to consider only the prompt that has a toxicity score that is greater than a threshold. This can be achieved with few lines of code as shown below:
+We want to increase the chance for the model to generate toxic prompts so we get more learning signal. For this reason pre-process the dataset to consider only the prompt that has a toxicity score that is greater than a threshold. We can do this in a few lines of code:
 ```python
 ds = load_dataset("allenai/real-toxicity-prompts", split="train")
 
@@ -56,7 +55,7 @@ ds = ds.filter(filter_fn, batched=False)
 ### Reward function
 
 
-The reward function is one of the most important part of the PPO algorithm. It is the function that will tell the model if it is doing well or not.
+The reward function is one of the most important part of training a model with reinforcement learning. It is the function that will tell the model if it is doing well or not.
 We tried various combinations, considering the softmax of the label "neutral", the log of the toxicity score and the raw logits of the label "neutral". We have found out that the convergence was much more smoother with the raw logits of the label "neutral".
 ```python
 logits = toxicity_model(**toxicity_inputs).logits.float()
@@ -66,7 +65,7 @@ toxicity_labels = (logits[:, 0]).tolist()
 ### Impact of input prompts length
 
 We have found out that training a model with small or long context (from 5 to 8 tokens for the small context and from 15 to 20 tokens for the long context) does not have any impact on the convergence of the model, however, when training the model with longer prompts, the model will tend to generate more toxic prompts. 
-We decided to use a context window of 10 to 15 tokens for the training of the larger models, as we think the results will be more impressive if the model is able to generate toxic prompts even with slightly long contexts.
+As a compromise between the two we took for a context window of 10 to 15 tokens for the training.
 
 
 <div style="text-align: center">
@@ -75,7 +74,7 @@ We decided to use a context window of 10 to 15 tokens for the training of the la
 
 ### How to deal with OOM issues
 
-Oour goal was to train models up to 6B parameters, which is about 24GB in float32! Here are few tricks we have used to be able to train the largest model on a single 40GB-RAM GPU:
+Our goal is to train models up to 6B parameters, which is about 24GB in float32! Here two tricks we use to be able to train a 6B model on a single 40GB-RAM GPU:
 
 - Use `bfloat16` precision: Simply load your model in `bfloat16` when calling `from_pretrained` and you can reduce the size of the model by 2:
 
@@ -111,19 +110,19 @@ We have trained 6 models in total:
 - [`ybelkada/gpt-j-6b-detoxified-20shdl-4mbs`](https://huggingface.co/ybelkada/gpt-j-6b-detoxified-20shdl-4mbs)
 - [`ybelkada/gpt-j-6b-detoxified-1000-20shdl`](https://huggingface.co/ybelkada/gpt-j-6b-detoxified-1000-20shdl)
 
-We have used different learning rates for each model, and have found out that the largest models were quite hard to train and can easily lead to collapse mode if the learning rate is not chosen correctly (i.e. if the learning rate is too high)
+We have used different learning rates for each model, and have found out that the largest models were quite hard to train and can easily lead to collapse mode if the learning rate is not chosen correctly (i.e. if the learning rate is too high):
 
 <div style="text-align: center">
 <img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl-collapse-mode.png">
 </div>
 
-The final training run of `ybelkada/gpt-j-6b-detoxified-1000-20shdl` looks like the following for the largest model:
+The final training run of `ybelkada/gpt-j-6b-detoxified-1000-20shdl` looks like this:
 
 <div style="text-align: center">
 <img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl-gpt-j-final-run-2.png">
 </div>
 
-As you can see the model seems to converge quite nicely, but obviously we don't observe a very large improvement from the first step, as the original model is not trained to generate toxic contents. 
+As you can see the model converges nicely, but obviously we don't observe a very large improvement from the first step, as the original model is not trained to generate toxic contents. 
 
 Also we have observed that training with larger `mini_batch_size` leads to smoother convergence and better results on the test set:
 
@@ -133,7 +132,7 @@ Also we have observed that training with larger `mini_batch_size` leads to smoot
 
 ## Results
 
-We tested our models on a new dataset, the `OxAISH-AL-LLM/wiki_toxic` dataset that can be found [here](https://huggingface.co/datasets/OxAISH-AL-LLM/wiki_toxic). We feed to each model a toxic prompt from it (a sample with the label "toxic"), and generate 30 new tokens as it is done on the training loop and measure the toxicity score using `evaluate`'s [`toxicity` metric](https://huggingface.co/spaces/ybelkada/toxicity).
+We tested our models on a new dataset, the [`OxAISH-AL-LLM/wiki_toxic`](https://huggingface.co/datasets/OxAISH-AL-LLM/wiki_toxic) dataset. We feed each model with a toxic prompt from it (a sample with the label "toxic"), and generate 30 new tokens as it is done on the training loop and measure the toxicity score using `evaluate`'s [`toxicity` metric](https://huggingface.co/spaces/ybelkada/toxicity).
 We report the toxicity score of 400 sampled examples, compute its mean and standard deviation and report the results in the table below:
 
 | Model | Mean toxicity score | Std toxicity score |
@@ -160,7 +159,7 @@ The evaluation script can be found [here](https://gist.github.com/younesbelkada/
 
 ### Discussions
 
-The results are quite promising, as we can see that the models are able to reduce the toxicity score of the generated text by an interesting margin. The gap is impressive for `gpt-neo-2B` model but we hoped to see a larger gap for the `gpt-j-6B` model. We believe that many tricks could solve these issues at scale, starting with training with larger `mini_batch_size` and probably allowing to back-propagate through more layers (i.e. use less shared layers).
+The results are quite promising, as we can see that the models are able to reduce the toxicity score of the generated text by an interesting margin. The gap is clear for `gpt-neo-2B` model but we less so for the `gpt-j-6B` model. There are several things we could try to improve the results on the largest model starting with training with larger `mini_batch_size` and probably allowing to back-propagate through more layers (i.e. use less shared layers).
 We also think we could have trained the models on a "more toxic" dataset as the one we used is much cleaner than the dataset we used for testing our models (from our observation). 
 A hypothesis we made is that larger models tends to be more toxic. Therefore, one could have also played with the KL-penalty term, to allow the model to deviate a bit more from its original distribution. We also believe that fine-tuning a model that is known to be toxic (i.e. trained on a toxic dataset) could also lead to better results.
 We have also observed that training the model with larger context helps getting better results for larger models. Therefore one could have also played with this factor for the larger model and produce a better model. 
