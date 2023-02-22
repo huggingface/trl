@@ -23,7 +23,7 @@ from peft import LoraConfig, get_peft_model, prepare_model_for_int8_training
 
 tqdm.pandas()
 
-from transformers import pipeline, AutoTokenizer, HfArgumentParser
+from transformers import pipeline, AutoTokenizer, HfArgumentParser, AutoModelForCausalLM
 from datasets import load_dataset
 
 from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead, set_seed
@@ -69,8 +69,8 @@ class ScriptArguments:
 
     # NOTE: gpt2 models use Conv1D instead of Linear layers which are not yet supported in 8 bit mode
     # models like gpt-neo* models are more suitable
-    model_name: Optional[str] = field(default="lvwerra/gpt2-imdb", metadata={"help": "the model name"})
-    log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
+    model_name: Optional[str] = field(default="edbeeching/gpt-neo-125M-imdb", metadata={"help": "the model name"})
+    log_with: Optional[str] = field(default="wandb", metadata={"help": "use 'wandb' to log with wandb"})
     learning_rate: Optional[float] = field(default=1.41e-5, metadata={"help": "use 'wandb' to log with wandb"})
     # peft_modules_to_save: Optional[str] = field(default=["v_head"], metadata={"help": "use 'wandb' to log with wandb"})
 
@@ -82,6 +82,8 @@ config = PPOConfig(
     model_name=script_args.model_name,
     learning_rate=script_args.learning_rate,
     log_with=script_args.log_with,
+    forward_batch_size=16,
+    batch_size=256,
 )
 
 # We then define the arguments to pass to the sentiment analysis pipeline.
@@ -136,8 +138,9 @@ def collator(data):
 set_seed(config.seed)
 
 # Now let's build the model, the reference model, and the tokenizer.
-ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name, load_in_8bit=True, device_map="auto")
-model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name, load_in_8bit=True, device_map="auto")
+# ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name, load_in_8bit=True, device_map="auto")
+# model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name, load_in_8bit=True, device_map="auto")
+pretrained_model = AutoModelForCausalLM.from_pretrained(config.model_name, load_in_8bit=True, device_map="auto")
 
 tokenizer = AutoTokenizer.from_pretrained(config.model_name)
 
@@ -152,7 +155,7 @@ def print_trainable_parameters(model):
     """
     trainable_params = 0
     all_param = 0
-    for _, param in ref_model.named_parameters():
+    for _, param in model.named_parameters():
         all_param += param.numel()
         if param.requires_grad:
             trainable_params += param.numel()
@@ -171,10 +174,18 @@ lora_config = LoraConfig(
     modules_to_save=["v_head"],
 )
 
+pretrained_model = prepare_model_for_int8_training(pretrained_model)
+pretrained_model = get_peft_model(pretrained_model, lora_config)
+
+model = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model)
+
 model.gradient_checkpointing_disable = model.pretrained_model.gradient_checkpointing_disable
 model.gradient_checkpointing_enable = model.pretrained_model.gradient_checkpointing_enable
-model.pretrained_model = prepare_model_for_int8_training(ref_model.pretrained_model)
-model.pretrained_model = get_peft_model(model.pretrained_model, lora_config)
+
+ref_pretrained_model = AutoModelForCausalLM.from_pretrained(config.model_name, load_in_8bit=True, device_map="auto")
+ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(ref_pretrained_model)
+
+print(model)
 
 print_trainable_parameters(model)
 
@@ -186,12 +197,12 @@ tokenizer.pad_token = tokenizer.eos_token
 #{'params': model.base.parameters()},
 #                {'params': model.classifier.parameters(), 'lr': 1e-3}
 
-params = [
-    {"params": model.pretrained_model.parameters()},
-    {"params": model.v_head.parameters(), "lr": config.learning_rate / 10.0},
-]
+# params = [
+#     {"params": model.pretrained_model.parameters()},
+#     {"params": model.v_head.parameters(), "lr": config.learning_rate * 100.0},
+# ]
 
-optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
+optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=config.learning_rate * 10.0)
 
 # We then build the PPOTrainer, passing the model, the reference model, the tokenizer
 ppo_trainer = PPOTrainer(config, model, ref_model, tokenizer, dataset=dataset, data_collator=collator, optimizer=optimizer)
@@ -224,25 +235,25 @@ output_length_sampler = LengthSampler(output_min_length, output_max_length)
 for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     query_tensors = batch["input_ids"]
 
-    with torch.cuda.amp.autocast():
-        model.gradient_checkpointing_disable()
-        #### Get response from Causal LM
-        response_tensors = []
-        for query in query_tensors:
-            gen_len = output_length_sampler()
-            generation_kwargs["max_new_tokens"] = gen_len
-            response = ppo_trainer.generate(query, **generation_kwargs)
-            response_tensors.append(response.squeeze()[-gen_len:])
-        batch["response"] = [tokenizer.decode(r.squeeze()) for r in response_tensors]
+    model.gradient_checkpointing_disable()
+    #### Get response from Causal LM
+    response_tensors = []
+    for query in query_tensors:
+        gen_len = output_length_sampler()
+        generation_kwargs["max_new_tokens"] = gen_len
+        response = ppo_trainer.generate(query, **generation_kwargs)
+        response_tensors.append(response.squeeze()[-gen_len:])
+    batch["response"] = [tokenizer.decode(r.squeeze()) for r in response_tensors]
 
-        #### Compute sentiment score
-        texts = [q + r for q, r in zip(batch["query"], batch["response"])]
-        pipe_outputs = sentiment_pipe(texts, **sent_kwargs)
-        rewards = [torch.tensor(output[1]["score"]) for output in pipe_outputs]
+    #### Compute sentiment score
+    texts = [q + r for q, r in zip(batch["query"], batch["response"])]
+    pipe_outputs = sentiment_pipe(texts, **sent_kwargs)
+    rewards = [torch.tensor(output[1]["score"]) for output in pipe_outputs]
+    model.gradient_checkpointing_enable()
 
-        #### Run PPO step
+    #### Run PPO step
         
-        stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
+    stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
     ppo_trainer.log_stats(stats, batch, rewards)
 
 
