@@ -194,8 +194,10 @@ print_trainable_parameters(model)
 tokenizer.pad_token = tokenizer.eos_token
 
 # create our own optimizer
-#{'params': model.base.parameters()},
-#                {'params': model.classifier.parameters(), 'lr': 1e-3}
+# params = [
+#     {"params": model.pretrained_model.parameters()},
+#     {"params": model.v_head.parameters(), "lr": config.learning_rate / 10.0},
+# ]
 
 # params = [
 #     {"params": model.pretrained_model.parameters()},
@@ -228,8 +230,6 @@ generation_kwargs = {
 output_min_length = 4
 output_max_length = 16
 output_length_sampler = LengthSampler(output_min_length, output_max_length)
-
-
 
 
 for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
