@@ -562,7 +562,7 @@ class PPOTrainer(BaseTrainer):
             input_data["decoder_input_ids"] = decoder_inputs["input_ids"]
             input_data["decoder_attention_mask"] = decoder_inputs["attention_mask"]
 
-            input_data.pop("labels")  # we don't want to compute LM losses
+            input_data.pop("labels", None)  # we don't want to compute LM losses
 
         else:
             input_ids = [torch.cat([q, r]) for q, r in zip(queries, responses)]
@@ -828,9 +828,6 @@ class PPOTrainer(BaseTrainer):
         kl_list = ((data["logprobs"] - data["ref_logprobs"]) * mask).sum(axis=-1)
         mean_kl = kl_list.mean()
         mean_entropy = (-data["logprobs"] * mask).sum(axis=-1).mean()
-        # kl_list = [logprobs - ref_logprobs for logprobs, ref_logprobs in zip(data["logprobs"], data["ref_logprobs"])]
-        # mean_kl = masked_mean(torch.stack([torch.sum(kl) for kl in kl_list]), mask)
-        # mean_entropy = masked_mean(torch.stack([torch.sum(-log_probs) for log_probs in data["logprobs"]]), mask)
 
         mean_non_score_reward = masked_mean(data["non_score_reward"], mask)
 
