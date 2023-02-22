@@ -108,7 +108,7 @@ We have trained 6 models in total:
 - [`ybelkada/gpt-neo-125m-detoxified-long-context`](https://huggingface.co/ybelkada/gpt-neo-125m-detoxified-long-context)
 - [`ybelkada/gpt-neo-2B-detoxified-20sh-30steps`](https://huggingface.co/ybelkada/gpt-neo-2B-detoxified-20sh-30steps)
 - [`ybelkada/gpt-neo-2.7B-detoxified-20shdl`](https://huggingface.co/ybelkada/gpt-neo-2.7B-detoxified-20shdl)
-- [`ybelkada/gpt-j-6b-detoxified-24-shdl-400steps`](https://huggingface.co/ybelkada/gpt-j-6b-detoxified-24-shdl-400steps)
+- [`ybelkada/gpt-j-6b-detoxified-20shdl-4mbs`](https://huggingface.co/ybelkada/gpt-j-6b-detoxified-20shdl-4mbs)
 - [`ybelkada/gpt-j-6b-detoxified-1000-20shdl`](https://huggingface.co/ybelkada/gpt-j-6b-detoxified-1000-20shdl)
 
 We have used different learning rates for each model, and have found out that the largest models were quite hard to train and can easily lead to collapse mode if the learning rate is not chosen correctly (i.e. if the learning rate is too high)
@@ -117,7 +117,7 @@ We have used different learning rates for each model, and have found out that th
 <img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl-collapse-mode.png">
 </div>
 
-The final training run looks like the following for the largest model:
+The final training run of `ybelkada/gpt-j-6b-detoxified-1000-20shdl` looks like the following for the largest model:
 
 <div style="text-align: center">
 <img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl-gpt-j-final-run-2.png">
@@ -125,6 +125,45 @@ The final training run looks like the following for the largest model:
 
 As you can see the model seems to converge quite nicely, but obviously we don't observe a very large improvement from the first step, as the original model is not trained to generate toxic contents. 
 
+Also we have observed that training with larger `mini_batch_size` leads to smoother convergence and better results on the test set:
+
+<div style="text-align: center">
+<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl-gpt-j-mbs-run.png">
+</div>
+
 ## Results
+
+We tested our models on a new dataset, the `OxAISH-AL-LLM/wiki_toxic` dataset that can be found [here](https://huggingface.co/datasets/OxAISH-AL-LLM/wiki_toxic). We feed to each model a toxic prompt from it (a sample with the label "toxic"), and generate 30 new tokens as it is done on the training loop and measure the toxicity score using `evaluate`'s [`toxicity` metric](https://huggingface.co/spaces/ybelkada/toxicity).
+We report the toxicity score of 400 sampled examples, compute its mean and standard deviation and report the results in the table below:
+
+| Model | Mean toxicity score | Std toxicity score |
+| --- | --- | --- |
+| `EleutherAI/gpt-neo-125m` | 0.1627 | 0.2997 |
+| `ybelkada/gpt-neo-125m-detoxified-small-context` | 0.1148 | 0.2506 |
+| --- | --- | --- |
+| `EleutherAI/gpt-neo-2.7B` | 0.1884 | ,0.3178 |
+| `ybelkada/gpt-neo-2.7B-detoxified-20shdl` | 0.0916 | 0.2104 |
+| --- | --- | --- |
+| `EleutherAI/gpt-j-6B` | 0.1699 | 0.3033 |
+| `ybelkada/gpt-j-6b-detoxified-20shdl-4mbs` | 0.1510 | 0.2798 |
+
+<div class="column" style="text-align:center">
+    <img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl-toxicity-final-plot.png" style="width:70%">
+  </div>
+  <div class="column">
+    <img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl-toxicity-without-std.png" style="width:70%">
+  </div>
+</div>
+
+The evaluation script can be found [here](https://gist.github.com/younesbelkada/781b862ffbe1233a1c117a07716d4711).
+
+### Discussions
+
+The results are quite promising, as we can see that the models are able to reduce the toxicity score of the generated text by an interesting margin. The gap is impressive for `gpt-neo-2B` model but we hoped to see a larger gap for the `gpt-j-6B` model. We believe that many tricks could solve these issues at scale, starting with training with larger `mini_batch_size` and probably allowing to back-propagate through more layers (i.e. use less shared layers).
+We also think we could have trained the models on a "more toxic" dataset as the one we used is much cleaner than the dataset we used for testing our models (from our observation). 
+A hypothesis we made is that larger models tends to be more toxic. Therefore, one could have also played with the KL-penalty term, to allow the model to deviate a bit more from its original distribution. We also believe that fine-tuning a model that is known to be toxic (i.e. trained on a toxic dataset) could also lead to better results.
+We have also observed that training the model with larger context helps getting better results for larger models. Therefore one could have also played with this factor for the larger model and produce a better model. 
+
+## What is next?
 
 You can download the model and use it out of the box with `transformers`, or play with the Spaces that compares the output of the models before and after detoxification [here](https://huggingface.co/spaces/ybelkada/detoxified-lms).
