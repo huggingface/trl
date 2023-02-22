@@ -19,7 +19,7 @@ import torch
 import torch.nn as nn
 from huggingface_hub import hf_hub_download
 from transformers import PreTrainedModel
-
+from peft import PeftModelForCausalLM, PeftModelForSeq2SeqLM
 
 LAYER_PATTERNS = ["transformer.h.{layer}", "model.decoder.layers.{layer}", "gpt_neox.layers.{layer}"]
 
@@ -80,7 +80,7 @@ class PreTrainedModelWrapper(nn.Module):
             pretrained_model = cls.transformers_parent_class.from_pretrained(
                 pretrained_model_name_or_path, *model_args, **pretrained_kwargs
             )
-        elif isinstance(pretrained_model_name_or_path, PreTrainedModel):
+        elif isinstance(pretrained_model_name_or_path, (PreTrainedModel, PeftModelForCausalLM, PeftModelForSeq2SeqLM)):
             pretrained_model = pretrained_model_name_or_path
         else:
             raise ValueError(
