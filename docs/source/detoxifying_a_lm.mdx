@@ -97,7 +97,7 @@ ppo_trainer = PPOTrainer(
 )
 ```
 
-- One could have also applied gradient checkpointing to reduce the memory footprint of the model by calling `model.pretrained_model.enable_gradient_checkpointing()`.
+- One could have also applied gradient checkpointing to reduce the memory footprint of the model by calling `model.pretrained_model.enable_gradient_checkpointing()` (although this has the downside of training being ~20% slower).
 
 ## Training the model!
 
