@@ -59,7 +59,7 @@ The reward function is one of the most important part of training a model with r
 We tried various combinations, considering the softmax of the label "neutral", the log of the toxicity score and the raw logits of the label "neutral". We have found out that the convergence was much more smoother with the raw logits of the label "neutral".
 ```python
 logits = toxicity_model(**toxicity_inputs).logits.float()
-toxicity_labels = (logits[:, 0]).tolist()
+rewards = (logits[:, 0]).tolist()
 ```
 
 ### Impact of input prompts length
