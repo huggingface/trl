@@ -101,14 +101,11 @@ ppo_trainer = PPOTrainer(
 
 ## Training the model!
 
-We have trained 6 models in total:
+We have decided to keep 3 models in total that correspond to our best models:
 
-- [`ybelkada/gpt-neo-125m-detoxified-small-context`](https://huggingface.co/ybelkada/gpt-neo-125m-detoxified-small-context)
-- [`ybelkada/gpt-neo-125m-detoxified-long-context`](https://huggingface.co/ybelkada/gpt-neo-125m-detoxified-long-context)
-- [`ybelkada/gpt-neo-2B-detoxified-20sh-30steps`](https://huggingface.co/ybelkada/gpt-neo-2B-detoxified-20sh-30steps)
-- [`ybelkada/gpt-neo-2.7B-detoxified-20shdl`](https://huggingface.co/ybelkada/gpt-neo-2.7B-detoxified-20shdl)
-- [`ybelkada/gpt-j-6b-detoxified-20shdl-4mbs`](https://huggingface.co/ybelkada/gpt-j-6b-detoxified-20shdl-4mbs)
-- [`ybelkada/gpt-j-6b-detoxified-1000-20shdl`](https://huggingface.co/ybelkada/gpt-j-6b-detoxified-1000-20shdl)
+- [`ybelkada/gpt-neo-125m-detox`](https://huggingface.co/ybelkada/gpt-neo-125m-detox)
+- [`ybelkada/gpt-neo-2.7B-detox`](https://huggingface.co/ybelkada/gpt-neo-2.7B-detox)
+- [`ybelkada/gpt-j-6b-detox`](https://huggingface.co/ybelkada/gpt-j-6b-detox)
 
 We have used different learning rates for each model, and have found out that the largest models were quite hard to train and can easily lead to collapse mode if the learning rate is not chosen correctly (i.e. if the learning rate is too high):
 
@@ -138,13 +135,13 @@ We report the toxicity score of 400 sampled examples, compute its mean and stand
 | Model | Mean toxicity score | Std toxicity score |
 | --- | --- | --- |
 | `EleutherAI/gpt-neo-125m` | 0.1627 | 0.2997 |
-| `ybelkada/gpt-neo-125m-detoxified-small-context` | **0.1148** | **0.2506** |
+| `ybelkada/gpt-neo-125m-detox` | **0.1148** | **0.2506** |
 | --- | --- | --- |
 | `EleutherAI/gpt-neo-2.7B` | 0.1884 | ,0.3178 |
-| `ybelkada/gpt-neo-2.7B-detoxified-20shdl` | **0.0916** | **0.2104** |
+| `ybelkada/gpt-neo-2.7B-detox` | **0.0916** | **0.2104** |
 | --- | --- | --- |
 | `EleutherAI/gpt-j-6B` | 0.1699 | 0.3033 |
-| `ybelkada/gpt-j-6b-detoxified-20shdl-4mbs` | **0.1510** | **0.2798** |
+| `ybelkada/gpt-j-6b-detox` | **0.1510** | **0.2798** |
 
 <div class="column" style="text-align:center">
   <figure>
