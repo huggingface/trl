@@ -437,6 +437,7 @@ class PPOTrainer(BaseTrainer):
         timing["time/ppo/compute_rewards"] = time.time() - t
 
         self.model.train()
+        self.model.gradient_checkpointing_enable()
         mini_batch_dict = {
             "queries": queries,
             "responses": responses,

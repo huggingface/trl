@@ -137,6 +137,8 @@ set_seed(config.seed)
 
 # Now let's build the model, the reference model, and the tokenizer.
 ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name, load_in_8bit=True, device_map="auto")
+model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name, load_in_8bit=True, device_map="auto")
+
 tokenizer = AutoTokenizer.from_pretrained(config.model_name)
 
 """### Apply LoRA
@@ -162,21 +164,17 @@ def print_trainable_parameters(model):
 lora_config = LoraConfig(
     r=16,
     lora_alpha=32,
-    target_modules=["k_proj", "v_proj", "q_proj", "out_proj"],  # Are these the correct layers to target with LoRA ?
+    target_modules=["v_proj","q_proj", "k_proj"],  # Are these the correct layers to target with LoRA ?
     lora_dropout=0.05,
     bias="none",
     task_type="CAUSAL_LM",
     modules_to_save=["v_head"],
 )
 
-ref_model.config = (
-    ref_model.pretrained_model.config
-)  # We should probably change the AutoModelForCausalLMWithValueHead to have a config property
-ref_model.prepare_inputs_for_generation = (
-    ref_model.pretrained_model.prepare_inputs_for_generation
-)  # Again, this is required by LoRA, should we also add this method to AutoModelForCausalLMWithValueHead?
-ref_model.pretrained_model = prepare_model_for_int8_training(ref_model.pretrained_model)
-model = get_peft_model(ref_model, lora_config)
+model.gradient_checkpointing_disable = model.pretrained_model.gradient_checkpointing_disable
+model.gradient_checkpointing_enable = model.pretrained_model.gradient_checkpointing_enable
+model.pretrained_model = prepare_model_for_int8_training(ref_model.pretrained_model)
+model.pretrained_model = get_peft_model(model.pretrained_model, lora_config)
 
 print_trainable_parameters(model)
 
@@ -184,8 +182,19 @@ print_trainable_parameters(model)
 # only for this model.
 tokenizer.pad_token = tokenizer.eos_token
 
+# create our own optimizer
+#{'params': model.base.parameters()},
+#                {'params': model.classifier.parameters(), 'lr': 1e-3}
+
+params = [
+    {"params": model.pretrained_model.parameters()},
+    {"params": model.v_head.parameters(), "lr": config.learning_rate / 10.0},
+]
+
+optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
+
 # We then build the PPOTrainer, passing the model, the reference model, the tokenizer
-ppo_trainer = PPOTrainer(config, model, ref_model, tokenizer, dataset=dataset, data_collator=collator)
+ppo_trainer = PPOTrainer(config, model, ref_model, tokenizer, dataset=dataset, data_collator=collator, optimizer=optimizer)
 
 # We then build the sentiment analysis pipeline, passing the model name and the
 # sentiment analysis pipeline arguments. Let's also make sure to set the device
@@ -204,16 +213,19 @@ generation_kwargs = {
     "top_p": 1.0,
     "do_sample": True,
     "pad_token_id": tokenizer.eos_token_id,
-    "use_cache" : False
 }
 output_min_length = 4
 output_max_length = 16
 output_length_sampler = LengthSampler(output_min_length, output_max_length)
 
+
+
+
 for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     query_tensors = batch["input_ids"]
 
     with torch.cuda.amp.autocast():
+        model.gradient_checkpointing_disable()
         #### Get response from Causal LM
         response_tensors = []
         for query in query_tensors:
@@ -229,6 +241,7 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
         rewards = [torch.tensor(output[1]["score"]) for output in pipe_outputs]
 
         #### Run PPO step
+        
         stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
     ppo_trainer.log_stats(stats, batch, rewards)
 
