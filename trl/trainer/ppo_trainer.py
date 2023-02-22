@@ -779,11 +779,11 @@ class PPOTrainer(BaseTrainer):
 
         loss = pg_loss + self.config.vf_coef * vf_loss
 
-        entropy = torch.mean(entropy_from_logits(logits))
-        approxkl = 0.5 * torch.mean((logprob - old_logprobs) ** 2)
-        policykl = masked_mean(old_logprobs - logprob, mask)
-        return_mean, return_var = torch.mean(returns), torch.var(returns)
-        value_mean, value_var = torch.mean(values), torch.var(values)
+        entropy = masked_mean(entropy_from_logits(logits), mask)
+        approxkl = 0.5 * masked_mean((logprobs - old_logprobs) ** 2, mask)
+        policykl = masked_mean(old_logprobs - logprobs, mask)
+        return_mean, return_var = masked_mean(returns, mask), masked_var(returns, mask)
+        value_mean, value_var = masked_mean(values, mask), masked_var(values, mask)
 
         stats = dict(
             loss=dict(policy=pg_loss, value=vf_loss, total=loss),
