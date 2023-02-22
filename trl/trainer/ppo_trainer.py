@@ -438,6 +438,7 @@ class PPOTrainer(BaseTrainer):
         timing["time/ppo/compute_rewards"] = time.time() - t
 
         self.model.train()
+        self.model.gradient_checkpointing_enable()
         t = time.time()
         all_stats = []
         idxs = list(range(bs))
