@@ -222,7 +222,9 @@ def create_reference_model(
     Returns
         `PreTrainedModelWrapper`
     """
-
+    if hasattr(model.pretrained_model, "disable_adapter"):
+        # don't create a ref model if we are using an adaptor
+        return None
     parameter_names = [n for n, _ in model.named_parameters()]
     ref_model = deepcopy(model)
 

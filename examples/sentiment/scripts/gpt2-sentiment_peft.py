@@ -182,8 +182,8 @@ model = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model)
 model.gradient_checkpointing_disable = model.pretrained_model.gradient_checkpointing_disable
 model.gradient_checkpointing_enable = model.pretrained_model.gradient_checkpointing_enable
 
-ref_pretrained_model = AutoModelForCausalLM.from_pretrained(config.model_name, load_in_8bit=True, device_map="auto")
-ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(ref_pretrained_model)
+# ref_pretrained_model = AutoModelForCausalLM.from_pretrained(config.model_name, load_in_8bit=True, device_map="auto")
+# ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(ref_pretrained_model)
 
 print(model)
 
@@ -193,21 +193,10 @@ print_trainable_parameters(model)
 # only for this model.
 tokenizer.pad_token = tokenizer.eos_token
 
-# create our own optimizer
-# params = [
-#     {"params": model.pretrained_model.parameters()},
-#     {"params": model.v_head.parameters(), "lr": config.learning_rate / 10.0},
-# ]
-
-# params = [
-#     {"params": model.pretrained_model.parameters()},
-#     {"params": model.v_head.parameters(), "lr": config.learning_rate * 100.0},
-# ]
-
-optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=config.learning_rate * 10.0)
+optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=config.learning_rate)
 
 # We then build the PPOTrainer, passing the model, the reference model, the tokenizer
-ppo_trainer = PPOTrainer(config, model, ref_model, tokenizer, dataset=dataset, data_collator=collator, optimizer=optimizer)
+ppo_trainer = PPOTrainer(config, model, ref_model=None,  tokenizer=tokenizer, dataset=dataset, data_collator=collator, optimizer=optimizer)
 
 # We then build the sentiment analysis pipeline, passing the model name and the
 # sentiment analysis pipeline arguments. Let's also make sure to set the device

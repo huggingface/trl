@@ -13,6 +13,9 @@
 # limitations under the License.
 import inspect
 import os
+import gc
+import torch
+import random
 import time
 import warnings
 from typing import List, Optional, Union
@@ -607,6 +610,14 @@ class PPOTrainer(BaseTrainer):
             query_batch = queries[i * fbs : (i + 1) * fbs]
             response_batch = responses[i * fbs : (i + 1) * fbs]
             logits, _, values = model(**input_kwargs)
+
+            with torch.no_grad():
+                logits, _, v = self.model(**input_kwargs)
+                if self.ref_model is None and hasattr(self.model.pretrained_model, "disable_adapter"):
+                    with self.model.pretrained_model.disable_adapter():
+                        ref_logits, _, _ = self.model(**input_kwargs)
+                else:
+                    ref_logits, _, _ = self.ref_model(**input_kwargs)
 
             if self.is_encoder_decoder:
                 input_ids = input_kwargs["decoder_input_ids"]
