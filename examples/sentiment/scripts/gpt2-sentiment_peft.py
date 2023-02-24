@@ -70,9 +70,8 @@ class ScriptArguments:
     # NOTE: gpt2 models use Conv1D instead of Linear layers which are not yet supported in 8 bit mode
     # models like gpt-neo* models are more suitable
     model_name: Optional[str] = field(default="edbeeching/gpt-neo-125M-imdb", metadata={"help": "the model name"})
-    log_with: Optional[str] = field(default="wandb", metadata={"help": "use 'wandb' to log with wandb"})
-    learning_rate: Optional[float] = field(default=1.41e-5, metadata={"help": "use 'wandb' to log with wandb"})
-    # peft_modules_to_save: Optional[str] = field(default=["v_head"], metadata={"help": "use 'wandb' to log with wandb"})
+    log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
+    learning_rate: Optional[float] = field(default=1.41e-5, metadata={"help": "the learning rate"})
 
 
 parser = HfArgumentParser(ScriptArguments)
@@ -163,18 +162,32 @@ def print_trainable_parameters(model):
         f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param}"
     )
 
+target_modules = None
+if script_args.model_name == "EleutherAI/gpt-neox-20b":
+    target_modules = ["query_key_value", "xxx"] # workaround to use 8bit training on this model
 
 lora_config = LoraConfig(
     r=16,
     lora_alpha=32,
-    target_modules=["v_proj","q_proj", "k_proj"],  # Are these the correct layers to target with LoRA ?
+    target_modules=target_modules,  #handled automatically by peft
     lora_dropout=0.05,
     bias="none",
     task_type="CAUSAL_LM",
-    modules_to_save=["v_head"],
 )
 
-pretrained_model = prepare_model_for_int8_training(pretrained_model)
+pretrained_model = prepare_model_for_int8_training(pretrained_model, output_embedding_layer_name="embed_out")
+
+# hacky workaround due to issues with "EleutherAI/gpt-neox-20b"
+if script_args.model_name == "EleutherAI/gpt-neox-20b":
+    for name, param in pretrained_model.named_parameters():
+        # freeze base model's layers
+        param.requires_grad = False
+
+        if getattr(pretrained_model, "is_loaded_in_8bit", False):
+            # cast layer norm in fp32 for stability for 8bit models
+            if param.ndim == 1 and "layer_norm" in name:
+                param.data = param.data.to(torch.float16)
+
 pretrained_model = get_peft_model(pretrained_model, lora_config)
 
 model = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model)
@@ -186,7 +199,6 @@ model.gradient_checkpointing_enable = model.pretrained_model.gradient_checkpoint
 # ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(ref_pretrained_model)
 
 print(model)
-
 print_trainable_parameters(model)
 
 # GPT-2 tokenizer has a pad token, but it is not eos_token by default. We need to set it to eos_token.
@@ -215,6 +227,7 @@ generation_kwargs = {
     "top_p": 1.0,
     "do_sample": True,
     "pad_token_id": tokenizer.eos_token_id,
+    "eos_token_id": -1
 }
 output_min_length = 4
 output_max_length = 16
@@ -225,6 +238,7 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     query_tensors = batch["input_ids"]
 
     model.gradient_checkpointing_disable()
+    model.pretrained_model.config.use_cache = True
     #### Get response from Causal LM
     response_tensors = []
     for query in query_tensors:
@@ -238,10 +252,12 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     texts = [q + r for q, r in zip(batch["query"], batch["response"])]
     pipe_outputs = sentiment_pipe(texts, **sent_kwargs)
     rewards = [torch.tensor(output[1]["score"]) for output in pipe_outputs]
-    model.gradient_checkpointing_enable()
+    
 
     #### Run PPO step
-        
+    model.gradient_checkpointing_enable()
+    model.pretrained_model.config.use_cache = False 
+
     stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
     ppo_trainer.log_stats(stats, batch, rewards)
 
