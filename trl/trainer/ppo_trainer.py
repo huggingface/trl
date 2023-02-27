@@ -429,9 +429,16 @@ class PPOTrainer(BaseTrainer):
         model_inputs = self.prepare_model_inputs(queries, responses)
         model_inputs_names = list(model_inputs.keys())
 
+
         with torch.no_grad():
             all_logprobs, _, values, masks = self.batched_forward_pass(self.model, queries, responses, model_inputs)
-            ref_logprobs, _, _, _ = self.batched_forward_pass(self.ref_model, queries, responses, model_inputs)
+            # for when the model is a peft model
+            if self.ref_model is None and hasattr(self.model.pretrained_model, "disable_adapter"): 
+                with self.model.pretrained_model.disable_adapter():
+                    ref_logprobs, _, _, _ = self.batched_forward_pass(self.model, queries, responses, model_inputs)
+                
+            else:
+                ref_logprobs, _, _, _ = self.batched_forward_pass(self.ref_model, queries, responses, model_inputs)
 
         timing["time/ppo/forward_pass"] = time.time() - t
 
@@ -611,13 +618,7 @@ class PPOTrainer(BaseTrainer):
             response_batch = responses[i * fbs : (i + 1) * fbs]
             logits, _, values = model(**input_kwargs)
 
-            with torch.no_grad():
-                logits, _, v = self.model(**input_kwargs)
-                if self.ref_model is None and hasattr(self.model.pretrained_model, "disable_adapter"):
-                    with self.model.pretrained_model.disable_adapter():
-                        ref_logits, _, _ = self.model(**input_kwargs)
-                else:
-                    ref_logits, _, _ = self.ref_model(**input_kwargs)
+
 
             if self.is_encoder_decoder:
                 input_ids = input_kwargs["decoder_input_ids"]
