@@ -68,7 +68,7 @@ class ScriptArguments:
     """
 
     # NOTE: gpt2 models use Conv1D instead of Linear layers which are not yet supported in 8 bit mode
-    # models like gpt-neo* models are more suitable
+    # models like gpt-neo* models are more suitable.
     model_name: Optional[str] = field(default="edbeeching/gpt-neo-125M-imdb", metadata={"help": "the model name"})
     log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
     learning_rate: Optional[float] = field(default=1.41e-5, metadata={"help": "the learning rate"})
@@ -162,32 +162,16 @@ def print_trainable_parameters(model):
         f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param}"
     )
 
-target_modules = None
-if script_args.model_name == "EleutherAI/gpt-neox-20b":
-    target_modules = ["query_key_value", "xxx"] # workaround to use 8bit training on this model
 
 lora_config = LoraConfig(
     r=16,
     lora_alpha=32,
-    target_modules=target_modules,  #handled automatically by peft
     lora_dropout=0.05,
     bias="none",
     task_type="CAUSAL_LM",
 )
 
-pretrained_model = prepare_model_for_int8_training(pretrained_model, output_embedding_layer_name="embed_out")
-
-# hacky workaround due to issues with "EleutherAI/gpt-neox-20b"
-if script_args.model_name == "EleutherAI/gpt-neox-20b":
-    for name, param in pretrained_model.named_parameters():
-        # freeze base model's layers
-        param.requires_grad = False
-
-        if getattr(pretrained_model, "is_loaded_in_8bit", False):
-            # cast layer norm in fp32 for stability for 8bit models
-            if param.ndim == 1 and "layer_norm" in name:
-                param.data = param.data.to(torch.float16)
-
+pretrained_model = prepare_model_for_int8_training(pretrained_model)
 pretrained_model = get_peft_model(pretrained_model, lora_config)
 
 model = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model)
@@ -260,6 +244,5 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
 
     stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
     ppo_trainer.log_stats(stats, batch, rewards)
-
 
 model.push_to_hub(f"{script_args.model_name}-ppo-sentiment")
