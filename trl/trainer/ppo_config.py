@@ -69,6 +69,8 @@ class PPOConfig(object):
             Keyword arguments for the tracker (e.g. wandb_project)
         tracker_project_name (`str`, *optional*, defaults to "trl"):
             Name of project to use for tracking
+        max_grad_norm (`float`, *optional*, defaults to `None`):
+            Maximum gradient norm for gradient clipping
         seed (`int`, *optional*, defaults to 0):
             Seed value for random generations
     """
@@ -96,6 +98,7 @@ class PPOConfig(object):
         tracker_kwargs: Optional[dict] = {},
         accelerator_kwargs: Optional[dict] = {},
         tracker_project_name: Optional[str] = "trl",
+        max_grad_norm: Optional[float] = None,
         seed: Optional[int] = 0,
     ):
         self.model_name = model_name
@@ -136,6 +139,7 @@ class PPOConfig(object):
         self.tracker_kwargs = tracker_kwargs
         self.accelerator_kwargs = accelerator_kwargs
         self.tracker_project_name = tracker_project_name
+        self.max_grad_norm = max_grad_norm
 
         self.total_ppo_epochs = int(np.ceil(steps / batch_size))
 
