@@ -192,7 +192,9 @@ tokenizer.pad_token = tokenizer.eos_token
 optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=config.learning_rate)
 
 # We then build the PPOTrainer, passing the model, the reference model, the tokenizer
-ppo_trainer = PPOTrainer(config, model, ref_model=None,  tokenizer=tokenizer, dataset=dataset, data_collator=collator, optimizer=optimizer)
+ppo_trainer = PPOTrainer(
+    config, model, ref_model=None, tokenizer=tokenizer, dataset=dataset, data_collator=collator, optimizer=optimizer
+)
 
 # We then build the sentiment analysis pipeline, passing the model name and the
 # sentiment analysis pipeline arguments. Let's also make sure to set the device
@@ -211,7 +213,7 @@ generation_kwargs = {
     "top_p": 1.0,
     "do_sample": True,
     "pad_token_id": tokenizer.eos_token_id,
-    "eos_token_id": -1
+    "eos_token_id": -1,
 }
 output_min_length = 4
 output_max_length = 16
@@ -236,11 +238,10 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     texts = [q + r for q, r in zip(batch["query"], batch["response"])]
     pipe_outputs = sentiment_pipe(texts, **sent_kwargs)
     rewards = [torch.tensor(output[1]["score"]) for output in pipe_outputs]
-    
 
     #### Run PPO step
     model.gradient_checkpointing_enable()
-    model.pretrained_model.config.use_cache = False 
+    model.pretrained_model.config.use_cache = False
 
     stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
     ppo_trainer.log_stats(stats, batch, rewards)

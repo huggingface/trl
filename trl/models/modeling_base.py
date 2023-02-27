@@ -18,8 +18,9 @@ from copy import deepcopy
 import torch
 import torch.nn as nn
 from huggingface_hub import hf_hub_download
-from transformers import PreTrainedModel
 from peft import PeftModelForCausalLM, PeftModelForSeq2SeqLM
+from transformers import PreTrainedModel
+
 
 LAYER_PATTERNS = ["transformer.h.{layer}", "model.decoder.layers.{layer}", "gpt_neox.layers.{layer}"]
 

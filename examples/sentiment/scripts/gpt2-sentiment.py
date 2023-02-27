@@ -71,7 +71,6 @@ config = PPOConfig(
 sent_kwargs = {"return_all_scores": True, "function_to_apply": "none", "batch_size": 16}
 
 
-
 # Below is an example function to build the dataset. In our case, we use the IMDB dataset
 # from the `datasets` library. One should customize this function to train the model on
 # its own dataset.
