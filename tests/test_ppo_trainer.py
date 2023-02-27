@@ -645,7 +645,7 @@ class PPOTrainerTester(unittest.TestCase):
 
     def test_ppo_trainer_max_grad_norm(self):
         """
-        Test if the loss trainer works fine
+        Test if the `max_grad_norm` feature works as expected
         """
         # initialize dataset
         dummy_dataset = self._init_dummy_dataset()
