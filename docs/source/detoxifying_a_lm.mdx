@@ -180,7 +180,6 @@ The evaluation script can be found [here](https://github.com/lvwerra/trl/blob/ma
 
 The results are quite promising, as we can see that the models are able to reduce the toxicity score of the generated text by an interesting margin. The gap is clear for `gpt-neo-2B` model but we less so for the `gpt-j-6B` model. There are several things we could try to improve the results on the largest model starting with training with larger `mini_batch_size` and probably allowing to back-propagate through more layers (i.e. use less shared layers).
 We also think we could have trained the models using a "more toxic" dataset as the one we used is much cleaner than the dataset we used for testing our models (from our observation). 
-A hypothesis we made is that larger models tends to be more toxic. Therefore, one could have also played with the KL-penalty term, to allow the model to deviate a bit more from its original distribution. We also believe that fine-tuning a model that is known to be toxic (i.e. trained on a toxic dataset) could also lead to better results.
 
 To sum up, in addition to human feedback this could be a useful additional signal when training large language models to ensure there outputs are less toxic as well as useful.
 
