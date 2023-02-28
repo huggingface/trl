@@ -46,6 +46,11 @@ class PreTrainedModelWrapper(nn.Module):
     def __init__(self, pretrained_model=None, **kwargs):
         super().__init__()
         self.pretrained_model = pretrained_model
+        self.config = pretrained_model.config
+        self.prepare_inputs_for_generation = pretrained_model.prepare_inputs_for_generation
+        self.is_loaded_in_8bit = getattr(pretrained_model, "is_loaded_in_8bit", False)
+        self.gradient_checkpointing_disable = pretrained_model.gradient_checkpointing_disable
+        self.gradient_checkpointing_enable = pretrained_model.gradient_checkpointing_enable
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
@@ -133,11 +138,7 @@ class PreTrainedModelWrapper(nn.Module):
 
         model.post_init(state_dict=state_dict)
         # properties / methods required by PEFT
-        model.config = model.pretrained_model.config
-        model.prepare_inputs_for_generation = model.pretrained_model.prepare_inputs_for_generation
-        model.is_loaded_in_8bit = getattr(model.pretrained_model, "is_loaded_in_8bit", False)
-        model.gradient_checkpointing_disable = model.pretrained_model.gradient_checkpointing_disable
-        model.gradient_checkpointing_enable = model.pretrained_model.gradient_checkpointing_enable
+
 
         return model
 
