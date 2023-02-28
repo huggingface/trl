@@ -643,6 +643,41 @@ class PPOTrainerTester(unittest.TestCase):
         self.assertLessEqual(abs_diff_masked_tensors(logprobs_0, logprobs_2[:1], mask_0, mask_2[:1]), 1e-4)
         self.assertLessEqual(abs_diff_masked_tensors(values_0, values_2[:1], mask_0, mask_2[:1]), 1e-4)
 
+    def test_ppo_trainer_max_grad_norm(self):
+        """
+        Test if the `max_grad_norm` feature works as expected
+        """
+        # initialize dataset
+        dummy_dataset = self._init_dummy_dataset()
+
+        self.ppo_config.max_grad_norm = 0.00001
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=self.gpt2_model,
+            ref_model=None,
+            tokenizer=self.gpt2_tokenizer,
+            dataset=dummy_dataset,
+        )
+
+        dummy_dataloader = ppo_trainer.dataloader
+
+        # train model with ppo
+        for query_tensor, response_tensor in dummy_dataloader:
+            # define a reward for response
+            # (this could be any reward such as human feedback or output from another model)
+            reward = [torch.tensor(1.0), torch.tensor(0.0)]
+            # train model
+            _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+            break
+
+        # check gradients
+        for name, param in ppo_trainer.model.named_parameters():
+            self.assertTrue(param.grad is not None, f"Parameter {name} has no gradient")
+            self.assertTrue(
+                torch.all(param.grad.abs() <= self.ppo_config.max_grad_norm),
+                f"Parameter {name} has a gradient larger than max_grad_norm",
+            )
+
     @unittest.skip("Fix by either patching `whomai()` to work in the staging endpoint or use a dummy prod user.")
     def test_push_to_hub(self):
         REPO_NAME = "test-ppo-trainer"
