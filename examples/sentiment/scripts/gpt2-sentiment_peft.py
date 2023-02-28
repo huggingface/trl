@@ -176,11 +176,6 @@ pretrained_model = get_peft_model(pretrained_model, lora_config)
 
 model = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model)
 
-
-
-# ref_pretrained_model = AutoModelForCausalLM.from_pretrained(config.model_name, load_in_8bit=True, device_map="auto")
-# ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(ref_pretrained_model)
-
 print(model)
 print_trainable_parameters(model)
 
@@ -222,6 +217,7 @@ output_length_sampler = LengthSampler(output_min_length, output_max_length)
 for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     query_tensors = batch["input_ids"]
 
+    # cache and gradient checkpointing are not compatible, so we switch them on and off here
     model.gradient_checkpointing_disable()
     model.pretrained_model.config.use_cache = True
     #### Get response from Causal LM
