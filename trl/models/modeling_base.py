@@ -136,6 +136,8 @@ class PreTrainedModelWrapper(nn.Module):
         model.config = model.pretrained_model.config
         model.prepare_inputs_for_generation = model.pretrained_model.prepare_inputs_for_generation
         model.is_loaded_in_8bit = getattr(model.pretrained_model, "is_loaded_in_8bit", False)
+        model.gradient_checkpointing_disable = model.pretrained_model.gradient_checkpointing_disable
+        model.gradient_checkpointing_enable = model.pretrained_model.gradient_checkpointing_enable
 
         return model
 
