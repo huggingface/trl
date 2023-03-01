@@ -694,8 +694,12 @@ class PPOTrainerTester(unittest.TestCase):
             task_type="CAUSAL_LM",
         )
         gpt2_model = AutoModelForCausalLM.from_pretrained(self.model_id)
+
         # this line is very important
-        gpt2_model = prepare_model_for_int8_training(gpt2_model)
+        def make_inputs_require_grad(module, input, output):
+            output.requires_grad_(True)
+
+        gpt2_model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
 
         peft_model = get_peft_model(gpt2_model, lora_config)
         model = AutoModelForCausalLMWithValueHead.from_pretrained(peft_model)
