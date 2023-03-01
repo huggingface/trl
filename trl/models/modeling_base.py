@@ -139,7 +139,6 @@ class PreTrainedModelWrapper(nn.Module):
         model.post_init(state_dict=state_dict)
         # properties / methods required by PEFT
 
-
         return model
 
     @classmethod
