@@ -1,10 +1,10 @@
 # Detoxifying a Language Model using PPO
 
-Language models (LMs) are known to sometimes generate toxic outputs. In this example, we will show how to "detoxify" a LM by feeding it toxic prompts and then using PPO to "detoxify" it.
+Language models (LMs) are known to sometimes generate toxic outputs. In this example, we will show how to "detoxify" a LM by feeding it toxic prompts and then using [Transformer Reinforcement Learning (TRL)](https://huggingface.co/docs/trl/index) and Proximal Policy Optimization (PPO) to "detoxify" it.
 
 Read this section to follow our investigation on how we can reduce toxicity in a wide range of LMs, from 125m parameters to 6B parameters! 
 
-Here's an overview of the notebooks and scripts in the [trl repository](https://github.com/lvwerra/trl/tree/main/examples/toxicity) as well as the link for the interactive demo:
+Here's an overview of the notebooks and scripts in the [TRL toxicity repository](https://github.com/lvwerra/trl/tree/main/examples/toxicity/scripts) as well as the link for the interactive demo:
 
 | File | Description | Colab link |
 |---|---| --- |
@@ -24,7 +24,7 @@ One could have also used different techniques to evaluate the toxicity of a mode
 
 ### Selection of models
 
-We selected the following models for our experiments to show that `trl` can be easily scaled to 10B parameters models: 
+We selected the following models for our experiments to show that TRL can be easily scaled to 10B parameters models: 
 
 * [`EleutherAI/gpt-neo-125M`](https://huggingface.co/EleutherAI/gpt-neo-125M) (125 million parameters)
 * [`EleutherAI/gpt-neo-2.7B`](https://huggingface.co/EleutherAI/gpt-neo-2.7B) (2.7 billion parameters)
