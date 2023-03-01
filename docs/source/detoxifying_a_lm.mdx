@@ -179,9 +179,12 @@ The evaluation script can be found [here](https://github.com/lvwerra/trl/blob/ma
 ### Discussions
 
 The results are quite promising, as we can see that the models are able to reduce the toxicity score of the generated text by an interesting margin. The gap is clear for `gpt-neo-2B` model but we less so for the `gpt-j-6B` model. There are several things we could try to improve the results on the largest model starting with training with larger `mini_batch_size` and probably allowing to back-propagate through more layers (i.e. use less shared layers).
-We also think we could have trained the models using a "more toxic" dataset as the one we used is much cleaner than the dataset we used for testing our models (from our observation). 
 
 To sum up, in addition to human feedback this could be a useful additional signal when training large language models to ensure there outputs are less toxic as well as useful.
+
+### Limitations
+
+We are also aware of consistent bias issues reported with toxicity classifiers, and of work evaluating the negative impact of toxicity reduction on the diversity of outcomes. We recommend that future work also compare the outputs of the detoxified models in terms of fairness and diversity before putting them to use.
 
 ## What is next?
 
