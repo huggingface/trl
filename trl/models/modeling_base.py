@@ -18,8 +18,13 @@ from copy import deepcopy
 import torch
 import torch.nn as nn
 from huggingface_hub import hf_hub_download
-from peft import PeftModelForCausalLM, PeftModelForSeq2SeqLM
 from transformers import PreTrainedModel
+
+from ..import_utils import is_peft_available
+
+
+if is_peft_available():
+    from peft import PeftModelForCausalLM, PeftModelForSeq2SeqLM
 
 
 LAYER_PATTERNS = ["transformer.h.{layer}", "model.decoder.layers.{layer}", "gpt_neox.layers.{layer}"]
@@ -42,15 +47,25 @@ class PreTrainedModelWrapper(nn.Module):
     transformers_parent_class = None
     supported_args = None
     supported_modules = ("v_head",)
+    supported_pretrained_model_architectures = (
+        (PreTrainedModel)
+        if not is_peft_available()
+        else (PreTrainedModel, PeftModelForCausalLM, PeftModelForSeq2SeqLM)
+    )
 
     def __init__(self, pretrained_model=None, **kwargs):
         super().__init__()
         self.pretrained_model = pretrained_model
+
         self.config = pretrained_model.config
         self.prepare_inputs_for_generation = pretrained_model.prepare_inputs_for_generation
         self.is_loaded_in_8bit = getattr(pretrained_model, "is_loaded_in_8bit", False)
-        self.gradient_checkpointing_disable = pretrained_model.gradient_checkpointing_disable
-        self.gradient_checkpointing_enable = pretrained_model.gradient_checkpointing_enable
+
+        if hasattr(pretrained_model, "gradient_checkpointing_disable"):
+            self.gradient_checkpointing_disable = pretrained_model.gradient_checkpointing_disable
+
+        if hasattr(pretrained_model, "gradient_checkpointing_enable"):
+            self.gradient_checkpointing_enable = pretrained_model.gradient_checkpointing_enable
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
@@ -86,7 +101,7 @@ class PreTrainedModelWrapper(nn.Module):
             pretrained_model = cls.transformers_parent_class.from_pretrained(
                 pretrained_model_name_or_path, *model_args, **pretrained_kwargs
             )
-        elif isinstance(pretrained_model_name_or_path, (PreTrainedModel, PeftModelForCausalLM, PeftModelForSeq2SeqLM)):
+        elif isinstance(pretrained_model_name_or_path, cls.supported_pretrained_model_architectures):
             pretrained_model = pretrained_model_name_or_path
         else:
             raise ValueError(
