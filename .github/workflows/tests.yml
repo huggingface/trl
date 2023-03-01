@@ -64,7 +64,7 @@ jobs:
         python -m pip install --upgrade pip
         # cpu version of pytorch
         pip install .[test]
-        pip install git+https://github.com/huggingface/peft.git
+        pip install git+https://github.com/huggingface/peft.git@main
     - name: Test with pytest
       run: |
         pytest -m peft_test tests/
