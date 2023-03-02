@@ -175,20 +175,13 @@ pretrained_model = prepare_model_for_int8_training(pretrained_model)
 pretrained_model = get_peft_model(pretrained_model, lora_config)
 
 model = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model)
-
-print(model)
 print_trainable_parameters(model)
 
 # GPT-2 tokenizer has a pad token, but it is not eos_token by default. We need to set it to eos_token.
 # only for this model.
 tokenizer.pad_token = tokenizer.eos_token
-
-optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=config.learning_rate)
-
 # We then build the PPOTrainer, passing the model, the reference model, the tokenizer
-ppo_trainer = PPOTrainer(
-    config, model, ref_model=None, tokenizer=tokenizer, dataset=dataset, data_collator=collator, optimizer=optimizer
-)
+ppo_trainer = PPOTrainer(config, model, ref_model=None, tokenizer=tokenizer, dataset=dataset, data_collator=collator)
 
 # We then build the sentiment analysis pipeline, passing the model name and the
 # sentiment analysis pipeline arguments. Let's also make sure to set the device

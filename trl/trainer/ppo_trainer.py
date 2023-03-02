@@ -233,7 +233,9 @@ class PPOTrainer(BaseTrainer):
         # Step 3: Initialize optimizer and data collator
         self.data_collator = DataCollatorForLanguageModeling(self.tokenizer, mlm=False)
         if optimizer is None:
-            self.optimizer = Adam(self.model.parameters(), lr=self.config.learning_rate)
+            self.optimizer = Adam(
+                filter(lambda p: p.requires_grad, self.model.parameters()), lr=self.config.learning_rate
+            )
         else:
             self.optimizer = optimizer
 
