@@ -160,7 +160,7 @@ class PreTrainedModelWrapper(nn.Module):
         model.is_peft_model = is_peft_model
 
         model.post_init(state_dict=state_dict)
-        
+
         return model
 
     @classmethod
