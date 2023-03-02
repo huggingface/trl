@@ -58,7 +58,13 @@ from setuptools import setup, find_packages
 
 __version__ = "0.3.2.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
 
-REQUIRED_PKGS = ["torch>=1.4.0", "transformers>=4.18.0", "numpy>=1.18.2", "accelerate", "datasets"]
+REQUIRED_PKGS = [
+    "torch>=1.4.0",
+    "transformers>=4.18.0",
+    "numpy>=1.18.2",
+    "accelerate",
+    "datasets",
+]
 EXTRAS = {
     "test": ["parameterized", "pytest", "pytest-xdist", "accelerate"],
     "dev": ["parameterized", "pytest", "pytest-xdist", "black", "isort", "flake8>=3.8.3"],
