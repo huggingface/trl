@@ -725,7 +725,8 @@ class PPOTrainerTester(unittest.TestCase):
             # define a reward for response
             # (this could be any reward such as human feedback or output from another model)
             reward = [torch.tensor(1.0), torch.tensor(0.0)]
-            # train model
+            # train model by running a step twice
+            _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
             _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
             break
 
