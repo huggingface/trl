@@ -160,7 +160,7 @@ class PreTrainedModelWrapper(nn.Module):
         model.is_peft_model = is_peft_model
 
         model.post_init(state_dict=state_dict)
-
+        
         return model
 
     @classmethod
@@ -247,6 +247,7 @@ def create_reference_model(
     Returns
         `PreTrainedModelWrapper`
     """
+
     parameter_names = [n for n, _ in model.named_parameters()]
     ref_model = deepcopy(model)
 
