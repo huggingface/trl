@@ -1,6 +1,6 @@
 # flake8: noqa
 
-__version__ = "0.3.1"
+__version__ = "0.3.2.dev0"
 
 from .core import set_seed
 from .models import (
