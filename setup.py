@@ -71,7 +71,7 @@ EXTRAS = {
         "pytest",
         "pytest-xdist",
         "accelerate",
-        "git+https://github.com/huggingface/peft.git@main",
+        "git+https://github.com/huggingface/peft.git",
     ],
     "dev": ["parameterized", "pytest", "pytest-xdist", "black", "isort", "flake8>=3.8.3"],
 }
