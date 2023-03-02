@@ -727,6 +727,9 @@ class PPOTrainerTester(unittest.TestCase):
             reward = [torch.tensor(1.0), torch.tensor(0.0)]
             # train model by running a step twice
             _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+
+            ppo_trainer.model.train()
+            ppo_trainer.model.gradient_checkpointing_enable()
             _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
             break
 

@@ -451,10 +451,6 @@ class PPOTrainer(BaseTrainer):
         rewards, non_score_reward = self.compute_rewards(scores, all_logprobs, ref_logprobs, masks)
         timing["time/ppo/compute_rewards"] = time.time() - t
 
-        if self.is_peft_model:
-            self.model.train()
-            self.model.gradient_checkpointing_enable()
-
         mini_batch_dict = {
             "queries": queries,
             "responses": responses,

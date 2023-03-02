@@ -228,6 +228,7 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     rewards = [torch.tensor(output[1]["score"]) for output in pipe_outputs]
 
     #### Run PPO step
+    model.train()
     model.gradient_checkpointing_enable()
     model.pretrained_model.config.use_cache = False
 
