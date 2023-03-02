@@ -24,7 +24,7 @@ from ..import_utils import is_peft_available
 
 
 if is_peft_available():
-    from peft import PeftModelForCausalLM, PeftModelForSeq2SeqLM
+    from peft import PeftModel, PeftModelForCausalLM, PeftModelForSeq2SeqLM
 
 
 LAYER_PATTERNS = ["transformer.h.{layer}", "model.decoder.layers.{layer}", "gpt_neox.layers.{layer}"]
@@ -95,6 +95,8 @@ class PreTrainedModelWrapper(nn.Module):
             trl_model_args = {}
             pretrained_kwargs = {}
 
+        is_peft_model = False
+
         # First, load the pre-trained model using the parent-class
         # either `AutoModelForCausalLM` or `AutoModelForSeq2SeqLM`
         if isinstance(pretrained_model_name_or_path, str):
@@ -108,6 +110,10 @@ class PreTrainedModelWrapper(nn.Module):
                 "pretrained_model_name_or_path should be a string or a PreTrainedModel, "
                 f"but is {type(pretrained_model_name_or_path)}"
             )
+
+        if is_peft_available():
+            if isinstance(pretrained_model, PeftModel):
+                is_peft_model = True
         # Then, create the full model by instantiating the wrapper class
         model = cls(pretrained_model, **trl_model_args)
 
@@ -150,6 +156,8 @@ class PreTrainedModelWrapper(nn.Module):
 
         else:
             state_dict = pretrained_model_name_or_path.state_dict()
+
+        model.is_peft_model = is_peft_model
 
         model.post_init(state_dict=state_dict)
         # properties / methods required by PEFT
@@ -240,9 +248,6 @@ def create_reference_model(
     Returns
         `PreTrainedModelWrapper`
     """
-    if hasattr(model.pretrained_model, "disable_adapter"):
-        # don't create a ref model if we are using an adapter
-        return None
     parameter_names = [n for n, _ in model.named_parameters()]
     ref_model = deepcopy(model)
 

@@ -181,6 +181,7 @@ class PPOTrainer(BaseTrainer):
 
         self.model = model
         self.is_encoder_decoder = hasattr(self.model, "is_encoder_decoder")
+        self.is_peft_model = getattr(self.model, "is_peft_model", False)
 
         if isinstance(ref_model, SUPPORTED_ARCHITECTURES):
             self.ref_model = ref_model
@@ -190,8 +191,10 @@ class PPOTrainer(BaseTrainer):
                     "model and the reference model and no layers are shared.",
                     UserWarning,
                 )
-        elif ref_model is None:
+        elif ref_model is None and not self.is_peft_model:
             self.ref_model = create_reference_model(self.model, num_shared_layers=num_shared_layers)
+        elif self.is_peft_model:
+            self.ref_model = None
         else:
             raise ValueError(
                 f"ref_model must be a PreTrainedModelWrapper or `None`, got {type(ref_model)} - supported "
@@ -429,9 +432,13 @@ class PPOTrainer(BaseTrainer):
         with torch.no_grad():
             all_logprobs, _, values, masks = self.batched_forward_pass(self.model, queries, responses, model_inputs)
             # for when the model is a peft model
-            if self.ref_model is None and hasattr(self.model.pretrained_model, "disable_adapter"):
+            if self.is_peft_model and hasattr(self.model.pretrained_model, "disable_adapter"):
                 with self.model.pretrained_model.disable_adapter():
                     ref_logprobs, _, _, _ = self.batched_forward_pass(self.model, queries, responses, model_inputs)
+            elif self.is_peft_model and not hasattr(self.model.pretrained_model, "disable_adapter"):
+                raise ValueError(
+                    "You are using a `peft` version that does not support `disable_adapter`. Please update your `peft` version to the latest version."
+                )
 
             else:
                 ref_logprobs, _, _, _ = self.batched_forward_pass(self.ref_model, queries, responses, model_inputs)
@@ -442,8 +449,10 @@ class PPOTrainer(BaseTrainer):
         rewards, non_score_reward = self.compute_rewards(scores, all_logprobs, ref_logprobs, masks)
         timing["time/ppo/compute_rewards"] = time.time() - t
 
-        self.model.train()
-        self.model.gradient_checkpointing_enable()
+        if self.is_peft_model:
+            self.model.train()
+            self.model.gradient_checkpointing_enable()
+
         mini_batch_dict = {
             "queries": queries,
             "responses": responses,
