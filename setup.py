@@ -66,7 +66,13 @@ REQUIRED_PKGS = [
     "datasets",
 ]
 EXTRAS = {
-    "test": ["parameterized", "pytest", "pytest-xdist", "accelerate"],
+    "test": [
+        "parameterized",
+        "pytest",
+        "pytest-xdist",
+        "accelerate",
+        "git+https://github.com/huggingface/peft.git@main",
+    ],
     "dev": ["parameterized", "pytest", "pytest-xdist", "black", "isort", "flake8>=3.8.3"],
 }
 
