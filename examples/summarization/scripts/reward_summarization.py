@@ -49,10 +49,7 @@ class ScriptArguments:
         },
     )
     num_train_epochs: Optional[int] = field(
-        default="5",
-        metadata={
-            "help": "The number of training epochs for the reward model. OpenAI used 5."
-        }
+        default="5", metadata={"help": "The number of training epochs for the reward model. OpenAI used 5."}
     )
 
 
@@ -92,7 +89,9 @@ def turn_into_text_classification_format(examples):
     new_examples = {"text_j": [], "text_k": []}
     for info, summaries, choice in zip(examples["info"], examples["summaries"], examples["choice"]):
         if len(summaries) != 2 or choice not in (0, 1):
-            raise ValueError(f"There should be two summaries with a choice that's either 0 or 1. Received {len(summaries)} summaries and choice={choice}.")
+            raise ValueError(
+                f"There should be two summaries with a choice that's either 0 or 1. Received {len(summaries)} summaries and choice={choice}."
+            )
         original_text_field = "post" if info["post"] is not None else "article"
         new_examples["text_j"].append(
             summaries[choice]["text"] + " " + tokenizer.bos_token + " " + info[original_text_field]
@@ -104,9 +103,7 @@ def turn_into_text_classification_format(examples):
     return new_examples
 
 
-num_proc = (
-    8
-)  # Can adjust to be higher if you have more processors. Should work even if you don't have 8 CPUs, though.
+num_proc = 8  # Can adjust to be higher if you have more processors. Should work even if you don't have 8 CPUs, though.
 original_columns = ds["train"].column_names
 ds = ds.map(turn_into_text_classification_format, batched=True, num_proc=num_proc, remove_columns=original_columns)
 
@@ -182,7 +179,9 @@ class RewardTrainer(Trainer):
     def compute_loss(self, model, inputs, return_outputs=False):
         rewards_j = model(input_ids=inputs["input_ids_j"], attention_mask=inputs["attention_mask_j"])[0]
         rewards_k = model(input_ids=inputs["input_ids_k"], attention_mask=inputs["attention_mask_k"])[0]
-        loss = -nn.functional.logsigmoid(rewards_j - rewards_k).mean()
+        rew_ranking = (rewards_j > rewards_k).int()
+        rew_mapping = 2 * rew_ranking - 1
+        loss = -nn.functional.logsigmoid(rew_mapping * (rewards_j - rewards_k)).mean()
         if return_outputs:
             return loss, {"rewards_j": rewards_j, "rewards_k": rewards_k}
         return loss
