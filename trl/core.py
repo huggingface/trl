@@ -104,9 +104,9 @@ def whiten(values, shift_mean=True):
 
 def masked_mean(values, mask, axis=None):
     """Compute mean of tensor with a masked values."""
-    try:
+    if axis is not None:
         return (values * mask).sum(axis=axis) / mask.sum(axis=axis)
-    except:
+    else:
         return (values * mask).sum() / mask.sum()
 
 
