@@ -20,12 +20,10 @@ import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 from transformers import top_k_top_p_filtering
 
-
 try:
     from collections.abc import Mapping
 except ImportError:
     from collections import Mapping
-
 
 WANDB_PADDING = -1
 
@@ -56,7 +54,7 @@ def convert_to_scalar(stats):
         # for tensorboard compatibility - arrays and tensors are ignored with tensorboard
         # therefore we convert single element tensors to scalars
         if (isinstance(v, torch.Tensor) or isinstance(v, np.ndarray)) and (
-            len(v.shape) == 0 or (len(v.shape) == 1 and v.shape[0] == 1)
+                len(v.shape) == 0 or (len(v.shape) == 1 and v.shape[0] == 1)
         ):
             v = v.item()
         tensorboard_stats[k] = v
@@ -106,14 +104,17 @@ def whiten(values, shift_mean=True):
 
 def masked_mean(values, mask, axis=None):
     """Compute mean of tensor with a masked values."""
-    return (values * mask).sum(axis=axis) / mask.sum(axis=axis)
+    try:
+        return (values * mask).sum(axis=axis) / mask.sum(axis=axis)
+    except:
+        return (values * mask).sum() / mask.sum()
 
 
 def masked_var(values, mask, unbiased=True):
     """Compute variance of tensor with masked values."""
     mean = masked_mean(values, mask)
     centered_values = values - mean
-    variance = masked_mean(centered_values**2, mask)
+    variance = masked_mean(centered_values ** 2, mask)
     if unbiased:
         bessel_correction = mask.sum() / (mask.sum() - 1)
         variance = variance * bessel_correction
