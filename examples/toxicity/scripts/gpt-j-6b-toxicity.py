@@ -196,4 +196,3 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     if epoch % 100 == 0:
         if ppo_trainer.accelerator.is_main_process:
             ppo_trainer.save_pretrained(model_save_path)
-
