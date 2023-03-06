@@ -16,7 +16,6 @@ from transformers import (
 from transformers.utils import PaddingStrategy
 
 
-
 # Define and parse arguments.
 @dataclass
 class ScriptArguments:

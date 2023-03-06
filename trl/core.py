@@ -26,6 +26,7 @@ try:
 except ImportError:
     from collections import Mapping
 
+
 WANDB_PADDING = -1
 
 
