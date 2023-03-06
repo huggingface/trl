@@ -12,22 +12,20 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import Optional
 from dataclasses import dataclass, field
+from typing import Optional
 
 import torch
-from tqdm import tqdm
-import torch.nn as nn
-import bitsandbytes as bnb
+from datasets import load_dataset
 from peft import LoraConfig, get_peft_model, prepare_model_for_int8_training
+from tqdm import tqdm
+from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, pipeline
+
+from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, set_seed
+from trl.core import LengthSampler
+
 
 tqdm.pandas()
-
-from transformers import pipeline, AutoTokenizer, HfArgumentParser, AutoModelForCausalLM
-from datasets import load_dataset
-
-from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead, set_seed
-from trl.core import LengthSampler
 
 ########################################################################
 # This is a fully working simple example to use trl with accelerate.
@@ -213,7 +211,7 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     # cache and gradient checkpointing are not compatible, so we switch them on and off here
     model.gradient_checkpointing_disable()
     model.pretrained_model.config.use_cache = True
-    #### Get response from Causal LM
+    # Get response from Causal LM
     response_tensors = []
     for query in query_tensors:
         gen_len = output_length_sampler()
@@ -222,12 +220,12 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
         response_tensors.append(response.squeeze()[-gen_len:])
     batch["response"] = [tokenizer.decode(r.squeeze()) for r in response_tensors]
 
-    #### Compute sentiment score
+    # Compute sentiment score
     texts = [q + r for q, r in zip(batch["query"], batch["response"])]
     pipe_outputs = sentiment_pipe(texts, **sent_kwargs)
     rewards = [torch.tensor(output[1]["score"]) for output in pipe_outputs]
 
-    #### Run PPO step
+    # Run PPO step
     model.train()
     model.gradient_checkpointing_enable()
     model.pretrained_model.config.use_cache = False
