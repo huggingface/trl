@@ -140,7 +140,6 @@ pretrained_model = AutoModelForCausalLM.from_pretrained(config.model_name, load_
 tokenizer = AutoTokenizer.from_pretrained(config.model_name)
 
 
-
 # Apply LoRA
 # Here comes the magic with `peft`! Let's load a `PeftModel` and specify that we are going to use low-rank adapters (LoRA) using `get_peft_model` utility function from `peft`.
 def print_trainable_parameters(model):
