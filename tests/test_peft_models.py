@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import os
 import tempfile
 import unittest
 
@@ -90,6 +91,28 @@ class PeftModelTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             model.save_pretrained(tmp_dir)
+
+            # check that the files `adapter_model.bin` and `adapter_config.json` are in the directory
+            self.assertTrue(
+                os.path.isfile(f"{tmp_dir}/adapter_model.bin"),
+                msg=f"{tmp_dir}/adapter_model.bin does not exist",
+            )
+            self.assertTrue(
+                os.path.exists(f"{tmp_dir}/adapter_config.json"),
+                msg=f"{tmp_dir}/adapter_config.json does not exist",
+            )
+            # check also for `pytorch_model.bin` and make sure it only contains `v_head` weights
+            self.assertTrue(
+                os.path.exists(f"{tmp_dir}/pytorch_model.bin"),
+                msg=f"{tmp_dir}/pytorch_model.bin does not exist",
+            )
+            maybe_v_head = torch.load(f"{tmp_dir}/pytorch_model.bin")
+            # check that only keys that starts with `v_head` are in the dict
+            self.assertTrue(
+                all(k.startswith("v_head") for k in maybe_v_head.keys()),
+                msg=f"keys in {tmp_dir}/pytorch_model.bin do not start with `v_head`",
+            )
+
             model_from_pretrained = AutoModelForCausalLMWithValueHead.from_pretrained(tmp_dir)
 
             # check all the weights are the same
