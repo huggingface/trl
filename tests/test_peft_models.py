@@ -11,8 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import tempfile
 import unittest
 
+import torch
 from pytest import mark
 from transformers import AutoModelForCausalLM
 
@@ -76,3 +78,20 @@ class PeftModelTester(unittest.TestCase):
         non_peft_model = AutoModelForCausalLMWithValueHead.from_pretrained(self.causal_lm_model_id)
         nb_trainable_params = sum(p.numel() for p in non_peft_model.parameters() if p.requires_grad)
         self.assertEqual(nb_trainable_params, 99578)
+
+    def test_save_pretrained_peft(self):
+        r"""
+        Check that the model can be saved and loaded properly.
+        """
+        causal_lm_model = AutoModelForCausalLM.from_pretrained(self.causal_lm_model_id)
+        pretrained_model = get_peft_model(causal_lm_model, self.lora_config)
+
+        model = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model.save_pretrained(tmp_dir)
+            model_from_pretrained = AutoModelForCausalLMWithValueHead.from_pretrained(tmp_dir)
+
+            # check all the weights are the same
+            for p1, p2 in zip(model.named_parameters(), model_from_pretrained.named_parameters()):
+                self.assertTrue(torch.allclose(p1[1], p2[1]), msg=f"{p1[0]} != {p2[0]}")

@@ -195,7 +195,10 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
         Returns the state dictionary of the model. We add the state dictionary of the value head
         to the state dictionary of the wrapped model by prepending the key with `v_head.`.
         """
-        pretrained_model_state_dict = self.pretrained_model.state_dict(*args, **kwargs)
+        if not self.is_peft_model:
+            pretrained_model_state_dict = self.pretrained_model.state_dict(*args, **kwargs)
+        else:
+            pretrained_model_state_dict = {}
         v_head_state_dict = self.v_head.state_dict(*args, **kwargs)
         for k, v in v_head_state_dict.items():
             pretrained_model_state_dict[f"v_head.{k}"] = v
@@ -278,7 +281,10 @@ class AutoModelForSeq2SeqLMWithValueHead(PreTrainedModelWrapper):
         Returns the state dictionary of the model. We add the state dictionary of the value head
         to the state dictionary of the wrapped model by prepending the key with `v_head.`.
         """
-        pretrained_model_state_dict = self.pretrained_model.state_dict(*args, **kwargs)
+        if not self.is_peft_model:
+            pretrained_model_state_dict = self.pretrained_model.state_dict(*args, **kwargs)
+        else:
+            pretrained_model_state_dict = {}
         v_head_state_dict = self.v_head.state_dict(*args, **kwargs)
         for k, v in v_head_state_dict.items():
             pretrained_model_state_dict[f"v_head.{k}"] = v

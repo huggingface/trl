@@ -24,7 +24,7 @@ from ..import_utils import is_peft_available
 
 
 if is_peft_available():
-    from peft import PeftModel, PeftModelForCausalLM, PeftModelForSeq2SeqLM
+    from peft import PeftConfig, PeftModel, PeftModelForCausalLM, PeftModelForSeq2SeqLM
 
 
 LAYER_PATTERNS = ["transformer.h.{layer}", "model.decoder.layers.{layer}", "gpt_neox.layers.{layer}"]
@@ -100,9 +100,30 @@ class PreTrainedModelWrapper(nn.Module):
         # First, load the pre-trained model using the parent-class
         # either `AutoModelForCausalLM` or `AutoModelForSeq2SeqLM`
         if isinstance(pretrained_model_name_or_path, str):
-            pretrained_model = cls.transformers_parent_class.from_pretrained(
-                pretrained_model_name_or_path, *model_args, **pretrained_kwargs
-            )
+            try:
+                peft_filename = hf_hub_download(pretrained_model_name_or_path, "adapter_config.json")
+            except:  # noqa
+                peft_filename = None
+
+            if (
+                os.path.exists(pretrained_model_name_or_path)
+                and ("adapter_config.json" in os.listdir(pretrained_model_name_or_path) or peft_filename is not None)
+                and is_peft_available()
+            ):
+                if peft_filename is not None:
+                    peft_config = PeftConfig.from_pretrained(peft_filename)
+                else:
+                    peft_config = PeftConfig.from_pretrained(pretrained_model_name_or_path)
+
+                pretrained_model = cls.transformers_parent_class.from_pretrained(
+                    peft_config.base_model_name_or_path, *model_args, **pretrained_kwargs
+                )
+
+                pretrained_model = PeftModel.from_pretrained(pretrained_model, pretrained_model_name_or_path)
+            else:
+                pretrained_model = cls.transformers_parent_class.from_pretrained(
+                    pretrained_model_name_or_path, *model_args, **pretrained_kwargs
+                )
         elif isinstance(pretrained_model_name_or_path, cls.supported_pretrained_model_architectures):
             pretrained_model = pretrained_model_name_or_path
         else:
@@ -214,6 +235,12 @@ class PreTrainedModelWrapper(nn.Module):
         if state_dict is None:
             state_dict = self.state_dict()
             kwargs["state_dict"] = state_dict
+
+        if self.is_peft_model:
+            save_path = args[0]
+            save_path = os.path.join(save_path, "pytorch_model.bin")
+            torch.save(state_dict, save_path)
+            _ = kwargs.pop("state_dict", None)
 
         return self.pretrained_model.save_pretrained(*args, **kwargs)
 
