@@ -13,19 +13,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import torch
+from datasets import load_dataset
 from torch.optim import Adam
 from tqdm import tqdm
+from transformers import AutoModelForCausalLM, AutoTokenizer, RobertaForSequenceClassification, RobertaTokenizer
+
+from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, create_reference_model, set_seed
+from trl.core import LengthSampler
+
 
 tqdm.pandas()
-
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from transformers import RobertaTokenizer, RobertaForSequenceClassification
-
-from datasets import load_dataset
-
-from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead, set_seed
-from trl import create_reference_model
-from trl.core import LengthSampler
 
 ########################################################################
 # This is a fully working simple example to use trl with accelerate.
@@ -169,7 +166,7 @@ model_save_path = "/mnt/disks/younes-disk/models/gpt-j-6B-detoxified-long-contex
 for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     query_tensors = batch["input_ids"]
 
-    #### Get response from gpt2
+    # Get response from gpt2
     response_tensors = []
     for query in query_tensors:
         gen_len = output_length_sampler()
@@ -178,7 +175,7 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
         response_tensors.append(response.squeeze()[-gen_len:])
     batch["response"] = [tokenizer.decode(r.squeeze()) for r in response_tensors]
 
-    #### Compute sentiment score
+    # Compute sentiment score # noqa
     texts = batch["response"]
     toxicity_inputs = toxicity_tokenizer(texts, padding=True, truncation=True, return_tensors="pt").to(
         ppo_trainer.accelerator.device
@@ -188,7 +185,7 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
 
     rewards = [torch.tensor(output) for output in toxicity_labels]
 
-    #### Run PPO step
+    # Run PPO step
     stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
     ppo_trainer.log_stats(stats, batch, rewards)
 
