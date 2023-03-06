@@ -1,12 +1,13 @@
-import numpy as np
-import csv
 import argparse
-from tqdm import tqdm
-import torch
+import csv
 
 import evaluate
+import numpy as np
+import torch
 from datasets import load_dataset
+from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
+
 
 toxicity = evaluate.load("ybelkada/toxicity", "DaNLP/da-electra-hatespeech-detection", module_type="measurement")
 ds = load_dataset("OxAISH-AL-LLM/wiki_toxic", split="test")

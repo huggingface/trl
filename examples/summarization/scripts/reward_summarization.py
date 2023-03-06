@@ -1,18 +1,19 @@
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Union
+
+import evaluate
+import numpy as np
+import torch.nn as nn
 from datasets import load_dataset
 from transformers import (
-    AutoTokenizer,
     AutoModelForSequenceClassification,
-    TrainingArguments,
-    Trainer,
-    PreTrainedTokenizerBase,
+    AutoTokenizer,
     HfArgumentParser,
+    PreTrainedTokenizerBase,
+    Trainer,
+    TrainingArguments,
 )
 from transformers.utils import PaddingStrategy
-from typing import Optional, Union, List, Dict, Any
-import evaluate
-from dataclasses import dataclass, field
-import torch.nn as nn
-import numpy as np
 
 
 # Define and parse arguments.
