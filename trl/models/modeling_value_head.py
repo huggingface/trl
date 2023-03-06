@@ -198,7 +198,9 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
         if not self.is_peft_model:
             pretrained_model_state_dict = self.pretrained_model.state_dict(*args, **kwargs)
         else:
+            # if it is a peft model, only save the v_head
             pretrained_model_state_dict = {}
+
         v_head_state_dict = self.v_head.state_dict(*args, **kwargs)
         for k, v in v_head_state_dict.items():
             pretrained_model_state_dict[f"v_head.{k}"] = v
@@ -284,7 +286,9 @@ class AutoModelForSeq2SeqLMWithValueHead(PreTrainedModelWrapper):
         if not self.is_peft_model:
             pretrained_model_state_dict = self.pretrained_model.state_dict(*args, **kwargs)
         else:
+            # if it is a peft model, only save the v_head
             pretrained_model_state_dict = {}
+
         v_head_state_dict = self.v_head.state_dict(*args, **kwargs)
         for k, v in v_head_state_dict.items():
             pretrained_model_state_dict[f"v_head.{k}"] = v

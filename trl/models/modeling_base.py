@@ -105,6 +105,10 @@ class PreTrainedModelWrapper(nn.Module):
             except:  # noqa
                 peft_filename = None
 
+            # Dealing with `peft` case:
+            # 1- check if `adapter_config` has been saved in the hub or locally
+            # 2- if yes, load the `peft` config
+            # 3- use the config to load the `transformers` model and then load the `peft` model
             if (
                 os.path.exists(pretrained_model_name_or_path)
                 and ("adapter_config.json" in os.listdir(pretrained_model_name_or_path) or peft_filename is not None)
@@ -236,6 +240,8 @@ class PreTrainedModelWrapper(nn.Module):
             state_dict = self.state_dict()
             kwargs["state_dict"] = state_dict
 
+        # if it is a peft model only save the `v_head` state_dict and
+        # pop the `state_dict` from the kwargs to avoid slient bugs with `peft`
         if self.is_peft_model:
             save_path = args[0]
             save_path = os.path.join(save_path, "pytorch_model.bin")
