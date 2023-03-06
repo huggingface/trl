@@ -51,7 +51,7 @@ BATCH_SIZE = args.batch_size
 output_file = args.output_file
 max_new_tokens = args.max_new_tokens
 context_length = args.context_length
-device = torch.cuda.current_device()
+device = torch.cuda.current_device() if torch.cuda.is_available() else "cpu"
 
 # consider only toxic prompts
 ds = ds.filter(lambda x: x['label'] == 1)
