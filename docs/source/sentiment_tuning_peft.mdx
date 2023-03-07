@@ -1,0 +1,34 @@
+# Examples of using peft and trl to finetune 8-bit models with Low Rank Adaption 
+
+The notebooks and scripts in this examples show how to fine-tune a model with a sentiment classifier (such as `lvwerra/distilbert-imdb`).
+
+Here's an overview of the notebooks and scripts in the [trl repository](https://github.com/lvwerra/trl/tree/main/examples):
+
+| File | Description | Colab link |
+|---|---| --- |
+| [`gpt2-sentiment_peft.py`](https://github.com/lvwerra/trl/blob/main/examples/sentiment/scripts/gpt2-sentiment_peft.py) | Same as the sentiment analysis example, but learning a low rank adapter on a 8-bit base model |  | 
+
+## Installation
+Note: peft is in active development, so we install directly from their github page.
+Peft also relies on the latest version of transformers. 
+
+```bash
+pip install trl
+pip install  bitsandbytes datasets accelerate loralib
+pip install  git+https://github.com/huggingface/transformers.git@main
+pip install git+https://github.com/huggingface/peft.git
+#optional: wandb
+pip install wandb
+```
+
+Note: if you don't want to log with `wandb` remove `log_with="wandb"` in the scripts/notebooks. You can also replace it with your favourite experiment tracker that's [supported by `accelerate`](https://huggingface.co/docs/accelerate/usage_guides/tracking).
+
+
+## Launch scripts
+
+The `trl` library is powered by `accelerate`. As such it is best to configure and launch trainings with the following commands:
+
+```bash
+accelerate config # will prompt you to define the training configuration
+accelerate launch scripts/gpt2-sentiment_peft.py # launches training
+```
