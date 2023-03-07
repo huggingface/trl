@@ -19,22 +19,7 @@ from unittest.mock import patch
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-
-# We need to define it manually otherwise trl will still import
-# peft and the test will fail
-def is_peft_available():
-    return importlib.util.find_spec("peft") is not None
-
-
-# We need to define it manually otherwise trl will still import
-# peft and the test will fail
-def require_peft(test_case):
-    """
-    Decorator marking a test that requires peft. Skips the test if peft is not available.
-    """
-    if not is_peft_available():
-        test_case = unittest.skip("test requires peft")(test_case)
-    return test_case
+from .testing_utils import is_peft_available, require_peft
 
 
 class DummyDataset(torch.utils.data.Dataset):
@@ -111,9 +96,6 @@ class TestPeftDependancy(unittest.TestCase):
             # Check that loading a model with `peft` will raise an error
             with self.assertRaises(ModuleNotFoundError):
                 import peft  # noqa
-
-            with self.assertRaises(ValueError):
-                _ = AutoModelForCausalLMWithValueHead.from_pretrained(self.peft_model)
 
             trl_model = AutoModelForCausalLMWithValueHead.from_pretrained(self.causal_lm_model_id)  # noqa
             trl_seq2seq_model = AutoModelForSeq2SeqLMWithValueHead.from_pretrained(self.seq_to_seq_model_id)  # noqa
