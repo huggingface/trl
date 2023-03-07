@@ -170,6 +170,7 @@ pretrained_model = get_peft_model(pretrained_model, lora_config)
 
 model = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model)
 print_trainable_parameters(model)
+model.train()
 
 # GPT-2 tokenizer has a pad token, but it is not eos_token by default. We need to set it to eos_token.
 # only for this model.
@@ -222,7 +223,6 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     rewards = [torch.tensor(output[1]["score"]) for output in pipe_outputs]
 
     # Run PPO step
-    model.train()
     model.gradient_checkpointing_enable()
     model.pretrained_model.config.use_cache = False
 
