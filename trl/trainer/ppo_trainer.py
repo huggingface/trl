@@ -171,7 +171,7 @@ class PPOTrainer(BaseTrainer):
             raise ValueError(
                 f"tokenizer must be a PreTrainedTokenizer or PreTrainedTokenizerFast, got {type(tokenizer)}"
             )
-        if not isinstance(model, PreTrainedModelWrapper):
+        if not isinstance(model, (SUPPORTED_ARCHITECTURES)):
             raise ValueError(
                 f"model must be a PreTrainedModelWrapper, got {type(model)} - supported architectures are: {SUPPORTED_ARCHITECTURES}"
             )
@@ -181,8 +181,9 @@ class PPOTrainer(BaseTrainer):
 
         self.model = model
         self.is_encoder_decoder = hasattr(self.model, "is_encoder_decoder")
+        self.is_peft_model = getattr(self.model, "is_peft_model", False)
 
-        if isinstance(ref_model, PreTrainedModelWrapper):
+        if isinstance(ref_model, SUPPORTED_ARCHITECTURES):
             self.ref_model = ref_model
             if num_shared_layers is not None:
                 warnings.warn(
@@ -190,8 +191,10 @@ class PPOTrainer(BaseTrainer):
                     "model and the reference model and no layers are shared.",
                     UserWarning,
                 )
-        elif ref_model is None:
+        elif ref_model is None and not self.is_peft_model:
             self.ref_model = create_reference_model(self.model, num_shared_layers=num_shared_layers)
+        elif self.is_peft_model:
+            self.ref_model = None
         else:
             raise ValueError(
                 f"ref_model must be a PreTrainedModelWrapper or `None`, got {type(ref_model)} - supported "
@@ -230,7 +233,9 @@ class PPOTrainer(BaseTrainer):
         # Step 3: Initialize optimizer and data collator
         self.data_collator = DataCollatorForLanguageModeling(self.tokenizer, mlm=False)
         if optimizer is None:
-            self.optimizer = Adam(self.model.parameters(), lr=self.config.learning_rate)
+            self.optimizer = Adam(
+                filter(lambda p: p.requires_grad, self.model.parameters()), lr=self.config.learning_rate
+            )
         else:
             self.optimizer = optimizer
 
@@ -343,7 +348,7 @@ class PPOTrainer(BaseTrainer):
             `torch.LongTensor`: A tensor of shape (`batch_size`, `gen_len`) containing response tokens.
         """
         response = self.accelerator.unwrap_model(self.model).generate(
-            query_tensor.unsqueeze(dim=0), **generation_kwargs
+            input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs
         )
 
         return response
@@ -428,7 +433,17 @@ class PPOTrainer(BaseTrainer):
 
         with torch.no_grad():
             all_logprobs, _, values, masks = self.batched_forward_pass(self.model, queries, responses, model_inputs)
-            ref_logprobs, _, _, _ = self.batched_forward_pass(self.ref_model, queries, responses, model_inputs)
+            # for when the model is a peft model
+            if self.is_peft_model and hasattr(self.model.pretrained_model, "disable_adapter"):
+                with self.model.pretrained_model.disable_adapter():
+                    ref_logprobs, _, _, _ = self.batched_forward_pass(self.model, queries, responses, model_inputs)
+            elif self.is_peft_model and not hasattr(self.model.pretrained_model, "disable_adapter"):
+                raise ValueError(
+                    "You are using a `peft` version that does not support `disable_adapter`. Please update your `peft` version to the latest version."
+                )
+
+            else:
+                ref_logprobs, _, _, _ = self.batched_forward_pass(self.ref_model, queries, responses, model_inputs)
 
         timing["time/ppo/forward_pass"] = time.time() - t
 

@@ -1,5 +1,3 @@
-# flake8: noqa
-
 # Copyright 2022 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,11 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from .modeling_base import PreTrainedModelWrapper, create_reference_model
-from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
+import importlib
 
 
-SUPPORTED_ARCHITECTURES = (
-    AutoModelForCausalLMWithValueHead,
-    AutoModelForSeq2SeqLMWithValueHead,
-)
+def is_peft_available():
+    return importlib.util.find_spec("peft") is not None

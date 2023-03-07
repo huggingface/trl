@@ -156,11 +156,11 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
             kwargs (`dict`, `optional`):
                 Additional keyword arguments, that are passed to the wrapped model.
         """
+        kwargs["output_hidden_states"] = True  # this had already been set in the LORA / PEFT examples
         base_model_output = self.pretrained_model(
             input_ids=input_ids,
             past_key_values=past_key_values,
             attention_mask=attention_mask,
-            output_hidden_states=True,  # We force the model to output hidden states
             **kwargs,
         )
 
@@ -195,7 +195,12 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
         Returns the state dictionary of the model. We add the state dictionary of the value head
         to the state dictionary of the wrapped model by prepending the key with `v_head.`.
         """
-        pretrained_model_state_dict = self.pretrained_model.state_dict(*args, **kwargs)
+        if not self.is_peft_model:
+            pretrained_model_state_dict = self.pretrained_model.state_dict(*args, **kwargs)
+        else:
+            # if it is a peft model, only save the v_head
+            pretrained_model_state_dict = {}
+
         v_head_state_dict = self.v_head.state_dict(*args, **kwargs)
         for k, v in v_head_state_dict.items():
             pretrained_model_state_dict[f"v_head.{k}"] = v
@@ -278,7 +283,12 @@ class AutoModelForSeq2SeqLMWithValueHead(PreTrainedModelWrapper):
         Returns the state dictionary of the model. We add the state dictionary of the value head
         to the state dictionary of the wrapped model by prepending the key with `v_head.`.
         """
-        pretrained_model_state_dict = self.pretrained_model.state_dict(*args, **kwargs)
+        if not self.is_peft_model:
+            pretrained_model_state_dict = self.pretrained_model.state_dict(*args, **kwargs)
+        else:
+            # if it is a peft model, only save the v_head
+            pretrained_model_state_dict = {}
+
         v_head_state_dict = self.v_head.state_dict(*args, **kwargs)
         for k, v in v_head_state_dict.items():
             pretrained_model_state_dict[f"v_head.{k}"] = v
