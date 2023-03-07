@@ -100,9 +100,12 @@ class PreTrainedModelWrapper(nn.Module):
         # First, load the pre-trained model using the parent-class
         # either `AutoModelForCausalLM` or `AutoModelForSeq2SeqLM`
         if isinstance(pretrained_model_name_or_path, str):
-            try:
-                peft_filename = hf_hub_download(pretrained_model_name_or_path, "adapter_config.json")
-            except:  # noqa
+            if is_peft_available():
+                try:
+                    peft_filename = hf_hub_download(pretrained_model_name_or_path, "adapter_config.json")
+                except:  # noqa
+                    peft_filename = None
+            else:
                 peft_filename = None
 
             # Dealing with `peft` case:
