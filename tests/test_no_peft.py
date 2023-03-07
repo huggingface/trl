@@ -110,7 +110,7 @@ class TestPeftDependancy(unittest.TestCase):
 
             # Check that loading a model with `peft` will raise an error
             with self.assertRaises(ModuleNotFoundError):
-                import peft
+                import peft  # noqa
 
             with self.assertRaises(ValueError):
                 _ = AutoModelForCausalLMWithValueHead.from_pretrained(self.peft_model)
@@ -120,7 +120,7 @@ class TestPeftDependancy(unittest.TestCase):
 
     def test_imports_no_peft(self):
         with patch.dict(sys.modules, {"peft": None}):
-            from trl import (
+            from trl import (  # noqa
                 AutoModelForCausalLMWithValueHead,
                 AutoModelForSeq2SeqLMWithValueHead,
                 PPOConfig,
