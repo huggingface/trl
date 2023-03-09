@@ -102,7 +102,7 @@ class PreTrainedModelWrapper(nn.Module):
         if isinstance(pretrained_model_name_or_path, str):
             if is_peft_available():
                 try:
-                    peft_filename = hf_hub_download(pretrained_model_name_or_path, "adapter_config.json")
+                    peft_filename = hf_hub_download(pretrained_model_name_or_path, "adapter_config.json", **pretrained_kwargs)
                 except:  # noqa
                     peft_filename = None
             else:
@@ -118,15 +118,15 @@ class PreTrainedModelWrapper(nn.Module):
                 and is_peft_available()
             ):
                 if peft_filename is not None:
-                    peft_config = PeftConfig.from_pretrained(peft_filename)
+                    peft_config = PeftConfig.from_pretrained(peft_filename, **pretrained_kwargs)
                 else:
-                    peft_config = PeftConfig.from_pretrained(pretrained_model_name_or_path)
+                    peft_config = PeftConfig.from_pretrained(pretrained_model_name_or_path, **pretrained_kwargs)
 
                 pretrained_model = cls.transformers_parent_class.from_pretrained(
                     peft_config.base_model_name_or_path, *model_args, **pretrained_kwargs
                 )
 
-                pretrained_model = PeftModel.from_pretrained(pretrained_model, pretrained_model_name_or_path)
+                pretrained_model = PeftModel.from_pretrained(pretrained_model, pretrained_model_name_or_path, **pretrained_kwargs)
             else:
                 pretrained_model = cls.transformers_parent_class.from_pretrained(
                     pretrained_model_name_or_path, *model_args, **pretrained_kwargs
@@ -154,14 +154,14 @@ class PreTrainedModelWrapper(nn.Module):
 
             if not os.path.exists(filename):
                 try:
-                    filename = hf_hub_download(pretrained_model_name_or_path, "pytorch_model.bin")
+                    filename = hf_hub_download(pretrained_model_name_or_path, "pytorch_model.bin", **pretrained_kwargs)
                 # sharded
                 except:  # noqa
                     if os.path.exists(sharded_index_filename):
                         index_file_name = sharded_index_filename
                     else:
                         index_file_name = hf_hub_download(
-                            pretrained_model_name_or_path, "pytorch_model.bin.index.json"
+                            pretrained_model_name_or_path, "pytorch_model.bin.index.json", **pretrained_kwargs
                         )
                     # load json
                     with open(index_file_name, "r") as f:
@@ -177,7 +177,7 @@ class PreTrainedModelWrapper(nn.Module):
                 # download each file and add it to the state_dict
                 state_dict = {}
                 for shard_file in files_to_download:
-                    filename = hf_hub_download(pretrained_model_name_or_path, shard_file)
+                    filename = hf_hub_download(pretrained_model_name_or_path, shard_file, **pretrained_kwargs)
                     state_dict.update(torch.load(filename, map_location="cpu"))
             else:
                 state_dict = torch.load(filename, map_location="cpu")
@@ -244,7 +244,7 @@ class PreTrainedModelWrapper(nn.Module):
             kwargs["state_dict"] = state_dict
 
         # if it is a peft model only save the `v_head` state_dict and
-        # pop the `state_dict` from the kwargs to avoid slient bugs with `peft`
+        # pop the `state_dict` from the kwargs to avoid silent bugs with `peft`
         if self.is_peft_model:
             save_path = args[0]
             save_path = os.path.join(save_path, "pytorch_model.bin")
