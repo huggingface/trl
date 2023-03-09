@@ -67,8 +67,8 @@ REQUIRED_PKGS = [
 ]
 EXTRAS = {
     "test": ["parameterized", "pytest", "pytest-xdist", "accelerate", "peft"],
-    "peft": ["peft"],
-    "dev": ["parameterized", "pytest", "pytest-xdist", "black", "isort", "flake8>=3.8.3", "peft"],
+    "peft": ["peft>=0.2.0"],
+    "dev": ["parameterized", "pytest", "pytest-xdist", "black", "isort", "flake8>=3.8.3", "peft>=0.2.0"],
 }
 
 setup(
