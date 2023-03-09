@@ -233,7 +233,7 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
 
     model.gradient_checkpointing_disable()
     model.pretrained_model.config.use_cache = True
-    #### Get response from Causal LM
+    # Get response from Causal LM
     response_tensors = []
     for query in query_tensors:
         gen_len = output_length_sampler()
@@ -242,12 +242,12 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
         response_tensors.append(response.squeeze()[-gen_len:])
     batch["response"] = [tokenizer.decode(r.squeeze()) for r in response_tensors]
 
-    #### Compute sentiment score
+    # Compute sentiment score
     texts = [q + r for q, r in zip(batch["query"], batch["response"])]
     pipe_outputs = sentiment_pipe(texts, **sent_kwargs)
     rewards = [torch.tensor(output[1]["score"]) for output in pipe_outputs]
 
-    #### Run PPO step
+    # Run PPO step
     model.gradient_checkpointing_enable()
     model.pretrained_model.config.use_cache = False
 
