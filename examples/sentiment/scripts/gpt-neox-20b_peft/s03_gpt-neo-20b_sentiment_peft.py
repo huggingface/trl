@@ -44,7 +44,7 @@ from trl.core import LengthSampler
 # transformers is required, full dependecies for this example:
 # pip install  bitsandbytes datasets accelerate loralib
 # pip install  git+https://github.com/huggingface/transformers.git@main
-# pip install git+https://github.com/huggingface/peft.git
+# pip install peft
 ########################################################################
 
 # We first define the configuration of the experiment, defining the model, the dataset,
