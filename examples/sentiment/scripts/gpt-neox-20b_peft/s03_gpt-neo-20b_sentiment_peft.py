@@ -191,10 +191,6 @@ model = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model)
 model.gradient_checkpointing_disable = model.pretrained_model.gradient_checkpointing_disable
 model.gradient_checkpointing_enable = model.pretrained_model.gradient_checkpointing_enable
 
-# ref_pretrained_model = AutoModelForCausalLM.from_pretrained(config.model_name, load_in_8bit=True, device_map="auto")
-# ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(ref_pretrained_model)
-
-print(model)
 print_trainable_parameters(model)
 
 # GPT-2 tokenizer has a pad token, but it is not eos_token by default. We need to set it to eos_token.
