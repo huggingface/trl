@@ -1,6 +1,6 @@
 # flake8: noqa
 
-__version__ = "0.3.2.dev0"
+__version__ = "0.4.0"
 
 from .core import set_seed
 from .import_utils import is_peft_available
