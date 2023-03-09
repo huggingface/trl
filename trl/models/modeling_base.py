@@ -27,7 +27,11 @@ if is_peft_available():
     from peft import PeftConfig, PeftModel, PeftModelForCausalLM, PeftModelForSeq2SeqLM
 
 
-LAYER_PATTERNS = ["transformer.h.{layer}", "model.decoder.layers.{layer}", "gpt_neox.layers.{layer}"]
+LAYER_PATTERNS = [
+    "transformer.h.{layer}",
+    "model.decoder.layers.{layer}",
+    "gpt_neox.layers.{layer}",
+]
 
 
 class PreTrainedModelWrapper(nn.Module):
@@ -102,7 +106,11 @@ class PreTrainedModelWrapper(nn.Module):
         if isinstance(pretrained_model_name_or_path, str):
             if is_peft_available():
                 try:
-                    peft_filename = hf_hub_download(pretrained_model_name_or_path, "adapter_config.json", **pretrained_kwargs)
+                    peft_filename = hf_hub_download(
+                        pretrained_model_name_or_path,
+                        "adapter_config.json",
+                        **pretrained_kwargs,
+                    )
                 except:  # noqa
                     peft_filename = None
             else:
@@ -123,10 +131,14 @@ class PreTrainedModelWrapper(nn.Module):
                     peft_config = PeftConfig.from_pretrained(pretrained_model_name_or_path, **pretrained_kwargs)
 
                 pretrained_model = cls.transformers_parent_class.from_pretrained(
-                    peft_config.base_model_name_or_path, *model_args, **pretrained_kwargs
+                    peft_config.base_model_name_or_path,
+                    *model_args,
+                    **pretrained_kwargs,
                 )
 
-                pretrained_model = PeftModel.from_pretrained(pretrained_model, pretrained_model_name_or_path, **pretrained_kwargs)
+                pretrained_model = PeftModel.from_pretrained(
+                    pretrained_model, pretrained_model_name_or_path, **pretrained_kwargs
+                )
             else:
                 pretrained_model = cls.transformers_parent_class.from_pretrained(
                     pretrained_model_name_or_path, *model_args, **pretrained_kwargs
@@ -154,14 +166,20 @@ class PreTrainedModelWrapper(nn.Module):
 
             if not os.path.exists(filename):
                 try:
-                    filename = hf_hub_download(pretrained_model_name_or_path, "pytorch_model.bin", **pretrained_kwargs)
+                    filename = hf_hub_download(
+                        pretrained_model_name_or_path,
+                        "pytorch_model.bin",
+                        **pretrained_kwargs,
+                    )
                 # sharded
                 except:  # noqa
                     if os.path.exists(sharded_index_filename):
                         index_file_name = sharded_index_filename
                     else:
                         index_file_name = hf_hub_download(
-                            pretrained_model_name_or_path, "pytorch_model.bin.index.json", **pretrained_kwargs
+                            pretrained_model_name_or_path,
+                            "pytorch_model.bin.index.json",
+                            **pretrained_kwargs,
                         )
                     # load json
                     with open(index_file_name, "r") as f:
