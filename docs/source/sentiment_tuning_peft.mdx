@@ -13,10 +13,9 @@ Note: peft is in active development, so we install directly from their github pa
 Peft also relies on the latest version of transformers. 
 
 ```bash
-pip install trl
-pip install  bitsandbytes datasets accelerate loralib
-pip install  git+https://github.com/huggingface/transformers.git@main
-pip install git+https://github.com/huggingface/peft.git
+pip install trl[peft]
+pip install bitsandbytes loralib
+pip install git+https://github.com/huggingface/transformers.git@main
 #optional: wandb
 pip install wandb
 ```
