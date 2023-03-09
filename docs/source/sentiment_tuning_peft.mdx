@@ -7,6 +7,9 @@ Here's an overview of the notebooks and scripts in the [trl repository](https://
 | File | Description | Colab link |
 |---|---| --- |
 | [`gpt2-sentiment_peft.py`](https://github.com/lvwerra/trl/blob/main/examples/sentiment/scripts/gpt2-sentiment_peft.py) | Same as the sentiment analysis example, but learning a low rank adapter on a 8-bit base model |  | 
+| [`cm_finetune_peft_imdb.py`](https://github.com/lvwerra/trl/blob/main/examples/sentiment/scripts/gpt-neox-20b_peft/cm_finetune_peft_imdb.py) | Fine tuning a Low Rank Adapter on a frozen 8-bit model for text generation on the imdb dataset. |  | 
+| [`merge_peft_adapter.py`](https://github.com/lvwerra/trl/blob/main/examples/sentiment/scripts/gpt-neox-20b_peft/merge_peft_adapter.py) |  Merging of the adapter layers into the base model’s weights and storing these on the hub. |  | 
+| [`gpt-neo-20b_sentiment_peft.py`](https://github.com/lvwerra/trl/blob/main/examples/sentiment/scripts/gpt-neox-20b_peft/gpt-neo-20b_sentiment_peft.py.py) | Sentiment fine-tuning of a Low Rank Adapter to create positive reviews. |  | 
 
 ## Installation
 Note: peft is in active development, so we install directly from their github page.
