@@ -32,8 +32,6 @@ from trl.core import LengthSampler
 # (proximal policy optimization).
 # in any of the following settings (with the same script):
 #   - single CPU or single GPU
-#   - multi GPUS (using PyTorch distributed mode)
-#   - multi GPUS (using DeepSpeed ZeRO-Offload stages 1 & 2)
 #   - fp16 (mixed-precision) or fp32 (normal precision)
 #
 # To run it in each of these various modes, first initialize the accelerate
@@ -46,7 +44,7 @@ from trl.core import LengthSampler
 # transformers is required, full dependecies for this example:
 # pip install  bitsandbytes datasets accelerate loralib
 # pip install  git+https://github.com/huggingface/transformers.git@main
-# pip install git+https://github.com/huggingface/peft.git
+# pip install peft
 ########################################################################
 
 # We first define the configuration of the experiment, defining the model, the dataset,
@@ -136,8 +134,6 @@ def collator(data):
 set_seed(config.seed)
 
 # Now let's build the model, the reference model, and the tokenizer.
-# ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name, load_in_8bit=True, device_map="auto")
-# model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name, load_in_8bit=True, device_map="auto")
 
 pretrained_model = AutoModelForCausalLM.from_pretrained(config.model_name, load_in_8bit=True, device_map="auto")
 tokenizer = AutoTokenizer.from_pretrained(config.model_name)
@@ -195,10 +191,6 @@ model = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model)
 model.gradient_checkpointing_disable = model.pretrained_model.gradient_checkpointing_disable
 model.gradient_checkpointing_enable = model.pretrained_model.gradient_checkpointing_enable
 
-# ref_pretrained_model = AutoModelForCausalLM.from_pretrained(config.model_name, load_in_8bit=True, device_map="auto")
-# ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(ref_pretrained_model)
-
-print(model)
 print_trainable_parameters(model)
 
 # GPT-2 tokenizer has a pad token, but it is not eos_token by default. We need to set it to eos_token.
