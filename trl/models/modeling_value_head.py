@@ -305,6 +305,30 @@ class AutoModelForSeq2SeqLMWithValueHead(PreTrainedModelWrapper):
         self.v_head.load_state_dict(state_dict, strict=False)
         del state_dict
 
+        if hasattr(self.pretrained_model, "hf_device_map"):
+            if (
+                "cpu" in self.pretrained_model.hf_device_map.values()
+                or "disk" in self.pretrained_model.hf_device_map.values()
+            ):
+                raise ValueError(
+                    "The model is offloaded on CPU or disk - CPU & disk offloading is not supported for ValueHead models."
+                )
+
+            first_device = list(set(self.pretrained_model.hf_device_map.values()))[0]
+
+            self.v_head = self.v_head.to(first_device)
+
+            def set_device_hook(module, input, outputs):
+                new_output = ()
+                for output in outputs:
+                    if isinstance(output, torch.Tensor):
+                        new_output += (output.to(first_device),)
+                    else:
+                        new_output += (output,)
+                return new_output
+
+            self.register_forward_hook(set_device_hook)
+
     def state_dict(self, *args, **kwargs):
         r"""
         Returns the state dictionary of the model. We add the state dictionary of the value head
