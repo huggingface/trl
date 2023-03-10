@@ -168,6 +168,9 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
         lm_logits = base_model_output.logits
         loss = base_model_output.loss
 
+        if last_hidden_state.device != self.v_head.summary.weight.device:
+            last_hidden_state = last_hidden_state.to(self.v_head.summary.weight.device)
+
         value = self.v_head(last_hidden_state).squeeze(-1)
 
         # force upcast in fp32 if logits are in half-precision
@@ -222,6 +225,30 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
                 state_dict[k.replace("v_head.", "")] = state_dict.pop(k)
         self.v_head.load_state_dict(state_dict, strict=False)
         del state_dict
+
+        if hasattr(self.pretrained_model, "hf_device_map"):
+            if (
+                "cpu" in self.pretrained_model.hf_device_map.values()
+                or "disk" in self.pretrained_model.hf_device_map.values()
+            ):
+                raise ValueError(
+                    "The model is offloaded on CPU or disk - CPU & disk offloading is not supported for ValueHead models."
+                )
+
+            first_device = list(set(self.pretrained_model.hf_device_map.values()))[0]
+
+            self.v_head = self.v_head.to(first_device)
+
+            def set_device_hook(module, input, outputs):
+                new_output = ()
+                for output in outputs:
+                    if isinstance(output, torch.Tensor):
+                        new_output += (output.to(first_device),)
+                    else:
+                        new_output += (output,)
+                return new_output
+
+            self.register_forward_hook(set_device_hook)
 
 
 class AutoModelForSeq2SeqLMWithValueHead(PreTrainedModelWrapper):
