@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import gc
 import random
+from contextlib import contextmanager
 
 import numpy as np
 import torch
@@ -240,3 +242,16 @@ class LengthSampler:
 
     def __call__(self):
         return np.random.choice(self.values)
+
+
+class PPODecorators(object):
+    optimize_cuda_cache = False
+
+    @classmethod
+    @contextmanager
+    def empty_cuda_cache(cls):
+        yield
+        if cls.optimize_cuda_cache and torch.cuda.is_available():
+            gc.collect()
+            torch.cuda.empty_cache()
+            gc.collect()

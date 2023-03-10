@@ -28,6 +28,7 @@ from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizer, P
 
 from ..core import (
     WANDB_PADDING,
+    PPODecorators,
     clip_by_value,
     convert_to_scalar,
     entropy_from_logits,
@@ -274,6 +275,8 @@ class PPOTrainer(BaseTrainer):
         else:
             self.current_device = torch.device("cuda:0")
 
+        PPODecorators.optimize_cuda_cache = self.config.optimize_cuda_cache
+
     def _filter_kwargs(self, kwargs, target_func):
         """
         filter the keyword arguments that are supported by the target function.
@@ -405,6 +408,7 @@ class PPOTrainer(BaseTrainer):
 
         return queries, responses, scores
 
+    @PPODecorators.empty_cuda_cache()
     def step(
         self,
         queries: List[torch.LongTensor],
@@ -439,6 +443,7 @@ class PPOTrainer(BaseTrainer):
 
         with torch.no_grad():
             all_logprobs, _, values, masks = self.batched_forward_pass(self.model, queries, responses, model_inputs)
+
             # for when the model is a peft model
             if self.is_peft_model and hasattr(self.model.pretrained_model, "disable_adapter"):
                 with self.model.pretrained_model.disable_adapter():
@@ -504,6 +509,7 @@ class PPOTrainer(BaseTrainer):
                     batch["masks"],
                 )
                 all_stats.append(train_stats)
+
         timing["time/ppo/optimize_step"] = time.time() - t
 
         t = time.time()
@@ -591,6 +597,7 @@ class PPOTrainer(BaseTrainer):
             ).to(self.current_device)
         return input_data
 
+    @PPODecorators.empty_cuda_cache()
     def batched_forward_pass(
         self,
         model: PreTrainedModelWrapper,
@@ -667,6 +674,7 @@ class PPOTrainer(BaseTrainer):
             torch.cat(all_masks)[:, :-1],
         )
 
+    @PPODecorators.empty_cuda_cache()
     def train_minibatch(
         self,
         old_logprobs: torch.FloatTensor,
