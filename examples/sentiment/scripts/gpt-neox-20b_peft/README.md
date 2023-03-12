@@ -1,7 +1,7 @@
 
 # Fine-tuning 20B LLMs with RL on a 24GB consumer GPU
 The scripts in the section detail the fine-tuning a 20b LLM in 8-bit, in order to generate positive imdb reviews. You
-can find out more in our [blogpost](LINK_TODO).
+can find out more in our [blogpost](https://huggingface.co/blog/trl-peft).
 
 Overall there were three key steps and training scripts:
 
