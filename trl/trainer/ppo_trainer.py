@@ -270,7 +270,7 @@ class PPOTrainer(BaseTrainer):
         self.current_step = 0
 
         # post process for PP
-        if not self.model.is_sequential_parallel:
+        if not getattr(self.model, "is_sequential_parallel", False):
             self.current_device = self.accelerator.device
         else:
             self.current_device = torch.device("cuda:0")
