@@ -110,17 +110,6 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
 
         self._init_weights(**v_head_kwargs)
 
-    def _get_lm_head_device(self):
-        r"""
-        Returns the device of the language model head.
-        """
-        for attribute in self.lm_head_namings:
-            if hasattr(self.pretrained_model, attribute):
-                if isinstance(getattr(self.pretrained_model, attribute), nn.Sequential):
-                    return getattr(self.pretrained_model, attribute)[0].weight.device
-                else:
-                    return getattr(self.pretrained_model, attribute).weight.device
-
     def _init_weights(self, **kwargs):
         r"""
         Initializes the weights of the value head. The default initialization strategy is random.
@@ -168,9 +157,6 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
                 Additional keyword arguments, that are passed to the wrapped model.
         """
         kwargs["output_hidden_states"] = True  # this had already been set in the LORA / PEFT examples
-
-        # lm_head_device = self._get_lm_head_device()
-        # kwargs["labels"] = kwargs["labels"].to(lm_head_device)
 
         base_model_output = self.pretrained_model(
             input_ids=input_ids,
