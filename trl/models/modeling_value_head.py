@@ -317,15 +317,32 @@ class AutoModelForSeq2SeqLMWithValueHead(PreTrainedModelWrapper):
                     "The model is offloaded on CPU or disk - CPU & disk offloading is not supported for ValueHead models."
                 )
 
-            first_device = list(set(self.pretrained_model.hf_device_map.values()))[0]
+            # get the lm_head device
+            for name, module in self.pretrained_model.named_modules():
+                if any(attribute in name for attribute in self.lm_head_namings):
+                    lm_head_device = module.weight.device
+                    break
 
-            self.v_head = self.v_head.to(first_device)
+            # put v_head on the same device as the lm_head to avoid issues
+            self.v_head = self.v_head.to(lm_head_device)
 
             def set_device_hook(module, input, outputs):
+                r"""
+                A hook that sets the device of the output of the model to the device of the first
+                parameter of the model.
+
+                Args:
+                    module (`nn.Module`):
+                        The module to which the hook is attached.
+                    input (`tuple`):
+                        The input to the module.
+                    outputs (`tuple`):
+                        The output of the module.
+                """
                 new_output = ()
                 for output in outputs:
                     if isinstance(output, torch.Tensor):
-                        new_output += (output.to(first_device),)
+                        new_output += (output.to(lm_head_device),)
                     else:
                         new_output += (output,)
                 return new_output
