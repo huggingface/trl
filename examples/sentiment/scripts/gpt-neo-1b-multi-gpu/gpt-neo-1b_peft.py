@@ -132,11 +132,6 @@ def collator(data):
 # set seed before initializing value head for deterministic eval
 set_seed(config.seed)
 
-# Now let's build the model, the reference model, and the tokenizer.
-pretrained_model = AutoModelForCausalLM.from_pretrained(
-    config.model_name, load_in_8bit=True, device_map="balanced", max_memory={0: "800MB", 1: "800MB"}
-)
-tokenizer = AutoTokenizer.from_pretrained(config.model_name)
 
 """### Apply LoRA
 Here comes the magic with `peft`! Let's load a `PeftModel` and specify that we are going to use low-rank adapters (LoRA) using `get_peft_model` utility function from `peft`.
@@ -166,13 +161,16 @@ lora_config = LoraConfig(
     task_type="CAUSAL_LM",
 )
 
+# Now let's build the model, the reference model, and the tokenizer.
+pretrained_model = AutoModelForCausalLM.from_pretrained(
+    config.model_name, load_in_8bit=True, device_map="balanced", max_memory={0: "800MB", 1: "800MB"}
+)
+tokenizer = AutoTokenizer.from_pretrained(config.model_name)
+
 pretrained_model = prepare_model_for_int8_training(pretrained_model)
 pretrained_model = get_peft_model(pretrained_model, lora_config)
 
 model = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model)
-
-model.gradient_checkpointing_disable = model.pretrained_model.gradient_checkpointing_disable
-model.gradient_checkpointing_enable = model.pretrained_model.gradient_checkpointing_enable
 
 print_trainable_parameters(model)
 
