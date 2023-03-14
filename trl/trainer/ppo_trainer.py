@@ -177,7 +177,9 @@ class PPOTrainer(BaseTrainer):
             )
         # Step 1: Initialize Accelerator
         self.accelerator = Accelerator(log_with=config.log_with, **config.accelerator_kwargs)
-        self.accelerator.init_trackers(config.tracker_project_name, config=config.to_dict(), init_kwargs=config.tracker_kwargs)
+        self.accelerator.init_trackers(
+            config.tracker_project_name, config=config.to_dict(), init_kwargs=config.tracker_kwargs
+        )
 
         self.model = model
         self.is_encoder_decoder = hasattr(self.model, "is_encoder_decoder")
