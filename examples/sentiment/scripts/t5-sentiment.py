@@ -16,11 +16,10 @@
 from dataclasses import dataclass, field
 from typing import Optional
 
-
 import torch
 from datasets import load_dataset
 from tqdm import tqdm
-from transformers import AutoTokenizer, pipeline, HfArgumentParser
+from transformers import AutoTokenizer, HfArgumentParser, pipeline
 
 from trl import AutoModelForSeq2SeqLMWithValueHead, PPOConfig, PPOTrainer, set_seed
 from trl.core import LengthSampler

@@ -22,9 +22,9 @@ from tqdm import tqdm
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
+    HfArgumentParser,
     RobertaForSequenceClassification,
     RobertaTokenizer,
-    HfArgumentParser,
 )
 
 from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, create_reference_model, set_seed
