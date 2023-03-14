@@ -134,7 +134,13 @@ tokenizer.pad_token = tokenizer.eos_token
 
 # We then build the PPOTrainer, passing the model, the reference model, the tokenizer
 ppo_trainer = PPOTrainer(
-    config, model, ref_model=ref_model, tokenizer=tokenizer, dataset=dataset, data_collator=collator
+    config,
+    model,
+    ref_model=ref_model,
+    tokenizer=tokenizer,
+    dataset=dataset,
+    data_collator=collator,
+    optimizer=optimizer,
 )
 
 # We then build the reward pipeline, we will use the toxicity model to compute the reward.
