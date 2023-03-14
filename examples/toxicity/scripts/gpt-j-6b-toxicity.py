@@ -12,11 +12,20 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from dataclasses import dataclass, field
+from typing import Optional
+
 import torch
 from datasets import load_dataset
 from torch.optim import Adam
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer, RobertaForSequenceClassification, RobertaTokenizer
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    RobertaForSequenceClassification,
+    RobertaTokenizer,
+    HfArgumentParser,
+)
 
 from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, create_reference_model, set_seed
 from trl.core import LengthSampler
@@ -41,17 +50,40 @@ tqdm.pandas()
 #
 ########################################################################
 
+
 # We first define the configuration of the experiment, defining the model, the dataset,
 # the training parameters, and the PPO parameters.
 # Check the default arguments in the `PPOConfig` class for more details.
 # If you want to log with tensorboard, add the kwarg
 # `accelerator_kwargs={"logging_dir": PATH_TO_LOGS}` to the PPOConfig.
+@dataclass
+class ScriptArguments:
+    """
+    The name of the Casual LM model we wish to fine with PPO
+    """
+
+    # NOTE: gpt2 models use Conv1D instead of Linear layers which are not yet supported in 8 bit mode
+    # models like gpt-neo* models are more suitable.
+    model_name: Optional[str] = field(default="ybelkada/gpt-j-6b-sharded-bf16", metadata={"help": "the model name"})
+    log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
+    learning_rate: Optional[float] = field(default=(1.47e-5) * 2, metadata={"help": "the learning rate"})
+    mini_batch_size: Optional[int] = field(default=1, metadata={"help": "the PPO minibatch size"})
+    batch_size: Optional[int] = field(default=256, metadata={"help": "the batch size"})
+    gradient_accumulation_steps: Optional[int] = field(
+        default=1, metadata={"help": "the number of gradient accumulation steps"}
+    )
+
+
+parser = HfArgumentParser(ScriptArguments)
+script_args = parser.parse_args_into_dataclasses()[0]
+
 config = PPOConfig(
-    model_name="ybelkada/gpt-j-6b-sharded-bf16",
-    learning_rate=(1.47e-5) * 2,
-    log_with="wandb",
-    batch_size=32,
-    forward_batch_size=1,
+    model_name=script_args.model_name,
+    learning_rate=script_args.learning_rate,
+    log_with=script_args.log_with,
+    mini_batch_size=script_args.mini_batch_size,
+    batch_size=script_args.batch_size,
+    accelerator_kwargs=dict(gradient_accumulation_steps=script_args.gradient_accumulation_steps),
 )
 
 
