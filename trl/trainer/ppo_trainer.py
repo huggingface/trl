@@ -496,10 +496,11 @@ class PPOTrainer(BaseTrainer):
         all_stats = []
         for _ in range(self.config.ppo_epochs):
             for batch in mini_batch_dataloader:
-                model_inputs = {k: batch[k] for k in model_inputs_names}
-                logprobs, logits, vpreds, _ = self.batched_forward_pass(
-                    self.model, batch["queries"], batch["responses"], model_inputs
-                )
+                with self.accelerator.accumulate(self.model):
+                    model_inputs = {k: batch[k] for k in model_inputs_names}
+                    logprobs, logits, vpreds, _ = self.batched_forward_pass(
+                        self.model, batch["queries"], batch["responses"], model_inputs
+                    )
 
                 train_stats = self.train_minibatch(
                     batch["logprobs"],
@@ -708,7 +709,6 @@ class PPOTrainer(BaseTrainer):
             train_stats (dict[str, `torch.Tensor`]):
                 Dictionary of training statistics
         """
-
         loss_p, loss_v, train_stats = self.loss(old_logprobs, values, rewards, logits, vpreds, logprobs, mask)
         loss = loss_p + loss_v
         self.optimizer.zero_grad()
@@ -798,9 +798,7 @@ class PPOTrainer(BaseTrainer):
         advantages = masked_whiten(advantages, mask)
         advantages = advantages.detach()
 
-        vpredclipped = clip_by_value(
-            vpreds, values - self.config.cliprange_value, values + self.config.cliprange_value
-        )
+        vpredclipped = clip_by_value(vpreds, values - self.config.cliprange_value, values + self.config.cliprange_value)
 
         vf_losses1 = (vpreds - returns) ** 2
         vf_losses2 = (vpredclipped - returns) ** 2
