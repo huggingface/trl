@@ -101,8 +101,8 @@ class PPOConfig(object):
         accelerator_kwargs: Optional[dict] = {},
         tracker_project_name: Optional[str] = "trl",
         max_grad_norm: Optional[float] = None,
-        optimize_cuda_cache: Optional[bool] = False,
         seed: Optional[int] = 0,
+        optimize_cuda_cache: Optional[bool] = False,
     ):
         self.model_name = model_name
         self.steps = steps
