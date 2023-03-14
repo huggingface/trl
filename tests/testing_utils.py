@@ -13,6 +13,8 @@
 # limitations under the License.
 import unittest
 
+import torch
+
 from trl import is_peft_available
 
 
@@ -22,4 +24,13 @@ def require_peft(test_case):
     """
     if not is_peft_available():
         test_case = unittest.skip("test requires peft")(test_case)
+    return test_case
+
+
+def require_torch_multi_gpu(test_case):
+    """
+    Decorator marking a test that requires multiple GPUs. Skips the test if there aren't enough GPUs.
+    """
+    if torch.cuda.device_count() < 2:
+        test_case = unittest.skip("test requires multiple GPUs")(test_case)
     return test_case
