@@ -798,9 +798,7 @@ class PPOTrainer(BaseTrainer):
         advantages = masked_whiten(advantages, mask)
         advantages = advantages.detach()
 
-        vpredclipped = clip_by_value(
-            vpreds, values - self.config.cliprange_value, values + self.config.cliprange_value
-        )
+        vpredclipped = clip_by_value(vpreds, values - self.config.cliprange_value, values + self.config.cliprange_value)
 
         vf_losses1 = (vpreds - returns) ** 2
         vf_losses2 = (vpredclipped - returns) ** 2
@@ -823,23 +821,23 @@ class PPOTrainer(BaseTrainer):
         value_mean, value_var = masked_mean(values, mask), masked_var(values, mask)
 
         stats = dict(
-            loss=dict(policy=pg_loss, value=vf_loss, total=loss),
+            loss=dict(policy=pg_loss.detach(), value=vf_loss.detach(), total=loss.detach()),
             policy=dict(
-                entropy=entropy,
-                approxkl=approxkl,
-                policykl=policykl,
-                clipfrac=pg_clipfrac,
-                advantages=advantages,
-                advantages_mean=masked_mean(advantages, mask),
+                entropy=entropy.detach(),
+                approxkl=approxkl.detach(),
+                policykl=policykl.detach(),
+                clipfrac=pg_clipfrac.detach(),
+                advantages=advantages.detach(),
+                advantages_mean=masked_mean(advantages, mask).detach(),
                 ratio=ratio,
             ),
-            returns=dict(mean=return_mean, var=return_var),
+            returns=dict(mean=return_mean.detach(), var=return_var.detach()),
             val=dict(
-                vpred=masked_mean(vpreds, mask),
-                error=masked_mean((vpreds - returns) ** 2, mask),
-                clipfrac=vf_clipfrac,
-                mean=value_mean,
-                var=value_var,
+                vpred=masked_mean(vpreds, mask).detach(),
+                error=masked_mean((vpreds - returns) ** 2, mask).detach(),
+                clipfrac=vf_clipfrac.detach(),
+                mean=value_mean.detach(),
+                var=value_var.detach(),
             ),
         )
         return pg_loss, self.config.vf_coef * vf_loss, flatten_dict(stats)
