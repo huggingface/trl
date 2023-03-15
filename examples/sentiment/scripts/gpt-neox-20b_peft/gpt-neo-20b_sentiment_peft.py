@@ -84,7 +84,7 @@ config = PPOConfig(
     log_with=script_args.log_with,
     mini_batch_size=script_args.mini_batch_size,
     batch_size=script_args.batch_size,
-    accelerator_kwargs=dict(gradient_accumulation_steps=script_args.gradient_accumulation_steps),
+    gradient_accumulation_steps=script_args.gradient_accumulation_steps,
 )
 
 # We then define the arguments to pass to the sentiment analysis pipeline.

@@ -177,10 +177,12 @@ class PPOTrainer(BaseTrainer):
                 f"model must be a PreTrainedModelWrapper, got {type(model)} - supported architectures are: {SUPPORTED_ARCHITECTURES}"
             )
         # Step 1: Initialize Accelerator
-        self.accelerator = Accelerator(log_with=config.log_with, **config.accelerator_kwargs)
-        self.accelerator.init_trackers(
-            config.tracker_project_name, config=config.to_dict(), init_kwargs=config.tracker_kwargs
+        self.accelerator = Accelerator(
+            log_with=config.log_with,
+            gradient_accumulation_steps=config.gradient_accumulation_steps,
+            **config.accelerator_kwargs,
         )
+        self.accelerator.init_trackers(config.tracker_project_name, config=config.to_dict(), **config.tracker_kwargs)
 
         self.model = model
         self.is_encoder_decoder = hasattr(self.model, "is_encoder_decoder")
@@ -798,9 +800,7 @@ class PPOTrainer(BaseTrainer):
         advantages = masked_whiten(advantages, mask)
         advantages = advantages.detach()
 
-        vpredclipped = clip_by_value(
-            vpreds, values - self.config.cliprange_value, values + self.config.cliprange_value
-        )
+        vpredclipped = clip_by_value(vpreds, values - self.config.cliprange_value, values + self.config.cliprange_value)
 
         vf_losses1 = (vpreds - returns) ** 2
         vf_losses2 = (vpredclipped - returns) ** 2

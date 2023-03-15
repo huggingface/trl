@@ -56,6 +56,8 @@ class PPOConfig(object):
             Number of samples forward passed through model at a time
         mini_batch_size (`int`, *optional*, defaults to 1):
             Number of samples optimized inside PPO together
+        gradient_accumulation_steps (`int`, *optional*, defaults to 1):
+            The number of gradient accumulation steps
         ppo_epochs (`int`, *optional*, defaults to 4):
             Number of optimisation epochs per batch of samples
         remove_unused_columns (`bool`, *optional*, defaults to True):
@@ -94,6 +96,7 @@ class PPOConfig(object):
         batch_size: Optional[int] = 256,
         forward_batch_size: Optional[int] = None,
         mini_batch_size: Optional[int] = 1,
+        gradient_accumulation_steps: Optional[int] = 1,
         ppo_epochs: Optional[int] = 4,
         remove_unused_columns: Optional[bool] = True,
         log_with: Optional[str] = None,
@@ -124,6 +127,7 @@ class PPOConfig(object):
             self.mini_batch_size = forward_batch_size
         else:
             self.mini_batch_size = mini_batch_size
+        self.gradient_accumulation_steps = gradient_accumulation_steps
         self.ppo_epochs = ppo_epochs
         self.remove_unused_columns = remove_unused_columns
         self.seed = seed
