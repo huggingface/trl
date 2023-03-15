@@ -182,7 +182,7 @@ class PPOTrainer(BaseTrainer):
             gradient_accumulation_steps=config.gradient_accumulation_steps,
             **config.accelerator_kwargs,
         )
-        self.accelerator.init_trackers(config.tracker_project_name, config=config.to_dict(), **config.tracker_kwargs)
+        self.accelerator.init_trackers(config.tracker_project_name, config=config.to_dict(), init_kwargs=config.tracker_kwargs)
 
         self.model = model
         self.is_encoder_decoder = hasattr(self.model, "is_encoder_decoder")
