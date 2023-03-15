@@ -447,8 +447,10 @@ class PPOTrainer(BaseTrainer):
             all_logprobs, _, values, masks = self.batched_forward_pass(self.model, queries, responses, model_inputs)
 
             # for when the model is a peft model
-            if self.is_peft_model and hasattr(self.model.pretrained_model, "disable_adapter"):
-                with self.model.pretrained_model.disable_adapter():
+            if self.is_peft_model and hasattr(
+                self.accelerator.unwrap_model(self.model).pretrained_model, "disable_adapter"
+            ):
+                with self.accelerator.unwrap_model(self.model).pretrained_model.disable_adapter():
                     ref_logprobs, _, _, _ = self.batched_forward_pass(self.model, queries, responses, model_inputs)
             elif self.is_peft_model and not hasattr(self.model.pretrained_model, "disable_adapter"):
                 raise ValueError(
