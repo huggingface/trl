@@ -36,6 +36,18 @@ accelerate config # will prompt you to define the training configuration
 accelerate launch scripts/gpt2-sentiment_peft.py # launches training
 ```
 
+## Using `trl` + `peft` and Data Parallelism
+
+You can scale up to as many GPUs as you want, as long as you are able to fit the training process in a single device. The only tweak you need to apply is to load the model as follows:
+```python
+current_device = torch.distributed.get_rank()
+
+pretrained_model = AutoModelForCausalLM.from_pretrained(
+    config.model_name, load_in_8bit=True, device_map={"": current_device}
+)
+```
+And make sure that the rewards are computed on `current_device` as well.
+
 ## Naive pipeline parallelism (NPP) for large models (>60B models)
 
 The `trl` library also supports naive pipeline parallelism (NPP) for large models (>60B models). This is a simple way to parallelize the model across multiple GPUs. 
