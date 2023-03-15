@@ -40,13 +40,19 @@ accelerate launch scripts/gpt2-sentiment_peft.py # launches training
 
 You can scale up to as many GPUs as you want, as long as you are able to fit the training process in a single device. The only tweak you need to apply is to load the model as follows:
 ```python
-current_device = torch.distributed.get_rank()
+from accelerate import Accelerator
+...
+
+current_device = Accelerator().process_index
 
 pretrained_model = AutoModelForCausalLM.from_pretrained(
     config.model_name, load_in_8bit=True, device_map={"": current_device}
 )
 ```
-And make sure that the rewards are computed on `current_device` as well.
+As the `Accelerator` object from `accelerate` will take care of initializing the distributed setup correctly.
+Make sure to initialize your accelerate config by specifying that you are training in a multi-gpu setup, by running `accelerate config` and make sure to run the training script with `accelerator launch your_script.py`.
+
+Finally make sure that the rewards are computed on `current_device` as well.
 
 ## Naive pipeline parallelism (NPP) for large models (>60B models)
 
