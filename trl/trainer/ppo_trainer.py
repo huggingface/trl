@@ -453,6 +453,7 @@ class PPOTrainer(BaseTrainer):
             )
             if self.is_encoder_decoder:
                 model_inputs["decoder_input_ids"] = self.accelerator.pad_across_processes(
+                    model_inputs["decoder_input_ids"],
                     dim=1,
                     pad_index=self.tokenizer.pad_token_id,
                     pad_first=pad_first,
