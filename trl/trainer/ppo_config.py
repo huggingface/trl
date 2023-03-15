@@ -73,6 +73,8 @@ class PPOConfig(object):
             Maximum gradient norm for gradient clipping
         seed (`int`, *optional*, defaults to 0):
             Seed value for random generations
+        optimize_cuda_cache (`bool`, *optional*, defaults to `False`):
+            Optimize CUDA cache for slightly more memory-effcient training
     """
 
     def __init__(
@@ -100,6 +102,7 @@ class PPOConfig(object):
         tracker_project_name: Optional[str] = "trl",
         max_grad_norm: Optional[float] = None,
         seed: Optional[int] = 0,
+        optimize_cuda_cache: Optional[bool] = False,
     ):
         self.model_name = model_name
         self.steps = steps
@@ -139,6 +142,7 @@ class PPOConfig(object):
         self.tracker_kwargs = tracker_kwargs
         self.accelerator_kwargs = accelerator_kwargs
         self.tracker_project_name = tracker_project_name
+        self.optimize_cuda_cache = optimize_cuda_cache
         self.max_grad_norm = max_grad_norm
 
         self.total_ppo_epochs = int(np.ceil(steps / batch_size))

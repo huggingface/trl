@@ -28,6 +28,7 @@ from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizer, P
 
 from ..core import (
     WANDB_PADDING,
+    PPODecorators,
     clip_by_value,
     convert_to_scalar,
     entropy_from_logits,
@@ -270,6 +271,14 @@ class PPOTrainer(BaseTrainer):
         # init the current step
         self.current_step = 0
 
+        # post process for PP
+        if not getattr(self.model, "is_sequential_parallel", False):
+            self.current_device = self.accelerator.device
+        else:
+            self.current_device = torch.device("cuda:0")
+
+        PPODecorators.optimize_cuda_cache = self.config.optimize_cuda_cache
+
     def _filter_kwargs(self, kwargs, target_func):
         """
         filter the keyword arguments that are supported by the target function.
@@ -388,9 +397,9 @@ class PPOTrainer(BaseTrainer):
                 )
 
         # add queries, scores and responses on the correct device
-        queries = [tensor.to(self.accelerator.device) for tensor in queries]
-        responses = [tensor.to(self.accelerator.device) for tensor in responses]
-        scores = [tensor.to(self.accelerator.device) for tensor in scores]
+        queries = [tensor.to(self.current_device) for tensor in queries]
+        responses = [tensor.to(self.current_device) for tensor in responses]
+        scores = [tensor.to(self.current_device) for tensor in scores]
 
         # squeeze scores if needed
         for i, score in enumerate(scores):
@@ -401,6 +410,7 @@ class PPOTrainer(BaseTrainer):
 
         return queries, responses, scores
 
+    @PPODecorators.empty_cuda_cache()
     def step(
         self,
         queries: List[torch.LongTensor],
@@ -435,6 +445,7 @@ class PPOTrainer(BaseTrainer):
 
         with torch.no_grad():
             all_logprobs, _, values, masks = self.batched_forward_pass(self.model, queries, responses, model_inputs)
+
             # for when the model is a peft model
             if self.is_peft_model and hasattr(self.model.pretrained_model, "disable_adapter"):
                 with self.model.pretrained_model.disable_adapter():
@@ -468,7 +479,7 @@ class PPOTrainer(BaseTrainer):
                 if key in ["queries", "responses"]:
                     return_dict[key] = [d[key] for d in data]
                 else:
-                    return_dict[key] = torch.stack([d[key] for d in data]).to(self.accelerator.device)
+                    return_dict[key] = torch.stack([d[key] for d in data]).to(self.current_device)
             return return_dict
 
         mini_batch_dict.update(model_inputs)
@@ -500,6 +511,7 @@ class PPOTrainer(BaseTrainer):
                     batch["masks"],
                 )
                 all_stats.append(train_stats)
+
         timing["time/ppo/optimize_step"] = time.time() - t
 
         t = time.time()
@@ -569,11 +581,11 @@ class PPOTrainer(BaseTrainer):
         if self.is_encoder_decoder:
             input_data = self.data_collator(
                 [{"input_ids": q, "attention_mask": torch.ones_like(q)} for q in queries]
-            ).to(self.accelerator.device)
+            ).to(self.current_device)
 
             decoder_inputs = self.data_collator(
                 [{"input_ids": r, "attention_mask": torch.ones_like(r)} for r in responses]
-            ).to(self.accelerator.device)
+            ).to(self.current_device)
 
             input_data["decoder_input_ids"] = decoder_inputs["input_ids"]
             input_data["decoder_attention_mask"] = decoder_inputs["attention_mask"]
@@ -584,9 +596,10 @@ class PPOTrainer(BaseTrainer):
             input_ids = [torch.cat([q, r]) for q, r in zip(queries, responses)]
             input_data = self.data_collator(
                 [{"input_ids": ids, "attention_mask": torch.ones_like(ids)} for ids in input_ids]
-            ).to(self.accelerator.device)
+            ).to(self.current_device)
         return input_data
 
+    @PPODecorators.empty_cuda_cache()
     def batched_forward_pass(
         self,
         model: PreTrainedModelWrapper,
@@ -663,6 +676,7 @@ class PPOTrainer(BaseTrainer):
             torch.cat(all_masks)[:, :-1],
         )
 
+    @PPODecorators.empty_cuda_cache()
     def train_minibatch(
         self,
         old_logprobs: torch.FloatTensor,
@@ -707,7 +721,7 @@ class PPOTrainer(BaseTrainer):
 
         t = time.time()
         self.optimizer.step()
-        train_stats["time/ppo/optimizer_step"] = torch.Tensor([time.time() - t]).to(self.accelerator.device)
+        train_stats["time/ppo/optimizer_step"] = torch.Tensor([time.time() - t]).to(self.current_device)
         return train_stats
 
     def compute_rewards(
@@ -891,7 +905,7 @@ class PPOTrainer(BaseTrainer):
 
             # Log stats
             if not isinstance(rewards, torch.Tensor):
-                rewards = torch.tensor(rewards).to(self.accelerator.device)
+                rewards = torch.tensor(rewards).to(self.current_device)
 
             if "query" not in batch.keys() and "response" not in batch.keys():
                 # warn the user that the game logs will not be logged
@@ -935,7 +949,7 @@ class PPOTrainer(BaseTrainer):
                 import torch.distributed as dist
 
                 if not isinstance(rewards, torch.Tensor):
-                    rewards = torch.tensor(rewards).to(self.accelerator.device)
+                    rewards = torch.tensor(rewards).to(self.current_device)
 
                 dist.barrier()
                 dist.all_reduce(rewards, op=torch.distributed.ReduceOp.SUM)

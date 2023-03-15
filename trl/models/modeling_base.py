@@ -60,6 +60,7 @@ class PreTrainedModelWrapper(nn.Module):
         self.config = pretrained_model.config
         self.prepare_inputs_for_generation = pretrained_model.prepare_inputs_for_generation
         self.is_loaded_in_8bit = getattr(pretrained_model, "is_loaded_in_8bit", False)
+        self.is_sequential_parallel = False
 
         if hasattr(pretrained_model, "gradient_checkpointing_disable"):
             self.gradient_checkpointing_disable = pretrained_model.gradient_checkpointing_disable
