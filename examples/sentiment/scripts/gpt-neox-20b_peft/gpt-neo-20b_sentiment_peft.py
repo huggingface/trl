@@ -62,13 +62,17 @@ class ScriptArguments:
     """
 
     # NOTE: gpt2 models use Conv1D instead of Linear layers which are not yet supported in 8 bit mode
-    # models like gpt-neo* models are more suitable
+    # models like gpt-neo* models are more suitable.
     model_name: Optional[str] = field(
         default="edbeeching/gpt-neo-125M-imdb-lora-adapter-merged", metadata={"help": "the model name"}
     )
     log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
     learning_rate: Optional[float] = field(default=1.41e-5, metadata={"help": "the learning rate"})
-    merge_model_adapter: Optional[bool] = field(default=False, metadata={"help": "the learning rate"})
+    mini_batch_size: Optional[int] = field(default=16, metadata={"help": "the PPO minibatch size"})
+    batch_size: Optional[int] = field(default=256, metadata={"help": "the batch size"})
+    gradient_accumulation_steps: Optional[int] = field(
+        default=1, metadata={"help": "the number of gradient accumulation steps"}
+    )
 
 
 parser = HfArgumentParser(ScriptArguments)
@@ -78,13 +82,14 @@ config = PPOConfig(
     model_name=script_args.model_name,
     learning_rate=script_args.learning_rate,
     log_with=script_args.log_with,
-    forward_batch_size=16,
-    batch_size=256,
+    mini_batch_size=script_args.mini_batch_size,
+    batch_size=script_args.batch_size,
+    gradient_accumulation_steps=script_args.gradient_accumulation_steps,
 )
 
 # We then define the arguments to pass to the sentiment analysis pipeline.
 # We set `return_all_scores` to True to get the sentiment score for each token.
-sent_kwargs = {"return_all_scores": True, "function_to_apply": "none", "batch_size": config.forward_batch_size}
+sent_kwargs = {"return_all_scores": True, "function_to_apply": "none", "batch_size": config.mini_batch_size}
 
 
 # Below is an example function to build the dataset. In our case, we use the IMDB dataset
