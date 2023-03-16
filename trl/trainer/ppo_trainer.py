@@ -823,9 +823,7 @@ class PPOTrainer(BaseTrainer):
         advantages = masked_whiten(advantages, mask)
         advantages = advantages.detach()
 
-        vpredclipped = clip_by_value(
-            vpreds, values - self.config.cliprange_value, values + self.config.cliprange_value
-        )
+        vpredclipped = clip_by_value(vpreds, values - self.config.cliprange_value, values + self.config.cliprange_value)
 
         vf_losses1 = (vpreds - returns) ** 2
         vf_losses2 = (vpredclipped - returns) ** 2
@@ -856,7 +854,7 @@ class PPOTrainer(BaseTrainer):
                 clipfrac=pg_clipfrac.detach(),
                 advantages=advantages.detach(),
                 advantages_mean=masked_mean(advantages, mask).detach(),
-                ratio=ratio,
+                ratio=ratio.detach(),
             ),
             returns=dict(mean=return_mean.detach(), var=return_var.detach()),
             val=dict(
