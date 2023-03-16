@@ -49,6 +49,8 @@ pretrained_model = AutoModelForCausalLM.from_pretrained(
     config.model_name, load_in_8bit=True, device_map={"": current_device}
 )
 ```
+The reason behind `device_map={"": current_device}` is that when you set `"":device_number`, `accelerate` will set the entire model on the `device_number` device. Therefore this trick enables to set the model on the correct device for each process.
+
 As the `Accelerator` object from `accelerate` will take care of initializing the distributed setup correctly.
 Make sure to initialize your accelerate config by specifying that you are training in a multi-gpu setup, by running `accelerate config` and make sure to run the training script with `accelerator launch your_script.py`.
 
