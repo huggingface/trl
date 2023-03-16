@@ -177,7 +177,11 @@ class PPOTrainer(BaseTrainer):
                 f"model must be a PreTrainedModelWrapper, got {type(model)} - supported architectures are: {SUPPORTED_ARCHITECTURES}"
             )
         # Step 1: Initialize Accelerator
-        self.accelerator = Accelerator(log_with=config.log_with, **config.accelerator_kwargs)
+        self.accelerator = Accelerator(
+            log_with=config.log_with,
+            gradient_accumulation_steps=config.gradient_accumulation_steps,
+            **config.accelerator_kwargs,
+        )
         self.accelerator.init_trackers(
             config.tracker_project_name, config=config.to_dict(), init_kwargs=config.tracker_kwargs
         )
@@ -517,10 +521,11 @@ class PPOTrainer(BaseTrainer):
         all_stats = []
         for _ in range(self.config.ppo_epochs):
             for batch in mini_batch_dataloader:
-                model_inputs = {k: batch[k] for k in model_inputs_names}
-                logprobs, logits, vpreds, _ = self.batched_forward_pass(
-                    self.model, batch["queries"], batch["responses"], model_inputs
-                )
+                with self.accelerator.accumulate(self.model):
+                    model_inputs = {k: batch[k] for k in model_inputs_names}
+                    logprobs, logits, vpreds, _ = self.batched_forward_pass(
+                        self.model, batch["queries"], batch["responses"], model_inputs
+                    )
 
                 train_stats = self.train_minibatch(
                     batch["logprobs"],
@@ -729,7 +734,6 @@ class PPOTrainer(BaseTrainer):
             train_stats (dict[str, `torch.Tensor`]):
                 Dictionary of training statistics
         """
-
         loss_p, loss_v, train_stats = self.loss(old_logprobs, values, rewards, logits, vpreds, logprobs, mask)
         loss = loss_p + loss_v
         self.optimizer.zero_grad()
@@ -844,23 +848,23 @@ class PPOTrainer(BaseTrainer):
         value_mean, value_var = masked_mean(values, mask), masked_var(values, mask)
 
         stats = dict(
-            loss=dict(policy=pg_loss, value=vf_loss, total=loss),
+            loss=dict(policy=pg_loss.detach(), value=vf_loss.detach(), total=loss.detach()),
             policy=dict(
-                entropy=entropy,
-                approxkl=approxkl,
-                policykl=policykl,
-                clipfrac=pg_clipfrac,
-                advantages=advantages,
-                advantages_mean=masked_mean(advantages, mask),
+                entropy=entropy.detach(),
+                approxkl=approxkl.detach(),
+                policykl=policykl.detach(),
+                clipfrac=pg_clipfrac.detach(),
+                advantages=advantages.detach(),
+                advantages_mean=masked_mean(advantages, mask).detach(),
                 ratio=ratio,
             ),
-            returns=dict(mean=return_mean, var=return_var),
+            returns=dict(mean=return_mean.detach(), var=return_var.detach()),
             val=dict(
-                vpred=masked_mean(vpreds, mask),
-                error=masked_mean((vpreds - returns) ** 2, mask),
-                clipfrac=vf_clipfrac,
-                mean=value_mean,
-                var=value_var,
+                vpred=masked_mean(vpreds, mask).detach(),
+                error=masked_mean((vpreds - returns) ** 2, mask).detach(),
+                clipfrac=vf_clipfrac.detach(),
+                mean=value_mean.detach(),
+                var=value_var.detach(),
             ),
         )
         return pg_loss, self.config.vf_coef * vf_loss, flatten_dict(stats)

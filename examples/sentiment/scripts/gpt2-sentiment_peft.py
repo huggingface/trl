@@ -70,6 +70,11 @@ class ScriptArguments:
     model_name: Optional[str] = field(default="edbeeching/gpt-neo-125M-imdb", metadata={"help": "the model name"})
     log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
     learning_rate: Optional[float] = field(default=1.41e-5, metadata={"help": "the learning rate"})
+    mini_batch_size: Optional[int] = field(default=16, metadata={"help": "the PPO minibatch size"})
+    batch_size: Optional[int] = field(default=256, metadata={"help": "the batch size"})
+    gradient_accumulation_steps: Optional[int] = field(
+        default=1, metadata={"help": "the number of gradient accumulation steps"}
+    )
 
 
 parser = HfArgumentParser(ScriptArguments)
@@ -79,8 +84,9 @@ config = PPOConfig(
     model_name=script_args.model_name,
     learning_rate=script_args.learning_rate,
     log_with=script_args.log_with,
-    mini_batch_size=16,
-    batch_size=256,
+    mini_batch_size=script_args.mini_batch_size,
+    batch_size=script_args.batch_size,
+    gradient_accumulation_steps=script_args.gradient_accumulation_steps,
 )
 
 # We then define the arguments to pass to the sentiment analysis pipeline.
