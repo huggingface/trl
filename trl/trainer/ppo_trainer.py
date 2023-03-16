@@ -461,10 +461,6 @@ class PPOTrainer(BaseTrainer):
                 model_inputs["decoder_attention_mask"] = self.accelerator.pad_across_processes(
                     model_inputs["decoder_attention_mask"], dim=1, pad_index=0, pad_first=pad_first
                 )
-            else:
-                model_inputs['labels'] = self.accelerator.pad_across_processes(
-                    model_inputs['labels'], dim=1, pad_index=-100, pad_first=pad_first
-                )
 
         model_inputs_names = list(model_inputs.keys())
 
@@ -617,13 +613,14 @@ class PPOTrainer(BaseTrainer):
             input_data["decoder_input_ids"] = decoder_inputs["input_ids"]
             input_data["decoder_attention_mask"] = decoder_inputs["attention_mask"]
 
-            input_data.pop("labels", None)  # we don't want to compute LM losses
-
         else:
             input_ids = [torch.cat([q, r]) for q, r in zip(queries, responses)]
             input_data = self.data_collator(
                 [{"input_ids": ids, "attention_mask": torch.ones_like(ids)} for ids in input_ids]
             ).to(self.current_device)
+
+        input_data.pop("labels", None)  # we don't want to compute LM losses
+
         return input_data
 
     @PPODecorators.empty_cuda_cache()
