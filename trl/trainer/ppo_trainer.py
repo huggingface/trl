@@ -461,6 +461,10 @@ class PPOTrainer(BaseTrainer):
                 model_inputs["decoder_attention_mask"] = self.accelerator.pad_across_processes(
                     model_inputs["decoder_attention_mask"], dim=1, pad_index=0, pad_first=pad_first
                 )
+            else:
+                model_inputs['labels'] = self.accelerator.pad_across_processes(
+                    model_inputs['labels'], dim=1, pad_index=-100, pad_first=pad_first
+                )
 
         model_inputs_names = list(model_inputs.keys())
 
