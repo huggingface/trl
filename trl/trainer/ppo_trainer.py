@@ -856,7 +856,7 @@ class PPOTrainer(BaseTrainer):
                 clipfrac=pg_clipfrac.detach(),
                 advantages=advantages.detach(),
                 advantages_mean=masked_mean(advantages, mask).detach(),
-                ratio=ratio,
+                ratio=ratio.detach(),
             ),
             returns=dict(mean=return_mean.detach(), var=return_var.detach()),
             val=dict(
