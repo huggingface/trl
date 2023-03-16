@@ -27,7 +27,6 @@ from transformers import AutoTokenizer
 
 from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead, PPOConfig, PPOTrainer, set_seed
 from trl.core import respond_to_batch
-from trl.import_utils import is_torch_greater_2_0
 
 from .testing_constants import CI_HUB_ENDPOINT, CI_HUB_USER, CI_HUB_USER_TOKEN
 from .testing_utils import require_peft, require_torch_multi_gpu
