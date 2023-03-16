@@ -12,7 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import importlib
+from importlib.metadata import version
 
 
 def is_peft_available():
     return importlib.util.find_spec("peft") is not None
+
+
+def is_torch_greater_2_0():
+    torch_version = version("torch")
+    return torch_version >= "2.0"
