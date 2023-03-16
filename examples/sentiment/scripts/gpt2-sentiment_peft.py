@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import torch
+from accelerate import Accelerator
 from datasets import load_dataset
 from peft import LoraConfig, get_peft_model, prepare_model_for_int8_training
 from tqdm import tqdm
@@ -141,7 +142,11 @@ def collator(data):
 set_seed(config.seed)
 
 # Now let's build the main base model! We'll use the `AutoModelForCausalLM` class and load the model in 8 bit mode.
-pretrained_model = AutoModelForCausalLM.from_pretrained(config.model_name, load_in_8bit=True, device_map="auto")
+current_device = Accelerator().process_index
+
+pretrained_model = AutoModelForCausalLM.from_pretrained(
+    config.model_name, load_in_8bit=True, device_map={"": current_device}
+)
 
 tokenizer = AutoTokenizer.from_pretrained(config.model_name)
 
@@ -171,7 +176,7 @@ lora_config = LoraConfig(
     task_type="CAUSAL_LM",
 )
 
-pretrained_model = prepare_model_for_int8_training(pretrained_model)
+pretrained_model = prepare_model_for_int8_training(pretrained_model, layer_norm_names=[])
 pretrained_model = get_peft_model(pretrained_model, lora_config)
 
 model = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model)
@@ -189,7 +194,7 @@ ppo_trainer = PPOTrainer(config, model, ref_model=None, tokenizer=tokenizer, dat
 # to the same device as the PPOTrainer.
 device = ppo_trainer.accelerator.device
 if ppo_trainer.accelerator.num_processes == 1:
-    device = 0 if torch.cuda.is_available() else "cpu"  # to avoid a `pipeline` bug
+    device = current_device if torch.cuda.is_available() else "cpu"  # to avoid a `pipeline` bug
 sentiment_pipe = pipeline("sentiment-analysis", model="lvwerra/distilbert-imdb", device=device)
 
 # We then define the arguments to pass to the `generate` function. These arguments

@@ -472,8 +472,10 @@ class PPOTrainer(BaseTrainer):
             all_logprobs, _, values, masks = self.batched_forward_pass(self.model, queries, responses, model_inputs)
 
             # for when the model is a peft model
-            if self.is_peft_model and hasattr(self.model.pretrained_model, "disable_adapter"):
-                with self.model.pretrained_model.disable_adapter():
+            if self.is_peft_model and hasattr(
+                self.accelerator.unwrap_model(self.model).pretrained_model, "disable_adapter"
+            ):
+                with self.accelerator.unwrap_model(self.model).pretrained_model.disable_adapter():
                     ref_logprobs, _, _, _ = self.batched_forward_pass(self.model, queries, responses, model_inputs)
             elif self.is_peft_model and not hasattr(self.model.pretrained_model, "disable_adapter"):
                 raise ValueError(
@@ -616,13 +618,14 @@ class PPOTrainer(BaseTrainer):
             input_data["decoder_input_ids"] = decoder_inputs["input_ids"]
             input_data["decoder_attention_mask"] = decoder_inputs["attention_mask"]
 
-            input_data.pop("labels", None)  # we don't want to compute LM losses
-
         else:
             input_ids = [torch.cat([q, r]) for q, r in zip(queries, responses)]
             input_data = self.data_collator(
                 [{"input_ids": ids, "attention_mask": torch.ones_like(ids)} for ids in input_ids]
             ).to(self.current_device)
+
+        input_data.pop("labels", None)  # we don't want to compute LM losses
+
         return input_data
 
     @PPODecorators.empty_cuda_cache()
