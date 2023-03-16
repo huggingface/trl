@@ -265,10 +265,7 @@ class PPOTrainerTester(unittest.TestCase):
 
         self.assertTrue(isinstance(ppo_trainer.optimizer.optimizer, torch.optim.SGD))
         # for some accelerate versions the scheduler is not an `Accelerate scheduler` object
-        if hasattr(ppo_trainer.lr_scheduler, "scheduler"):
-            self.assertTrue(isinstance(ppo_trainer.lr_scheduler.scheduler, torch.optim.lr_scheduler.ExponentialLR))
-        else:
-            self.assertTrue(isinstance(ppo_trainer.lr_scheduler, torch.optim.lr_scheduler.ExponentialLR))
+        self.assertTrue(isinstance(ppo_trainer.lr_scheduler.scheduler, torch.optim.lr_scheduler.ExponentialLR))
 
         # train model with ppo
         for query_tensor, response_tensor in dummy_dataloader:
