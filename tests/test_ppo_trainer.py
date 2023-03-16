@@ -264,7 +264,6 @@ class PPOTrainerTester(unittest.TestCase):
         dummy_dataloader = ppo_trainer.dataloader
 
         self.assertTrue(isinstance(ppo_trainer.optimizer.optimizer, torch.optim.SGD))
-        # for some accelerate versions the scheduler is not an `Accelerate scheduler` object
         self.assertTrue(isinstance(ppo_trainer.lr_scheduler.scheduler, torch.optim.lr_scheduler.ExponentialLR))
 
         # train model with ppo
