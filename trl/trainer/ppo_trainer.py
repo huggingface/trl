@@ -41,6 +41,7 @@ from ..core import (
     stack_dicts,
     stats_to_np,
 )
+from ..import_utils import is_torch_greater_2_0
 from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper, create_reference_model
 from . import AdaptiveKLController, BaseTrainer, FixedKLController, PPOConfig
 
@@ -248,8 +249,16 @@ class PPOTrainer(BaseTrainer):
 
         self.lr_scheduler = lr_scheduler
         if self.lr_scheduler is not None:
-            if not isinstance(self.lr_scheduler, torch.optim.lr_scheduler._LRScheduler):
-                raise ValueError("lr_scheduler must be a torch.optim.lr_scheduler._LRScheduler")
+            lr_scheduler_class = (
+                torch.optim.lr_scheduler._LRScheduler
+                if not is_torch_greater_2_0()
+                else torch.optim.lr_scheduler.LRScheduler
+            )
+
+            if not isinstance(self.lr_scheduler, lr_scheduler_class):
+                raise ValueError(
+                    "lr_scheduler must be a torch.optim.lr_scheduler._LRScheduler or torch.optim.lr_scheduler.LRScheduler (for torch >= 2.0)"
+                )
 
         if self.config.adap_kl_ctrl:
             self.kl_ctl = AdaptiveKLController(self.config.init_kl_coef, self.config.target, self.config.horizon)
