@@ -246,7 +246,6 @@ class PPOTrainerTester(unittest.TestCase):
         for stat in EXPECTED_STATS:
             assert stat in train_stats.keys()
 
-    @unittest.skip("TODO: fix this test")
     def test_ppo_step_with_no_ref_sgd_lr_scheduler(self):
         # initialize dataset
         dummy_dataset = self._init_dummy_dataset()
