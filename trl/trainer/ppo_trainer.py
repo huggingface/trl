@@ -15,7 +15,7 @@ import inspect
 import os
 import time
 import warnings
-from typing import List, Optional, Union
+from typing import Callable, List, Optional, Union
 
 import datasets
 import torch
@@ -357,7 +357,14 @@ class PPOTrainer(BaseTrainer):
         else:
             return dataset.remove_columns(ignored_columns)
 
-    def generate(self, query_tensor: torch.Tensor, **generation_kwargs):
+    def generate(
+        self,
+        query_tensor: Union[torch.Tensor, List[torch.Tensor]],
+        length_sampler: Callable = None,
+        batch_size: int = 4,
+        return_prompt: bool = True,
+        **generation_kwargs,
+    ):
         """
         Generate response with the model given the query tensor.
         call the `generate` method of the model.
@@ -371,11 +378,68 @@ class PPOTrainer(BaseTrainer):
         Returns:
             `torch.LongTensor`: A tensor of shape (`batch_size`, `gen_len`) containing response tokens.
         """
-        response = self.accelerator.unwrap_model(self.model).generate(
-            input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs
-        )
 
-        return response
+        if isinstance(query_tensor, List):
+            return self._generate_batched(
+                query_tensor,
+                length_sampler=length_sampler,
+                batch_size=batch_size,
+                return_prompt=return_prompt,
+                **generation_kwargs,
+            )
+
+        else:
+            if length_sampler is not None:
+                generation_kwargs["max_new_tokens"] = length_sampler()
+            response = self.accelerator.unwrap_model(self.model).generate(
+                input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs
+            )
+
+            if not return_prompt:
+                return response[:, query_tensor.shape[0] :]
+            return response
+
+    def _generate_batched(
+        self,
+        query_tensors: List[torch.Tensor],
+        length_sampler: Callable = None,
+        batch_size: int = 4,
+        return_prompt: bool = True,
+        pad_to_multiple_of: int = 8
+        **generation_kwargs,
+    ):
+        outputs = []
+
+        padding_side_default = self.tokenizer.padding_side
+        self.tokenizer.padding_side = "left"
+
+        for i in range(0, len(query_tensors), batch_size):
+            if length_sampler is not None:
+                generation_kwargs["max_new_tokens"] = length_sampler()
+
+            batch = query_tensors[i : i + batch_size]
+            batch = [torch.tensor(element) for element in batch]
+            batch_mask = [torch.ones_like(element) for element in batch]
+            inputs = {"input_ids": batch, "attention_mask": batch_mask}
+
+            padded_inputs = self.tokenizer.pad(
+                inputs,
+                padding=True,
+                max_length=None,
+                pad_to_multiple_of=pad_to_multiple_of,
+                return_tensors="pt",
+            ).to(self.current_device)
+
+            generations = self.accelerator.unwrap_model(self.model).generate(**padded_inputs, **generation_kwargs)
+
+            for generation, mask in zip(generations, padded_inputs["attention_mask"]):
+                output = generation[(1 - mask).sum() :]  # remove padding
+                if not return_prompt:
+                    output = output[(mask).sum() :]  # remove prompt
+                outputs.append(output)
+
+        self.tokenizer.padding_side = padding_side_default
+        return outputs
 
     def _step_safety_checker(
         self,
