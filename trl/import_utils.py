@@ -1,5 +1,3 @@
-# flake8: noqa
-
 # Copyright 2022 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,11 +11,27 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from .modeling_base import PreTrainedModelWrapper, create_reference_model
-from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
+import importlib
+import sys
 
 
-SUPPORTED_ARCHITECTURES = (
-    AutoModelForCausalLMWithValueHead,
-    AutoModelForSeq2SeqLMWithValueHead,
-)
+if sys.version_info[0] < 3.8:
+    _is_python_greater_3_8 = False
+else:
+    _is_python_greater_3_8 = True
+
+
+def is_peft_available():
+    return importlib.util.find_spec("peft") is not None
+
+
+def is_torch_greater_2_0():
+    if _is_python_greater_3_8:
+        from importlib.metadata import version
+
+        torch_version = version("torch")
+    else:
+        import pkg_resources
+
+        torch_version = pkg_resources.get_distribution("torch").version
+    return torch_version >= "2.0"
