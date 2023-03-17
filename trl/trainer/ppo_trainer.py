@@ -405,7 +405,7 @@ class PPOTrainer(BaseTrainer):
         length_sampler: Callable = None,
         batch_size: int = 4,
         return_prompt: bool = True,
-        pad_to_multiple_of: int = 8
+        pad_to_multiple_of: int = 8,
         **generation_kwargs,
     ):
         outputs = []
