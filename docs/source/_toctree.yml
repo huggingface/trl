@@ -17,6 +17,8 @@
 - sections: 
   - local: sentiment_tuning
     title: Sentiment Tuning
+  - local: sentiment_tuning_peft
+    title: Peft support - Low rank adaption of 8 bit models
   - local: summarization_reward_tuning
     title: Summarization Reward Tuning
   - local: detoxifying_a_lm

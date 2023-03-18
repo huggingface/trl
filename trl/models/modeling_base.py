@@ -20,6 +20,12 @@ import torch.nn as nn
 from huggingface_hub import hf_hub_download
 from transformers import PreTrainedModel
 
+from ..import_utils import is_peft_available
+
+
+if is_peft_available():
+    from peft import PeftConfig, PeftModel, PeftModelForCausalLM, PeftModelForSeq2SeqLM
+
 
 LAYER_PATTERNS = ["transformer.h.{layer}", "model.decoder.layers.{layer}", "gpt_neox.layers.{layer}"]
 
@@ -41,10 +47,26 @@ class PreTrainedModelWrapper(nn.Module):
     transformers_parent_class = None
     supported_args = None
     supported_modules = ("v_head",)
+    supported_pretrained_model_architectures = (
+        (PreTrainedModel)
+        if not is_peft_available()
+        else (PreTrainedModel, PeftModelForCausalLM, PeftModelForSeq2SeqLM)
+    )
 
     def __init__(self, pretrained_model=None, **kwargs):
         super().__init__()
         self.pretrained_model = pretrained_model
+
+        self.config = pretrained_model.config
+        self.prepare_inputs_for_generation = pretrained_model.prepare_inputs_for_generation
+        self.is_loaded_in_8bit = getattr(pretrained_model, "is_loaded_in_8bit", False)
+        self.is_sequential_parallel = False
+
+        if hasattr(pretrained_model, "gradient_checkpointing_disable"):
+            self.gradient_checkpointing_disable = pretrained_model.gradient_checkpointing_disable
+
+        if hasattr(pretrained_model, "gradient_checkpointing_enable"):
+            self.gradient_checkpointing_enable = pretrained_model.gradient_checkpointing_enable
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
@@ -74,19 +96,53 @@ class PreTrainedModelWrapper(nn.Module):
             trl_model_args = {}
             pretrained_kwargs = {}
 
+        is_peft_model = False
+
         # First, load the pre-trained model using the parent-class
         # either `AutoModelForCausalLM` or `AutoModelForSeq2SeqLM`
         if isinstance(pretrained_model_name_or_path, str):
-            pretrained_model = cls.transformers_parent_class.from_pretrained(
-                pretrained_model_name_or_path, *model_args, **pretrained_kwargs
-            )
-        elif isinstance(pretrained_model_name_or_path, PreTrainedModel):
+            if is_peft_available():
+                try:
+                    peft_filename = hf_hub_download(pretrained_model_name_or_path, "adapter_config.json")
+                except:  # noqa
+                    peft_filename = None
+            else:
+                peft_filename = None
+
+            # Dealing with `peft` case:
+            # 1- check if `adapter_config` has been saved in the hub or locally
+            # 2- if yes, load the `peft` config
+            # 3- use the config to load the `transformers` model and then load the `peft` model
+            if (
+                os.path.exists(pretrained_model_name_or_path)
+                and ("adapter_config.json" in os.listdir(pretrained_model_name_or_path) or peft_filename is not None)
+                and is_peft_available()
+            ):
+                if peft_filename is not None:
+                    peft_config = PeftConfig.from_pretrained(peft_filename)
+                else:
+                    peft_config = PeftConfig.from_pretrained(pretrained_model_name_or_path)
+
+                pretrained_model = cls.transformers_parent_class.from_pretrained(
+                    peft_config.base_model_name_or_path, *model_args, **pretrained_kwargs
+                )
+
+                pretrained_model = PeftModel.from_pretrained(pretrained_model, pretrained_model_name_or_path)
+            else:
+                pretrained_model = cls.transformers_parent_class.from_pretrained(
+                    pretrained_model_name_or_path, *model_args, **pretrained_kwargs
+                )
+        elif isinstance(pretrained_model_name_or_path, cls.supported_pretrained_model_architectures):
             pretrained_model = pretrained_model_name_or_path
         else:
             raise ValueError(
                 "pretrained_model_name_or_path should be a string or a PreTrainedModel, "
                 f"but is {type(pretrained_model_name_or_path)}"
             )
+
+        if is_peft_available():
+            if isinstance(pretrained_model, PeftModel):
+                is_peft_model = True
         # Then, create the full model by instantiating the wrapper class
         model = cls(pretrained_model, **trl_model_args)
 
@@ -129,6 +185,8 @@ class PreTrainedModelWrapper(nn.Module):
 
         else:
             state_dict = pretrained_model_name_or_path.state_dict()
+
+        model.is_peft_model = is_peft_model
 
         model.post_init(state_dict=state_dict)
 
@@ -185,6 +243,14 @@ class PreTrainedModelWrapper(nn.Module):
         if state_dict is None:
             state_dict = self.state_dict()
             kwargs["state_dict"] = state_dict
+
+        # if it is a peft model only save the `v_head` state_dict and
+        # pop the `state_dict` from the kwargs to avoid slient bugs with `peft`
+        if self.is_peft_model:
+            save_path = args[0]
+            save_path = os.path.join(save_path, "pytorch_model.bin")
+            torch.save(state_dict, save_path)
+            _ = kwargs.pop("state_dict", None)
 
         return self.pretrained_model.save_pretrained(*args, **kwargs)
 
