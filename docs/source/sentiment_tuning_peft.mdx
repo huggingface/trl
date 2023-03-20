@@ -49,6 +49,14 @@ model = AutoModelForCausalLMWithValueHead.from_pretrained(
     peft_config=lora_config,
 )
 ```
+And if you want to load your model in 8bit precision:
+```python
+pretrained_model = AutoModelForCausalLM.from_pretrained(
+    config.model_name, 
+    peft_config=lora_config,
+    load_in_8bit=True,
+)
+```
 
 
 ## Launch scripts
@@ -89,12 +97,7 @@ pretrained_model = AutoModelForCausalLM.from_pretrained(
 )
 ```
 
-The reason behind `device_map={"": current_device}` is that when you set `"":device_number`, `accelerate` will set the entire model on the `device_number` device. Therefore this trick enables to set the model on the correct device for each process.
-
-As the `Accelerator` object from `accelerate` will take care of initializing the distributed setup correctly.
-Make sure to initialize your accelerate config by specifying that you are training in a multi-gpu setup, by running `accelerate config` and make sure to run the training script with `accelerator launch your_script.py`.
-
-Finally make sure that the rewards are computed on `current_device` as well.
+Finally make sure that the rewards are computed on correct device as well, for that you can use `ppo_trainer.model.current_device`.
 
 ## Naive pipeline parallelism (NPP) for large models (>60B models)
 
