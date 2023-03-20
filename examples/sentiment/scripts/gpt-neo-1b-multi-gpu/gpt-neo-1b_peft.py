@@ -17,9 +17,9 @@ from typing import Optional
 
 import torch
 from datasets import load_dataset
+from peft import LoraConfig
 from tqdm import tqdm
 from transformers import AutoTokenizer, HfArgumentParser, pipeline
-from peft import LoraConfig
 
 from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, set_seed
 from trl.core import LengthSampler
