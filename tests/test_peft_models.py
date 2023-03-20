@@ -80,6 +80,23 @@ class PeftModelTester(unittest.TestCase):
         nb_trainable_params = sum(p.numel() for p in non_peft_model.parameters() if p.requires_grad)
         self.assertEqual(nb_trainable_params, 99578)
 
+    def test_create_peft_model_from_config(self):
+        r"""
+        Simply creates a peft model and checks that it can be loaded.
+        """
+        trl_model = AutoModelForCausalLMWithValueHead.from_pretrained(
+            self.causal_lm_model_id, peft_config=self.lora_config
+        )
+        # Check that the number of trainable parameters is correct
+        nb_trainable_params = sum(p.numel() for p in trl_model.parameters() if p.requires_grad)
+        self.assertEqual(nb_trainable_params, 10273)
+
+        causal_lm_model = AutoModelForCausalLM.from_pretrained(self.causal_lm_model_id)
+        trl_model = AutoModelForCausalLMWithValueHead.from_pretrained(causal_lm_model, peft_config=self.lora_config)
+        # Check that the number of trainable parameters is correct
+        nb_trainable_params = sum(p.numel() for p in trl_model.parameters() if p.requires_grad)
+        self.assertEqual(nb_trainable_params, 10273)
+
     def test_save_pretrained_peft(self):
         r"""
         Check that the model can be saved and loaded properly.
