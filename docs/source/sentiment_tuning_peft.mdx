@@ -77,10 +77,18 @@ lora_config = LoraConfig(
 
 pretrained_model = AutoModelForCausalLM.from_pretrained(
     config.model_name, 
-    load_in_8bit=True, 
     peft_config=lora_config,
 )
 ```
+And if you want to load your model in 8bit precision:
+```python
+pretrained_model = AutoModelForCausalLM.from_pretrained(
+    config.model_name, 
+    peft_config=lora_config,
+    load_in_8bit=True,
+)
+```
+
 The reason behind `device_map={"": current_device}` is that when you set `"":device_number`, `accelerate` will set the entire model on the `device_number` device. Therefore this trick enables to set the model on the correct device for each process.
 
 As the `Accelerator` object from `accelerate` will take care of initializing the distributed setup correctly.
