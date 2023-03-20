@@ -112,7 +112,10 @@ class PreTrainedModelWrapper(nn.Module):
 
         is_peft_model = False
         current_device = cls._get_current_device()
-        is_loaded_in_8bit = pretrained_kwargs.pop("load_in_8bit", False)
+        if isinstance(pretrained_model_name_or_path, str):
+            is_loaded_in_8bit = pretrained_kwargs.pop("load_in_8bit", False)
+        else:
+            is_loaded_in_8bit = getattr(pretrained_model_name_or_path, "is_loaded_in_8bit", False)
 
         if is_loaded_in_8bit and "device_map" not in pretrained_kwargs:
             # warn users
