@@ -16,7 +16,6 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import torch
-from accelerate import Accelerator
 from datasets import load_dataset
 from peft import LoraConfig
 from tqdm import tqdm
@@ -141,9 +140,6 @@ def collator(data):
 # set seed before initializing value head for deterministic eval
 set_seed(config.seed)
 
-# Now let's build the main base model! We'll use the `AutoModelForCausalLM` class and load the model in 8 bit mode.
-current_device = Accelerator().process_index
-
 lora_config = LoraConfig(
     r=16,
     lora_alpha=32,
@@ -153,7 +149,10 @@ lora_config = LoraConfig(
 )
 
 model = AutoModelForCausalLMWithValueHead.from_pretrained(
-    config.model_name, load_in_8bit=True, device_map={"": current_device}, peft_config=lora_config, layer_norm_names=[]
+    config.model_name,
+    load_in_8bit=True,
+    peft_config=lora_config,
+    layer_norm_names=[],
 )
 
 tokenizer = AutoTokenizer.from_pretrained(config.model_name)
@@ -190,7 +189,7 @@ ppo_trainer = PPOTrainer(config, model, ref_model=None, tokenizer=tokenizer, dat
 # to the same device as the PPOTrainer.
 device = ppo_trainer.accelerator.device
 if ppo_trainer.accelerator.num_processes == 1:
-    device = current_device if torch.cuda.is_available() else "cpu"  # to avoid a `pipeline` bug
+    device = model.current_device if torch.cuda.is_available() else "cpu"  # to avoid a `pipeline` bug
 sentiment_pipe = pipeline("sentiment-analysis", model="lvwerra/distilbert-imdb", device=device)
 
 # We then define the arguments to pass to the `generate` function. These arguments

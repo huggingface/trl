@@ -12,11 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import json
+import logging
 import os
 from copy import deepcopy
 
 import torch
 import torch.nn as nn
+from accelerate import Accelerator
 from huggingface_hub import hf_hub_download
 from transformers import PreTrainedModel
 
@@ -109,7 +111,18 @@ class PreTrainedModelWrapper(nn.Module):
             peft_int8_kwargs = {}
 
         is_peft_model = False
-        is_loaded_in_8bit = pretrained_kwargs.pop("is_loaded_in_8bit", False)
+        current_device = cls._get_current_device()
+        is_loaded_in_8bit = pretrained_kwargs.pop("load_in_8bit", False)
+
+        if is_loaded_in_8bit and "device_map" not in pretrained_kwargs:
+            # warn users
+            logging.warning(
+                "The `device_map` argument is not provided. We will override the device_map argument."
+                " to set the entire"
+                " model on the current device. If you want to set the model on multiple devices, please provide"
+                " a custom `device_map` argument."
+            )
+            pretrained_kwargs["device_map"] = {"": current_device}
 
         if is_peft_available() and peft_config is not None and not isinstance(peft_config, PeftConfig):
             raise ValueError("The `peft_config` argument should be an instance of `peft.PeftConfig` class.")
@@ -220,10 +233,26 @@ class PreTrainedModelWrapper(nn.Module):
             state_dict = pretrained_model_name_or_path.state_dict()
 
         model.is_peft_model = is_peft_model
+        model.current_device = current_device
 
         model.post_init(state_dict=state_dict)
 
         return model
+
+    @classmethod
+    def _get_current_device(cls):
+        r"""
+        Get the current device using the `Accelerate` object - We just return the
+        process index of the `Accelerate` object to handle corner cases when running scripts
+        in distributed setups.
+
+        Returns:
+            current_device (`int`):
+                The current device index.
+        """
+        dummy_accelerator = Accelerator()
+        current_device = dummy_accelerator.process_index
+        return current_device
 
     @classmethod
     def _split_kwargs(cls, kwargs):
