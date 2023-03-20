@@ -18,9 +18,9 @@ from typing import Optional
 import torch
 from accelerate import Accelerator
 from datasets import load_dataset
-from peft import LoraConfig, get_peft_model, prepare_model_for_int8_training
+from peft import LoraConfig
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, pipeline
+from transformers import AutoTokenizer, HfArgumentParser, pipeline
 
 from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, set_seed
 from trl.core import LengthSampler
@@ -144,8 +144,16 @@ set_seed(config.seed)
 # Now let's build the main base model! We'll use the `AutoModelForCausalLM` class and load the model in 8 bit mode.
 current_device = Accelerator().process_index
 
-pretrained_model = AutoModelForCausalLM.from_pretrained(
-    config.model_name, load_in_8bit=True, device_map={"": current_device}
+lora_config = LoraConfig(
+    r=16,
+    lora_alpha=32,
+    lora_dropout=0.05,
+    bias="none",
+    task_type="CAUSAL_LM",
+)
+
+model = AutoModelForCausalLMWithValueHead.from_pretrained(
+    config.model_name, load_in_8bit=True, device_map={"": current_device}, peft_config=lora_config, layer_norm_names=[]
 )
 
 tokenizer = AutoTokenizer.from_pretrained(config.model_name)
@@ -168,18 +176,6 @@ def print_trainable_parameters(model):
     )
 
 
-lora_config = LoraConfig(
-    r=16,
-    lora_alpha=32,
-    lora_dropout=0.05,
-    bias="none",
-    task_type="CAUSAL_LM",
-)
-
-pretrained_model = prepare_model_for_int8_training(pretrained_model, layer_norm_names=[])
-pretrained_model = get_peft_model(pretrained_model, lora_config)
-
-model = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model)
 print_trainable_parameters(model)
 model.train()
 
