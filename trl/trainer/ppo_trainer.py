@@ -535,7 +535,7 @@ class PPOTrainer(BaseTrainer):
                 with self.accelerator.accumulate(self.model):
                     model_inputs = {k: batch[k] for k in model_inputs_names}
                     logprobs, logits, vpreds, _ = self.batched_forward_pass(
-                        self.model, batch["queries"], batch["responses"], model_inputs
+                        self.model, batch["queries"], batch["responses"], model_inputs, return_logits=True
                     )
 
                 train_stats = self.train_minibatch(
@@ -644,6 +644,7 @@ class PPOTrainer(BaseTrainer):
         queries: torch.Tensor,
         responses: torch.Tensor,
         model_inputs: dict,
+        return_logits: bool = False,
     ):
         """
         Calculate model outputs in multiple batches.
@@ -702,14 +703,17 @@ class PPOTrainer(BaseTrainer):
                 masks[j, :start] = 0
                 masks[j, end:] = 0
 
-            all_logits.append(logits)
+            if return_logits:
+                all_logits.append(logits)
+            else:
+                del logits
             all_values.append(values)
             all_logprobs.append(logprobs)
             all_masks.append(masks)
 
         return (
             torch.cat(all_logprobs),
-            torch.cat(all_logits)[:, :-1],
+            torch.cat(all_logits)[:, :-1] if return_logits else None,
             torch.cat(all_values)[:, :-1],
             torch.cat(all_masks)[:, :-1],
         )
