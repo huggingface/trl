@@ -401,7 +401,7 @@ class PPOTrainer(BaseTrainer):
                 input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs
             )
 
-            if not return_prompt:
+            if not return_prompt and not self.is_encoder_decoder:
                 return response[:, query_tensor.shape[0] :]
             return response
 
@@ -439,7 +439,7 @@ class PPOTrainer(BaseTrainer):
 
             for generation, mask in zip(generations, padded_inputs["attention_mask"]):
                 output = generation[(1 - mask).sum() :]  # remove padding
-                if not return_prompt:
+                if not return_prompt and not self.is_encoder_decoder:
                     output = output[(mask).sum() :]  # remove prompt
                 outputs.append(output)
 
