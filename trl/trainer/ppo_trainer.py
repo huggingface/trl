@@ -627,6 +627,7 @@ class PPOTrainer(BaseTrainer):
                 )
                 if self.config.early_stopping and train_stats["policy/policykl"] > 1.5 * self.config.target_kl:
                     early_stop = True
+                    self.optimizer.zero_grad()
                     break
 
                 all_stats.append(train_stats)
