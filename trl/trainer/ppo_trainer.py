@@ -418,7 +418,6 @@ class PPOTrainer(BaseTrainer):
                 generation_kwargs["max_new_tokens"] = length_sampler()
 
             batch = query_tensors[i : i + batch_size]
-            batch = [torch.tensor(element) for element in batch]
             batch_mask = [torch.ones_like(element) for element in batch]
             inputs = {"input_ids": batch, "attention_mask": batch_mask}
 
