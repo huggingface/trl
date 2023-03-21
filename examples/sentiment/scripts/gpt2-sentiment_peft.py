@@ -16,11 +16,10 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import torch
-from accelerate import Accelerator
 from datasets import load_dataset
-from peft import LoraConfig, get_peft_model, prepare_model_for_int8_training
+from peft import LoraConfig
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, pipeline
+from transformers import AutoTokenizer, HfArgumentParser, pipeline
 
 from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, set_seed
 from trl.core import LengthSampler
@@ -141,11 +140,19 @@ def collator(data):
 # set seed before initializing value head for deterministic eval
 set_seed(config.seed)
 
-# Now let's build the main base model! We'll use the `AutoModelForCausalLM` class and load the model in 8 bit mode.
-current_device = Accelerator().process_index
+lora_config = LoraConfig(
+    r=16,
+    lora_alpha=32,
+    lora_dropout=0.05,
+    bias="none",
+    task_type="CAUSAL_LM",
+)
 
-pretrained_model = AutoModelForCausalLM.from_pretrained(
-    config.model_name, load_in_8bit=True, device_map={"": current_device}
+model = AutoModelForCausalLMWithValueHead.from_pretrained(
+    config.model_name,
+    load_in_8bit=True,
+    peft_config=lora_config,
+    layer_norm_names=[],
 )
 
 tokenizer = AutoTokenizer.from_pretrained(config.model_name)
@@ -168,20 +175,7 @@ def print_trainable_parameters(model):
     )
 
 
-lora_config = LoraConfig(
-    r=16,
-    lora_alpha=32,
-    lora_dropout=0.05,
-    bias="none",
-    task_type="CAUSAL_LM",
-)
-
-pretrained_model = prepare_model_for_int8_training(pretrained_model, layer_norm_names=[])
-pretrained_model = get_peft_model(pretrained_model, lora_config)
-
-model = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model)
 print_trainable_parameters(model)
-model.train()
 
 # GPT-2 tokenizer has a pad token, but it is not eos_token by default. We need to set it to eos_token.
 # only for this model.
@@ -194,7 +188,7 @@ ppo_trainer = PPOTrainer(config, model, ref_model=None, tokenizer=tokenizer, dat
 # to the same device as the PPOTrainer.
 device = ppo_trainer.accelerator.device
 if ppo_trainer.accelerator.num_processes == 1:
-    device = current_device if torch.cuda.is_available() else "cpu"  # to avoid a `pipeline` bug
+    device = model.current_device if torch.cuda.is_available() else "cpu"  # to avoid a `pipeline` bug
 sentiment_pipe = pipeline("sentiment-analysis", model="lvwerra/distilbert-imdb", device=device)
 
 # We then define the arguments to pass to the `generate` function. These arguments

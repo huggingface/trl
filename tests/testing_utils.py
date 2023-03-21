@@ -27,6 +27,17 @@ def require_peft(test_case):
     return test_case
 
 
+def require_bitsandbytes(test_case):
+    """
+    Decorator marking a test that requires bitsandbytes. Skips the test if bitsandbytes is not available.
+    """
+    try:
+        import bitsandbytes  # noqa: F401
+    except ImportError:
+        test_case = unittest.skip("test requires bitsandbytes")(test_case)
+    return test_case
+
+
 def require_torch_multi_gpu(test_case):
     """
     Decorator marking a test that requires multiple GPUs. Skips the test if there aren't enough GPUs.

@@ -12,11 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import json
+import logging
 import os
 from copy import deepcopy
 
 import torch
 import torch.nn as nn
+from accelerate import Accelerator
 from huggingface_hub import hf_hub_download
 from transformers import PreTrainedModel
 
@@ -24,7 +26,14 @@ from ..import_utils import is_peft_available
 
 
 if is_peft_available():
-    from peft import PeftConfig, PeftModel, PeftModelForCausalLM, PeftModelForSeq2SeqLM
+    from peft import (
+        PeftConfig,
+        PeftModel,
+        PeftModelForCausalLM,
+        PeftModelForSeq2SeqLM,
+        get_peft_model,
+        prepare_model_for_int8_training,
+    )
 
 
 LAYER_PATTERNS = ["transformer.h.{layer}", "model.decoder.layers.{layer}", "gpt_neox.layers.{layer}"]
@@ -88,15 +97,38 @@ class PreTrainedModelWrapper(nn.Module):
                 Additional keyword arguments passed along to the underlying model's
                 `from_pretrained` method. We also pre-process the kwargs to extract
                 the arguments that are specific to the `transformers.PreTrainedModel`
-                class and the arguments that are specific to trl models.
+                class and the arguments that are specific to trl models. The kwargs
+                also support `prepare_model_for_int8_training` arguments from
+                `peft` library.
         """
         if kwargs is not None:
-            trl_model_args, pretrained_kwargs = cls._split_kwargs(kwargs)
+            peft_config = kwargs.pop("peft_config", None)
+            trl_model_args, pretrained_kwargs, peft_int8_kwargs = cls._split_kwargs(kwargs)
         else:
+            peft_config = None
             trl_model_args = {}
             pretrained_kwargs = {}
+            peft_int8_kwargs = {}
 
         is_peft_model = False
+        current_device = cls._get_current_device()
+        if isinstance(pretrained_model_name_or_path, str):
+            is_loaded_in_8bit = pretrained_kwargs["load_in_8bit"] if "load_in_8bit" in pretrained_kwargs else False
+        else:
+            is_loaded_in_8bit = getattr(pretrained_model_name_or_path, "is_loaded_in_8bit", False)
+
+        if is_loaded_in_8bit and "device_map" not in pretrained_kwargs:
+            # warn users
+            logging.warning(
+                "The `device_map` argument is not provided. We will override the device_map argument."
+                " to set the entire"
+                " model on the current device. If you want to set the model on multiple devices, please provide"
+                " a custom `device_map` argument."
+            )
+            pretrained_kwargs["device_map"] = {"": current_device}
+
+        if is_peft_available() and peft_config is not None and not isinstance(peft_config, PeftConfig):
+            raise ValueError("The `peft_config` argument should be an instance of `peft.PeftConfig` class.")
 
         # First, load the pre-trained model using the parent-class
         # either `AutoModelForCausalLM` or `AutoModelForSeq2SeqLM`
@@ -132,8 +164,25 @@ class PreTrainedModelWrapper(nn.Module):
                 pretrained_model = cls.transformers_parent_class.from_pretrained(
                     pretrained_model_name_or_path, *model_args, **pretrained_kwargs
                 )
+
+                if peft_config is not None:
+                    if is_loaded_in_8bit:
+                        pretrained_model = prepare_model_for_int8_training(
+                            pretrained_model,
+                            **peft_int8_kwargs,
+                        )
+                    pretrained_model = get_peft_model(pretrained_model, peft_config)
+
         elif isinstance(pretrained_model_name_or_path, cls.supported_pretrained_model_architectures):
             pretrained_model = pretrained_model_name_or_path
+
+            if peft_config is not None and isinstance(pretrained_model, PreTrainedModel):
+                if is_loaded_in_8bit:
+                    pretrained_model = prepare_model_for_int8_training(
+                        pretrained_model,
+                        **peft_int8_kwargs,
+                    )
+                pretrained_model = get_peft_model(pretrained_model, peft_config)
         else:
             raise ValueError(
                 "pretrained_model_name_or_path should be a string or a PreTrainedModel, "
@@ -187,10 +236,26 @@ class PreTrainedModelWrapper(nn.Module):
             state_dict = pretrained_model_name_or_path.state_dict()
 
         model.is_peft_model = is_peft_model
+        model.current_device = current_device
 
         model.post_init(state_dict=state_dict)
 
         return model
+
+    @classmethod
+    def _get_current_device(cls):
+        r"""
+        Get the current device using the `Accelerate` object - We just return the
+        process index of the `Accelerate` object to handle corner cases when running scripts
+        in distributed setups.
+
+        Returns:
+            current_device (`int`):
+                The current device index.
+        """
+        dummy_accelerator = Accelerator()
+        current_device = dummy_accelerator.process_index
+        return current_device
 
     @classmethod
     def _split_kwargs(cls, kwargs):
@@ -198,8 +263,16 @@ class PreTrainedModelWrapper(nn.Module):
         Separate the kwargs from the arguments that we support inside
         `supported_args` and the ones that we don't.
         """
+        check_peft_kwargs = False
+
+        if is_peft_available():
+            from peft import prepare_model_for_int8_training
+
+            check_peft_kwargs = True
+
         supported_kwargs = {}
         unsupported_kwargs = {}
+        peft_kwargs = {}
 
         for key, value in kwargs.items():
             if key in cls.supported_args:
@@ -207,7 +280,13 @@ class PreTrainedModelWrapper(nn.Module):
             else:
                 unsupported_kwargs[key] = value
 
-        return supported_kwargs, unsupported_kwargs
+            if check_peft_kwargs:
+                if key in prepare_model_for_int8_training.__code__.co_varnames:
+                    peft_kwargs[key] = value
+                    if key in unsupported_kwargs:
+                        unsupported_kwargs.pop(key)
+
+        return supported_kwargs, unsupported_kwargs, peft_kwargs
 
     def push_to_hub(self, *args, **kwargs):
         r"""
