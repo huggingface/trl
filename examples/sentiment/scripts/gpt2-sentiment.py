@@ -65,6 +65,8 @@ class ScriptArguments:
     gradient_accumulation_steps: Optional[int] = field(
         default=1, metadata={"help": "the number of gradient accumulation steps"}
     )
+    early_stopping: Optional[bool] = field(default=False, metadata={"help": "whether to early stop"})
+    target_kl: Optional[float] = field(default=0.01, metadata={"help": "kl target for early stopping"})
 
 
 parser = HfArgumentParser(ScriptArguments)
@@ -77,6 +79,8 @@ config = PPOConfig(
     mini_batch_size=script_args.mini_batch_size,
     batch_size=script_args.batch_size,
     gradient_accumulation_steps=script_args.gradient_accumulation_steps,
+    early_stopping=script_args.early_stopping,
+    target_kl=script_args.target_kl,
 )
 
 

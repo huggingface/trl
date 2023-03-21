@@ -77,6 +77,10 @@ class PPOConfig(object):
             Seed value for random generations
         optimize_cuda_cache (`bool`, *optional*, defaults to `False`):
             Optimize CUDA cache for slightly more memory-effcient training
+        early_stopping (`bool`, *optional*, defaults to `False`):
+            Whether to stop the PPO opimization loop early is the KL too high
+        target_kl (`float`, *optional*, defaults to `0.01`):
+            Stop early if we exceed this value by over 50%
     """
 
     def __init__(
@@ -106,6 +110,8 @@ class PPOConfig(object):
         max_grad_norm: Optional[float] = None,
         seed: Optional[int] = 0,
         optimize_cuda_cache: Optional[bool] = False,
+        early_stopping: Optional[bool] = False,
+        target_kl: Optional[float] = 0.1,
     ):
         self.model_name = model_name
         self.steps = steps
@@ -148,6 +154,8 @@ class PPOConfig(object):
         self.tracker_project_name = tracker_project_name
         self.optimize_cuda_cache = optimize_cuda_cache
         self.max_grad_norm = max_grad_norm
+        self.early_stopping = early_stopping
+        self.target_kl = target_kl
 
         self.total_ppo_epochs = int(np.ceil(steps / batch_size))
 

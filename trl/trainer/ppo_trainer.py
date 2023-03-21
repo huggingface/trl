@@ -605,7 +605,10 @@ class PPOTrainer(BaseTrainer):
 
         t = time.time()
         all_stats = []
+        early_stop = False
         for _ in range(self.config.ppo_epochs):
+            if early_stop:
+                break
             for batch in mini_batch_dataloader:
                 with self.accelerator.accumulate(self.model):
                     model_inputs = {k: batch[k] for k in model_inputs_names}
@@ -622,6 +625,10 @@ class PPOTrainer(BaseTrainer):
                     vpreds,
                     batch["masks"],
                 )
+                if self.config.early_stopping and train_stats["policy/policykl"] > 1.5 * self.config.target_kl:
+                    early_stop = True
+                    break
+
                 all_stats.append(train_stats)
 
         timing["time/ppo/optimize_step"] = time.time() - t
@@ -916,9 +923,7 @@ class PPOTrainer(BaseTrainer):
         advantages = masked_whiten(advantages, mask)
         advantages = advantages.detach()
 
-        vpredclipped = clip_by_value(
-            vpreds, values - self.config.cliprange_value, values + self.config.cliprange_value
-        )
+        vpredclipped = clip_by_value(vpreds, values - self.config.cliprange_value, values + self.config.cliprange_value)
 
         vf_losses1 = (vpreds - returns) ** 2
         vf_losses2 = (vpredclipped - returns) ** 2
