@@ -23,7 +23,7 @@ from huggingface_hub import HfApi, HfFolder, delete_repo
 from parameterized import parameterized
 from pytest import mark
 from requests.exceptions import HTTPError
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer
 
 from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead, PPOConfig, PPOTrainer, set_seed
 from trl.core import respond_to_batch
@@ -846,7 +846,6 @@ class PPOTrainerTester(unittest.TestCase):
             else:
                 self.assertTrue(param.grad is None, f"Parameter {name} has a gradient")
 
-
     def test_generation(self):
         dummy_dataset = self._init_dummy_dataset()
 
@@ -861,16 +860,9 @@ class PPOTrainerTester(unittest.TestCase):
             dataset=dummy_dataset,
         )
 
-        input_texts = [
-            "this is a test", 
-            "this is another, longer test"
-        ]
+        input_texts = ["this is a test", "this is another, longer test"]
 
-        generation_kwargs = {
-            "do_sample": False,
-            "max_new_tokens": 4,
-            "pad_token_id": tokenizer.eos_token_id
-        }
+        generation_kwargs = {"do_sample": False, "max_new_tokens": 4, "pad_token_id": tokenizer.eos_token_id}
 
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -878,7 +870,7 @@ class PPOTrainerTester(unittest.TestCase):
 
         generations_batched = ppo_trainer.generate(model_inputs, batch_size=2, **generation_kwargs)
         generations_batched = tokenizer.batch_decode(generations_batched)
-        
+
         generations_single = [ppo_trainer.generate(inputs, **generation_kwargs).squeeze() for inputs in model_inputs]
         generations_single = tokenizer.batch_decode(generations_single)
 
