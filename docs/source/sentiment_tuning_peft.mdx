@@ -45,16 +45,15 @@ lora_config = LoraConfig(
 
 model = AutoModelForCausalLMWithValueHead.from_pretrained(
     model_id, 
-    load_in_8bit=True, 
     peft_config=lora_config,
 )
 ```
 And if you want to load your model in 8bit precision:
 ```python
-pretrained_model = AutoModelForCausalLM.from_pretrained(
+pretrained_model = AutoModelForCausalLMWithValueHead.from_pretrained(
     config.model_name, 
-    peft_config=lora_config,
     load_in_8bit=True,
+    peft_config=lora_config,
 )
 ```
 
@@ -83,14 +82,14 @@ lora_config = LoraConfig(
     task_type="CAUSAL_LM",
 )
 
-pretrained_model = AutoModelForCausalLM.from_pretrained(
+pretrained_model = AutoModelForCausalLMWithValueHead.from_pretrained(
     config.model_name, 
     peft_config=lora_config,
 )
 ```
 And if you want to load your model in 8bit precision:
 ```python
-pretrained_model = AutoModelForCausalLM.from_pretrained(
+pretrained_model = AutoModelForCausalLMWithValueHead.from_pretrained(
     config.model_name, 
     peft_config=lora_config,
     load_in_8bit=True,
