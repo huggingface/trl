@@ -13,6 +13,7 @@
 # limitations under the License.
 import inspect
 import os
+import re
 from pathlib import Path
 import time
 import warnings
@@ -27,6 +28,8 @@ from huggingface_hub import whoami
 from packaging import version
 from torch.optim import Adam
 from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizer, PreTrainedTokenizerFast
+
+from .utils import get_last_checkpoint
 
 from ..core import (
     WANDB_PADDING,
@@ -290,15 +293,7 @@ class PPOTrainer(BaseTrainer):
         self.current_step = 0
 
         # load the accelerator state
-        if self.config.output_dir:
-            if os.path.exists(self.config.output_dir):
-                if self.config.load_step is not None:
-                    checkpoint_path = Path(self.config.output_dir) / f"checkpoint_{self.config.load_step}"
-                    self.accelerator.load_state(checkpoint_path)
-                    self.current_step = self.config.load_step
-                    self.accelerator.skip_first_batches(self.dataloader, self.current_step)
-            else:
-                self.accelerator.save_state()
+        self.init_acclerator_state()
 
         # post process for PP
         if not getattr(self.model, "is_sequential_parallel", False):
@@ -307,6 +302,30 @@ class PPOTrainer(BaseTrainer):
             self.current_device = torch.device("cuda:0")
 
         PPODecorators.optimize_cuda_cache = self.config.optimize_cuda_cache
+
+    def init_acclerator_state(self):
+        if not self.config.output_dir or self.config.save_steps is None:
+            # no checkpoints will be saved
+            return
+
+        if not os.path.exists(self.config.output_dir):
+            self.accelerator.save_state()
+            return
+
+        # need to load the state
+        resume_from_checkpoint = self.config.resume_from_checkpoint
+        if isinstance(resume_from_checkpoint, bool) and resume_from_checkpoint:
+            checkpoint_dir = Path(self.config.output_dir) / "checkpoints"
+            resume_from_checkpoint = get_last_checkpoint(checkpoint_dir)
+
+        self.accelerator.load_state(resume_from_checkpoint)
+        # I don't like this, can we save the current step in the checkpoint. In the docs we can only save classes
+        # that implement state_dict
+        save_iteration = int(resume_from_checkpoint[-1])
+        self.accelerator.project_configuration.iteration = save_iteration + 1
+
+        self.current_step = self.config.save_steps * save_iteration
+        self.accelerator.skip_first_batches(self.dataloader, self.current_step)
 
     def _filter_kwargs(self, kwargs, target_func):
         """

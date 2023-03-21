@@ -13,7 +13,7 @@
 # limitations under the License.
 import warnings
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Union
 
 import numpy as np
 
@@ -109,7 +109,7 @@ class PPOConfig(object):
         optimize_cuda_cache: Optional[bool] = False,
         output_dir: Optional[str] = None,
         save_steps: Optional[int] = None,
-        load_step: Optional[int] = None,
+        resume_from_checkpoint: Optional[Union[str, bool]] = None,
     ):
         self.model_name = model_name
         self.steps = steps
@@ -153,7 +153,10 @@ class PPOConfig(object):
         self.optimize_cuda_cache = optimize_cuda_cache
         self.output_dir = output_dir
         self.save_steps = save_steps
-        self.load_step = load_step
+
+        self.resume_from_checkpoint = resume_from_checkpoint
+        if self.resume_from_checkpoint == False:
+            self.resume_from_checkpoint = None
         self.max_grad_norm = max_grad_norm
 
         self.total_ppo_epochs = int(np.ceil(steps / batch_size))

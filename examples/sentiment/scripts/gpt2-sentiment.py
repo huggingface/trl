@@ -77,8 +77,8 @@ config = PPOConfig(
     mini_batch_size=script_args.mini_batch_size,
     batch_size=script_args.batch_size,
     gradient_accumulation_steps=script_args.gradient_accumulation_steps,
-    output_dir="checkpoints",
-    load_step=0,
+    output_dir="run01",
+    resume_from_checkpoint=True,
     save_steps=10,
 )
 
@@ -168,7 +168,7 @@ output_min_length = 4
 output_max_length = 16
 output_length_sampler = LengthSampler(output_min_length, output_max_length)
 
-for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
+for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader), initial=ppo_trainer.current_step):
     query_tensors = batch["input_ids"]
 
     # Get response from gpt2
