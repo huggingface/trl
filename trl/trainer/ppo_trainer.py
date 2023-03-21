@@ -374,6 +374,12 @@ class PPOTrainer(BaseTrainer):
                 A tensor of shape (`batch_size`, `seq_len`) containing query tokens.
             generation_kwargs (dict[str, Any]):
                 Keyword arguments for generation.
+            length_sampler (`Callable`, *optional*):
+                Callable that returns the number of newly generated tokens.
+            batch_size (`int`, *optional):
+                Batch size used for generation, defaults to `4`.
+            return_prompt (`bool`, *optional*):
+                If set to `False` the prompt is not returned but only the newly generated tokens, defaults to `True`.
 
         Returns:
             `torch.LongTensor`: A tensor of shape (`batch_size`, `gen_len`) containing response tokens.
