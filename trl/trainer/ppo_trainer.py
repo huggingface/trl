@@ -425,11 +425,11 @@ class PPOTrainer(BaseTrainer):
         for i in range(0, len(query_tensors), batch_size):
             if length_sampler is not None:
                 generation_kwargs["max_new_tokens"] = length_sampler()
-            
+
             # prevent overflow if query tensors are not even multiple of bs
             end_index = min(len(query_tensors), i + batch_size)
-            
-            batch = query_tensors[i : end_index]
+
+            batch = query_tensors[i:end_index]
             batch_mask = [torch.ones_like(element) for element in batch]
             inputs = {"input_ids": batch, "attention_mask": batch_mask}
 
