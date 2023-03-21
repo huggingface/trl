@@ -77,6 +77,9 @@ config = PPOConfig(
     mini_batch_size=script_args.mini_batch_size,
     batch_size=script_args.batch_size,
     gradient_accumulation_steps=script_args.gradient_accumulation_steps,
+    output_dir="checkpoints",
+    load_step=0,
+    save_steps=10,
 )
 
 

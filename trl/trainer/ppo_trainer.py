@@ -13,6 +13,7 @@
 # limitations under the License.
 import inspect
 import os
+from pathlib import Path
 import time
 import warnings
 from typing import List, Optional, Union
@@ -20,6 +21,7 @@ from typing import List, Optional, Union
 import datasets
 import torch
 from accelerate import Accelerator
+from accelerate.utils import ProjectConfiguration
 from datasets import Dataset
 from huggingface_hub import whoami
 from packaging import version
@@ -178,9 +180,12 @@ class PPOTrainer(BaseTrainer):
                 f"model must be a PreTrainedModelWrapper, got {type(model)} - supported architectures are: {SUPPORTED_ARCHITECTURES}"
             )
         # Step 1: Initialize Accelerator
+        project_config = ProjectConfiguration(config.output_dir, automatic_checkpoint_naming=True, total_limit=3)
+
         self.accelerator = Accelerator(
             log_with=config.log_with,
             gradient_accumulation_steps=config.gradient_accumulation_steps,
+            project_config=project_config,
             **config.accelerator_kwargs,
         )
         self.accelerator.init_trackers(
@@ -283,6 +288,17 @@ class PPOTrainer(BaseTrainer):
 
         # init the current step
         self.current_step = 0
+
+        # load the accelerator state
+        if self.config.output_dir:
+            if os.path.exists(self.config.output_dir):
+                if self.config.load_step is not None:
+                    checkpoint_path = Path(self.config.output_dir) / f"checkpoint_{self.config.load_step}"
+                    self.accelerator.load_state(checkpoint_path)
+                    self.current_step = self.config.load_step
+                    self.accelerator.skip_first_batches(self.dataloader, self.current_step)
+            else:
+                self.accelerator.save_state()
 
         # post process for PP
         if not getattr(self.model, "is_sequential_parallel", False):
@@ -589,6 +605,10 @@ class PPOTrainer(BaseTrainer):
         if self.lr_scheduler is not None:
             self.lr_scheduler.step()
 
+        self.current_step += 1
+        if self.config.save_steps and self.current_step % self.config.save_steps == 0:
+            self.accelerator.save_state()
+
         return stats
 
     def gather_stats(self, stats):
@@ -835,9 +855,7 @@ class PPOTrainer(BaseTrainer):
         advantages = masked_whiten(advantages, mask)
         advantages = advantages.detach()
 
-        vpredclipped = clip_by_value(
-            vpreds, values - self.config.cliprange_value, values + self.config.cliprange_value
-        )
+        vpredclipped = clip_by_value(vpreds, values - self.config.cliprange_value, values + self.config.cliprange_value)
 
         vf_losses1 = (vpreds - returns) ** 2
         vf_losses2 = (vpredclipped - returns) ** 2
@@ -974,10 +992,6 @@ class PPOTrainer(BaseTrainer):
             logs["env/reward_mean"] = torch.mean(rewards).cpu().numpy().item()
             logs["env/reward_std"] = torch.std(rewards).cpu().numpy().item()
             logs["env/reward_dist"] = rewards.cpu().numpy()
-
-            if self.config.log_with == "tensorboard":
-                # update the current step
-                self.current_step += 1
 
             self.accelerator.log(logs, step=self.current_step if self.config.log_with == "tensorboard" else None)
 

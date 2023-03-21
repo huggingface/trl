@@ -77,6 +77,7 @@ class PPOConfig(object):
             Seed value for random generations
         optimize_cuda_cache (`bool`, *optional*, defaults to `False`):
             Optimize CUDA cache for slightly more memory-effcient training
+
     """
 
     def __init__(
@@ -106,6 +107,9 @@ class PPOConfig(object):
         max_grad_norm: Optional[float] = None,
         seed: Optional[int] = 0,
         optimize_cuda_cache: Optional[bool] = False,
+        output_dir: Optional[str] = None,
+        save_steps: Optional[int] = None,
+        load_step: Optional[int] = None,
     ):
         self.model_name = model_name
         self.steps = steps
@@ -147,6 +151,9 @@ class PPOConfig(object):
         self.accelerator_kwargs = accelerator_kwargs
         self.tracker_project_name = tracker_project_name
         self.optimize_cuda_cache = optimize_cuda_cache
+        self.output_dir = output_dir
+        self.save_steps = save_steps
+        self.load_step = load_step
         self.max_grad_norm = max_grad_norm
 
         self.total_ppo_epochs = int(np.ceil(steps / batch_size))
