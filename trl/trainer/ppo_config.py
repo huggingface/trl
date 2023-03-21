@@ -155,7 +155,7 @@ class PPOConfig(object):
         self.save_steps = save_steps
 
         self.resume_from_checkpoint = resume_from_checkpoint
-        if self.resume_from_checkpoint == False:
+        if self.resume_from_checkpoint is False:
             self.resume_from_checkpoint = None
         self.max_grad_norm = max_grad_norm
 

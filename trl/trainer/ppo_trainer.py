@@ -13,10 +13,9 @@
 # limitations under the License.
 import inspect
 import os
-import re
-from pathlib import Path
 import time
 import warnings
+from pathlib import Path
 from typing import List, Optional, Union
 
 import datasets
@@ -28,8 +27,6 @@ from huggingface_hub import whoami
 from packaging import version
 from torch.optim import Adam
 from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizer, PreTrainedTokenizerFast
-
-from .utils import get_last_checkpoint
 
 from ..core import (
     WANDB_PADDING,
@@ -49,6 +46,7 @@ from ..core import (
 from ..import_utils import is_torch_greater_2_0
 from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper, create_reference_model
 from . import AdaptiveKLController, BaseTrainer, FixedKLController, PPOConfig
+from .utils import get_last_checkpoint
 
 
 MODEL_CARD_TEMPLATE = """---
@@ -874,7 +872,9 @@ class PPOTrainer(BaseTrainer):
         advantages = masked_whiten(advantages, mask)
         advantages = advantages.detach()
 
-        vpredclipped = clip_by_value(vpreds, values - self.config.cliprange_value, values + self.config.cliprange_value)
+        vpredclipped = clip_by_value(
+            vpreds, values - self.config.cliprange_value, values + self.config.cliprange_value
+        )
 
         vf_losses1 = (vpreds - returns) ** 2
         vf_losses2 = (vpredclipped - returns) ** 2
