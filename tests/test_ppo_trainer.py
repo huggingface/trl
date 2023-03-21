@@ -23,7 +23,7 @@ from huggingface_hub import HfApi, HfFolder, delete_repo
 from parameterized import parameterized
 from pytest import mark
 from requests.exceptions import HTTPError
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead, PPOConfig, PPOTrainer, set_seed
 from trl.core import respond_to_batch
@@ -845,3 +845,41 @@ class PPOTrainerTester(unittest.TestCase):
                 self.assertTrue(param.grad is not None, f"Parameter {name} has a no gradient")
             else:
                 self.assertTrue(param.grad is None, f"Parameter {name} has a gradient")
+
+
+    def test_generation(self):
+        dummy_dataset = self._init_dummy_dataset()
+
+        model = AutoModelForCausalLMWithValueHead.from_pretrained("gpt2")
+        tokenizer = AutoTokenizer.from_pretrained("gpt2")
+
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=model,
+            ref_model=None,
+            tokenizer=tokenizer,
+            dataset=dummy_dataset,
+        )
+
+        input_texts = [
+            "this is a test", 
+            "this is another, longer test"
+        ]
+
+        generation_kwargs = {
+            "do_sample": False,
+            "max_new_tokens": 4,
+            "pad_token_id": tokenizer.eos_token_id
+        }
+
+        tokenizer.pad_token = tokenizer.eos_token
+
+        model_inputs = [tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts]
+
+        generations_batched = ppo_trainer.generate(model_inputs, batch_size=2, **generation_kwargs)
+        generations_batched = tokenizer.batch_decode(generations_batched)
+        
+        generations_single = [ppo_trainer.generate(inputs, **generation_kwargs).squeeze() for inputs in model_inputs]
+        generations_single = tokenizer.batch_decode(generations_single)
+
+        self.assertEqual(generations_single, generations_batched)
