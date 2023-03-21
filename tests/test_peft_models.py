@@ -25,7 +25,7 @@ from trl import AutoModelForCausalLMWithValueHead, is_peft_available
 if is_peft_available():
     from peft import get_peft_model, LoraConfig
 
-from .testing_utils import require_peft
+from .testing_utils import require_bitsandbytes, require_peft
 
 
 @require_peft
@@ -79,6 +79,51 @@ class PeftModelTester(unittest.TestCase):
         non_peft_model = AutoModelForCausalLMWithValueHead.from_pretrained(self.causal_lm_model_id)
         nb_trainable_params = sum(p.numel() for p in non_peft_model.parameters() if p.requires_grad)
         self.assertEqual(nb_trainable_params, 99578)
+
+    def test_create_peft_model_from_config(self):
+        r"""
+        Simply creates a peft model and checks that it can be loaded.
+        """
+        trl_model = AutoModelForCausalLMWithValueHead.from_pretrained(
+            self.causal_lm_model_id, peft_config=self.lora_config
+        )
+        # Check that the number of trainable parameters is correct
+        nb_trainable_params = sum(p.numel() for p in trl_model.parameters() if p.requires_grad)
+        self.assertEqual(nb_trainable_params, 10273)
+
+        causal_lm_model = AutoModelForCausalLM.from_pretrained(self.causal_lm_model_id)
+        trl_model = AutoModelForCausalLMWithValueHead.from_pretrained(causal_lm_model, peft_config=self.lora_config)
+        # Check that the number of trainable parameters is correct
+        nb_trainable_params = sum(p.numel() for p in trl_model.parameters() if p.requires_grad)
+        self.assertEqual(nb_trainable_params, 10273)
+
+    @require_bitsandbytes
+    def test_create_bnb_peft_model_from_config(self):
+        r"""
+        Simply creates a peft model and checks that it can be loaded.
+        """
+        from bitsandbytes.nn import Linear8bitLt
+
+        trl_model = AutoModelForCausalLMWithValueHead.from_pretrained(
+            self.causal_lm_model_id, peft_config=self.lora_config, load_in_8bit=True
+        )
+        # Check that the number of trainable parameters is correct
+        nb_trainable_params = sum(p.numel() for p in trl_model.parameters() if p.requires_grad)
+        self.assertEqual(nb_trainable_params, 10273)
+        self.assertTrue(
+            trl_model.pretrained_model.model.gpt_neox.layers[0].mlp.dense_h_to_4h.__class__ == Linear8bitLt
+        )
+
+        causal_lm_model = AutoModelForCausalLM.from_pretrained(
+            self.causal_lm_model_id, load_in_8bit=True, device_map="auto"
+        )
+        trl_model = AutoModelForCausalLMWithValueHead.from_pretrained(causal_lm_model, peft_config=self.lora_config)
+        # Check that the number of trainable parameters is correct
+        nb_trainable_params = sum(p.numel() for p in trl_model.parameters() if p.requires_grad)
+        self.assertEqual(nb_trainable_params, 10273)
+        self.assertTrue(
+            trl_model.pretrained_model.model.gpt_neox.layers[0].mlp.dense_h_to_4h.__class__ == Linear8bitLt
+        )
 
     def test_save_pretrained_peft(self):
         r"""

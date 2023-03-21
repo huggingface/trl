@@ -26,6 +26,37 @@ pip install wandb
 
 Note: if you don't want to log with `wandb` remove `log_with="wandb"` in the scripts/notebooks. You can also replace it with your favourite experiment tracker that's [supported by `accelerate`](https://huggingface.co/docs/accelerate/usage_guides/tracking).
 
+## How to use it?
+
+Simply declare a `PeftConfig` object in your script and pass it through `.from_pretrained` to load the TRL+PEFT model. 
+
+```python
+from peft import LoraConfig
+from trl import AutoModelForCausalLMWithValueHead
+
+model_id = "edbeeching/gpt-neo-125M-imdb"
+lora_config = LoraConfig(
+    r=16,
+    lora_alpha=32,
+    lora_dropout=0.05,
+    bias="none",
+    task_type="CAUSAL_LM",
+)
+
+model = AutoModelForCausalLMWithValueHead.from_pretrained(
+    model_id, 
+    peft_config=lora_config,
+)
+```
+And if you want to load your model in 8bit precision:
+```python
+pretrained_model = AutoModelForCausalLMWithValueHead.from_pretrained(
+    config.model_name, 
+    load_in_8bit=True,
+    peft_config=lora_config,
+)
+```
+
 
 ## Launch scripts
 
@@ -40,21 +71,32 @@ accelerate launch scripts/gpt2-sentiment_peft.py # launches training
 
 You can scale up to as many GPUs as you want, as long as you are able to fit the training process in a single device. The only tweak you need to apply is to load the model as follows:
 ```python
-from accelerate import Accelerator
+from peft import LoraConfig
 ...
 
-current_device = Accelerator().process_index
+lora_config = LoraConfig(
+    r=16,
+    lora_alpha=32,
+    lora_dropout=0.05,
+    bias="none",
+    task_type="CAUSAL_LM",
+)
 
-pretrained_model = AutoModelForCausalLM.from_pretrained(
-    config.model_name, load_in_8bit=True, device_map={"": current_device}
+pretrained_model = AutoModelForCausalLMWithValueHead.from_pretrained(
+    config.model_name, 
+    peft_config=lora_config,
 )
 ```
-The reason behind `device_map={"": current_device}` is that when you set `"":device_number`, `accelerate` will set the entire model on the `device_number` device. Therefore this trick enables to set the model on the correct device for each process.
+And if you want to load your model in 8bit precision:
+```python
+pretrained_model = AutoModelForCausalLMWithValueHead.from_pretrained(
+    config.model_name, 
+    peft_config=lora_config,
+    load_in_8bit=True,
+)
+```
 
-As the `Accelerator` object from `accelerate` will take care of initializing the distributed setup correctly.
-Make sure to initialize your accelerate config by specifying that you are training in a multi-gpu setup, by running `accelerate config` and make sure to run the training script with `accelerator launch your_script.py`.
-
-Finally make sure that the rewards are computed on `current_device` as well.
+Finally make sure that the rewards are computed on correct device as well, for that you can use `ppo_trainer.model.current_device`.
 
 ## Naive pipeline parallelism (NPP) for large models (>60B models)
 

@@ -101,7 +101,7 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
                 Additional keyword arguments, that are passed to the `ValueHead` class.
         """
         super().__init__(pretrained_model)
-        v_head_kwargs, _ = self._split_kwargs(kwargs)
+        v_head_kwargs, _, _ = self._split_kwargs(kwargs)
 
         if not any(hasattr(self.pretrained_model, attribute) for attribute in self.lm_head_namings):
             raise ValueError("The model does not have a language model head, please use a model that has one.")
@@ -279,7 +279,7 @@ class AutoModelForSeq2SeqLMWithValueHead(PreTrainedModelWrapper):
 
     def __init__(self, pretrained_model, **kwargs):
         super().__init__(pretrained_model)
-        v_head_kwargs, _ = self._split_kwargs(kwargs)
+        v_head_kwargs, _, _ = self._split_kwargs(kwargs)
         self.is_encoder_decoder = True
 
         if not self._has_lm_head():

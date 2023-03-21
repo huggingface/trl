@@ -17,9 +17,9 @@ from typing import Optional
 
 import torch
 from datasets import load_dataset
-from peft import LoraConfig, get_peft_model, prepare_model_for_int8_training
+from peft import LoraConfig
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, pipeline
+from transformers import AutoTokenizer, HfArgumentParser, pipeline
 
 from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, set_seed
 from trl.core import LengthSampler
@@ -63,7 +63,7 @@ class ScriptArguments:
 
     # NOTE: gpt2 models use Conv1D instead of Linear layers which are not yet supported in 8 bit mode
     # models like gpt-neo* models are more suitable
-    model_name: Optional[str] = field(default="EleutherAI/gpt-neox-20b", metadata={"help": "the model name"})
+    model_name: Optional[str] = field(default="edbeeching/gpt-neo-1.3B-imdb", metadata={"help": "the model name"})
     log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
     learning_rate: Optional[float] = field(default=1.41e-5, metadata={"help": "the learning rate"})
     merge_model_adapter: Optional[bool] = field(default=False, metadata={"help": "the learning rate"})
@@ -162,15 +162,14 @@ lora_config = LoraConfig(
 )
 
 # Now let's build the model, the reference model, and the tokenizer.
-pretrained_model = AutoModelForCausalLM.from_pretrained(
-    config.model_name, load_in_8bit=True, device_map="balanced", max_memory={0: "800MB", 1: "800MB"}
+model = AutoModelForCausalLMWithValueHead.from_pretrained(
+    config.model_name,
+    load_in_8bit=True,
+    device_map="balanced",
+    max_memory={0: "800MB", 1: "800MB"},
+    peft_config=lora_config,
 )
 tokenizer = AutoTokenizer.from_pretrained(config.model_name)
-
-pretrained_model = prepare_model_for_int8_training(pretrained_model)
-pretrained_model = get_peft_model(pretrained_model, lora_config)
-
-model = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model)
 
 print_trainable_parameters(model)
 
