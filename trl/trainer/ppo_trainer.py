@@ -988,7 +988,7 @@ class PPOTrainer(BaseTrainer):
         if mean_kl.item() < 0.0:
             # warn users
             warnings.warn(
-                f"KL divergence is starting to become negative: {mean_kl.item()} - this might be a precursor for failed training."
+                f"KL divergence is starting to become negative: {mean_kl.item():.2f} - this might be a precursor for failed training."
                 " sometimes this happens because the generation kwargs are not correctly set. Please make sure"
                 " that the generation kwargs are set correctly, or review your training hyperparameters."
             )
