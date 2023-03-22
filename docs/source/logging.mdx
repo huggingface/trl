@@ -16,12 +16,14 @@ If you want to log with tensorboard, add the kwarg `accelerator_kwargs={"logging
 
 ### Crucial values
 During training, many values are logged, here are the most important ones:
-* `env/reward_mean`,`env/reward_std`, `env/reward_dist`: the properties of the reward distribution from the "environment".
-* `ppo/mean_scores`: The mean scores directly out of the reward model.
-* `ppo/mean_non_score_reward`: The mean negated KL penalty during training (shows the delta between the reference model and the new policy over the batch in the step)
+
+1. `env/reward_mean`,`env/reward_std`, `env/reward_dist`: the properties of the reward distribution from the "environment".
+2. `ppo/mean_scores`: The mean scores directly out of the reward model.
+3. `ppo/mean_non_score_reward`: The mean negated KL penalty during training (shows the delta between the reference model and the new policy over the batch in the step)
 
 ### Training stability parameters:
 Here are some parameters that are useful to monitor for stability (when these diverge or collapse to 0, try tuning variables):
-* `ppo/loss/value`: The value function loss -- will spike / NaN when not going well.
-* `ppo/val/clipfrac`: The fraction of clipped values in the value function loss. This is often from 0.3 to 0.6.
-* `objective/kl_coef`: The target coefficient with [`AdaptiveKLController`]. Often increases before numerical instabilities.
+
+1. `ppo/loss/value`: The value function loss -- will spike / NaN when not going well.
+2. `ppo/val/clipfrac`: The fraction of clipped values in the value function loss. This is often from 0.3 to 0.6.
+3. `objective/kl_coef`: The target coefficient with [`AdaptiveKLController`]. Often increases before numerical instabilities.
