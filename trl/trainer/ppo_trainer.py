@@ -985,6 +985,14 @@ class PPOTrainer(BaseTrainer):
 
         mean_non_score_reward = masked_mean(data["non_score_reward"], mask)
 
+        if mean_kl.item() < 0.0:
+            # warn users
+            warnings.warn(
+                f"KL divergence is starting to become negative: {mean_kl.item():.2f} - this might be a precursor for failed training."
+                " sometimes this happens because the generation kwargs are not correctly set. Please make sure"
+                " that the generation kwargs are set correctly, or review your training hyperparameters."
+            )
+
         stats = {
             "objective/kl": mean_kl,
             "objective/kl_dist": kl_list,
