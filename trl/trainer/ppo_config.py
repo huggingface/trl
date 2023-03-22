@@ -79,7 +79,7 @@ class PPOConfig(object):
             Optimize CUDA cache for slightly more memory-effcient training
         early_stopping (`bool`, *optional*, defaults to `False`):
             Whether to stop the PPO opimization loop early is the KL too high
-        target_kl (`float`, *optional*, defaults to `0.01`):
+        target_kl (`float`, *optional*, defaults to `0.1`):
             Stop early if we exceed this value by over 50%
     """
 
