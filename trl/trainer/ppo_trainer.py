@@ -750,7 +750,6 @@ class PPOTrainer(BaseTrainer):
             input_kwargs = {key: value[i * fbs : (i + 1) * fbs] for key, value in model_inputs.items()}
             query_batch = queries[i * fbs : (i + 1) * fbs]
             response_batch = responses[i * fbs : (i + 1) * fbs]
-
             logits, _, values = model(**input_kwargs)
 
             if self.is_encoder_decoder:
