@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 import numpy as np
@@ -98,8 +98,8 @@ class PPOConfig(object):
     ppo_epochs: Optional[int] = 4
     remove_unused_columns: Optional[bool] = True
     log_with: Optional[str] = None
-    tracker_kwargs: Optional[dict] = {}
-    accelerator_kwargs: Optional[dict] = {}
+    tracker_kwargs: Optional[dict] = field(default_factory=dict)
+    accelerator_kwargs: Optional[dict] = field(default_factory=dict)
     tracker_project_name: Optional[str] = "trl"
     max_grad_norm: Optional[float] = None
     seed: Optional[int] = 0
