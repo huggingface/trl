@@ -79,60 +79,39 @@ class PPOConfig(object):
             Optimize CUDA cache for slightly more memory-effcient training
     """
 
-    def __init__(
-        self,
-        model_name: Optional[str] = None,
-        steps: Optional[int] = 20000,
-        learning_rate: Optional[float] = 1e-5,
-        adap_kl_ctrl: Optional[bool] = True,
-        init_kl_coef: Optional[float] = 0.2,
-        target: Optional[float] = 6,
-        horizon: Optional[float] = 10000,
-        gamma: Optional[float] = 1,
-        lam: Optional[float] = 0.95,
-        cliprange: Optional[float] = 0.2,
-        cliprange_value: Optional[float] = 0.2,
-        vf_coef: Optional[float] = 0.1,
-        batch_size: Optional[int] = 256,
-        forward_batch_size: Optional[int] = None,
-        mini_batch_size: Optional[int] = 1,
-        gradient_accumulation_steps: Optional[int] = 1,
-        ppo_epochs: Optional[int] = 4,
-        remove_unused_columns: Optional[bool] = True,
-        log_with: Optional[str] = None,
-        tracker_kwargs: Optional[dict] = {},
-        accelerator_kwargs: Optional[dict] = {},
-        tracker_project_name: Optional[str] = "trl",
-        max_grad_norm: Optional[float] = None,
-        seed: Optional[int] = 0,
-        optimize_cuda_cache: Optional[bool] = False,
-    ):
-        self.model_name = model_name
-        self.steps = steps
-        self.learning_rate = learning_rate
-        self.adap_kl_ctrl = adap_kl_ctrl
-        self.init_kl_coef = init_kl_coef
-        self.target = target
-        self.horizon = horizon
-        self.gamma = gamma
-        self.lam = lam
-        self.cliprange = cliprange
-        self.cliprange_value = cliprange_value
-        self.vf_coef = vf_coef
-        self.batch_size = batch_size
-        if forward_batch_size is not None:
+    model_name: Optional[str] = None
+    steps: Optional[int] = 20000
+    learning_rate: Optional[float] = 1e-5
+    adap_kl_ctrl: Optional[bool] = True
+    init_kl_coef: Optional[float] = 0.2
+    target: Optional[float] = 6
+    horizon: Optional[float] = 10000
+    gamma: Optional[float] = 1
+    lam: Optional[float] = 0.95
+    cliprange: Optional[float] = 0.2
+    cliprange_value: Optional[float] = 0.2
+    vf_coef: Optional[float] = 0.1
+    batch_size: Optional[int] = 256
+    forward_batch_size: Optional[int] = None
+    mini_batch_size: Optional[int] = 1
+    gradient_accumulation_steps: Optional[int] = 1
+    ppo_epochs: Optional[int] = 4
+    remove_unused_columns: Optional[bool] = True
+    log_with: Optional[str] = None
+    tracker_kwargs: Optional[dict] = {}
+    accelerator_kwargs: Optional[dict] = {}
+    tracker_project_name: Optional[str] = "trl"
+    max_grad_norm: Optional[float] = None
+    seed: Optional[int] = 0
+    optimize_cuda_cache: Optional[bool] = False
+
+    def __post_init__(self):
+        if self.forward_batch_size is not None:
             warnings.warn(
                 "Note that using `forward_batch_size` is deprecated, use `mini_batch_size` instead. By setting it you overwrite `mini_batch_size` which affects both the batch size during forward passes and also the mini batch size for PPO optimization."
             )
-            self.mini_batch_size = forward_batch_size
-        else:
-            self.mini_batch_size = mini_batch_size
-        self.gradient_accumulation_steps = gradient_accumulation_steps
-        self.ppo_epochs = ppo_epochs
-        self.remove_unused_columns = remove_unused_columns
-        self.seed = seed
+            self.mini_batch_size = self.forward_batch_size
 
-        self.log_with = log_with
         # check if wandb is installed
         if self.log_with == "wandb":
             # raise error if wandb is not installed
@@ -143,13 +122,7 @@ class PPOConfig(object):
                     "Please install wandb to use wandb logging. You can do this by running `pip install wandb`."
                 )
 
-        self.tracker_kwargs = tracker_kwargs
-        self.accelerator_kwargs = accelerator_kwargs
-        self.tracker_project_name = tracker_project_name
-        self.optimize_cuda_cache = optimize_cuda_cache
-        self.max_grad_norm = max_grad_norm
-
-        self.total_ppo_epochs = int(np.ceil(steps / batch_size))
+        self.total_ppo_epochs = int(np.ceil(self.steps / self.batch_size))
 
     def to_dict(self):
         output_dict = {}
