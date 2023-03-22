@@ -750,6 +750,7 @@ class PPOTrainer(BaseTrainer):
             input_kwargs = {key: value[i * fbs : (i + 1) * fbs] for key, value in model_inputs.items()}
             query_batch = queries[i * fbs : (i + 1) * fbs]
             response_batch = responses[i * fbs : (i + 1) * fbs]
+
             logits, _, values = model(**input_kwargs)
 
             if self.is_encoder_decoder:
@@ -939,6 +940,14 @@ class PPOTrainer(BaseTrainer):
         policykl = masked_mean(old_logprobs - logprobs, mask)
         return_mean, return_var = masked_mean(returns, mask), masked_var(returns, mask)
         value_mean, value_var = masked_mean(values, mask), masked_var(values, mask)
+
+        if policykl.item() < 0.0:
+            # warn users
+            warnings.warn(
+                f"KL divergence is starting to become negative: {policykl.item()} - this might be a precursor for failed training."
+                " sometimes this happens because the generation kwargs are not correctly set. Please make sure"
+                " that the generation kwargs are set correctly, or review your training hyperparameters."
+            )
 
         stats = dict(
             loss=dict(policy=pg_loss.detach(), value=vf_loss.detach(), total=loss.detach()),
