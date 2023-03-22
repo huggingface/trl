@@ -940,14 +940,6 @@ class PPOTrainer(BaseTrainer):
         return_mean, return_var = masked_mean(returns, mask), masked_var(returns, mask)
         value_mean, value_var = masked_mean(values, mask), masked_var(values, mask)
 
-        if policykl.item() < 0.0:
-            # warn users
-            warnings.warn(
-                f"KL divergence is starting to become negative: {policykl.item()} - this might be a precursor for failed training."
-                " sometimes this happens because the generation kwargs are not correctly set. Please make sure"
-                " that the generation kwargs are set correctly, or review your training hyperparameters."
-            )
-
         stats = dict(
             loss=dict(policy=pg_loss.detach(), value=vf_loss.detach(), total=loss.detach()),
             policy=dict(
@@ -992,6 +984,14 @@ class PPOTrainer(BaseTrainer):
         mean_entropy = (-data["logprobs"] * mask).sum(axis=-1).mean()
 
         mean_non_score_reward = masked_mean(data["non_score_reward"], mask)
+
+        if mean_kl.item() < 0.0:
+            # warn users
+            warnings.warn(
+                f"KL divergence is starting to become negative: {mean_kl.item()} - this might be a precursor for failed training."
+                " sometimes this happens because the generation kwargs are not correctly set. Please make sure"
+                " that the generation kwargs are set correctly, or review your training hyperparameters."
+            )
 
         stats = {
             "objective/kl": mean_kl,
