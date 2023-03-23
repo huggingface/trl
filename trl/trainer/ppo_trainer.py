@@ -605,7 +605,10 @@ class PPOTrainer(BaseTrainer):
 
         t = time.time()
         all_stats = []
+        early_stop = False
         for _ in range(self.config.ppo_epochs):
+            if early_stop:
+                break
             for batch in mini_batch_dataloader:
                 with self.accelerator.accumulate(self.model):
                     model_inputs = {k: batch[k] for k in model_inputs_names}
@@ -622,6 +625,11 @@ class PPOTrainer(BaseTrainer):
                     vpreds,
                     batch["masks"],
                 )
+                if self.config.early_stopping and train_stats["policy/policykl"] > 1.5 * self.config.target_kl:
+                    early_stop = True
+                    self.optimizer.zero_grad()
+                    break
+
                 all_stats.append(train_stats)
 
         timing["time/ppo/optimize_step"] = time.time() - t
