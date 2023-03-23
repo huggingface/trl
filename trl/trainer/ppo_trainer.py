@@ -987,7 +987,7 @@ class PPOTrainer(BaseTrainer):
         mean_entropy = (-data["logprobs"] * mask).sum(axis=-1).mean()
 
         mean_non_score_reward = masked_mean(data["non_score_reward"], mask)
-        mean_scores = (data["scores"] * mask).sum(axis=-1)
+        mean_scores = (data["scores"] * mask).sum(axis=-1).mean()
 
         if mean_kl.item() < 0.0:
             # warn users
