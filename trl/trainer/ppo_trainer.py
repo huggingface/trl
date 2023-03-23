@@ -989,8 +989,8 @@ class PPOTrainer(BaseTrainer):
         mean_non_score_reward = masked_mean(
             data["non_score_reward"], mask
         )  # non_score_reward is size `batch_size`, `response_length`
-        mean_scores = data["scores"].mean()  # scores is size `batch_size`
-        std_scores = data["scores"].std()
+        mean_scores = torch.stack(data["scores"]).mean()  # scores is size `batch_size`
+        std_scores = torch.stack(data["scores"]).std()
 
         if mean_kl.item() < 0.0:
             # warn users
