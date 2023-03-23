@@ -860,7 +860,7 @@ class PPOTrainer(BaseTrainer):
             ref_logprobs (`torch.FloatTensor`):
                 Log probabilities of the reference model, shape (`batch_size`, `response_length`)
         """
-        rewards, non_score_rewards, scores = [], []
+        rewards, non_score_rewards = [], []
         for score, logprob, ref_logprob, mask in zip(scores, logprobs, ref_logprobs, masks):
             # compute KL penalty (from difference in logprobs)
             kl = logprob - ref_logprob
