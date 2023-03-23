@@ -30,45 +30,25 @@ class PPOConfig(object):
         default=None,
         metadata={"help": "Name of model to use - used only for tracking purposes"},
     )
-    steps: Optional[int] = field(
-        default=20000, metadata={"help": "Number of training steps"}
-    )
-    learning_rate: Optional[float] = field(
-        default=1e-5, metadata={"help": "Adam learning rate"}
-    )
-    adap_kl_ctrl: Optional[bool] = field(
-        default=True, metadata={"help": "Use adaptive KL control, otherwise linear"}
-    )
+    steps: Optional[int] = field(default=20000, metadata={"help": "Number of training steps"})
+    learning_rate: Optional[float] = field(default=1e-5, metadata={"help": "Adam learning rate"})
+    adap_kl_ctrl: Optional[bool] = field(default=True, metadata={"help": "Use adaptive KL control, otherwise linear"})
     init_kl_coef: Optional[float] = field(
         default=0.2,
-        metadata={
-            "help": "Initial KL penalty coefficient (used for adaptive and linear control)"
-        },
+        metadata={"help": "Initial KL penalty coefficient (used for adaptive and linear control)"},
     )
-    target: Optional[float] = field(
-        default=6, metadata={"help": "Target KL value for adaptive KL control"}
-    )
-    horizon: Optional[float] = field(
-        default=10000, metadata={"help": "Horizon for adaptive KL control"}
-    )
-    gamma: Optional[float] = field(
-        default=1, metadata={"help": "Gamma parameter for advantage calculation"}
-    )
-    lam: Optional[float] = field(
-        default=0.95, metadata={"help": "Lambda parameter for advantage calculation"}
-    )
+    target: Optional[float] = field(default=6, metadata={"help": "Target KL value for adaptive KL control"})
+    horizon: Optional[float] = field(default=10000, metadata={"help": "Horizon for adaptive KL control"})
+    gamma: Optional[float] = field(default=1, metadata={"help": "Gamma parameter for advantage calculation"})
+    lam: Optional[float] = field(default=0.95, metadata={"help": "Lambda parameter for advantage calculation"})
     cliprange: Optional[float] = field(
         default=0.2, metadata={"help": "Range for clipping in PPO policy gradient loss"}
     )
     cliprange_value: Optional[float] = field(
         default=0.2, metadata={"help": "Range for clipping values in loss calculation"}
     )
-    vf_coef: Optional[float] = field(
-        default=0.1, metadata={"help": "Scaling factor for value loss"}
-    )
-    batch_size: Optional[int] = field(
-        default=256, metadata={"help": "Number of samples per optimisation step"}
-    )
+    vf_coef: Optional[float] = field(default=0.1, metadata={"help": "Scaling factor for value loss"})
+    batch_size: Optional[int] = field(default=256, metadata={"help": "Number of samples per optimisation step"})
     forward_batch_size: Optional[int] = field(
         default=None,
         metadata={"help": "Number of samples forward passed through model at a time"},
@@ -85,9 +65,7 @@ class PPOConfig(object):
     )
     remove_unused_columns: Optional[bool] = field(
         default=True,
-        metadata={
-            "help": "Remove unused columns from the dataset if `datasets.Dataset` is used"
-        },
+        metadata={"help": "Remove unused columns from the dataset if `datasets.Dataset` is used"},
     )
     log_with: Optional[str] = field(
         default=None,
@@ -109,14 +87,10 @@ class PPOConfig(object):
     max_grad_norm: Optional[float] = field(
         default=None, metadata={"help": "Maximum gradient norm for gradient clipping"}
     )
-    seed: Optional[int] = field(
-        default=0, metadata={"help": "Seed value for random generations"}
-    )
+    seed: Optional[int] = field(default=0, metadata={"help": "Seed value for random generations"})
     optimize_cuda_cache: Optional[bool] = field(
         default=False,
-        metadata={
-            "help": "Optimize CUDA cache for slightly more memory-effcient training"
-        },
+        metadata={"help": "Optimize CUDA cache for slightly more memory-effcient training"},
     )
 
     def __post_init__(self):
