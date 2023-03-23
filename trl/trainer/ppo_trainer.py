@@ -986,8 +986,11 @@ class PPOTrainer(BaseTrainer):
         mean_kl = kl_list.mean()
         mean_entropy = (-data["logprobs"] * mask).sum(axis=-1).mean()
 
-        mean_non_score_reward = masked_mean(data["non_score_reward"], mask)
-        mean_scores = (data["scores"] * mask).sum(axis=-1).mean()
+        mean_non_score_reward = masked_mean(
+            data["non_score_reward"], mask
+        )  # non_score_reward is size `batch_size`, `response_length`
+        mean_scores = data["scores"].mean()  # scores is size `batch_size`
+        std_scores = data["scores"].std()
 
         if mean_kl.item() < 0.0:
             # warn users
@@ -1006,6 +1009,7 @@ class PPOTrainer(BaseTrainer):
             "objective/entropy": mean_entropy,
             "ppo/mean_non_score_reward": mean_non_score_reward,
             "ppo/mean_scores": mean_scores,
+            "ppo/std_scores": std_scores,
         }
 
         for k, v in data["train_stats"].items():
