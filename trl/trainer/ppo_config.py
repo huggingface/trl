@@ -92,6 +92,12 @@ class PPOConfig(object):
         default=False,
         metadata={"help": "Optimize CUDA cache for slightly more memory-effcient training"},
     )
+    early_stopping: Optional[bool] = field(
+        default=False, metadata={"help": "Whether to stop the PPO opimization loop early is the KL too high"}
+    )
+    target_kl: Optional[float] = field(
+        default=0.1, metadata={"help": "Stop early if we exceed this value by over 50%"}
+    )
 
     def __post_init__(self):
         if self.forward_batch_size is not None:
