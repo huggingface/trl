@@ -7,6 +7,8 @@
     title: Installation
   - local: customization
     title: Customize your training
+  - local: logging
+    title: Understanding logs
   title: Get started
 - sections:
   - local: models

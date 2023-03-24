@@ -870,11 +870,14 @@ class PPOTrainer(BaseTrainer):
         """
         rewards, non_score_rewards = [], []
         for score, logprob, ref_logprob, mask in zip(scores, logprobs, ref_logprobs, masks):
+            # compute KL penalty (from difference in logprobs)
             kl = logprob - ref_logprob
             non_score_reward = -self.kl_ctl.value * kl
             non_score_rewards.append(non_score_reward)
             reward = non_score_reward.clone()
             last_non_masked_index = mask.nonzero()[-1]
+
+            # reward is preference model score + KL penalty
             reward[last_non_masked_index] += score
             rewards.append(reward)
         return torch.stack(rewards), torch.stack(non_score_rewards)
@@ -991,7 +994,11 @@ class PPOTrainer(BaseTrainer):
         mean_kl = kl_list.mean()
         mean_entropy = (-data["logprobs"] * mask).sum(axis=-1).mean()
 
-        mean_non_score_reward = masked_mean(data["non_score_reward"], mask)
+        mean_non_score_reward = masked_mean(
+            data["non_score_reward"], mask
+        )  # non_score_reward is size `batch_size`, `response_length`
+        mean_scores = torch.stack(data["scores"]).mean()  # scores is size `batch_size`
+        std_scores = torch.stack(data["scores"]).std()
 
         if mean_kl.item() < 0.0:
             # warn users
@@ -1009,6 +1016,8 @@ class PPOTrainer(BaseTrainer):
             "objective/kl_coef": kl_coef,
             "objective/entropy": mean_entropy,
             "ppo/mean_non_score_reward": mean_non_score_reward,
+            "ppo/mean_scores": mean_scores,
+            "ppo/std_scores": std_scores,
         }
 
         for k, v in data["train_stats"].items():
