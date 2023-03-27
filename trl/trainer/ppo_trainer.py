@@ -286,6 +286,10 @@ class PPOTrainer(BaseTrainer):
                 # `KL devergence loss`,i.e, in eval model, just have it be on the respective device and
                 # there is no need to pass it to the `accelerator.prepare` call
                 self.ref_model = self.ref_model.to(self.accelerator.device)
+
+            # this hack seems to be needed for DS stage 3 to work
+            if self.accelerator.state.deepspeed_plugin.zero_stage == 3:
+                self.model.train()
         else:
             (
                 self.model,
