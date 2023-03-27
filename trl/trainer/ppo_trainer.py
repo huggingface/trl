@@ -625,10 +625,27 @@ class PPOTrainer(BaseTrainer):
                     vpreds,
                     batch["masks"],
                 )
-                if self.config.early_stopping and train_stats["policy/policykl"] > 1.5 * self.config.target_kl:
-                    early_stop = True
-                    self.optimizer.zero_grad()
-                    break
+                if self.config.early_stopping:
+                    policykl = train_stats["policy/policykl"]
+
+                    if not self.is_distributed and policykl > 1.5 * self.config.target_kl:
+                        early_stop = True
+                        self.optimizer.zero_grad()
+                        break
+                    elif self.is_distributed:
+                        import torch.distributed as dist
+
+                        # Wait for all processes to finish
+                        dist.barrier()
+
+                        # all gather the policykl
+                        dist.all_reduce(policykl, dist.ReduceOp.SUM)
+                        policykl /= self.accelerator.num_processes
+
+                        if policykl > 0 * self.config.target_kl:
+                            early_stop = True
+                            self.optimizer.zero_grad()
+                            break
 
                 all_stats.append(train_stats)
 
