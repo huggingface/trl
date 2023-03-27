@@ -144,14 +144,12 @@ output_length_sampler = LengthSampler(output_min_length, output_max_length)
 for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     query_tensors = batch["input_ids"]
 
-    # Get response from gpt2
-    response_tensors = []
-    for query in query_tensors:
-        gen_len = output_length_sampler()
-        generation_kwargs["max_new_tokens"] = gen_len
-        response = ppo_trainer.generate(query, **generation_kwargs)
-        response_tensors.append(response.squeeze())
-    batch["response"] = [tokenizer.decode(r[1:].squeeze()) for r in response_tensors]
+    # Get response from t5
+    response_tensors = ppo_trainer.generate(
+        query_tensors, return_prompt=False, length_sampler=output_length_sampler, **generation_kwargs
+    )
+    response_tensors = [r[1:] for r in response_tensors]
+    batch["response"] = tokenizer.batch_decode(response_tensors)
 
     # Compute sentiment score
     texts = [q + r for q, r in zip(batch["query"], batch["response"])]
