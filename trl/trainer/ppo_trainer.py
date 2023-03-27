@@ -642,7 +642,7 @@ class PPOTrainer(BaseTrainer):
                         dist.all_reduce(policykl, dist.ReduceOp.SUM)
                         policykl /= self.accelerator.num_processes
 
-                        if policykl > 0 * self.config.target_kl:
+                        if policykl > 1.5 * self.config.target_kl:
                             early_stop = True
                             self.optimizer.zero_grad()
                             break
