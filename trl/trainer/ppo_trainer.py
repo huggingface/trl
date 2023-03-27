@@ -266,9 +266,8 @@ class PPOTrainer(BaseTrainer):
             self.kl_ctl = FixedKLController(self.config.init_kl_coef)
 
         # Safety checkers for DS integration
-        is_deepspeed_used = (
-            self.accelerator.distributed_type == "DEEPSPEED"
-            and hasattr(self.accelerator.state, "deepspeed_plugin")
+        is_deepspeed_used = self.accelerator.distributed_type == "DEEPSPEED" and hasattr(
+            self.accelerator.state, "deepspeed_plugin"
         )
 
         if is_deepspeed_used:
