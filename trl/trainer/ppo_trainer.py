@@ -269,7 +269,6 @@ class PPOTrainer(BaseTrainer):
         is_deepspeed_zero_3 = (
             self.accelerator.distributed_type == "DEEPSPEED"
             and hasattr(self.accelerator.state, "deepspeed_plugin")
-            and self.accelerator.state.deepspeed_plugin.zero_stage == 3
         )
 
         if is_deepspeed_zero_3:
