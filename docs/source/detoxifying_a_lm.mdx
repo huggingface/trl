@@ -1,10 +1,10 @@
 # Detoxifying a Language Model using PPO
 
-Language models (LMs) are known to sometimes generate toxic outputs. In this example, we will show how to "detoxify" a LM by feeding it toxic prompts and then using PPO to "detoxify" it.
+Language models (LMs) are known to sometimes generate toxic outputs. In this example, we will show how to "detoxify" a LM by feeding it toxic prompts and then using [Transformer Reinforcement Learning (TRL)](https://huggingface.co/docs/trl/index) and Proximal Policy Optimization (PPO) to "detoxify" it.
 
 Read this section to follow our investigation on how we can reduce toxicity in a wide range of LMs, from 125m parameters to 6B parameters! 
 
-Here's an overview of the notebooks and scripts in the [trl repository](https://github.com/lvwerra/trl/tree/main/examples/toxicity) as well as the link for the interactive demo:
+Here's an overview of the notebooks and scripts in the [TRL toxicity repository](https://github.com/lvwerra/trl/tree/main/examples/toxicity/scripts) as well as the link for the interactive demo:
 
 | File | Description | Colab link |
 |---|---| --- |
@@ -24,7 +24,7 @@ One could have also used different techniques to evaluate the toxicity of a mode
 
 ### Selection of models
 
-We selected the following models for our experiments to show that `trl` can be easily scaled to 10B parameters models: 
+We selected the following models for our experiments to show that TRL can be easily scaled to 10B parameters models: 
 
 * [`EleutherAI/gpt-neo-125M`](https://huggingface.co/EleutherAI/gpt-neo-125M) (125 million parameters)
 * [`EleutherAI/gpt-neo-2.7B`](https://huggingface.co/EleutherAI/gpt-neo-2.7B) (2.7 billion parameters)
@@ -179,9 +179,12 @@ The evaluation script can be found [here](https://github.com/lvwerra/trl/blob/ma
 ### Discussions
 
 The results are quite promising, as we can see that the models are able to reduce the toxicity score of the generated text by an interesting margin. The gap is clear for `gpt-neo-2B` model but we less so for the `gpt-j-6B` model. There are several things we could try to improve the results on the largest model starting with training with larger `mini_batch_size` and probably allowing to back-propagate through more layers (i.e. use less shared layers).
-We also think we could have trained the models using a "more toxic" dataset as the one we used is much cleaner than the dataset we used for testing our models (from our observation). 
 
 To sum up, in addition to human feedback this could be a useful additional signal when training large language models to ensure there outputs are less toxic as well as useful.
+
+### Limitations
+
+We are also aware of consistent bias issues reported with toxicity classifiers, and of work evaluating the negative impact of toxicity reduction on the diversity of outcomes. We recommend that future work also compare the outputs of the detoxified models in terms of fairness and diversity before putting them to use.
 
 ## What is next?
 

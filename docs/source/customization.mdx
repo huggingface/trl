@@ -142,3 +142,11 @@ ppo_config = {'batch_size': 1}
 config = PPOConfig(**ppo_config)
 ppo_trainer = PPOTrainer(config, model, model_ref, tokenizer)
 ```
+
+## Use the CUDA cache optimizer
+
+When training large models, you should better handle the CUDA cache by iteratively clearing it. Do do so, simply pass `optimize_cuda_cache=True` to `PPOConfig`:
+
+```python
+config = PPOConfig(..., optimize_cuda_cache=True)
+```

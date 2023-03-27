@@ -1,18 +1,20 @@
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Union
+
+import evaluate
+import numpy as np
+import torch.nn as nn
 from datasets import load_dataset
 from transformers import (
-    AutoTokenizer,
     AutoModelForSequenceClassification,
-    TrainingArguments,
-    Trainer,
-    PreTrainedTokenizerBase,
+    AutoTokenizer,
     HfArgumentParser,
+    PreTrainedTokenizerBase,
+    Trainer,
+    TrainingArguments,
 )
 from transformers.utils import PaddingStrategy
-from typing import Optional, Union, List, Dict, Any
-import evaluate
-from dataclasses import dataclass, field
-import torch.nn as nn
-import numpy as np
+
 
 # Define and parse arguments.
 @dataclass
@@ -49,10 +51,7 @@ class ScriptArguments:
         },
     )
     num_train_epochs: Optional[int] = field(
-        default="5",
-        metadata={
-            "help": "The number of training epochs for the reward model. OpenAI used 5."
-        }
+        default="5", metadata={"help": "The number of training epochs for the reward model. OpenAI used 5."}
     )
 
 
@@ -87,12 +86,15 @@ model = AutoModelForSequenceClassification.from_pretrained(script_args.model_nam
 tokenizer.pad_token = tokenizer.eos_token
 model.config.pad_token_id = tokenizer.eos_token_id
 
+
 # Turn the dataset into pairs of post + summaries, where text_j is the preferred post + summary and text_k is the other.
 def turn_into_text_classification_format(examples):
     new_examples = {"text_j": [], "text_k": []}
     for info, summaries, choice in zip(examples["info"], examples["summaries"], examples["choice"]):
         if len(summaries) != 2 or choice not in (0, 1):
-            raise ValueError(f"There should be two summaries with a choice that's either 0 or 1. Received {len(summaries)} summaries and choice={choice}.")
+            raise ValueError(
+                f"There should be two summaries with a choice that's either 0 or 1. Received {len(summaries)} summaries and choice={choice}."
+            )
         original_text_field = "post" if info["post"] is not None else "article"
         new_examples["text_j"].append(
             summaries[choice]["text"] + " " + tokenizer.bos_token + " " + info[original_text_field]
@@ -104,11 +106,10 @@ def turn_into_text_classification_format(examples):
     return new_examples
 
 
-num_proc = (
-    8
-)  # Can adjust to be higher if you have more processors. Should work even if you don't have 8 CPUs, though.
+num_proc = 8  # Can adjust to be higher if you have more processors. Should work even if you don't have 8 CPUs, though.
 original_columns = ds["train"].column_names
 ds = ds.map(turn_into_text_classification_format, batched=True, num_proc=num_proc, remove_columns=original_columns)
+
 
 # Tokenize the dataset.
 def preprocess_function(examples):
@@ -124,10 +125,10 @@ def preprocess_function(examples):
 
 tokenized_ds = ds.map(preprocess_function, batched=True, num_proc=num_proc, remove_columns=["text_j", "text_k"])
 
+
 # We need to define a special data collator that batches the data in our j vs k format.
 @dataclass
 class RewardDataCollatorWithPadding:
-
     tokenizer: PreTrainedTokenizerBase
     padding: Union[bool, str, PaddingStrategy] = True
     max_length: Optional[int] = None

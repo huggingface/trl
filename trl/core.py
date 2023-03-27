@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import gc
 import random
+from contextlib import contextmanager
 
 import numpy as np
 import torch
@@ -106,7 +108,10 @@ def whiten(values, shift_mean=True):
 
 def masked_mean(values, mask, axis=None):
     """Compute mean of tensor with a masked values."""
-    return (values * mask).sum(axis=axis) / mask.sum(axis=axis)
+    if axis is not None:
+        return (values * mask).sum(axis=axis) / mask.sum(axis=axis)
+    else:
+        return (values * mask).sum() / mask.sum()
 
 
 def masked_var(values, mask, unbiased=True):
@@ -237,3 +242,16 @@ class LengthSampler:
 
     def __call__(self):
         return np.random.choice(self.values)
+
+
+class PPODecorators(object):
+    optimize_cuda_cache = False
+
+    @classmethod
+    @contextmanager
+    def empty_cuda_cache(cls):
+        yield
+        if cls.optimize_cuda_cache and torch.cuda.is_available():
+            gc.collect()
+            torch.cuda.empty_cache()
+            gc.collect()

@@ -7,6 +7,8 @@
     title: Installation
   - local: customization
     title: Customize your training
+  - local: logging
+    title: Understanding logs
   title: Get started
 - sections:
   - local: models
@@ -17,6 +19,8 @@
 - sections: 
   - local: sentiment_tuning
     title: Sentiment Tuning
+  - local: sentiment_tuning_peft
+    title: Peft support - Low rank adaption of 8 bit models
   - local: summarization_reward_tuning
     title: Summarization Reward Tuning
   - local: detoxifying_a_lm
