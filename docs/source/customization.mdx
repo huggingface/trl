@@ -150,3 +150,16 @@ When training large models, you should better handle the CUDA cache by iterative
 ```python
 config = PPOConfig(..., optimize_cuda_cache=True)
 ```
+
+## Use correctly DeepSpeed stage 3:
+
+A small tweak need to be added to your training script to use DeepSpeed stage 3 correctly. You need to properly initialize your reward model on the correct device using the `zero3_init_context_manager` context manager. Here is an example adapted for the `gpt2-sentiment` script:
+
+```python
+ds_plugin = ppo_trainer.accelerator.state.deepspeed_plugin
+if ds_plugin is not None and ds_plugin.is_zero3_init_enabled():
+    with ds_plugin.zero3_init_context_manager(enable=False):
+        sentiment_pipe = pipeline("sentiment-analysis", model="lvwerra/distilbert-imdb", device=device)
+else:
+    sentiment_pipe = pipeline("sentiment-analysis", model="lvwerra/distilbert-imdb", device=device)
+```
