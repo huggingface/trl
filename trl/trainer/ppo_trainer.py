@@ -642,12 +642,14 @@ class PPOTrainer(BaseTrainer):
                     vpreds,
                     batch["masks"],
                 )
-                if self.config.early_stopping and train_stats["policy/policykl"] > 1.5 * self.config.target_kl:
-                    early_stop = True
-                    self.optimizer.zero_grad()
-                    break
 
                 all_stats.append(train_stats)
+
+                if self.config.early_stopping:
+                    policykl = train_stats["policy/policykl"]
+                    early_stop = self._early_stop(policykl)
+                    if early_stop:
+                        break
 
         timing["time/ppo/optimize_step"] = time.time() - t
 
@@ -690,6 +692,41 @@ class PPOTrainer(BaseTrainer):
             self.lr_scheduler.step()
 
         return stats
+
+    def _early_stop(self, policykl):
+        r"""
+        Handles the early stopping logic. If the policy KL is greater than the target KL, then the gradient is zeroed and
+        the optimization step is skipped.
+        This also handles the multi-gpu case where the policy KL is averaged across all processes.
+
+        Args:
+            policy_kl (torch.Tensor):
+                the policy KL
+
+        Returns:
+            `bool`: whether to early stop or not
+        """
+        early_stop = False
+        if not self.config.early_stopping:
+            return early_stop
+
+        if not self.is_distributed and policykl > 1.5 * self.config.target_kl:
+            self.optimizer.zero_grad()
+            early_stop = True
+        elif self.is_distributed:
+            import torch.distributed as dist
+
+            # Wait for all processes to finish
+            dist.barrier()
+
+            # all gather the policykl
+            dist.all_reduce(policykl, dist.ReduceOp.SUM)
+            policykl /= self.accelerator.num_processes
+
+            if policykl > 1.5 * self.config.target_kl:
+                self.optimizer.zero_grad()
+                early_stop = True
+        return early_stop
 
     def gather_stats(self, stats):
         """
