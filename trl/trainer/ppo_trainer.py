@@ -270,16 +270,16 @@ class PPOTrainer(BaseTrainer):
             self.accelerator.state, "deepspeed_plugin"
         )
 
+        (
+            self.model,
+            self.optimizer,
+            self.data_collator,
+            self.dataloader,
+            self.lr_scheduler,
+        ) = self.accelerator.prepare(
+            self.model, self.optimizer, self.data_collator, self.dataloader, self.lr_scheduler
+        )
         if is_deepspeed_used:
-            (
-                self.model,
-                self.optimizer,
-                self.data_collator,
-                self.dataloader,
-                self.lr_scheduler,
-            ) = self.accelerator.prepare(
-                self.model, self.optimizer, self.data_collator, self.dataloader, self.lr_scheduler
-            )
             # 8 bit models are already set on the correct device
             if not getattr(self.ref_model.pretrained_model, "is_loaded_in_8bit", False):
                 # DS integration only allows for single model and as `ref_model` is only used for
@@ -291,16 +291,7 @@ class PPOTrainer(BaseTrainer):
             if self.accelerator.state.deepspeed_plugin.zero_stage == 3:
                 self.model.train()
         else:
-            (
-                self.model,
-                self.ref_model,
-                self.optimizer,
-                self.data_collator,
-                self.dataloader,
-                self.lr_scheduler,
-            ) = self.accelerator.prepare(
-                self.model, self.ref_model, self.optimizer, self.data_collator, self.dataloader, self.lr_scheduler
-            )
+            self.ref_model = self.accelerator.prepare(self.ref_model)
 
         # In a distributed setup, only logging needs to be performed on the main process
         # check: https://pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html
