@@ -625,11 +625,14 @@ class PPOTrainer(BaseTrainer):
                     vpreds,
                     batch["masks"],
                 )
+
+                all_stats.append(train_stats)
+
                 if self.config.early_stopping:
                     policykl = train_stats["policy/policykl"]
                     early_stop = self._early_stop(policykl)
-
-                all_stats.append(train_stats)
+                    if early_stop:
+                        break
 
         timing["time/ppo/optimize_step"] = time.time() - t
 
