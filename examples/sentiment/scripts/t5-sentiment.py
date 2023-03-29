@@ -120,7 +120,8 @@ dataset = build_imdb_dataset(tokenizer)
 
 query = tokenizer("I really liked this movie because", return_tensors="pt")["input_ids"]
 
-generation_kwargs = {"top_k": 0.0, "top_p": 1.0, "do_sample": True, "eos_token_id": -1}
+# generation_kwargs = {"top_k": 0.0, "top_p": 1.0, "do_sample": True, "eos_token_id": -1}
+generation_kwargs = {"top_k": 0.0, "top_p": 1.0, "do_sample": True}
 
 
 # We then build the PPOTrainer, passing the model, the reference model, the tokenizer
@@ -148,8 +149,7 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     response_tensors = ppo_trainer.generate(
         query_tensors, return_prompt=False, length_sampler=output_length_sampler, **generation_kwargs
     )
-    response_tensors = [r[1:] for r in response_tensors]
-    batch["response"] = tokenizer.batch_decode(response_tensors)
+    batch["response"] = tokenizer.batch_decode([r[1:] for r in response_tensors])
 
     # Compute sentiment score
     texts = [q + r for q, r in zip(batch["query"], batch["response"])]

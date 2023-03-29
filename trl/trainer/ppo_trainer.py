@@ -417,7 +417,8 @@ class PPOTrainer(BaseTrainer):
         outputs = []
 
         padding_side_default = self.tokenizer.padding_side
-        self.tokenizer.padding_side = "left"
+        if not self.is_encoder_decoder:
+            self.tokenizer.padding_side = "left"
 
         # in case we have fewer examples than bs
         batch_size = min(len(query_tensors), batch_size)
@@ -444,7 +445,12 @@ class PPOTrainer(BaseTrainer):
             generations = self.accelerator.unwrap_model(self.model).generate(**padded_inputs, **generation_kwargs)
 
             for generation, mask in zip(generations, padded_inputs["attention_mask"]):
-                output = generation[(1 - mask).sum() :]  # remove padding
+                if not self.is_encoder_decoder:
+                    output = generation[(1 - mask).sum() :]  # remove padding
+                else:
+                    output = generation
+
+
                 if not return_prompt and not self.is_encoder_decoder:
                     output = output[(mask).sum() :]  # remove prompt
                 outputs.append(output)
