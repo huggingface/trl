@@ -592,11 +592,12 @@ class PPOTrainer(BaseTrainer):
         rewards, non_score_reward = self.compute_rewards(scores, all_logprobs, ref_logprobs, masks)
         timing["time/ppo/compute_rewards"] = time.time() - t
 
+        # upcast to float32 to avoid dataset issues
         mini_batch_dict = {
             "queries": queries,
             "responses": responses,
-            "logprobs": all_logprobs,
-            "values": values,
+            "logprobs": all_logprobs.to(torch.float32),
+            "values": values.to(torch.float32),
             "rewards": rewards,
             "masks": masks,
         }
