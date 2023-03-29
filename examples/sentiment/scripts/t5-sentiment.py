@@ -120,8 +120,7 @@ dataset = build_imdb_dataset(tokenizer)
 
 query = tokenizer("I really liked this movie because", return_tensors="pt")["input_ids"]
 
-# generation_kwargs = {"top_k": 0.0, "top_p": 1.0, "do_sample": True, "eos_token_id": -1}
-generation_kwargs = {"top_k": 0.0, "top_p": 1.0, "do_sample": True}
+generation_kwargs = {"top_k": 0.0, "top_p": 1.0, "do_sample": True, "eos_token_id": -1}
 
 
 # We then build the PPOTrainer, passing the model, the reference model, the tokenizer
