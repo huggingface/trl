@@ -595,8 +595,8 @@ class PPOTrainer(BaseTrainer):
         mini_batch_dict = {
             "queries": queries,
             "responses": responses,
-            "logprobs": all_logprobs,
-            "values": values,
+            "logprobs": all_logprobs.to(torch.float32),
+            "values": values.to(torch.float32),
             "rewards": rewards,
             "masks": masks,
         }
