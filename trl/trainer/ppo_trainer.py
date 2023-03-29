@@ -450,7 +450,6 @@ class PPOTrainer(BaseTrainer):
                 else:
                     output = generation
 
-
                 if not return_prompt and not self.is_encoder_decoder:
                     output = output[(mask).sum() :]  # remove prompt
                 outputs.append(output)
