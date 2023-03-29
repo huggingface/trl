@@ -30,6 +30,7 @@ ALL_CAUSAL_LM_MODELS = [
     "trl-internal-testing/tiny-random-BloomForCausalLM",
     "trl-internal-testing/tiny-random-GPT2LMHeadModel",
     "trl-internal-testing/tiny-random-CodeGenForCausalLM-sharded",
+    "trl-internal-testing/tiny-random-LlamaForCausalLM",
 ]
 
 ALL_SEQ2SEQ_MODELS = [
