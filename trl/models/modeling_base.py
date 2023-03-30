@@ -36,7 +36,12 @@ if is_peft_available():
     )
 
 
-LAYER_PATTERNS = ["transformer.h.{layer}", "model.decoder.layers.{layer}", "gpt_neox.layers.{layer}"]
+LAYER_PATTERNS = [
+    "transformer.h.{layer}",
+    "model.decoder.layers.{layer}",
+    "gpt_neox.layers.{layer}",
+    "model.layers.{layer}",
+]
 
 
 class PreTrainedModelWrapper(nn.Module):
@@ -412,5 +417,8 @@ def create_reference_model(
     for param_name in unshared_param_list:
         param = ref_model.get_parameter(param_name)
         param.requires_grad = False
+
+    if pattern is not None and len(unshared_param_list) == 0:
+        logging.warning("Pattern passed or found, but no layers matched in the model. Check for a typo.")
 
     return ref_model.eval()
