@@ -78,7 +78,7 @@ query_txt = "This morning I went to the "
 query_tensor = tokenizer.encode(query_txt, return_tensors="pt")
 
 # get model response
-response_tensor  = respond_to_batch(model_ref, query_tensor)
+response_tensor  = respond_to_batch(model, query_tensor)
 
 # create a ppo trainer
 ppo_trainer = PPOTrainer(ppo_config, model, model_ref, tokenizer)
