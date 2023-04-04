@@ -41,9 +41,7 @@ class PPOConfig(object):
     horizon: Optional[float] = field(default=10000, metadata={"help": "Horizon for adaptive KL control"})
     gamma: Optional[float] = field(default=1, metadata={"help": "Gamma parameter for advantage calculation"})
     lam: Optional[float] = field(default=0.95, metadata={"help": "Lambda parameter for advantage calculation"})
-    cliprange: Optional[float] = field(
-        default=0.2, metadata={"help": "Range for clipping in PPO policy gradient loss"}
-    )
+    cliprange: Optional[float] = field(default=0.2, metadata={"help": "Range for clipping in PPO policy gradient loss"})
     cliprange_value: Optional[float] = field(
         default=0.2, metadata={"help": "Range for clipping values in loss calculation"}
     )
@@ -81,9 +79,7 @@ class PPOConfig(object):
         default_factory=dict,
         metadata={"help": "Keyword arguments for the tracker (e.g. wandb_project)"},
     )
-    tracker_project_name: Optional[str] = field(
-        default="trl", metadata={"help": "Name of project to use for tracking"}
-    )
+    tracker_project_name: Optional[str] = field(default="trl", metadata={"help": "Name of project to use for tracking"})
     max_grad_norm: Optional[float] = field(
         default=None, metadata={"help": "Maximum gradient norm for gradient clipping"}
     )
@@ -95,15 +91,7 @@ class PPOConfig(object):
     early_stopping: Optional[bool] = field(
         default=False, metadata={"help": "Whether to stop the PPO opimization loop early is the KL too high"}
     )
-    target_kl: Optional[float] = field(
-        default=0.1, metadata={"help": "Stop early if we exceed this value by over 50%"}
-    )
-    non_reward_score_min: Optional[float] = field(
-        default=-1000.0, metadata={"help": "Clamp the kl penalty to be above this value"}
-    )
-    non_reward_score_max: Optional[float] = field(
-        default=1000.0, metadata={"help": "Clamp the kl penalty to be below this value"}
-    )
+    target_kl: Optional[float] = field(default=0.1, metadata={"help": "Stop early if we exceed this value by over 50%"})
 
     def __post_init__(self):
         if self.forward_batch_size is not None:

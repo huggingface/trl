@@ -276,9 +276,7 @@ class PPOTrainer(BaseTrainer):
             self.data_collator,
             self.dataloader,
             self.lr_scheduler,
-        ) = self.accelerator.prepare(
-            self.model, self.optimizer, self.data_collator, self.dataloader, self.lr_scheduler
-        )
+        ) = self.accelerator.prepare(self.model, self.optimizer, self.data_collator, self.dataloader, self.lr_scheduler)
         if is_deepspeed_used:
             # 8 bit models are already set on the correct device
             if not getattr(self.ref_model.pretrained_model, "is_loaded_in_8bit", False):
@@ -927,9 +925,7 @@ class PPOTrainer(BaseTrainer):
         for score, logprob, ref_logprob, mask in zip(scores, logprobs, ref_logprobs, masks):
             # compute KL penalty (from difference in logprobs)
             kl = logprob - ref_logprob
-            non_score_reward = torch.clamp(
-                -self.kl_ctl.value * kl, -self.config.non_reward_score_min, self.config.non_reward_score_max
-            )
+            non_score_reward = -self.kl_ctl.value * kl
             non_score_rewards.append(non_score_reward)
             reward = non_score_reward.clone()
             last_non_masked_index = mask.nonzero()[-1]
@@ -984,9 +980,7 @@ class PPOTrainer(BaseTrainer):
         advantages = masked_whiten(advantages, mask)
         advantages = advantages.detach()
 
-        vpredclipped = clip_by_value(
-            vpreds, values - self.config.cliprange_value, values + self.config.cliprange_value
-        )
+        vpredclipped = clip_by_value(vpreds, values - self.config.cliprange_value, values + self.config.cliprange_value)
 
         vf_losses1 = (vpreds - returns) ** 2
         vf_losses2 = (vpredclipped - returns) ** 2
