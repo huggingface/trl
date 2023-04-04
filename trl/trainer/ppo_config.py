@@ -98,6 +98,12 @@ class PPOConfig(object):
     target_kl: Optional[float] = field(
         default=0.1, metadata={"help": "Stop early if we exceed this value by over 50%"}
     )
+    non_reward_score_min: Optional[float] = field(
+        default=-1000.0, metadata={"help": "Clamp the kl penalty to be above this value"}
+    )
+    non_reward_score_max: Optional[float] = field(
+        default=1000.0, metadata={"help": "Clamp the kl penalty to be below this value"}
+    )
 
     def __post_init__(self):
         if self.forward_batch_size is not None:

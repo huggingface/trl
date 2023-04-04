@@ -86,6 +86,8 @@ config = PPOConfig(
     target_kl=script_args.target_kl,
     ppo_epochs=script_args.ppo_epochs,
     seed=script_args.seed,
+    non_reward_score_max=0.0,
+    non_reward_score_min=20.0,
 )
 
 train_dataset = load_dataset("lvwerra/stack-exchange-paired", data_dir="data/rl", split="train")
