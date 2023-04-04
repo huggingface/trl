@@ -875,3 +875,42 @@ class PPOTrainerTester(unittest.TestCase):
         generations_single = tokenizer.batch_decode(generations_single)
 
         self.assertEqual(generations_single, generations_batched)
+
+    @unittest.skip("Fix by either patching `whomai()` to work in the staging endpoint or use a dummy prod user.")
+    def test_push_to_hub_if_best_reward(self):
+        REPO_NAME = "test-ppo-trainer"
+        repo_id = f"{CI_HUB_USER}/{REPO_NAME}"
+
+        dummy_dataset = self._init_dummy_dataset()
+
+        # push_to_hub_if_best_kwargs = {"repo_id": repo_id, "token": self._token, "api_endpoint": CI_HUB_ENDPOINT}
+        push_to_hub_if_best_kwargs = {"repo_id": repo_id}
+
+        ppo_config = PPOConfig(
+            batch_size=2,
+            mini_batch_size=1,
+            log_with=None,
+            push_to_hub_if_best=True,
+            push_to_hub_if_best_kwargs=push_to_hub_if_best_kwargs,
+            steps_beetwen_check=1,
+        )
+
+        ppo_trainer = PPOTrainer(
+            config=ppo_config,
+            model=self.gpt2_model,
+            ref_model=self.gpt2_model_ref,
+            tokenizer=self.gpt2_tokenizer,
+            dataset=dummy_dataset,
+        )
+
+        dummy_dataloader = ppo_trainer.dataloader
+        # train model with ppo
+        for query_tensor, response_tensor in dummy_dataloader:
+            # define a reward for response
+            # (this could be any reward such as human feedback or output from another model)
+            reward = [torch.tensor(1.0), torch.tensor(0.0)]
+            # train model
+            _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+            break
+
+        # TODO: extract repo name without url since pushing is done internally

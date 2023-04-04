@@ -98,6 +98,14 @@ class PPOConfig(object):
     target_kl: Optional[float] = field(
         default=0.1, metadata={"help": "Stop early if we exceed this value by over 50%"}
     )
+    push_to_hub_if_best_kwargs: Optional[dict] = field(
+        default_factory=dict,
+        metadata={"help": "Keyword arguments for pushing model to the hub during training (e.g. repo_id)"},
+    )
+    compare_steps: Optional[int] = field(
+        default=1,
+        metadata={"help": "Number of steps between comparison of the current reward with the best seen so far"},
+    )
 
     def __post_init__(self):
         if self.forward_batch_size is not None:
