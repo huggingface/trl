@@ -4,12 +4,8 @@ from typing import Optional
 import peft
 import torch
 from peft import PeftConfig, PeftModel
-from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    HfArgumentParser,
-    AutoConfig,
-)
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
+
 
 DEFAULT_PAD_TOKEN = "[PAD]"
 DEFAULT_EOS_TOKEN = "</s>"

@@ -12,17 +12,19 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from accelerate import Accelerator
-
 from dataclasses import dataclass, field
 from typing import Optional
+
 import torch
+from accelerate import Accelerator
 from datasets import load_dataset
-from tqdm import tqdm
-from transformers import AutoTokenizer, pipeline, HfArgumentParser, Adafactor
 from peft import LoraConfig
+from tqdm import tqdm
+from transformers import Adafactor, AutoTokenizer, HfArgumentParser, pipeline
+
 from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, set_seed
 from trl.core import LengthSampler
+
 
 DEFAULT_PAD_TOKEN = "[PAD]"
 DEFAULT_EOS_TOKEN = "</s>"

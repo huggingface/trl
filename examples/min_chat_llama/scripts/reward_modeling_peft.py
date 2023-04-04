@@ -1,21 +1,23 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
-import torch
+
 import evaluate
 import numpy as np
+import torch
 import torch.nn as nn
 from datasets import load_dataset
+from peft import LoraConfig, TaskType, get_peft_model
 from transformers import (
+    AutoConfig,
     AutoModelForSequenceClassification,
     AutoTokenizer,
-    AutoConfig,
     HfArgumentParser,
     PreTrainedTokenizerBase,
     Trainer,
     TrainingArguments,
 )
 from transformers.utils import PaddingStrategy
-from peft import get_peft_model, LoraConfig, TaskType
+
 
 DEFAULT_PAD_TOKEN = "[PAD]"
 DEFAULT_EOS_TOKEN = "</s>"
@@ -48,7 +50,9 @@ class ScriptArguments:
     weight_decay: Optional[int] = field(default=0.001)
     model_name: Optional[str] = field(
         default="gpt2",
-        metadata={"help": "The model that you want to train from the Hugging Face hub. E.g. gpt2, gpt2-xl, bert, etc."},
+        metadata={
+            "help": "The model that you want to train from the Hugging Face hub. E.g. gpt2, gpt2-xl, bert, etc."
+        },
     )
     bf16: Optional[bool] = field(
         default=True,
@@ -183,7 +187,9 @@ def preprocess_function(examples):
 
 
 # preprocess the dataset and filter out QAs that are longer than 512
-train_dataset = train_dataset.map(preprocess_function, batched=True, num_proc=num_proc, remove_columns=original_columns)
+train_dataset = train_dataset.map(
+    preprocess_function, batched=True, num_proc=num_proc, remove_columns=original_columns
+)
 train_dataset = train_dataset.filter(lambda x: len(x["input_ids_j"]) <= 512 and len(x["input_ids_k"]) <= 512)
 
 eval_dataset = eval_dataset.map(preprocess_function, batched=True, num_proc=num_proc, remove_columns=original_columns)

@@ -1,25 +1,18 @@
-"""
-Fine-Tune Llama-7b on SE paired dataset
-"""
-
 import argparse
 import os
 
 import torch
-from datasets import load_dataset
-from torch.utils.data import IterableDataset
 from accelerate import Accelerator
+from datasets import load_dataset
+from peft import LoraConfig, get_peft_model, prepare_model_for_int8_training
+from torch.utils.data import IterableDataset
 from tqdm import tqdm
-from transformers import (
-    AutoConfig,
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    Trainer,
-    TrainingArguments,
-    logging,
-    set_seed,
-)
-from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model, prepare_model_for_int8_training
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, Trainer, TrainingArguments, logging, set_seed
+
+
+"""
+Fine-Tune Llama-7b on SE paired dataset
+"""
 
 
 def get_args():
@@ -206,7 +199,7 @@ def run_training(args, train_data, val_data):
     )
     model = prepare_model_for_int8_training(model)
 
-    config = lora_config = LoraConfig(
+    lora_config = LoraConfig(
         r=16,
         lora_alpha=32,
         lora_dropout=0.05,
@@ -214,7 +207,7 @@ def run_training(args, train_data, val_data):
         task_type="CAUSAL_LM",
     )
 
-    model = get_peft_model(model, config)
+    model = get_peft_model(model, lora_config)
 
     print_trainable_parameters(model)
 
