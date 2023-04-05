@@ -168,7 +168,7 @@ def collator(data):
 set_seed(config.seed)
 
 # Now let's build the model, the reference model, and the tokenizer.
-current_device = Accelerator().process_index
+current_device = Accelerator().local_process_index
 
 lora_config = LoraConfig(
     r=16,
