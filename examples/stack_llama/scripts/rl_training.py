@@ -160,6 +160,7 @@ def build_dataset(
 # We retrieve the dataloader by calling the `build_dataset` function.
 dataset = build_dataset(tokenizer)
 
+
 def collator(data):
     return dict((key, [d[key] for d in data]) for key in data[0])
 
