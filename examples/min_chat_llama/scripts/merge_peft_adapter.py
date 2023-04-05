@@ -19,20 +19,21 @@ class ScriptArguments:
     The name of the Casual LM model we wish to fine with PPO
     """
 
-    model_name: Optional[str] = field(default=None, metadata={"help": "the model name"})
+    adapter_model_name: Optional[str] = field(default=None, metadata={"help": "the model name"})
+    base_model_name: Optional[str] = field(default=None, metadata={"help": "the model name"})
+    output_name: Optional[str] = field(default=None, metadata={"help": "the model name"})
 
 
 parser = HfArgumentParser(ScriptArguments)
 script_args = parser.parse_args_into_dataclasses()[0]
-assert script_args is not None, "please provide the name of the Adapter you would like to merge"
+assert script_args.adapter_model_name is not None, "please provide the name of the Adapter you would like to merge"
+assert script_args.base_model_name is not None, "please provide the name of the Base model"
+assert script_args.base_model_name is not None, "please provide the output name of the merged model"
 
-peft_model_id = script_args.model_name
-peft_config = PeftConfig.from_pretrained(peft_model_id)
-model = AutoModelForCausalLM.from_pretrained(
-    peft_config.base_model_name_or_path, return_dict=True, torch_dtype=torch.bfloat16
-)
-tokenizer = AutoTokenizer.from_pretrained(peft_config.base_model_name_or_path)
-config = AutoConfig.from_pretrained(peft_config.base_model_name_or_path)
+peft_config = PeftConfig.from_pretrained(script_args.adapter_model_name)
+model = AutoModelForCausalLM.from_pretrained(script_args.base_model_name, return_dict=True, torch_dtype=torch.bfloat16)
+tokenizer = AutoTokenizer.from_pretrained(script_args.base_model_name)
+config = AutoConfig.from_pretrained(script_args.base_model_name)
 architecture = config.architectures[0]
 if "Llama" in architecture:
     print("Setting EOS, BOS, and UNK tokens for LLama tokenizer")
@@ -46,7 +47,7 @@ if "Llama" in architecture:
     )
 
 # Load the Lora model
-model = PeftModel.from_pretrained(model, peft_model_id)
+model = PeftModel.from_pretrained(model, script_args.adapter_model_name)
 model.eval()
 
 key_list = [key for key, _ in model.base_model.model.named_modules() if "lora" not in key]
@@ -59,5 +60,5 @@ for key in key_list:
 
 model = model.base_model.model
 
-model.save_pretrained(f"{script_args.model_name}-adapter-merged")
-model.push_to_hub(f"{script_args.model_name}-adapter-merged", use_temp_dir=False)
+model.save_pretrained(f"{script_args.output_name}")
+model.push_to_hub(f"{script_args.output_name}", use_temp_dir=False)
