@@ -159,13 +159,6 @@ def build_dataset(
 
 # We retrieve the dataloader by calling the `build_dataset` function.
 dataset = build_dataset(tokenizer)
-# import numpy as np
-# import matplotlib.pyplot as plt
-
-# ls = [len(s["query"]) for s in dataset]
-# hist = np.histogram(ls, bins=100)
-# plt.hist(ls, bins="auto")
-
 
 def collator(data):
     return dict((key, [d[key] for d in data]) for key in data[0])
