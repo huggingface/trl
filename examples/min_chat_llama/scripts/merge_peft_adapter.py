@@ -19,15 +19,12 @@ class ScriptArguments:
     The name of the Casual LM model we wish to fine with PPO
     """
 
-    # NOTE: gpt2 models use Conv1D instead of Linear layers which are not yet supported in 8 bit mode
-    # models like gpt-neo* models are more suitable
-    model_name: Optional[str] = field(
-        default="llama-se-rl-finetune-128-8-8-1.4e-5step_1200", metadata={"help": "the model name"}
-    )
+    model_name: Optional[str] = field(default=None, metadata={"help": "the model name"})
 
 
 parser = HfArgumentParser(ScriptArguments)
 script_args = parser.parse_args_into_dataclasses()[0]
+assert script_args is not None, "please provide the name of the Adapter you would like to merge"
 
 peft_model_id = script_args.model_name
 peft_config = PeftConfig.from_pretrained(peft_model_id)
