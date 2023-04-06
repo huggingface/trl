@@ -1,4 +1,4 @@
-# RLHF pipeline for the creation of Stack LLaMa" a Stack exchange llama-7b model.
+# RLHF pipeline for the creation of StackLLaMa: a Stack exchange llama-7b model.
 There were three main steps to the training process:
 1. Supervised fine-tuning of the base llama-7b model to create llama-7b-se:
     - `torchrun --nnodes 1  --nproc_per_node 8 examples/stack_llama/scripts/supervised_finetuning.py --model_path=<LLAMA_MODEL_PATH> --streaming --no_gradient_checkpointing --learning_rate 1e-5 --max_steps 5000 --output_dir ./llama-se`
@@ -13,3 +13,5 @@ At each stage the peft adapter layers were merged with the base model, using:
 ```shell
 python merge_peft_adapter.py --model_id=XXX --base_model_id=YYY --output_name=ZZZ
 ```
+
+For access to the base llama-7b model, please see Meta's [release](https://ai.facebook.com/blog/large-language-model-llama-meta-ai/) and [request form](https://docs.google.com/forms/d/e/1FAIpQLSfqNECQnMkycAp2jP4Z9TFX0cGR4uf7b_fBxjY_OjhJILlKGA/viewform).
