@@ -883,14 +883,12 @@ class PPOTrainerTester(unittest.TestCase):
 
         dummy_dataset = self._init_dummy_dataset()
 
-        # push_to_hub_if_best_kwargs = {"repo_id": repo_id, "token": self._token, "api_endpoint": CI_HUB_ENDPOINT}
         push_to_hub_if_best_kwargs = {"repo_id": repo_id}
 
         ppo_config = PPOConfig(
             batch_size=2,
             mini_batch_size=1,
             log_with=None,
-            push_to_hub_if_best=True,
             push_to_hub_if_best_kwargs=push_to_hub_if_best_kwargs,
             steps_beetwen_check=1,
         )
@@ -912,5 +910,3 @@ class PPOTrainerTester(unittest.TestCase):
             # train model
             _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
             break
-
-        # TODO: extract repo name without url since pushing is done internally

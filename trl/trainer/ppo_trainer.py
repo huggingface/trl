@@ -556,8 +556,8 @@ class PPOTrainer(BaseTrainer):
                 # if the best reward ever seen
                 if curr_mean_reward > self.highest_reward:
                     self.highest_reward = curr_mean_reward
-                # push model to hub
-                self.push_to_hub(**self.push_to_hub_kwargs)
+                    # push model to hub
+                    self.push_to_hub(**self.push_to_hub_kwargs)
             self.compare_step += 1
 
         timing = dict()
