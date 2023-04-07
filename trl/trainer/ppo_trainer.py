@@ -956,7 +956,7 @@ class PPOTrainer(BaseTrainer):
             values (`torch.FloatTensor`):
                 Values of the value head, shape (`batch_size`, `response_length`)
             rewards (`torch.FloatTensor`):
-                Rewards from the reward model, shape (`batch_size`)
+                Rewards from the reward model, shape (`batch_size`, `response_length`)
             logits (`torch.FloatTensor`):
                 Logits of the model, shape (`batch_size`, `response_length`, `vocab_size`)
             v_pred (`torch.FloatTensor`):
