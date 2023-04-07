@@ -1,19 +1,23 @@
-# Examples of using peft and trl to finetune 8-bit models with Low Rank Adaption 
+# Examples of using peft with trl to finetune 8-bit models with Low Rank Adaption (LoRA)
 
-The notebooks and scripts in this examples show how to fine-tune a model with a sentiment classifier (such as `lvwerra/distilbert-imdb`).
+The notebooks and scripts in this examples show how to use Low Rank Adaptation (LoRA) to fine-tune models in a memory efficient manner.
+For more information on LoRA, see the [original paper](https://arxiv.org/abs/2106.09685).
 
-Here's an overview of the notebooks and scripts in the [trl repository](https://github.com/lvwerra/trl/tree/main/examples):
+Here's an overview of the `peft`-enabled notebooks and scripts in the [trl repository](https://github.com/lvwerra/trl/tree/main/examples):
 
-| File | Description | Colab link |
+| File | Task | Description | Colab link |
 |---|---| --- |
-| [`gpt2-sentiment_peft.py`](https://github.com/lvwerra/trl/blob/main/examples/sentiment/scripts/gpt2-sentiment_peft.py) | Same as the sentiment analysis example, but learning a low rank adapter on a 8-bit base model |  | 
-| [`cm_finetune_peft_imdb.py`](https://github.com/lvwerra/trl/blob/main/examples/sentiment/scripts/gpt-neox-20b_peft/cm_finetune_peft_imdb.py) | Fine tuning a Low Rank Adapter on a frozen 8-bit model for text generation on the imdb dataset. |  | 
-| [`merge_peft_adapter.py`](https://github.com/lvwerra/trl/blob/main/examples/sentiment/scripts/gpt-neox-20b_peft/merge_peft_adapter.py) |  Merging of the adapter layers into the base model’s weights and storing these on the hub. |  | 
-| [`gpt-neo-20b_sentiment_peft.py`](https://github.com/lvwerra/trl/blob/main/examples/sentiment/scripts/gpt-neox-20b_peft/gpt-neo-20b_sentiment_peft.py) | Sentiment fine-tuning of a Low Rank Adapter to create positive reviews. |  | 
-| [`gpt-neo-1b_peft.py`](https://github.com/lvwerra/trl/blob/main/examples/sentiment/scripts/gpt-neo-1b-multi-gpu/gpt-neo-1b_peft.py) | Sentiment fine-tuning of a Low Rank Adapter to create positive reviews using 2 GPUs. |  | 
+| [`gpt2-sentiment_peft.py`](https://github.com/lvwerra/trl/blob/main/examples/sentiment/scripts/gpt2-sentiment_peft.py) | Sentiment | Same as the sentiment analysis example, but learning a low rank adapter on a 8-bit base model |  |
+| [`cm_finetune_peft_imdb.py`](https://github.com/lvwerra/trl/blob/main/examples/sentiment/scripts/gpt-neox-20b_peft/cm_finetune_peft_imdb.py) | Sentiment | Fine tuning a low rank adapter on a frozen 8-bit model for text generation on the imdb dataset. |  |
+| [`merge_peft_adapter.py`](https://github.com/lvwerra/trl/blob/main/examples/sentiment/scripts/gpt-neox-20b_peft/merge_peft_adapter.py) | 🤗 Hub |  Merging of the adapter layers into the base model’s weights and storing these on the hub. |  |
+| [`gpt-neo-20b_sentiment_peft.py`](https://github.com/lvwerra/trl/blob/main/examples/sentiment/scripts/gpt-neox-20b_peft/gpt-neo-20b_sentiment_peft.py) | Sentiment | Sentiment fine-tuning of a low rank adapter to create positive reviews. |  |
+| [`gpt-neo-1b_peft.py`](https://github.com/lvwerra/trl/blob/main/examples/sentiment/scripts/gpt-neo-1b-multi-gpu/gpt-neo-1b_peft.py) | Sentiment | Sentiment fine-tuning of a low rank adapter to create positive reviews using 2 GPUs. |  |
+| [`stack_llama/rl_training.py`](https://github.com/lvwerra/trl/blob/main/examples/stack_llama/scripts/rl_training.py) | RLHF | Distributed fine-tuning of the 7b parameter LLaMA models with a learned reward model and `peft`. |  |
+| [`stack_llama/reward_modeling.py`](https://github.com/lvwerra/trl/blob/main/examples/stack_llama/scripts/reward_modeling.py) | Reward Modeling | Distributed training of the 7b parameter LLaMA reward model with `peft`. |  |
+| [`stack_llama/supervised_finetuning.py`](https://github.com/lvwerra/trl/blob/main/examples/stack_llama/scripts/supervised_finetuning.py) | SFT | Distributed instruction/supervised fine-tuning of the 7b parameter LLaMA model with `peft`. |  |
 
 ## Installation
-Note: peft is in active development, so we install directly from their github page.
+Note: peft is in active development, so we install directly from their Github page.
 Peft also relies on the latest version of transformers. 
 
 ```bash
@@ -96,7 +100,7 @@ pretrained_model = AutoModelForCausalLMWithValueHead.from_pretrained(
 )
 ```
 
-Finally make sure that the rewards are computed on correct device as well, for that you can use `ppo_trainer.model.current_device`.
+Finally, make sure that the rewards are computed on correct device as well, for that you can use `ppo_trainer.model.current_device`.
 
 ## Naive pipeline parallelism (NPP) for large models (>60B models)
 
