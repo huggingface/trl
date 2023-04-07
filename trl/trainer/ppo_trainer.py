@@ -909,15 +909,10 @@ class PPOTrainer(BaseTrainer):
         """
         loss_p, loss_v, train_stats = self.loss(old_logprobs, values, rewards, logits, vpreds, logprobs, mask)
         loss = loss_p + loss_v
+        loss = torch.clamp_max(loss, self.config.loss_spike_threshold)
         self.optimizer.zero_grad()
-        if loss < self.config.loss_spike_threshold:
-            self.accelerator.backward(loss)
-        else:
-            print("zeroing loss")
-            train_stats["loss/policy"] = 0.0 * train_stats["loss/policy"]
-            train_stats["loss/value"] = 0.0 * train_stats["loss/value"]
-            train_stats["loss/total"] = 0.0 * train_stats["loss/total"]
 
+        self.accelerator.backward(loss)
         if self.config.max_grad_norm is not None:
             torch.nn.utils.clip_grad_norm_(
                 filter(lambda p: p.requires_grad, self.model.parameters()), self.config.max_grad_norm
@@ -1020,6 +1015,7 @@ class PPOTrainer(BaseTrainer):
         pg_clipfrac = masked_mean(torch.gt(pg_losses2, pg_losses).double(), mask)
 
         loss = pg_loss + self.config.vf_coef * vf_loss
+        loss = torch.clamp_max(loss, self.config.loss_spike_threshold)
 
         entropy = masked_mean(entropy_from_logits(logits), mask)
         approxkl = 0.5 * masked_mean((logprobs - old_logprobs) ** 2, mask)
