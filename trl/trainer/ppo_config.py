@@ -98,6 +98,9 @@ class PPOConfig(object):
     target_kl: Optional[float] = field(
         default=0.1, metadata={"help": "Stop early if we exceed this value by over 50%"}
     )
+    loss_spike_threshold: Optional[float] = field(
+        default=1000.0, metadata={"help": "A loss threshold at which we do no backprop"}
+    ) 
     push_to_hub_if_best_kwargs: Optional[dict] = field(
         default_factory=dict,
         metadata={"help": "Keyword arguments for pushing model to the hub during training (e.g. repo_id)"},

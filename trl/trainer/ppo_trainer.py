@@ -276,9 +276,7 @@ class PPOTrainer(BaseTrainer):
             self.data_collator,
             self.dataloader,
             self.lr_scheduler,
-        ) = self.accelerator.prepare(
-            self.model, self.optimizer, self.data_collator, self.dataloader, self.lr_scheduler
-        )
+        ) = self.accelerator.prepare(self.model, self.optimizer, self.data_collator, self.dataloader, self.lr_scheduler)
         if is_deepspeed_used:
             # 8 bit models are already set on the correct device
             if not getattr(self.ref_model.pretrained_model, "is_loaded_in_8bit", False):
@@ -912,7 +910,13 @@ class PPOTrainer(BaseTrainer):
         loss_p, loss_v, train_stats = self.loss(old_logprobs, values, rewards, logits, vpreds, logprobs, mask)
         loss = loss_p + loss_v
         self.optimizer.zero_grad()
-        self.accelerator.backward(loss)
+        if loss < self.config.loss_spike_threshold:
+            self.accelerator.backward(loss)
+        else:
+            print("zeroing loss")
+            train_stats["loss/policy"] = 0.0 * train_stats["loss/policy"]
+            train_stats["loss/value"] = 0.0 * train_stats["loss/value"]
+            train_stats["loss/total"] = 0.0 * train_stats["loss/total"]
 
         if self.config.max_grad_norm is not None:
             torch.nn.utils.clip_grad_norm_(
@@ -1001,9 +1005,7 @@ class PPOTrainer(BaseTrainer):
         advantages = masked_whiten(advantages, mask)
         advantages = advantages.detach()
 
-        vpredclipped = clip_by_value(
-            vpreds, values - self.config.cliprange_value, values + self.config.cliprange_value
-        )
+        vpredclipped = clip_by_value(vpreds, values - self.config.cliprange_value, values + self.config.cliprange_value)
 
         vf_losses1 = (vpreds - returns) ** 2
         vf_losses2 = (vpredclipped - returns) ** 2

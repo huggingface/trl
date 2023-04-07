@@ -67,6 +67,7 @@ class ScriptArguments:
     )
     early_stopping: Optional[bool] = field(default=False, metadata={"help": "whether to early stop"})
     target_kl: Optional[float] = field(default=0.1, metadata={"help": "kl target for early stopping"})
+    loss_spike_threshold: Optional[float] = field(default=1000.0, metadata={"help": "kl target for early stopping"})
 
 
 parser = HfArgumentParser(ScriptArguments)
@@ -81,6 +82,7 @@ config = PPOConfig(
     gradient_accumulation_steps=script_args.gradient_accumulation_steps,
     early_stopping=script_args.early_stopping,
     target_kl=script_args.target_kl,
+    loss_spike_threshold=script_args.loss_spike_threshold,
 )
 
 
