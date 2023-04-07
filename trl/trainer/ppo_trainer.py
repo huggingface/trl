@@ -303,9 +303,8 @@ class PPOTrainer(BaseTrainer):
 
         # init variables for pushing model to hub
         if config.push_to_hub_if_best_kwargs:
-            assert (
-                "repo_id" in config.push_to_hub_if_best_kwargs
-            ), "You have to specify repo_id in order to push the model to the hub!"
+            if "repo_id" not in config.push_to_hub_if_best_kwargs:
+                raise ValueError("You have to specify repo_id in order to push the model to the hub!")
             self.push_to_hub_kwargs = config.push_to_hub_if_best_kwargs
             self.compare_step = 0
             self.highest_reward = torch.tensor(-float('inf'))
