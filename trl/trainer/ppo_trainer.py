@@ -307,7 +307,7 @@ class PPOTrainer(BaseTrainer):
                 raise ValueError("You have to specify repo_id in order to push the model to the hub!")
             self.push_to_hub_kwargs = config.push_to_hub_if_best_kwargs
             self.compare_step = 0
-            self.highest_reward = torch.tensor(-float('inf'))
+            self.highest_reward = torch.tensor(-float("inf"))
 
         # post process for PP
         if not getattr(self.model, "is_sequential_parallel", False):

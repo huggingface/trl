@@ -890,7 +890,7 @@ class PPOTrainerTester(unittest.TestCase):
             mini_batch_size=1,
             log_with=None,
             push_to_hub_if_best_kwargs=push_to_hub_if_best_kwargs,
-            compare_steps =1,
+            compare_steps=1,
         )
 
         ppo_trainer = PPOTrainer(
