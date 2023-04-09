@@ -1,5 +1,8 @@
 datasets>=1.17.0
 torch>=1.4.0
 tqdm
-transformers
 accelerate
+trl 
+bitsandbytes==0.37.2 
+git+https://github.com/mymusise/peft.git@chatglm 
+git+https://github.com/zphang/transformers.git@llama_push 
