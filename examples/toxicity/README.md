@@ -3,5 +3,5 @@
 To run this code, do the following:
 
 ```shell
-ACCELERATE_LOG_LEVEL=info accelerate launch --config_file examples/toxicity/scripts/accelerate_config_multi_gpu.yml examples/toxicity/scripts/gpt-j-6b-toxicity.py --log_with wandb
+ACCELERATE_LOG_LEVEL=info accelerate launch --config_file {CONFIG} examples/toxicity/scripts/gpt-j-6b-toxicity.py --log_with wandb
 ```
