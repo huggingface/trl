@@ -90,10 +90,10 @@ class PPOConfig(object):
     seed: Optional[int] = field(default=0, metadata={"help": "Seed value for random generations"})
     optimize_cuda_cache: Optional[bool] = field(
         default=False,
-        metadata={"help": "Optimize CUDA cache for slightly more memory-effcient training"},
+        metadata={"help": "Optimize CUDA cache for slightly more memory-efficient training"},
     )
     early_stopping: Optional[bool] = field(
-        default=False, metadata={"help": "Whether to stop the PPO opimization loop early is the KL too high"}
+        default=False, metadata={"help": "Whether to stop the PPO optimization loop early is the KL too high"}
     )
     target_kl: Optional[float] = field(
         default=0.1, metadata={"help": "Stop early if we exceed this value by over 50%"}
