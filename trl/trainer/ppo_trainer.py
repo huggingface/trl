@@ -1098,8 +1098,9 @@ class PPOTrainer(BaseTrainer):
 
         if self.config.log_token_distribution:
             # Log text properties
-            query_lens = torch.stack([len(query) for query in data["queries"]])
-            response_lens = torch.stack([len(response) for response in data["responses"]])
+            query_lens = torch.tensor([len(query) for query in data["queries"]], dtype=torch.float)
+            response_lens = torch.tensor([len(response) for response in data["responses"]], dtype=torch.float)
+
             stats["tokens/query_len_mean"] = torch.mean(query_lens).cpu().numpy().item()
             stats["tokens/query_len_std"] = torch.std(query_lens).cpu().numpy().item()
             stats["tokens/responses_len_mean"] = torch.mean(response_lens).cpu().numpy().item()
