@@ -73,7 +73,7 @@ class ScriptArguments:
         default=1, metadata={"help": "the number of gradient accumulation steps"}
     )
     model_save_path: Optional[str] = field(
-        default="/mnt/disks/younes-disk/models/gpt-j-6B-detoxified-long-context-26-shl-1e4-final",
+        default="./gpt-j-6B-detoxified-long-context-26-shl-1e4-final",
         metadata={"help": "the path to save the model"},
     )
 
