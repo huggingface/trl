@@ -67,10 +67,14 @@ class ScriptArguments:
     model_name: Optional[str] = field(default="ybelkada/gpt-j-6b-sharded-bf16", metadata={"help": "the model name"})
     log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
     learning_rate: Optional[float] = field(default=(1.47e-5) * 2, metadata={"help": "the learning rate"})
-    mini_batch_size: Optional[int] = field(default=1, metadata={"help": "the PPO minibatch size"})
-    batch_size: Optional[int] = field(default=256, metadata={"help": "the batch size"})
+    mini_batch_size: Optional[int] = field(default=4, metadata={"help": "the PPO minibatch size"})
+    batch_size: Optional[int] = field(default=16, metadata={"help": "the batch size"})
     gradient_accumulation_steps: Optional[int] = field(
         default=1, metadata={"help": "the number of gradient accumulation steps"}
+    )
+    model_save_path: Optional[str] = field(
+        default="./gpt-j-6B-detoxified-long-context-26-shl-1e4-final",
+        metadata={"help": "the path to save the model"},
     )
 
 
@@ -81,6 +85,7 @@ config = PPOConfig(
     model_name=script_args.model_name,
     learning_rate=script_args.learning_rate,
     log_with=script_args.log_with,
+    ppo_epochs=100,
     mini_batch_size=script_args.mini_batch_size,
     batch_size=script_args.batch_size,
     gradient_accumulation_steps=script_args.gradient_accumulation_steps,
@@ -199,12 +204,12 @@ output_min_length = 20
 output_max_length = 30
 output_length_sampler = LengthSampler(output_min_length, output_max_length)
 
-model_save_path = "/mnt/disks/younes-disk/models/gpt-j-6B-detoxified-long-context-26-shl-1e4-final"
+model_save_path = script_args.model_save_path
 
 for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     query_tensors = batch["input_ids"]
 
-    # Get response from gpt2
+    # Get response from the policy model
     response_tensors = []
     for query in query_tensors:
         gen_len = output_length_sampler()
