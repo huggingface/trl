@@ -1151,6 +1151,18 @@ class PPOTrainer(BaseTrainer):
                 if isinstance(v, torch.Tensor) and v.dtype == torch.bfloat16:
                     logs[k] = v.float()
 
+            # Log text properties
+            queries = batch["query"]
+            responses = batch["response"]
+            logs["env/query_len_mean"] = torch.mean(queries).cpu().numpy().item()
+            logs["env/query_len_std"] = torch.std(queries).cpu().numpy().item()
+            logs["env/responses_len_mean"] = torch.mean(responses).cpu().numpy().item()
+            logs["env/responses_len_std"] = torch.std(responses).cpu().numpy().item()
+
+            logs["env/reward_mean"] = torch.mean(rewards).cpu().numpy().item()
+            logs["env/reward_std"] = torch.std(rewards).cpu().numpy().item()
+            logs["env/reward_dist"] = rewards.cpu().numpy()
+
             logs["env/reward_mean"] = torch.mean(rewards).cpu().numpy().item()
             logs["env/reward_std"] = torch.std(rewards).cpu().numpy().item()
             logs["env/reward_dist"] = rewards.cpu().numpy()
