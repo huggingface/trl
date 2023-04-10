@@ -689,6 +689,8 @@ class PPOTrainer(BaseTrainer):
             train_stats=train_stats,
             kl_coef=self.kl_ctl.value,
             masks=masks,
+            queries=queries,
+            responses=responses,
         )
         # Gather/Reduce stats from all processes
         if self.is_distributed:
@@ -1094,6 +1096,15 @@ class PPOTrainer(BaseTrainer):
             "ppo/std_scores": std_scores,
         }
 
+        if self.config.log_token_distribution:
+            # Log text properties
+            query_lens = [len(query) for query in data["queries"]]
+            response_lens = [len(response) for response in data["responses"]]
+            stats["tokens/query_len_mean"] = torch.mean(query_lens).cpu().numpy().item()
+            stats["tokens/query_len_std"] = torch.std(query_lens).cpu().numpy().item()
+            stats["tokens/responses_len_mean"] = torch.mean(response_lens).cpu().numpy().item()
+            stats["tokens/responses_len_std"] = torch.std(response_lens).cpu().numpy().item()
+
         for k, v in data["train_stats"].items():
             stats[f"ppo/{k}"] = torch.mean(v, axis=0)
         stats["ppo/val/var_explained"] = 1 - stats["ppo/val/error"] / stats["ppo/returns/var"]
@@ -1150,14 +1161,6 @@ class PPOTrainer(BaseTrainer):
             for k, v in logs.items():
                 if isinstance(v, torch.Tensor) and v.dtype == torch.bfloat16:
                     logs[k] = v.float()
-
-            # Log text properties
-            queries = batch["query"]
-            responses = batch["response"]
-            logs["env/query_len_mean"] = torch.mean(queries).cpu().numpy().item()
-            logs["env/query_len_std"] = torch.std(queries).cpu().numpy().item()
-            logs["env/responses_len_mean"] = torch.mean(responses).cpu().numpy().item()
-            logs["env/responses_len_std"] = torch.std(responses).cpu().numpy().item()
 
             logs["env/reward_mean"] = torch.mean(rewards).cpu().numpy().item()
             logs["env/reward_std"] = torch.std(rewards).cpu().numpy().item()
