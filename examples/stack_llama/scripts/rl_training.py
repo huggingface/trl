@@ -47,7 +47,7 @@ class ScriptArguments:
     reward_model_name: Optional[str] = field(default="", metadata={"help": "the model name"})
     log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
     learning_rate: Optional[float] = field(default=1.41e-5, metadata={"help": "the learning rate"})
-    output_max_length: Optional[int] = field(default=128, metadata={"help": "the learning rate"})
+    output_max_length: Optional[int] = field(default=128, metadata={"help": "maximum generating length"})
     mini_batch_size: Optional[int] = field(default=1, metadata={"help": "the PPO minibatch size"})
     batch_size: Optional[int] = field(default=32, metadata={"help": "the batch size"})
     ppo_epochs: Optional[int] = field(default=4, metadata={"help": "the number of ppo epochs"})
