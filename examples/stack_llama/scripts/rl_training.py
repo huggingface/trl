@@ -43,8 +43,8 @@ class ScriptArguments:
     # NOTE: gpt2 models use Conv1D instead of Linear layers which are not yet supported in 8 bit mode
     # models like gpt-neo* models are more suitable.
     model_name: Optional[str] = field(default="", metadata={"help": "the model name"})
-    tokenizer_name: Optional[str] = field(default="", metadata={"help": "the model name"})
-    reward_model_name: Optional[str] = field(default="", metadata={"help": "the model name"})
+    tokenizer_name: Optional[str] = field(default="", metadata={"help": "the tokenizer name"})
+    reward_model_name: Optional[str] = field(default="", metadata={"help": "the reward model name"})
     log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
     learning_rate: Optional[float] = field(default=1.41e-5, metadata={"help": "the learning rate"})
     output_max_length: Optional[int] = field(default=128, metadata={"help": "maximum generating length"})
