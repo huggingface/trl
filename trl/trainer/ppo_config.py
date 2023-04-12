@@ -73,10 +73,6 @@ class PPOConfig(object):
             "help": "Log with either 'wandb' or 'tensorboard', check  https://huggingface.co/docs/accelerate/usage_guides/tracking for more details"
         },
     )
-    log_token_distribution: Optional[bool] = field(
-        default=True,
-        metadata={"help": "Extra logging in each PPO step of the token distribution"},
-    )
     tracker_kwargs: Optional[dict] = field(
         default_factory=dict,
         metadata={"help": "Keyword arguments for the tracker (e.g. wandb_project)"},

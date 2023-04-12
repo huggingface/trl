@@ -1096,15 +1096,16 @@ class PPOTrainer(BaseTrainer):
             "ppo/std_scores": std_scores,
         }
 
-        if self.config.log_token_distribution:
-            # Log text properties
-            query_lens = torch.tensor([len(query) for query in data["queries"]], dtype=torch.float)
-            response_lens = torch.tensor([len(response) for response in data["responses"]], dtype=torch.float)
+        # Log text properties
+        query_lens = torch.tensor([len(query) for query in data["queries"]], dtype=torch.float)
+        response_lens = torch.tensor([len(response) for response in data["responses"]], dtype=torch.float)
 
-            stats["tokens/query_len_mean"] = torch.mean(query_lens).cpu().numpy().item()
-            stats["tokens/query_len_std"] = torch.std(query_lens).cpu().numpy().item()
-            stats["tokens/responses_len_mean"] = torch.mean(response_lens).cpu().numpy().item()
-            stats["tokens/responses_len_std"] = torch.std(response_lens).cpu().numpy().item()
+        stats["tokens/queries_len_mean"] = torch.mean(query_lens).cpu().numpy().item()
+        stats["tokens/queries_len_std"] = torch.std(query_lens).cpu().numpy().item()
+        stats["tokens/queries_dist"] = query_lens.cpu().numpy()
+        stats["tokens/responses_len_mean"] = torch.mean(response_lens).cpu().numpy().item()
+        stats["tokens/responses_len_std"] = torch.std(response_lens).cpu().numpy().item()
+        stats["tokens/responses_dist"] = response_lens.cpu().numpy()
 
         for k, v in data["train_stats"].items():
             stats[f"ppo/{k}"] = torch.mean(v, axis=0)
