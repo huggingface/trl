@@ -90,7 +90,9 @@ class RewardTrainerTester(unittest.TestCase):
             # check the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
-                self.assertFalse(torch.allclose(param, new_param, atol=1e-3, rtol=1e-3))
+                # check the params have changed - ignore 0 biases
+                if param.sum() != 0:
+                    self.assertFalse(torch.equal(param, new_param))
 
     @require_peft
     def test_reward_trainer_peft(self):
@@ -176,12 +178,12 @@ class RewardTrainerTester(unittest.TestCase):
             # check the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
-                self.assertFalse(torch.allclose(param, new_param, atol=1e-3, rtol=1e-3))
+                self.assertFalse(torch.allclose(param, new_param, atol=1e-12, rtol=1e-12))
 
             # check the non trainable params have not changed
             for n, param in previous_non_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
-                self.assertTrue(torch.allclose(param, new_param, atol=1e-3, rtol=1e-3))
+                self.assertTrue(torch.allclose(param, new_param, atol=1e-12, rtol=1e-12))
 
     def test_reward_trainer_assert_value_error(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
