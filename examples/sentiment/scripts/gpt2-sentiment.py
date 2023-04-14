@@ -67,7 +67,9 @@ class ScriptArguments:
     )
     early_stopping: Optional[bool] = field(default=False, metadata={"help": "whether to early stop"})
     target_kl: Optional[float] = field(default=0.1, metadata={"help": "kl target for early stopping"})
-    loss_spike_threshold: Optional[float] = field(default=1000.0, metadata={"help": "A loss threshold at which we do no backprop"})
+    loss_spike_threshold: Optional[float] = field(
+        default=1000.0, metadata={"help": "A loss threshold at which we do no backprop"}
+    )
 
 
 parser = HfArgumentParser(ScriptArguments)
