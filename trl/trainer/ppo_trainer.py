@@ -301,6 +301,14 @@ class PPOTrainer(BaseTrainer):
         # init the current step
         self.current_step = 0
 
+        # init variables for pushing model to hub
+        if config.push_to_hub_if_best_kwargs:
+            if "repo_id" not in config.push_to_hub_if_best_kwargs:
+                raise ValueError("You have to specify repo_id in order to push the model to the hub!")
+            self.push_to_hub_kwargs = config.push_to_hub_if_best_kwargs
+            self.compare_step = 0
+            self.highest_reward = torch.tensor(-float("inf"))
+
         # post process for PP
         if not getattr(self.model, "is_sequential_parallel", False):
             self.current_device = self.accelerator.device
@@ -434,7 +442,8 @@ class PPOTrainer(BaseTrainer):
         outputs = []
 
         padding_side_default = self.tokenizer.padding_side
-        self.tokenizer.padding_side = "left"
+        if not self.is_encoder_decoder:
+            self.tokenizer.padding_side = "left"
 
         # in case we have fewer examples than bs
         batch_size = min(len(query_tensors), batch_size)
@@ -461,7 +470,11 @@ class PPOTrainer(BaseTrainer):
             generations = self.accelerator.unwrap_model(self.model).generate(**padded_inputs, **generation_kwargs)
 
             for generation, mask in zip(generations, padded_inputs["attention_mask"]):
-                output = generation[(1 - mask).sum() :]  # remove padding
+                if not self.is_encoder_decoder:
+                    output = generation[(1 - mask).sum() :]  # remove padding
+                else:
+                    output = generation
+
                 if not return_prompt and not self.is_encoder_decoder:
                     output = output[(mask).sum() :]  # remove prompt
                 outputs.append(output)
@@ -539,6 +552,17 @@ class PPOTrainer(BaseTrainer):
         bs = self.config.batch_size
 
         queries, responses, scores = self._step_safety_checker(bs, queries, responses, scores)
+
+        # if we want to push best model to the hub
+        if hasattr(self, "highest_reward"):
+            if self.compare_step % self.config.compare_steps == 0:
+                curr_mean_reward = torch.tensor(scores).mean()
+                # if the best reward ever seen
+                if curr_mean_reward > self.highest_reward:
+                    self.highest_reward = curr_mean_reward
+                    # push model to hub
+                    self.push_to_hub(**self.push_to_hub_kwargs)
+            self.compare_step += 1
 
         timing = dict()
         t0 = time.time()
