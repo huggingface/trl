@@ -106,8 +106,9 @@ class RewardTrainerTester(unittest.TestCase):
             training_args = TrainingArguments(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
-                max_steps=1,
+                max_steps=3,
                 remove_unused_columns=False,
+                gradient_accumulation_steps=4,
             )
 
             # fmt: off
@@ -149,6 +150,18 @@ class RewardTrainerTester(unittest.TestCase):
                 max_length=512,
                 peft_config=peft_config,
             )
+            previous_trainable_params = {}
+            previous_non_trainable_params = {}
+
+            # due to a change in the way the modules to save are dealt in PEFT.
+            trainable_params_name = ["lora", "score"] if peft_version < "0.3.0" else ["lora", "modules_to_save"]
+
+            # check gradients are not None
+            for n, param in trainer.model.named_parameters():
+                if any([t in n for t in trainable_params_name]):
+                    previous_trainable_params[n] = param.clone()
+                else:
+                    previous_non_trainable_params[n] = param.clone()
 
             trainer.train()
 
@@ -157,16 +170,15 @@ class RewardTrainerTester(unittest.TestCase):
             # due to a change in the way the modules to save are dealt in PEFT.
             trainable_params_name = ["lora", "score"] if peft_version < "0.3.0" else ["lora", "modules_to_save"]
 
-            torch_version = torch.__version__
-            if torch_version >= "2.0.0":
-                return
+            # check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.allclose(param, new_param))
 
-            # check gradients are not None
-            for n, param in trainer.model.named_parameters():
-                if any([t in n for t in trainable_params_name]):
-                    self.assertIsNotNone(param.grad)
-                else:
-                    self.assertIsNone(param.grad)
+            # check the non trainable params have not changed
+            for n, param in previous_non_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertTrue(torch.allclose(param, new_param))
 
     def test_reward_trainer_assert_value_error(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
