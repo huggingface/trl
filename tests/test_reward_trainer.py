@@ -36,8 +36,10 @@ class RewardTrainerTester(unittest.TestCase):
             training_args = TrainingArguments(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
-                max_steps=1,
+                max_steps=3,
                 remove_unused_columns=False,
+                gradient_accumulation_steps=4,
+                learning_rate=9e-1,
             )
 
             # fmt: off
@@ -79,13 +81,16 @@ class RewardTrainerTester(unittest.TestCase):
                 max_length=512,
             )
 
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
             trainer.train()
 
             self.assertIsNotNone(trainer.state.log_history[0]["train_loss"])
 
-            # check gradients are not None
-            for param in trainer.model.parameters():
-                self.assertIsNotNone(param.grad)
+            # check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.allclose(param, new_param, atol=1e-3, rtol=1e-3))
 
     @require_peft
     def test_reward_trainer_peft(self):
@@ -109,6 +114,7 @@ class RewardTrainerTester(unittest.TestCase):
                 max_steps=3,
                 remove_unused_columns=False,
                 gradient_accumulation_steps=4,
+                learning_rate=9e-1,
             )
 
             # fmt: off
@@ -170,12 +176,12 @@ class RewardTrainerTester(unittest.TestCase):
             # check the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
-                self.assertFalse(torch.allclose(param, new_param))
+                self.assertFalse(torch.allclose(param, new_param, atol=1e-3, rtol=1e-3))
 
             # check the non trainable params have not changed
             for n, param in previous_non_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
-                self.assertTrue(torch.allclose(param, new_param))
+                self.assertTrue(torch.allclose(param, new_param, atol=1e-3, rtol=1e-3))
 
     def test_reward_trainer_assert_value_error(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
