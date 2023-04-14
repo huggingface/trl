@@ -167,9 +167,6 @@ class RewardTrainerTester(unittest.TestCase):
 
             self.assertIsNotNone(trainer.state.log_history[0]["train_loss"])
 
-            # due to a change in the way the modules to save are dealt in PEFT.
-            trainable_params_name = ["lora", "score"] if peft_version < "0.3.0" else ["lora", "modules_to_save"]
-
             # check the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
