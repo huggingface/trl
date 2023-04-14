@@ -148,8 +148,7 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     response_tensors = ppo_trainer.generate(
         query_tensors, return_prompt=False, length_sampler=output_length_sampler, **generation_kwargs
     )
-    response_tensors = [r[1:] for r in response_tensors]
-    batch["response"] = tokenizer.batch_decode(response_tensors)
+    batch["response"] = tokenizer.batch_decode([r[1:] for r in response_tensors])
 
     # Compute sentiment score
     texts = [q + r for q, r in zip(batch["query"], batch["response"])]
