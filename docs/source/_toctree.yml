@@ -15,7 +15,7 @@
     title: Model Classes
   - local: trainer
     title: Trainer Classes
-  - local: Reward Modeling
+  - local: reward_trainer
     title: Training your own reward model
   title: API
 - sections: 
