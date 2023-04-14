@@ -41,7 +41,6 @@ class RewardTrainerTester(unittest.TestCase):
             )
 
             # fmt: off
-            # noqa
             dummy_dataset_dict = {
                 "input_ids_j": [
                     torch.LongTensor([0, 1, 2,]),
