@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import warnings
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import torch
@@ -35,6 +36,13 @@ class RewardTrainer(Trainer):
     an `AutoModelForSequenceClassification` as the reward model. The reward model should be trained on a dataset
     of paired examples, where each example is a tuple of two sequences. The reward model should be trained to
     predict which example in the pair is more relevant to the task at hand.
+
+    The reward trainer expects a very specific format for the dataset. The dataset should contain two 4 entries at least
+    if you don't use the default `RewardDataCollatorWithPadding` data collator. The entries should be named
+    - `input_ids_j`
+    - `attention_mask_j`
+    - `input_ids_k`
+    - `attention_mask_k`
 
     """
 
@@ -86,7 +94,7 @@ class RewardTrainer(Trainer):
                     - `max_length` (`int`, defaults to `None`): The maximum length of the sequences in the batch. This argument is required if you want to use the default data collator.
                     - `peft_config` (`Dict`, defaults to `None`): The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
         """
-        use_reward_data_collator = kwargs.pop("use_reward_data_collator", False)
+        use_reward_data_collator = kwargs.pop("use_reward_data_collator", True)
         max_length = kwargs.pop("max_length", None)
         peft_config = kwargs.pop("peft_config", None)
 
@@ -105,9 +113,12 @@ class RewardTrainer(Trainer):
             data_collator = RewardDataCollatorWithPadding(tokenizer, max_length=max_length)
 
             if args.remove_unused_columns:
-                # warn users that they should use `remove_unused_columns=False` when using RewardDataCollatorWithPadding
-                raise ValueError(
+                args.remove_unused_columns = False
+                # warn users
+                warnings.warn(
                     "When using RewardDataCollatorWithPadding, you should set `remove_unused_columns=False` in your TrainingArguments"
+                    " we have set it for you, but you should do it yourself in the future.",
+                    UserWarning,
                 )
 
         self.use_reward_data_collator = use_reward_data_collator

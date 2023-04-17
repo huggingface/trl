@@ -75,7 +75,6 @@ class RewardTrainerTester(unittest.TestCase):
             trainer = RewardTrainer(
                 model=self.model,
                 args=training_args,
-                use_reward_data_collator=True,
                 tokenizer=self.tokenizer,
                 train_dataset=dummy_dataset,
                 max_length=512,
@@ -152,7 +151,6 @@ class RewardTrainerTester(unittest.TestCase):
             trainer = RewardTrainer(
                 model=self.model,
                 args=training_args,
-                use_reward_data_collator=True,
                 tokenizer=self.tokenizer,
                 train_dataset=dummy_dataset,
                 max_length=512,
@@ -227,7 +225,6 @@ class RewardTrainerTester(unittest.TestCase):
             trainer = RewardTrainer(
                 model=self.model,
                 args=training_args,
-                use_reward_data_collator=True,
                 tokenizer=self.tokenizer,
                 train_dataset=dummy_dataset,
                 max_length=512,
@@ -243,11 +240,10 @@ class RewardTrainerTester(unittest.TestCase):
                 remove_unused_columns=True,
             )
 
-            with self.assertRaises(ValueError):
+            with self.assertWarns(UserWarning):
                 trainer = RewardTrainer(
                     model=self.model,
                     args=training_args,
-                    use_reward_data_collator=True,
                     tokenizer=self.tokenizer,
                     train_dataset=dummy_dataset,
                     max_length=512,
