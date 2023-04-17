@@ -11,3 +11,43 @@ if you don't use the default `RewardDataCollatorWithPadding` data collator. The 
 - `attention_mask_j`
 - `input_ids_k`
 - `attention_mask_k`
+
+The `j` and `k` suffixes are used to denote the two sentences in the paired dataset.
+
+## Using the `RewardTrainer`
+
+After standardizing your dataset, you can use the `RewardTrainer` as a classic HugingFace Trainer. 
+You should pass an `AutoModelForSequenceClassification` model to the `RewardTrainer`.
+
+### Leveraging `peft` library to train a reward model
+
+Just pass a `peft_config` in the key word arguments of `RewardTrainer`, and the trainer should automatically take care of converting the model into a PEFT model!
+
+```python
+from peft import LoraConfig, task_type
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, TrainingArguments
+from trl import RewardTrainer
+
+model = AutoModelForSequenceClassification.from_pretrained("gpt2")
+peft_config = LoraConfig(
+    task_type=TaskType.SEQ_CLS,
+    inference_mode=False,
+    r=8,
+    lora_alpha=32,
+    lora_dropout=0.1,
+)
+
+...
+
+trainer = RewardTrainer(
+    model=model,
+    args=training_args,
+    tokenizer=tokenizer,
+    train_dataset=dataset,
+)
+
+trainer.train()
+
+```
+
+```python

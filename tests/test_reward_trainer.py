@@ -77,7 +77,6 @@ class RewardTrainerTester(unittest.TestCase):
                 args=training_args,
                 tokenizer=self.tokenizer,
                 train_dataset=dummy_dataset,
-                max_length=512,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -153,7 +152,6 @@ class RewardTrainerTester(unittest.TestCase):
                 args=training_args,
                 tokenizer=self.tokenizer,
                 train_dataset=dummy_dataset,
-                max_length=512,
                 peft_config=peft_config,
             )
             previous_trainable_params = {}
@@ -227,7 +225,6 @@ class RewardTrainerTester(unittest.TestCase):
                 args=training_args,
                 tokenizer=self.tokenizer,
                 train_dataset=dummy_dataset,
-                max_length=512,
             )
 
             with self.assertRaises(ValueError):
@@ -246,5 +243,4 @@ class RewardTrainerTester(unittest.TestCase):
                     args=training_args,
                     tokenizer=self.tokenizer,
                     train_dataset=dummy_dataset,
-                    max_length=512,
                 )
