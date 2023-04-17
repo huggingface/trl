@@ -59,7 +59,8 @@ class RewardTrainer(Trainer):
         callbacks: Optional[List[TrainerCallback]] = None,
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        **kwargs,
+        max_length: Optional[int] = None,
+        peft_config: Optional[Dict] = None,
     ):
         """
         Initialize RewardTrainer.
@@ -88,16 +89,11 @@ class RewardTrainer(Trainer):
                 The optimizer and scheduler to use for training.
             preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
                 The function to use to preprocess the logits before computing the metrics.
-            kwargs (`Dict`):
-                Additional keyword arguments to pass to the `RewardTrainer` class. The supported arguments are:
-                    - `use_reward_data_collator` (`bool`, defaults to `False`): Whether to use the default data collator (`RewardDataCollatorWithPadding`).
-                    - `max_length` (`int`, defaults to `None`): The maximum length of the sequences in the batch. This argument is required if you want to use the default data collator.
-                    - `peft_config` (`Dict`, defaults to `None`): The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
+            max_length (`int`, defaults to `None`): 
+                The maximum length of the sequences in the batch. This argument is required if you want to use the default data collator.
+            peft_config (`Dict`, defaults to `None`): 
+                The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
         """
-        use_reward_data_collator = kwargs.pop("use_reward_data_collator", True)
-        max_length = kwargs.pop("max_length", None)
-        peft_config = kwargs.pop("peft_config", None)
-
         if not is_peft_available() and peft_config is not None:
             raise ValueError(
                 "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
@@ -105,11 +101,18 @@ class RewardTrainer(Trainer):
         elif is_peft_available() and peft_config is not None:
             model = get_peft_model(model, peft_config)
 
-        if use_reward_data_collator and data_collator is None:
-            if max_length is None or tokenizer is None:
+        if data_collator is None:
+            if tokenizer is None:
                 raise ValueError(
                     "max_length or a tokenizer must be specified when using the default RewardDataCollatorWithPadding"
                 )
+            if max_length is None:
+                warnings.warn(
+                    "When using RewardDataCollatorWithPadding, you should set `max_length` in the RewardTrainer's init"
+                    " it will be set to `512` by default, but you should do it yourself in the future.",
+                    UserWarning
+                )
+                max_length = 512
             data_collator = RewardDataCollatorWithPadding(tokenizer, max_length=max_length)
 
             if args.remove_unused_columns:
@@ -120,9 +123,10 @@ class RewardTrainer(Trainer):
                     " we have set it for you, but you should do it yourself in the future.",
                     UserWarning,
                 )
-
-        self.use_reward_data_collator = use_reward_data_collator
-
+            
+            self.use_reward_data_collator = True
+        else:
+            self.use_reward_data_collator = False
         super().__init__(
             model,
             args,
