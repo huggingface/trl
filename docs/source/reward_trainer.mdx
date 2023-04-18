@@ -19,7 +19,7 @@ The `j` and `k` suffixes are used to denote the two sentences in the paired data
 After standardizing your dataset, you can use the `RewardTrainer` as a classic HugingFace Trainer. 
 You should pass an `AutoModelForSequenceClassification` model to the `RewardTrainer`.
 
-### Leveraging `peft` library to train a reward model
+### Leveraging the `peft` library to train a reward model
 
 Just pass a `peft_config` in the key word arguments of `RewardTrainer`, and the trainer should automatically take care of converting the model into a PEFT model!
 
