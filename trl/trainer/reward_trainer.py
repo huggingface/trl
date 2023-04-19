@@ -14,6 +14,7 @@
 import warnings
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
+import numpy as np
 import torch
 import torch.nn as nn
 from datasets import Dataset
@@ -154,3 +155,13 @@ class RewardTrainer(Trainer):
         if return_outputs:
             return loss, {"rewards_chosen": rewards_chosen, "rewards_rejected": rewards_rejected}
         return loss
+
+    def compute_metrics(eval_pred):
+        predictions, _ = eval_pred
+        # Here, predictions is rewards_chosen and rewards_rejected.
+        # We want to see how much of the time rewards_chosen > rewards_rejected.
+        predictions = np.argmax(predictions, axis=0)
+        labels = np.zeros(predictions.shape)
+
+        accuracy = np.mean([p == l for p, l in zip(predictions, labels)])
+        return {"accuracy": accuracy}

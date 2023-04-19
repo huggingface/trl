@@ -40,6 +40,7 @@ class RewardTrainerTester(unittest.TestCase):
                 remove_unused_columns=False,
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
+                eval_steps=1,
             )
 
             # fmt: off
@@ -115,6 +116,7 @@ class RewardTrainerTester(unittest.TestCase):
                 remove_unused_columns=False,
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
+                eval_steps=1,
             )
 
             # fmt: off
