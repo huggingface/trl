@@ -8,9 +8,9 @@ The reward trainer expects a very specific format for the dataset. The dataset s
 if you don't use the default `RewardDataCollatorWithPadding` data collator. The entries should be named:
 
 - `input_ids_chosen`
-- `attention_mask_j`
+- `attention_mask_chosen`
 - `input_ids_rejected`
-- `attention_mask_k`
+- `attention_mask_rejected`
 
 The `j` and `k` suffixes are used to denote the two sentences in the paired dataset.
 

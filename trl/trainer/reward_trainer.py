@@ -39,10 +39,10 @@ class RewardTrainer(Trainer):
 
     The reward trainer expects a very specific format for the dataset. The dataset should contain two 4 entries at least
     if you don't use the default `RewardDataCollatorWithPadding` data collator. The entries should be named
-    - `input_ids_j`
-    - `attention_mask_j`
-    - `input_ids_k`
-    - `attention_mask_k`
+    - `input_ids_chosen`
+    - `attention_mask_chosen`
+    - `input_ids_rejected`
+    - `attention_mask_rejected`
 
     """
 
@@ -146,9 +146,11 @@ class RewardTrainer(Trainer):
             raise NotImplementedError(
                 "compute_loss is only implemented for RewardDataCollatorWithPadding, please implement your own compute_loss method if you are using a custom data collator"
             )
-        rewards_j = model(input_ids=inputs["input_ids_j"], attention_mask=inputs["attention_mask_j"])[0]
-        rewards_k = model(input_ids=inputs["input_ids_k"], attention_mask=inputs["attention_mask_k"])[0]
-        loss = -nn.functional.logsigmoid(rewards_j - rewards_k).mean()
+        rewards_chosen = model(input_ids=inputs["input_ids_chosen"], attention_mask=inputs["attention_mask_chosen"])[0]
+        rewards_rejected = model(
+            input_ids=inputs["input_ids_rejected"], attention_mask=inputs["attention_mask_rejected"]
+        )[0]
+        loss = -nn.functional.logsigmoid(rewards_chosen - rewards_rejected).mean()
         if return_outputs:
-            return loss, {"rewards_j": rewards_j, "rewards_k": rewards_k}
+            return loss, {"rewards_chosen": rewards_chosen, "rewards_rejected": rewards_rejected}
         return loss
