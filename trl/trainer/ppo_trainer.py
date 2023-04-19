@@ -508,7 +508,7 @@ class PPOTrainer(BaseTrainer):
             if not isinstance(tensor_list, list):
                 raise ValueError(f"{name} must be a list of tensors - got {type(tensor_list)}")
             if not isinstance(tensor_list[0], torch.Tensor):
-                raise ValueError(f"Elements in {name} must tensors - got {type(tensor_list[0])}")
+                raise ValueError(f"Elements in {name} must be tensors - got {type(tensor_list[0])}")
             if batch_size is not None and len(tensor_list) != batch_size:
                 raise ValueError(
                     f"Batch size ({batch_size}) does not match number of examples - but got {len(tensor_list)} for: {name}"
