@@ -4,8 +4,8 @@ TRL supports custom reward modeling for anyone to perform reward modeling on the
 
 ## Expected dataset format
 
-The reward trainer expects a very specific format for the dataset. The dataset should contain two 4 entries at least
-if you don't use the default `RewardDataCollatorWithPadding` data collator. The entries should be named:
+The reward trainer expects a very specific format for the dataset. Since the model will be trained to predict which sentence is the most relevant, given two sentences.
+Therefore the final dataset object should contain two 4 entries at least if you use the default `RewardDataCollatorWithPadding` data collator. The entries should be named:
 
 - `input_ids_chosen`
 - `attention_mask_chosen`

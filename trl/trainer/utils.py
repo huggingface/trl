@@ -69,51 +69,51 @@ class RewardDataCollatorWithPadding:
     return_tensors: str = "pt"
 
     def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
-        features_j = []
-        features_k = []
+        features_chosen = []
+        features_rejected = []
         for feature in features:
             # check if the keys are named as expected
             if (
-                "input_ids_j" not in feature
-                or "input_ids_k" not in feature
-                or "attention_mask_j" not in feature
-                or "attention_mask_k" not in feature
+                "input_ids_chosen" not in feature
+                or "input_ids_rejected" not in feature
+                or "attention_mask_chosen" not in feature
+                or "attention_mask_rejected" not in feature
             ):
                 raise ValueError(
-                    "The features should include `input_ids_j`, `attention_mask_j`, `input_ids_k` and `attention_mask_k`"
+                    "The features should include `input_ids_chosen`, `attention_mask_chosen`, `input_ids_rejected` and `attention_mask_rejected`"
                 )
 
-            features_j.append(
+            features_chosen.append(
                 {
-                    "input_ids": feature["input_ids_j"],
-                    "attention_mask": feature["attention_mask_j"],
+                    "input_ids": feature["input_ids_chosen"],
+                    "attention_mask": feature["attention_mask_chosen"],
                 }
             )
-            features_k.append(
+            features_rejected.append(
                 {
-                    "input_ids": feature["input_ids_k"],
-                    "attention_mask": feature["attention_mask_k"],
+                    "input_ids": feature["input_ids_rejected"],
+                    "attention_mask": feature["attention_mask_rejected"],
                 }
             )
-        batch_j = self.tokenizer.pad(
-            features_j,
+        batch_chosen = self.tokenizer.pad(
+            features_chosen,
             padding=self.padding,
             max_length=self.max_length,
             pad_to_multiple_of=self.pad_to_multiple_of,
             return_tensors=self.return_tensors,
         )
-        batch_k = self.tokenizer.pad(
-            features_k,
+        batch_rejected = self.tokenizer.pad(
+            features_rejected,
             padding=self.padding,
             max_length=self.max_length,
             pad_to_multiple_of=self.pad_to_multiple_of,
             return_tensors=self.return_tensors,
         )
         batch = {
-            "input_ids_j": batch_j["input_ids"],
-            "attention_mask_j": batch_j["attention_mask"],
-            "input_ids_k": batch_k["input_ids"],
-            "attention_mask_k": batch_k["attention_mask"],
+            "input_ids_chosen": batch_chosen["input_ids"],
+            "attention_mask_chosen": batch_chosen["attention_mask"],
+            "input_ids_rejected": batch_rejected["input_ids"],
+            "attention_mask_rejected": batch_rejected["attention_mask"],
             "return_loss": True,
         }
         return batch
