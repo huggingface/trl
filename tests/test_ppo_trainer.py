@@ -105,7 +105,6 @@ class PPOTrainerTester(unittest.TestCase):
         set_seed(42)
         cls._token = CI_HUB_USER_TOKEN
         cls._api = HfApi(endpoint=CI_HUB_ENDPOINT)
-        cls._api.set_access_token(CI_HUB_USER_TOKEN)
         HfFolder.save_token(CI_HUB_USER_TOKEN)
 
         # model_id
