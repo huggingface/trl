@@ -283,7 +283,7 @@ class PPOTrainer(BaseTrainer):
         )
         if is_deepspeed_used:
             # 8 bit models are already set on the correct device
-            if not getattr(self.ref_model.pretrained_model, "is_loaded_in_8bit", False):
+            if not self.is_peft_model and not getattr(self.ref_model.pretrained_model, "is_loaded_in_8bit", False):
                 # DS integration only allows for single model and as `ref_model` is only used for
                 # `KL devergence loss`,i.e, in eval model, just have it be on the respective device and
                 # there is no need to pass it to the `accelerator.prepare` call
@@ -510,7 +510,7 @@ class PPOTrainer(BaseTrainer):
             if not isinstance(tensor_list, list):
                 raise ValueError(f"{name} must be a list of tensors - got {type(tensor_list)}")
             if not isinstance(tensor_list[0], torch.Tensor):
-                raise ValueError(f"Elements in {name} must tensors - got {type(tensor_list[0])}")
+                raise ValueError(f"Elements in {name} must be tensors - got {type(tensor_list[0])}")
             if batch_size is not None and len(tensor_list) != batch_size:
                 raise ValueError(
                     f"Batch size ({batch_size}) does not match number of examples - but got {len(tensor_list)} for: {name}"

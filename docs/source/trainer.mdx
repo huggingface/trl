@@ -2,6 +2,7 @@
 
 At TRL we support PPO (Proximal Policy Optimisation) with an implementation that largely follows  the structure introduced in the paper "Fine-Tuning Language Models from Human Preferences" by D. Ziegler et al. [[paper](https://arxiv.org/pdf/1909.08593.pdf), [code](https://github.com/openai/lm-human-preferences)].
 The Trainer and model classes are largely inspired from `transformers.Trainer` and `transformers.AutoModel` classes and adapted for RL.
+We also support a `RewardTrainer` that can be used to train a reward model.
 
 ## PPOConfig
 
@@ -10,6 +11,10 @@ The Trainer and model classes are largely inspired from `transformers.Trainer` a
 ## PPOTrainer
 
 [[autodoc]] PPOTrainer
+
+## RewardTrainer
+
+[[autodoc]] RewardTrainer
 
 ## set_seed
 
