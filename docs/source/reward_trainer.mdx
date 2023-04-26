@@ -49,6 +49,7 @@ trainer = RewardTrainer(
     args=training_args,
     tokenizer=tokenizer,
     train_dataset=dataset,
+    peft_config=peft_config,
 )
 
 trainer.train()
