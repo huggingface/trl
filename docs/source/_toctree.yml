@@ -17,6 +17,8 @@
     title: Trainer Classes
   - local: reward_trainer
     title: Training your own reward model
+  - local: sft_trainer
+    title: Training your own Supervised Fine-tuning model
   title: API
 - sections: 
   - local: sentiment_tuning
