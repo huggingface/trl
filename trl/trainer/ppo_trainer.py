@@ -184,7 +184,9 @@ class PPOTrainer(BaseTrainer):
             **config.accelerator_kwargs,
         )
         self.accelerator.init_trackers(
-            config.tracker_project_name, config=config.to_dict(), init_kwargs=config.tracker_kwargs
+            config.tracker_project_name,
+            config=dict(trl_ppo_trainer_config=config.to_dict()),
+            init_kwargs=config.tracker_kwargs,
         )
 
         self.model = model
