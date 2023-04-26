@@ -182,6 +182,9 @@ class ConstantLengthDataset(IterableDataset):
                 " which corresponds to the dictonnary returned by each element of the dataset. Make sure you know what you are doing."
             )
 
+    def __len__(self):
+        return len(self.dataset)
+
     def __iter__(self):
         iterator = iter(self.dataset)
         more_examples = True
