@@ -2,6 +2,22 @@
 
 At `trl` we provide the possibility to give enough modularity to users to be able to efficiently customize the training loop for their needs. Below are some examples on how you can apply and test different techniques.
 
+## Run on multiple GPUs / nodes
+
+We leverage `accelerate` to enable users to run their training on multiple GPUs or nodes. You should first create your accelerate config by simply running:
+
+```bash
+accelerate config
+```
+
+Then make sure you have selected multi-gpu / multi-node setup. You can then run your training by simply running:
+
+```bash
+accelerate launch your_script.py
+```
+
+Refer to the [examples page](https://github.com/lvwerra/trl/tree/main/examples) for more details
+
 ## Use different optimizers
 
 By default, the `PPOTrainer` creates a `torch.optim.Adam` optimizer. You can create and define a different optimizer and pass it to `PPOTrainer`:
