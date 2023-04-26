@@ -30,6 +30,17 @@ if is_peft_available():
     from peft import get_peft_model
 
 
+def compute_accuracy(eval_pred):
+    predictions, _ = eval_pred
+    # Here, predictions is rewards_chosen and rewards_rejected.
+    # We want to see how much of the time rewards_chosen > rewards_rejected.
+    predictions = np.argmax(predictions, axis=0)
+    labels = np.zeros(predictions.shape)
+
+    accuracy = np.mean([p == l for p, l in zip(predictions, labels)])
+    return {"accuracy": accuracy}
+
+
 class RewardTrainer(Trainer):
     r"""
     The RewardTrainer can be used to train your custom Reward Model. It is a subclass of the
@@ -82,8 +93,8 @@ class RewardTrainer(Trainer):
                 The tokenizer to use for training. This argument is required if you want to use the default data collator.
             model_init (`Callable[[], transformers.PreTrainedModel]`):
                 The model initializer to use for training. If None is specified, the default model initializer will be used.
-            compute_metrics (`Callable[[transformers.EvalPrediction], Dict]`):
-                The metrics to use for evaluation.
+            compute_metrics (`Callable[[transformers.EvalPrediction], Dict]`, *optional* defaults to `compute_accuracy`):
+                The metrics to use for evaluation. If no metrics are specified, the default metric (`compute_accuracy`) will be used.
             callbacks (`List[transformers.TrainerCallback]`):
                 The callbacks to use for training.
             optimizers (`Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
@@ -101,6 +112,9 @@ class RewardTrainer(Trainer):
             )
         elif is_peft_available() and peft_config is not None:
             model = get_peft_model(model, peft_config)
+
+        if compute_metrics is None:
+            compute_metrics = compute_accuracy
 
         if data_collator is None:
             if tokenizer is None:
@@ -155,13 +169,3 @@ class RewardTrainer(Trainer):
         if return_outputs:
             return loss, {"rewards_chosen": rewards_chosen, "rewards_rejected": rewards_rejected}
         return loss
-
-    def compute_metrics(eval_pred):
-        predictions, _ = eval_pred
-        # Here, predictions is rewards_chosen and rewards_rejected.
-        # We want to see how much of the time rewards_chosen > rewards_rejected.
-        predictions = np.argmax(predictions, axis=0)
-        labels = np.zeros(predictions.shape)
-
-        accuracy = np.mean([p == l for p, l in zip(predictions, labels)])
-        return {"accuracy": accuracy}

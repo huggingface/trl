@@ -19,6 +19,7 @@ from datasets import Dataset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, TrainingArguments
 
 from trl import RewardTrainer
+from trl.trainer import compute_accuracy
 
 from .testing_utils import require_peft
 
@@ -30,6 +31,11 @@ class RewardTrainerTester(unittest.TestCase):
         cls.model = AutoModelForSequenceClassification.from_pretrained(cls.model_id)
         cls.tokenizer = AutoTokenizer.from_pretrained(cls.model_id)
         cls.tokenizer.pad_token = cls.tokenizer.eos_token
+
+    def test_accuracy_metrics(self):
+        dummy_eval_predictions = (torch.FloatTensor([[0.1, 0.9], [0.9, 0.1]]), torch.LongTensor([1, 0]))
+        accuracy = compute_accuracy(dummy_eval_predictions)
+        self.assertTrue(accuracy["accuracy"] == 0.5)
 
     def test_reward_trainer(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
