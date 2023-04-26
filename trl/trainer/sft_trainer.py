@@ -138,7 +138,9 @@ class SFTTrainer(Trainer):
             model = AutoModelForCausalLM.from_pretrained(model, **pretrained_kwargs)
 
         if tokenizer is None:
-            tokenizer = AutoTokenizer.from_pretrained(model.config)
+            tokenizer = AutoTokenizer.from_pretrained(model.config._name_or_path)
+            if getattr(tokenizer, "pad_token", None) is None:
+                tokenizer.pad_token = tokenizer.eos_token
 
         super().__init__(
             model=model,
