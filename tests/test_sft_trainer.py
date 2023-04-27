@@ -64,7 +64,32 @@ class SFTTrainerTester(unittest.TestCase):
                     "Yes, llamas are very good at talking.",
                     "No, llamas can't swim.",
                 ],
+                "text": [
+                    "### Question: Does llamas know how to code?\n ### Answer: Yes, llamas are very good at coding.",
+                    "### Question: Does llamas know how to fly?\n ### Answer: No, llamas can't fly.",
+                    "### Question: Does llamas know how to talk?\n ### Answer: Yes, llamas are very good at talking.",
+                    "### Question: Does llamas know how to code?\n ### Answer: Yes, llamas are very good at coding.",
+                    "### Question: Does llamas know how to fly?\n ### Answer: No, llamas can't fly.",
+                    "### Question: Does llamas know how to talk?\n ### Answer: Yes, llamas are very good at talking.",
+                    "### Question: Does llamas know how to swim?\n ### Answer: No, llamas can't swim.",
+                ],
             }
+        )
+
+        cls.train_dataset = ConstantLengthDataset(
+            cls.tokenizer,
+            cls.dummy_dataset,
+            formatting_prompts_func,
+            seq_length=16,
+            num_of_sequences=16,
+        )
+
+        cls.eval_dataset = ConstantLengthDataset(
+            cls.tokenizer,
+            cls.dummy_dataset,
+            formatting_prompts_func,
+            seq_length=16,
+            num_of_sequences=16,
         )
 
     def test_constant_length_dataset(self):
@@ -86,22 +111,6 @@ class SFTTrainerTester(unittest.TestCase):
 
     def test_sft_pretrained_kwargs(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            train_dataset = ConstantLengthDataset(
-                self.tokenizer,
-                self.dummy_dataset,
-                formatting_prompts_func,
-                seq_length=16,
-                num_of_sequences=16,
-            )
-
-            eval_dataset = ConstantLengthDataset(
-                self.tokenizer,
-                self.dummy_dataset,
-                formatting_prompts_func,
-                seq_length=16,
-                num_of_sequences=16,
-            )
-
             training_args = TrainingArguments(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
@@ -115,8 +124,8 @@ class SFTTrainerTester(unittest.TestCase):
             trainer = SFTTrainer(
                 model=self.model_id,
                 args=training_args,
-                train_dataset=train_dataset,
-                eval_dataset=eval_dataset,
+                train_dataset=self.train_dataset,
+                eval_dataset=self.eval_dataset,
                 torch_dtype=torch.float16,
             )
 
@@ -124,22 +133,6 @@ class SFTTrainerTester(unittest.TestCase):
 
     def test_sft_trainer(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            train_dataset = ConstantLengthDataset(
-                self.tokenizer,
-                self.dummy_dataset,
-                formatting_prompts_func,
-                seq_length=16,
-                num_of_sequences=16,
-            )
-
-            eval_dataset = ConstantLengthDataset(
-                self.tokenizer,
-                self.dummy_dataset,
-                formatting_prompts_func,
-                seq_length=16,
-                num_of_sequences=16,
-            )
-
             training_args = TrainingArguments(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
@@ -153,8 +146,8 @@ class SFTTrainerTester(unittest.TestCase):
             trainer = SFTTrainer(
                 model=self.model_id,
                 args=training_args,
-                train_dataset=train_dataset,
-                eval_dataset=eval_dataset,
+                train_dataset=self.train_dataset,
+                eval_dataset=self.eval_dataset,
             )
 
             trainer.train()
@@ -164,24 +157,32 @@ class SFTTrainerTester(unittest.TestCase):
 
             self.assertTrue("pytorch_model.bin" in os.listdir(tmp_dir + "/checkpoint-2"))
 
+    def test_sft_trainer_uncorrect_data(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                evaluation_strategy="steps",
+                max_steps=2,
+                eval_steps=1,
+                save_steps=1,
+                per_device_train_batch_size=2,
+            )
+
+            with self.assertRaises(ValueError):
+                _ = SFTTrainer(
+                    model=self.model,
+                    args=training_args,
+                    train_dataset=self.dummy_dataset,
+                )
+
+            # This should work
+            _ = SFTTrainer(
+                model=self.model, args=training_args, train_dataset=self.dummy_dataset, dataset_text_field="text"
+            )
+
     def test_sft_trainer_with_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            train_dataset = ConstantLengthDataset(
-                self.tokenizer,
-                self.dummy_dataset,
-                formatting_prompts_func,
-                seq_length=16,
-                num_of_sequences=16,
-            )
-
-            eval_dataset = ConstantLengthDataset(
-                self.tokenizer,
-                self.dummy_dataset,
-                formatting_prompts_func,
-                seq_length=16,
-                num_of_sequences=16,
-            )
-
             training_args = TrainingArguments(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
@@ -195,8 +196,8 @@ class SFTTrainerTester(unittest.TestCase):
             trainer = SFTTrainer(
                 model=self.model,
                 args=training_args,
-                train_dataset=train_dataset,
-                eval_dataset=eval_dataset,
+                train_dataset=self.train_dataset,
+                eval_dataset=self.eval_dataset,
             )
 
             trainer.train()
@@ -206,25 +207,60 @@ class SFTTrainerTester(unittest.TestCase):
 
             self.assertTrue("pytorch_model.bin" in os.listdir(tmp_dir + "/checkpoint-2"))
 
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                evaluation_strategy="steps",
+                max_steps=2,
+                save_steps=1,
+                per_device_train_batch_size=2,
+            )
+
+            trainer = SFTTrainer(
+                model=self.model,
+                args=training_args,
+                train_dataset=self.dummy_dataset,
+                dataset_text_field="text",
+                dataset_kwargs={
+                    "seq_length": 16,
+                    "num_of_sequences": 16,
+                },
+            )
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            self.assertTrue("pytorch_model.bin" in os.listdir(tmp_dir + "/checkpoint-2"))
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                evaluation_strategy="steps",
+                max_steps=2,
+                save_steps=1,
+                per_device_train_batch_size=2,
+            )
+
+            trainer = SFTTrainer(
+                model=self.model,
+                args=training_args,
+                train_dataset=self.dummy_dataset,
+                dataset_text_field="text",
+                packing=False,
+            )
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            self.assertTrue("pytorch_model.bin" in os.listdir(tmp_dir + "/checkpoint-1"))
+
     @require_peft
     def test_peft_sft_trainer(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            train_dataset = ConstantLengthDataset(
-                self.tokenizer,
-                self.dummy_dataset,
-                formatting_prompts_func,
-                seq_length=16,
-                num_of_sequences=16,
-            )
-
-            eval_dataset = ConstantLengthDataset(
-                self.tokenizer,
-                self.dummy_dataset,
-                formatting_prompts_func,
-                seq_length=16,
-                num_of_sequences=16,
-            )
-
             training_args = TrainingArguments(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
@@ -246,8 +282,8 @@ class SFTTrainerTester(unittest.TestCase):
             trainer = SFTTrainer(
                 model=self.model_id,
                 args=training_args,
-                train_dataset=train_dataset,
-                eval_dataset=eval_dataset,
+                train_dataset=self.train_dataset,
+                eval_dataset=self.eval_dataset,
                 peft_config=peft_config,
             )
 

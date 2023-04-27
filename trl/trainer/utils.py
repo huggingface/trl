@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import random
 import warnings
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
@@ -133,7 +134,7 @@ class ConstantLengthDataset(IterableDataset):
                 The processor used for proccessing the data.
             dataset (`dataset.Dataset`):
                 Dataset with text files.
-            formatting_func (`Callable`):
+            formatting_func (`Callable`, **optional**):
                 Function that formats the text before tokenization. Usually it is recommended to have follows a certain
                 pattern such as "### Question: {question}\n ### Answer: {answer}\n"
             infinite (`bool`, *optional*, defaults to `False`):
@@ -152,7 +153,7 @@ class ConstantLengthDataset(IterableDataset):
         self,
         tokenizer,
         dataset,
-        formatting_func,
+        formatting_func=None,
         infinite=False,
         seq_length=1024,
         num_of_sequences=1024,
@@ -175,12 +176,13 @@ class ConstantLengthDataset(IterableDataset):
         self.max_buffer_size = seq_length * chars_per_token * num_of_sequences
         self.formatting_func = formatting_func
 
-        formatting_func_signature = formatting_func.__code__.co_varnames
-        if len(formatting_func_signature) > 1:
-            warnings.warn(
-                "The passed formatting_func has more than one argument. Usually that function should have a single argument `example`"
-                " which corresponds to the dictonnary returned by each element of the dataset. Make sure you know what you are doing."
-            )
+        if formatting_func is not None:
+            formatting_func_signature = formatting_func.__code__.co_varnames
+            if len(formatting_func_signature) > 1:
+                warnings.warn(
+                    "The passed formatting_func has more than one argument. Usually that function should have a single argument `example`"
+                    " which corresponds to the dictonnary returned by each element of the dataset. Make sure you know what you are doing."
+                )
 
     def __len__(self):
         return len(self.dataset)
@@ -194,7 +196,10 @@ class ConstantLengthDataset(IterableDataset):
                 if buffer_len >= self.max_buffer_size:
                     break
                 try:
-                    buffer.append(self.formatting_func(next(iterator)))
+                    if self.formatting_func is None:
+                        buffer.append(next(iterator))
+                    else:
+                        buffer.append(self.formatting_func(next(iterator)))
                     buffer_len += len(buffer[-1])
                 except StopIteration:
                     if self.infinite:
@@ -206,11 +211,24 @@ class ConstantLengthDataset(IterableDataset):
             all_token_ids = []
             for tokenized_input in tokenized_inputs:
                 all_token_ids.extend(tokenized_input + [self.concat_token_id])
+            examples = []
             for i in range(0, len(all_token_ids), self.seq_length):
                 input_ids = all_token_ids[i : i + self.seq_length]
                 if len(input_ids) == self.seq_length:
-                    self.current_size += 1
-                    yield {
-                        "input_ids": torch.LongTensor(input_ids),
-                        "labels": torch.LongTensor(input_ids),
-                    }
+                    examples.append(input_ids)
+            random.shuffle(examples)
+            for example in examples:
+                self.current_size += 1
+                yield {
+                    "input_ids": torch.LongTensor(example),
+                    "labels": torch.LongTensor(example),
+                }
+        # else:
+        #     next_examples = next(iterator)
+        #     inputs = self.tokenizer(next_examples, truncation=True, max_length=self.seq_length, padding="max_length")
+        #     self.current_size += 1
+
+        #     # use data_collator
+        #     yield self.data_collator(
+        #         [{"input_ids":torch.LongTensor(inputs.input_ids), "attention_mask": torch.LongTensor(inputs.attention_mask)}]
+        #     )

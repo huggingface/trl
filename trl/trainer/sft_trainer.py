@@ -23,6 +23,7 @@ from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     DataCollator,
+    DataCollatorForLanguageModeling,
     PreTrainedModel,
     PreTrainedTokenizerBase,
     Trainer,
@@ -32,6 +33,7 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 
 from ..import_utils import is_peft_available
+from .utils import ConstantLengthDataset
 
 
 if is_peft_available():
@@ -84,6 +86,12 @@ class SFTTrainer(Trainer):
         prepare_in_int8_kwargs (`Dict`):
             The arguments to pass to the `prepare_model_for_int8_training` function, in case a `PeftConfig` has been passed and in case
             users want to train their models in 8bit mode.
+        dataset_text_field (`Optional[str]`):
+            The name of the text field of the dataset, in case this is passed by a user, the trainer will automatically create a
+            `ConstantLengthDataset` based on the `dataset_text_field` argument.
+        packing (`Optional[bool]`):
+            Used only in case `dataset_text_field` is passed. This argument is used by the `ConstantLengthDataset` to pack the sequences
+            of the dataset.
     """
 
     def __init__(
@@ -100,6 +108,9 @@ class SFTTrainer(Trainer):
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         peft_config: Optional[Dict] = None,
+        dataset_text_field: Optional[str] = None,
+        packing: Optional[bool] = True,
+        dataset_kwargs: Optional[Dict] = {},
         prepare_in_int8_kwargs: Optional[Dict] = {},
         **pretrained_kwargs,
     ):
@@ -142,6 +153,63 @@ class SFTTrainer(Trainer):
             if getattr(tokenizer, "pad_token", None) is None:
                 tokenizer.pad_token = tokenizer.eos_token
 
+        # check if torch dataset / dataloader and do nothing
+        if train_dataset is not None and (
+            isinstance(
+                train_dataset,
+                (torch.utils.data.IterableDataset, torch.utils.data.Dataset),
+            )
+        ):
+            is_already_dataset = True
+        else:
+            is_already_dataset = False
+
+        if not packing:
+            if dataset_text_field is None:
+                raise ValueError(
+                    "You passed `packing=False` to the SFTTrainer, but you didn't pass a `dataset_text_field` argument."
+                )
+
+            if data_collator is None:
+                data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+
+            if "max_seq_length" not in dataset_kwargs:
+                warnings.warn(
+                    "You passed `packing=False` to the SFTTrainer, but you didn't pass a `max_seq_length` argument to the `dataset_kwargs`."
+                    "The default value of 512 will be used. And the text will be padded to that value."
+                )
+
+            max_seq_length = dataset_kwargs.get("max_seq_length", 512)
+
+            if train_dataset is not None:
+                train_dataset = self._prepare_non_packed_dataloader(
+                    tokenizer, train_dataset, dataset_text_field, data_collator, max_seq_length
+                )
+            if eval_dataset is not None:
+                eval_dataset = self._prepare_non_packed_dataloader(
+                    tokenizer, eval_dataset, dataset_text_field, data_collator, max_seq_length
+                )
+
+            is_already_dataset = True
+
+        if not is_already_dataset and dataset_text_field is not None:
+            warnings.warn(
+                "You passed a `dataset_text_field` argument to the SFTTrainer. The trainer will automatically take care of creating a `ConstantLengthDataset` for you."
+            )
+            if tokenizer is None:
+                raise ValueError(
+                    "You need to pass a tokenizer when using the SFT Trainer in `dataset_text_field` mode."
+                )
+
+            if train_dataset is not None:
+                train_dataset = ConstantLengthDataset(tokenizer, train_dataset[dataset_text_field], **dataset_kwargs)
+            if eval_dataset is not None:
+                eval_dataset = ConstantLengthDataset(tokenizer, eval_dataset[dataset_text_field], **dataset_kwargs)
+        elif not is_already_dataset and dataset_text_field is None:
+            raise ValueError(
+                "You need to pass a `dataset_text_field` argument to the SFTTrainer if you want to use the `ConstantLengthDataset`."
+            )
+
         super().__init__(
             model=model,
             args=args,
@@ -155,3 +223,22 @@ class SFTTrainer(Trainer):
             optimizers=optimizers,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
+
+    def _prepare_non_packed_dataloader(self, tokenizer, dataset, dataset_text_field, data_collator, max_seq_len):
+        # tokenize the dataset
+        dataset = dataset.map(
+            lambda x: data_collator(
+                [tokenizer(x[dataset_text_field], padding="max_length", truncation=True, max_length=max_seq_len)]
+            ),
+            batched=False,
+        )
+
+        # convert to torch dataset
+        dataset.set_format("torch", columns=["input_ids", "attention_mask", "labels"])
+
+        # squueze unneeded args
+        dataset = dataset.map(lambda x: {"input_ids": x["input_ids"].squeeze()})
+        dataset = dataset.map(lambda x: {"attention_mask": x["attention_mask"].squeeze()})
+        dataset = dataset.map(lambda x: {"labels": x["labels"].squeeze()})
+
+        return dataset
