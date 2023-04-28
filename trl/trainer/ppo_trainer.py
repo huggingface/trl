@@ -183,9 +183,12 @@ class PPOTrainer(BaseTrainer):
             gradient_accumulation_steps=config.gradient_accumulation_steps,
             **config.accelerator_kwargs,
         )
+
+        is_using_tensorboard = config.log_with is not None and config.log_with == "tensorboard"
+
         self.accelerator.init_trackers(
             config.tracker_project_name,
-            config=dict(trl_ppo_trainer_config=config.to_dict()),
+            config=dict(trl_ppo_trainer_config=config.to_dict()) if not is_using_tensorboard else config.to_dict(),
             init_kwargs=config.tracker_kwargs,
         )
 
