@@ -174,6 +174,7 @@ def run_training(args, train_data, val_data):
         eval_dataset=val_data,
         peft_config=lora_config,
         load_in_8bit=True,
+        packing=True,
     )
 
     print_trainable_parameters(trainer.model)

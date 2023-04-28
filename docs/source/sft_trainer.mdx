@@ -4,7 +4,147 @@ When doing RLHF, the supervised finetuning step is a very crucial step. In TRL w
 
 ## Quickstart
 
-## Supported modes
+If you have a dataset hosted on 🤗 Hub, you can easily fine-tune your SFT model using `SFTTrainer` from TRL. Let us assume your dataset is `imdb` , the text you want to predict is inside `text` field of the dataset and you want to fine-tune `facebook/opt-350m` model.
+
+```python
+from datasets import load_dataset
+from trl import SFTTrainer
+
+dataset = load_dataset("imdb", split="train")
+
+trainer = SFTTrainer(
+    "facebook/opt-350m",
+    train_dataset=dataset,
+    dataset_text_field="text",
+)
+```
+
+Of course you can also construct a model outside of the trainer and pass it to the trainer. For example:
+
+```python
+from transformers import AutoModelForCausalLM
+from datasets import load_dataset
+from trl import SFTTrainer
+
+dataset = load_dataset("imdb", split="train")
+
+model = AutoModelForCausalLM.from_pretrained("facebook/opt-350m")
+
+trainer = SFTTrainer(
+    model,
+    train_dataset=dataset,
+    dataset_text_field="text",
+)
+
+trainer.train()
+```
+
+## Advanced usage
+
+### Packing dataset (`ConstantLengthDataset`)
+
+`SFTTrainer` supports the integration of packed dataset. This is done with the `ConstantLengthDataset` utility clss that returns constant length chunks of tokens from stream of text files. To enable the usage of this dataset class, simply pass `packing=True` to the `SFTTrainer` constructor.
+
+```python
+...
+
+trainer = SFTTrainer(
+    "facebook/opt-350m",
+    train_dataset=dataset,
+    dataset_text_field="text",
+    packing=True
+)
+
+trainer.train()
+```
+
+If your dataset has several fields that you want to combine, for example if the dataset has `question` and `answer` fields and you want to combine them, you can pass a formatting function to the trainer that will take care of that. For example:
+
+```python
+def formatting_func(example):
+    text = f"### Question: {example['question']}\n ### Answer: {example['answer']}"
+    return text
+
+trainer = SFTTrainer(
+    "facebook/opt-350m",
+    train_dataset=dataset,
+    dataset_text_field="text",
+    packing=True,
+    formatting_func=formatting_func
+)
+
+trainer.train()
+```
+You can also customize the `ConstantLengthDataset` much more by directly passing the arguments to the `SFTTrainer` constructor. Please refer to that class' signature for more information.
+
+### Control over the pretrained model
+
+You can directly pass the kwargs of `.from_pretrained` method to the `SFTTrainer`. For example, if you want to load a model in a different precision, analoguous to `model = AutoModelForCausalLM.from_pretrained("facebook/opt-350m", torch_dtype=torch.bfloat16)`, you can do:
+
+```python
+...
+
+trainer = SFTTrainer(
+    "facebook/opt-350m",
+    train_dataset=dataset,
+    dataset_text_field="text",
+    torch_dtype=torch.bfloat16,
+)
+
+trainer.train()
+```
+Note that all key word arguments of `.from_pretrained` are supported. 
+
+### Training adapters
+
+We also support a tight integration with 🤗 PEFT library so that any user can conveniently train adapters and share them on the Hub instead of training the entire model
+
+```python
+from datasets import load_dataset
+from trl import SFTTrainer
+from peft import LoraConfig
+
+dataset = load_dataset("imdb", split="train")
+
+peft_config = LoraConfig(
+    r=16,
+    lora_alpha=32,
+    lora_dropout=0.05,
+    bias="none",
+    task_type="CAUSAL_LM",
+)
+
+trainer = SFTTrainer(
+    "EleutherAI/gpt-neo-125m",
+    train_dataset=dataset,
+    dataset_text_field="text",
+    torch_dtype=torch.bfloat16,
+    peft_config=peft_config
+)
+
+trainer.train()
+```
+
+Note that in case of training adapters, we manually add a saving callback to automatically save the adapters only:
+```python
+class PeftSavingCallback(TrainerCallback):
+    def on_save(self, args, state, control, **kwargs):
+        checkpoint_path = os.path.join(args.output_dir, f"checkpoint-{state.global_step}")
+        kwargs["model"].save_pretrained(checkpoint_path)
+
+        if "pytorch_model.bin" in os.listdir(checkpoint_path):
+            os.remove(os.path.join(checkpoint_path, "pytorch_model.bin"))
+```
+If you want to add more callbacks, make sure to add this one as well to properly save the adapters only during training.
+
+## Best practices
+
+Pay attention to the following best practices when training a model with that trainer:
+
+- `SFTTrainer` always padds by default the sequences to the `max_seq_length` argument of the `SFTTrainer`. If none is passed, the trainer will retrieve that value from the tokenizer. Some tokenizers have this value broken, so there is a check to retrieve the minimum between 2048 and that value. Make sure to check it before training.
+- For training adapters in 8bit, you might need to tweak the arguments of the `prepare_model_for_int8_training` method from PEFT, hence we advise users to use `prepare_in_int8_kwargs` field, or create the `PeftModel` outside the `SFTTrainer` and pass it.
+- For a more memory-efficient training using adapters, you can load the base model in 8bit, for that simply add `load_in_8bit` argument when creating the `SFTTrainer`, or create a base model in 8bit outside the trainer and pass it.  
+- If you create a model outside the trainer, make sure to not pass to the trainer any additional keyword arguments that are relative to `.from_pretrained` method.
 
 ## SFTTrainer
 

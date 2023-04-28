@@ -119,7 +119,7 @@ class SFTTrainer(Trainer):
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         peft_config: Optional[Dict] = None,
         dataset_text_field: Optional[str] = None,
-        packing: Optional[bool] = True,
+        packing: Optional[bool] = False,
         formatting_func: Optional[Callable] = None,
         max_seq_length: Optional[int] = None,
         infinite: Optional[bool] = False,
@@ -130,8 +130,13 @@ class SFTTrainer(Trainer):
     ):
         if isinstance(model, str):
             warnings.warn(
-                "You passed a model_id and a `PeftConfig` to the SFTTrainer. This will automatically create an "
-                "`AutoModelForCausalLM` or a `PeftModel` for you."
+                "You passed a model_id to the SFTTrainer. This will automatically create an "
+                "`AutoModelForCausalLM` or a `PeftModel` (if you passed a `peft_config`) for you."
+            )
+        elif len(pretrained_kwargs) > 1:
+            raise ValueError(
+                "You can't pass `.from_pretrained` keyword arguments to the SFTTrainer if you pass a model object.",
+                " make sure to properly initialize the model object and pass it to the SFTTrainer without additional arguments.",
             )
 
         if is_peft_available() and peft_config is not None:
@@ -167,7 +172,8 @@ class SFTTrainer(Trainer):
                 tokenizer.pad_token = tokenizer.eos_token
 
         if max_seq_length is None:
-            max_seq_length = tokenizer.model_max_length
+            # to overcome some issues with broken tokenizers
+            max_seq_length = min(tokenizer.model_max_length, 2048)
 
         # check if torch dataset / dataloader and do nothing
         if train_dataset is not None and (
@@ -191,11 +197,11 @@ class SFTTrainer(Trainer):
 
             if train_dataset is not None:
                 train_dataset = self._prepare_non_packed_dataloader(
-                    tokenizer, train_dataset, dataset_text_field, data_collator, max_seq_length
+                    tokenizer, train_dataset, dataset_text_field, max_seq_length
                 )
             if eval_dataset is not None:
                 eval_dataset = self._prepare_non_packed_dataloader(
-                    tokenizer, eval_dataset, dataset_text_field, data_collator, max_seq_length
+                    tokenizer, eval_dataset, dataset_text_field, max_seq_length
                 )
 
             is_already_dataset = True
@@ -247,7 +253,7 @@ class SFTTrainer(Trainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
-    def _prepare_non_packed_dataloader(self, tokenizer, dataset, dataset_text_field, data_collator, max_seq_len):
+    def _prepare_non_packed_dataloader(self, tokenizer, dataset, dataset_text_field, max_seq_len):
         # Inspired from: https://huggingface.co/learn/nlp-course/chapter7/6?fw=pt
         def tokenize(element):
             outputs = tokenizer(

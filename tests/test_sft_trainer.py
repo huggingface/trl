@@ -109,6 +109,9 @@ class SFTTrainerTester(unittest.TestCase):
             self.assertTrue(len(example["input_ids"]) == formatted_dataset.seq_length)
             self.assertTrue(len(example["labels"]) == formatted_dataset.seq_length)
 
+            decoded_text = self.tokenizer.decode(example["input_ids"])
+            self.assertTrue(("Question" in decoded_text) and ("Answer" in decoded_text))
+
     def test_sft_pretrained_kwargs(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
@@ -127,6 +130,7 @@ class SFTTrainerTester(unittest.TestCase):
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
                 torch_dtype=torch.float16,
+                packing=True,
             )
 
             self.assertTrue(trainer.model.dtype == torch.float16)
@@ -148,6 +152,7 @@ class SFTTrainerTester(unittest.TestCase):
                 args=training_args,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
+                packing=True,
             )
 
             trainer.train()
@@ -174,6 +179,7 @@ class SFTTrainerTester(unittest.TestCase):
                     model=self.model,
                     args=training_args,
                     train_dataset=self.dummy_dataset,
+                    packing=True,
                 )
 
             # This should work
@@ -198,6 +204,7 @@ class SFTTrainerTester(unittest.TestCase):
                 args=training_args,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
+                packing=True,
             )
 
             trainer.train()
@@ -224,6 +231,7 @@ class SFTTrainerTester(unittest.TestCase):
                 dataset_text_field="text",
                 max_seq_length=16,
                 num_of_sequences=16,
+                packing=True,
             )
 
             trainer.train()
@@ -247,7 +255,6 @@ class SFTTrainerTester(unittest.TestCase):
                 args=training_args,
                 train_dataset=self.dummy_dataset,
                 dataset_text_field="text",
-                packing=False,
                 max_seq_length=16,
             )
 
@@ -284,6 +291,7 @@ class SFTTrainerTester(unittest.TestCase):
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
                 peft_config=peft_config,
+                packing=True,
             )
 
             self.assertTrue(isinstance(trainer.model, PeftModel))
