@@ -181,7 +181,7 @@ else:
 ```
 
 ## Use torch distributed 
-torch.distributed package provides PyTorch natives method to distribute a network over several machines (mostly usefule if there are several GPU nodes). It copies the model on each GPU, runs the forward and backward on each and then applies the mean of gradient of all GPUs for each one. If running torch 1.XX, you can call `torch.distributed.launch`, like
+torch.distributed package provides PyTorch natives method to distribute a network over several machines (mostly useful if there are several GPU nodes). It copies the model on each GPU, runs the forward and backward on each and then applies the mean of gradient of all GPUs for each one. If running torch 1.XX, you can call `torch.distributed.launch`, like
 
 `python -m torch.distributed.launch --nproc_per_node=1 reward_summarization.py --bf16`
 
