@@ -175,17 +175,6 @@ class SFTTrainer(Trainer):
             # to overcome some issues with broken tokenizers
             max_seq_length = min(tokenizer.model_max_length, 2048)
 
-        # check if torch dataset / dataloader and do nothing
-        if train_dataset is not None and (
-            isinstance(
-                train_dataset,
-                (torch.utils.data.IterableDataset, torch.utils.data.Dataset),
-            )
-        ):
-            is_already_dataset = True
-        else:
-            is_already_dataset = False
-
         if not packing:
             if dataset_text_field is None:
                 raise ValueError(
@@ -195,48 +184,29 @@ class SFTTrainer(Trainer):
             if data_collator is None:
                 data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
-            if train_dataset is not None:
-                train_dataset = self._prepare_non_packed_dataloader(
-                    tokenizer, train_dataset, dataset_text_field, max_seq_length
-                )
-            if eval_dataset is not None:
-                eval_dataset = self._prepare_non_packed_dataloader(
-                    tokenizer, eval_dataset, dataset_text_field, max_seq_length
-                )
-
-            is_already_dataset = True
-
-        if not is_already_dataset and dataset_text_field is not None:
-            if tokenizer is None:
-                raise ValueError(
-                    "You need to pass a tokenizer when using the SFT Trainer when passing a `dataset_text_field`."
-                )
-
-            if train_dataset is not None:
-                train_dataset = ConstantLengthDataset(
-                    tokenizer,
-                    train_dataset[dataset_text_field],
-                    formatting_func=formatting_func,
-                    seq_length=max_seq_length,
-                    infinite=infinite,
-                    num_of_sequences=num_of_sequences,
-                    chars_per_token=chars_per_token,
-                    eos_token_id=tokenizer.eos_token_id,
-                )
-            if eval_dataset is not None:
-                eval_dataset = ConstantLengthDataset(
-                    tokenizer,
-                    eval_dataset[dataset_text_field],
-                    formatting_func=formatting_func,
-                    seq_length=max_seq_length,
-                    infinite=infinite,
-                    num_of_sequences=num_of_sequences,
-                    chars_per_token=chars_per_token,
-                    eos_token_id=tokenizer.eos_token_id,
-                )
-        elif not is_already_dataset and dataset_text_field is None:
-            raise ValueError(
-                "You need to pass a `dataset_text_field` argument to the SFTTrainer if you want to use the `ConstantLengthDataset`."
+        if train_dataset is not None:
+            train_dataset = self._prepare_dataset(
+                train_dataset,
+                tokenizer,
+                packing,
+                dataset_text_field,
+                max_seq_length,
+                formatting_func,
+                infinite,
+                num_of_sequences,
+                chars_per_token,
+            )
+        if eval_dataset is not None:
+            eval_dataset = self._prepare_dataset(
+                eval_dataset,
+                tokenizer,
+                packing,
+                dataset_text_field,
+                max_seq_length,
+                formatting_func,
+                infinite,
+                num_of_sequences,
+                chars_per_token,
             )
 
         super().__init__(
@@ -252,6 +222,58 @@ class SFTTrainer(Trainer):
             optimizers=optimizers,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
+
+    def _prepare_dataset(
+        self,
+        dataset,
+        tokenizer,
+        packing,
+        dataset_text_field,
+        max_seq_length,
+        formatting_func,
+        infinite,
+        num_of_sequences,
+        chars_per_token,
+    ):
+        # check if torch dataset / dataloader and do nothing
+        if dataset is not None and (
+            isinstance(
+                dataset,
+                (torch.utils.data.IterableDataset, torch.utils.data.Dataset),
+            )
+        ):
+            is_already_dataset = True
+        else:
+            is_already_dataset = False
+
+        if not packing:
+            dataset = self._prepare_non_packed_dataloader(tokenizer, dataset, dataset_text_field, max_seq_length)
+
+            is_already_dataset = True
+
+        if not is_already_dataset and dataset_text_field is not None:
+            if tokenizer is None:
+                raise ValueError(
+                    "You need to pass a tokenizer when using the SFT Trainer when passing a `dataset_text_field`."
+                )
+
+            dataset = ConstantLengthDataset(
+                tokenizer,
+                dataset[dataset_text_field],
+                formatting_func=formatting_func,
+                seq_length=max_seq_length,
+                infinite=infinite,
+                num_of_sequences=num_of_sequences,
+                chars_per_token=chars_per_token,
+                eos_token_id=tokenizer.eos_token_id,
+            )
+
+        elif not is_already_dataset and dataset_text_field is None:
+            raise ValueError(
+                "You need to pass a `dataset_text_field` argument to the SFTTrainer if you want to use the `ConstantLengthDataset`."
+            )
+
+        return dataset
 
     def _prepare_non_packed_dataloader(self, tokenizer, dataset, dataset_text_field, max_seq_len):
         # Inspired from: https://huggingface.co/learn/nlp-course/chapter7/6?fw=pt
