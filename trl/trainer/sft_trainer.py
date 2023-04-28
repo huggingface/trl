@@ -198,7 +198,7 @@ class SFTTrainer(Trainer):
             )
             if tokenizer is None:
                 raise ValueError(
-                    "You need to pass a tokenizer when using the SFT Trainer in `dataset_text_field` mode."
+                    "You need to pass a tokenizer when using the SFT Trainer when passing a `dataset_text_field`."
                 )
 
             if train_dataset is not None:
