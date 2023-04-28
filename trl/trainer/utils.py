@@ -174,7 +174,10 @@ class ConstantLengthDataset(IterableDataset):
         self.infinite = infinite
         self.current_size = 0
         self.max_buffer_size = seq_length * chars_per_token * num_of_sequences
-        self.formatting_func = formatting_func
+        if formatting_func is None:
+            self.formatting_func = lambda x: x
+        else:
+            self.formatting_func = formatting_func
 
         if formatting_func is not None:
             formatting_func_signature = formatting_func.__code__.co_varnames
@@ -196,10 +199,7 @@ class ConstantLengthDataset(IterableDataset):
                 if buffer_len >= self.max_buffer_size:
                     break
                 try:
-                    if self.formatting_func is None:
-                        buffer.append(next(iterator))
-                    else:
-                        buffer.append(self.formatting_func(next(iterator)))
+                    buffer.append(self.formatting_func(next(iterator)))
                     buffer_len += len(buffer[-1])
                 except StopIteration:
                     if self.infinite:
@@ -223,12 +223,3 @@ class ConstantLengthDataset(IterableDataset):
                     "input_ids": torch.LongTensor(example),
                     "labels": torch.LongTensor(example),
                 }
-        # else:
-        #     next_examples = next(iterator)
-        #     inputs = self.tokenizer(next_examples, truncation=True, max_length=self.seq_length, padding="max_length")
-        #     self.current_size += 1
-
-        #     # use data_collator
-        #     yield self.data_collator(
-        #         [{"input_ids":torch.LongTensor(inputs.input_ids), "attention_mask": torch.LongTensor(inputs.attention_mask)}]
-        #     )
