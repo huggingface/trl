@@ -121,7 +121,7 @@ class SFTTrainer(Trainer):
         dataset_text_field: Optional[str] = None,
         packing: Optional[bool] = True,
         formatting_func: Optional[Callable] = None,
-        max_seq_length: Optional[int] = 1024,
+        max_seq_length: Optional[int] = None,
         infinite: Optional[bool] = False,
         num_of_sequences: Optional[int] = 1024,
         chars_per_token: Optional[float] = 3.6,
@@ -158,7 +158,6 @@ class SFTTrainer(Trainer):
 
             if callbacks is None:
                 callbacks = [PeftSavingCallback]
-
         elif not isinstance(model, PreTrainedModel):
             model = AutoModelForCausalLM.from_pretrained(model, **pretrained_kwargs)
 
@@ -166,6 +165,9 @@ class SFTTrainer(Trainer):
             tokenizer = AutoTokenizer.from_pretrained(model.config._name_or_path)
             if getattr(tokenizer, "pad_token", None) is None:
                 tokenizer.pad_token = tokenizer.eos_token
+
+        if max_seq_length is None:
+            max_seq_length = tokenizer.model_max_length
 
         # check if torch dataset / dataloader and do nothing
         if train_dataset is not None and (
