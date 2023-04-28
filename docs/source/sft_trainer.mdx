@@ -39,6 +39,9 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
+The above snippets will use the default training arguments from [`transformers.TrainingArguments`](https://huggingface.co/docs/transformers/main_classes/trainer#transformers.TrainingArguments) class. If you want to modify that, make sure to create your own `TrainingArguments` object and pass it to the `SFTTrainer` constructor as it is done on the [`supervised_finetuning.py` script](https://github.com/lvwerra/trl/blob/main/examples/stack_llama/scripts/supervised_finetuning.py) on the stack-llama example.
+
+
 ## Advanced usage
 
 ### Packing dataset (`ConstantLengthDataset`)
