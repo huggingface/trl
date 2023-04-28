@@ -248,20 +248,21 @@ class SFTTrainer(Trainer):
         )
 
     def _prepare_non_packed_dataloader(self, tokenizer, dataset, dataset_text_field, data_collator, max_seq_len):
-        # tokenize the dataset
-        dataset = dataset.map(
-            lambda x: data_collator(
-                [tokenizer(x[dataset_text_field], padding="max_length", truncation=True, max_length=max_seq_len)]
-            ),
-            batched=False,
-        )
+        # Inspired from: https://huggingface.co/learn/nlp-course/chapter7/6?fw=pt
+        def tokenize(element):
+            outputs = tokenizer(
+                element[dataset_text_field],
+                truncation=True,
+                max_length=max_seq_len,
+                return_overflowing_tokens=True,
+                return_length=True,
+            )
+            input_batch = []
+            for length, input_ids in zip(outputs["length"], outputs["input_ids"]):
+                if length == max_seq_len:
+                    input_batch.append(input_ids)
+            return {"input_ids": input_batch}
 
-        # convert to torch dataset
-        dataset.set_format("torch", columns=["input_ids", "attention_mask", "labels"])
+        tokenized_dataset = dataset.map(tokenize, batched=True, remove_columns=dataset.column_names)
 
-        # squueze unneeded args
-        dataset = dataset.map(lambda x: {"input_ids": x["input_ids"].squeeze()})
-        dataset = dataset.map(lambda x: {"attention_mask": x["attention_mask"].squeeze()})
-        dataset = dataset.map(lambda x: {"labels": x["labels"].squeeze()})
-
-        return dataset
+        return tokenized_dataset
