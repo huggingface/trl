@@ -193,9 +193,6 @@ class SFTTrainer(Trainer):
             is_already_dataset = True
 
         if not is_already_dataset and dataset_text_field is not None:
-            warnings.warn(
-                "You passed a `dataset_text_field` argument to the SFTTrainer. The trainer will automatically take care of creating a `ConstantLengthDataset` for you."
-            )
             if tokenizer is None:
                 raise ValueError(
                     "You need to pass a tokenizer when using the SFT Trainer when passing a `dataset_text_field`."
