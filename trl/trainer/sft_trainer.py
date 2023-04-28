@@ -89,6 +89,16 @@ class SFTTrainer(Trainer):
         dataset_text_field (`Optional[str]`):
             The name of the text field of the dataset, in case this is passed by a user, the trainer will automatically create a
             `ConstantLengthDataset` based on the `dataset_text_field` argument.
+        formatting_func (`Optional[Callable]`):
+            The formatting function to be used for creating the `ConstantLengthDataset`.
+        max_seq_length (`Optional[int]`):
+            The maximum sequence length to use for the `ConstantLengthDataset` and for automaticallty creating the Dataset. Defaults to `512`.
+        infinite (`Optional[bool]`):
+            Whether to use an infinite dataset or not. Defaults to `False`.
+        num_of_sequences (`Optional[int]`):
+            The number of sequences to use for the `ConstantLengthDataset`. Defaults to `1024`.
+        chars_per_token (`Optional[float]`):
+            The number of characters per token to use for the `ConstantLengthDataset`. Defaults to `3.6`.
         packing (`Optional[bool]`):
             Used only in case `dataset_text_field` is passed. This argument is used by the `ConstantLengthDataset` to pack the sequences
             of the dataset.
@@ -110,7 +120,11 @@ class SFTTrainer(Trainer):
         peft_config: Optional[Dict] = None,
         dataset_text_field: Optional[str] = None,
         packing: Optional[bool] = True,
-        dataset_kwargs: Optional[Dict] = {},
+        formatting_func: Optional[Callable] = None,
+        max_seq_length: Optional[int] = 1024,
+        infinite: Optional[bool] = False,
+        num_of_sequences: Optional[int] = 1024,
+        chars_per_token: Optional[float] = 3.6,
         prepare_in_int8_kwargs: Optional[Dict] = {},
         **pretrained_kwargs,
     ):
@@ -173,14 +187,6 @@ class SFTTrainer(Trainer):
             if data_collator is None:
                 data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
-            if "max_seq_length" not in dataset_kwargs:
-                warnings.warn(
-                    "You passed `packing=False` to the SFTTrainer, but you didn't pass a `max_seq_length` argument to the `dataset_kwargs`."
-                    "The default value of 512 will be used. And the text will be padded to that value."
-                )
-
-            max_seq_length = dataset_kwargs.get("max_seq_length", 512)
-
             if train_dataset is not None:
                 train_dataset = self._prepare_non_packed_dataloader(
                     tokenizer, train_dataset, dataset_text_field, data_collator, max_seq_length
@@ -199,9 +205,27 @@ class SFTTrainer(Trainer):
                 )
 
             if train_dataset is not None:
-                train_dataset = ConstantLengthDataset(tokenizer, train_dataset[dataset_text_field], **dataset_kwargs)
+                train_dataset = ConstantLengthDataset(
+                    tokenizer,
+                    train_dataset[dataset_text_field],
+                    formatting_func=formatting_func,
+                    seq_length=max_seq_length,
+                    infinite=infinite,
+                    num_of_sequences=num_of_sequences,
+                    chars_per_token=chars_per_token,
+                    eos_token_id=tokenizer.eos_token_id,
+                )
             if eval_dataset is not None:
-                eval_dataset = ConstantLengthDataset(tokenizer, eval_dataset[dataset_text_field], **dataset_kwargs)
+                eval_dataset = ConstantLengthDataset(
+                    tokenizer,
+                    eval_dataset[dataset_text_field],
+                    formatting_func=formatting_func,
+                    seq_length=max_seq_length,
+                    infinite=infinite,
+                    num_of_sequences=num_of_sequences,
+                    chars_per_token=chars_per_token,
+                    eos_token_id=tokenizer.eos_token_id,
+                )
         elif not is_already_dataset and dataset_text_field is None:
             raise ValueError(
                 "You need to pass a `dataset_text_field` argument to the SFTTrainer if you want to use the `ConstantLengthDataset`."

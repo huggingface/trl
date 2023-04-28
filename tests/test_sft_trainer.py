@@ -222,10 +222,8 @@ class SFTTrainerTester(unittest.TestCase):
                 args=training_args,
                 train_dataset=self.dummy_dataset,
                 dataset_text_field="text",
-                dataset_kwargs={
-                    "seq_length": 16,
-                    "num_of_sequences": 16,
-                },
+                max_seq_length=16,
+                num_of_sequences=16,
             )
 
             trainer.train()
@@ -250,6 +248,7 @@ class SFTTrainerTester(unittest.TestCase):
                 train_dataset=self.dummy_dataset,
                 dataset_text_field="text",
                 packing=False,
+                max_seq_length=16,
             )
 
             trainer.train()
