@@ -90,24 +90,21 @@ outputs = model(**inputs, labels=inputs["input_ids"])
 ```
 """
 
+
 class DictDataset(torch.utils.data.Dataset):
     def __init__(self, data):
         self._data = data
 
     def __getitem__(self, *argc, **kwargs):
-        return {
-            k: v.__getitem__(*argc, **kwargs) 
-            for k, v in self._data.items()
-        }
+        return {k: v.__getitem__(*argc, **kwargs) for k, v in self._data.items()}
 
     def __len__(self):
         lengths = [len(v) for v in self._data.values()]
         if len(lengths) > 1:
-            assert all(l == lengths[0] for l in lengths[1:]), {
-                k: len(v) for k, v in self._data.items()}
-            
+            assert all(len_ == lengths[0] for len_ in lengths[1:]), {k: len(v) for k, v in self._data.items()}
+
         return lengths[0]
-    
+
 
 class PPOTrainer(BaseTrainer):
     """
@@ -657,7 +654,7 @@ class PPOTrainer(BaseTrainer):
 
         mini_batch_dict.update(model_inputs)
         mini_batch_data = DictDataset(mini_batch_dict)
-        
+
         mini_batch_dataloader = torch.utils.data.DataLoader(
             mini_batch_data,
             batch_size=self.config.mini_batch_size,
