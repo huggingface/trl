@@ -75,11 +75,11 @@ class PPOConfig(object):
     )
     tracker_kwargs: Optional[dict] = field(
         default_factory=dict,
-        metadata={"help": "Keyword arguments for the accelerator (e.g. `logging_dir`)"},
+        metadata={"help": "Keyword arguments for the tracker (e.g. wandb_project)"},
     )
     accelerator_kwargs: Optional[dict] = field(
         default_factory=dict,
-        metadata={"help": "Keyword arguments for the tracker (e.g. wandb_project)"},
+        metadata={"help": "Keyword arguments for the accelerator (e.g. `logging_dir`)"},
     )
     tracker_project_name: Optional[str] = field(
         default="trl", metadata={"help": "Name of project to use for tracking"}
@@ -90,13 +90,21 @@ class PPOConfig(object):
     seed: Optional[int] = field(default=0, metadata={"help": "Seed value for random generations"})
     optimize_cuda_cache: Optional[bool] = field(
         default=False,
-        metadata={"help": "Optimize CUDA cache for slightly more memory-effcient training"},
+        metadata={"help": "Optimize CUDA cache for slightly more memory-efficient training"},
     )
     early_stopping: Optional[bool] = field(
-        default=False, metadata={"help": "Whether to stop the PPO opimization loop early is the KL too high"}
+        default=False, metadata={"help": "Whether to stop the PPO optimization loop early is the KL too high"}
     )
     target_kl: Optional[float] = field(
         default=0.1, metadata={"help": "Stop early if we exceed this value by over 50%"}
+    )
+    push_to_hub_if_best_kwargs: Optional[dict] = field(
+        default_factory=dict,
+        metadata={"help": "Keyword arguments for pushing model to the hub during training (e.g. repo_id)"},
+    )
+    compare_steps: Optional[int] = field(
+        default=1,
+        metadata={"help": "Number of steps between comparison of the current reward with the best seen so far"},
     )
 
     def __post_init__(self):

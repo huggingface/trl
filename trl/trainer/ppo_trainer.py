@@ -281,7 +281,7 @@ class PPOTrainer(BaseTrainer):
         )
         if is_deepspeed_used:
             # 8 bit models are already set on the correct device
-            if not getattr(self.ref_model.pretrained_model, "is_loaded_in_8bit", False):
+            if not self.is_peft_model and not getattr(self.ref_model.pretrained_model, "is_loaded_in_8bit", False):
                 # DS integration only allows for single model and as `ref_model` is only used for
                 # `KL devergence loss`,i.e, in eval model, just have it be on the respective device and
                 # there is no need to pass it to the `accelerator.prepare` call
@@ -300,6 +300,14 @@ class PPOTrainer(BaseTrainer):
 
         # init the current step
         self.current_step = 0
+
+        # init variables for pushing model to hub
+        if config.push_to_hub_if_best_kwargs:
+            if "repo_id" not in config.push_to_hub_if_best_kwargs:
+                raise ValueError("You have to specify repo_id in order to push the model to the hub!")
+            self.push_to_hub_kwargs = config.push_to_hub_if_best_kwargs
+            self.compare_step = 0
+            self.highest_reward = torch.tensor(-float("inf"))
 
         # post process for PP
         if not getattr(self.model, "is_sequential_parallel", False):
@@ -434,7 +442,8 @@ class PPOTrainer(BaseTrainer):
         outputs = []
 
         padding_side_default = self.tokenizer.padding_side
-        self.tokenizer.padding_side = "left"
+        if not self.is_encoder_decoder:
+            self.tokenizer.padding_side = "left"
 
         # in case we have fewer examples than bs
         batch_size = min(len(query_tensors), batch_size)
@@ -461,7 +470,11 @@ class PPOTrainer(BaseTrainer):
             generations = self.accelerator.unwrap_model(self.model).generate(**padded_inputs, **generation_kwargs)
 
             for generation, mask in zip(generations, padded_inputs["attention_mask"]):
-                output = generation[(1 - mask).sum() :]  # remove padding
+                if not self.is_encoder_decoder:
+                    output = generation[(1 - mask).sum() :]  # remove padding
+                else:
+                    output = generation
+
                 if not return_prompt and not self.is_encoder_decoder:
                     output = output[(mask).sum() :]  # remove prompt
                 outputs.append(output)
@@ -495,7 +508,7 @@ class PPOTrainer(BaseTrainer):
             if not isinstance(tensor_list, list):
                 raise ValueError(f"{name} must be a list of tensors - got {type(tensor_list)}")
             if not isinstance(tensor_list[0], torch.Tensor):
-                raise ValueError(f"Elements in {name} must tensors - got {type(tensor_list[0])}")
+                raise ValueError(f"Elements in {name} must be tensors - got {type(tensor_list[0])}")
             if batch_size is not None and len(tensor_list) != batch_size:
                 raise ValueError(
                     f"Batch size ({batch_size}) does not match number of examples - but got {len(tensor_list)} for: {name}"
@@ -539,6 +552,17 @@ class PPOTrainer(BaseTrainer):
         bs = self.config.batch_size
 
         queries, responses, scores = self._step_safety_checker(bs, queries, responses, scores)
+
+        # if we want to push best model to the hub
+        if hasattr(self, "highest_reward"):
+            if self.compare_step % self.config.compare_steps == 0:
+                curr_mean_reward = torch.tensor(scores).mean()
+                # if the best reward ever seen
+                if curr_mean_reward > self.highest_reward:
+                    self.highest_reward = curr_mean_reward
+                    # push model to hub
+                    self.push_to_hub(**self.push_to_hub_kwargs)
+            self.compare_step += 1
 
         timing = dict()
         t0 = time.time()
@@ -670,6 +694,8 @@ class PPOTrainer(BaseTrainer):
             train_stats=train_stats,
             kl_coef=self.kl_ctl.value,
             masks=masks,
+            queries=queries,
+            responses=responses,
         )
         # Gather/Reduce stats from all processes
         if self.is_distributed:
@@ -954,9 +980,9 @@ class PPOTrainer(BaseTrainer):
             old_logprobs (`torch.FloatTensor`):
                 Log probabilities of the model, shape (`batch_size`, `response_length`)
             values (`torch.FloatTensor`):
-                Values of the value head, shape (`batch_size`, `hidden_dim`)
+                Values of the value head, shape (`batch_size`, `response_length`)
             rewards (`torch.FloatTensor`):
-                Rewards from the reward model, shape (`batch_size`)
+                Rewards from the reward model, shape (`batch_size`, `response_length`)
             logits (`torch.FloatTensor`):
                 Logits of the model, shape (`batch_size`, `response_length`, `vocab_size`)
             v_pred (`torch.FloatTensor`):
@@ -1075,6 +1101,17 @@ class PPOTrainer(BaseTrainer):
             "ppo/std_scores": std_scores,
         }
 
+        # Log text properties
+        query_lens = torch.tensor([len(query) for query in data["queries"]], dtype=torch.float)
+        response_lens = torch.tensor([len(response) for response in data["responses"]], dtype=torch.float)
+
+        stats["tokens/queries_len_mean"] = torch.mean(query_lens).cpu().numpy().item()
+        stats["tokens/queries_len_std"] = torch.std(query_lens).cpu().numpy().item()
+        stats["tokens/queries_dist"] = query_lens.cpu().numpy()
+        stats["tokens/responses_len_mean"] = torch.mean(response_lens).cpu().numpy().item()
+        stats["tokens/responses_len_std"] = torch.std(response_lens).cpu().numpy().item()
+        stats["tokens/responses_dist"] = response_lens.cpu().numpy()
+
         for k, v in data["train_stats"].items():
             stats[f"ppo/{k}"] = torch.mean(v, axis=0)
         stats["ppo/val/var_explained"] = 1 - stats["ppo/val/error"] / stats["ppo/returns/var"]
@@ -1131,6 +1168,10 @@ class PPOTrainer(BaseTrainer):
             for k, v in logs.items():
                 if isinstance(v, torch.Tensor) and v.dtype == torch.bfloat16:
                     logs[k] = v.float()
+
+            logs["env/reward_mean"] = torch.mean(rewards).cpu().numpy().item()
+            logs["env/reward_std"] = torch.std(rewards).cpu().numpy().item()
+            logs["env/reward_dist"] = rewards.cpu().numpy()
 
             logs["env/reward_mean"] = torch.mean(rewards).cpu().numpy().item()
             logs["env/reward_std"] = torch.std(rewards).cpu().numpy().item()

@@ -15,14 +15,18 @@
     title: Model Classes
   - local: trainer
     title: Trainer Classes
+  - local: reward_trainer
+    title: Training your own reward model
   title: API
 - sections: 
   - local: sentiment_tuning
     title: Sentiment Tuning
-  - local: sentiment_tuning_peft
+  - local: lora_tuning_peft
     title: Peft support - Low rank adaption of 8 bit models
   - local: summarization_reward_tuning
     title: Summarization Reward Tuning
   - local: detoxifying_a_lm
     title: Detoxifying a Language Model
+  - local: using_llama_models
+    title: Using LLaMA with TRL
   title: Examples
