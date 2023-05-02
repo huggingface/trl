@@ -143,6 +143,22 @@ class PeftSavingCallback(TrainerCallback):
             os.remove(os.path.join(checkpoint_path, "pytorch_model.bin"))
 ```
 If you want to add more callbacks, make sure to add this one as well to properly save the adapters only during training.
+```python
+...
+
+callbacks = [YourCustomCallback(), PeftSavingCallback()]
+
+trainer = SFTTrainer(
+    "EleutherAI/gpt-neo-125m",
+    train_dataset=dataset,
+    dataset_text_field="text",
+    torch_dtype=torch.bfloat16,
+    peft_config=peft_config,
+    callbacks=callbacks
+)
+
+trainer.train()
+```
 
 ## Best practices
 
