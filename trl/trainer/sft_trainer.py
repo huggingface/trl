@@ -286,7 +286,7 @@ class SFTTrainer(Trainer):
                 element[dataset_text_field] if not use_formatting_func else formatting_func(element),
                 truncation=True,
                 max_length=max_seq_len,
-                return_overflowing_tokens=True,
+                return_overflowing_tokens=False,
                 return_length=True,
             )
             input_batch = []
