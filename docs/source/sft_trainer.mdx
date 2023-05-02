@@ -73,9 +73,9 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
-### Packing dataset (`ConstantLengthDataset`)
+### Packing dataset ([`ConstantLengthDataset`])
 
-[`SFTTrainer`] supports _example packing_, where multiple short examples are packed in the same input sequence to increase training efficiency. This is done with the `ConstantLengthDataset` utility class that returns constant length chunks of tokens from a stream of examples. To enable the usage of this dataset class, simply pass `packing=True` to the [`SFTTrainer`] constructor.
+[`SFTTrainer`] supports _example packing_, where multiple short examples are packed in the same input sequence to increase training efficiency. This is done with the [`ConstantLengthDataset`] utility class that returns constant length chunks of tokens from a stream of examples. To enable the usage of this dataset class, simply pass `packing=True` to the [`SFTTrainer`] constructor.
 
 ```python
 ...
@@ -108,7 +108,7 @@ trainer = SFTTrainer(
 
 trainer.train()
 ```
-You can also customize the `ConstantLengthDataset` much more by directly passing the arguments to the [`SFTTrainer`] constructor. Please refer to that class' signature for more information.
+You can also customize the [`ConstantLengthDataset`] much more by directly passing the arguments to the [`SFTTrainer`] constructor. Please refer to that class' signature for more information.
 
 ### Control over the pretrained model
 
@@ -201,3 +201,7 @@ Pay attention to the following best practices when training a model with that tr
 ## SFTTrainer
 
 [[autodoc]] SFTTrainer
+
+## ConstantLengthDataset
+
+[[autodoc]] trainer.ConstantLengthDataset
