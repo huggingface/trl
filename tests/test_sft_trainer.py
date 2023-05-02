@@ -79,7 +79,8 @@ class SFTTrainerTester(unittest.TestCase):
         cls.train_dataset = ConstantLengthDataset(
             cls.tokenizer,
             cls.dummy_dataset,
-            formatting_prompts_func,
+            dataset_text_field=None,
+            formatting_func=formatting_prompts_func,
             seq_length=16,
             num_of_sequences=16,
         )
@@ -87,7 +88,8 @@ class SFTTrainerTester(unittest.TestCase):
         cls.eval_dataset = ConstantLengthDataset(
             cls.tokenizer,
             cls.dummy_dataset,
-            formatting_prompts_func,
+            dataset_text_field=None,
+            formatting_func=formatting_prompts_func,
             seq_length=16,
             num_of_sequences=16,
         )
@@ -96,7 +98,8 @@ class SFTTrainerTester(unittest.TestCase):
         formatted_dataset = ConstantLengthDataset(
             self.tokenizer,
             self.dummy_dataset,
-            formatting_prompts_func,
+            dataset_text_field=None,
+            formatting_func=formatting_prompts_func,
         )
 
         self.assertTrue(len(formatted_dataset) == len(self.dummy_dataset))

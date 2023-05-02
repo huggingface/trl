@@ -134,6 +134,8 @@ class ConstantLengthDataset(IterableDataset):
                 The processor used for proccessing the data.
             dataset (`dataset.Dataset`):
                 Dataset with text files.
+            dataset_text_field (`str`, **optional**):
+                Name of the field in the dataset that contains the text. Used only if `formatting_func` is `None`.
             formatting_func (`Callable`, **optional**):
                 Function that formats the text before tokenization. Usually it is recommended to have follows a certain
                 pattern such as `"### Question: {question}\n ### Answer: {answer}\n"`
@@ -153,6 +155,7 @@ class ConstantLengthDataset(IterableDataset):
         self,
         tokenizer,
         dataset,
+        dataset_text_field=None,
         formatting_func=None,
         infinite=False,
         seq_length=1024,
@@ -175,7 +178,7 @@ class ConstantLengthDataset(IterableDataset):
         self.current_size = 0
         self.max_buffer_size = seq_length * chars_per_token * num_of_sequences
         if formatting_func is None:
-            self.formatting_func = lambda x: x
+            self.formatting_func = lambda x: x[dataset_text_field]
         else:
             self.formatting_func = formatting_func
 

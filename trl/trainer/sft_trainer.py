@@ -263,7 +263,8 @@ class SFTTrainer(Trainer):
 
             dataset = ConstantLengthDataset(
                 tokenizer,
-                dataset[dataset_text_field] if dataset_text_field is not None else dataset,
+                dataset,
+                dataset_text_field=dataset_text_field,
                 formatting_func=formatting_func,
                 seq_length=max_seq_length,
                 infinite=infinite,
