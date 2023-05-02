@@ -136,7 +136,7 @@ class ConstantLengthDataset(IterableDataset):
                 Dataset with text files.
             formatting_func (`Callable`, **optional**):
                 Function that formats the text before tokenization. Usually it is recommended to have follows a certain
-                pattern such as "### Question: {question}\n ### Answer: {answer}\n"
+                pattern such as `"### Question: {question}\n ### Answer: {answer}\n"`
             infinite (`bool`, *optional*, defaults to `False`):
                 If True the iterator is reset after dataset reaches end else stops.
             seq_length (`int`, *optional*, defaults to `1024`):
