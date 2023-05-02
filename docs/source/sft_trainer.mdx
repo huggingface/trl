@@ -1,10 +1,10 @@
 # Supervised Fine-tuning Trainer 
 
-When doing RLHF, the supervised finetuning step is a very crucial step. In TRL we provide an easy-to-use API to create your SFT models and train them with few lines of code on your dataset.
+When doing RLHF, supervised fine-tuning (or SFT for short) is a very crucial step. In TRL we provide an easy-to-use API to create your SFT models and train them with few lines of code on your dataset.
 
 ## Quickstart
 
-If you have a dataset hosted on 🤗 Hub, you can easily fine-tune your SFT model using `SFTTrainer` from TRL. Let us assume your dataset is `imdb` , the text you want to predict is inside `text` field of the dataset and you want to fine-tune `facebook/opt-350m` model.
+If you have a dataset hosted on the 🤗 Hub, you can easily fine-tune your SFT model using `SFTTrainer` from TRL. Let us assume your dataset is `imdb`, the text you want to predict is inside the `text` field of the dataset, and you want to fine-tune the `facebook/opt-350m` model. The following code-snippet takes care of all the data pre-processing and training for you:
 
 ```python
 from datasets import load_dataset
@@ -17,9 +17,10 @@ trainer = SFTTrainer(
     train_dataset=dataset,
     dataset_text_field="text",
 )
+trainer.train()
 ```
 
-Of course you can also construct a model outside of the trainer and pass it to the trainer. For example:
+You can also construct a model outside of the trainer and pass it as follows:
 
 ```python
 from transformers import AutoModelForCausalLM
@@ -39,14 +40,14 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
-The above snippets will use the default training arguments from [`transformers.TrainingArguments`](https://huggingface.co/docs/transformers/main_classes/trainer#transformers.TrainingArguments) class. If you want to modify that, make sure to create your own `TrainingArguments` object and pass it to the `SFTTrainer` constructor as it is done on the [`supervised_finetuning.py` script](https://github.com/lvwerra/trl/blob/main/examples/stack_llama/scripts/supervised_finetuning.py) on the stack-llama example.
+The above snippets will use the default training arguments from the [`transformers.TrainingArguments`](https://huggingface.co/docs/transformers/main_classes/trainer#transformers.TrainingArguments) class. If you want to modify that, make sure to create your own `TrainingArguments` object and pass it to the `SFTTrainer` constructor as it is done on the [`supervised_finetuning.py` script](https://github.com/lvwerra/trl/blob/main/examples/stack_llama/scripts/supervised_finetuning.py) on the stack-llama example.
 
 
 ## Advanced usage
 
 ### Packing dataset (`ConstantLengthDataset`)
 
-`SFTTrainer` supports the integration of packed dataset. This is done with the `ConstantLengthDataset` utility clss that returns constant length chunks of tokens from stream of text files. To enable the usage of this dataset class, simply pass `packing=True` to the `SFTTrainer` constructor.
+`SFTTrainer` supports _example packing_, where multiple short examples are packed in the same input sequence to increase training efficiency. This is done with the `ConstantLengthDataset` utility class that returns constant length chunks of tokens from a stream of examples. To enable the usage of this dataset class, simply pass `packing=True` to the `SFTTrainer` constructor.
 
 ```python
 ...
@@ -82,7 +83,10 @@ You can also customize the `ConstantLengthDataset` much more by directly passing
 
 ### Control over the pretrained model
 
-You can directly pass the kwargs of `.from_pretrained` method to the `SFTTrainer`. For example, if you want to load a model in a different precision, analoguous to `model = AutoModelForCausalLM.from_pretrained("facebook/opt-350m", torch_dtype=torch.bfloat16)`, you can do:
+You can directly pass the kwargs of the `from_pretrained()` method to the `SFTTrainer`. For example, if you want to load a model in a different precision, analoguous to 
+
+```python
+model = AutoModelForCausalLM.from_pretrained("facebook/opt-350m", torch_dtype=torch.bfloat16)
 
 ```python
 ...
@@ -96,7 +100,7 @@ trainer = SFTTrainer(
 
 trainer.train()
 ```
-Note that all key word arguments of `.from_pretrained` are supported. 
+Note that all keyword arguments of `from_pretrained()` are supported. 
 
 ### Training adapters
 
@@ -144,10 +148,10 @@ If you want to add more callbacks, make sure to add this one as well to properly
 
 Pay attention to the following best practices when training a model with that trainer:
 
-- `SFTTrainer` always padds by default the sequences to the `max_seq_length` argument of the `SFTTrainer`. If none is passed, the trainer will retrieve that value from the tokenizer. Some tokenizers have this value broken, so there is a check to retrieve the minimum between 2048 and that value. Make sure to check it before training.
+- `SFTTrainer` always pads by default the sequences to the `max_seq_length` argument of the `SFTTrainer`. If none is passed, the trainer will retrieve that value from the tokenizer. Some tokenizers do not provide default value, so there is a check to retrieve the minimum between 2048 and that value. Make sure to check it before training.
 - For training adapters in 8bit, you might need to tweak the arguments of the `prepare_model_for_int8_training` method from PEFT, hence we advise users to use `prepare_in_int8_kwargs` field, or create the `PeftModel` outside the `SFTTrainer` and pass it.
 - For a more memory-efficient training using adapters, you can load the base model in 8bit, for that simply add `load_in_8bit` argument when creating the `SFTTrainer`, or create a base model in 8bit outside the trainer and pass it.  
-- If you create a model outside the trainer, make sure to not pass to the trainer any additional keyword arguments that are relative to `.from_pretrained` method.
+- If you create a model outside the trainer, make sure to not pass to the trainer any additional keyword arguments that are relative to `from_pretrained()` method.
 
 ## SFTTrainer
 
