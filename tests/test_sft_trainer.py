@@ -184,7 +184,20 @@ class SFTTrainerTester(unittest.TestCase):
 
             # This should work
             _ = SFTTrainer(
-                model=self.model, args=training_args, train_dataset=self.dummy_dataset, dataset_text_field="text"
+                model=self.model,
+                args=training_args,
+                train_dataset=self.dummy_dataset,
+                formatting_func=formatting_prompts_func,
+                packing=True,
+            )
+
+            # This should work as well
+            _ = SFTTrainer(
+                model=self.model,
+                args=training_args,
+                train_dataset=self.dummy_dataset,
+                formatting_func=formatting_prompts_func,
+                packing=False,
             )
 
     def test_sft_trainer_with_model_num_train_epochs(self):
@@ -312,6 +325,65 @@ class SFTTrainerTester(unittest.TestCase):
                 max_seq_length=16,
                 num_of_sequences=16,
                 packing=True,
+            )
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            self.assertTrue("pytorch_model.bin" in os.listdir(tmp_dir + "/checkpoint-2"))
+
+        # with formatting_func + packed
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                evaluation_strategy="steps",
+                max_steps=2,
+                save_steps=1,
+                per_device_train_batch_size=2,
+            )
+
+            trainer = SFTTrainer(
+                model=self.model,
+                args=training_args,
+                train_dataset=self.dummy_dataset,
+                formatting_func=formatting_prompts_func,
+                max_seq_length=16,
+                num_of_sequences=16,
+                packing=True,
+            )
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            self.assertTrue("pytorch_model.bin" in os.listdir(tmp_dir + "/checkpoint-2"))
+
+        # with formatting_func + packed
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                evaluation_strategy="steps",
+                max_steps=2,
+                save_steps=1,
+                per_device_train_batch_size=2,
+            )
+
+            def formatting_prompts_func_batched(example):
+                output_text = []
+                for i, question in enumerate(example["question"]):
+                    text = f"### Question: {question}\n ### Answer: {example['answer'][i]}"
+                    output_text.append(text)
+                return output_text
+
+            trainer = SFTTrainer(
+                model=self.model,
+                args=training_args,
+                train_dataset=self.dummy_dataset,
+                formatting_func=formatting_prompts_func_batched,
+                max_seq_length=16,
             )
 
             trainer.train()

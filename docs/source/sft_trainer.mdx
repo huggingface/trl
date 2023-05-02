@@ -42,8 +42,36 @@ trainer.train()
 
 The above snippets will use the default training arguments from the [`transformers.TrainingArguments`](https://huggingface.co/docs/transformers/main_classes/trainer#transformers.TrainingArguments) class. If you want to modify that, make sure to create your own `TrainingArguments` object and pass it to the `SFTTrainer` constructor as it is done on the [`supervised_finetuning.py` script](https://github.com/lvwerra/trl/blob/main/examples/stack_llama/scripts/supervised_finetuning.py) on the stack-llama example.
 
-
 ## Advanced usage
+
+### Format your input prompts
+
+For instruction fine-tuning, it is quite common to have two columns inside the dataset: one for the prompt & the other for the response. 
+This allows people to format examples like [Stanford-Alpaca](https://github.com/tatsu-lab/stanford_alpaca) did as follows:
+```bash
+Below is an instruction ...
+
+### Instruction
+{prompt}
+
+### Response:
+{completion}
+```
+Let us assume your dataset has two fields, `question` and `answer`. Therefore you can just run:
+```python
+...
+def formatting_prompts_func(example):
+    text = f"### Question: {example['question']}\n ### Answer: {example['answer']}"
+    return text
+
+trainer = SFTTrainer(
+    model,
+    train_dataset=dataset,
+    formatting_func=formatting_prompts_func,
+)
+
+trainer.train()
+```
 
 ### Packing dataset (`ConstantLengthDataset`)
 
@@ -62,6 +90,8 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
+#### Customize your prompts using packed dataset
+
 If your dataset has several fields that you want to combine, for example if the dataset has `question` and `answer` fields and you want to combine them, you can pass a formatting function to the trainer that will take care of that. For example:
 
 ```python
@@ -72,7 +102,6 @@ def formatting_func(example):
 trainer = SFTTrainer(
     "facebook/opt-350m",
     train_dataset=dataset,
-    dataset_text_field="text",
     packing=True,
     formatting_func=formatting_func
 )
