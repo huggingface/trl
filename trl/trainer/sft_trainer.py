@@ -84,9 +84,6 @@ class SFTTrainer(Trainer):
             The function to use to preprocess the logits before computing the metrics.
         peft_config (`Optional[PeftConfig]`):
             The PeftConfig object to use to initialize the PeftModel.
-        prepare_in_int8_kwargs (`Dict`):
-            The arguments to pass to the `prepare_model_for_int8_training` function, in case a `PeftConfig` has been passed and in case
-            users want to train their models in 8bit mode.
         dataset_text_field (`Optional[str]`):
             The name of the text field of the dataset, in case this is passed by a user, the trainer will automatically create a
             `ConstantLengthDataset` based on the `dataset_text_field` argument.
@@ -127,7 +124,6 @@ class SFTTrainer(Trainer):
         infinite: Optional[bool] = False,
         num_of_sequences: Optional[int] = 1024,
         chars_per_token: Optional[float] = 3.6,
-        prepare_in_int8_kwargs: Optional[Dict] = {},
         **pretrained_kwargs,
     ):
         if isinstance(model, str):
@@ -159,7 +155,7 @@ class SFTTrainer(Trainer):
                 )
 
                 if getattr(model, "is_loaded_in_8bit", False):
-                    model = prepare_model_for_int8_training(model, **prepare_in_int8_kwargs)
+                    model = prepare_model_for_int8_training(model)
 
                 model = get_peft_model(model, peft_config)
 
