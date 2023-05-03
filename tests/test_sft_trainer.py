@@ -115,29 +115,6 @@ class SFTTrainerTester(unittest.TestCase):
             decoded_text = self.tokenizer.decode(example["input_ids"])
             self.assertTrue(("Question" in decoded_text) and ("Answer" in decoded_text))
 
-    def test_sft_pretrained_kwargs(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
-                output_dir=tmp_dir,
-                dataloader_drop_last=True,
-                evaluation_strategy="steps",
-                max_steps=4,
-                eval_steps=2,
-                save_steps=2,
-                per_device_train_batch_size=2,
-            )
-
-            trainer = SFTTrainer(
-                model=self.model_id,
-                args=training_args,
-                train_dataset=self.train_dataset,
-                eval_dataset=self.eval_dataset,
-                torch_dtype=torch.float16,
-                packing=True,
-            )
-
-            self.assertTrue(trainer.model.dtype == torch.float16)
-
     def test_sft_trainer(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(

@@ -17,7 +17,6 @@ from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
-from accelerate import Accelerator
 from datasets import Dataset
 from transformers import (
     AutoModelForCausalLM,
@@ -124,17 +123,11 @@ class SFTTrainer(Trainer):
         infinite: Optional[bool] = False,
         num_of_sequences: Optional[int] = 1024,
         chars_per_token: Optional[float] = 3.6,
-        **pretrained_kwargs,
     ):
         if isinstance(model, str):
             warnings.warn(
                 "You passed a model_id to the SFTTrainer. This will automatically create an "
                 "`AutoModelForCausalLM` or a `PeftModel` (if you passed a `peft_config`) for you."
-            )
-        elif len(pretrained_kwargs) > 1:
-            raise ValueError(
-                "You can't pass `.from_pretrained` keyword arguments to the SFTTrainer if you pass a model object.",
-                " make sure to properly initialize the model object and pass it to the SFTTrainer without additional arguments.",
             )
 
         if is_peft_available() and peft_config is not None:
@@ -145,13 +138,8 @@ class SFTTrainer(Trainer):
                 )
 
             if not isinstance(model, PeftModel):
-                if pretrained_kwargs.get("load_in_8bit", False) and "device_map" not in pretrained_kwargs:
-                    device_map = {"": Accelerator().process_index}
-                    pretrained_kwargs["device_map"] = device_map
-
                 model = AutoModelForCausalLM.from_pretrained(
                     model,
-                    **pretrained_kwargs,
                 )
 
                 if getattr(model, "is_loaded_in_8bit", False):
@@ -162,7 +150,7 @@ class SFTTrainer(Trainer):
             if callbacks is None:
                 callbacks = [PeftSavingCallback]
         elif not isinstance(model, PreTrainedModel):
-            model = AutoModelForCausalLM.from_pretrained(model, **pretrained_kwargs)
+            model = AutoModelForCausalLM.from_pretrained(model)
 
         if tokenizer is None:
             tokenizer = AutoTokenizer.from_pretrained(model.config._name_or_path)
