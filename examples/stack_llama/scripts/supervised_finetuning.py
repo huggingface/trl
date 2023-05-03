@@ -1,13 +1,14 @@
 import argparse
 import os
 
-import torch
 from accelerate import Accelerator
 from datasets import load_dataset
-from peft import LoraConfig, get_peft_model, prepare_model_for_int8_training
-from torch.utils.data import IterableDataset
+from peft import LoraConfig
 from tqdm import tqdm
-from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, Trainer, TrainingArguments, logging, set_seed
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, TrainingArguments, logging, set_seed
+
+from trl import SFTTrainer
+from trl.trainer import ConstantLengthDataset
 
 
 """
@@ -27,7 +28,7 @@ def get_args():
 
     parser.add_argument("--seq_length", type=int, default=1024)
     parser.add_argument("--max_steps", type=int, default=10000)
-    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     parser.add_argument("--eos_token_id", type=int, default=49152)
 
@@ -38,7 +39,7 @@ def get_args():
 
     parser.add_argument("--local_rank", type=int, default=0)
     parser.add_argument("--no_fp16", action="store_false")
-    parser.add_argument("--bf16", action="store_true", default=True)
+    parser.add_argument("--bf16", action="store_true", default=False)
     parser.add_argument("--no_gradient_checkpointing", action="store_false", default=False)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--num_workers", type=int, default=None)
@@ -87,66 +88,6 @@ def prepare_sample_text(example):
     return text
 
 
-class ConstantLengthDataset(IterableDataset):
-    """
-    Iterable dataset that returns constant length chunks of tokens from stream of text files.
-        Args:
-            tokenizer (Tokenizer): The processor used for proccessing the data.
-            dataset (dataset.Dataset): Dataset with text files.
-            infinite (bool): If True the iterator is reset after dataset reaches end else stops.
-            seq_length (int): Length of token sequences to return.
-            num_of_sequences (int): Number of token sequences to keep in buffer.
-            chars_per_token (int): Number of characters per token used to estimate number of tokens in text buffer.
-    """
-
-    def __init__(
-        self,
-        tokenizer,
-        dataset,
-        infinite=False,
-        seq_length=1024,
-        num_of_sequences=1024,
-        chars_per_token=3.6,
-    ):
-        self.tokenizer = tokenizer
-        self.concat_token_id = tokenizer.eos_token_id if tokenizer.eos_token_id else args.eos_token_id
-        self.dataset = dataset
-        self.seq_length = seq_length
-        self.infinite = infinite
-        self.current_size = 0
-        self.max_buffer_size = seq_length * chars_per_token * num_of_sequences
-
-    def __iter__(self):
-        iterator = iter(self.dataset)
-        more_examples = True
-        while more_examples:
-            buffer, buffer_len = [], 0
-            while True:
-                if buffer_len >= self.max_buffer_size:
-                    break
-                try:
-                    buffer.append(prepare_sample_text(next(iterator)))
-                    buffer_len += len(buffer[-1])
-                except StopIteration:
-                    if self.infinite:
-                        iterator = iter(self.dataset)
-                    else:
-                        more_examples = False
-                        break
-            tokenized_inputs = self.tokenizer(buffer, truncation=False)["input_ids"]
-            all_token_ids = []
-            for tokenized_input in tokenized_inputs:
-                all_token_ids.extend(tokenized_input + [self.concat_token_id])
-            for i in range(0, len(all_token_ids), self.seq_length):
-                input_ids = all_token_ids[i : i + self.seq_length]
-                if len(input_ids) == self.seq_length:
-                    self.current_size += 1
-                    yield {
-                        "input_ids": torch.LongTensor(input_ids),
-                        "labels": torch.LongTensor(input_ids),
-                    }
-
-
 def create_datasets(tokenizer, args):
     dataset = load_dataset(
         args.dataset_name,
@@ -173,6 +114,7 @@ def create_datasets(tokenizer, args):
     train_dataset = ConstantLengthDataset(
         tokenizer,
         train_data,
+        formatting_func=prepare_sample_text,
         infinite=True,
         seq_length=args.seq_length,
         chars_per_token=chars_per_token,
@@ -180,6 +122,7 @@ def create_datasets(tokenizer, args):
     valid_dataset = ConstantLengthDataset(
         tokenizer,
         valid_data,
+        formatting_func=prepare_sample_text,
         infinite=False,
         seq_length=args.seq_length,
         chars_per_token=chars_per_token,
@@ -189,15 +132,6 @@ def create_datasets(tokenizer, args):
 
 def run_training(args, train_data, val_data):
     print("Loading the model")
-    # disable caching mechanism when using gradient checkpointing
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model_path,
-        trust_remote_code=True,
-        use_cache=not args.no_gradient_checkpointing,
-        load_in_8bit=True,
-        device_map={"": Accelerator().process_index},
-    )
-    model = prepare_model_for_int8_training(model)
 
     lora_config = LoraConfig(
         r=16,
@@ -206,10 +140,6 @@ def run_training(args, train_data, val_data):
         bias="none",
         task_type="CAUSAL_LM",
     )
-
-    model = get_peft_model(model, lora_config)
-
-    print_trainable_parameters(model)
 
     train_data.start_iteration = 0
 
@@ -238,20 +168,33 @@ def run_training(args, train_data, val_data):
         ddp_find_unused_parameters=False,
     )
 
-    trainer = Trainer(model=model, args=training_args, train_dataset=train_data, eval_dataset=val_data)
+    model = AutoModelForCausalLM.from_pretrained(
+        args.model_path, load_in_8bit=True, device_map={"": Accelerator().process_index}
+    )
+
+    trainer = SFTTrainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_data,
+        eval_dataset=val_data,
+        peft_config=lora_config,
+        packing=True,
+    )
+
+    print_trainable_parameters(trainer.model)
 
     print("Training...")
     trainer.train()
 
     print("Saving last checkpoint of the model")
-    model.save_pretrained(os.path.join(args.output_dir, "final_checkpoint/"))
+    trainer.model.save_pretrained(os.path.join(args.output_dir, "final_checkpoint/"))
 
 
 def main(args):
     config = AutoConfig.from_pretrained(args.model_path)
     architecture = config.architectures[0]
 
-    tokenizer = AutoTokenizer.from_pretrained(args.model_path, use_auth_token=True)
+    tokenizer = AutoTokenizer.from_pretrained(args.model_path)
 
     if "Llama" in architecture:
         print("Setting EOS, BOS, and UNK tokens for LLama tokenizer")
