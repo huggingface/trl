@@ -15,7 +15,6 @@ import os
 import tempfile
 import unittest
 
-import torch
 from datasets import Dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
 
