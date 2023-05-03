@@ -1,10 +1,11 @@
 import argparse
 import os
 
+from accelerate import Accelerator
 from datasets import load_dataset
 from peft import LoraConfig
 from tqdm import tqdm
-from transformers import AutoConfig, AutoTokenizer, TrainingArguments, logging, set_seed
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, TrainingArguments, logging, set_seed
 
 from trl import SFTTrainer
 from trl.trainer import ConstantLengthDataset
@@ -113,7 +114,7 @@ def create_datasets(tokenizer, args):
     train_dataset = ConstantLengthDataset(
         tokenizer,
         train_data,
-        prepare_sample_text,
+        formatting_func=prepare_sample_text,
         infinite=True,
         seq_length=args.seq_length,
         chars_per_token=chars_per_token,
@@ -121,7 +122,7 @@ def create_datasets(tokenizer, args):
     valid_dataset = ConstantLengthDataset(
         tokenizer,
         valid_data,
-        prepare_sample_text,
+        formatting_func=prepare_sample_text,
         infinite=False,
         seq_length=args.seq_length,
         chars_per_token=chars_per_token,
@@ -167,13 +168,16 @@ def run_training(args, train_data, val_data):
         ddp_find_unused_parameters=False,
     )
 
+    model = AutoModelForCausalLM.from_pretrained(
+        args.model_path, load_in_8bit=True, device_map={"": Accelerator().process_index}
+    )
+
     trainer = SFTTrainer(
-        model=args.model_path,
+        model=model,
         args=training_args,
         train_dataset=train_data,
         eval_dataset=val_data,
         peft_config=lora_config,
-        load_in_8bit=True,
         packing=True,
     )
 
@@ -190,7 +194,7 @@ def main(args):
     config = AutoConfig.from_pretrained(args.model_path)
     architecture = config.architectures[0]
 
-    tokenizer = AutoTokenizer.from_pretrained(args.model_path, use_auth_token=True)
+    tokenizer = AutoTokenizer.from_pretrained(args.model_path)
 
     if "Llama" in architecture:
         print("Setting EOS, BOS, and UNK tokens for LLama tokenizer")
