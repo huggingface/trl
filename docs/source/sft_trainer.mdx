@@ -154,7 +154,6 @@ trainer = SFTTrainer(
     "EleutherAI/gpt-neo-125m",
     train_dataset=dataset,
     dataset_text_field="text",
-    torch_dtype=torch.bfloat16,
     peft_config=peft_config
 )
 
@@ -184,6 +183,38 @@ trainer = SFTTrainer(
     torch_dtype=torch.bfloat16,
     peft_config=peft_config,
     callbacks=callbacks
+)
+
+trainer.train()
+```
+
+### Training adapters with base 8 bit models 
+
+For that you need to first load your 8bit model outside the Trainer and pass a `PeftConfig` to the trainer. For example:
+
+```python
+...
+
+peft_config = LoraConfig(
+    r=16,
+    lora_alpha=32,
+    lora_dropout=0.05,
+    bias="none",
+    task_type="CAUSAL_LM",
+)
+
+model = AutoModelForCausalLM.from_pretrained(
+    "EleutherAI/gpt-neo-125m",
+    load_in_8bit=True,
+    device_map="auto",
+)
+
+trainer = SFTTrainer(
+    model,
+    train_dataset=dataset,
+    dataset_text_field="text",
+    torch_dtype=torch.bfloat16,
+    peft_config=peft_config,
 )
 
 trainer.train()
