@@ -138,9 +138,10 @@ class SFTTrainer(Trainer):
                 )
 
             if not isinstance(model, PeftModel):
-                model = AutoModelForCausalLM.from_pretrained(
-                    model,
-                )
+                if not isinstance(model, PreTrainedModel):
+                    model = AutoModelForCausalLM.from_pretrained(
+                        model,
+                    )
 
                 if getattr(model, "is_loaded_in_8bit", False):
                     model = prepare_model_for_int8_training(model)
