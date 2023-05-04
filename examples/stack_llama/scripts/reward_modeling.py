@@ -78,7 +78,7 @@ class ScriptArguments:
     )
     optim: Optional[str] = field(
         default="adamw_hf",
-        metadata={"help": "Enables gradient checkpointing."},
+        metadata={"help": "The optimizer to use."},
     )
     lr_scheduler_type: Optional[str] = field(
         default="linear",
