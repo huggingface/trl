@@ -165,6 +165,7 @@ class PreTrainedModelWrapper(nn.Module):
                 )
 
                 pretrained_model = PeftModel.from_pretrained(pretrained_model, pretrained_model_name_or_path)
+                pretrained_model_name_or_path = pretrained_model # avoid enter resume_training branch in line 206
             else:
                 pretrained_model = cls.transformers_parent_class.from_pretrained(
                     pretrained_model_name_or_path, *model_args, **pretrained_kwargs
