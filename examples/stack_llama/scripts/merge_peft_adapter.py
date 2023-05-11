@@ -4,6 +4,7 @@ from typing import Optional
 import peft
 import torch
 from peft import PeftConfig, PeftModel
+from peft.utils import _get_submodules
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
 
@@ -52,7 +53,7 @@ model.eval()
 
 key_list = [key for key, _ in model.base_model.model.named_modules() if "lora" not in key]
 for key in key_list:
-    parent, target, target_name = model.base_model._get_submodules(key)
+    parent, target, target_name = _get_submodules(model.base_model.model, key)
     if isinstance(target, peft.tuners.lora.Linear):
         bias = target.bias is not None
         new_module = torch.nn.Linear(target.in_features, target.out_features, bias=bias)
