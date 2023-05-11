@@ -163,9 +163,7 @@ class PreTrainedModelWrapper(nn.Module):
                     peft_config.base_model_name_or_path, *model_args, **pretrained_kwargs
                 )
 
-                pretrained_model = PeftModel.from_pretrained(
-                    pretrained_model, pretrained_model_name_or_path, is_trainable=True
-                )
+                pretrained_model = PeftModel.from_pretrained(pretrained_model, pretrained_model_name_or_path)
             else:
                 pretrained_model = cls.transformers_parent_class.from_pretrained(
                     pretrained_model_name_or_path, *model_args, **pretrained_kwargs
