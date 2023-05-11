@@ -1083,7 +1083,7 @@ class PPOTrainer(BaseTrainer):
         mean_scores = torch.stack(data["scores"]).mean()  # scores is size `batch_size`
         std_scores = torch.stack(data["scores"]).std()
 
-        if mean_kl.item() < 0.0:
+        if mean_kl.item() < -1.0:
             # warn users
             warnings.warn(
                 f"KL divergence is starting to become negative: {mean_kl.item():.2f} - this might be a precursor for failed training."
