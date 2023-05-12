@@ -4,7 +4,8 @@ Supervised fine-tuning (or SFT for short) is a crucial step in RLHF. In TRL we p
 
 ## Quickstart
 
-If you have a dataset hosted on the 🤗 Hub, you can easily fine-tune your SFT model using [`SFTTrainer`] from TRL. Let us assume your dataset is `imdb`, the text you want to predict is inside the `text` field of the dataset, and you want to fine-tune the `facebook/opt-350m` model. The following code-snippet takes care of all the data pre-processing and training for you:
+If you have a dataset hosted on the 🤗 Hub, you can easily fine-tune your SFT model using [`SFTTrainer`] from TRL. Let us assume your dataset is `imdb`, the text you want to predict is inside the `text` field of the dataset, and you want to fine-tune the `facebook/opt-350m` model. 
+The following code-snippet takes care of all the data pre-processing and training for you:
 
 ```python
 from datasets import load_dataset
@@ -16,9 +17,11 @@ trainer = SFTTrainer(
     "facebook/opt-350m",
     train_dataset=dataset,
     dataset_text_field="text",
+    max_seq_length=512,
 )
 trainer.train()
 ```
+Make sure to pass a correct value for `max_seq_length` as the default value will be set to `4096` which can be large for some datasets.
 
 You can also construct a model outside of the trainer and pass it as follows:
 
@@ -35,6 +38,7 @@ trainer = SFTTrainer(
     model,
     train_dataset=dataset,
     dataset_text_field="text",
+    max_seq_length=512,
 )
 
 trainer.train()
