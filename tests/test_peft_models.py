@@ -191,3 +191,18 @@ class PeftModelTester(unittest.TestCase):
             for p1, p2 in zip(model.named_parameters(), model_from_pretrained.named_parameters()):
                 if p1[0] not in ["v_head.summary.weight", "v_head.summary.bias"]:
                     self.assertTrue(torch.allclose(p1[1], p2[1]), msg=f"{p1[0]} != {p2[0]}")
+
+    def test_continue_training_peft_model(self):
+        r"""
+        Load peft and checks that it can continue training.
+        """
+        causal_lm_model = AutoModelForCausalLM.from_pretrained(self.causal_lm_model_id)
+        pretrained_model = get_peft_model(causal_lm_model, self.lora_config)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            pretrained_model.save_pretrained(tmp_dir)
+            # set is_trainable to True
+            model = AutoModelForCausalLMWithValueHead.from_pretrained(tmp_dir, is_trainable=True)
+            # Check that the number of trainable parameters is correct
+            nb_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+            self.assertEqual(nb_trainable_params, 10273)
