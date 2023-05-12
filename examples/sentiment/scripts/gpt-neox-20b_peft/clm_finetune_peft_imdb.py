@@ -60,7 +60,7 @@ if tokenizer.pad_token_id is None:
 
 if "gpt-neox" in model_args.model_name_or_path:
     model = prepare_model_for_int8_training(
-        model, output_embedding_layer_name="embed_out", layer_norm_names=["layer_norm", "layernorm"]
+        model, output_embedding_layer_name="embed_out"
     )
 else:
     model = prepare_model_for_int8_training(model)

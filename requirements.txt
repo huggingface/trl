@@ -3,3 +3,4 @@ torch>=1.4.0
 tqdm
 transformers
 accelerate
+pert>=0.3.0
