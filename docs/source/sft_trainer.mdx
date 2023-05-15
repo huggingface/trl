@@ -22,10 +22,14 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 <<<<<<< HEAD
+<<<<<<< HEAD
 Make sure to pass a correct value for `max_seq_length` as the default value will be set to `min(tokenizer.model_max_length, 1024)`.
 =======
 Make sure to pass a correct value for `max_seq_length` as the default value will be set to `4096` which can be large for some datasets.
 >>>>>>> fix doc
+=======
+Make sure to pass a correct value for `max_seq_length` as the default value will be set to `min(tokenizer.model_max_length, 1024)`.
+>>>>>>> adapt from suggestions
 
 You can also construct a model outside of the trainer and pass it as follows:
 
