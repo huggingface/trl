@@ -107,9 +107,11 @@ class PreTrainedModelWrapper(nn.Module):
         """
         if kwargs is not None:
             peft_config = kwargs.pop("peft_config", None)
+            is_trainable = kwargs.pop("is_trainable", False)
             trl_model_args, pretrained_kwargs, peft_int8_kwargs = cls._split_kwargs(kwargs)
         else:
             peft_config = None
+            is_trainable = False
             trl_model_args = {}
             pretrained_kwargs = {}
             peft_int8_kwargs = {}
@@ -163,7 +165,9 @@ class PreTrainedModelWrapper(nn.Module):
                     peft_config.base_model_name_or_path, *model_args, **pretrained_kwargs
                 )
 
-                pretrained_model = PeftModel.from_pretrained(pretrained_model, pretrained_model_name_or_path)
+                pretrained_model = PeftModel.from_pretrained(
+                    pretrained_model, pretrained_model_name_or_path, is_trainable=is_trainable
+                )
             else:
                 pretrained_model = cls.transformers_parent_class.from_pretrained(
                     pretrained_model_name_or_path, *model_args, **pretrained_kwargs
