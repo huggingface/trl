@@ -160,7 +160,7 @@ class SFTTrainer(Trainer):
 
         if max_seq_length is None:
             # to overcome some issues with broken tokenizers
-            max_seq_length = min(tokenizer.model_max_length, 4096)
+            max_seq_length = min(tokenizer.model_max_length, 1024)
 
             warnings.warn(
                 f"You didn't pass a `max_seq_length` argument to the SFTTrainer, this will default to {max_seq_length}"
