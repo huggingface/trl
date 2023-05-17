@@ -37,7 +37,6 @@ if is_peft_available():
     )
     from peft.peft_model import set_peft_model_state_dict
 
-
 LAYER_PATTERNS = [
     "transformer.h.{layer}",
     "model.decoder.layers.{layer}",
@@ -112,9 +111,11 @@ class PreTrainedModelWrapper(nn.Module):
         if kwargs is not None:
             peft_config = kwargs.pop("peft_config", None)
             reward_modeling_adapter_id = kwargs.pop("reward_modeling_adapter_id", None)
+            is_trainable = kwargs.pop("is_trainable", False)
             trl_model_args, pretrained_kwargs, peft_int8_kwargs = cls._split_kwargs(kwargs)
         else:
             peft_config = None
+            is_trainable = False
             trl_model_args = {}
             pretrained_kwargs = {}
             peft_int8_kwargs = {}
@@ -173,7 +174,9 @@ class PreTrainedModelWrapper(nn.Module):
                     peft_config.base_model_name_or_path, *model_args, **pretrained_kwargs
                 )
 
-                pretrained_model = PeftModel.from_pretrained(pretrained_model, pretrained_model_name_or_path)
+                pretrained_model = PeftModel.from_pretrained(
+                    pretrained_model, pretrained_model_name_or_path, is_trainable=is_trainable
+                )
             else:
                 pretrained_model = cls.transformers_parent_class.from_pretrained(
                     pretrained_model_name_or_path, *model_args, **pretrained_kwargs
@@ -211,6 +214,7 @@ class PreTrainedModelWrapper(nn.Module):
 
         # if resume_training, load the state_dict again - this is ok since the
         # state_dict is removed from the model after loading it.
+        is_resuming_training = True
         if isinstance(pretrained_model_name_or_path, str):
             filename = os.path.join(pretrained_model_name_or_path, "pytorch_model.bin")
             sharded_index_filename = os.path.join(pretrained_model_name_or_path, "pytorch_model.bin.index.json")
@@ -224,27 +228,35 @@ class PreTrainedModelWrapper(nn.Module):
                     if os.path.exists(sharded_index_filename):
                         index_file_name = sharded_index_filename
                     else:
-                        index_file_name = hf_hub_download(
-                            pretrained_model_name_or_path, "pytorch_model.bin.index.json"
-                        )
+                        try:
+                            index_file_name = hf_hub_download(
+                                pretrained_model_name_or_path, "pytorch_model.bin.index.json"
+                            )
+                        except ValueError:  # not continue training, do not have v_head weight
+                            is_resuming_training = False
+                            logging.warning(
+                                f"A {type(pretrained_model)} model is loaded from '{pretrained_model_name_or_path}', "
+                                f"and no v_head weight is found. This IS expected if you are not resuming PPO training."
+                            )
                     # load json
-                    with open(index_file_name, "r") as f:
-                        index = json.load(f)
-                    # check filename with `v_head` or any known extra module:
-                    files_to_download = set()
-                    for k, v in index["weight_map"].items():
-                        if any([module in k for module in cls.supported_modules]):
-                            files_to_download.add(v)
-                    is_shared = True
-
-            if is_shared:
-                # download each file and add it to the state_dict
-                state_dict = {}
-                for shard_file in files_to_download:
-                    filename = hf_hub_download(pretrained_model_name_or_path, shard_file)
-                    state_dict.update(torch.load(filename, map_location="cpu"))
-            else:
-                state_dict = torch.load(filename, map_location="cpu")
+                    if is_resuming_training:
+                        with open(index_file_name, "r") as f:
+                            index = json.load(f)
+                        # check filename with `v_head` or any known extra module:
+                        files_to_download = set()
+                        for k, v in index["weight_map"].items():
+                            if any([module in k for module in cls.supported_modules]):
+                                files_to_download.add(v)
+                        is_shared = True
+            if is_resuming_training:
+                if is_shared:
+                    # download each file and add it to the state_dict
+                    state_dict = {}
+                    for shard_file in files_to_download:
+                        filename = hf_hub_download(pretrained_model_name_or_path, shard_file)
+                        state_dict.update(torch.load(filename, map_location="cpu"))
+                else:
+                    state_dict = torch.load(filename, map_location="cpu")
 
         else:
             state_dict = pretrained_model_name_or_path.state_dict()
@@ -252,7 +264,8 @@ class PreTrainedModelWrapper(nn.Module):
         model.is_peft_model = is_peft_model
         model.current_device = current_device
 
-        model.post_init(state_dict=state_dict)
+        if is_resuming_training:
+            model.post_init(state_dict=state_dict)
 
         if not is_peft_model and reward_modeling_adapter_id is not None:
             raise ValueError("reward_modeling_adapter_id can only be used with a PeftModel. ")
