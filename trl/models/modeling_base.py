@@ -377,7 +377,7 @@ class PreTrainedModelWrapper(nn.Module):
         if not os.path.exists(filename):
             try:
                 local_filename = hf_hub_download(adapter_model_id, "adapter_model.bin")
-            except:
+            except: # noqa
                 raise ValueError(
                     "Could not find adapter model in the Hub, make sure you have the correct adapter model id."
                 )
