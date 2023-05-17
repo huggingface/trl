@@ -84,6 +84,7 @@ class ScriptArguments:
         default="linear",
         metadata={"help": "The lr scheduler"},
     )
+    max_length: Optional[int] = field(default=512)
 
 
 parser = HfArgumentParser(ScriptArguments)
@@ -186,14 +187,18 @@ def preprocess_function(examples):
     return new_examples
 
 
-# preprocess the dataset and filter out QAs that are longer than 512
+# preprocess the dataset and filter out QAs that are longer than script_args.max_length
 train_dataset = train_dataset.map(
     preprocess_function, batched=True, num_proc=num_proc, remove_columns=original_columns
 )
-train_dataset = train_dataset.filter(lambda x: len(x["input_ids_j"]) <= 512 and len(x["input_ids_k"]) <= 512)
+train_dataset = train_dataset.filter(
+    lambda x: len(x["input_ids_j"]) <= script_args.max_length and len(x["input_ids_k"]) <= script_args.max_length
+)
 
 eval_dataset = eval_dataset.map(preprocess_function, batched=True, num_proc=num_proc, remove_columns=original_columns)
-eval_dataset = eval_dataset.filter(lambda x: len(x["input_ids_j"]) <= 512 and len(x["input_ids_k"]) <= 512)
+eval_dataset = eval_dataset.filter(
+    lambda x: len(x["input_ids_j"]) <= script_args.max_length and len(x["input_ids_k"]) <= script_args.max_length
+)
 
 
 # We need to define a special data collator that batches the data in our j vs k format.
@@ -276,7 +281,7 @@ trainer = RewardTrainer(
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
     compute_metrics=compute_metrics,
-    data_collator=RewardDataCollatorWithPadding(tokenizer=tokenizer, max_length=512),
+    data_collator=RewardDataCollatorWithPadding(tokenizer=tokenizer, max_length=script_args.max_length),
 )
 
 trainer.train(script_args.resume_from_checkpoint)
