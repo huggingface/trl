@@ -27,6 +27,7 @@ from ..import_utils import is_peft_available
 
 if is_peft_available():
     from peft import (
+        LoraConfig,
         PeftConfig,
         PeftModel,
         PeftModelForCausalLM,
@@ -34,6 +35,7 @@ if is_peft_available():
         get_peft_model,
         prepare_model_for_int8_training,
     )
+    from peft.peft_model import set_peft_model_state_dict
 
 LAYER_PATTERNS = [
     "transformer.h.{layer}",
@@ -60,6 +62,7 @@ class PreTrainedModelWrapper(nn.Module):
     transformers_parent_class = None
     supported_args = None
     supported_modules = ("v_head",)
+    supported_rm_modules = ("score",)
     supported_pretrained_model_architectures = (
         (PreTrainedModel)
         if not is_peft_available()
@@ -109,6 +112,7 @@ class PreTrainedModelWrapper(nn.Module):
         if kwargs is not None:
             peft_config = kwargs.pop("peft_config", None)
             is_trainable = kwargs.pop("is_trainable", False)
+            reward_modeling_adapter_id = kwargs.pop("reward_modeling_adapter_id", None)
             trl_model_args, pretrained_kwargs, peft_quantization_kwargs = cls._split_kwargs(kwargs)
         else:
             peft_config = None
@@ -116,6 +120,11 @@ class PreTrainedModelWrapper(nn.Module):
             trl_model_args = {}
             pretrained_kwargs = {}
             peft_quantization_kwargs = {}
+
+        if reward_modeling_adapter_id is not None and not isinstance(reward_modeling_adapter_id, str):
+            raise ValueError(
+                "The `reward_modeling_adapter_id` argument should be a string representing the name of local path or the Hub id to the Reward Modeling adapter."
+            )
 
         is_peft_model = False
         current_device = cls._get_current_device()
@@ -270,6 +279,14 @@ class PreTrainedModelWrapper(nn.Module):
         if is_resuming_training:
             model.post_init(state_dict=state_dict)
 
+        if not is_peft_model and reward_modeling_adapter_id is not None:
+            raise ValueError("reward_modeling_adapter_id can only be used with a PeftModel. ")
+        elif is_peft_model and reward_modeling_adapter_id is not None:
+            model.add_and_load_reward_modeling_adapter(reward_modeling_adapter_id)
+            model.supports_rm_adapter = True
+        else:
+            model.supports_rm_adapter = False
+
         return model
 
     @classmethod
@@ -376,6 +393,76 @@ class PreTrainedModelWrapper(nn.Module):
         additional operations such as loading the state_dict.
         """
         raise NotImplementedError
+
+    def add_and_load_reward_modeling_adapter(self, adapter_model_id, adapter_name="reward_model_adapter"):
+        r"""
+        Add and load a reward modeling adapter.
+        """
+        filename = os.path.join(adapter_model_id, "adapter_model.bin")
+        if not os.path.exists(filename):
+            try:
+                local_filename = hf_hub_download(adapter_model_id, "adapter_model.bin")
+            except:
+                raise ValueError(
+                    "Could not find adapter model in the Hub, make sure you have the correct adapter model id."
+                )
+        else:
+            local_filename = filename
+
+        adapter_state_dict = torch.load(local_filename, map_location="cpu")
+        rm_adapter_peft_config = LoraConfig.from_pretrained(adapter_model_id)
+
+        for score_name_candidate in self.supported_rm_modules:
+            if any([score_name_candidate in name for name in adapter_state_dict.keys()]):
+                score_name = score_name_candidate
+                break
+
+        score_dict = {}
+        copy_adapter_state_dict = adapter_state_dict.copy()
+
+        for name, _ in copy_adapter_state_dict.items():
+            if score_name in name:
+                key_name = ".".join(name.split(".")[-1:])
+                score_dict[key_name] = adapter_state_dict.pop(name).to(self._get_current_device())
+
+        self.pretrained_model.add_adapter(adapter_name, rm_adapter_peft_config)
+        self.rm_adapter_name = adapter_name
+
+        num_labels, hidden_dim = score_dict["weight"].shape
+        has_bias = any(["bias" in name for name in adapter_state_dict.keys()])
+
+        self.score = nn.Linear(hidden_dim, num_labels, bias=has_bias).to(self._get_current_device())
+        self.score.load_state_dict(score_dict)
+
+        # load the adapter to the model
+        set_peft_model_state_dict(self.pretrained_model, adapter_state_dict, adapter_name=adapter_name)
+
+    def compute_reward_score(self, input_ids, attention_mask, ppo_adapter_name="default", **kwargs):
+        r"""
+        Computes the reward score for a given input. The method has first to enable the adapter
+        and then compute the reward score. After that the model disables the reward modeling
+        adapter and enables the default ppo adapter again.
+        """
+        if not self.supports_rm_adapter:
+            raise ValueError("This model does not support reward modeling adapter.")
+
+        # enable rm adapter
+        self.pretrained_model.set_adapter(self.rm_adapter_name)
+
+        base_model_output = self.pretrained_model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            output_hidden_states=True,
+            return_dict=True,
+            **kwargs,
+        )
+
+        last_hidden_states = base_model_output.hidden_states[-1]
+        scores = self.score(last_hidden_states)
+
+        self.pretrained_model.set_adapter(ppo_adapter_name)
+
+        return scores
 
 
 def create_reference_model(

@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import os
 import random
 import warnings
 from dataclasses import dataclass
@@ -19,7 +20,7 @@ from typing import Any, Dict, List, Optional, Union
 import numpy as np
 import torch
 from torch.utils.data import IterableDataset
-from transformers import PreTrainedTokenizerBase
+from transformers import PreTrainedTokenizerBase, TrainerCallback
 
 
 class AdaptiveKLController:
@@ -226,3 +227,13 @@ class ConstantLengthDataset(IterableDataset):
                     "input_ids": torch.LongTensor(example),
                     "labels": torch.LongTensor(example),
                 }
+
+
+class PeftSavingCallback(TrainerCallback):
+    def on_save(self, args, state, control, **kwargs):
+        if args.should_save:
+            checkpoint_path = os.path.join(args.output_dir, f"checkpoint-{state.global_step}")
+            kwargs["model"].save_pretrained(checkpoint_path)
+
+            if "pytorch_model.bin" in os.listdir(checkpoint_path):
+                os.remove(os.path.join(checkpoint_path, "pytorch_model.bin"))
