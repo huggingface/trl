@@ -233,9 +233,9 @@ class PPOTrainer(BaseTrainer):
             self.dataloader = self.prepare_dataloader(self.dataset, data_collator)
         elif self.dataset is None and self.accelerator.num_processes > 1:
             warnings.warn(
-                "No dataset is provided. In a multi-GPU setting, this will lead to an error. You should",
-                " prepare your dataloader yourself with `dataloader = ppo_trainer.accelerator.prepare(dataloader)`",
-                " and using `torch.utils.data.DataLoader`, or pass a dataset to the `PPOTrainer`. Please ",
+                "No dataset is provided. In a multi-GPU setting, this will lead to an error. You should"
+                " prepare your dataloader yourself with `dataloader = ppo_trainer.accelerator.prepare(dataloader)`"
+                " and using `torch.utils.data.DataLoader`, or pass a dataset to the `PPOTrainer`. Please "
                 " refer to the documentation for more details.",
                 UserWarning,
             )
