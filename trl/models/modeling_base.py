@@ -302,7 +302,7 @@ class PreTrainedModelWrapper(nn.Module):
         """
         dummy_accelerator = Accelerator()
         current_device = dummy_accelerator.process_index
-        return current_device
+        return current_device if torch.cuda.is_available() else "cpu"
 
     @classmethod
     def _split_kwargs(cls, kwargs):
@@ -440,7 +440,7 @@ class PreTrainedModelWrapper(nn.Module):
         # load the adapter to the model
         set_peft_model_state_dict(self.pretrained_model, adapter_state_dict, adapter_name=adapter_name)
 
-    def compute_reward_score(self, input_ids, attention_mask, ppo_adapter_name="default", **kwargs):
+    def compute_reward_score(self, input_ids, attention_mask=None, ppo_adapter_name="default", **kwargs):
         r"""
         Computes the reward score for a given input. The method has first to enable the adapter
         and then compute the reward score. After that the model disables the reward modeling
@@ -451,6 +451,7 @@ class PreTrainedModelWrapper(nn.Module):
 
         # enable rm adapter
         self.pretrained_model.set_adapter(self.rm_adapter_name)
+        self.pretrained_model.eval()
 
         base_model_output = self.pretrained_model(
             input_ids=input_ids,
@@ -464,6 +465,7 @@ class PreTrainedModelWrapper(nn.Module):
         scores = self.score(last_hidden_states)
 
         self.pretrained_model.set_adapter(ppo_adapter_name)
+        self.pretrained_model.train()
 
         return scores
 
