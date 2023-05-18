@@ -48,8 +48,24 @@ trainer = PPOTrainer(
 
 ...
 ```
+Then inside your PPO training loop, call `compute_reward_score` method by accessing to the `model` attribute from `ppo_trainer`.
+
+```python
+rewards = trainer.model.compute_reward_score(**inputs)
+```
 
 ## Advanced usage
+
+### Control on the adapter name 
+
+If you are familiar with the `peft` library, you know that you can use multiple adapters inside the same model. What you can do is to train multiple adapters on the same base model to fine-tune on different policies. 
+In this case, you want to have a control on the adapter name you want to activate back, after retrieving the reward. For that, simply pass the appropriate `adapter_name` to `ppo_adapter_name` argument when calling `compute_reward_score`.
+
+```python
+adapter_name_policy_1 = "policy_1"
+rewards = trainer.model.compute_reward_score(**inputs, ppo_adapter_name=adapter_name_policy_1)
+...
+```
 
 ### Using 8-bit base models
 
