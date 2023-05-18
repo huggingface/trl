@@ -384,7 +384,10 @@ class PreTrainedModelWrapper(nn.Module):
 
     def add_and_load_reward_modeling_adapter(self, adapter_model_id, adapter_name="reward_model_adapter"):
         r"""
-        Add and load a reward modeling adapter.
+        Add and load a reward modeling adapter. This method can only be used if the
+        model is a `PeftModel` and if you have initialized the model with the `reward_modeling_adapter_id`
+        argument, pointing to the id of the reward modeling adapter. The latest needs also to contain the
+        score head in order to produce the reward.
         """
         filename = os.path.join(adapter_model_id, "adapter_model.bin")
         if not os.path.exists(filename):
