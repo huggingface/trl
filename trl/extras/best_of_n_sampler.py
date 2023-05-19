@@ -1,6 +1,7 @@
 from typing import Any, Dict, List, Optional, Union
 
 import torch
+import numpy
 from transformers import GenerationConfig, Pipeline, PreTrainedTokenizer, PreTrainedTokenizerFast
 
 from ..core import set_seed
@@ -50,9 +51,9 @@ class BestOfNSampler(object):
         device: Optional[Union[str, torch.device]] = None,
         **generation_kwargs,  # way to override generation config
     ):
-        if isinstance(query_tensor, torch.Tensor) and query_tensor.dim() == 1:
+        if isinstance(query_tensor, (torch.Tensor, numpy.ndarray)) and query_tensor.ndim == 1:
             query_tensor = [query_tensor.reshape((1, -1))]
-        elif isinstance(query_tensor, List) and query_tensor[0].dim() == 1:
+        elif isinstance(query_tensor, List) and query_tensor[0].ndim == 1:
             query_tensor = [query.reshape((1, -1)) for query in query_tensor]
         
         result = []
