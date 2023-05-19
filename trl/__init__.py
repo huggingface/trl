@@ -3,6 +3,7 @@
 __version__ = "0.4.5.dev0"
 
 from .core import set_seed
+from .extras import BestOfNSampler
 from .import_utils import is_peft_available
 from .models import (
     AutoModelForCausalLMWithValueHead,
@@ -10,5 +11,4 @@ from .models import (
     PreTrainedModelWrapper,
     create_reference_model,
 )
-from .extras import BestOfNSampler
 from .trainer import PPOConfig, PPOTrainer, RewardTrainer, SFTTrainer
