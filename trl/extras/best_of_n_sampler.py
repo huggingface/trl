@@ -4,7 +4,7 @@ import torch
 from transformers import GenerationConfig, Pipeline, PreTrainedTokenizer, PreTrainedTokenizerFast
 
 from ..core import set_seed
-from . import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper
+from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper
 
 
 class BestOfNSampler(object):

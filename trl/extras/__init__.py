@@ -13,12 +13,4 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from .modeling_base import PreTrainedModelWrapper, create_reference_model
-from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
 from ..extras.best_of_n_sampler import BestOfNSampler
-
-
-SUPPORTED_ARCHITECTURES = (
-    AutoModelForCausalLMWithValueHead,
-    AutoModelForSeq2SeqLMWithValueHead,
-)

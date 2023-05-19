@@ -10,4 +10,5 @@ from .models import (
     PreTrainedModelWrapper,
     create_reference_model,
 )
+from .extras import BestOfNSampler
 from .trainer import PPOConfig, PPOTrainer, RewardTrainer, SFTTrainer
