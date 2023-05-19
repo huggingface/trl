@@ -13,4 +13,4 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from ..extras.best_of_n_sampler import BestOfNSampler
+from .best_of_n_sampler import BestOfNSampler
