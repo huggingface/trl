@@ -139,32 +139,27 @@ class PreTrainedModelWrapper(nn.Module):
         # First, load the pre-trained model using the parent-class
         # either `AutoModelForCausalLM` or `AutoModelForSeq2SeqLM`
         if isinstance(pretrained_model_name_or_path, str):
-            if is_peft_available():
-                try:
-                    peft_filename = hf_hub_download(pretrained_model_name_or_path, "adapter_config.json")
-                except:  # noqa
-                    peft_filename = None
-            else:
-                peft_filename = None
+            try:
+                trained_adapter_config = PeftConfig.from_pretrained(pretrained_model_name_or_path)
+            except:  # noqa
+                trained_adapter_config = None
 
             # Dealing with `peft` case:
-            # 1- check if `adapter_config` has been saved in the hub or locally
-            # 2- if yes, load the `peft` config
-            # 3- use the config to load the `transformers` model and then load the `peft` model
-            if (
-                os.path.exists(pretrained_model_name_or_path)
-                and ("adapter_config.json" in os.listdir(pretrained_model_name_or_path) or peft_filename is not None)
-                and is_peft_available()
-            ):
-                if peft_filename is not None:
-                    peft_config = PeftConfig.from_pretrained(peft_filename)
-                else:
-                    peft_config = PeftConfig.from_pretrained(pretrained_model_name_or_path)
+            # 1- If `adapter_config` has been saved in the hub or locally, load the `peft` config
+            # 2- use the config to load the `transformers` model and then load the `peft` model
+            if trained_adapter_config is not None:
+                if peft_config is not None:
+                    logging.warning(
+                        "`peft_config` argument ignored since a peft config file was found in "
+                        f"{pretrained_model_name_or_path}"
+                    )
 
+                # Load the pretrained base model
                 pretrained_model = cls.transformers_parent_class.from_pretrained(
-                    peft_config.base_model_name_or_path, *model_args, **pretrained_kwargs
+                    trained_adapter_config.base_model_name_or_path, *model_args, **pretrained_kwargs
                 )
 
+                # Load the trained peft adapter
                 pretrained_model = PeftModel.from_pretrained(
                     pretrained_model, pretrained_model_name_or_path, is_trainable=is_trainable
                 )
@@ -174,6 +169,7 @@ class PreTrainedModelWrapper(nn.Module):
                 )
 
                 if peft_config is not None:
+                    # Initialize a new peft adapter with the given config
                     if is_loaded_in_8bit:
                         pretrained_model = prepare_model_for_int8_training(
                             pretrained_model,
@@ -185,6 +181,7 @@ class PreTrainedModelWrapper(nn.Module):
             pretrained_model = pretrained_model_name_or_path
 
             if peft_config is not None and isinstance(pretrained_model, PreTrainedModel):
+                # Initialize a new peft adapter with the given config
                 if is_loaded_in_8bit:
                     pretrained_model = prepare_model_for_int8_training(
                         pretrained_model,
