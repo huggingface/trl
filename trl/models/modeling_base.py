@@ -140,13 +140,12 @@ class PreTrainedModelWrapper(nn.Module):
         # either `AutoModelForCausalLM` or `AutoModelForSeq2SeqLM`
         if isinstance(pretrained_model_name_or_path, str):
             try:
+                # If there is a trained peft adapter in the hub or locally, load its config.
+                # The `peft` config is a file called "adapter_config.json"
                 trained_adapter_config = PeftConfig.from_pretrained(pretrained_model_name_or_path)
             except:  # noqa
                 trained_adapter_config = None
 
-            # Dealing with `peft` case:
-            # 1- If `adapter_config` has been saved in the hub or locally, load the `peft` config
-            # 2- use the config to load the `transformers` model and then load the `peft` model
             if trained_adapter_config is not None:
                 if peft_config is not None:
                     logging.warning(
