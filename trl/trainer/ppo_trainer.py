@@ -286,7 +286,7 @@ class PPOTrainer(BaseTrainer):
         )
         if is_deepspeed_used:
             # 8 bit models are already set on the correct device
-            if not self.is_peft_model and not getattr(self.ref_model.pretrained_model, "is_loaded_in_8bit", False):
+            if not self.is_peft_model and not (getattr(self.ref_model.pretrained_model, "is_loaded_in_8bit", False) or getattr(self.ref_model.pretrained_model, "is_loaded_in_4bit", False)):
                 # DS integration only allows for single model and as `ref_model` is only used for
                 # `KL devergence loss`,i.e, in eval model, just have it be on the respective device and
                 # there is no need to pass it to the `accelerator.prepare` call

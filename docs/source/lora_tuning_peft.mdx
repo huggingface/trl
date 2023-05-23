@@ -60,6 +60,14 @@ pretrained_model = AutoModelForCausalLMWithValueHead.from_pretrained(
     peft_config=lora_config,
 )
 ```
+... or in 4bit precision:
+```python
+pretrained_model = AutoModelForCausalLMWithValueHead.from_pretrained(
+    config.model_name, 
+    peft_config=lora_config,
+    load_in_4bit=True,
+)
+```
 
 
 ## Launch scripts
@@ -99,7 +107,14 @@ pretrained_model = AutoModelForCausalLMWithValueHead.from_pretrained(
     load_in_8bit=True,
 )
 ```
-
+... or in 4bit precision:
+```python
+pretrained_model = AutoModelForCausalLMWithValueHead.from_pretrained(
+    config.model_name, 
+    peft_config=lora_config,
+    load_in_4bit=True,
+)
+```
 Finally, make sure that the rewards are computed on correct device as well, for that you can use `ppo_trainer.model.current_device`.
 
 ## Naive pipeline parallelism (NPP) for large models (>60B models)
