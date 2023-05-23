@@ -177,7 +177,7 @@ class PreTrainedModelWrapper(nn.Module):
                 )
 
                 if peft_config is not None:
-                    if (is_loaded_in_8bit or is_loaded_in_4bit):
+                    if is_loaded_in_8bit or is_loaded_in_4bit:
                         pretrained_model = prepare_model_for_int8_training(
                             pretrained_model,
                             **peft_quantization_kwargs,
@@ -188,7 +188,7 @@ class PreTrainedModelWrapper(nn.Module):
             pretrained_model = pretrained_model_name_or_path
 
             if peft_config is not None and isinstance(pretrained_model, PreTrainedModel):
-                if (is_loaded_in_8bit or is_loaded_in_4bit):
+                if is_loaded_in_8bit or is_loaded_in_4bit:
                     pretrained_model = prepare_model_for_int8_training(
                         pretrained_model,
                         **peft_quantization_kwargs,
