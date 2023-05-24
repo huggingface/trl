@@ -1,7 +1,7 @@
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, List, Optional, Union
 
 import torch
-from transformers import GenerationConfig, Pipeline, PreTrainedTokenizer, PreTrainedTokenizerFast
+from transformers import GenerationConfig, PreTrainedTokenizer, PreTrainedTokenizerFast
 
 from ..core import set_seed
 from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper
@@ -12,12 +12,13 @@ class BestOfNSampler(object):
         self,
         model: PreTrainedModelWrapper,
         tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast],
-        reward_pipeline: Pipeline,
+        best_of_lot: Callable[
+            [List[str]], str
+        ],  # callable that takes a list of generated texts and returns the best one
         sample_size: int = 4,
         length_sampler: Any = None,
         seed: Optional[int] = None,
         generation_config: Optional[GenerationConfig] = None,
-        reward_kwargs: Dict[str, Any] = {},
     ) -> None:
         if seed is not None:
             set_seed(seed)
@@ -34,13 +35,9 @@ class BestOfNSampler(object):
         self.model = model
         self.tokenizer = tokenizer
 
-        if reward_pipeline is None:
-            raise ValueError("reward_pipeline must be provided")
-
-        self.reward_pipeline = reward_pipeline
+        self.best_of_lot = best_of_lot
         self.length_sampler = length_sampler
         self.gen_config = generation_config
-        self.reward_kwargs = reward_kwargs
         self.sample_size = sample_size
 
     def generate(
@@ -68,9 +65,6 @@ class BestOfNSampler(object):
                 **generation_kwargs,
             ).squeeze()
             output = self.tokenizer.batch_decode(output, skip_special_tokens=skip_special_tokens)
-            scores = torch.tensor(
-                [output[0]["score"] for output in self.reward_pipeline(output, **self.reward_kwargs)]
-            )
-            result.append(output[torch.argmax(scores)])
+            result.append(self.best_of_lot(output))
 
         return result
