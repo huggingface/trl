@@ -73,6 +73,7 @@ class PreTrainedModelWrapper(nn.Module):
         self.config = pretrained_model.config
         self.prepare_inputs_for_generation = pretrained_model.prepare_inputs_for_generation
         self.is_loaded_in_8bit = getattr(pretrained_model, "is_loaded_in_8bit", False)
+        self.is_loaded_in_4bit = getattr(pretrained_model, "is_loaded_in_4bit", False)
         self.is_sequential_parallel = False
 
         if hasattr(pretrained_model, "gradient_checkpointing_disable"):
@@ -108,22 +109,24 @@ class PreTrainedModelWrapper(nn.Module):
         if kwargs is not None:
             peft_config = kwargs.pop("peft_config", None)
             is_trainable = kwargs.pop("is_trainable", False)
-            trl_model_args, pretrained_kwargs, peft_int8_kwargs = cls._split_kwargs(kwargs)
+            trl_model_args, pretrained_kwargs, peft_quantization_kwargs = cls._split_kwargs(kwargs)
         else:
             peft_config = None
             is_trainable = False
             trl_model_args = {}
             pretrained_kwargs = {}
-            peft_int8_kwargs = {}
+            peft_quantization_kwargs = {}
 
         is_peft_model = False
         current_device = cls._get_current_device()
         if isinstance(pretrained_model_name_or_path, str):
             is_loaded_in_8bit = pretrained_kwargs["load_in_8bit"] if "load_in_8bit" in pretrained_kwargs else False
+            is_loaded_in_4bit = pretrained_kwargs["load_in_4bit"] if "load_in_4bit" in pretrained_kwargs else False
         else:
             is_loaded_in_8bit = getattr(pretrained_model_name_or_path, "is_loaded_in_8bit", False)
+            is_loaded_in_4bit = getattr(pretrained_model_name_or_path, "is_loaded_in_4bit", False)
 
-        if is_loaded_in_8bit and "device_map" not in pretrained_kwargs:
+        if (is_loaded_in_8bit or is_loaded_in_4bit) and "device_map" not in pretrained_kwargs:
             # warn users
             logging.warning(
                 "The `device_map` argument is not provided. We will override the device_map argument."
@@ -174,10 +177,10 @@ class PreTrainedModelWrapper(nn.Module):
                 )
 
                 if peft_config is not None:
-                    if is_loaded_in_8bit:
+                    if is_loaded_in_8bit or is_loaded_in_4bit:
                         pretrained_model = prepare_model_for_int8_training(
                             pretrained_model,
-                            **peft_int8_kwargs,
+                            **peft_quantization_kwargs,
                         )
                     pretrained_model = get_peft_model(pretrained_model, peft_config)
 
@@ -185,10 +188,10 @@ class PreTrainedModelWrapper(nn.Module):
             pretrained_model = pretrained_model_name_or_path
 
             if peft_config is not None and isinstance(pretrained_model, PreTrainedModel):
-                if is_loaded_in_8bit:
+                if is_loaded_in_8bit or is_loaded_in_4bit:
                     pretrained_model = prepare_model_for_int8_training(
                         pretrained_model,
-                        **peft_int8_kwargs,
+                        **peft_quantization_kwargs,
                     )
                 pretrained_model = get_peft_model(pretrained_model, peft_config)
         else:
