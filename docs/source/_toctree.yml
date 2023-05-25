@@ -20,7 +20,7 @@
   - local: sft_trainer
     title: Supervised fine-tuning
   - local: extras
-    title: Extras: Better model output without reinforcement learning
+    title: Extras - Better model output without reinforcement learning
   title: API
 - sections: 
   - local: sentiment_tuning
