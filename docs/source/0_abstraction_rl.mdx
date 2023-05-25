@@ -48,7 +48,7 @@ trainer = PPOTrainer(
 
 ...
 ```
-Then inside your PPO training loop, call `compute_reward_score` method by accessing to the `model` attribute from `ppo_trainer`.
+Then inside your PPO training loop, call the `compute_reward_score` method by accessing to the `model` attribute from `PPOTrainer`.
 
 ```python
 rewards = trainer.model.compute_reward_score(**inputs)

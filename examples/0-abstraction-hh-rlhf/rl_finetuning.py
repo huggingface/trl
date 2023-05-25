@@ -117,7 +117,7 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     )
     batch["response"] = tokenizer.batch_decode(response_tensors, skip_special_tokens=True)
 
-    # Compute sentiment score
+    # Compute reward score
     texts = [q + r for q, r in zip(batch["query"], batch["response"])]
     inputs = tokenizer(texts, padding=True, truncation=True, return_tensors="pt").to(ppo_trainer.accelerator.device)
     raw_rewards = ppo_trainer.model.compute_reward_score(**inputs)
