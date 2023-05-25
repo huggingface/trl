@@ -5,7 +5,7 @@ As to how it fares against the RL based fine-tuning, please look in the `example
 
 ## Usage
 
-To get started quickly, instantiate an instance of the class with a model, a length sampler, a tokenizer and a callable serves as a generalized version of a reward pipeline.
+To get started quickly, instantiate an instance of the class with a model, a length sampler, a tokenizer and a callable that serves as a proxy reward pipeline that selects the goal specific best output for a query
 
 ```python
 
@@ -48,7 +48,7 @@ best_of_n = BestOfNSampler(model, tokenizer, reward_pipeline, length_sampler=out
 
 ```
 
-There is the option of setting the generation settings (like `temperature`, `pad_token_id`) at the time of instance creation as opposed when calling the `generate` method.
+There is the option of setting the generation settings (like `temperature`, `pad_token_id`) at the time of instance creation as opposed to when calling the `generate` method.
 This is done by passing a `GenerationConfig` from the `transformers` library at the time of initialization
 
 ```python
