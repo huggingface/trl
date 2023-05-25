@@ -1,11 +1,11 @@
-# Extras: Alternative ways to get better model output besides RL based fine-tuning 
+# Extras: Alternative ways to get better model output without RL based fine-tuning 
 
 Within the extras module is the `best-of-n` sampler class that serves as an alternative method of generating better model output.
 As to how it fares against the RL based fine-tuning, please look in the `examples` directory for a comparison example
 
 ## Usage
 
-To get started, instantiate an instance of the class with a model, a length sampler, a tokenizer and a callable serves as a generalized version of a reward pipeline.
+To get started quickly, instantiate an instance of the class with a model, a length sampler, a tokenizer and a callable serves as a generalized version of a reward pipeline.
 
 ```python
 
@@ -40,5 +40,29 @@ And assuming you have a list/tensor of tokenized queries, you can generate bette
 best_of_n.generate(query_tensors, device=device, **gen_kwargs)
 
 ```
+The default sample size is 4, but you can change it at the time of instance initialization like so
+
+```python
+
+best_of_n = BestOfNSampler(model, tokenizer, reward_pipeline, length_sampler=output_length_sampler, sample_size=8)
+
+```
+
+There is the option of setting the generation settings (like `temperature`, `pad_token_id`) at the time of instance creation as opposed when calling the `generate` method.
+This is done by passing a `GenerationConfig` from the `transformers` library at the time of initialization
+
+```python
+
+from transformers import GenerationConfig
+
+generation_config = GenerationConfig(min_length= -1, top_k=0.0, top_p= 1.0, do_sample= True, pad_token_id=tokenizer.eos_token_id)
+
+best_of_n = BestOfNSampler(ref_model, tokenizer, reward_pipeline1, length_sampler=output_length_sampler, generation_config=generation_config)
+
+best_of_n.generate(query_tensors, device=device)
+
+```
+
+Furthermore, at the time of initialization you can set the seed to control repeatability of the generation process and the number of samples to generate for each query
 
 
