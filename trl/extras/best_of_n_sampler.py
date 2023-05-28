@@ -18,6 +18,7 @@ class BestOfNSampler(object):
         length_sampler: Any,
         sample_size: int = 4,
         seed: Optional[int] = None,
+        postop_top_k: int = 1,
         generation_config: Optional[GenerationConfig] = None,
     ) -> None:
         if seed is not None:
@@ -39,13 +40,13 @@ class BestOfNSampler(object):
         self.length_sampler = length_sampler
         self.gen_config = generation_config
         self.sample_size = sample_size
+        self.postop_top_k = postop_top_k
 
     def generate(
         self,
         query_tensor: Union[torch.Tensor, List[torch.Tensor]],
         skip_special_tokens: bool = True,
         device: Optional[Union[str, torch.device]] = None,
-        top_k: int = 1,
         **generation_kwargs,  # way to override generation config
     ) -> List[List[str]]:
         if isinstance(query_tensor, torch.Tensor) and query_tensor.ndim == 1:
@@ -67,7 +68,7 @@ class BestOfNSampler(object):
             ).squeeze()
             output = self.tokenizer.batch_decode(output, skip_special_tokens=skip_special_tokens)
             scores = torch.tensor(self.queries_to_scores(output))
-            output = [output[i] for i in scores.topk(top_k).indices]
+            output = [output[i] for i in scores.topk(self.postop_top_k).indices]
             result.append(output)
 
         return result
