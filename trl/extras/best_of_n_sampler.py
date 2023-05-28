@@ -12,11 +12,11 @@ class BestOfNSampler(object):
         self,
         model: PreTrainedModelWrapper,
         tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast],
-        best_of_lot: Callable[
-            [List[str]], str
-        ],  # callable that takes a list of generated texts and returns the best one
+        queries_to_scores: Callable[
+            [List[str]], List[float]
+        ],  # callable that takes a list of generated texts and returns the associated reward scores
+        length_sampler: Any,
         sample_size: int = 4,
-        length_sampler: Any = None,
         seed: Optional[int] = None,
         generation_config: Optional[GenerationConfig] = None,
     ) -> None:
@@ -35,7 +35,7 @@ class BestOfNSampler(object):
         self.model = model
         self.tokenizer = tokenizer
 
-        self.best_of_lot = best_of_lot
+        self.queries_to_scores = queries_to_scores
         self.length_sampler = length_sampler
         self.gen_config = generation_config
         self.sample_size = sample_size
@@ -45,8 +45,9 @@ class BestOfNSampler(object):
         query_tensor: Union[torch.Tensor, List[torch.Tensor]],
         skip_special_tokens: bool = True,
         device: Optional[Union[str, torch.device]] = None,
+        top_k: int = 1,
         **generation_kwargs,  # way to override generation config
-    ):
+    ) -> List[List[str]]:
         if isinstance(query_tensor, torch.Tensor) and query_tensor.ndim == 1:
             query_tensor = torch.tensor(query_tensor).unsqueeze(0)
         elif isinstance(query_tensor, List):
@@ -65,6 +66,8 @@ class BestOfNSampler(object):
                 **generation_kwargs,
             ).squeeze()
             output = self.tokenizer.batch_decode(output, skip_special_tokens=skip_special_tokens)
-            result.append(self.best_of_lot(output))
+            scores = torch.tensor(self.queries_to_scores(output))
+            output = [output[i] for i in scores.topk(top_k).indices]
+            result.append(output)
 
         return result
