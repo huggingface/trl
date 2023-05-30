@@ -227,7 +227,7 @@ class PPOTrainer(BaseTrainer):
         self.tokenizer = tokenizer
 
         if dataset is not None and not (isinstance(dataset, torch.utils.data.Dataset) or isinstance(dataset, Dataset)):
-            raise ValueError("dataloader must be a torch.utils.data.Dataset or datasets.Dataset")
+            raise ValueError("dataset must be a torch.utils.data.Dataset or datasets.Dataset")
         elif dataset is None:
             warnings.warn(
                 "No dataset is provided. Make sure to set config.batch_size to the correct value before training.",
