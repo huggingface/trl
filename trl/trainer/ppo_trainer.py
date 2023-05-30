@@ -16,6 +16,7 @@ import os
 import time
 import warnings
 from typing import Callable, List, Optional, Union
+import typing
 
 import datasets
 import torch
@@ -24,7 +25,12 @@ from datasets import Dataset
 from huggingface_hub import whoami
 from packaging import version
 from torch.optim import Adam
-from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizerBase
+from transformers import (
+    DataCollatorForLanguageModeling,
+    PreTrainedTokenizerBase,
+    PreTrainedTokenizer,
+    PreTrainedTokenizerFast,
+)
 
 from ..core import (
     WANDB_PADDING,
