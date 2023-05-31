@@ -348,7 +348,7 @@ class PreTrainedModelWrapper(nn.Module):
                 Keyword arguments passed along to the underlying model's
                 `save_pretrained` method.
         """
-        state_dict = kwargs.pop("state_dict", None)
+        state_dict = kwargs.get("state_dict")
         if state_dict is None:
             state_dict = self.state_dict()
             kwargs["state_dict"] = state_dict
