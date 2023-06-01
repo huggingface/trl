@@ -5,7 +5,13 @@ from accelerate import Accelerator
 from datasets import load_dataset
 from peft import LoraConfig
 from tqdm import tqdm
-from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, TrainingArguments, logging, set_seed
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    TrainingArguments,
+    logging,
+    set_seed,
+)
 
 from trl import SFTTrainer
 from trl.trainer import ConstantLengthDataset
@@ -19,7 +25,9 @@ Fine-Tune Llama-7b on SE paired dataset
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", type=str, default="")
-    parser.add_argument("--dataset_name", type=str, default="lvwerra/stack-exchange-paired")
+    parser.add_argument(
+        "--dataset_name", type=str, default="lvwerra/stack-exchange-paired"
+    )
     parser.add_argument("--subset", type=str, default="data/finetune")
     parser.add_argument("--split", type=str, default="train")
     parser.add_argument("--size_valid_set", type=int, default=4000)
@@ -40,7 +48,9 @@ def get_args():
     parser.add_argument("--local_rank", type=int, default=0)
     parser.add_argument("--no_fp16", action="store_false")
     parser.add_argument("--bf16", action="store_true", default=False)
-    parser.add_argument("--no_gradient_checkpointing", action="store_false", default=False)
+    parser.add_argument(
+        "--no_gradient_checkpointing", action="store_false", default=False
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--num_workers", type=int, default=None)
     parser.add_argument("--output_dir", type=str, default="./checkpoints")
@@ -106,7 +116,9 @@ def create_datasets(tokenizer, args):
         dataset = dataset.train_test_split(test_size=0.005, seed=args.seed)
         train_data = dataset["train"]
         valid_data = dataset["test"]
-        print(f"Size of the train set: {len(train_data)}. Size of the validation set: {len(valid_data)}")
+        print(
+            f"Size of the train set: {len(train_data)}. Size of the validation set: {len(valid_data)}"
+        )
 
     chars_per_token = chars_token_ratio(train_data, tokenizer)
     print(f"The character to token ratio of the dataset is: {chars_per_token:.2f}")
@@ -191,21 +203,7 @@ def run_training(args, train_data, val_data):
 
 
 def main(args):
-    config = AutoConfig.from_pretrained(args.model_path)
-    architecture = config.architectures[0]
-
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
-
-    if "Llama" in architecture:
-        print("Setting EOS, BOS, and UNK tokens for LLama tokenizer")
-        tokenizer.add_special_tokens(
-            {
-                "eos_token": "</s>",
-                "bos_token": "</s>",
-                "unk_token": "</s>",
-            }
-        )
-
     train_dataset, eval_dataset = create_datasets(tokenizer, args)
     run_training(args, train_dataset, eval_dataset)
 
