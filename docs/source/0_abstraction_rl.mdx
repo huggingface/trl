@@ -73,7 +73,7 @@ For more memory efficient fine-tuning, you can load your base model in 8-bit whi
 Just pass the appropriate arguments (i.e. `load_in_8bit=True`) to `AutoModelForCausalLMWithValueHead.from_pretrained` as follows (assuming you have installed `bitsandbytes`):
 ```python
 model_name = "llama-7b"
-rm_adapter_id = "ybelkada/llama-7b-hh-rm-adapter"
+rm_adapter_id = "trl-lib/llama-7b-hh-rm-adapter"
 
 # PPO adapter
 lora_config = LoraConfig(
