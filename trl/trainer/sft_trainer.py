@@ -143,7 +143,7 @@ class SFTTrainer(Trainer):
                         model,
                     )
 
-                if getattr(model, "is_loaded_in_8bit", False):
+                if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
                     model = prepare_model_for_int8_training(model)
 
                 model = get_peft_model(model, peft_config)
