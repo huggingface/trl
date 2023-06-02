@@ -18,12 +18,12 @@ Make sure to use the same model (i.e. same architecure and same weights) for the
 
 ## Quickstart
 
-Let us assume you have trained your reward adapter on `llama-7b` model using `RewardTrainer` and pushed the weights on the hub under `ybelkada/llama-7b-hh-rm-adapter`. 
+Let us assume you have trained your reward adapter on `llama-7b` model using `RewardTrainer` and pushed the weights on the hub under `trl-lib/llama-7b-hh-rm-adapter`. 
 When doing PPO, before passing the model to `PPOTrainer` create your model as follows:
 
 ```python
-model_name = "llama-7b"
-rm_adapter_id = "ybelkada/llama-7b-hh-rm-adapter"
+model_name = "huggyllama/llama-7b"
+rm_adapter_id = "trl-lib/llama-7b-hh-rm-adapter"
 
 # PPO adapter
 lora_config = LoraConfig(
