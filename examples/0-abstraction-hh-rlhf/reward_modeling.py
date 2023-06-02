@@ -30,11 +30,6 @@ from transformers import (
 from trl import RewardTrainer
 
 
-DEFAULT_PAD_TOKEN = "[PAD]"
-DEFAULT_EOS_TOKEN = "</s>"
-DEFAULT_BOS_TOKEN = "</s>"
-DEFAULT_UNK_TOKEN = "</s>"
-
 ########################################################################
 # This is a fully working simple example to use trl's RewardTrainer.
 #
@@ -61,7 +56,7 @@ class ScriptArguments:
     weight_decay: Optional[int] = field(default=0.001)
     max_seq_length: Optional[int] = field(default=512)
     model_name: Optional[str] = field(
-        default="decapoda-research/llama-7b-hf",
+        default="huggyllama/llama-7b",
         metadata={
             "help": "The model that you want to train from the Hugging Face hub. E.g. gpt2, gpt2-xl, bert, etc."
         },
@@ -133,24 +128,8 @@ def create_and_prepare_model(args):
 
     model = get_peft_model(model, peft_config)
 
-    if "llama" in script_args.model_name:
-        tokenizer = LlamaTokenizer.from_pretrained(script_args.model_name, use_auth_token=True)
-    else:
-        tokenizer = AutoTokenizer.from_pretrained(script_args.model_name, use_auth_token=True)
-
-    if "llama" in script_args.model_name:
-        # required for llama
-        tokenizer.add_special_tokens(
-            {
-                "eos_token": DEFAULT_EOS_TOKEN,
-                "bos_token": DEFAULT_BOS_TOKEN,
-                "unk_token": DEFAULT_UNK_TOKEN,
-                "pad_token": DEFAULT_PAD_TOKEN,
-            }
-        )
-    else:
-        # required for gpt2
-        tokenizer.pad_token = tokenizer.eos_token
+    tokenizer = AutoTokenizer.from_pretrained(script_args.model_name, use_auth_token=True)
+    tokenizer.pad_token = tokenizer.eos_token
 
     return model, tokenizer
 
