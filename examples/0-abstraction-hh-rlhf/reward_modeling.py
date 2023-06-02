@@ -125,6 +125,8 @@ def create_and_prepare_model(args):
     )
     model = prepare_model_for_int8_training(model)
 
+    # we add `score` to the list of modules to save to
+    # correctly save the score head.
     peft_config = LoraConfig(
         lora_alpha=32, lora_dropout=0.05, bias="none", task_type="SEQ_CLS", modules_to_save=["score"]
     )
