@@ -406,6 +406,7 @@ class PreTrainedModelWrapper(nn.Module):
         for score_name_candidate in self.supported_rm_modules:
             if any([score_name_candidate in name for name in adapter_state_dict.keys()]):
                 score_name = score_name_candidate
+                # we have found the correct head name and can break
                 break
 
         score_dict = {}
