@@ -23,7 +23,6 @@ from transformers import (
     AutoTokenizer,
     BitsAndBytesConfig,
     HfArgumentParser,
-    LlamaTokenizer,
     TrainingArguments,
 )
 
