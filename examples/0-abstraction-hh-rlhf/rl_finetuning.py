@@ -21,17 +21,12 @@ from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer
 from trl.core import LengthSampler
 
 
-rm_adapter_id = "ybelkada/llama-7b-dummy-rm"
-model_name = "decapoda-research/llama-7b-hf"
+rm_adapter_id = "trl-lib/llama-7b-hh-rm-adapter"
+model_name = "huggyllama/llama-7b"
 dataset_name = "Anthropic/hh-rlhf"
 
 input_min_text_length = 6
 input_max_text_length = 12
-
-DEFAULT_PAD_TOKEN = "[PAD]"
-DEFAULT_EOS_TOKEN = "</s>"
-DEFAULT_BOS_TOKEN = "</s>"
-DEFAULT_UNK_TOKEN = "</s>"
 
 
 def create_and_prepare_dataset(tokenizer):
@@ -66,14 +61,7 @@ model = AutoModelForCausalLMWithValueHead.from_pretrained(
 )
 tokenizer = LlamaTokenizer.from_pretrained(model_name)
 
-tokenizer.add_special_tokens(
-    {
-        "eos_token": DEFAULT_EOS_TOKEN,
-        "bos_token": DEFAULT_BOS_TOKEN,
-        "unk_token": DEFAULT_UNK_TOKEN,
-        "pad_token": DEFAULT_PAD_TOKEN,
-    }
-)
+tokenizer.pad_token = tokenizer.eos_token
 
 dataset = create_and_prepare_dataset(tokenizer)
 
