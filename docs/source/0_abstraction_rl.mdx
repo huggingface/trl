@@ -67,10 +67,10 @@ rewards = trainer.model.compute_reward_score(**inputs, ppo_adapter_name=adapter_
 ...
 ```
 
-### Using 8-bit base models
+### Using 4-bit and 8-bit base models
 
-For more memory efficient fine-tuning, you can load your base model in 8-bit while keeping the adapters in the default precision (float32).
-Just pass the appropriate arguments (i.e. `load_in_8bit=True`) to `AutoModelForCausalLMWithValueHead.from_pretrained` as follows (assuming you have installed `bitsandbytes`):
+For more memory efficient fine-tuning, you can load your base model in 8-bit or 4-bit while keeping the adapters in the default precision (float32).
+Just pass the appropriate arguments (i.e. `load_in_8bit=True` or `load_in_4bit=True`) to `AutoModelForCausalLMWithValueHead.from_pretrained` as follows (assuming you have installed `bitsandbytes`):
 ```python
 model_name = "llama-7b"
 rm_adapter_id = "trl-lib/llama-7b-hh-rm-adapter"
