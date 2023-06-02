@@ -31,6 +31,6 @@
     title: Detoxifying a Language Model
   - local: using_llama_models
     title: Using LLaMA with TRL
-  - local: 0_abstraction_rl
-    title: 0 abstraction RL - a single base model for everything
+  - local: multi_adapter_rl
+    title: Multi Adapter RL (MARL) - a single base model for everything
   title: Examples
