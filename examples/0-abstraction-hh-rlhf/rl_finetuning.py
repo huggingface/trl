@@ -62,7 +62,7 @@ model = AutoModelForCausalLMWithValueHead.from_pretrained(
     load_in_8bit=True,
     device_map={"": 0},
     peft_config=lora_config,
-    reward_modeling_adapter_id=rm_adapter_id,
+    reward_adapter=rm_adapter_id,
 )
 tokenizer = LlamaTokenizer.from_pretrained(model_name)
 
