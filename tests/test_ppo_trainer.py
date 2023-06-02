@@ -788,7 +788,7 @@ class PPOTrainerTester(unittest.TestCase):
             peft_model = get_peft_model(gpt2_model, lora_config)
             model = AutoModelForCausalLMWithValueHead.from_pretrained(
                 peft_model,
-                reward_modeling_adapter_id=tmpdirname,
+                reward_adapter=tmpdirname,
             )
 
             dummy_dataset = self._init_dummy_dataset()

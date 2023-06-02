@@ -111,8 +111,8 @@ class PreTrainedModelWrapper(nn.Module):
         """
         if kwargs is not None:
             peft_config = kwargs.pop("peft_config", None)
+            reward_adapter = kwargs.pop("reward_adapter", None)
             is_trainable = kwargs.pop("is_trainable", False)
-            reward_modeling_adapter_id = kwargs.pop("reward_modeling_adapter_id", None)
             trl_model_args, pretrained_kwargs, peft_quantization_kwargs = cls._split_kwargs(kwargs)
         else:
             peft_config = None
@@ -121,9 +121,9 @@ class PreTrainedModelWrapper(nn.Module):
             pretrained_kwargs = {}
             peft_quantization_kwargs = {}
 
-        if reward_modeling_adapter_id is not None and not isinstance(reward_modeling_adapter_id, str):
+        if reward_adapter is not None and not isinstance(reward_adapter, str):
             raise ValueError(
-                "The `reward_modeling_adapter_id` argument should be a string representing the name of local path or the Hub id to the Reward Modeling adapter."
+                "The `reward_adapter` argument should be a string representing the name of local path or the Hub id to the Reward Modeling adapter."
             )
 
         is_peft_model = False
@@ -279,10 +279,10 @@ class PreTrainedModelWrapper(nn.Module):
         if is_resuming_training:
             model.post_init(state_dict=state_dict)
 
-        if not is_peft_model and reward_modeling_adapter_id is not None:
-            raise ValueError("reward_modeling_adapter_id can only be used with a PeftModel. ")
-        elif is_peft_model and reward_modeling_adapter_id is not None:
-            model.add_and_load_reward_modeling_adapter(reward_modeling_adapter_id)
+        if not is_peft_model and reward_adapter is not None:
+            raise ValueError("reward_adapter can only be used with a PeftModel. ")
+        elif is_peft_model and reward_adapter is not None:
+            model.add_and_load_reward_modeling_adapter(reward_adapter)
             model.supports_rm_adapter = True
         else:
             model.supports_rm_adapter = False

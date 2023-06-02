@@ -37,7 +37,7 @@ lora_config = LoraConfig(
 model = AutoModelForCausalLMWithValueHead.from_pretrained(
     model_name,
     peft_config=lora_config,
-    reward_modeling_adapter_id=rm_adapter_id,
+    reward_adapter=rm_adapter_id,
 )
 
 ...
@@ -87,7 +87,7 @@ lora_config = LoraConfig(
 model = AutoModelForCausalLMWithValueHead.from_pretrained(
     model_name,
     peft_config=lora_config,
-    reward_modeling_adapter_id=rm_adapter_id,
+    reward_adapter=rm_adapter_id,
     load_in_8bit=True,
 )
 
