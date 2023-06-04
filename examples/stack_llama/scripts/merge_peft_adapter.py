@@ -1,10 +1,8 @@
 from dataclasses import dataclass, field
 from typing import Optional
 
-import peft
 import torch
 from peft import PeftConfig, PeftModel
-from peft.utils import _get_submodules
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, HfArgumentParser
 
 
