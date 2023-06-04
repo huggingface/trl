@@ -20,7 +20,7 @@ from accelerate import Accelerator
 from datasets import load_dataset
 from peft import LoraConfig
 from tqdm import tqdm
-from transformers import Adafactor, HfArgumentParser, LlamaTokenizer, pipeline
+from transformers import Adafactor, AutoTokenizer, HfArgumentParser, pipeline
 
 from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, set_seed
 from trl.core import LengthSampler
@@ -101,7 +101,7 @@ sent_kwargs = {
     "truncation": True,
 }
 
-tokenizer = LlamaTokenizer.from_pretrained(script_args.tokenizer_name)
+tokenizer = AutoTokenizer.from_pretrained(script_args.tokenizer_name)
 # GPT-2 tokenizer has a pad token, but it is not eos_token by default. We need to set it to eos_token.
 # only for this model.
 
@@ -219,6 +219,7 @@ sentiment_pipe = pipeline(
     device_map={"": current_device},
     model_kwargs={"load_in_8bit": True},
     tokenizer=tokenizer,
+    return_token_type_ids=False,
 )
 
 # We then define the arguments to pass to the `generate` function. These arguments
