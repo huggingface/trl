@@ -189,7 +189,8 @@ class RewardTrainer(Trainer):
             else:
                 ignore_keys = []
 
-        loss, logits_dict = self.compute_loss(model, inputs, return_outputs=True)
+        with torch.no_grad():
+            loss, logits_dict = self.compute_loss(model, inputs, return_outputs=True)
 
         if prediction_loss_only:
             return (loss, None, None)
