@@ -26,6 +26,7 @@ from trl.core import respond_to_batch
 model = AutoModelForCausalLMWithValueHead.from_pretrained('gpt2')
 model_ref = AutoModelForCausalLMWithValueHead.from_pretrained('gpt2')
 tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+tokenizer.pad_token = tokenizer.eos_token
 
 # 2. initialize trainer
 ppo_config = {'batch_size': 1}
@@ -34,7 +35,7 @@ ppo_trainer = PPOTrainer(config, model, model_ref, tokenizer)
 
 # 3. encode a query
 query_txt = "This morning I went to the "
-query_tensor = tokenizer.encode(query_txt, return_tensors="pt")
+query_tensor = tokenizer.encode(query_txt, return_tensors="pt").to(model.pretrained_model.device)
 
 # 4. generate model response
 response_tensor  = respond_to_batch(model, query_tensor)
@@ -42,7 +43,7 @@ response_txt = tokenizer.decode(response_tensor[0,:])
 
 # 5. define a reward for response
 # (this could be any reward such as human feedback or output from another model)
-reward = [torch.tensor(1.0)]
+reward = [torch.tensor(1.0, device=model.pretrained_model.device)]
 
 # 6. train model with ppo
 train_stats = ppo_trainer.step([query_tensor[0]], [response_tensor[0]], reward)
