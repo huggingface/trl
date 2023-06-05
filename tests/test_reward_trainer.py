@@ -16,7 +16,7 @@ import unittest
 
 import torch
 from datasets import Dataset
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, TrainingArguments
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, EvalPrediction, TrainingArguments
 
 from trl import RewardTrainer
 from trl.trainer import compute_accuracy
@@ -33,9 +33,9 @@ class RewardTrainerTester(unittest.TestCase):
         cls.tokenizer.pad_token = cls.tokenizer.eos_token
 
     def test_accuracy_metrics(self):
-        dummy_eval_predictions = (torch.FloatTensor([[0.1, 0.9], [0.9, 0.1]]), torch.LongTensor([1, 0]))
+        dummy_eval_predictions = EvalPrediction(torch.FloatTensor([[0.1, 0.9], [0.9, 0.1]]), torch.LongTensor([0, 0]))
         accuracy = compute_accuracy(dummy_eval_predictions)
-        self.assertTrue(accuracy["accuracy"] == 0.5)
+        self.assertEqual(accuracy["accuracy"], 0.5)
 
     def test_reward_trainer(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -46,6 +46,7 @@ class RewardTrainerTester(unittest.TestCase):
                 remove_unused_columns=False,
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
+                evaluation_strategy="steps",
                 eval_steps=1,
             )
 
@@ -84,13 +85,14 @@ class RewardTrainerTester(unittest.TestCase):
                 args=training_args,
                 tokenizer=self.tokenizer,
                 train_dataset=dummy_dataset,
+                eval_dataset=dummy_dataset,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
             trainer.train()
 
-            self.assertIsNotNone(trainer.state.log_history[0]["train_loss"])
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
             # check the params have changed
             for n, param in previous_trainable_params.items():
@@ -98,6 +100,9 @@ class RewardTrainerTester(unittest.TestCase):
                 # check the params have changed - ignore 0 biases
                 if param.sum() != 0:
                     self.assertFalse(torch.equal(param, new_param))
+
+            preds = trainer.predict(dummy_dataset)
+            assert preds.predictions.shape == (4, 2)
 
     @require_peft
     def test_reward_trainer_peft(self):
@@ -122,6 +127,7 @@ class RewardTrainerTester(unittest.TestCase):
                 remove_unused_columns=False,
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
+                evaluation_strategy="steps",
                 eval_steps=1,
             )
 
@@ -160,6 +166,7 @@ class RewardTrainerTester(unittest.TestCase):
                 args=training_args,
                 tokenizer=self.tokenizer,
                 train_dataset=dummy_dataset,
+                eval_dataset=dummy_dataset,
                 peft_config=peft_config,
             )
             previous_trainable_params = {}
@@ -177,7 +184,7 @@ class RewardTrainerTester(unittest.TestCase):
 
             trainer.train()
 
-            self.assertIsNotNone(trainer.state.log_history[0]["train_loss"])
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
             # check the params have changed
             for n, param in previous_trainable_params.items():
@@ -188,6 +195,9 @@ class RewardTrainerTester(unittest.TestCase):
             for n, param in previous_non_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertTrue(torch.allclose(param, new_param, atol=1e-12, rtol=1e-12))
+
+            preds = trainer.predict(dummy_dataset)
+            assert preds.predictions.shape == (4, 2)
 
     def test_reward_trainer_assert_value_error(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
