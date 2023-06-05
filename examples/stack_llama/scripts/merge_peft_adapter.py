@@ -1,17 +1,9 @@
 from dataclasses import dataclass, field
 from typing import Optional
 
-import peft
 import torch
 from peft import PeftConfig, PeftModel
-from peft.utils import _get_submodules
-from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
-
-
-DEFAULT_PAD_TOKEN = "[PAD]"
-DEFAULT_EOS_TOKEN = "</s>"
-DEFAULT_BOS_TOKEN = "</s>"
-DEFAULT_UNK_TOKEN = "</s>"
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, HfArgumentParser
 
 
 @dataclass
@@ -32,34 +24,23 @@ assert script_args.base_model_name is not None, "please provide the name of the 
 assert script_args.base_model_name is not None, "please provide the output name of the merged model"
 
 peft_config = PeftConfig.from_pretrained(script_args.adapter_model_name)
-model = AutoModelForCausalLM.from_pretrained(script_args.base_model_name, return_dict=True, torch_dtype=torch.bfloat16)
-tokenizer = AutoTokenizer.from_pretrained(script_args.base_model_name)
-config = AutoConfig.from_pretrained(script_args.base_model_name)
-architecture = config.architectures[0]
-if "Llama" in architecture:
-    print("Setting EOS, BOS, and UNK tokens for LLama tokenizer")
-    tokenizer.add_special_tokens(
-        {
-            "eos_token": DEFAULT_EOS_TOKEN,
-            "bos_token": DEFAULT_BOS_TOKEN,
-            "unk_token": DEFAULT_UNK_TOKEN,
-            "pad_token": DEFAULT_PAD_TOKEN,
-        }
+if peft_config.task_type == "SEQ_CLS":
+    # peft is for reward model so load sequence classification
+    model = AutoModelForSequenceClassification.from_pretrained(
+        script_args.base_model_name, num_labels=1, torch_dtype=torch.bfloat16
     )
+else:
+    model = AutoModelForCausalLM.from_pretrained(
+        script_args.base_model_name, return_dict=True, torch_dtype=torch.bfloat16
+    )
+
+tokenizer = AutoTokenizer.from_pretrained(script_args.base_model_name)
 
 # Load the Lora model
 model = PeftModel.from_pretrained(model, script_args.adapter_model_name)
 model.eval()
 
-key_list = [key for key, _ in model.base_model.model.named_modules() if "lora" not in key]
-for key in key_list:
-    parent, target, target_name = _get_submodules(model.base_model.model, key)
-    if isinstance(target, peft.tuners.lora.Linear):
-        bias = target.bias is not None
-        new_module = torch.nn.Linear(target.in_features, target.out_features, bias=bias)
-        model.base_model._replace_module(parent, target_name, new_module, target)
-
-model = model.base_model.model
+model = model.merge_and_unload()
 
 model.save_pretrained(f"{script_args.output_name}")
 tokenizer.save_pretrained(f"{script_args.output_name}")
