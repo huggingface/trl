@@ -102,7 +102,7 @@ class RewardTrainerTester(unittest.TestCase):
                     self.assertFalse(torch.equal(param, new_param))
 
             preds = trainer.predict(dummy_dataset)
-            assert preds.predictions.shape == (4, 2)
+            self.assertEqual(preds.predictions.shape, (4, 2))
 
     @require_peft
     def test_reward_trainer_peft(self):
@@ -197,7 +197,7 @@ class RewardTrainerTester(unittest.TestCase):
                 self.assertTrue(torch.allclose(param, new_param, atol=1e-12, rtol=1e-12))
 
             preds = trainer.predict(dummy_dataset)
-            assert preds.predictions.shape == (4, 2)
+            self.assertEqual(preds.predictions.shape, (4, 2))
 
     def test_reward_trainer_assert_value_error(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
