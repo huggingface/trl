@@ -1,8 +1,10 @@
 # 0. imports
 import torch
 from transformers import GPT2Tokenizer
-from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead
+
+from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer
 from trl.core import LengthSampler, respond_to_batch
+
 
 # 1. load a pretrained model
 model = AutoModelForCausalLMWithValueHead.from_pretrained("gpt2")
