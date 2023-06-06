@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import warnings
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -20,6 +20,7 @@ import torch.nn as nn
 from datasets import Dataset
 from transformers import DataCollator, PreTrainedModel, PreTrainedTokenizerBase, Trainer, TrainingArguments
 from transformers.trainer_callback import TrainerCallback
+from transformers.trainer_pt_utils import nested_detach
 from transformers.trainer_utils import EvalPrediction
 
 from ..import_utils import is_peft_available
@@ -30,14 +31,13 @@ if is_peft_available():
     from peft import get_peft_model
 
 
-def compute_accuracy(eval_pred):
-    predictions, _ = eval_pred
+def compute_accuracy(eval_pred) -> Dict[str, float]:
+    predictions, labels = eval_pred
     # Here, predictions is rewards_chosen and rewards_rejected.
     # We want to see how much of the time rewards_chosen > rewards_rejected.
-    predictions = np.argmax(predictions, axis=0)
-    labels = np.zeros(predictions.shape)
+    predictions = np.argmax(predictions, axis=1)
 
-    accuracy = np.mean([p == l for p, l in zip(predictions, labels)])
+    accuracy = np.array(predictions == labels, dtype=float).mean().item()
     return {"accuracy": accuracy}
 
 
@@ -156,7 +156,12 @@ class RewardTrainer(Trainer):
             preprocess_logits_for_metrics,
         )
 
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(
+        self,
+        model: Union[PreTrainedModel, nn.Module],
+        inputs: Dict[str, Union[torch.Tensor, Any]],
+        return_outputs=False,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
         if not self.use_reward_data_collator:
             raise NotImplementedError(
                 "compute_loss is only implemented for RewardDataCollatorWithPadding, please implement your own compute_loss method if you are using a custom data collator"
@@ -169,3 +174,34 @@ class RewardTrainer(Trainer):
         if return_outputs:
             return loss, {"rewards_chosen": rewards_chosen, "rewards_rejected": rewards_rejected}
         return loss
+
+    def prediction_step(
+        self,
+        model: Union[PreTrainedModel, nn.Module],
+        inputs: Dict[str, Union[torch.Tensor, Any]],
+        prediction_loss_only: bool,
+        ignore_keys: Optional[List[str]] = None,
+    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
+        inputs = self._prepare_inputs(inputs)
+        if ignore_keys is None:
+            if hasattr(self.model, "config"):
+                ignore_keys = getattr(self.model.config, "keys_to_ignore_at_inference", [])
+            else:
+                ignore_keys = []
+
+        with torch.no_grad():
+            loss, logits_dict = self.compute_loss(model, inputs, return_outputs=True)
+
+        if prediction_loss_only:
+            return (loss, None, None)
+
+        loss = loss.detach()
+        logits = tuple(v for k, v in logits_dict.items() if k not in ignore_keys)
+        logits = nested_detach(logits)
+        # Stack accepted against rejected, mean over logits
+        # and softmax to get preferences between accepted and rejected to sum to 1
+        logits = torch.stack(logits).mean(dim=2).softmax(dim=0).T
+
+        labels = torch.zeros(logits.shape[0])
+
+        return loss, logits, labels
