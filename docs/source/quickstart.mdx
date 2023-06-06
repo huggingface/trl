@@ -20,7 +20,7 @@ The following code illustrates the steps above.
 import torch
 from transformers import GPT2Tokenizer
 from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead
-from trl.core import respond_to_batch
+from trl.core import LengthSampler, respond_to_batch
 
 # 1. load a pretrained model
 model = AutoModelForCausalLMWithValueHead.from_pretrained('gpt2')
@@ -38,8 +38,16 @@ query_txt = "This morning I went to the "
 query_tensor = tokenizer.encode(query_txt, return_tensors="pt").to(model.pretrained_model.device)
 
 # 4. generate model response
-response_tensor  = respond_to_batch(model, query_tensor)
-response_txt = tokenizer.decode(response_tensor[0,:])
+generation_kwargs = {
+    "min_length": -1,
+    "top_k": 0.0,
+    "top_p": 1.0,
+    "do_sample": True,
+    "pad_token_id": tokenizer.eos_token_id,
+    "max_new_tokens": 20,
+}
+response_tensor = ppo_trainer.generate([item for item in query_tensor], return_prompt=False, **generation_kwargs)
+response_txt = tokenizer.decode(response_tensor[0])
 
 # 5. define a reward for response
 # (this could be any reward such as human feedback or output from another model)
