@@ -1,7 +1,7 @@
 import subprocess
 
 
-def test_dqn_jax():
+def test_hello_world():
     subprocess.run(
         "python examples/hello_world.py",
         shell=True,
