@@ -665,30 +665,30 @@ class PPOTrainer(BaseTrainer):
         for _ in range(self.config.ppo_epochs):
             if early_stop:
                 break
-            for batch in mini_batch_dataloader:
-                with self.accelerator.accumulate(self.model):
+            with self.accelerator.accumulate(self.model):
+                for batch in mini_batch_dataloader:
                     model_inputs = {k: batch[k] for k in model_inputs_names}
                     logprobs, logits, vpreds, _ = self.batched_forward_pass(
                         self.model, batch["queries"], batch["responses"], model_inputs, return_logits=True
                     )
 
-                train_stats = self.train_minibatch(
-                    batch["logprobs"],
-                    batch["values"],
-                    batch["rewards"],
-                    logprobs,
-                    logits,
-                    vpreds,
-                    batch["masks"],
-                )
+                    train_stats = self.train_minibatch(
+                        batch["logprobs"],
+                        batch["values"],
+                        batch["rewards"],
+                        logprobs,
+                        logits,
+                        vpreds,
+                        batch["masks"],
+                    )
 
-                all_stats.append(train_stats)
+                    all_stats.append(train_stats)
 
-                if self.config.early_stopping:
-                    policykl = train_stats["policy/policykl"]
-                    early_stop = self._early_stop(policykl)
-                    if early_stop:
-                        break
+                    if self.config.early_stopping:
+                        policykl = train_stats["policy/policykl"]
+                        early_stop = self._early_stop(policykl)
+                        if early_stop:
+                            break
 
         timing["time/ppo/optimize_step"] = time.time() - t
 
