@@ -24,6 +24,7 @@ from trl.trainer import compute_accuracy
 from .testing_utils import require_peft
 
 
+@unittest.skip("skip until the next transformers release")
 class RewardTrainerTester(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
