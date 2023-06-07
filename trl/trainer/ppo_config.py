@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import logging
 import os
 import subprocess
 import warnings
@@ -25,11 +26,11 @@ from ..core import flatten_dict
 
 def autotag() -> str:
     wandb_tag = ""
-    print("autotag feature is enabled")
+    logging.info("autotag feature is enabled")
     try:
         git_tag = subprocess.check_output(["git", "describe", "--tags"]).decode("ascii").strip()
         wandb_tag = f"{git_tag}"
-        print(f"identified git tag: {git_tag}")
+        logging.info(f"identified git tag: {git_tag}")
     except subprocess.CalledProcessError:
         return wandb_tag
 
@@ -46,9 +47,9 @@ def autotag() -> str:
                     pr = prs["items"][0]
                     pr_number = pr["number"]
                     wandb_tag += f",pr-{pr_number}"
-            print(f"identified github pull request: {pr_number}")
+            logging.info(f"identified github pull request: {pr_number}")
         else:
-            print("current branch is main, not searching for pull request")
+            logging.info("current branch is main, not searching for pull request")
     except Exception as e:
         print(e)
 
@@ -166,7 +167,7 @@ class PPOConfig(object):
                         os.environ["WANDB_TAGS"] = ",".join([existing_wandb_tag, wandb_tag])
                     else:
                         os.environ["WANDB_TAGS"] = wandb_tag
-                print(os.environ["WANDB_TAGS"])
+                logging.info(f"the following tags will be used for wandb logging: {os.environ['WANDB_TAGS']}")
             except ImportError:
                 raise ImportError(
                     "Please install wandb to use wandb logging. You can do this by running `pip install wandb`."
