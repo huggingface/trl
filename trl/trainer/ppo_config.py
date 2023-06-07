@@ -51,7 +51,7 @@ def autotag() -> str:
         else:
             logging.info("current branch is main, not searching for pull request")
     except Exception as e:
-        print(e)
+        logger.warning(f"Automatic autotag failed with the following error: {e}")
 
     return wandb_tag
 
