@@ -44,11 +44,11 @@ best_of_n = BestOfNSampler(model, tokenizer, queries_to_scores, length_sampler=o
 
 ```
 
-The default output is the result of taking the top scored output for each query, but you can change it to top 2 and so on by passing the `postop_top_k` argument at the time of instance initialization
+The default output is the result of taking the top scored output for each query, but you can change it to top 2 and so on by passing the `n_candidates` argument at the time of instance initialization
 
 ```python
 
-best_of_n = BestOfNSampler(model, tokenizer, queries_to_scores, length_sampler=output_length_sampler, postop_top_k=2)
+best_of_n = BestOfNSampler(model, tokenizer, queries_to_scores, length_sampler=output_length_sampler, n_candidates=2)
 
 ```
 
