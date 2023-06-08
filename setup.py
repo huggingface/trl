@@ -62,7 +62,7 @@ REQUIRED_PKGS = [
     "torch>=1.4.0",
     "transformers>=4.18.0",
     "numpy>=1.18.2",
-    "accelerate<0.20.0",
+    "accelerate",
     "datasets",
 ]
 EXTRAS = {
