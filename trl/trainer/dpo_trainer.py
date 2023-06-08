@@ -145,8 +145,8 @@ class DPOTrainer(BaseTrainer):
         set_seed(config.seed)
 
         # Step 0: check positional arguments validity
-        if not isinstance(config, PPOConfig):
-            raise ValueError(f"config must be a PPOConfig, got {type(config)}")
+        if not isinstance(config, DPOConfig):
+            raise ValueError(f"config must be a DPOConfig, got {type(config)}")
         if not isinstance(tokenizer, (PreTrainedTokenizerBase)):
             raise ValueError(
                 f"tokenizer must be a PreTrainedTokenizerBase like a PreTrainedTokenizer or a PreTrainedTokenizerFast, got {type(tokenizer)}"
@@ -168,7 +168,7 @@ class DPOTrainer(BaseTrainer):
 
         self.accelerator.init_trackers(
             config.tracker_project_name,
-            config=dict(trl_ppo_trainer_config=config.to_dict())
+            config=dict(trl_dpo_trainer_config=config.to_dict())
             if not is_using_tensorboard
             else config.to_dict(),
             init_kwargs=config.tracker_kwargs,
@@ -324,7 +324,6 @@ class DPOTrainer(BaseTrainer):
             self.current_device = self.accelerator.device
         else:
             self.current_device = torch.device("cuda:0")
-
 
     def _filter_kwargs(self, kwargs, target_func):
         """

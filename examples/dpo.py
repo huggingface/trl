@@ -34,5 +34,5 @@ response_tensor = dpo_trainer.generate(
 )
 response_txt = tokenizer.decode(response_tensor[0])
 
-# 5. train model with dpo which uses the reward implicitly defined by the mode and model_ref
+# 5. train model with dpo which uses the reward implicitly defined by the model and model_ref
 train_stats = dpo_trainer.step([query_tensor[0]], [response_tensor[0]])
