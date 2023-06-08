@@ -179,25 +179,37 @@ class DPOTrainer(Trainer):
             raise NotImplementedError(
                 "compute_loss is only implemented for RewardDataCollatorWithPadding, please implement your own compute_loss method if you are using a custom data collator"
             )
-        log_prob_chosen_model = model(
+        logits_chosen_model = model(
             input_ids=inputs["input_ids_chosen"],
             attention_mask=inputs["attention_mask_chosen"],
         )[0]
-        log_probr_rejected_model = model(
+        logits_rejected_model = model(
             input_ids=inputs["input_ids_rejected"],
             attention_mask=inputs["attention_mask_rejected"],
         )[0]
 
-        log_prob_chosen_ref = self.ref_model(
+        logits_chosen_ref = self.ref_model(
             input_ids=inputs["input_ids_chosen"],
             attention_mask=inputs["attention_mask_chosen"],
         )[0]
-        log_prob_rejected_ref = self.ref_model(
+        logits_rejected_ref = self.ref_model(
             input_ids=inputs["input_ids_rejected"],
             attention_mask=inputs["attention_mask_rejected"],
         )[0]
 
-        logprobs_from_logits()
+        log_prob_chosen_model = logprobs_from_logits(
+            logits_chosen_model, inputs["input_ids_chosen"]
+        )
+        log_probr_rejected_model = logprobs_from_logits(
+            logits_rejected_model, inputs["input_ids_rejected"]
+        )
+
+        log_prob_chosen_ref = logprobs_from_logits(
+            logits_chosen_ref, inputs["input_ids_chosen"]
+        )
+        log_prob_rejected_ref = logprobs_from_logits(
+            logits_rejected_ref, inputs["input_ids_rejected"]
+        )
 
         pi_logratios = log_prob_chosen_model - log_probr_rejected_model
         ref_logratios = log_prob_chosen_ref - log_prob_rejected_ref
