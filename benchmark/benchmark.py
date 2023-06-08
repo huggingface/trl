@@ -48,7 +48,7 @@ if __name__ == "__main__":
 
     commands = []
     for seed in range(0, args.num_seeds):
-        commands += [" ".join([args.command])]
+        commands += [" ".join([args.command, "--seed", str(args.start_seed + seed)])]
 
     print("======= commands to run:")
     for command in commands:

@@ -13,4 +13,4 @@ seeds={{seeds}}
 seed=${seeds[$SLURM_ARRAY_TASK_ID % {{len_seeds}}]}
 
 echo "Running task $SLURM_ARRAY_TASK_ID with seed: $seed"
-srun {{command}} # --seed $seed
+srun {{command}} --seed $seed
