@@ -15,24 +15,18 @@
 from dataclasses import dataclass, field
 from typing import Optional
 
-import torch
 from accelerate import Accelerator
 from datasets import load_dataset
+from multi_adapter_model_value import AutoModelForCausalLMWithMultiAdapterValueHead
 from peft import LoraConfig
 from tqdm import tqdm
-from transformers import Adafactor, AutoTokenizer, HfArgumentParser, pipeline
+from transformers import AutoTokenizer, HfArgumentParser
 
-from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, set_seed
+from trl import PPOConfig, PPOTrainer, set_seed
 from trl.core import LengthSampler
 
 
-DEFAULT_PAD_TOKEN = "[PAD]"
-DEFAULT_EOS_TOKEN = "</s>"
-DEFAULT_BOS_TOKEN = "</s>"
-DEFAULT_UNK_TOKEN = "</s>"
-
 tqdm.pandas()
-
 
 @dataclass
 class ScriptArguments:
@@ -44,7 +38,7 @@ class ScriptArguments:
     # models like gpt-neo* models are more suitable.
     model_name: Optional[str] = field(default="", metadata={"help": "the model name"})
     tokenizer_name: Optional[str] = field(default="", metadata={"help": "the tokenizer name"})
-    reward_model_name: Optional[str] = field(default="", metadata={"help": "the reward model name"})
+    reward_model_adapter_name: Optional[str] = field(default="", metadata={"help": "the reward model name"})
     log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
     learning_rate: Optional[float] = field(default=1.41e-5, metadata={"help": "the learning rate"})
     output_max_length: Optional[int] = field(default=128, metadata={"help": "maximum length for generation"})
@@ -94,18 +88,7 @@ sent_kwargs = {"return_all_scores": True, "function_to_apply": "none", "batch_si
 tokenizer = AutoTokenizer.from_pretrained(script_args.tokenizer_name)
 # GPT-2 tokenizer has a pad token, but it is not eos_token by default. We need to set it to eos_token.
 # only for this model.
-
-if "llama" in script_args.tokenizer_name:
-    tokenizer.add_special_tokens(
-        {
-            "eos_token": DEFAULT_EOS_TOKEN,
-            "bos_token": DEFAULT_BOS_TOKEN,
-            "unk_token": DEFAULT_UNK_TOKEN,
-            "pad_token": DEFAULT_PAD_TOKEN,
-        }
-    )
-else:
-    tokenizer.pad_token = tokenizer.eos_token
+tokenizer.pad_token = tokenizer.eos_token
 
 
 # Below is an example function to build the dataset. In our case, we use the IMDB dataset
@@ -178,22 +161,14 @@ lora_config = LoraConfig(
     bias="none",
     task_type="CAUSAL_LM",
 )
-model = AutoModelForCausalLMWithValueHead.from_pretrained(
+model = AutoModelForCausalLMWithMultiAdapterValueHead.from_pretrained(
     config.model_name,
     load_in_8bit=True,
     device_map={"": current_device},
     peft_config=lora_config,
+    rm_adapter_id=script_args.reward_model_adapter_name,
 )
 
-optimizer = None
-if script_args.adafactor:
-    optimizer = Adafactor(
-        filter(lambda p: p.requires_grad, model.parameters()),
-        scale_parameter=False,
-        relative_step=False,
-        warmup_init=False,
-        lr=config.learning_rate,
-    )
 # We then build the PPOTrainer, passing the model, the reference model, the tokenizer
 ppo_trainer = PPOTrainer(
     config,
@@ -202,21 +177,6 @@ ppo_trainer = PPOTrainer(
     tokenizer=tokenizer,
     dataset=dataset,
     data_collator=collator,
-    optimizer=optimizer,
-)
-
-# We then build the sentiment analysis pipeline, passing the model name and the
-# sentiment analysis pipeline arguments. Let's also make sure to set the device
-# to the same device as the PPOTrainer.
-device = ppo_trainer.accelerator.device
-if ppo_trainer.accelerator.num_processes == 1:
-    device = 0 if torch.cuda.is_available() else "cpu"  # to avoid a ` pipeline` bug
-sentiment_pipe = pipeline(
-    "sentiment-analysis",
-    model=reward_model_name,
-    device_map={"": current_device},
-    model_kwargs={"load_in_8bit": True},
-    tokenizer=tokenizer,
 )
 
 # We then define the arguments to pass to the `generate` function. These arguments
@@ -247,8 +207,9 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
 
     # Compute sentiment score
     texts = [q + r for q, r in zip(batch["query"], batch["response"])]
-    pipe_outputs = sentiment_pipe(texts, **sent_kwargs)
-    rewards = [torch.tensor(output[0]["score"] - script_args.reward_baseline) for output in pipe_outputs]
+    reward_inputs = tokenizer(texts, padding=True, truncation=True, return_tensors="pt").to(ppo_trainer.accelerator.device)
+    raw_rewards = ppo_trainer.model.compute_reward_score(**reward_inputs)
+    rewards = [(raw_rewards[i, -1, 1] - script_args.reward_baseline) for i in range(len(raw_rewards))]
 
     # Run PPO step
     stats = ppo_trainer.step(question_tensors, response_tensors, rewards)
