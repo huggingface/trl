@@ -1045,9 +1045,9 @@ class PPOTrainer(BaseTrainer):
             entropy = masked_mean(entropy_from_logits(logits), mask)
             # calculate approx_kl http://joschu.net/blog/kl-approx.html
             approxkl_k1 = masked_mean(-logratio, mask)
-            approxkl_k2 = 0.5 * masked_mean(logratio ** 2, mask)
+            approxkl_k2 = 0.5 * masked_mean(logratio**2, mask)
             approxkl_k3 = masked_mean((ratio - 1) - logratio, mask)
-            # by default use `k3`, the estimator which has lowest variance and is unbiased 
+            # by default use `k3`, the estimator which has lowest variance and is unbiased
             approxkl = approxkl_k3
 
         return_mean, return_var = masked_mean(returns, mask), masked_var(returns, mask)
