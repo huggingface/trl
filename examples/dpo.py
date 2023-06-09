@@ -10,63 +10,14 @@ from datasets import load_dataset
 from trl import DPOTrainer
 
 
-# We need to define a special data collator that batches the data in our j vs k format.
-@dataclass
-class DPODataCollatorWithPadding:
-    tokenizer: PreTrainedTokenizerBase
-    padding: Union[bool, str, PaddingStrategy] = True
-    max_length: Optional[int] = None
-    pad_to_multiple_of: Optional[int] = None
-    return_tensors: str = "pt"
-
-    def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
-        features_j = []
-        features_k = []
-        for feature in features:
-            features_j.append(
-                {
-                    "input_ids": feature["input_ids_j"],
-                    "attention_mask": feature["attention_mask_j"],
-                }
-            )
-            features_k.append(
-                {
-                    "input_ids": feature["input_ids_k"],
-                    "attention_mask": feature["attention_mask_k"],
-                }
-            )
-        batch_j = self.tokenizer.pad(
-            features_j,
-            padding=self.padding,
-            max_length=self.max_length,
-            pad_to_multiple_of=self.pad_to_multiple_of,
-            return_tensors=self.return_tensors,
-        )
-        batch_k = self.tokenizer.pad(
-            features_k,
-            padding=self.padding,
-            max_length=self.max_length,
-            pad_to_multiple_of=self.pad_to_multiple_of,
-            return_tensors=self.return_tensors,
-        )
-        batch = {
-            "input_ids_chosen": batch_j["input_ids"],
-            "attention_mask_chosen": batch_j["attention_mask"],
-            "input_ids_rejected": batch_k["input_ids"],
-            "attention_mask_rejected": batch_k["attention_mask"],
-            "return_loss": True,
-        }
-        return batch
-
-
 # Turn the dataset into pairs of post + summaries, where text_j is the preferred question + answer and text_k is the other.
 # Then tokenize the dataset.
 def preprocess_function(examples):
     new_examples = {
-        "input_ids_j": [],
-        "attention_mask_j": [],
-        "input_ids_k": [],
-        "attention_mask_k": [],
+        "input_ids_chosen": [],
+        "attention_mask_chosen": [],
+        "input_ids_rejected": [],
+        "attention_mask_rejected": [],
     }
     for question, response_j, response_k in zip(
         examples["question"], examples["response_j"], examples["response_k"]
@@ -78,10 +29,10 @@ def preprocess_function(examples):
             "Question: " + question + "\n\nAnswer: " + response_k, truncation=True
         )
 
-        new_examples["input_ids_j"].append(tokenized_j["input_ids"])
-        new_examples["attention_mask_j"].append(tokenized_j["attention_mask"])
-        new_examples["input_ids_k"].append(tokenized_k["input_ids"])
-        new_examples["attention_mask_k"].append(tokenized_k["attention_mask"])
+        new_examples["input_ids_chosen"].append(tokenized_j["input_ids"])
+        new_examples["attention_mask_chosen"].append(tokenized_j["attention_mask"])
+        new_examples["input_ids_rejected"].append(tokenized_k["input_ids"])
+        new_examples["attention_mask_rejected"].append(tokenized_k["attention_mask"])
 
     return new_examples
 
