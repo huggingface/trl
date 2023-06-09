@@ -1,5 +1,9 @@
 from transformers import StoppingCriteria, StoppingCriteriaList
-
+import re
+import torch
+from accelerate.utils import extract_model_from_parallel
+from rich.console import Console
+from rich.text import Text
 
 class StringStoppingCriteria(StoppingCriteria):
     """Custom `StoppingCriteria` which checks if all generations in the batch are completed."""
@@ -26,6 +30,8 @@ class TextHistory:
         self.spans = []
         self.text = text
         self.completed = False
+        self.truncated = False
+        self.reward = 0.0
 
         if len(text)>0:
             self.spans.append((0, len(text)))
@@ -37,70 +43,194 @@ class TextHistory:
             raise ValueError("Can't append empty text to history.")
         original_text_length = len(self.text)
         self.text += text
-        self.spans.append((original_text_length, len(text)))
+        self.spans.append((original_text_length, len(self.text)))
         self.system_spans.append(system)
 
 
-    def complete(self):
+    def complete(self, truncated=False):
         self.completed = True
+        self.truncated = truncated
+
 
     @property
-    def last_text(self):
+    def last_text_segment(self):
         start, end = self.spans[-1]
         return self.text[start: end]
+    
+    def show(self):
+        console = Console()
+        text = Text(self.text)
+        text.stylize("rgb(128,128,128)", self.spans[0][0], self.spans[1][0])
+        for i, (start, end) in enumerate(self.spans[1:]):
+            if self.system_spans[i]:
+                color = "green"
+            else:
+                color = "blue"
+            text.stylize(f"{color}", start, end)
+        console.print(text)
+        text = Text(f"Reward: {self.reward}")
+        text.stylize("bold red", self.spans[0][0], self.spans[0][1])
+        console.print(text)
 
 
 
-class Environment:
+class TextEnvironment:
     def __init__(self, model, tokenizer, tools, reward, prompt, generation_kwargs=None):
         self.model = model
         self.tokenizer = tokenizer
         self.prompt = prompt
-        self.tools = tools
+        if isinstance(tools, dict):
+            self.tools = tools
+        else:
+            self.tools = dict([(tool.__class__.__name__, tool) for tool in tools])
         self.reward = reward
-        self.max_length = 1024
+        self.max_length = None
         self.request_token = "<request>"
         self.call_token = "<call>"
         self.response_token = "<response>"
+        self.submit_token = "<submit>"
+        self.max_turns = 4
 
         if generation_kwargs is None:
             self.generation_kwargs = dict()
         else:
-            self.generation_kwargs = generation_kwargs            
+            self.generation_kwargs = generation_kwargs    
 
+        self.is_encoder_decoder = hasattr(self.model, "is_encoder_decoder")
+        self.current_device = extract_model_from_parallel(self.model).pretrained_model.device
 
-    def run(self, tasks):
         
+    def run(self, tasks):
+        turns = 0
         histories = [TextHistory(self.prompt + task, system=True) for task in tasks]
 
         while any([not history.completed for history in histories]):
             histories = self.generate(histories)
             # TODO: make this parallel rather than for-loop
-            for i, history in enumerate(histories):
-                new_history, reward, terminated, truncated, info = self.step(history)
-                system_generated = [(len(history), len(history)) for history in histories]
+            for i in range(len(histories)):
+                histories[i] = self.step(histories[i])
+            turns += 1
+            if turns == self.max_turns:
+                break
 
+        self.compute_reward(histories)
+
+        return histories
 
     def step(self, history):
-        if self.task_ended(history):
-            return history, 
-        history
+        history = self.task_end_check(history)
+        if history.completed:
+            return history
+        
+        try:
+            tool, query = self.parse_tool_call(history.last_text_segment)
+            response = self.tools[tool](query)
+        except:
+            response = "Error!"
 
-    def compute_reward(self, history):
-        return self.reward(history.last_text)
-    
-    def generate(self, history):
-        # TODO: implement a batched geneartion function with the custom stopping criteria
-        # TODO: exclude completed histories from generating
-
-        self.generation_kwargs["stopping_criteria"] =  StoppingCriteriaList([StringStoppingCriteria(input_lengths, [self.call_token], self.tokenizer)])
+        history.append(response + self.response_token, system=True)
 
         return history
 
-    def task_ended(self, task):
-        if len(task)>self.max_length:
-            return True, True
-        elif self.tokenizer.eos_token in task:
-            return True, False
-        else:
-            return False, False
+    def parse_tool_call(self, text):
+        """Parse request string. Expected format: <request><tool_name>query<call> """
+        result = re.search(f"(?<={self.request_token}).*?(?={self.call_token})", text)
+        extracted_text = result.group()
+
+        tool = re.search(r"<(.*?)>", extracted_text).group(1)
+        query = ">".join(extracted_text.split(">")[1:])
+
+        return tool, query
+
+    def compute_reward(self, histories):
+        for history in histories:
+            history.reward = self.reward(history.last_text_segment)
+        return histories
+    
+    def generate(self, histories):
+        # TODO: implement a batched geneartion function with the custom stopping criteria
+        # TODO: exclude completed histories from generating
+        active_histories = [i for i, history in enumerate(histories) if not history.completed]
+        
+        query_tensors = [self.tokenizer(histories[i].text, return_tensors="pt").input_ids.squeeze() for i in active_histories]
+        input_lengths = [len(histories[i].text) for i in active_histories]
+        response_tensors = self._generate_batched(query_tensors, input_lengths)
+        response_texts = self.tokenizer.batch_decode(response_tensors)
+
+        for i, response_text in zip(active_histories, response_texts):
+            histories[i].append(response_text, system=False)
+
+        return histories
+
+    def task_end_check(self, history):
+        """Check if the current generation sequence has finished."""
+        if history.completed:
+            return history
+        truncated = False
+        ended = False
+        if self.max_length is not None and len(history.text)>self.max_length:
+            truncated = True
+            ended = True
+        elif self.tokenizer.eos_token in history.text:
+            ended = True
+        elif not self.request_token in history.last_text_segment:
+            ended = True
+        elif self.submit_token in history.last_text_segment:
+            ended = True
+        if ended:
+            history.complete(truncated=truncated)
+        return history
+
+        
+    def _generate_batched(
+        self,
+        query_tensors,
+        input_lengths,
+        batch_size: int = 4,
+        pad_to_multiple_of: int = None,
+    ):
+        outputs = []
+        padding_side_default = self.tokenizer.padding_side
+        if not self.is_encoder_decoder:
+            self.tokenizer.padding_side = "left"
+
+        # in case we have fewer examples than bs
+        batch_size = min(len(query_tensors), batch_size)
+
+        for i in range(0, len(query_tensors), batch_size):
+            # prevent overflow if query tensors are not even multiple of bs
+            end_index = min(len(query_tensors), i + batch_size)
+
+            batch = query_tensors[i:end_index]
+            batch_input_lengths = input_lengths[i:end_index]
+            batch_mask = [torch.ones_like(element) for element in batch]
+            inputs = {"input_ids": batch, "attention_mask": batch_mask}
+
+            padded_inputs = self.tokenizer.pad(
+                inputs,
+                padding=True,
+                max_length=None,
+                pad_to_multiple_of=pad_to_multiple_of,
+                return_tensors="pt",
+            ).to(self.current_device)
+
+            #input_lengths = padded_inputs["attention_mask"].sum(dim=-1)
+            self.generation_kwargs["stopping_criteria"] =  StoppingCriteriaList([StringStoppingCriteria(batch_input_lengths, [self.call_token, self.submit_token], self.tokenizer)])
+
+            generations = extract_model_from_parallel(self.model).generate(**padded_inputs, **self.generation_kwargs)
+
+            for generation, mask in zip(generations, padded_inputs["attention_mask"]):
+                if not self.is_encoder_decoder:
+                    output = generation[(1 - mask).sum() :]  # remove padding
+                else:
+                    output = generation
+
+                if not self.is_encoder_decoder:
+                    output = output[(mask).sum() :]  # remove prompt
+                outputs.append(output)
+
+        self.tokenizer.padding_side = padding_side_default
+        return outputs
+
+
+
