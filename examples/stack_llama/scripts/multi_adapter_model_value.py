@@ -1,7 +1,7 @@
-import copy
-
 import torch
-from peft import get_peft_model_state_dict, set_peft_model_state_dict
+from peft import LoraConfig, get_peft_model_state_dict, set_peft_model_state_dict
+from torch import nn
+from transformers import AutoModelForCausalLM
 
 from trl import AutoModelForCausalLMWithValueHead
 
@@ -32,7 +32,7 @@ class AutoModelForCausalLMWithMultiAdapterValueHead(AutoModelForCausalLMWithValu
                 - **"normal"** -- Initializes the weights of the `ValueHead` with a normal distribution.
 
     """
-    transformers_parent_class = AutoModelForCausalLMWithValueHead
+    transformers_parent_class = AutoModelForCausalLM
     lm_head_namings = ["lm_head", "embed_out"]
     supported_args = (
         "summary_dropout_prob",
@@ -40,57 +40,29 @@ class AutoModelForCausalLMWithMultiAdapterValueHead(AutoModelForCausalLMWithValu
         "v_head_init_strategy",
     )
 
-    @classmethod
-    def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
-        r"""
-        Instantiates a new model from a pretrained model from `transformers`. The
-        pretrained model is loaded using the `from_pretrained` method of the
-        `transformers.PreTrainedModel` class. The arguments that are specific to the
-        `transformers.PreTrainedModel` class are passed along this method and filtered
-        out from the `kwargs` argument.
+    def __init__(
+        self, pretrained_model, policy_adapter_name="default", value_adapter_name="value_model_adapter", **kwargs
+    ):
+        super().__init__(pretrained_model, **kwargs)
 
-
-        Args:
-            pretrained_model_name_or_path (`str` or `transformers.PreTrainedModel`):
-                The path to the pretrained model or its name.
-            *model_args (`list`, *optional*)):
-                Additional positional arguments passed along to the underlying model's
-                `from_pretrained` method.
-            **kwargs (`dict`, *optional*):
-                Additional keyword arguments passed along to the underlying model's
-                `from_pretrained` method. We also pre-process the kwargs to extract
-                the arguments that are specific to the `transformers.PreTrainedModel`
-                class and the arguments that are specific to trl models. The kwargs
-                also support `prepare_model_for_int8_training` arguments from
-                `peft` library.
-        """
-        if kwargs is not None:
-            value_adapter_name = kwargs.pop("value_adapter_name", "value_model_adapter")
-            policy_adapter_name = kwargs.get("adapter_name", "default")
+        # simple v head to match reward model
+        if hasattr(pretrained_model.config, "word_embed_proj_dim"):
+            hidden_size = pretrained_model.config.word_embed_proj_dim
         else:
-            value_adapter_name = "value_model_adapter"
-            policy_adapter_name = "default"
+            hidden_size = pretrained_model.config.hidden_size
+        self.v_head = nn.Linear(hidden_size, 1, bias=False)
 
-        model = cls.transformers_parent_class.from_pretrained(pretrained_model_name_or_path, *model_args, **kwargs)
-
-        model.policy_adapter_name = policy_adapter_name
-
-        # if reward_adapter is not None and not isinstance(reward_adapter, str):
-        #     raise ValueError(
-        #         "The `reward_adapter` argument should be a string representing the name of local path or the Hub id to the Reward Modeling adapter."
-        #     )
-        #
-
-        if model.supports_rm_adapter:
-            model.copy_reward_modeling_adapter_to_value_function(model.rm_adapter_name, value_adapter_name)
-
-        return model
-
-    def copy_reward_modeling_adapter_to_value_function(self, reward_adapter_name="reward_model_adapter", value_adapter_name="value_function_adapter"):
-        adapter_peft_config = copy.deepcopy(self.pretrained_model.peft_config[reward_adapter_name])
-        self.pretrained_model.add_adapter(value_adapter_name, adapter_peft_config)
-
+        assert self.supports_rm_adapter, "value head adapter requires reward self adapter"
+        self.policy_adapter_name = policy_adapter_name
+        self.copy_reward_model_adapter_to_value_function(self.rm_adapter_name, value_adapter_name)
         self.value_adapter_name = value_adapter_name
+
+    def copy_reward_model_adapter_to_value_function(
+        self, reward_adapter_name="reward_model_adapter", value_adapter_name="value_function_adapter"
+    ):
+        # copy.deepcopy doesn't work with LoraConfig for some reason, so use this
+        adapter_peft_config = LoraConfig(**self.pretrained_model.peft_config[reward_adapter_name].to_dict())
+        self.pretrained_model.add_adapter(value_adapter_name, adapter_peft_config)
 
         # load the reward model's adapter and head state to the value function
         self.v_head.load_state_dict(self.score.state_dict())
@@ -145,8 +117,8 @@ class AutoModelForCausalLMWithMultiAdapterValueHead(AutoModelForCausalLMWithValu
 
         last_hidden_state = value_model_output.hidden_states[-1]
 
-        if last_hidden_state.device != self.v_head.summary.weight.device:
-            last_hidden_state = last_hidden_state.to(self.v_head.summary.weight.device)
+        if last_hidden_state.device != self.v_head.weight.device:
+            last_hidden_state = last_hidden_state.to(self.v_head.weight.device)
 
         value = self.v_head(last_hidden_state).squeeze(-1)
 

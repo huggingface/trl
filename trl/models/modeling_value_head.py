@@ -100,7 +100,7 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
             kwargs (`dict`, `optional`):
                 Additional keyword arguments, that are passed to the `ValueHead` class.
         """
-        super().__init__(pretrained_model)
+        super().__init__(pretrained_model, **kwargs)
         v_head_kwargs, _, _ = self._split_kwargs(kwargs)
 
         if not any(hasattr(self.pretrained_model, attribute) for attribute in self.lm_head_namings):
@@ -208,6 +208,12 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
         v_head_state_dict = self.v_head.state_dict(*args, **kwargs)
         for k, v in v_head_state_dict.items():
             pretrained_model_state_dict[f"v_head.{k}"] = v
+
+        if self.supports_rm_adapter:
+            score_state_dict = self.score.state_dict(*args, **kwargs)
+            for k, v in score_state_dict.items():
+                pretrained_model_state_dict[f"score.{k}"] = v
+
         return pretrained_model_state_dict
 
     def push_to_hub(self, *args, **kwargs):
