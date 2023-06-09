@@ -1,4 +1,5 @@
 # 0. imports
+import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
 
@@ -13,6 +14,9 @@ from transformers.utils import PaddingStrategy
 from datasets import load_dataset
 
 from trl import DPOTrainer
+
+
+SANITY = True
 
 
 # Turn the dataset into pairs of post + summaries, where text_j is the preferred question + answer and text_k is the other.
@@ -52,10 +56,15 @@ tokenizer.pad_token = tokenizer.eos_token
 train_dataset = load_dataset(
     "lvwerra/stack-exchange-paired", data_dir="data/reward", split="train"
 )
+
+if SANITY:
+    train_dataset = train_dataset.select(range(1000))
+
 train_dataset = train_dataset.map(
     preprocess_function,
     batched=True,
     remove_columns=train_dataset.column_names,
+    num_proc=os.cpu_count()
 )
 
 # 2. initialize training arguments:
@@ -66,6 +75,7 @@ training_args = TrainingArguments(
     gradient_accumulation_steps=4,
     learning_rate=1e-3,
     evaluation_strategy="steps",
+    output_dir="./test"
 )
 
 
@@ -73,9 +83,10 @@ training_args = TrainingArguments(
 dpo_trainer = DPOTrainer(
     model,
     model_ref,
+    args=training_args,
     beta=0.1,
-    training_args=training_args,
     train_dataset=train_dataset,
+    tokenizer=tokenizer
 )
 
 # 4. train
