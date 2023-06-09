@@ -1,9 +1,11 @@
-from transformers import StoppingCriteria, StoppingCriteriaList
 import re
+
 import torch
 from accelerate.utils import extract_model_from_parallel
 from rich.console import Console
 from rich.text import Text
+from transformers import StoppingCriteria, StoppingCriteriaList
+
 
 class StringStoppingCriteria(StoppingCriteria):
     """Custom `StoppingCriteria` which checks if all generations in the batch are completed."""
@@ -16,7 +18,10 @@ class StringStoppingCriteria(StoppingCriteria):
     def __call__(self, input_ids, scores, **kwargs):
         """Returns true if all generated sequences contain any of the stop strings."""
         decoded_generations = self.tokenizer.batch_decode(input_ids)
-        decoded_generations = [decoded_generation[start_length:] for start_length, decoded_generation in zip(self.start_lengths, decoded_generations)]
+        decoded_generations = [
+            decoded_generation[start_length:]
+            for start_length, decoded_generation in zip(self.start_lengths, decoded_generations)
+        ]
         done = []
         for decoded_generation in decoded_generations:
             done.append(any([stop_string in decoded_generation for stop_string in self.stop_strings]))
@@ -25,7 +30,6 @@ class StringStoppingCriteria(StoppingCriteria):
 
 class TextHistory:
     def __init__(self, text, system=True):
-        
         self.system_spans = []
         self.spans = []
         self.text = text
@@ -33,30 +37,27 @@ class TextHistory:
         self.truncated = False
         self.reward = 0.0
 
-        if len(text)>0:
+        if len(text) > 0:
             self.spans.append((0, len(text)))
             self.system_spans.append(system)
-        
 
     def append(self, text, system=True):
-        if len(text)==0:
+        if len(text) == 0:
             raise ValueError("Can't append empty text to history.")
         original_text_length = len(self.text)
         self.text += text
         self.spans.append((original_text_length, len(self.text)))
         self.system_spans.append(system)
 
-
     def complete(self, truncated=False):
         self.completed = True
         self.truncated = truncated
 
-
     @property
     def last_text_segment(self):
         start, end = self.spans[-1]
-        return self.text[start: end]
-    
+        return self.text[start:end]
+
     def show(self):
         console = Console()
         text = Text(self.text)
@@ -71,7 +72,6 @@ class TextHistory:
         text = Text(f"Reward: {self.reward}")
         text.stylize("bold red", self.spans[0][0], self.spans[0][1])
         console.print(text)
-
 
 
 class TextEnvironment:
@@ -94,12 +94,11 @@ class TextEnvironment:
         if generation_kwargs is None:
             self.generation_kwargs = dict()
         else:
-            self.generation_kwargs = generation_kwargs    
+            self.generation_kwargs = generation_kwargs
 
         self.is_encoder_decoder = hasattr(self.model, "is_encoder_decoder")
         self.current_device = extract_model_from_parallel(self.model).pretrained_model.device
 
-        
     def run(self, tasks):
         turns = 0
         histories = [TextHistory(self.prompt + task, system=True) for task in tasks]
@@ -121,19 +120,19 @@ class TextEnvironment:
         history = self.task_end_check(history)
         if history.completed:
             return history
-        
+
         try:
             tool, query = self.parse_tool_call(history.last_text_segment)
             response = self.tools[tool](query)
-        except:
-            response = "Error!"
+        except Exception as error:
+            response = str(error)
 
         history.append(response + self.response_token, system=True)
 
         return history
 
     def parse_tool_call(self, text):
-        """Parse request string. Expected format: <request><tool_name>query<call> """
+        """Parse request string. Expected format: <request><tool_name>query<call>"""
         result = re.search(f"(?<={self.request_token}).*?(?={self.call_token})", text)
         extracted_text = result.group()
 
@@ -146,13 +145,13 @@ class TextEnvironment:
         for history in histories:
             history.reward = self.reward(history.last_text_segment)
         return histories
-    
+
     def generate(self, histories):
-        # TODO: implement a batched geneartion function with the custom stopping criteria
-        # TODO: exclude completed histories from generating
         active_histories = [i for i, history in enumerate(histories) if not history.completed]
-        
-        query_tensors = [self.tokenizer(histories[i].text, return_tensors="pt").input_ids.squeeze() for i in active_histories]
+
+        query_tensors = [
+            self.tokenizer(histories[i].text, return_tensors="pt").input_ids.squeeze() for i in active_histories
+        ]
         input_lengths = [len(histories[i].text) for i in active_histories]
         response_tensors = self._generate_batched(query_tensors, input_lengths)
         response_texts = self.tokenizer.batch_decode(response_tensors)
@@ -168,12 +167,12 @@ class TextEnvironment:
             return history
         truncated = False
         ended = False
-        if self.max_length is not None and len(history.text)>self.max_length:
+        if self.max_length is not None and len(history.text) > self.max_length:
             truncated = True
             ended = True
         elif self.tokenizer.eos_token in history.text:
             ended = True
-        elif not self.request_token in history.last_text_segment:
+        elif self.request_token not in history.last_text_segment:
             ended = True
         elif self.submit_token in history.last_text_segment:
             ended = True
@@ -181,7 +180,6 @@ class TextEnvironment:
             history.complete(truncated=truncated)
         return history
 
-        
     def _generate_batched(
         self,
         query_tensors,
@@ -214,8 +212,9 @@ class TextEnvironment:
                 return_tensors="pt",
             ).to(self.current_device)
 
-            #input_lengths = padded_inputs["attention_mask"].sum(dim=-1)
-            self.generation_kwargs["stopping_criteria"] =  StoppingCriteriaList([StringStoppingCriteria(batch_input_lengths, [self.call_token, self.submit_token], self.tokenizer)])
+            self.generation_kwargs["stopping_criteria"] = StoppingCriteriaList(
+                [StringStoppingCriteria(batch_input_lengths, [self.call_token, self.submit_token], self.tokenizer)]
+            )
 
             generations = extract_model_from_parallel(self.model).generate(**padded_inputs, **self.generation_kwargs)
 
@@ -231,6 +230,3 @@ class TextEnvironment:
 
         self.tokenizer.padding_side = padding_side_default
         return outputs
-
-
-
