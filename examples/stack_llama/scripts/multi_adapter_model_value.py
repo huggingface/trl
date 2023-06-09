@@ -1,11 +1,14 @@
 import copy
 
+import torch
+from peft import get_peft_model_state_dict, set_peft_model_state_dict
+
 from trl import AutoModelForCausalLMWithValueHead
 
 
 class AutoModelForCausalLMWithMultiAdapterValueHead(AutoModelForCausalLMWithValueHead):
     r"""
-    An extension of AutoModelForCausalLM that adds an adapter for the value function if 
+    An extension of AutoModelForCausalLM that adds an adapter for the value function if
     there is an adapter for the reward model. In this way, there are no shared parameters
     between the policy and the value function, and the value function is initialized from
     the reward model as recommended by Ouyang et al (2020)
@@ -68,9 +71,9 @@ class AutoModelForCausalLMWithMultiAdapterValueHead(AutoModelForCausalLMWithValu
             value_adapter_name = "value_model_adapter"
             policy_adapter_name = "default"
 
-        self.policy_adapter_name = policy_adapter_name
-
         model = cls.transformers_parent_class.from_pretrained(pretrained_model_name_or_path, *model_args, **kwargs)
+
+        model.policy_adapter_name = policy_adapter_name
 
         # if reward_adapter is not None and not isinstance(reward_adapter, str):
         #     raise ValueError(
@@ -79,8 +82,7 @@ class AutoModelForCausalLMWithMultiAdapterValueHead(AutoModelForCausalLMWithValu
         #
 
         if model.supports_rm_adapter:
-            model.copy_reward_modeling_adapter_to_value_function(self.rm_adapter_name, value_adapter_name)
-
+            model.copy_reward_modeling_adapter_to_value_function(model.rm_adapter_name, value_adapter_name)
 
         return model
 
@@ -127,7 +129,6 @@ class AutoModelForCausalLMWithMultiAdapterValueHead(AutoModelForCausalLMWithValu
             attention_mask=attention_mask,
             **kwargs,
         )
-
 
         lm_logits = base_model_output.logits
         loss = base_model_output.loss
