@@ -1,0 +1,16 @@
+#!/bin/bash
+#SBATCH --partition=dev-cluster
+#SBATCH --gpus-per-task={{gpus_per_task}}
+#SBATCH --cpus-per-gpu={{cpus_per_gpu}}
+#SBATCH --ntasks={{ntasks}}
+#SBATCH --mem-per-cpu=11G
+#SBATCH --output=slurm/logs/%x_%j.out
+#SBATCH --array={{array}}
+
+{{nodes}}
+
+seeds={{seeds}}
+seed=${seeds[$SLURM_ARRAY_TASK_ID % {{len_seeds}}]}
+
+echo "Running task $SLURM_ARRAY_TASK_ID with seed: $seed"
+srun {{command}} --seed $seed
