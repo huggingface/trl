@@ -175,6 +175,9 @@ class DPOTrainer(Trainer):
         inputs: Dict[str, Union[torch.Tensor, Any]],
         return_outputs=False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
+        # TODO fix this
+        self.ref_model.to(device=model.device)
+
         if not self.use_reward_data_collator:
             raise NotImplementedError(
                 "compute_loss is only implemented for RewardDataCollatorWithPadding, please implement your own compute_loss method if you are using a custom data collator"
@@ -211,10 +214,14 @@ class DPOTrainer(Trainer):
             logits_rejected_ref, inputs["input_ids_rejected"]
         )
 
-        pi_logratios = log_prob_chosen_model - log_probr_rejected_model
-        ref_logratios = log_prob_chosen_ref - log_prob_rejected_ref
+        pi_logratios = log_prob_chosen_model.mean(-1) - log_probr_rejected_model.mean(
+            -1
+        )
+        ref_logratios = log_prob_chosen_ref.mean(-1) - log_prob_rejected_ref.mean(-1)
 
-        loss = -nn.functional.logsigmoid(self.beta * (pi_logratios - ref_logratios))
+        loss = -nn.functional.logsigmoid(
+            self.beta * (pi_logratios - ref_logratios)
+        ).mean()
         rewards_chosen = (
             self.beta * (log_prob_chosen_model - log_prob_chosen_ref).detach()
         )
