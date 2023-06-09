@@ -69,7 +69,9 @@ class PreTrainedModelWrapper(nn.Module):
         else (PreTrainedModel, PeftModelForCausalLM, PeftModelForSeq2SeqLM)
     )
 
-    def __init__(self, pretrained_model=None, **kwargs):
+    def __init__(
+        self, pretrained_model=None, score_module=None, supports_rm_adapter=False, rm_adapter_name=None, **kwargs
+    ):
         super().__init__()
         self.pretrained_model = pretrained_model
 
@@ -84,6 +86,11 @@ class PreTrainedModelWrapper(nn.Module):
 
         if hasattr(pretrained_model, "gradient_checkpointing_enable"):
             self.gradient_checkpointing_enable = pretrained_model.gradient_checkpointing_enable
+
+        self.supports_rm_adapter = supports_rm_adapter
+        self.rm_adapter_name = rm_adapter_name
+        if score_module is not None:
+            self.score = score_module
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
@@ -112,6 +119,7 @@ class PreTrainedModelWrapper(nn.Module):
         if kwargs is not None:
             peft_config = kwargs.pop("peft_config", None)
             reward_adapter = kwargs.pop("reward_adapter", None)
+            reward_adapter_name = kwargs.pop("reward_adapter_name", "reward_adapter")
             is_trainable = kwargs.pop("is_trainable", False)
             trl_model_args, pretrained_kwargs, peft_quantization_kwargs = cls._split_kwargs(kwargs)
         else:
@@ -222,7 +230,22 @@ class PreTrainedModelWrapper(nn.Module):
             if isinstance(pretrained_model, PeftModel):
                 is_peft_model = True
         # Then, create the full model by instantiating the wrapper class
-        model = cls(pretrained_model, **trl_model_args)
+
+        if not is_peft_model and reward_adapter is not None:
+            raise ValueError("reward_adapter can only be used with a PeftModel. ")
+        elif is_peft_model and reward_adapter is not None:
+            score_module = cls.add_and_load_reward_modeling_adapter(
+                pretrained_model, reward_adapter, reward_adapter_name
+            )
+            multi_adapter_args = {
+                "score_module": score_module,
+                "supports_rm_adapter": True,
+                "rm_adapter_name": reward_adapter_name,
+            }
+        else:
+            multi_adapter_args = {"supports_rm_adapter": False}
+
+        model = cls(pretrained_model, **multi_adapter_args, **trl_model_args)
 
         # if resume_training, load the state_dict again - this is ok since the
         # state_dict is removed from the model after loading it.
@@ -278,14 +301,6 @@ class PreTrainedModelWrapper(nn.Module):
 
         if is_resuming_training:
             model.post_init(state_dict=state_dict)
-
-        if not is_peft_model and reward_adapter is not None:
-            raise ValueError("reward_adapter can only be used with a PeftModel. ")
-        elif is_peft_model and reward_adapter is not None:
-            model.add_and_load_reward_modeling_adapter(reward_adapter)
-            model.supports_rm_adapter = True
-        else:
-            model.supports_rm_adapter = False
 
         return model
 
@@ -394,7 +409,10 @@ class PreTrainedModelWrapper(nn.Module):
         """
         raise NotImplementedError
 
-    def add_and_load_reward_modeling_adapter(self, adapter_model_id, adapter_name="reward_model_adapter"):
+    @classmethod
+    def add_and_load_reward_modeling_adapter(
+        cls, pretrained_model, adapter_model_id, adapter_name="reward_model_adapter"
+    ):
         r"""
         Add and load a reward modeling adapter. This method can only be used if the
         model is a `PeftModel` and if you have initialized the model with the `reward_modeling_adapter_id`
@@ -415,10 +433,9 @@ class PreTrainedModelWrapper(nn.Module):
         adapter_state_dict = torch.load(local_filename, map_location="cpu")
         rm_adapter_peft_config = LoraConfig.from_pretrained(adapter_model_id)
 
-        for score_name_candidate in self.supported_rm_modules:
+        for score_name_candidate in cls.supported_rm_modules:
             if any([score_name_candidate in name for name in adapter_state_dict.keys()]):
                 score_name = score_name_candidate
-                # we have found the correct head name and can break
                 break
 
         score_dict = {}
@@ -427,19 +444,20 @@ class PreTrainedModelWrapper(nn.Module):
         for name, _ in copy_adapter_state_dict.items():
             if score_name in name:
                 key_name = ".".join(name.split(".")[-1:])
-                score_dict[key_name] = adapter_state_dict.pop(name).to(self._get_current_device())
+                score_dict[key_name] = adapter_state_dict.pop(name).to(cls._get_current_device())
 
-        self.pretrained_model.add_adapter(adapter_name, rm_adapter_peft_config)
-        self.rm_adapter_name = adapter_name
+        pretrained_model.add_adapter(adapter_name, rm_adapter_peft_config)
 
         num_labels, hidden_dim = score_dict["weight"].shape
         has_bias = any(["bias" in name for name in adapter_state_dict.keys()])
 
-        self.score = nn.Linear(hidden_dim, num_labels, bias=has_bias).to(self._get_current_device())
-        self.score.load_state_dict(score_dict)
+        score = nn.Linear(hidden_dim, num_labels, bias=has_bias).to(cls._get_current_device())
+        score.load_state_dict(score_dict)
 
         # load the adapter to the model
-        set_peft_model_state_dict(self.pretrained_model, adapter_state_dict, adapter_name=adapter_name)
+        set_peft_model_state_dict(pretrained_model, adapter_state_dict, adapter_name=adapter_name)
+
+        return score
 
     def compute_reward_score(self, input_ids, attention_mask=None, ppo_adapter_name="default", **kwargs):
         r"""
@@ -454,16 +472,17 @@ class PreTrainedModelWrapper(nn.Module):
         self.pretrained_model.set_adapter(self.rm_adapter_name)
         self.pretrained_model.eval()
 
-        base_model_output = self.pretrained_model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            output_hidden_states=True,
-            return_dict=True,
-            **kwargs,
-        )
+        with torch.no_grad():
+            base_model_output = self.pretrained_model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                output_hidden_states=True,
+                return_dict=True,
+                **kwargs,
+            )
 
-        last_hidden_states = base_model_output.hidden_states[-1]
-        scores = self.score(last_hidden_states)
+            last_hidden_states = base_model_output.hidden_states[-1]
+            scores = self.score(last_hidden_states)
 
         self.pretrained_model.set_adapter(ppo_adapter_name)
         self.pretrained_model.train()

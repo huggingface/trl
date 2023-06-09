@@ -28,6 +28,7 @@ from trl.core import LengthSampler
 
 tqdm.pandas()
 
+
 @dataclass
 class ScriptArguments:
     """
@@ -38,7 +39,7 @@ class ScriptArguments:
     # models like gpt-neo* models are more suitable.
     model_name: Optional[str] = field(default="", metadata={"help": "the model name"})
     tokenizer_name: Optional[str] = field(default="", metadata={"help": "the tokenizer name"})
-    reward_model_adapter_name: Optional[str] = field(default="", metadata={"help": "the reward model name"})
+    reward_adapter_name: Optional[str] = field(default="", metadata={"help": "the reward model name"})
     log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
     learning_rate: Optional[float] = field(default=1.41e-5, metadata={"help": "the learning rate"})
     output_max_length: Optional[int] = field(default=128, metadata={"help": "maximum length for generation"})
@@ -70,7 +71,6 @@ class ScriptArguments:
 
 parser = HfArgumentParser(ScriptArguments)
 script_args: ScriptArguments = parser.parse_args_into_dataclasses()[0]
-reward_model_name = script_args.reward_model_name
 dataset_name = "lvwerra/stack-exchange-paired"
 config = PPOConfig(
     steps=script_args.steps,
@@ -103,9 +103,7 @@ if getattr(tokenizer, "pad_token", None) is None:
 # Below is an example function to build the dataset. In our case, we use the IMDB dataset
 # from the `datasets` library. One should customize this function to train the model on
 # its own dataset.
-def build_dataset(
-    tokenizer, dataset_name="lvwerra/stack-exchange-paired"
-):
+def build_dataset(tokenizer, dataset_name="lvwerra/stack-exchange-paired"):
     """
     Build dataset for training. This builds the dataset from `load_dataset`, one should
     customize this function to train the model on its own dataset.
@@ -175,7 +173,7 @@ model = AutoModelForCausalLMWithMultiAdapterValueHead.from_pretrained(
     load_in_8bit=True,
     device_map={"": current_device},
     peft_config=lora_config,
-    rm_adapter_id=script_args.reward_model_adapter_name,
+    reward_adapter=script_args.reward_adapter_name,
 )
 
 # We then build the PPOTrainer, passing the model, the reference model, the tokenizer
@@ -219,9 +217,11 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
 
     # Compute sentiment score
     texts = [q + r for q, r in zip(batch["query"], batch["response"])]
-    reward_inputs = tokenizer(texts, padding=True, truncation=True, return_tensors="pt").to(ppo_trainer.accelerator.device)
+    reward_inputs = tokenizer(
+        texts, padding=True, truncation=True, return_tensors="pt", return_token_type_ids=False
+    ).to(ppo_trainer.accelerator.device)
     raw_rewards = ppo_trainer.model.compute_reward_score(**reward_inputs)
-    rewards = [(raw_rewards[i, -1, 1] - script_args.reward_baseline) for i in range(len(raw_rewards))]
+    rewards = [(raw_rewards[i, -1, 0] - script_args.reward_baseline) for i in range(len(raw_rewards))]
 
     # Run PPO step
     stats = ppo_trainer.step(question_tensors, response_tensors, rewards)
