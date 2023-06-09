@@ -27,7 +27,9 @@ jobs:
           pip install .[dev]
         if: steps.cache-venv.outputs.cache-hit != 'true'
       - name: Check quality
+        shell: bash
         run: |
+          source ~/.venv/bin/activate
           make quality
 
   tests:
@@ -55,5 +57,7 @@ jobs:
         pip install .[test]
       if: steps.cache-venv.outputs.cache-hit != 'true'
     - name: Test with pytest
+      shell: bash
       run: |
+        source ~/.venv/bin/activate
         make test
