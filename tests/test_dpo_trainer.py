@@ -95,3 +95,5 @@ class DPOTrainerTester(unittest.TestCase):
             }
 
             trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
