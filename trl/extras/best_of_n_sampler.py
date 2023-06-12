@@ -64,7 +64,7 @@ class BestOfNSampler(object):
 
     def generate(
         self,
-        query_tensor: Union[torch.Tensor, List[torch.Tensor], List[str]],
+        query_tensor: Union[List[int], torch.Tensor, List[torch.Tensor], List[List[int]]],
         skip_special_tokens: bool = True,
         device: Optional[Union[str, torch.device]] = None,
         **generation_kwargs,
@@ -73,8 +73,8 @@ class BestOfNSampler(object):
         Generate the best of n samples for input queries
 
         Args:
-            query_tensor (`torch.Tensor` or `List[torch.Tensor]` or `List[str]`):
-                Query tensor or list of query tensors or list of plain string queries to generate from
+            query_tensor (`List[int]` or `torch.Tensor` or `List[torch.Tensor]` or `List[int]`):
+                Query tensor or list of query tensors or list of plain int/list of int queries to generate from
             skip_special_tokens (`bool`):
                 Whether to remove the special tokens from the output
             device (`str` or `torch.device`, *optional*):
@@ -86,10 +86,16 @@ class BestOfNSampler(object):
         Returns:
             List[List[str]]: A list of lists of generated texts
         """
+
         if isinstance(query_tensor, torch.Tensor) and query_tensor.ndim == 1:
-            query_tensor = torch.tensor(query_tensor).unsqueeze(0)
+            query_tensor = query_tensor.clone().detach().unsqueeze(0)
         elif isinstance(query_tensor, List):
-            if not isinstance(query_tensor[0], torch.Tensor):
+            element_type = type(query_tensor[0])
+            if element_type == int:
+                query_tensor = torch.tensor(query_tensor).unsqueeze(0)
+            elif element_type == torch.Tensor:
+                query_tensor = [tensor.reshape((1, -1)) for tensor in query_tensor]
+            else:
                 query_tensor = [torch.tensor(query).reshape((1, -1)) for query in query_tensor]
 
         result = []
