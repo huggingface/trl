@@ -143,7 +143,7 @@ class TextEnvironment:
 
     def compute_reward(self, histories):
         for history in histories:
-            history.reward = self.reward(history.last_text_segment)
+            history.reward = self.reward_fn(history.last_text_segment)
         return histories
 
     def generate(self, histories):
