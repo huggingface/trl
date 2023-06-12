@@ -64,9 +64,7 @@ class BestOfNSampler(object):
 
     def generate(
         self,
-        tokenized_query: Union[
-            List[int], torch.Tensor, List[torch.Tensor], List[List[int]]
-        ],
+        tokenized_query: Union[List[int], torch.Tensor, List[torch.Tensor], List[List[int]]],
         skip_special_tokens: bool = True,
         device: Optional[Union[str, torch.device]] = None,
         **generation_kwargs,
@@ -99,9 +97,7 @@ class BestOfNSampler(object):
             elif element_type == torch.Tensor:
                 queries = [tensor.reshape((1, -1)) for tensor in tokenized_query]
             else:
-                queries = [
-                    torch.tensor(query).reshape((1, -1)) for query in tokenized_query
-                ]
+                queries = [torch.tensor(query).reshape((1, -1)) for query in tokenized_query]
 
         result = []
 
@@ -113,9 +109,7 @@ class BestOfNSampler(object):
                 generation_config=self.gen_config,
                 **generation_kwargs,
             ).squeeze()
-            output = self.tokenizer.batch_decode(
-                output, skip_special_tokens=skip_special_tokens
-            )
+            output = self.tokenizer.batch_decode(output, skip_special_tokens=skip_special_tokens)
             scores = torch.tensor(self.queries_to_scores(output))
             output = [output[i] for i in scores.topk(self.n_candidates).indices]
             result.append(output)
