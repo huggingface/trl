@@ -75,7 +75,7 @@ class TextHistory:
 
 
 class TextEnvironment:
-    def __init__(self, model, tokenizer, tools, reward, prompt, generation_kwargs=None):
+    def __init__(self, model, tokenizer, tools, reward_fn, prompt, max_turns=4, generation_kwargs=None):
         self.model = model
         self.tokenizer = tokenizer
         self.prompt = prompt
@@ -83,13 +83,13 @@ class TextEnvironment:
             self.tools = tools
         else:
             self.tools = dict([(tool.__class__.__name__, tool) for tool in tools])
-        self.reward = reward
+        self.reward_fn = reward_fn
         self.max_length = None
         self.request_token = "<request>"
         self.call_token = "<call>"
         self.response_token = "<response>"
         self.submit_token = "<submit>"
-        self.max_turns = 4
+        self.max_turns = max_turns
 
         if generation_kwargs is None:
             self.generation_kwargs = dict()
