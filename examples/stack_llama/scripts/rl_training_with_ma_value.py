@@ -12,17 +12,19 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import copy
 from dataclasses import dataclass, field
 from typing import Optional
 
-from accelerate import Accelerator
+from accelerate import Accelerator, DistributedDataParallelKwargs
 from datasets import load_dataset
 from multi_adapter_model_value import AutoModelForCausalLMWithMultiAdapterValueHead
 from peft import LoraConfig
+from torch_ema import ExponentialMovingAverage
 from tqdm import tqdm
 from transformers import AutoTokenizer, HfArgumentParser
 
-from trl import PPOConfig, PPOTrainer, set_seed
+from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, set_seed
 from trl.core import LengthSampler
 
 
@@ -65,8 +67,12 @@ class ScriptArguments:
         default=0.2,
         metadata={"help": "Initial KL penalty coefficient (used for adaptive and linear control)"},
     )
-
     adap_kl_ctrl: Optional[bool] = field(default=True, metadata={"help": "Use adaptive KL control, otherwise linear"})
+    multi_adapter_value: Optional[bool] = field(default=False)
+
+    # EMA stuff
+    ema_decay: Optional[float] = field(default=0.995, metadata={"help": "the ema decay rate"})
+    reset_freq: Optional[int] = field(default=None, metadata={"help": "reset every n epochs"})
 
 
 parser = HfArgumentParser(ScriptArguments)
@@ -87,17 +93,14 @@ config = PPOConfig(
     seed=script_args.seed,
     init_kl_coef=script_args.init_kl_coef,
     adap_kl_ctrl=script_args.adap_kl_ctrl,
+    accelerator_kwargs={"kwargs_handlers": [DistributedDataParallelKwargs(find_unused_parameters=False)]},
 )
 
 train_dataset = load_dataset("lvwerra/stack-exchange-paired", data_dir="data/rl", split="train")
 train_dataset = train_dataset.select(range(100000))
 
 tokenizer = AutoTokenizer.from_pretrained(script_args.tokenizer_name)
-# GPT-2 tokenizer has a pad token, but it is not eos_token by default. We need to set it to eos_token.
-# only for this model.
-
-if getattr(tokenizer, "pad_token", None) is None:
-    tokenizer.pad_token = tokenizer.eos_token
+tokenizer.pad_token = tokenizer.eos_token
 
 
 # Below is an example function to build the dataset. In our case, we use the IMDB dataset
@@ -168,13 +171,36 @@ lora_config = LoraConfig(
     bias="none",
     task_type="CAUSAL_LM",
 )
-model = AutoModelForCausalLMWithMultiAdapterValueHead.from_pretrained(
+
+if script_args.multi_adapter_value:
+    model_cls = AutoModelForCausalLMWithMultiAdapterValueHead
+else:
+    model_cls = AutoModelForCausalLMWithValueHead
+
+model = model_cls.from_pretrained(
     config.model_name,
     load_in_8bit=True,
     device_map={"": current_device},
     peft_config=lora_config,
     reward_adapter=script_args.reward_adapter_name,
 )
+
+if script_args.reset_freq is not None:
+    # only use the policy parameters that require grad
+    ema = ExponentialMovingAverage(
+        (
+            param
+            for name, param in model.named_parameters()
+            if param.requires_grad and model.policy_adapter_name in name
+        ),
+        decay=script_args.ema_decay,
+        use_num_updates=False,
+    )
+    initial_state_dict = copy.deepcopy(ema.state_dict())
+    model.ema_model = ema
+else:
+    ema = None
+
 
 # We then build the PPOTrainer, passing the model, the reference model, the tokenizer
 ppo_trainer = PPOTrainer(
@@ -227,6 +253,14 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     # Run PPO step
     stats = ppo_trainer.step(question_tensors, response_tensors, rewards)
     ppo_trainer.log_stats(stats, batch, rewards)
+
+    if ema is not None:
+        ema.update()
+
+    if script_args.reset_freq and epoch and epoch % script_args.reset_freq == 0:
+        ema.copy_to()
+        ema.load_state_dict(initial_state_dict)
+        ppo_trainer.accelerator.print("elastic reset")
 
     if script_args.save_freq and epoch and epoch % script_args.save_freq == 0:
         ppo_trainer.save_pretrained(script_args.output_dir + f"step_{epoch}")
