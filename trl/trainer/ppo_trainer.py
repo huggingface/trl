@@ -24,6 +24,7 @@ from accelerate import Accelerator
 from datasets import Dataset
 from huggingface_hub import whoami
 from packaging import version
+from requests.exceptions import HTTPError
 from torch.optim import Adam
 from transformers import (
     DataCollatorForLanguageModeling,
@@ -1214,10 +1215,15 @@ class PPOTrainer(BaseTrainer):
             path (`str`): The path to save the model card to.
             model_name (`str`, *optional*): The name of the model, defaults to `TRL Model`.
         """
+        try:
+            user = whoami()["name"]
+        # handle the offline case
+        except HTTPError:
+            return
+
         if not os.path.exists(path):
             os.makedirs(path)
 
-        user = whoami()["name"]
         model_card_content = MODEL_CARD_TEMPLATE.format(model_name=model_name, model_id=f"{user}/{path}")
         with open(os.path.join(path, "README.md"), "w", encoding="utf-8") as f:
             f.write(model_card_content)
