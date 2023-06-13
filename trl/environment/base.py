@@ -120,8 +120,9 @@ class TextEnvironment:
         encoded_prompt = self.prompt_tokenizer(prompt, return_tensors="pt")["input_ids"]
         encoded_prompt = encoded_prompt.to(self.current_device)
 
-        attention_mask = (encoded_prompt < self.prompt_tokenizer.vocab_size) * 1.0
-        encoded_prompt[~(attention_mask.bool())] = self.prompt_tokenizer.pad_token_id
+        attention_mask = encoded_prompt < self.prompt_tokenizer.vocab_size
+        encoded_prompt[~attention_mask] = self.prompt_tokenizer.pad_token_id
+        attention_mask = attention_mask * 1.0
 
         if add_eos_token:
             attention_mask[:, -1] = 0.0
