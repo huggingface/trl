@@ -1,4 +1,5 @@
 import re
+import logging
 
 import torch
 from accelerate.utils import extract_model_from_parallel
@@ -75,7 +76,7 @@ class TextHistory:
 
 
 class TextEnvironment:
-    def __init__(self, model, tokenizer, tools, reward, prompt, generation_kwargs=None):
+    def __init__(self, model, tokenizer, tools, reward, prompt, tool_tokens, generation_kwargs=None):
         self.model = model
         self.tokenizer = tokenizer
         self.prompt = prompt
@@ -89,6 +90,7 @@ class TextEnvironment:
         self.call_token = "<call>"
         self.response_token = "<response>"
         self.submit_token = "<submit>"
+        self.tool_tokens = tool_tokens
         self.max_turns = 4
 
         if generation_kwargs is None:
@@ -98,6 +100,25 @@ class TextEnvironment:
 
         self.is_encoder_decoder = hasattr(self.model, "is_encoder_decoder")
         self.current_device = extract_model_from_parallel(self.model).pretrained_model.device
+    
+    @property
+    def extra_tokens(self):
+        return [self.request_token, self.call_token, self.response_token, self.submit_token] + self.tool_tokens
+    
+    def encode_prompt(self, prompt):
+        if not all([extra_token in self.tokenizer.special_tokens_map for extra_token in self.extra_tokens]):
+            logging.warning("Adding extra tokens to tokenizer - this will change the tokenizer.")
+            self.tokenizer.add_special_tokens({"additional_special_tokens": self.extra_tokens})
+        if self.tokenizer.pad_token_id is None:
+            raise ValueError("Tokenizer must have a pad token.")
+        
+        encoded_prompt = self.tokenizer(prompt, return_tensors="pt")["input_ids"]
+        encoded_prompt = encoded_prompt.to(self.current_device)
+
+        attention_mask = (encoded_prompt < self.tokenizer.vocab_size) * 1.0
+        encoded_prompt[~(attention_mask.bool())] = self.tokenizer.pad_token_id
+        
+        return {"input_ids": encoded_prompt, "attention_mask": attention_mask}
 
     def run(self, tasks):
         turns = 0
