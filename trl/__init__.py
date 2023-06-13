@@ -4,6 +4,7 @@ __version__ = "0.4.5.dev0"
 
 from .core import set_seed
 from .environment import TextEnvironment, TextHistory
+from .extras import BestOfNSampler
 from .import_utils import is_peft_available
 from .models import (
     AutoModelForCausalLMWithValueHead,
