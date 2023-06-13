@@ -143,7 +143,7 @@ class SFTTrainer(Trainer):
                         model,
                     )
 
-                if getattr(model, "is_loaded_in_8bit", False):
+                if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
                     model = prepare_model_for_int8_training(model)
 
                 model = get_peft_model(model, peft_config)
@@ -160,7 +160,7 @@ class SFTTrainer(Trainer):
 
         if max_seq_length is None:
             # to overcome some issues with broken tokenizers
-            max_seq_length = min(tokenizer.model_max_length, 4096)
+            max_seq_length = min(tokenizer.model_max_length, 1024)
 
             warnings.warn(
                 f"You didn't pass a `max_seq_length` argument to the SFTTrainer, this will default to {max_seq_length}"

@@ -35,7 +35,6 @@ if is_peft_available():
         prepare_model_for_int8_training,
     )
 
-
 LAYER_PATTERNS = [
     "transformer.h.{layer}",
     "model.decoder.layers.{layer}",
@@ -74,6 +73,7 @@ class PreTrainedModelWrapper(nn.Module):
         self.config = pretrained_model.config
         self.prepare_inputs_for_generation = pretrained_model.prepare_inputs_for_generation
         self.is_loaded_in_8bit = getattr(pretrained_model, "is_loaded_in_8bit", False)
+        self.is_loaded_in_4bit = getattr(pretrained_model, "is_loaded_in_4bit", False)
         self.is_sequential_parallel = False
 
         if hasattr(pretrained_model, "gradient_checkpointing_disable"):
@@ -108,21 +108,25 @@ class PreTrainedModelWrapper(nn.Module):
         """
         if kwargs is not None:
             peft_config = kwargs.pop("peft_config", None)
-            trl_model_args, pretrained_kwargs, peft_int8_kwargs = cls._split_kwargs(kwargs)
+            is_trainable = kwargs.pop("is_trainable", False)
+            trl_model_args, pretrained_kwargs, peft_quantization_kwargs = cls._split_kwargs(kwargs)
         else:
             peft_config = None
+            is_trainable = False
             trl_model_args = {}
             pretrained_kwargs = {}
-            peft_int8_kwargs = {}
+            peft_quantization_kwargs = {}
 
         is_peft_model = False
         current_device = cls._get_current_device()
         if isinstance(pretrained_model_name_or_path, str):
             is_loaded_in_8bit = pretrained_kwargs["load_in_8bit"] if "load_in_8bit" in pretrained_kwargs else False
+            is_loaded_in_4bit = pretrained_kwargs["load_in_4bit"] if "load_in_4bit" in pretrained_kwargs else False
         else:
             is_loaded_in_8bit = getattr(pretrained_model_name_or_path, "is_loaded_in_8bit", False)
+            is_loaded_in_4bit = getattr(pretrained_model_name_or_path, "is_loaded_in_4bit", False)
 
-        if is_loaded_in_8bit and "device_map" not in pretrained_kwargs:
+        if (is_loaded_in_8bit or is_loaded_in_4bit) and "device_map" not in pretrained_kwargs:
             # warn users
             logging.warning(
                 "The `device_map` argument is not provided. We will override the device_map argument."
@@ -140,54 +144,65 @@ class PreTrainedModelWrapper(nn.Module):
         if isinstance(pretrained_model_name_or_path, str):
             if is_peft_available():
                 try:
-                    peft_filename = hf_hub_download(pretrained_model_name_or_path, "adapter_config.json")
+                    # If there is a trained peft adapter in the hub, load its config.
+                    remote_adapter_config = hf_hub_download(pretrained_model_name_or_path, "adapter_config.json")
                 except:  # noqa
-                    peft_filename = None
+                    remote_adapter_config = None
             else:
-                peft_filename = None
+                remote_adapter_config = None
 
-            # Dealing with `peft` case:
-            # 1- check if `adapter_config` has been saved in the hub or locally
-            # 2- if yes, load the `peft` config
-            # 3- use the config to load the `transformers` model and then load the `peft` model
-            if (
-                os.path.exists(pretrained_model_name_or_path)
-                and ("adapter_config.json" in os.listdir(pretrained_model_name_or_path) or peft_filename is not None)
-                and is_peft_available()
-            ):
-                if peft_filename is not None:
-                    peft_config = PeftConfig.from_pretrained(peft_filename)
+            local_adapter_present = os.path.exists(os.path.join(pretrained_model_name_or_path, "adapter_config.json"))
+
+            if (local_adapter_present or remote_adapter_config is not None) and is_peft_available():
+                if peft_config is not None:
+                    logging.warning(
+                        "`peft_config` argument ignored since a peft config file was found in "
+                        f"{pretrained_model_name_or_path}"
+                    )
+
+                # Load the trained peft adapter config
+                if local_adapter_present:
+                    trained_adapter_config = PeftConfig.from_pretrained(pretrained_model_name_or_path)
                 else:
-                    peft_config = PeftConfig.from_pretrained(pretrained_model_name_or_path)
+                    trained_adapter_config = PeftConfig.from_pretrained(remote_adapter_config)
 
+                # Load the pretrained base model
                 pretrained_model = cls.transformers_parent_class.from_pretrained(
-                    peft_config.base_model_name_or_path, *model_args, **pretrained_kwargs
+                    trained_adapter_config.base_model_name_or_path, *model_args, **pretrained_kwargs
                 )
 
-                pretrained_model = PeftModel.from_pretrained(pretrained_model, pretrained_model_name_or_path)
+                # Wrap the pretrained model with the trained peft adapter
+                pretrained_model = PeftModel.from_pretrained(
+                    pretrained_model, pretrained_model_name_or_path, is_trainable=is_trainable
+                )
+                logging.info("Trained peft adapter loaded")
             else:
                 pretrained_model = cls.transformers_parent_class.from_pretrained(
                     pretrained_model_name_or_path, *model_args, **pretrained_kwargs
                 )
 
                 if peft_config is not None:
-                    if is_loaded_in_8bit:
+                    # Initialize a new peft adapter with the given config
+                    if is_loaded_in_8bit or is_loaded_in_4bit:
                         pretrained_model = prepare_model_for_int8_training(
                             pretrained_model,
-                            **peft_int8_kwargs,
+                            **peft_quantization_kwargs,
                         )
                     pretrained_model = get_peft_model(pretrained_model, peft_config)
+                    logging.info("peft adapter initialised")
 
         elif isinstance(pretrained_model_name_or_path, cls.supported_pretrained_model_architectures):
             pretrained_model = pretrained_model_name_or_path
 
             if peft_config is not None and isinstance(pretrained_model, PreTrainedModel):
-                if is_loaded_in_8bit:
+                # Initialize a new peft adapter with the given config
+                if is_loaded_in_8bit or is_loaded_in_4bit:
                     pretrained_model = prepare_model_for_int8_training(
                         pretrained_model,
-                        **peft_int8_kwargs,
+                        **peft_quantization_kwargs,
                     )
                 pretrained_model = get_peft_model(pretrained_model, peft_config)
+                logging.info("peft adapter initialised")
         else:
             raise ValueError(
                 "pretrained_model_name_or_path should be a string or a PreTrainedModel, "
@@ -202,6 +217,7 @@ class PreTrainedModelWrapper(nn.Module):
 
         # if resume_training, load the state_dict again - this is ok since the
         # state_dict is removed from the model after loading it.
+        is_resuming_training = True
         if isinstance(pretrained_model_name_or_path, str):
             filename = os.path.join(pretrained_model_name_or_path, "pytorch_model.bin")
             sharded_index_filename = os.path.join(pretrained_model_name_or_path, "pytorch_model.bin.index.json")
@@ -215,27 +231,35 @@ class PreTrainedModelWrapper(nn.Module):
                     if os.path.exists(sharded_index_filename):
                         index_file_name = sharded_index_filename
                     else:
-                        index_file_name = hf_hub_download(
-                            pretrained_model_name_or_path, "pytorch_model.bin.index.json"
-                        )
+                        try:
+                            index_file_name = hf_hub_download(
+                                pretrained_model_name_or_path, "pytorch_model.bin.index.json"
+                            )
+                        except ValueError:  # not continue training, do not have v_head weight
+                            is_resuming_training = False
+                            logging.warning(
+                                f"A {type(pretrained_model)} model is loaded from '{pretrained_model_name_or_path}', "
+                                f"and no v_head weight is found. This IS expected if you are not resuming PPO training."
+                            )
                     # load json
-                    with open(index_file_name, "r") as f:
-                        index = json.load(f)
-                    # check filename with `v_head` or any known extra module:
-                    files_to_download = set()
-                    for k, v in index["weight_map"].items():
-                        if any([module in k for module in cls.supported_modules]):
-                            files_to_download.add(v)
-                    is_shared = True
-
-            if is_shared:
-                # download each file and add it to the state_dict
-                state_dict = {}
-                for shard_file in files_to_download:
-                    filename = hf_hub_download(pretrained_model_name_or_path, shard_file)
-                    state_dict.update(torch.load(filename, map_location="cpu"))
-            else:
-                state_dict = torch.load(filename, map_location="cpu")
+                    if is_resuming_training:
+                        with open(index_file_name, "r") as f:
+                            index = json.load(f)
+                        # check filename with `v_head` or any known extra module:
+                        files_to_download = set()
+                        for k, v in index["weight_map"].items():
+                            if any([module in k for module in cls.supported_modules]):
+                                files_to_download.add(v)
+                        is_shared = True
+            if is_resuming_training:
+                if is_shared:
+                    # download each file and add it to the state_dict
+                    state_dict = {}
+                    for shard_file in files_to_download:
+                        filename = hf_hub_download(pretrained_model_name_or_path, shard_file)
+                        state_dict.update(torch.load(filename, map_location="cpu"))
+                else:
+                    state_dict = torch.load(filename, map_location="cpu")
 
         else:
             state_dict = pretrained_model_name_or_path.state_dict()
@@ -243,7 +267,8 @@ class PreTrainedModelWrapper(nn.Module):
         model.is_peft_model = is_peft_model
         model.current_device = current_device
 
-        model.post_init(state_dict=state_dict)
+        if is_resuming_training:
+            model.post_init(state_dict=state_dict)
 
         return model
 
@@ -323,7 +348,7 @@ class PreTrainedModelWrapper(nn.Module):
                 Keyword arguments passed along to the underlying model's
                 `save_pretrained` method.
         """
-        state_dict = kwargs.pop("state_dict", None)
+        state_dict = kwargs.get("state_dict")
         if state_dict is None:
             state_dict = self.state_dict()
             kwargs["state_dict"] = state_dict

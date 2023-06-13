@@ -17,3 +17,4 @@ jobs:
       version_tag_suffix: ""
     secrets:
       token: ${{ secrets.HUGGINGFACE_PUSH }}
+      hf_token: ${{ secrets.HF_DOC_BUILD_PUSH }}
