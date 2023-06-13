@@ -152,7 +152,6 @@ model = AutoModelForCausalLMWithValueHead.from_pretrained(
     config.model_name,
     load_in_8bit=True,
     peft_config=lora_config,
-    layer_norm_names=[],
 )
 
 tokenizer = AutoTokenizer.from_pretrained(config.model_name)
