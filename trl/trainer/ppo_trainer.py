@@ -195,6 +195,7 @@ class PPOTrainer(BaseTrainer):
         self.model = model
         self.is_encoder_decoder = hasattr(self.model, "is_encoder_decoder")
         self.is_peft_model = getattr(self.model, "is_peft_model", False)
+        self.is_using_text_environment = getattr(config, "use_text_environment", False)
 
         if isinstance(ref_model, SUPPORTED_ARCHITECTURES):
             self.ref_model = ref_model
@@ -493,6 +494,7 @@ class PPOTrainer(BaseTrainer):
         queries: List[torch.LongTensor],
         responses: List[torch.LongTensor],
         scores: List[torch.FloatTensor],
+        masks: Optional[List[torch.LongTensor]] = None,
     ):
         """
         Check if the input data is valid for training.
@@ -506,6 +508,8 @@ class PPOTrainer(BaseTrainer):
                 List of tensors containing the encoded responses of shape (`response_length`)
             scores (List[`torch.FloatTensor`]):
                 List of tensors containing the scores.
+            masks (List[`torch.LongTensor`], *optional*):
+                list of optional tensors containing the masks of shape (`query_length` + `response_length`)
         Returns:
             `tuple`: The input processed data.
         """
@@ -539,6 +543,7 @@ class PPOTrainer(BaseTrainer):
         queries: List[torch.LongTensor],
         responses: List[torch.LongTensor],
         scores: List[torch.FloatTensor],
+        masks: Optional[List[torch.LongTensor]] = None,
     ):
         """
         Run a PPO optimisation step given a list of queries, model responses, and rewards.
@@ -556,7 +561,7 @@ class PPOTrainer(BaseTrainer):
         """
         bs = self.config.batch_size
 
-        queries, responses, scores = self._step_safety_checker(bs, queries, responses, scores)
+        queries, responses, scores = self._step_safety_checker(bs, queries, responses, scores, masks)
 
         # if we want to push best model to the hub
         if hasattr(self, "highest_reward"):
@@ -574,7 +579,7 @@ class PPOTrainer(BaseTrainer):
 
         t = time.time()
 
-        model_inputs = self.prepare_model_inputs(queries, responses)
+        model_inputs = self.prepare_model_inputs(queries, responses, masks)
 
         if self.is_distributed:
             pad_first = self.tokenizer.padding_side == "left"
@@ -783,7 +788,21 @@ class PPOTrainer(BaseTrainer):
             stats[k] = v
         return stats
 
-    def prepare_model_inputs(self, queries: torch.Tensor, responses: torch.Tensor):
+    def _post_process_env_masks(self, model_input, masks):
+        responses_masks, queries_masks = masks
+
+        for i, (response_mask, query_mask) in enumerate(zip(responses_masks, queries_masks)):
+            attention_mask = torch.cat([query_mask, response_mask])
+            if self.tokenizer.padding_side == "right":
+                model_input["attention_mask"][i, : attention_mask.shape[0]] = attention_mask
+            else:
+                model_input["attention_mask"][i, -attention_mask.shape[0] :] = attention_mask
+
+        return model_input
+
+    def prepare_model_inputs(
+        self, queries: torch.Tensor, responses: torch.Tensor, masks: Optional[torch.Tensor] = None
+    ):
         if self.is_encoder_decoder:
             input_data = self.data_collator(
                 [{"input_ids": q, "attention_mask": torch.ones_like(q)} for q in queries]
@@ -795,7 +814,6 @@ class PPOTrainer(BaseTrainer):
 
             input_data["decoder_input_ids"] = decoder_inputs["input_ids"]
             input_data["decoder_attention_mask"] = decoder_inputs["attention_mask"]
-
         else:
             input_ids = [torch.cat([q, r]) for q, r in zip(queries, responses)]
             input_data = self.data_collator(
@@ -803,6 +821,9 @@ class PPOTrainer(BaseTrainer):
             ).to(self.current_device)
 
         input_data.pop("labels", None)  # we don't want to compute LM losses
+
+        if self.is_using_text_environment:
+            input_data = self._post_process_env_masks(input_data, masks)
 
         return input_data
 
