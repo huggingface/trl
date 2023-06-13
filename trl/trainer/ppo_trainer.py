@@ -1219,6 +1219,7 @@ class PPOTrainer(BaseTrainer):
             user = whoami()["name"]
         # handle the offline case
         except HTTPError:
+            warnings.warn("Cannot retrieve user information assuming you are running in offline mode.")
             return
 
         if not os.path.exists(path):
