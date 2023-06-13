@@ -107,6 +107,7 @@ class AutoModelForCausalLMWithMultiAdapterValueHead(AutoModelForCausalLMWithValu
 
         # value model
         self.pretrained_model.set_adapter(self.value_adapter_name)
+        self.pretrained_model.train()
 
         value_model_output = self.pretrained_model(
             input_ids=input_ids,
@@ -123,6 +124,7 @@ class AutoModelForCausalLMWithMultiAdapterValueHead(AutoModelForCausalLMWithValu
         value = self.v_head(last_hidden_state).squeeze(-1)
 
         self.pretrained_model.set_adapter(self.policy_adapter_name)
+        self.pretrained_model.train()
 
         # force upcast in fp32 if logits are in half-precision
         if lm_logits.dtype != torch.float32:

@@ -452,10 +452,15 @@ class PreTrainedModelWrapper(nn.Module):
         has_bias = any(["bias" in name for name in adapter_state_dict.keys()])
 
         score = nn.Linear(hidden_dim, num_labels, bias=has_bias).to(cls._get_current_device())
-        score.load_state_dict(score_dict)
+        for param in score.parameters():
+            param.requires_grad = False
 
         # load the adapter to the model
         set_peft_model_state_dict(pretrained_model, adapter_state_dict, adapter_name=adapter_name)
+
+        for name, param in pretrained_model.named_parameters():
+            if "lora" in name and adapter_name in name:
+                param.requires_grad = False
 
         return score
 
