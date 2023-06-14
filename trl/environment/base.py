@@ -100,6 +100,7 @@ class TextEnvironment:
             self.generation_kwargs = dict()
         else:
             self.generation_kwargs = generation_kwargs
+        self.generation_kwargs["pad_token_id"] = tokenizer.eos_token_id
 
         self.is_encoder_decoder = hasattr(self.model, "is_encoder_decoder")
         self.current_device = extract_model_from_parallel(self.model).pretrained_model.device
