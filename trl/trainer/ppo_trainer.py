@@ -655,7 +655,7 @@ class PPOTrainer(BaseTrainer):
         mini_batch_dataloader = torch.utils.data.DataLoader(
             mini_batch_data,
             batch_size=self.config.mini_batch_size,
-            shuffle=False,
+            shuffle=True,
             collate_fn=collator,
         )
 
