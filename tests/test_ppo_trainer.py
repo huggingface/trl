@@ -901,7 +901,7 @@ class PPOTrainerTester(unittest.TestCase):
             # (this could be any reward such as human feedback or output from another model)
             reward = [torch.tensor(1.0), torch.tensor(1.0)]
             # train model by running a step twice
-            record_1 = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+            _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
             break
 
         model_grad = gpt2_model.v_head.summary.weight.grad.clone()
@@ -925,7 +925,7 @@ class PPOTrainerTester(unittest.TestCase):
             # (this could be any reward such as human feedback or output from another model)
             reward = [torch.tensor(1.0), torch.tensor(1.0)]
             # train model by running a step twice
-            record_2 = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+            _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
             break
 
         model_grad_acc = gpt2_model_clone.v_head.summary.weight.grad.clone()
