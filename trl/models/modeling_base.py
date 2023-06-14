@@ -432,6 +432,7 @@ class PreTrainedModelWrapper(nn.Module):
 
         adapter_state_dict = torch.load(local_filename, map_location="cpu")
         rm_adapter_peft_config = LoraConfig.from_pretrained(adapter_model_id)
+        rm_adapter_peft_config["inference_mode"] = True
 
         for score_name_candidate in cls.supported_rm_modules:
             if any([score_name_candidate in name for name in adapter_state_dict.keys()]):
@@ -458,10 +459,6 @@ class PreTrainedModelWrapper(nn.Module):
         # load the adapter to the model
         set_peft_model_state_dict(pretrained_model, adapter_state_dict, adapter_name=adapter_name)
 
-        for name, param in pretrained_model.named_parameters():
-            if "lora" in name and adapter_name in name:
-                param.requires_grad = False
-
         return score
 
     def compute_reward_score(self, input_ids, attention_mask=None, ppo_adapter_name="default", **kwargs):
@@ -477,17 +474,16 @@ class PreTrainedModelWrapper(nn.Module):
         self.pretrained_model.set_adapter(self.rm_adapter_name)
         self.pretrained_model.eval()
 
-        with torch.no_grad():
-            base_model_output = self.pretrained_model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                output_hidden_states=True,
-                return_dict=True,
-                **kwargs,
-            )
+        base_model_output = self.pretrained_model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            output_hidden_states=True,
+            return_dict=True,
+            **kwargs,
+        )
 
-            last_hidden_states = base_model_output.hidden_states[-1]
-            scores = self.score(last_hidden_states)
+        last_hidden_states = base_model_output.hidden_states[-1]
+        scores = self.score(last_hidden_states)
 
         self.pretrained_model.set_adapter(ppo_adapter_name)
         self.pretrained_model.train()
