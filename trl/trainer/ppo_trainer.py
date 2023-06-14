@@ -655,7 +655,7 @@ class PPOTrainer(BaseTrainer):
         mini_batch_dataloader = torch.utils.data.DataLoader(
             mini_batch_data,
             batch_size=self.config.mini_batch_size,
-            shuffle=True,
+            shuffle=False,
             collate_fn=collator,
         )
 
@@ -665,8 +665,9 @@ class PPOTrainer(BaseTrainer):
         for _ in range(self.config.ppo_epochs):
             if early_stop:
                 break
-            with self.accelerator.accumulate(self.model):
-                for batch in mini_batch_dataloader:
+                
+            for batch in mini_batch_dataloader:
+                with self.accelerator.accumulate(self.model):
                     model_inputs = {k: batch[k] for k in model_inputs_names}
                     logprobs, logits, vpreds, _ = self.batched_forward_pass(
                         self.model, batch["queries"], batch["responses"], model_inputs, return_logits=True

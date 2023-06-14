@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+import copy
 import fnmatch
 import gc
 import re
@@ -874,6 +874,62 @@ class PPOTrainerTester(unittest.TestCase):
         generations_single = tokenizer.batch_decode(generations_single)
 
         self.assertEqual(generations_single, generations_batched)
+    
+    def test_grad_accumulation(self):
+        dummy_dataset = self._init_dummy_dataset()
+
+        torch.manual_seed(0)
+        gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(self.model_id)
+        gpt2_model_clone = copy.deepcopy(gpt2_model)
+
+        self.ppo_config.mini_batch_size = 2
+        self.ppo_config.ppo_epochs = 1
+
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=gpt2_model,
+            ref_model=None,
+            tokenizer=self.gpt2_tokenizer,
+            dataset=dummy_dataset,
+        )
+        
+        dummy_dataloader = ppo_trainer.dataloader
+
+        # train model with ppo
+        for query_tensor, response_tensor in dummy_dataloader:
+            # define a reward for response
+            # (this could be any reward such as human feedback or output from another model)
+            reward = [torch.tensor(1.0), torch.tensor(1.0)]
+            # train model by running a step twice
+            record_1 = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+            break
+            
+        model_grad = gpt2_model.v_head.summary.weight.grad.clone()
+
+        self.ppo_config.gradient_accumulation_steps = 2
+        self.ppo_config.mini_batch_size = 1
+
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=gpt2_model_clone,
+            ref_model=None,
+            tokenizer=self.gpt2_tokenizer,
+            dataset=dummy_dataset,
+        )
+        
+        dummy_dataloader = ppo_trainer.dataloader
+
+        # train model with ppo
+        for query_tensor, response_tensor in dummy_dataloader:
+            # define a reward for response
+            # (this could be any reward such as human feedback or output from another model)
+            reward = [torch.tensor(1.0), torch.tensor(1.0)]
+            # train model by running a step twice
+            record_2 = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+            break
+
+        model_grad_acc = gpt2_model_clone.v_head.summary.weight.grad.clone()
+        self.assertTrue(torch.allclose(model_grad_acc, model_grad))
 
     @unittest.skip("Fix by either patching `whomai()` to work in the staging endpoint or use a dummy prod user.")
     def test_push_to_hub_if_best_reward(self):
