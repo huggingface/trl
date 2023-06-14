@@ -665,13 +665,15 @@ class PPOTrainer(BaseTrainer):
         for _ in range(self.config.ppo_epochs):
             if early_stop:
                 break
-                
-            for batch in mini_batch_dataloader:
+
+            for i, batch in enumerate(mini_batch_dataloader):
                 with self.accelerator.accumulate(self.model):
                     model_inputs = {k: batch[k] for k in model_inputs_names}
                     logprobs, logits, vpreds, _ = self.batched_forward_pass(
                         self.model, batch["queries"], batch["responses"], model_inputs, return_logits=True
                     )
+                    if (i % self.config.gradient_accumulation_steps) == 0:
+                        self.optimizer.zero_grad()
 
                     train_stats = self.train_minibatch(
                         batch["logprobs"],
@@ -933,7 +935,6 @@ class PPOTrainer(BaseTrainer):
         """
         loss_p, loss_v, train_stats = self.loss(old_logprobs, values, rewards, logits, vpreds, logprobs, mask)
         loss = loss_p + loss_v
-        self.optimizer.zero_grad()
         self.accelerator.backward(loss)
 
         if self.config.max_grad_norm is not None:
