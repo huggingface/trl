@@ -126,8 +126,7 @@ class RewardDataCollatorWithPadding:
 @dataclass
 class DPODataCollatorWithPadding:
     r"""
-    Reward DataCollator class that pads the accepted and rejected tokens to max size minus the
-    size of the input context.
+    DPO DataCollator class that pads the inputs to the maximum length of the batch.
     Args:
         tokenizer (`PreTrainedTokenizerBase`):
             The tokenizer used for encoding the data.
@@ -137,14 +136,14 @@ class DPODataCollatorWithPadding:
             The maximum length of the sequence to be processed.
         pad_to_multiple_of (`Optional[int]`, `optional`, defaults to `None`):
             If set will pad the sequence to a multiple of the provided value.
-        return_tensors (`str`, `optional`, defaults to `"pt"`):
-            The tensor type to use.
+        label_pad_token_id (`int`, defaults to -100):
+            The label used for masking.
     """
     tokenizer: PreTrainedTokenizerBase
     padding: Union[bool, str] = True
     max_length: Optional[int] = None
     pad_to_multiple_of: Optional[int] = None
-    return_tensors: str = "pt"
+    label_pad_token_id: int = -100
 
     def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
         features_chosen = []
@@ -156,11 +155,11 @@ class DPODataCollatorWithPadding:
                 or "input_ids_rejected" not in feature
                 or "attention_mask_chosen" not in feature
                 or "attention_mask_rejected" not in feature
-                or "context_ids" not in feature
-                or "attention_mask_context" not in feature
+                or "labels_chosen" not in feature
+                or "labels_rejected" not in feature
             ):
                 raise ValueError(
-                    "The features should include `context_ids`, `attention_mask_context`, `input_ids_chosen`, `attention_mask_chosen`, `input_ids_rejected` and `attention_mask_rejected`"
+                    "The features should include `input_ids_chosen`, `attention_mask_chosen`, `input_ids_rejected`, `attention_mask_rejected`, `labels_chosen` and `labels_rejected`"
                 )
 
             features_chosen.append(
@@ -175,30 +174,41 @@ class DPODataCollatorWithPadding:
                     "attention_mask": feature["attention_mask_rejected"],
                 }
             )
-
+            
         batch_chosen = self.tokenizer.pad(
             features_chosen,
             padding=self.padding,
-            max_length=self.max_length - len(feature["context_ids"]),
+            max_length=self.max_length,
             pad_to_multiple_of=self.pad_to_multiple_of,
-            return_tensors=self.return_tensors,
+            return_tensors=None,
         )
         batch_rejected = self.tokenizer.pad(
             features_rejected,
             padding=self.padding,
-            max_length=self.max_length - len(feature["context_ids"]),
+            max_length=self.max_length,
             pad_to_multiple_of=self.pad_to_multiple_of,
-            return_tensors=self.return_tensors,
+            return_tensors=None,
         )
+        
         batch = {
-            "context_ids": feature["context_ids"],
-            "attention_mask_context": feature["attention_mask_context"],
             "input_ids_chosen": batch_chosen["input_ids"],
             "attention_mask_chosen": batch_chosen["attention_mask"],
             "input_ids_rejected": batch_rejected["input_ids"],
             "attention_mask_rejected": batch_rejected["attention_mask"],
             "return_loss": True,
         }
+        
+        sequence_length_chosen = torch.tensor(batch_chosen["input_ids"]).shape[1]
+        sequence_length_rejected = torch.tensor(batch_rejected["input_ids"]).shape[1]
+        padding_side = self.tokenizer.padding_side
+        if padding_side == "right":
+            batch["labels_chosen"] = [x["labels_chosen"] + [self.label_pad_token_id] * (sequence_length_chosen - len(x["labels_chosen"])) for x in features]
+            batch["labels_rejected"] = [x["labels_rejected"] + [self.label_pad_token_id] * (sequence_length_rejected - len(x["labels_rejected"])) for x in features]
+        else:
+            batch["labels_chosen"] = [[self.label_pad_token_id] * (sequence_length_chosen - len(x["labels_chosen"])) + x["labels_chosen"] for x in features]
+            batch["labels_rejected"] = [[self.label_pad_token_id] * (sequence_length_rejected - len(x["labels_rejected"])) + x["labels_rejected"] for x in features]
+
+        batch = {k: torch.tensor(v, dtype=torch.int64) for k, v in batch.items()}
         return batch
 
 

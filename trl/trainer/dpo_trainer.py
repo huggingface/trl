@@ -30,8 +30,8 @@ from transformers.trainer_pt_utils import nested_detach
 from transformers.trainer_utils import EvalPrediction
 
 from ..import_utils import is_peft_available
-from .utils import RewardDataCollatorWithPadding
-from ..core import logprobs_from_logits
+from .utils import DPODataCollatorWithPadding
+from ..core import logprobs_from_logits, masked_mean
 
 
 if is_peft_available():
@@ -61,6 +61,7 @@ class DPOTrainer(Trainer):
         beta: float = 0.1,
         args: TrainingArguments = None,
         data_collator: Optional[DataCollator] = None,
+        label_pad_token_id: int = -100,
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
         tokenizer: Optional[PreTrainedTokenizerBase] = None,
@@ -126,31 +127,35 @@ class DPOTrainer(Trainer):
         if data_collator is None:
             if tokenizer is None:
                 raise ValueError(
-                    "max_length or a tokenizer must be specified when using the default RewardDataCollatorWithPadding"
+                    "max_length or a tokenizer must be specified when using the default DPODataCollatorWithPadding"
                 )
             if max_length is None:
                 warnings.warn(
-                    "When using RewardDataCollatorWithPadding, you should set `max_length` in the RewardTrainer's init"
+                    "When using DPODataCollatorWithPadding, you should set `max_length` in the DPOTrainer's init"
                     " it will be set to `512` by default, but you should do it yourself in the future.",
                     UserWarning,
                 )
                 max_length = 512
-            data_collator = RewardDataCollatorWithPadding(
-                tokenizer, max_length=max_length
+            data_collator = DPODataCollatorWithPadding(
+                tokenizer, 
+                max_length=max_length,
+                label_pad_token_id=label_pad_token_id
             )
 
             if args.remove_unused_columns:
                 args.remove_unused_columns = False
                 # warn users
                 warnings.warn(
-                    "When using RewardDataCollatorWithPadding, you should set `remove_unused_columns=False` in your TrainingArguments"
+                    "When using DPODataCollatorWithPadding, you should set `remove_unused_columns=False` in your TrainingArguments"
                     " we have set it for you, but you should do it yourself in the future.",
                     UserWarning,
                 )
 
-            self.use_reward_data_collator = True
+            self.use_dpo_data_collator = True
         else:
-            self.use_reward_data_collator = False
+            self.use_dpo_data_collator = False
+        
+        self.label_pad_token_id = label_pad_token_id
 
         self.beta = beta
         self.ref_model = ref_model
@@ -176,11 +181,11 @@ class DPOTrainer(Trainer):
         return_outputs=False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
         # TODO fix this
-        self.ref_model.to(device=model.device)
+        self.ref_model.to(device=model.module.device)
 
-        if not self.use_reward_data_collator:
+        if not self.use_dpo_data_collator:
             raise NotImplementedError(
-                "compute_loss is only implemented for RewardDataCollatorWithPadding, please implement your own compute_loss method if you are using a custom data collator"
+                "compute_loss is only implemented for DPODataCollatorWithPadding, please implement your own compute_loss method if you are using a custom data collator"
             )
         logits_chosen_model = model(
             input_ids=inputs["input_ids_chosen"],
@@ -191,19 +196,20 @@ class DPOTrainer(Trainer):
             attention_mask=inputs["attention_mask_rejected"],
         )[0]
 
-        logits_chosen_ref = self.ref_model(
-            input_ids=inputs["input_ids_chosen"],
-            attention_mask=inputs["attention_mask_chosen"],
-        )[0]
-        logits_rejected_ref = self.ref_model(
-            input_ids=inputs["input_ids_rejected"],
-            attention_mask=inputs["attention_mask_rejected"],
-        )[0]
+        with torch.no_grad():
+            logits_chosen_ref = self.ref_model(
+                input_ids=inputs["input_ids_chosen"],
+                attention_mask=inputs["attention_mask_chosen"],
+            )[0]
+            logits_rejected_ref = self.ref_model(
+                input_ids=inputs["input_ids_rejected"],
+                attention_mask=inputs["attention_mask_rejected"],
+            )[0]
 
         log_prob_chosen_model = logprobs_from_logits(
             logits_chosen_model, inputs["input_ids_chosen"]
         )
-        log_probr_rejected_model = logprobs_from_logits(
+        log_prob_rejected_model = logprobs_from_logits(
             logits_rejected_model, inputs["input_ids_rejected"]
         )
 
@@ -214,10 +220,16 @@ class DPOTrainer(Trainer):
             logits_rejected_ref, inputs["input_ids_rejected"]
         )
 
-        pi_logratios = log_prob_chosen_model.mean(-1) - log_probr_rejected_model.mean(
-            -1
-        )
-        ref_logratios = log_prob_chosen_ref.mean(-1) - log_prob_rejected_ref.mean(-1)
+        mask_chosen = (inputs["labels_chosen"]!=self.label_pad_token_id).float()
+        mask_rejected = (inputs["labels_rejected"]!=self.label_pad_token_id).float()
+        
+        log_prob_chosen_model = masked_mean(log_prob_chosen_model, mask_chosen, 1)
+        log_prob_rejected_model = masked_mean(log_prob_rejected_model, mask_rejected, 1)
+        log_prob_chosen_ref = masked_mean(log_prob_chosen_ref, mask_chosen, 1)
+        log_prob_rejected_ref = masked_mean(log_prob_rejected_ref, mask_rejected, 1)
+        
+        pi_logratios =  log_prob_chosen_model - log_prob_rejected_model
+        ref_logratios = log_prob_chosen_ref - log_prob_rejected_ref
 
         loss = -nn.functional.logsigmoid(
             self.beta * (pi_logratios - ref_logratios)
@@ -226,7 +238,7 @@ class DPOTrainer(Trainer):
             self.beta * (log_prob_chosen_model - log_prob_chosen_ref).detach()
         )
         rewards_rejected = (
-            self.beta * (log_probr_rejected_model - log_prob_rejected_ref).detach()
+            self.beta * (log_prob_rejected_model - log_prob_rejected_ref).detach()
         )
         if return_outputs:
             return loss, {
