@@ -53,7 +53,7 @@ class FixedKLController:
 @dataclass
 class RewardDataCollatorWithPadding:
     r"""
-    Reward DataCollator class that padds the inputs to the maximum length of the batch.
+    Reward DataCollator class that pads the inputs to the maximum length of the batch.
     Args:
         tokenizer (`PreTrainedTokenizerBase`):
             The tokenizer used for encoding the data.
@@ -123,6 +123,85 @@ class RewardDataCollatorWithPadding:
         return batch
 
 
+@dataclass
+class DPODataCollatorWithPadding:
+    r"""
+    Reward DataCollator class that pads the accepted and rejected tokens to max size minus the
+    size of the input context.
+    Args:
+        tokenizer (`PreTrainedTokenizerBase`):
+            The tokenizer used for encoding the data.
+        padding (`Union[bool, str, `PaddingStrategy`]`, `optional`, defaults to `True`):
+            padding_strategy to pass to the tokenizer.
+        max_length (`Optional[int]`, `optional`, defaults to `None`):
+            The maximum length of the sequence to be processed.
+        pad_to_multiple_of (`Optional[int]`, `optional`, defaults to `None`):
+            If set will pad the sequence to a multiple of the provided value.
+        return_tensors (`str`, `optional`, defaults to `"pt"`):
+            The tensor type to use.
+    """
+    tokenizer: PreTrainedTokenizerBase
+    padding: Union[bool, str] = True
+    max_length: Optional[int] = None
+    pad_to_multiple_of: Optional[int] = None
+    return_tensors: str = "pt"
+
+    def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
+        features_chosen = []
+        features_rejected = []
+        for feature in features:
+            # check if the keys are named as expected
+            if (
+                "input_ids_chosen" not in feature
+                or "input_ids_rejected" not in feature
+                or "attention_mask_chosen" not in feature
+                or "attention_mask_rejected" not in feature
+                or "context_ids" not in feature
+                or "attention_mask_context" not in feature
+            ):
+                raise ValueError(
+                    "The features should include `context_ids`, `attention_mask_context`, `input_ids_chosen`, `attention_mask_chosen`, `input_ids_rejected` and `attention_mask_rejected`"
+                )
+
+            features_chosen.append(
+                {
+                    "input_ids": feature["input_ids_chosen"],
+                    "attention_mask": feature["attention_mask_chosen"],
+                }
+            )
+            features_rejected.append(
+                {
+                    "input_ids": feature["input_ids_rejected"],
+                    "attention_mask": feature["attention_mask_rejected"],
+                }
+            )
+
+        batch_chosen = self.tokenizer.pad(
+            features_chosen,
+            padding=self.padding,
+            max_length=self.max_length - len(feature["context_ids"]),
+            pad_to_multiple_of=self.pad_to_multiple_of,
+            return_tensors=self.return_tensors,
+        )
+        batch_rejected = self.tokenizer.pad(
+            features_rejected,
+            padding=self.padding,
+            max_length=self.max_length - len(feature["context_ids"]),
+            pad_to_multiple_of=self.pad_to_multiple_of,
+            return_tensors=self.return_tensors,
+        )
+        batch = {
+            "context_ids": feature["context_ids"],
+            "attention_mask_context": feature["attention_mask_context"],
+            "input_ids_chosen": batch_chosen["input_ids"],
+            "attention_mask_chosen": batch_chosen["attention_mask"],
+            "input_ids_rejected": batch_rejected["input_ids"],
+            "attention_mask_rejected": batch_rejected["attention_mask"],
+            "return_loss": True,
+        }
+        return batch
+
+
 class ConstantLengthDataset(IterableDataset):
     """
     Iterable dataset that returns constant length chunks of tokens from stream of text files.
@@ -131,7 +210,7 @@ class ConstantLengthDataset(IterableDataset):
 
         Args:
             tokenizer (`transformers.PreTrainedTokenizer`):
-                The processor used for proccessing the data.
+                The processor used for processing the data.
             dataset (`dataset.Dataset`):
                 Dataset with text files.
             dataset_text_field (`str`, **optional**):
@@ -171,7 +250,9 @@ class ConstantLengthDataset(IterableDataset):
                 f" to {eos_token_id}. If this is not the correct EOS token, make sure to pass the correct eos_token_id."
             )
 
-        self.concat_token_id = tokenizer.eos_token_id if tokenizer.eos_token_id else eos_token_id
+        self.concat_token_id = (
+            tokenizer.eos_token_id if tokenizer.eos_token_id else eos_token_id
+        )
         self.dataset = dataset
         self.seq_length = seq_length
         self.infinite = infinite
@@ -187,7 +268,7 @@ class ConstantLengthDataset(IterableDataset):
             if len(formatting_func_signature) > 1:
                 warnings.warn(
                     "The passed formatting_func has more than one argument. Usually that function should have a single argument `example`"
-                    " which corresponds to the dictonnary returned by each element of the dataset. Make sure you know what you are doing."
+                    " which corresponds to the dictionary returned by each element of the dataset. Make sure you know what you are doing."
                 )
 
     def __len__(self):
