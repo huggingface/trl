@@ -30,6 +30,14 @@ def formatting_prompts_func(example):
     return text
 
 
+def formatting_prompts_func_batched(example):
+    output_text = []
+    for i, question in enumerate(example["question"]):
+        text = f"### Question: {question}\n ### Answer: {example['answer'][i]}"
+        output_text.append(text)
+    return output_text
+
+
 if is_peft_available():
     from peft import LoraConfig, PeftModel
 
@@ -170,12 +178,22 @@ class SFTTrainerTester(unittest.TestCase):
                 packing=True,
             )
 
-            # This should work as well
+            # This should not work as well
+            with self.assertRaises(ValueError):
+                _ = SFTTrainer(
+                    model=self.model,
+                    args=training_args,
+                    train_dataset=self.dummy_dataset,
+                    formatting_func=formatting_prompts_func,
+                    packing=False,
+                )
+
+            # but this shpuld work
             _ = SFTTrainer(
                 model=self.model,
                 args=training_args,
                 train_dataset=self.dummy_dataset,
-                formatting_func=formatting_prompts_func,
+                formatting_func=formatting_prompts_func_batched,
                 packing=False,
             )
 
@@ -349,13 +367,6 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=1,
                 per_device_train_batch_size=2,
             )
-
-            def formatting_prompts_func_batched(example):
-                output_text = []
-                for i, question in enumerate(example["question"]):
-                    text = f"### Question: {question}\n ### Answer: {example['answer'][i]}"
-                    output_text.append(text)
-                return output_text
 
             trainer = SFTTrainer(
                 model=self.model,

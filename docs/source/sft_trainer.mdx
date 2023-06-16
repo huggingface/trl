@@ -65,8 +65,11 @@ Let us assume your dataset has two fields, `question` and `answer`. Therefore yo
 ```python
 ...
 def formatting_prompts_func(example):
-    text = f"### Question: {example['question']}\n ### Answer: {example['answer']}"
-    return text
+    output_texts = []
+    for i in range(len(example['question'])):
+        text = f"### Question: {example['question'][i]}\n ### Answer: {example['answer'][i]}"
+        output_texts.append(text)
+    return output_texts
 
 trainer = SFTTrainer(
     model,
@@ -76,6 +79,7 @@ trainer = SFTTrainer(
 
 trainer.train()
 ```
+To preperly format your input make sure to process all the examples by looping over them and returning a list of processed text. Check out a full example on how to use SFTTrainer on alpaca dataset [here]()
 
 ### Packing dataset ([`ConstantLengthDataset`])
 
