@@ -276,27 +276,43 @@ class SFTTrainer(Trainer):
         self, tokenizer, dataset, dataset_text_field, max_seq_len, formatting_func=None
     ):
         use_formatting_func = formatting_func is not None and dataset_text_field is None
+        self._dataset_sanity_checked = False
 
         # Inspired from: https://huggingface.co/learn/nlp-course/chapter7/6?fw=pt
         def tokenize(element):
+            input_batch = []
+            attention_masks = []
+
             outputs = tokenizer(
                 element[dataset_text_field] if not use_formatting_func else formatting_func(element),
                 truncation=True,
+                padding=True,
                 max_length=max_seq_len,
                 return_overflowing_tokens=False,
                 return_length=True,
             )
-            input_batch = []
-            for length, input_ids in zip(outputs["length"], outputs["input_ids"]):
+
+            if use_formatting_func and not self._dataset_sanity_checked:
+                if not isinstance(formatting_func(element), list):
+                    raise ValueError(
+                        "The `formatting_func` should return a list of processed strings since it can lead to silent bugs."
+                    )
+                else:
+                    self._dataset_sanity_checked = True
+
+            for length, input_ids, attention_mask in zip(
+                outputs["length"], outputs["input_ids"], outputs["attention_mask"]
+            ):
                 if length == max_seq_len:
                     input_batch.append(input_ids)
+                    attention_masks.append(attention_mask)
 
             if len(input_batch) == 0:
                 # warn users
                 warnings.warn(
                     f"Found 0 samples with a length of {max_seq_len}. You might want to decrease the `max_seq_len` argument."
                 )
-            return {"input_ids": input_batch}
+            return {"input_ids": input_batch, "attention_mask": attention_masks}
 
         tokenized_dataset = dataset.map(tokenize, batched=True, remove_columns=dataset.column_names)
 
