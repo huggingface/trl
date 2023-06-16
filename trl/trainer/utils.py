@@ -67,8 +67,10 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
         for i in range(len(examples)):
             response_token_ids_start_idx = None
             for idx in np.where(batch["labels"][i] == response_token_ids[0])[0]:
-                response_token_ids_start_idx = idx
-                break
+                # `response_token_ids` is `'### Response:\n'`, here we are just making sure that the token IDs match
+                if response_token_ids == examples[i]["input_ids"][idx:idx+len(response_token_ids)]:
+                    response_token_ids_start_idx = idx            
+            self.tokenizer.decode(response_token_ids)
 
             if response_token_ids_start_idx is None:
                 raise RuntimeError(
