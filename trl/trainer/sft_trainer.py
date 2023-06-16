@@ -283,12 +283,13 @@ class SFTTrainer(Trainer):
                 return_overflowing_tokens=False,
                 return_length=True,
             )
+            have_max_length_example = False
             input_batch = []
             for length, input_ids in zip(outputs["length"], outputs["input_ids"]):
-                if length == max_seq_len:
-                    input_batch.append(input_ids)
+                input_batch.append(input_ids)
+                have_max_length_example = have_max_length_example or length == max_seq_len
 
-            if len(input_batch) == 0:
+            if not have_max_length_example:
                 # warn users
                 warnings.warn(
                     f"Found 0 samples with a length of {max_seq_len}. You might want to decrease the `max_seq_len` argument."
