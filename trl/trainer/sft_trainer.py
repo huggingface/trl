@@ -234,6 +234,9 @@ class SFTTrainer(Trainer):
             )
         ):
             is_already_dataset = True
+        elif dataset is not None and isinstance(dataset, ConstantLengthDataset):
+            is_already_dataset = True
+            packing = True
         else:
             is_already_dataset = False
 
