@@ -33,6 +33,7 @@ class ScriptArguments:
     )
     max_length: Optional[int] = field(default=512, metadata={"help": "max length of each samples"})
     label_pad_token_id: Optional[int] = field(default=-100, metadata={"help": "label for non response tokens"})
+    broadcast_buffers: Optional[bool] = field(default=False, metadata={"help": "ddp broadcast buffer argument"})
 
 
 parser = HfArgumentParser(ScriptArguments)
@@ -110,6 +111,7 @@ training_args = TrainingArguments(
     evaluation_strategy="steps",
     output_dir="./test",
     report_to=script_args.log_with,
+    ddp_broadcast_buffers=script_args.broadcast_buffers
 )
 
 
