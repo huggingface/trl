@@ -174,14 +174,16 @@ class DPOTrainer(Trainer):
             preprocess_logits_for_metrics,
         )
 
+        # Hack?
+        # Since we inherit from trainer we always have access to an accelerator
+        self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
+
     def compute_loss(
         self,
         model: Union[PreTrainedModel, nn.Module],
         inputs: Dict[str, Union[torch.Tensor, Any]],
         return_outputs=False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
-        # TODO fix this
-        self.ref_model.to(device=model.module.device)
 
         if not self.use_dpo_data_collator:
             raise NotImplementedError(
