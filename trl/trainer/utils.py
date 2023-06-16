@@ -174,7 +174,7 @@ class DPODataCollatorWithPadding:
                     "attention_mask": feature["attention_mask_rejected"],
                 }
             )
-            
+
         batch_chosen = self.tokenizer.pad(
             features_chosen,
             padding=self.padding,
@@ -189,7 +189,7 @@ class DPODataCollatorWithPadding:
             pad_to_multiple_of=self.pad_to_multiple_of,
             return_tensors=None,
         )
-        
+
         batch = {
             "input_ids_chosen": batch_chosen["input_ids"],
             "attention_mask_chosen": batch_chosen["attention_mask"],
@@ -197,16 +197,30 @@ class DPODataCollatorWithPadding:
             "attention_mask_rejected": batch_rejected["attention_mask"],
             "return_loss": True,
         }
-        
+
         sequence_length_chosen = torch.tensor(batch_chosen["input_ids"]).shape[1]
         sequence_length_rejected = torch.tensor(batch_rejected["input_ids"]).shape[1]
         padding_side = self.tokenizer.padding_side
         if padding_side == "right":
-            batch["labels_chosen"] = [x["labels_chosen"] + [self.label_pad_token_id] * (sequence_length_chosen - len(x["labels_chosen"])) for x in features]
-            batch["labels_rejected"] = [x["labels_rejected"] + [self.label_pad_token_id] * (sequence_length_rejected - len(x["labels_rejected"])) for x in features]
+            batch["labels_chosen"] = [
+                x["labels_chosen"] + [self.label_pad_token_id] * (sequence_length_chosen - len(x["labels_chosen"]))
+                for x in features
+            ]
+            batch["labels_rejected"] = [
+                x["labels_rejected"]
+                + [self.label_pad_token_id] * (sequence_length_rejected - len(x["labels_rejected"]))
+                for x in features
+            ]
         else:
-            batch["labels_chosen"] = [[self.label_pad_token_id] * (sequence_length_chosen - len(x["labels_chosen"])) + x["labels_chosen"] for x in features]
-            batch["labels_rejected"] = [[self.label_pad_token_id] * (sequence_length_rejected - len(x["labels_rejected"])) + x["labels_rejected"] for x in features]
+            batch["labels_chosen"] = [
+                [self.label_pad_token_id] * (sequence_length_chosen - len(x["labels_chosen"])) + x["labels_chosen"]
+                for x in features
+            ]
+            batch["labels_rejected"] = [
+                [self.label_pad_token_id] * (sequence_length_rejected - len(x["labels_rejected"]))
+                + x["labels_rejected"]
+                for x in features
+            ]
 
         batch = {k: torch.tensor(v, dtype=torch.int64) for k, v in batch.items()}
         return batch
@@ -260,9 +274,7 @@ class ConstantLengthDataset(IterableDataset):
                 f" to {eos_token_id}. If this is not the correct EOS token, make sure to pass the correct eos_token_id."
             )
 
-        self.concat_token_id = (
-            tokenizer.eos_token_id if tokenizer.eos_token_id else eos_token_id
-        )
+        self.concat_token_id = tokenizer.eos_token_id if tokenizer.eos_token_id else eos_token_id
         self.dataset = dataset
         self.seq_length = seq_length
         self.infinite = infinite

@@ -16,12 +16,7 @@ import unittest
 
 import torch
 from datasets import Dataset
-from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    EvalPrediction,
-    TrainingArguments,
-)
+from transformers import AutoModelForCausalLM, AutoTokenizer, EvalPrediction, TrainingArguments
 
 from trl import DPOTrainer
 from trl.trainer import compute_accuracy
@@ -102,9 +97,7 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_dataset=dummy_dataset,
             )
 
-            previous_trainable_params = {
-                n: param.clone() for n, param in trainer.model.named_parameters()
-            }
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
             trainer.train()
 

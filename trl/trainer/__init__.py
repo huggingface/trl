@@ -21,8 +21,8 @@ from .utils import AdaptiveKLController, FixedKLController, ConstantLengthDatase
 # isort: on
 
 from .base import BaseTrainer
+from .dpo_trainer import DPOTrainer
 from .ppo_config import PPOConfig
 from .ppo_trainer import PPOTrainer
-from .dpo_trainer import DPOTrainer
 from .reward_trainer import RewardTrainer, compute_accuracy
 from .sft_trainer import SFTTrainer

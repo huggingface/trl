@@ -18,20 +18,14 @@ import numpy as np
 import torch
 import torch.nn as nn
 from datasets import Dataset
-from transformers import (
-    DataCollator,
-    PreTrainedModel,
-    PreTrainedTokenizerBase,
-    Trainer,
-    TrainingArguments,
-)
+from transformers import DataCollator, PreTrainedModel, PreTrainedTokenizerBase, Trainer, TrainingArguments
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_pt_utils import nested_detach
 from transformers.trainer_utils import EvalPrediction
 
+from ..core import logprobs_from_logits, masked_mean
 from ..import_utils import is_peft_available
 from .utils import DPODataCollatorWithPadding
-from ..core import logprobs_from_logits, masked_mean
 
 
 if is_peft_available():
@@ -72,9 +66,7 @@ class DPOTrainer(Trainer):
             None,
             None,
         ),
-        preprocess_logits_for_metrics: Optional[
-            Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
-        ] = None,
+        preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         max_length: Optional[int] = None,
         peft_config: Optional[Dict] = None,
     ):
@@ -137,9 +129,7 @@ class DPOTrainer(Trainer):
                 )
                 max_length = 512
             data_collator = DPODataCollatorWithPadding(
-                tokenizer, 
-                max_length=max_length,
-                label_pad_token_id=label_pad_token_id
+                tokenizer, max_length=max_length, label_pad_token_id=label_pad_token_id
             )
 
             if args.remove_unused_columns:
@@ -154,7 +144,7 @@ class DPOTrainer(Trainer):
             self.use_dpo_data_collator = True
         else:
             self.use_dpo_data_collator = False
-        
+
         self.label_pad_token_id = label_pad_token_id
 
         self.beta = beta
@@ -184,7 +174,6 @@ class DPOTrainer(Trainer):
         inputs: Dict[str, Union[torch.Tensor, Any]],
         return_outputs=False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
-
         if not self.use_dpo_data_collator:
             raise NotImplementedError(
                 "compute_loss is only implemented for DPODataCollatorWithPadding, please implement your own compute_loss method if you are using a custom data collator"
@@ -208,40 +197,26 @@ class DPOTrainer(Trainer):
                 attention_mask=inputs["attention_mask_rejected"],
             )[0]
 
-        log_prob_chosen_model = logprobs_from_logits(
-            logits_chosen_model, inputs["input_ids_chosen"]
-        )
-        log_prob_rejected_model = logprobs_from_logits(
-            logits_rejected_model, inputs["input_ids_rejected"]
-        )
+        log_prob_chosen_model = logprobs_from_logits(logits_chosen_model, inputs["input_ids_chosen"])
+        log_prob_rejected_model = logprobs_from_logits(logits_rejected_model, inputs["input_ids_rejected"])
 
-        log_prob_chosen_ref = logprobs_from_logits(
-            logits_chosen_ref, inputs["input_ids_chosen"]
-        )
-        log_prob_rejected_ref = logprobs_from_logits(
-            logits_rejected_ref, inputs["input_ids_rejected"]
-        )
+        log_prob_chosen_ref = logprobs_from_logits(logits_chosen_ref, inputs["input_ids_chosen"])
+        log_prob_rejected_ref = logprobs_from_logits(logits_rejected_ref, inputs["input_ids_rejected"])
 
-        mask_chosen = (inputs["labels_chosen"]!=self.label_pad_token_id).float()
-        mask_rejected = (inputs["labels_rejected"]!=self.label_pad_token_id).float()
-        
+        mask_chosen = (inputs["labels_chosen"] != self.label_pad_token_id).float()
+        mask_rejected = (inputs["labels_rejected"] != self.label_pad_token_id).float()
+
         log_prob_chosen_model = masked_mean(log_prob_chosen_model, mask_chosen, 1)
         log_prob_rejected_model = masked_mean(log_prob_rejected_model, mask_rejected, 1)
         log_prob_chosen_ref = masked_mean(log_prob_chosen_ref, mask_chosen, 1)
         log_prob_rejected_ref = masked_mean(log_prob_rejected_ref, mask_rejected, 1)
-        
-        pi_logratios =  log_prob_chosen_model - log_prob_rejected_model
+
+        pi_logratios = log_prob_chosen_model - log_prob_rejected_model
         ref_logratios = log_prob_chosen_ref - log_prob_rejected_ref
 
-        loss = -nn.functional.logsigmoid(
-            self.beta * (pi_logratios - ref_logratios)
-        ).mean()
-        rewards_chosen = (
-            self.beta * (log_prob_chosen_model - log_prob_chosen_ref).detach()
-        )
-        rewards_rejected = (
-            self.beta * (log_prob_rejected_model - log_prob_rejected_ref).detach()
-        )
+        loss = -nn.functional.logsigmoid(self.beta * (pi_logratios - ref_logratios)).mean()
+        rewards_chosen = self.beta * (log_prob_chosen_model - log_prob_chosen_ref).detach()
+        rewards_rejected = self.beta * (log_prob_rejected_model - log_prob_rejected_ref).detach()
         if return_outputs:
             return loss, {
                 "rewards_chosen": rewards_chosen,
@@ -259,9 +234,7 @@ class DPOTrainer(Trainer):
         inputs = self._prepare_inputs(inputs)
         if ignore_keys is None:
             if hasattr(self.model, "config"):
-                ignore_keys = getattr(
-                    self.model.config, "keys_to_ignore_at_inference", []
-                )
+                ignore_keys = getattr(self.model.config, "keys_to_ignore_at_inference", [])
             else:
                 ignore_keys = []
 

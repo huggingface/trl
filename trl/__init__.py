@@ -10,4 +10,4 @@ from .models import (
     PreTrainedModelWrapper,
     create_reference_model,
 )
-from .trainer import PPOConfig, PPOTrainer, RewardTrainer, SFTTrainer, DPOTrainer
+from .trainer import DPOTrainer, PPOConfig, PPOTrainer, RewardTrainer, SFTTrainer
