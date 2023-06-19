@@ -66,18 +66,18 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
 
         for i in range(len(examples)):
             response_token_ids_start_idx = None
+
             for idx in np.where(batch["labels"][i] == response_token_ids[0])[0]:
                 # `response_token_ids` is `'### Response:\n'`, here we are just making sure that the token IDs match
-                if response_token_ids == examples[i]["input_ids"][idx:idx+len(response_token_ids)]:
-                    response_token_ids_start_idx = idx            
-            self.tokenizer.decode(response_token_ids)
+                if response_token_ids == examples[i]["input_ids"][idx : idx + len(response_token_ids)]:
+                    response_token_ids_start_idx = idx
 
             if response_token_ids_start_idx is None:
                 raise RuntimeError(
                     f'Could not find response key {response_token_ids} in token IDs {batch["labels"][i]}'
                 )
 
-            response_token_ids_end_idx = response_token_ids_start_idx + 1
+            response_token_ids_end_idx = response_token_ids_start_idx + len(response_token_ids)
 
             # Make pytorch loss function ignore all tokens up through the end of the response key
             labels[i, :response_token_ids_end_idx] = -100
