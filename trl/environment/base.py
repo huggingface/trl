@@ -158,7 +158,7 @@ class TextEnvironment:
             histories_responses[i] = torch.cat(histories_responses[i], dim=0).squeeze()
             responses_masks[i] = torch.cat(responses_masks[i], dim=0).squeeze()
 
-        return (histories_queries, histories_responses), (responses_masks, queries_masks), histories_rewards, histories
+        return queries, responses,  masks, histories_rewards, histories
 
     def step(self, history):
         history = self.task_end_check(history)
