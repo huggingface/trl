@@ -1,5 +1,4 @@
 import re
-from copy import deepcopy
 
 import torch
 from accelerate.utils import extract_model_from_parallel
@@ -76,10 +75,9 @@ class TextHistory:
 
 
 class TextEnvironment:
-    def __init__(self, model, tokenizer, tools, reward_fn, prompt, tool_tokens, max_turns=4, generation_kwargs=None):
+    def __init__(self, model, tokenizer, tools, reward_fn, prompt, max_turns=4, generation_kwargs=None):
         self.model = model
         self.tokenizer = tokenizer
-        self.prompt_tokenizer = deepcopy(tokenizer)
         self.prompt = prompt
         if isinstance(tools, dict):
             self.tools = tools
@@ -92,14 +90,12 @@ class TextEnvironment:
         self.response_token = "<response>"
         self.submit_token = "<submit>"
 
-        self.tool_tokens = tool_tokens
         self.max_turns = max_turns
 
         if generation_kwargs is None:
             self.generation_kwargs = dict()
         else:
             self.generation_kwargs = generation_kwargs
-        self.generation_kwargs["pad_token_id"] = tokenizer.eos_token_id
 
         self.is_encoder_decoder = hasattr(self.model, "is_encoder_decoder")
         self.current_device = extract_model_from_parallel(self.model).pretrained_model.device

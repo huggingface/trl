@@ -146,10 +146,6 @@ class PPOConfig(object):
         default=1,
         metadata={"help": "Number of steps between comparison of the current reward with the best seen so far"},
     )
-    use_text_environment: Optional[bool] = field(
-        default=False,
-        metadata={"help": "Whehter to use the text environment or not"},
-    )
 
     def __post_init__(self):
         if self.forward_batch_size is not None:
