@@ -105,66 +105,63 @@ class TextEnvironment:
         self.is_encoder_decoder = hasattr(self.model, "is_encoder_decoder")
         self.current_device = extract_model_from_parallel(self.model).pretrained_model.device
 
-    @property
-    def extra_tokens(self):
-        return [self.request_token, self.call_token, self.response_token, self.submit_token] + self.tool_tokens
+    def encode_history(self, history, is_system_prompt=False):
+        encoded_prompt = self.tokenizer(history.last_text_segment, return_tensors="pt").to(self.current_device)
+        input_ids = encoded_prompt["input_ids"]
 
-    def encode_prompt(self, prompt, add_eos_token=False):
-        if not all([extra_token in self.tokenizer.special_tokens_map for extra_token in self.extra_tokens]):
-            logging.warning("Adding extra tokens to tokenizer - this will change the tokenizer.")
-            self.prompt_tokenizer.add_special_tokens({"additional_special_tokens": self.extra_tokens})
-        if self.prompt_tokenizer.pad_token_id is None:
-            raise ValueError("Tokenizer must have a pad token.")
-        if add_eos_token:
-            prompt = prompt + self.prompt_tokenizer.eos_token
+        if is_system_prompt:
+            attention_mask = torch.zeros_like(input_ids)
+        else:
+            attention_mask = torch.ones_like(input_ids)
 
-        encoded_prompt = self.prompt_tokenizer(prompt, return_tensors="pt")["input_ids"]
-        encoded_prompt = encoded_prompt.to(self.current_device)
-
-        attention_mask = encoded_prompt < self.prompt_tokenizer.vocab_size
-        encoded_prompt[~attention_mask] = self.prompt_tokenizer.pad_token_id
-        attention_mask = attention_mask * 1.0
-
-        if add_eos_token:
-            attention_mask[:, -1] = 0.0
-
-        return {"input_ids": encoded_prompt, "attention_mask": attention_mask}
+        return {"input_ids": input_ids, "attention_mask": attention_mask}
 
     def run(self, tasks):
         turns = 0
         histories = [TextHistory(self.prompt + task, system=True) for task in tasks]
 
+        encoded_prompts = [
+            self.tokenizer(self.prompt + task, return_tensors="pt").to(self.current_device) for task in tasks
+        ]
+
+        # queries
+        histories_queries = [encoded_prompt["input_ids"].squeeze() for encoded_prompt in encoded_prompts]
+        queries_masks = [encoded_prompt["attention_mask"].squeeze() for encoded_prompt in encoded_prompts]
+
+        # respo,ses
+        histories_responses = [[] for _ in range(len(tasks))]
+        responses_masks = [[] for _ in range(len(tasks))]
+
+        # rewards
+        histories_rewards = []
+
         while any([not history.completed for history in histories]):
             histories = self.generate(histories)
+
             # TODO: make this parallel rather than for-loop
             for i in range(len(histories)):
+                encoded_history = self.encode_history(histories[i])
+                histories_responses[i].append(encoded_history["input_ids"].squeeze())
+                responses_masks[i].append(encoded_history["attention_mask"].squeeze())
+
                 histories[i] = self.step(histories[i])
+
+                is_system_prompt = not histories[i].completed
+                encoded_history = self.encode_history(histories[i], is_system_prompt=is_system_prompt)
+
+                histories_responses[i].append(encoded_history["input_ids"].squeeze())
+                responses_masks[i].append(encoded_history["attention_mask"].squeeze())
+
             turns += 1
             if turns == self.max_turns:
                 break
 
         histories = self.compute_reward(histories)
 
-        histories_responses = []
-        histories_queries = []
-        queries_masks = []
-        responses_masks = []
-        histories_rewards = []
-
         for i, history in enumerate(histories):
-            query = self.prompt + tasks[i]
-            response = history.text.split(self.prompt + tasks[i])[-1]
-
-            encoded_response = self.encode_prompt(response, add_eos_token=True)
-            encoded_query = self.encode_prompt(query)
-
-            histories_queries.append(encoded_query["input_ids"].squeeze())
-            histories_responses.append(encoded_response["input_ids"].squeeze())
-
-            queries_masks.append(encoded_query["attention_mask"].squeeze())
-            responses_masks.append(encoded_response["attention_mask"].squeeze())
-
             histories_rewards.append(torch.Tensor([history.reward]))
+            histories_responses[i] = torch.cat(histories_responses[i], dim=0).squeeze()
+            responses_masks[i] = torch.cat(responses_masks[i], dim=0).squeeze()
 
         return (histories_queries, histories_responses), (responses_masks, queries_masks), histories_rewards, histories
 
