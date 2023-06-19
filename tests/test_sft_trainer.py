@@ -408,12 +408,10 @@ class SFTTrainerTester(unittest.TestCase):
             self.assertTrue("pytorch_model.bin" in os.listdir(tmp_dir + "/checkpoint-1"))
 
     def test_data_collator_completion_lm(self):
-        response_template = " ### Response:\n"
+        response_template = "### Response:\n"
         data_collator = DataCollatorForCompletionOnlyLM(response_template, tokenizer=self.tokenizer, mlm=False)
 
-        text = """\
-            ### Instructions:\nHello all this should be masked\n\n
-            ### Response:\nI have not been masked correctly."""
+        text = """\n\n### Instructions:\nHello all this should be masked\n\n### Response:\nI have not been masked correctly."""
         encoded_text = self.tokenizer(text)
         encoded_text["input_ids"] = encoded_text["input_ids"]
 
