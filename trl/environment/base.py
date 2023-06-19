@@ -120,12 +120,11 @@ class TextEnvironment:
         ]
 
         # queries
-        histories_queries = [encoded_prompt["input_ids"].squeeze() for encoded_prompt in encoded_prompts]
-        queries_masks = [encoded_prompt["attention_mask"].squeeze() for encoded_prompt in encoded_prompts]
+        queries = [encoded_prompt["input_ids"].squeeze() for encoded_prompt in encoded_prompts]
 
         # respo,ses
-        histories_responses = [[] for _ in range(len(tasks))]
-        responses_masks = [[] for _ in range(len(tasks))]
+        responses = [[] for _ in range(len(tasks))]
+        masks = [[] for _ in range(len(tasks))]
 
         # rewards
         histories_rewards = []
@@ -136,16 +135,16 @@ class TextEnvironment:
             # TODO: make this parallel rather than for-loop
             for i in range(len(histories)):
                 encoded_history = self.encode_history(histories[i])
-                histories_responses[i].append(encoded_history["input_ids"].squeeze())
-                responses_masks[i].append(encoded_history["attention_mask"].squeeze())
+                responses[i].append(encoded_history["input_ids"].squeeze())
+                masks[i].append(encoded_history["attention_mask"].squeeze())
 
                 histories[i] = self.step(histories[i])
 
                 is_system_prompt = not histories[i].completed
                 encoded_history = self.encode_history(histories[i], is_system_prompt=is_system_prompt)
 
-                histories_responses[i].append(encoded_history["input_ids"].squeeze())
-                responses_masks[i].append(encoded_history["attention_mask"].squeeze())
+                responses[i].append(encoded_history["input_ids"].squeeze())
+                masks[i].append(encoded_history["attention_mask"].squeeze())
 
             turns += 1
             if turns == self.max_turns:
@@ -155,10 +154,10 @@ class TextEnvironment:
 
         for i, history in enumerate(histories):
             histories_rewards.append(torch.Tensor([history.reward]))
-            histories_responses[i] = torch.cat(histories_responses[i], dim=0).squeeze()
-            responses_masks[i] = torch.cat(responses_masks[i], dim=0).squeeze()
+            responses[i] = torch.cat(responses[i], dim=0).squeeze()
+            masks[i] = torch.cat(masks[i], dim=0).squeeze()
 
-        return queries, responses,  masks, histories_rewards, histories
+        return queries, responses, masks, histories_rewards, histories
 
     def step(self, history):
         history = self.task_end_check(history)
