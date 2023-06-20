@@ -32,7 +32,7 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 
 from ..import_utils import is_peft_available
-from .utils import ConstantLengthDataset
+from .utils import ConstantLengthDataset, DataCollatorForCompletionOnlyLM
 
 
 if is_peft_available():
@@ -128,6 +128,11 @@ class SFTTrainer(Trainer):
             warnings.warn(
                 "You passed a model_id to the SFTTrainer. This will automatically create an "
                 "`AutoModelForCausalLM` or a `PeftModel` (if you passed a `peft_config`) for you."
+            )
+
+        if packing and data_collator is not None and isinstance(data_collator, DataCollatorForCompletionOnlyLM):
+            raise ValueError(
+                "You passed a `DataCollatorForCompletionOnlyLM` to the SFTTrainer. This is not compatible with the `packing` argument."
             )
 
         if is_peft_available() and peft_config is not None:
