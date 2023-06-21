@@ -5,7 +5,7 @@ from accelerate import Accelerator
 from datasets import load_dataset
 from peft import LoraConfig
 from tqdm import tqdm
-from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, TrainingArguments, logging, set_seed
+from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments, logging, set_seed
 
 from trl import SFTTrainer
 from trl.trainer import ConstantLengthDataset
@@ -191,21 +191,7 @@ def run_training(args, train_data, val_data):
 
 
 def main(args):
-    config = AutoConfig.from_pretrained(args.model_path)
-    architecture = config.architectures[0]
-
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
-
-    if "Llama" in architecture:
-        print("Setting EOS, BOS, and UNK tokens for LLama tokenizer")
-        tokenizer.add_special_tokens(
-            {
-                "eos_token": "</s>",
-                "bos_token": "</s>",
-                "unk_token": "</s>",
-            }
-        )
-
     train_dataset, eval_dataset = create_datasets(tokenizer, args)
     run_training(args, train_dataset, eval_dataset)
 

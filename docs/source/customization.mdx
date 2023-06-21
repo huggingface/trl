@@ -106,7 +106,7 @@ config = PPOConfig(**ppo_config)
 
 # 2. Create optimizer
 optimizer = torch.optim.SGD(model.parameters(), lr=config.learning_rate)
-lr_scheduler = lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
+lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
 
 # 3. initialize trainer
 ppo_trainer = PPOTrainer(config, model, model_ref, tokenizer, optimizer=optimizer, lr_scheduler=lr_scheduler)

@@ -14,6 +14,7 @@
 import inspect
 import os
 import time
+import typing
 import warnings
 from typing import Callable, List, Optional, Union
 
@@ -23,8 +24,14 @@ from accelerate import Accelerator
 from datasets import Dataset
 from huggingface_hub import whoami
 from packaging import version
+from requests.exceptions import HTTPError
 from torch.optim import Adam
-from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizer, PreTrainedTokenizerFast
+from transformers import (
+    DataCollatorForLanguageModeling,
+    PreTrainedTokenizer,
+    PreTrainedTokenizerBase,
+    PreTrainedTokenizerFast,
+)
 
 from ..core import (
     WANDB_PADDING,
@@ -106,7 +113,7 @@ class PPOTrainer(BaseTrainer):
             transformer model with a casual language modelling head. Check the documentation of `PreTrainedModelWrapper`
             for more details. If no reference model is provided, the trainer will create a reference model with the same
              architecture as the model to be optimized with shared layers.
-        **tokenizer** (`Union[PreTrainedTokenizer, PreTrainedTokenizerFast]`) -- Tokenizer to be used for encoding the
+        **tokenizer** (`PreTrainedTokenizerBase`) -- Tokenizer to be used for encoding the
             data. Check the documentation of `transformers.PreTrainedTokenizer` and
             `transformers.PreTrainedTokenizerFast` for more details.
         **dataset** (Union[`torch.utils.data.Dataset`, `datasets.Dataset`], *optional*) -- PyTorch dataset or Hugging
@@ -127,11 +134,11 @@ class PPOTrainer(BaseTrainer):
         self,
         config: PPOConfig = None,
         model: PreTrainedModelWrapper = None,
-        ref_model: PreTrainedModelWrapper = None,
-        tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast] = None,
+        ref_model: Optional[PreTrainedModelWrapper] = None,
+        tokenizer: PreTrainedTokenizerBase = None,
         dataset: Optional[Union[torch.utils.data.Dataset, Dataset]] = None,
         optimizer: Optional[torch.optim.Optimizer] = None,
-        data_collator=None,
+        data_collator: Optional[typing.Callable] = None,
         num_shared_layers: Optional[int] = None,
         lr_scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
     ):
@@ -145,9 +152,9 @@ class PPOTrainer(BaseTrainer):
                 Hugging Face transformer model with a value head.
             ref_model (`PreTrainedModelWrapper`):
                 Hugging Face transformer model with a casual language modelling head. Used for KL penalty
-            tokenizer (`transformers.PreTrainedTokenizer`):
+            tokenizer (`transformers.PreTrainedTokenizerBase`):
                 Hugging Face tokenizer
-            dataset (Union[`torch.utils.data.Dataset`, `datasets.Dataset`], *optional*):
+            dataset (Optional[Union[`torch.utils.data.Dataset`, `datasets.Dataset`]]):
                 PyTorch dataset or Hugging Face dataset. If a Hugging Face dataset is passed, the dataset
                 will be preprocessed by removing the columns that are not used by the model. If none is passed,
                 a warning will be raised in a multi-GPU setting.
@@ -169,9 +176,9 @@ class PPOTrainer(BaseTrainer):
         # Step 0: check positional arguments validity
         if not isinstance(config, PPOConfig):
             raise ValueError(f"config must be a PPOConfig, got {type(config)}")
-        if not isinstance(tokenizer, (PreTrainedTokenizer, PreTrainedTokenizerFast)):
+        if not isinstance(tokenizer, (PreTrainedTokenizerBase)):
             raise ValueError(
-                f"tokenizer must be a PreTrainedTokenizer or PreTrainedTokenizerFast, got {type(tokenizer)}"
+                f"tokenizer must be a PreTrainedTokenizerBase like a PreTrainedTokenizer or a PreTrainedTokenizerFast, got {type(tokenizer)}"
             )
         if not isinstance(model, (SUPPORTED_ARCHITECTURES)):
             raise ValueError(
@@ -221,7 +228,7 @@ class PPOTrainer(BaseTrainer):
         self.tokenizer = tokenizer
 
         if dataset is not None and not (isinstance(dataset, torch.utils.data.Dataset) or isinstance(dataset, Dataset)):
-            raise ValueError("dataloader must be a torch.utils.data.Dataset or datasets.Dataset")
+            raise ValueError("dataset must be a torch.utils.data.Dataset or datasets.Dataset")
         elif dataset is None:
             warnings.warn(
                 "No dataset is provided. Make sure to set config.batch_size to the correct value before training.",
@@ -233,9 +240,9 @@ class PPOTrainer(BaseTrainer):
             self.dataloader = self.prepare_dataloader(self.dataset, data_collator)
         elif self.dataset is None and self.accelerator.num_processes > 1:
             warnings.warn(
-                "No dataset is provided. In a multi-GPU setting, this will lead to an error. You should",
-                " prepare your dataloader yourself with `dataloader = ppo_trainer.accelerator.prepare(dataloader)`",
-                " and using `torch.utils.data.DataLoader`, or pass a dataset to the `PPOTrainer`. Please ",
+                "No dataset is provided. In a multi-GPU setting, this will lead to an error. You should"
+                " prepare your dataloader yourself with `dataloader = ppo_trainer.accelerator.prepare(dataloader)`"
+                " and using `torch.utils.data.DataLoader`, or pass a dataset to the `PPOTrainer`. Please "
                 " refer to the documentation for more details.",
                 UserWarning,
             )
@@ -286,7 +293,10 @@ class PPOTrainer(BaseTrainer):
         )
         if is_deepspeed_used:
             # 8 bit models are already set on the correct device
-            if not self.is_peft_model and not getattr(self.ref_model.pretrained_model, "is_loaded_in_8bit", False):
+            if not self.is_peft_model and not (
+                getattr(self.ref_model.pretrained_model, "is_loaded_in_8bit", False)
+                or getattr(self.ref_model.pretrained_model, "is_loaded_in_4bit", False)
+            ):
                 # DS integration only allows for single model and as `ref_model` is only used for
                 # `KL devergence loss`,i.e, in eval model, just have it be on the respective device and
                 # there is no need to pass it to the `accelerator.prepare` call
@@ -656,30 +666,33 @@ class PPOTrainer(BaseTrainer):
         for _ in range(self.config.ppo_epochs):
             if early_stop:
                 break
-            for batch in mini_batch_dataloader:
+
+            for i, batch in enumerate(mini_batch_dataloader):
                 with self.accelerator.accumulate(self.model):
                     model_inputs = {k: batch[k] for k in model_inputs_names}
                     logprobs, logits, vpreds, _ = self.batched_forward_pass(
                         self.model, batch["queries"], batch["responses"], model_inputs, return_logits=True
                     )
+                    if (i % self.config.gradient_accumulation_steps) == 0:
+                        self.optimizer.zero_grad()
 
-                train_stats = self.train_minibatch(
-                    batch["logprobs"],
-                    batch["values"],
-                    batch["rewards"],
-                    logprobs,
-                    logits,
-                    vpreds,
-                    batch["masks"],
-                )
+                    train_stats = self.train_minibatch(
+                        batch["logprobs"],
+                        batch["values"],
+                        batch["rewards"],
+                        logprobs,
+                        logits,
+                        vpreds,
+                        batch["masks"],
+                    )
 
-                all_stats.append(train_stats)
+                    all_stats.append(train_stats)
 
-                if self.config.early_stopping:
-                    policykl = train_stats["policy/policykl"]
-                    early_stop = self._early_stop(policykl)
-                    if early_stop:
-                        break
+                    if self.config.early_stopping:
+                        policykl = train_stats["policy/policykl"]
+                        early_stop = self._early_stop(policykl)
+                        if early_stop:
+                            break
 
         timing["time/ppo/optimize_step"] = time.time() - t
 
@@ -923,7 +936,6 @@ class PPOTrainer(BaseTrainer):
         """
         loss_p, loss_v, train_stats = self.loss(old_logprobs, values, rewards, logits, vpreds, logprobs, mask)
         loss = loss_p + loss_v
-        self.optimizer.zero_grad()
         self.accelerator.backward(loss)
 
         if self.config.max_grad_norm is not None:
@@ -1205,10 +1217,16 @@ class PPOTrainer(BaseTrainer):
             path (`str`): The path to save the model card to.
             model_name (`str`, *optional*): The name of the model, defaults to `TRL Model`.
         """
+        try:
+            user = whoami()["name"]
+        # handle the offline case
+        except HTTPError:
+            warnings.warn("Cannot retrieve user information assuming you are running in offline mode.")
+            return
+
         if not os.path.exists(path):
             os.makedirs(path)
 
-        user = whoami()["name"]
         model_card_content = MODEL_CARD_TEMPLATE.format(model_name=model_name, model_id=f"{user}/{path}")
         with open(os.path.join(path, "README.md"), "w", encoding="utf-8") as f:
             f.write(model_card_content)
