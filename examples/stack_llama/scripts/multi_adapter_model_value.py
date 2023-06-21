@@ -62,6 +62,7 @@ class AutoModelForCausalLMWithMultiAdapterValueHead(AutoModelForCausalLMWithValu
     ):
         # copy.deepcopy doesn't work with LoraConfig for some reason, so use this
         adapter_peft_config = LoraConfig(**self.pretrained_model.peft_config[reward_adapter_name].to_dict())
+        adapter_peft_config.inference_mode = False
         self.pretrained_model.add_adapter(value_adapter_name, adapter_peft_config)
 
         # load the reward model's adapter and head state to the value function

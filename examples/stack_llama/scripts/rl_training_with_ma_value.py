@@ -26,6 +26,7 @@ from transformers import AutoTokenizer, HfArgumentParser
 
 from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, set_seed
 from trl.core import LengthSampler
+from trl.models.modeling_base import compute_reward_score
 
 
 tqdm.pandas()
@@ -177,6 +178,7 @@ if script_args.multi_adapter_value:
 else:
     model_cls = AutoModelForCausalLMWithValueHead
 
+
 model = model_cls.from_pretrained(
     config.model_name,
     load_in_8bit=True,
@@ -220,8 +222,8 @@ generation_kwargs = {
     "top_k": 0.0,
     "top_p": 1.0,
     "do_sample": True,
-    "pad_token_id": tokenizer.pad_token_id,
-    "eos_token_id": 100_000,
+    # "pad_token_id": tokenizer.pad_token_id,
+    # "eos_token_id": 100_000,
 }
 output_min_length = 32
 output_max_length = script_args.output_max_length
@@ -247,8 +249,8 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
         texts, padding=True, truncation=True, return_tensors="pt", return_token_type_ids=False
     ).to(ppo_trainer.accelerator.device)
 
-    raw_rewards = ppo_trainer.accelerator.unwrap_model(ppo_trainer.model).compute_reward_score(**reward_inputs)
-    rewards = [(raw_rewards[i, -1, 0] - script_args.reward_baseline) for i in range(len(raw_rewards))]
+    raw_rewards = compute_reward_score(ppo_trainer.model, **reward_inputs)
+    rewards = [(raw_rewards[i] - script_args.reward_baseline) for i in range(len(raw_rewards))]
 
     # Run PPO step
     stats = ppo_trainer.step(question_tensors, response_tensors, rewards)
