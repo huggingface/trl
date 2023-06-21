@@ -98,6 +98,8 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
+Note that if you use a packed dataset and if you pass `max_steps` in the training arguments you will probably train your models for more than few epochs. 
+
 #### Customize your prompts using packed dataset
 
 If your dataset has several fields that you want to combine, for example if the dataset has `question` and `answer` fields and you want to combine them, you can pass a formatting function to the trainer that will take care of that. For example:
