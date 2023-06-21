@@ -244,7 +244,7 @@ class ConstantLengthDataset(IterableDataset):
                 except StopIteration:
                     if self.infinite:
                         iterator = iter(self.dataset)
-                        warnings.warn("The dataset reached end. The iterator is reset")
+                        warnings.warn("The dataset reached end and the iterator is reset to the start.")
                     else:
                         more_examples = False
                         break
