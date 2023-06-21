@@ -31,7 +31,7 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 
 from ..import_utils import is_peft_available
-from .utils import ConstantLengthDataset, PeftSavingCallback, DataCollatorForCompletionOnlyLM
+from .utils import ConstantLengthDataset, DataCollatorForCompletionOnlyLM, PeftSavingCallback
 
 
 if is_peft_available():
