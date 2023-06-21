@@ -14,7 +14,6 @@
 import warnings
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-import numpy as np
 import torch
 import torch.nn as nn
 from datasets import Dataset
@@ -24,21 +23,10 @@ from transformers.trainer_pt_utils import nested_detach
 from transformers.trainer_utils import EvalPrediction
 
 from ..import_utils import is_peft_available
-from .utils import RewardDataCollatorWithPadding
-
+from .utils import RewardDataCollatorWithPadding, compute_accuracy
 
 if is_peft_available():
     from peft import get_peft_model
-
-
-def compute_accuracy(eval_pred) -> Dict[str, float]:
-    predictions, labels = eval_pred
-    # Here, predictions is rewards_chosen and rewards_rejected.
-    # We want to see how much of the time rewards_chosen > rewards_rejected.
-    predictions = np.argmax(predictions, axis=1)
-
-    accuracy = np.array(predictions == labels, dtype=float).mean().item()
-    return {"accuracy": accuracy}
 
 
 class RewardTrainer(Trainer):

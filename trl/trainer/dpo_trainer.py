@@ -14,7 +14,6 @@
 import warnings
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-import numpy as np
 import torch
 import torch.nn as nn
 from datasets import Dataset
@@ -25,27 +24,48 @@ from transformers.trainer_utils import EvalPrediction
 
 from ..core import logprobs_from_logits, masked_mean
 from ..import_utils import is_peft_available
-from .utils import DPODataCollatorWithPadding
-
+from .utils import DPODataCollatorWithPadding, compute_accuracy
 
 if is_peft_available():
-    from peft import get_peft_model
-
-
-def compute_accuracy(eval_pred) -> Dict[str, float]:
-    predictions, labels = eval_pred
-    # Here, predictions is rewards_chosen and rewards_rejected.
-    # We want to see how much of the time rewards_chosen > rewards_rejected.
-    predictions = np.argmax(predictions, axis=1)
-
-    accuracy = np.array(predictions == labels, dtype=float).mean().item()
-    return {"accuracy": accuracy}
+    from peft import get_peft_model, prepare_model_for_int8_training
 
 
 class DPOTrainer(Trainer):
     r"""
-    The DPOTrainer.
+    Initialize DPOTrainer.
 
+    Args:
+        model (`transformers.PreTrainedModel`):
+            The model to train, preferably an `AutoModelForSequenceClassification`.
+        ref_model (`PreTrainedModelWrapper`):
+            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation and loss.
+        beta (`float`, defaults to 0.1):
+            The beta factor in DPO loss. Higher beta means less divergence from the initial policy.
+        args (`transformers.TrainingArguments`):
+            The arguments to use for training.
+        data_collator (`transformers.DataCollator`):
+            The data collator to use for training. If None is specified, the default data collator (`RewardDataCollatorWithPadding`) will be used
+            which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
+        train_dataset (`datasets.Dataset`):
+            The dataset to use for training.
+        eval_dataset (`datasets.Dataset`):
+            The dataset to use for evaluation.
+        tokenizer (`transformers.PreTrainedTokenizerBase`):
+            The tokenizer to use for training. This argument is required if you want to use the default data collator.
+        model_init (`Callable[[], transformers.PreTrainedModel]`):
+            The model initializer to use for training. If None is specified, the default model initializer will be used.
+        compute_metrics (`Callable[[transformers.EvalPrediction], Dict]`, *optional* defaults to `compute_accuracy`):
+            The metrics to use for evaluation. If no metrics are specified, the default metric (`compute_accuracy`) will be used.
+        callbacks (`List[transformers.TrainerCallback]`):
+            The callbacks to use for training.
+        optimizers (`Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
+            The optimizer and scheduler to use for training.
+        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
+            The function to use to preprocess the logits before computing the metrics.
+        max_length (`int`, defaults to `None`):
+            The maximum length of the sequences in the batch. This argument is required if you want to use the default data collator.
+        peft_config (`Dict`, defaults to `None`):
+            The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
     """
 
     def __init__(
@@ -70,47 +90,13 @@ class DPOTrainer(Trainer):
         max_length: Optional[int] = None,
         peft_config: Optional[Dict] = None,
     ):
-        """
-        Initialize DPOTrainer.
-
-        Args:
-            model (`transformers.PreTrainedModel`):
-                The model to train, preferably an `AutoModelForSequenceClassification`.
-            ref_model (`PreTrainedModelWrapper`):
-                Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation and loss.
-            beta (`float`, defaults to 0.1):
-
-            args (`transformers.TrainingArguments`):
-                The arguments to use for training.
-            data_collator (`transformers.DataCollator`):
-                The data collator to use for training. If None is specified, the default data collator (`RewardDataCollatorWithPadding`) will be used
-                which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
-            train_dataset (`datasets.Dataset`):
-                The dataset to use for training.
-            eval_dataset (`datasets.Dataset`):
-                The dataset to use for evaluation.
-            tokenizer (`transformers.PreTrainedTokenizerBase`):
-                The tokenizer to use for training. This argument is required if you want to use the default data collator.
-            model_init (`Callable[[], transformers.PreTrainedModel]`):
-                The model initializer to use for training. If None is specified, the default model initializer will be used.
-            compute_metrics (`Callable[[transformers.EvalPrediction], Dict]`, *optional* defaults to `compute_accuracy`):
-                The metrics to use for evaluation. If no metrics are specified, the default metric (`compute_accuracy`) will be used.
-            callbacks (`List[transformers.TrainerCallback]`):
-                The callbacks to use for training.
-            optimizers (`Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
-                The optimizer and scheduler to use for training.
-            preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
-                The function to use to preprocess the logits before computing the metrics.
-            max_length (`int`, defaults to `None`):
-                The maximum length of the sequences in the batch. This argument is required if you want to use the default data collator.
-            peft_config (`Dict`, defaults to `None`):
-                The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
-        """
         if not is_peft_available() and peft_config is not None:
             raise ValueError(
                 "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
             )
         elif is_peft_available() and peft_config is not None:
+            if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
+                model = prepare_model_for_int8_training(model)
             model = get_peft_model(model, peft_config)
 
         if compute_metrics is None:
@@ -164,9 +150,13 @@ class DPOTrainer(Trainer):
             preprocess_logits_for_metrics,
         )
 
-        # Hack?
         # Since we inherit from trainer we always have access to an accelerator
-        self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
+        if hasattr(self, "accelerator"):
+            self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
+        else:
+            raise AttributeError(
+                "Your `Trainer` does not have an `accelerator` object. Consider upgrading `transformers`."
+            )
 
     def compute_loss(
         self,
