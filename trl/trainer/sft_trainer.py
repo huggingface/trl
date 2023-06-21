@@ -225,9 +225,6 @@ class SFTTrainer(Trainer):
             )
             self.train_dataset.infinite = True
         elif self.args.max_steps == -1 and packing:
-            warnings.warn(
-                "You passed `packing=False` to the SFTTrainer, and you are training your model with `epochs` strategy. Will force-set `infinite` argument of the packed dataset to `False` "
-            )
             self.train_dataset.infinite = False
 
     def _prepare_dataset(
