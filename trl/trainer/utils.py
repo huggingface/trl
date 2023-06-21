@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional, Union
 import numpy as np
 import torch
 from torch.utils.data import IterableDataset
-from transformers import PreTrainedTokenizerBase
+from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizerBase
 
 
 class AdaptiveKLController:
@@ -48,6 +48,43 @@ class FixedKLController:
 
     def update(self, current, n_steps):
         pass
+
+
+class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
+    def __init__(self, response_template, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.response_template = response_template
+
+    def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
+        batch = super().torch_call(examples)
+
+        # The prompt ends with the response key plus a newline.  We encode this and then try to find it in the
+        # sequence of tokens.  This should just be a single token.
+        response_token_ids = self.tokenizer.encode(self.response_template, add_special_tokens=False)
+
+        labels = batch["labels"].clone()
+
+        for i in range(len(examples)):
+            response_token_ids_start_idx = None
+
+            for idx in np.where(batch["labels"][i] == response_token_ids[0])[0]:
+                # `response_token_ids` is `'### Response:\n'`, here we are just making sure that the token IDs match
+                if response_token_ids == examples[i]["input_ids"][idx : idx + len(response_token_ids)]:
+                    response_token_ids_start_idx = idx
+
+            if response_token_ids_start_idx is None:
+                raise RuntimeError(
+                    f'Could not find response key {response_token_ids} in token IDs {batch["labels"][i]}'
+                )
+
+            response_token_ids_end_idx = response_token_ids_start_idx + len(response_token_ids)
+
+            # Make pytorch loss function ignore all tokens up through the end of the response key
+            labels[i, :response_token_ids_end_idx] = -100
+
+        batch["labels"] = labels
+
+        return batch
 
 
 @dataclass
