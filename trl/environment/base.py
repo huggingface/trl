@@ -42,26 +42,24 @@ class TextHistory:
 
         self.append_segment(text, tokens, system=system)
 
-
     def append_segment(self, text, tokens, system=True):
-        if len(text) == 0 or len(tokens)==0:
+        if len(text) == 0 or len(tokens) == 0:
             raise ValueError("Can't append empty text or token list to history.")
-        
+
         original_text_length = len(self.text)
-        
+
         self.text += text
         self.text_spans.append((original_text_length, len(self.text)))
         self.system_spans.append(system)
 
         original_token_length = len(self.tokens)
-        
+
         self.tokens = torch.cat((self.tokens, tokens))
         if system:
             self.token_masks = torch.cat((self.token_masks, torch.zeros_like(tokens)))
         else:
             self.token_masks = torch.cat((self.token_masks, torch.ones_like(tokens)))
         self.token_spans.append((original_token_length, len(self.tokens)))
-
 
     def complete(self, truncated=False):
         self.completed = True
@@ -71,7 +69,7 @@ class TextHistory:
     def last_text_segment(self):
         start, end = self.text_spans[-1]
         return self.text[start:end]
-    
+
     def split_query_response_tokens(self):
         split_index = self.token_spans[0][1]
         query = self.tokens[:split_index]
@@ -102,7 +100,7 @@ class TextHistory:
         prompt_end = self.token_spans[0][1]
 
         for i, (token, mask) in enumerate(zip(self.tokens, self.token_masks)):
-            if i<prompt_end:
+            if i < prompt_end:
                 text.append(tokenizer.convert_ids_to_tokens(token.item()), style="black on grey85")
                 text.append(" ")
             elif mask == 1:
@@ -144,7 +142,10 @@ class TextEnvironment:
         turns = 0
 
         queries = [self.prompt + task for task in tasks]
-        queries_tokens = [self.tokenizer(query, return_tensors="pt").input_ids[0] for query in queries]
+        queries_tokens = [
+            self.tokenizer(query, return_tensors="pt").input_ids[0].to(self.model.pretrained_model.device)
+            for query in queries
+        ]
 
         histories = [TextHistory(q, qt, system=True) for q, qt in zip(queries, queries_tokens)]
 
@@ -161,7 +162,7 @@ class TextEnvironment:
 
         # convert a list of (q, r, m) tuples to lists of all qs, rs, and ms respectively
         queries, responses, masks = map(list, zip(*[history.split_query_response_tokens() for history in histories]))
-        
+
         rewards = [history.reward for history in histories]
         return queries, responses, masks, rewards, histories
 
@@ -176,9 +177,13 @@ class TextEnvironment:
         except Exception as error:
             response = str(error)
 
-        history.append_segment(response + self.response_token,
-                       self.tokenizer(response + self.response_token, return_tensors="pt").input_ids[0],
-                       system=True)
+        history.append_segment(
+            response + self.response_token,
+            self.tokenizer(response + self.response_token, return_tensors="pt")
+            .input_ids[0]
+            .to(self.model.pretrained_model.device),
+            system=True,
+        )
 
         return history
 
