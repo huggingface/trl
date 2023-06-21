@@ -26,7 +26,6 @@ from transformers import AutoTokenizer, HfArgumentParser
 
 from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, set_seed
 from trl.core import LengthSampler
-from trl.models.modeling_base import compute_reward_score
 
 
 tqdm.pandas()
@@ -156,7 +155,7 @@ dataset = build_dataset(tokenizer)
 
 
 def collator(data):
-    return dict((key, [d[key] for d in data]) for key in data[0])
+    return {key: [d[key] for d in data] for key in data[0]}
 
 
 # set seed before initializing value head for deterministic eval
@@ -249,7 +248,7 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
         texts, padding=True, truncation=True, return_tensors="pt", return_token_type_ids=False
     ).to(ppo_trainer.accelerator.device)
 
-    raw_rewards = compute_reward_score(ppo_trainer.model, **reward_inputs)
+    raw_rewards = ppo_trainer.compute_reward_score(**reward_inputs)
     rewards = [(raw_rewards[i] - script_args.reward_baseline) for i in range(len(raw_rewards))]
 
     # Run PPO step

@@ -954,13 +954,14 @@ class PPOTrainer(BaseTrainer):
         and then compute the reward score. After that the model disables the reward modeling
         adapter and enables the default ppo adapter again.
         """
-        if not self.model.supports_rm_adapter:
+        unwrap_model = self.accelerator.unwrap_model(self.model)
+        if not unwrap_model.supports_rm_adapter:
             raise ValueError(
                 "This model does not support reward modeling adapter, you must compute reward scores with another method."
             )
 
         # enable rm adapter
-        self.model.pretrained_model.set_adapter(self.model.rm_adapter_name)
+        unwrap_model.pretrained_model.set_adapter(unwrap_model.rm_adapter_name)
         self.model.eval()
 
         with torch.no_grad():
@@ -971,7 +972,7 @@ class PPOTrainer(BaseTrainer):
                 **kwargs,
             )
 
-        self.model.pretrained_model.set_adapter(self.model.policy_adapter_name)
+        unwrap_model.pretrained_model.set_adapter(unwrap_model.policy_adapter_name)
         self.model.train()
 
         return scores
