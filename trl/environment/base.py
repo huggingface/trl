@@ -33,9 +33,9 @@ class TextHistory:
         self.system_spans = []
         self.text_spans = []
         self.token_spans = []
-        self.token_masks = torch.Tensor([]).to(tokens.device)
+        self.token_masks = torch.tensor([], dtype=torch.long).to(tokens.device)
         self.text = ""
-        self.tokens = torch.Tensor([]).to(tokens.device)
+        self.tokens = torch.tensor([], dtype=torch.long).to(tokens.device)
         self.completed = False
         self.truncated = False
         self.reward = 0.0
@@ -57,9 +57,9 @@ class TextHistory:
         
         self.tokens = torch.cat((self.tokens, tokens))
         if system:
-            self.token_masks = torch.cat((self.masks, torch.zeros_like(tokens)))
+            self.token_masks = torch.cat((self.token_masks, torch.zeros_like(tokens)))
         else:
-            self.token_masks = torch.cat((self.masks, torch.ones_like(tokens)))
+            self.token_masks = torch.cat((self.token_masks, torch.ones_like(tokens)))
         self.token_spans.append((original_token_length, len(self.tokens)))
 
 
@@ -125,7 +125,7 @@ class TextEnvironment:
         turns = 0
 
         queries = [self.prompt + task for task in tasks]
-        queries_tokens = [self.tokenizer(query).input_ids[0] for query in queries]
+        queries_tokens = [self.tokenizer(query, return_tensors="pt").input_ids[0] for query in queries]
 
         histories = [TextHistory(q, qt, system=True) for q, qt in zip(queries, queries_tokens)]
 
@@ -157,8 +157,8 @@ class TextEnvironment:
         except Exception as error:
             response = str(error)
 
-        history.append(response + self.response_token,
-                       self.tokenizer(response + self.response_token).input_ids[0],
+        history.append_segment(response + self.response_token,
+                       self.tokenizer(response + self.response_token, return_tensors="pt").input_ids[0],
                        system=True)
 
         return history
@@ -187,7 +187,7 @@ class TextEnvironment:
         response_texts = self.tokenizer.batch_decode(response_tensors)
 
         for i, response_text, response_tensor in zip(active_histories, response_texts, response_tensors):
-            histories[i].append_segement(response_text, response_tensor, system=False)
+            histories[i].append_segment(response_text, response_tensor, system=False)
 
         return histories
 
