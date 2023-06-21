@@ -16,12 +16,9 @@ import unittest
 
 import torch
 from datasets import Dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, EvalPrediction, TrainingArguments
+from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
 
 from trl import DPOTrainer
-from trl.trainer import compute_accuracy
-
-from .testing_utils import require_peft
 
 
 class DPOTrainerTester(unittest.TestCase):

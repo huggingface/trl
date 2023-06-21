@@ -26,6 +26,7 @@ from ..core import logprobs_from_logits, masked_mean
 from ..import_utils import is_peft_available
 from .utils import DPODataCollatorWithPadding, compute_accuracy
 
+
 if is_peft_available():
     from peft import get_peft_model, prepare_model_for_int8_training
 
