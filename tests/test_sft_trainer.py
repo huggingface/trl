@@ -480,7 +480,7 @@ class SFTTrainerTester(unittest.TestCase):
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
             # make sure the trainer did 5 steps
-            self.assertTrue("pytorch_model.bin" in os.listdir(tmp_dir + "/checkpoint-2"))
+            self.assertTrue("pytorch_model.bin" in os.listdir(tmp_dir + "/checkpoint-4"))
 
     @require_peft
     def test_peft_sft_trainer(self):
