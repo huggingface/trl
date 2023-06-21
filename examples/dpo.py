@@ -34,11 +34,14 @@ class ScriptArguments:
     max_length: Optional[int] = field(default=512, metadata={"help": "max length of each samples"})
     label_pad_token_id: Optional[int] = field(default=-100, metadata={"help": "label for non response tokens"})
     broadcast_buffers: Optional[bool] = field(default=False, metadata={"help": "ddp broadcast buffer argument"})
+    ignore_bias_buffers: Optional[bool] = field(default=False, metadata={
+        "help": "fix for DDP issues with LM bias/mask buffers - invalid scalar type,`inplace operation. See"
+                "https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992"
+    })
 
 
 parser = HfArgumentParser(ScriptArguments)
 script_args = parser.parse_args_into_dataclasses()[0]
-
 
 SANITY = True
 
@@ -81,6 +84,11 @@ def preprocess_function(examples, tokenizer, max_length, label_pad_token_id):
 
 # 1. load a pretrained model
 model = AutoModelForCausalLM.from_pretrained(script_args.model_name)
+
+if script_args.ignore_bias_buffers:
+    # torch distributed hack
+    model._ddp_params_and_buffers_to_ignore = [name for name, buffer in model.named_buffers() if buffer.dtype == torch.bool]
+
 model_ref = AutoModelForCausalLM.from_pretrained(script_args.model_name)
 tokenizer = AutoTokenizer.from_pretrained(script_args.model_name)
 tokenizer.pad_token = tokenizer.eos_token
@@ -113,7 +121,6 @@ training_args = TrainingArguments(
     report_to=script_args.log_with,
     ddp_broadcast_buffers=script_args.broadcast_buffers
 )
-
 
 # 3. initialize the DPO trainer
 dpo_trainer = DPOTrainer(
