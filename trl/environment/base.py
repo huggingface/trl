@@ -80,19 +80,38 @@ class TextHistory:
 
         return query, response, mask
 
-    def show(self):
+    def show_text(self):
         console = Console()
         text = Text(self.text)
-        text.stylize("rgb(128,128,128)", self.text_spans[0][0], self.text_spans[1][0])
+        text.stylize("black on grey85", self.text_spans[0][0], self.text_spans[1][0])
         for i, (start, end) in enumerate(self.text_spans[1:]):
             if self.system_spans[i]:
-                color = "green"
+                color = "cyan3"
             else:
-                color = "blue"
-            text.stylize(f"{color}", start, end)
+                color = "deep_sky_blue1"
+            text.stylize(f"black on {color}", start, end)
         console.print(text)
         text = Text(f"Reward: {self.reward}")
-        text.stylize("bold red", self.text_spans[0][0], self.text_spans[0][1])
+        text.stylize("black on plum1", self.text_spans[0][0], self.text_spans[0][1])
+        console.print(text)
+
+    def show_tokens(self, tokenizer):
+        console = Console()
+        text = Text()
+
+        prompt_end = self.token_spans[0][1]
+
+        for i, (token, mask) in enumerate(zip(self.tokens, self.token_masks)):
+            if i<prompt_end:
+                text.append(tokenizer.convert_ids_to_tokens(token.item()), style="black on grey85")
+                text.append(" ")
+            elif mask == 1:
+                text.append(tokenizer.convert_ids_to_tokens(token.item()), style="black on deep_sky_blue1")
+                text.append(" ")
+            else:
+                text.append(tokenizer.convert_ids_to_tokens(token.item()), style="black on cyan3")
+                text.append(" ")
+        text.append(f"\n\nReward: {self.reward}", style="black on plum1")
         console.print(text)
 
 
