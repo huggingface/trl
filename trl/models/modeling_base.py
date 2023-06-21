@@ -89,6 +89,7 @@ class PreTrainedModelWrapper(nn.Module):
 
         self.supports_rm_adapter = supports_rm_adapter
         self.rm_adapter_name = rm_adapter_name
+        self.policy_adapter_name = "default"
         if score_module is not None:
             self.score = score_module
 
@@ -280,7 +281,7 @@ class PreTrainedModelWrapper(nn.Module):
                         # check filename with `v_head` or any known extra module:
                         files_to_download = set()
                         for k, v in index["weight_map"].items():
-                            if any([module in k for module in cls.supported_modules]):
+                            if any(module in k for module in cls.supported_modules):
                                 files_to_download.add(v)
                         is_shared = True
             if is_resuming_training:
@@ -432,10 +433,10 @@ class PreTrainedModelWrapper(nn.Module):
 
         adapter_state_dict = torch.load(local_filename, map_location="cpu")
         rm_adapter_peft_config = LoraConfig.from_pretrained(adapter_model_id)
-        rm_adapter_peft_config["inference_mode"] = True
+        rm_adapter_peft_config.inference_mode = True
 
         for score_name_candidate in cls.supported_rm_modules:
-            if any([score_name_candidate in name for name in adapter_state_dict.keys()]):
+            if any(score_name_candidate in name for name in adapter_state_dict.keys()):
                 score_name = score_name_candidate
                 break
 
@@ -450,9 +451,12 @@ class PreTrainedModelWrapper(nn.Module):
         pretrained_model.add_adapter(adapter_name, rm_adapter_peft_config)
 
         num_labels, hidden_dim = score_dict["weight"].shape
-        has_bias = any(["bias" in name for name in adapter_state_dict.keys()])
+        has_bias = any("bias" in name for name in adapter_state_dict.keys())
 
-        score = nn.Linear(hidden_dim, num_labels, bias=has_bias).to(cls._get_current_device())
+        score = nn.Linear(hidden_dim, num_labels, bias=has_bias, dtype=pretrained_model.dtype).to(
+            cls._get_current_device()
+        )
+        score.load_state_dict(score_dict)
         for param in score.parameters():
             param.requires_grad = False
 
@@ -461,34 +465,33 @@ class PreTrainedModelWrapper(nn.Module):
 
         return score
 
-    def compute_reward_score(self, input_ids, attention_mask=None, ppo_adapter_name="default", **kwargs):
-        r"""
-        Computes the reward score for a given input. The method has first to enable the adapter
-        and then compute the reward score. After that the model disables the reward modeling
-        adapter and enables the default ppo adapter again.
-        """
-        if not self.supports_rm_adapter:
-            raise ValueError("This model does not support reward modeling adapter.")
 
-        # enable rm adapter
-        self.pretrained_model.set_adapter(self.rm_adapter_name)
-        self.pretrained_model.eval()
+def compute_reward_score(model, input_ids, attention_mask=None, **kwargs):
+    r"""
+    Computes the reward score for a given input. The method has first to enable the adapter
+    and then compute the reward score. After that the model disables the reward modeling
+    adapter and enables the default ppo adapter again.
+    """
+    if not model.supports_rm_adapter:
+        raise ValueError("This model does not support reward modeling adapter.")
 
-        base_model_output = self.pretrained_model(
+    # enable rm adapter
+    model.pretrained_model.set_adapter(model.rm_adapter_name)
+    model.eval()
+
+    with torch.no_grad():
+        _, hidden_states, scores = model(
+            use_score=True,
             input_ids=input_ids,
             attention_mask=attention_mask,
             output_hidden_states=True,
-            return_dict=True,
             **kwargs,
         )
 
-        last_hidden_states = base_model_output.hidden_states[-1]
-        scores = self.score(last_hidden_states)
+    model.pretrained_model.set_adapter(model.policy_adapter_name)
+    model.train()
 
-        self.pretrained_model.set_adapter(ppo_adapter_name)
-        self.pretrained_model.train()
-
-        return scores
+    return scores
 
 
 def create_reference_model(
@@ -523,7 +526,7 @@ def create_reference_model(
     else:
         for pattern_candidate in LAYER_PATTERNS:
             pattern_candidate = pattern_candidate.format(layer=num_shared_layers)
-            if any([pattern_candidate in name for name in parameter_names]):
+            if any(pattern_candidate in name for name in parameter_names):
                 pattern = pattern_candidate
                 break
 

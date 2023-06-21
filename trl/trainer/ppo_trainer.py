@@ -948,6 +948,34 @@ class PPOTrainer(BaseTrainer):
         train_stats["time/ppo/optimizer_step"] = torch.Tensor([time.time() - t]).to(self.current_device)
         return train_stats
 
+    def compute_reward_score(self, input_ids: torch.FloatTensor, attention_mask: torch.FloatTensor = None, **kwargs):
+        r"""
+        Computes the reward score for a given input for a model with a reward modelling adapter. The method has first to enable the adapter
+        and then compute the reward score. After that the model disables the reward modeling
+        adapter and enables the default ppo adapter again.
+        """
+        if not self.model.supports_rm_adapter:
+            raise ValueError(
+                "This model does not support reward modeling adapter, you must compute reward scores with another method."
+            )
+
+        # enable rm adapter
+        self.model.pretrained_model.set_adapter(self.model.rm_adapter_name)
+        self.model.eval()
+
+        with torch.no_grad():
+            _, _, scores = self.model(
+                use_score=True,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                **kwargs,
+            )
+
+        self.model.pretrained_model.set_adapter(self.model.policy_adapter_name)
+        self.model.train()
+
+        return scores
+
     def compute_rewards(
         self,
         scores: torch.FloatTensor,

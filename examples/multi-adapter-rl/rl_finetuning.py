@@ -108,8 +108,8 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     # Compute reward score
     texts = [q + r for q, r in zip(batch["query"], batch["response"])]
     inputs = tokenizer(texts, padding=True, truncation=True, return_tensors="pt").to(ppo_trainer.accelerator.device)
-    raw_rewards = ppo_trainer.accelerator.unwrap_model(ppo_trainer.model).compute_reward_score(**inputs)
-    rewards = [raw_rewards[i, -1, 1] for i in range(len(raw_rewards))]  # take last token
+    raw_rewards = ppo_trainer.compute_reward_score(**inputs)
+    rewards = [raw_rewards[i] for i in range(len(raw_rewards))]
 
     # Run PPO step
     stats = ppo_trainer.step(question_tensors, response_tensors, rewards)
