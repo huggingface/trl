@@ -29,25 +29,39 @@ class StringStoppingCriteria(StoppingCriteria):
 
 
 class TextHistory:
-    def __init__(self, text, system=True):
+    def __init__(self, text, tokens, system=True):
         self.system_spans = []
-        self.spans = []
-        self.text = text
+        self.text_spans = []
+        self.token_spans = []
+        self.token_masks = torch.Tensor([]).to(tokens.device)
+        self.text = ""
+        self.tokens = torch.Tensor([]).to(tokens.device)
         self.completed = False
         self.truncated = False
         self.reward = 0.0
 
-        if len(text) > 0:
-            self.spans.append((0, len(text)))
-            self.system_spans.append(system)
+        self.append_segment(text, tokens, system=system)
 
-    def append(self, text, system=True):
-        if len(text) == 0:
-            raise ValueError("Can't append empty text to history.")
+
+    def append_segment(self, text, tokens, system=True):
+        if len(text) == 0 or len(tokens)==0:
+            raise ValueError("Can't append empty text or token list to history.")
+        
         original_text_length = len(self.text)
+        
         self.text += text
-        self.spans.append((original_text_length, len(self.text)))
+        self.text_spans.append((original_text_length, len(self.text)))
         self.system_spans.append(system)
+
+        original_token_length = len(self.tokens)
+        
+        self.tokens = torch.cat((self.tokens, tokens))
+        if system:
+            self.token_masks = torch.cat((self.masks, torch.zeros_like(tokens)))
+        else:
+            self.token_masks = torch.cat((self.masks, torch.ones_like(tokens)))
+        self.token_spans.append((original_token_length, len(self.tokens)))
+
 
     def complete(self, truncated=False):
         self.completed = True
@@ -55,14 +69,22 @@ class TextHistory:
 
     @property
     def last_text_segment(self):
-        start, end = self.spans[-1]
+        start, end = self.text_spans[-1]
         return self.text[start:end]
+    
+    def split_query_response_tokens(self):
+        split_index = self.token_spans[0][1]
+        query = self.tokens[:split_index]
+        response = self.tokens[split_index:]
+        mask = self.token_masks[split_index:]
+
+        return query, response, mask
 
     def show(self):
         console = Console()
         text = Text(self.text)
-        text.stylize("rgb(128,128,128)", self.spans[0][0], self.spans[1][0])
-        for i, (start, end) in enumerate(self.spans[1:]):
+        text.stylize("rgb(128,128,128)", self.text_spans[0][0], self.text_spans[1][0])
+        for i, (start, end) in enumerate(self.text_spans[1:]):
             if self.system_spans[i]:
                 color = "green"
             else:
@@ -70,7 +92,7 @@ class TextHistory:
             text.stylize(f"{color}", start, end)
         console.print(text)
         text = Text(f"Reward: {self.reward}")
-        text.stylize("bold red", self.spans[0][0], self.spans[0][1])
+        text.stylize("bold red", self.text_spans[0][0], self.text_spans[0][1])
         console.print(text)
 
 
@@ -89,7 +111,6 @@ class TextEnvironment:
         self.call_token = "<call>"
         self.response_token = "<response>"
         self.submit_token = "<submit>"
-
         self.max_turns = max_turns
 
         if generation_kwargs is None:
@@ -100,64 +121,30 @@ class TextEnvironment:
         self.is_encoder_decoder = hasattr(self.model, "is_encoder_decoder")
         self.current_device = extract_model_from_parallel(self.model).pretrained_model.device
 
-    def encode_history(self, history, is_system_prompt=False):
-        encoded_prompt = self.tokenizer(history.last_text_segment, return_tensors="pt").to(self.current_device)
-        input_ids = encoded_prompt["input_ids"]
-
-        if is_system_prompt:
-            attention_mask = torch.zeros_like(input_ids)
-        else:
-            attention_mask = torch.ones_like(input_ids)
-
-        return {"input_ids": input_ids, "attention_mask": attention_mask}
-
     def run(self, tasks):
         turns = 0
-        histories = [TextHistory(self.prompt + task, system=True) for task in tasks]
 
-        encoded_prompts = [
-            self.tokenizer(self.prompt + task, return_tensors="pt").to(self.current_device) for task in tasks
-        ]
+        queries = [self.prompt + task for task in tasks]
+        queries_tokens = [self.tokenizer(query).input_ids[0] for query in queries]
 
-        # queries
-        queries = [encoded_prompt["input_ids"].squeeze() for encoded_prompt in encoded_prompts]
-
-        # respo,ses
-        responses = [[] for _ in range(len(tasks))]
-        masks = [[] for _ in range(len(tasks))]
-
-        # rewards
-        histories_rewards = []
+        histories = [TextHistory(q, qt, system=True) for q, qt in zip(queries, queries_tokens)]
 
         while any([not history.completed for history in histories]):
             histories = self.generate(histories)
-
             # TODO: make this parallel rather than for-loop
             for i in range(len(histories)):
-                encoded_history = self.encode_history(histories[i])
-                responses[i].append(encoded_history["input_ids"].squeeze())
-                masks[i].append(encoded_history["attention_mask"].squeeze())
-
                 histories[i] = self.step(histories[i])
-
-                is_system_prompt = not histories[i].completed
-                encoded_history = self.encode_history(histories[i], is_system_prompt=is_system_prompt)
-
-                responses[i].append(encoded_history["input_ids"].squeeze())
-                masks[i].append(encoded_history["attention_mask"].squeeze())
-
             turns += 1
             if turns == self.max_turns:
                 break
 
-        histories = self.compute_reward(histories)
+        self.compute_reward(histories)
 
-        for i, history in enumerate(histories):
-            histories_rewards.append(torch.Tensor([history.reward]))
-            responses[i] = torch.cat(responses[i], dim=0).squeeze()
-            masks[i] = torch.cat(masks[i], dim=0).squeeze()
-
-        return queries, responses, masks, histories_rewards, histories
+        # convert a list of (q, r, m) tuples to lists of all qs, rs, and ms respectively
+        queries, responses, masks = map(list, zip(*[history.split_query_response_tokens() for history in histories]))
+        
+        rewards = [history.reward for history in histories]
+        return queries, responses, masks, rewards, histories
 
     def step(self, history):
         history = self.task_end_check(history)
@@ -170,7 +157,9 @@ class TextEnvironment:
         except Exception as error:
             response = str(error)
 
-        history.append(response + self.response_token, system=True)
+        history.append(response + self.response_token,
+                       self.tokenizer(response + self.response_token).input_ids[0],
+                       system=True)
 
         return history
 
@@ -192,15 +181,13 @@ class TextEnvironment:
     def generate(self, histories):
         active_histories = [i for i, history in enumerate(histories) if not history.completed]
 
-        query_tensors = [
-            self.tokenizer(histories[i].text, return_tensors="pt").input_ids.squeeze() for i in active_histories
-        ]
+        query_tensors = [histories[i].tokens for i in active_histories]
         input_lengths = [len(histories[i].text) for i in active_histories]
         response_tensors = self._generate_batched(query_tensors, input_lengths)
         response_texts = self.tokenizer.batch_decode(response_tensors)
 
-        for i, response_text in zip(active_histories, response_texts):
-            histories[i].append(response_text, system=False)
+        for i, response_text, response_tensor in zip(active_histories, response_texts, response_tensors):
+            histories[i].append_segement(response_text, response_tensor, system=False)
 
         return histories
 
