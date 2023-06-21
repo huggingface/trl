@@ -466,34 +466,6 @@ class PreTrainedModelWrapper(nn.Module):
         return score
 
 
-def compute_reward_score(model, input_ids, attention_mask=None, **kwargs):
-    r"""
-    Computes the reward score for a given input. The method has first to enable the adapter
-    and then compute the reward score. After that the model disables the reward modeling
-    adapter and enables the default ppo adapter again.
-    """
-    if not model.supports_rm_adapter:
-        raise ValueError("This model does not support reward modeling adapter.")
-
-    # enable rm adapter
-    model.pretrained_model.set_adapter(model.rm_adapter_name)
-    model.eval()
-
-    with torch.no_grad():
-        _, hidden_states, scores = model(
-            use_score=True,
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            output_hidden_states=True,
-            **kwargs,
-        )
-
-    model.pretrained_model.set_adapter(model.policy_adapter_name)
-    model.train()
-
-    return scores
-
-
 def create_reference_model(
     model: PreTrainedModelWrapper, num_shared_layers: int = None, pattern: str = None
 ) -> PreTrainedModelWrapper:
