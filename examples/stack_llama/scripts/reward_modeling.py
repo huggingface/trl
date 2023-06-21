@@ -5,8 +5,9 @@ import evaluate
 import numpy as np
 import torch
 import torch.nn as nn
+from accelerate import Accelerator
 from datasets import load_dataset
-from peft import LoraConfig, TaskType, get_peft_model
+from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_int8_training
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
@@ -89,6 +90,10 @@ class ScriptArguments:
         default=False,
         metadata={"help": "Whether to run eval after the first step"},
     )
+    load_in_8bit: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Whether to run eval after the first step"},
+    )
 
 
 parser = HfArgumentParser(ScriptArguments)
@@ -144,9 +149,22 @@ peft_config = LoraConfig(
     lora_dropout=0.1,
 )
 
-model = AutoModelForSequenceClassification.from_pretrained(
-    script_args.model_name, num_labels=1, torch_dtype=torch.bfloat16
-)
+current_device = Accelerator().local_process_index
+
+if script_args.load_in_8bit:
+    model = AutoModelForSequenceClassification.from_pretrained(
+        script_args.model_name,
+        num_labels=1,
+        load_in_8bit=True,
+        device_map={"": current_device},
+    )
+
+    model = prepare_model_for_int8_training(model)
+else:
+    model = AutoModelForSequenceClassification.from_pretrained(
+        script_args.model_name, num_labels=1, torch_dype=torch.bfloat16
+    )
+
 model = get_peft_model(model, peft_config)
 model.print_trainable_parameters()
 
