@@ -221,7 +221,7 @@ class SFTTrainer(Trainer):
 
         if self.args.max_steps > 0 and packing:
             warnings.warn(
-                "You passed `packing=True` to the SFTTrainer, and you are training your model with `max_steps` strategy. Will force-set `infinite` argument of the packed dataset to `True` "
+                "You passed `packing=True` to the SFTTrainer, and you are training your model with `max_steps` strategy. The dataset will be iterated until the `max_steps` are reached."
             )
             self.train_dataset.infinite = True
         elif self.args.max_steps == -1 and packing:
