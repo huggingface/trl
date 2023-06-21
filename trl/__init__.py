@@ -1,8 +1,9 @@
 # flake8: noqa
 
-__version__ = "0.4.3.dev0"
+__version__ = "0.4.5.dev0"
 
 from .core import set_seed
+from .extras import BestOfNSampler
 from .import_utils import is_peft_available
 from .models import (
     AutoModelForCausalLMWithValueHead,
@@ -10,4 +11,4 @@ from .models import (
     PreTrainedModelWrapper,
     create_reference_model,
 )
-from .trainer import PPOConfig, PPOTrainer, RewardTrainer, SFTTrainer
+from .trainer import DataCollatorForCompletionOnlyLM, PPOConfig, PPOTrainer, RewardTrainer, SFTTrainer
