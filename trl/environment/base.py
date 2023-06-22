@@ -2,7 +2,7 @@ import re
 
 import torch
 from accelerate.utils import extract_model_from_parallel
-from rich.console import Console
+from rich import print
 from rich.text import Text
 from transformers import StoppingCriteria, StoppingCriteriaList
 
@@ -79,7 +79,6 @@ class TextHistory:
         return query, response, mask
 
     def show_text(self):
-        console = Console()
         text = Text(self.text)
         text.stylize("black on grey85", self.text_spans[0][0], self.text_spans[1][0])
         for i, (start, end) in enumerate(self.text_spans[1:]):
@@ -88,13 +87,12 @@ class TextHistory:
             else:
                 color = "deep_sky_blue1"
             text.stylize(f"black on {color}", start, end)
-        console.print(text)
+        print(text)
         text = Text(f"Reward: {self.reward}")
         text.stylize("black on plum1", self.text_spans[0][0], self.text_spans[0][1])
-        console.print(text)
+        print(text)
 
     def show_tokens(self, tokenizer):
-        console = Console()
         text = Text()
 
         prompt_end = self.token_spans[0][1]
@@ -110,7 +108,7 @@ class TextHistory:
                 text.append(tokenizer.convert_ids_to_tokens(token.item()), style="black on cyan3")
                 text.append(" ")
         text.append(f"\n\nReward: {self.reward}", style="black on plum1")
-        console.print(text)
+        print(text)
 
 
 class TextEnvironment:
