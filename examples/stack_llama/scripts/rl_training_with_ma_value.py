@@ -217,12 +217,12 @@ ppo_trainer = PPOTrainer(
 # are passed to the `generate` function of the PPOTrainer, which is a wrapper around
 # the `generate` function of the trained model.
 generation_kwargs = {
-    # "min_length": -1,
+    "min_length": -1,
     "top_k": 0.0,
     "top_p": 1.0,
     "do_sample": True,
-    # "pad_token_id": tokenizer.pad_token_id,
-    # "eos_token_id": 100_000,
+    "pad_token_id": tokenizer.pad_token_id,
+    "eos_token_id": 100_000,
 }
 output_min_length = 32
 output_max_length = script_args.output_max_length
