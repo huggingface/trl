@@ -50,6 +50,59 @@ class FixedKLController:
         pass
 
 
+class DataCollatorForChatCompletionOnlyLM(DataCollatorForLanguageModeling):
+    def __init__(self, human_template, assistant_template, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.human_template = human_template
+        self.assistant_template = assistant_template
+
+    def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
+        batch = super().torch_call(examples)
+
+        human_token_ids = self.tokenizer.encode(self.human_template, add_special_tokens=False)
+        assistant_token_ids = self.tokenizer.encode(self.assistant_template, add_special_tokens=False)
+        
+        labels = batch["labels"].clone()
+
+        for i in range(len(examples)):
+            assistant_token_ids_idxs = []
+            human_token_ids_idxs = []
+
+            for assistant_idx in np.where(batch["labels"][i] == assistant_token_ids[0])[0]:
+                # find the indexes of the start of an assistant answer.
+                if assistant_token_ids == examples[i]["input_ids"][assistant_idx : assistant_idx + len(assistant_token_ids)]:
+                    assistant_token_ids_idxs.append(assistant_idx + len(assistant_token_ids))
+
+            if len(assistant_token_ids)==0:
+                raise RuntimeError(
+                    f'Could not find response key {assistant_token_ids} in token IDs {batch["labels"][i]}'
+                )
+                
+            for human_idx in np.where(batch["labels"][i] == human_token_ids[0])[0]:
+                # find the indexes of the start of a human answer.
+                if human_token_ids == examples[i]["input_ids"][human_idx : human_idx + len(human_token_ids)]:
+                    human_token_ids_idxs.append(human_idx)
+                    
+            if len(human_token_ids_idxs)==0:
+                raise RuntimeError(
+                    f'Could not find response key {human_token_ids} in token IDs {batch["labels"][i]}'
+                )
+        
+            for idx, (start, end) in enumerate(zip(human_token_ids_idxs, assistant_token_ids_idxs)):
+                # Make pytorch loss function ignore all non assistant tokens
+                if idx!=0:
+                    labels[i, start+1:end] = -100
+                else:
+                    labels[i, start:end] = -100
+                
+            if len(assistant_token_ids_idxs)<len(human_token_ids_idxs):
+                labels[i, human_token_ids_idxs[-1]+1:] = -100
+
+        batch["labels"] = labels
+
+        return batch
+
+
 class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
     def __init__(self, response_template, *args, **kwargs):
         super().__init__(*args, **kwargs)
