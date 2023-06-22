@@ -219,6 +219,14 @@ class SFTTrainer(Trainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
+        if self.args.max_steps > 0 and packing:
+            warnings.warn(
+                "You passed `packing=True` to the SFTTrainer, and you are training your model with `max_steps` strategy. The dataset will be iterated until the `max_steps` are reached."
+            )
+            self.train_dataset.infinite = True
+        elif self.args.max_steps == -1 and packing:
+            self.train_dataset.infinite = False
+
     def _prepare_dataset(
         self,
         dataset,
