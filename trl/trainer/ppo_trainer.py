@@ -553,7 +553,7 @@ class PPOTrainer(BaseTrainer):
         queries: List[torch.LongTensor],
         responses: List[torch.LongTensor],
         scores: List[torch.FloatTensor],
-        masks: Optional[List[torch.LongTensor]] = None,
+        response_masks: Optional[List[torch.LongTensor]] = None,
     ):
         """
         Run a PPO optimisation step given a list of queries, model responses, and rewards.
@@ -570,9 +570,7 @@ class PPOTrainer(BaseTrainer):
             `dict[str, Any]`: A summary of the training statistics
         """
         bs = self.config.batch_size
-
-        queries, responses, scores = self._step_safety_checker(bs, queries, responses, scores, masks)
-
+        queries, responses, scores = self._step_safety_checker(bs, queries, responses, scores, response_masks)
         # if we want to push best model to the hub
         if hasattr(self, "highest_reward"):
             if self.compare_step % self.config.compare_steps == 0:
@@ -589,7 +587,7 @@ class PPOTrainer(BaseTrainer):
 
         t = time.time()
 
-        model_inputs = self.prepare_model_inputs(queries, responses, masks)
+        model_inputs = self.prepare_model_inputs(queries, responses)
 
         if self.is_distributed:
             pad_first = self.tokenizer.padding_side == "left"
@@ -614,7 +612,9 @@ class PPOTrainer(BaseTrainer):
         model_inputs_names = list(model_inputs.keys())
 
         with torch.no_grad():
-            all_logprobs, _, values, masks = self.batched_forward_pass(self.model, queries, responses, model_inputs)
+            all_logprobs, _, values, masks = self.batched_forward_pass(self.model, queries, responses, model_inputs, response_masks=response_masks)
+            
+            # self._show_tokens(torch.cat((queries[0], responses[0]))[1:], masks[0])
 
             # for when the model is a peft model
             if self.is_peft_model and hasattr(
@@ -798,20 +798,8 @@ class PPOTrainer(BaseTrainer):
             stats[k] = v
         return stats
 
-    def _post_process_env_masks(self, model_input, masks):
-        responses_masks, queries_masks = masks
-
-        for i, (response_mask, query_mask) in enumerate(zip(responses_masks, queries_masks)):
-            attention_mask = torch.cat([query_mask, response_mask])
-            if self.tokenizer.padding_side == "right":
-                model_input["attention_mask"][i, : attention_mask.shape[0]] = attention_mask
-            else:
-                model_input["attention_mask"][i, -attention_mask.shape[0] :] = attention_mask
-
-        return model_input
-
     def prepare_model_inputs(
-        self, queries: torch.Tensor, responses: torch.Tensor, masks: Optional[torch.Tensor] = None
+        self, queries: torch.Tensor, responses: torch.Tensor
     ):
         if self.is_encoder_decoder:
             input_data = self.data_collator(
@@ -831,10 +819,6 @@ class PPOTrainer(BaseTrainer):
             ).to(self.current_device)
 
         input_data.pop("labels", None)  # we don't want to compute LM losses
-
-        if self.is_using_text_environment:
-            input_data = self._post_process_env_masks(input_data, masks)
-
         return input_data
 
     @PPODecorators.empty_cuda_cache()
@@ -845,6 +829,7 @@ class PPOTrainer(BaseTrainer):
         responses: torch.Tensor,
         model_inputs: dict,
         return_logits: bool = False,
+        response_masks: Optional[ torch.Tensor] = None
     ):
         """
         Calculate model outputs in multiple batches.
@@ -875,6 +860,8 @@ class PPOTrainer(BaseTrainer):
             input_kwargs = {key: value[i * fbs : (i + 1) * fbs] for key, value in model_inputs.items()}
             query_batch = queries[i * fbs : (i + 1) * fbs]
             response_batch = responses[i * fbs : (i + 1) * fbs]
+            if response_masks is not None:
+                response_masks_batch = response_masks[i * fbs : (i + 1) * fbs]
             logits, _, values = model(**input_kwargs)
 
             if self.is_encoder_decoder:
@@ -898,12 +885,16 @@ class PPOTrainer(BaseTrainer):
                     if attention_mask[j, 0] == 0:  # offset left padding
                         start += attention_mask[j, :].nonzero()[0]
                     end = start + len(response_batch[j])
+                    if response_masks is not None:
+                        response_masks_batch[j] = torch.cat((torch.zeros_like(query_batch[j]),  response_masks_batch[j]))[1:]
 
                 if len(logprobs[j, start:end]) < 2:
                     raise ValueError("Responses are too short. Make sure they are at least 4 tokens long.")
 
                 masks[j, :start] = 0
                 masks[j, end:] = 0
+                if response_masks is not None:
+                    masks[j, start:end] = masks[j, start:end] * response_masks_batch[j][start:end]
 
             if return_logits:
                 all_logits.append(logits)
@@ -1254,3 +1245,17 @@ class PPOTrainer(BaseTrainer):
         self.accelerator.unwrap_model(self.model).save_pretrained(save_directory)
         self.tokenizer.save_pretrained(save_directory)
         self.create_model_card(save_directory)
+
+    def _show_tokens(self, tokens, masks):
+        from rich.text import Text
+        from rich import print
+        text = Text()
+
+        for i, (token, mask) in enumerate(zip(tokens, masks)):
+            if mask == 1:
+                text.append(self.tokenizer.decode(token.item()), style="black on deep_sky_blue1")
+                text.append(" ")
+            else:
+                text.append(self.tokenizer.decode(token.item()), style="black on cyan3")
+                text.append(" ")
+        print(text)
