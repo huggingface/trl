@@ -15,20 +15,21 @@ class StringStoppingCriteria(StoppingCriteria):
         self.stop_strings = stop_strings
         self.tokenizer = tokenizer
         self.generated_tokens = [1 for _ in range(len(start_lengths))]
+        self.first_call=True
 
     def __call__(self, input_ids, scores, **kwargs):
         """Returns true if all generated sequences contain any of the stop strings."""
-        decoded_generations = self.tokenizer.batch_decode(input_ids)
-        decoded_generations = [
-            decoded_generation[start_length:]
-            for start_length, decoded_generation in zip(self.start_lengths, decoded_generations)
-        ]
+        if self.first_call:
+            self.start_lengths = [input_ids.shape[-1]-1 for _ in range(len(self.start_lengths))]
+            self.first_call = False
+        decoded_generations = self.tokenizer.batch_decode(input_ids[:, self.start_lengths[0]:])
         done = []
         for i, decoded_generation in enumerate(decoded_generations):
             sequence_complete = any([stop_string in decoded_generation for stop_string in self.stop_strings])
             done.append(sequence_complete)
             if not sequence_complete:
                 self.generated_tokens[i] += 1
+
         return all(done)
 
 
@@ -248,7 +249,7 @@ class TextEnvironment:
         self,
         query_tensors,
         input_lengths,
-        batch_size: int = 4,
+        batch_size: int = 16,
         pad_to_multiple_of: int = None,
     ):
         outputs = []
