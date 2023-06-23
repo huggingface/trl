@@ -101,20 +101,24 @@ trainer.train()
 This is a basic example on how to use the `RewardTrainer` from the library. The `RewardTrainer` is a wrapper around the `transformers` Trainer to easily fine-tune reward models or adapters on a custom preference dataset.
 
 ```python
+# imports
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from trl import RewardTrainer
 
+# load model and dataset - dataset needs to be in a specific format
 model = AutoModelForSequenceClassification.from_pretrained("gpt2")
 tokenizer = AutoTokenizer.from_pretrained("gpt2")
 
 ...
 
+# load trainer
 trainer = RewardTrainer(
     model=model,
     tokenizer=tokenizer,
     train_dataset=dataset,
 )
 
+# train
 trainer.train()
 ```
 
