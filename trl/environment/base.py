@@ -174,7 +174,7 @@ class TextEnvironment:
         if ended:
             history.complete(truncated=truncated)
         if history.completed:
-            return history
+            return
 
         try:
             tool, query = self.parse_tool_call(history.last_text_segment)
@@ -195,8 +195,6 @@ class TextEnvironment:
             .to(self.model.pretrained_model.device),
             system=True,
         )
-
-        return history
 
     def parse_tool_call(self, text):
         """Parse request string. Expected format: <request><tool_name>query<call>"""
