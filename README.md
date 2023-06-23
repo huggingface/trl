@@ -166,6 +166,8 @@ For a detailed example check out the example python script `examples/sentiment/s
 <p style="text-align: center;"> <b>Figure:</b> A few review continuations before and after optimisation. </p>
 </div>
 
+Have a look at more examples inside [`examples/`](https://github.com/lvwerra/trl/tree/main/examples) folder.
+
 ## References
 
 ### Proximal Policy Optimisation
