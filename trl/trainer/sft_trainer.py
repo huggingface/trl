@@ -232,10 +232,7 @@ class SFTTrainer(Trainer):
             raise ValueError("The dataset should not be None")
             
         # check if torch dataset / dataloader and do nothing
-        if isinstance(dataset,
-                      (torch.utils.data.IterableDataset, 
-                       torch.utils.data.Dataset, 
-                       ConstantLengthDataset)):
+        if isinstance(dataset, (torch.utils.data.IterableDataset, torch.utils.data.Dataset, ConstantLengthDataset)):
             return dataset
 
         if not packing:
