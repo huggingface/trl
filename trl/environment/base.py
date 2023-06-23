@@ -228,7 +228,9 @@ class TextEnvironment:
             ended = True
         elif self.tokenizer.eos_token in history.text:
             ended = True
-        elif self.request_token not in history.last_text_segment:
+        elif (
+            not ((self.request_token in history.last_text_segment and self.call_token in history.last_text_segment) or self.submit_token in history.last_text_segment)
+        ):
             ended = True
         elif self.submit_token in history.last_text_segment:
             ended = True
