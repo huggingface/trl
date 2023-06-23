@@ -1,6 +1,6 @@
 # flake8: noqa
 
-__version__ = "0.4.6"
+__version__ = "0.4.7.devO"
 
 from .core import set_seed
 from .extras import BestOfNSampler
