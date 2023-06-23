@@ -14,6 +14,7 @@ class StringStoppingCriteria(StoppingCriteria):
         self.start_lengths = start_lengths
         self.stop_strings = stop_strings
         self.tokenizer = tokenizer
+        self.generated_tokens = [1 for _ in range(len(start_lengths))]
 
     def __call__(self, input_ids, scores, **kwargs):
         """Returns true if all generated sequences contain any of the stop strings."""
@@ -23,8 +24,11 @@ class StringStoppingCriteria(StoppingCriteria):
             for start_length, decoded_generation in zip(self.start_lengths, decoded_generations)
         ]
         done = []
-        for decoded_generation in decoded_generations:
-            done.append(any([stop_string in decoded_generation for stop_string in self.stop_strings]))
+        for i, decoded_generation in enumerate(decoded_generations):
+            sequence_complete = any([stop_string in decoded_generation for stop_string in self.stop_strings])
+            done.append(sequence_complete)
+            if not sequence_complete:
+                self.generated_tokens[i] += 1
         return all(done)
 
 
@@ -264,13 +268,17 @@ class TextEnvironment:
                 return_tensors="pt",
             ).to(self.current_device)
 
-            self.generation_kwargs["stopping_criteria"] = StoppingCriteriaList(
-                [StringStoppingCriteria(batch_input_lengths, [self.call_token, self.submit_token], self.tokenizer)]
+            stopping_criteria = StringStoppingCriteria(
+                batch_input_lengths, [self.call_token, self.submit_token], self.tokenizer
             )
+
+            self.generation_kwargs["stopping_criteria"] = StoppingCriteriaList([stopping_criteria])
 
             generations = extract_model_from_parallel(self.model).generate(**padded_inputs, **self.generation_kwargs)
 
-            for generation, mask in zip(generations, padded_inputs["attention_mask"]):
+            for generation, mask, generated_tokens in zip(
+                generations, padded_inputs["attention_mask"], stopping_criteria.generated_tokens
+            ):
                 if not self.is_encoder_decoder:
                     output = generation[(1 - mask).sum() :]  # remove padding
                 else:
@@ -278,7 +286,8 @@ class TextEnvironment:
 
                 if not self.is_encoder_decoder:
                     output = output[(mask).sum() :]  # remove prompt
-                outputs.append(output)
 
+                # remove chunk generated after stopping criteria in batch mode
+                outputs.append(output[:generated_tokens])
         self.tokenizer.padding_side = padding_side_default
         return outputs
