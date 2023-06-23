@@ -442,6 +442,65 @@ class SFTTrainerTester(unittest.TestCase):
         result_text = self.tokenizer.decode(non_masked_tokens)
         self.assertTrue(result_text == " I have not been masked correctly.### I have not been masked correctly too.")
 
+    def test_sft_trainer_infinite_with_model(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                evaluation_strategy="steps",
+                max_steps=5,
+                eval_steps=1,
+                save_steps=1,
+                per_device_train_batch_size=2,
+            )
+
+            trainer = SFTTrainer(
+                model=self.model,
+                args=training_args,
+                train_dataset=self.train_dataset,
+                eval_dataset=self.eval_dataset,
+                packing=True,
+                max_seq_length=500,
+            )
+
+            self.assertTrue(trainer.train_dataset.infinite)
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+            self.assertIsNotNone(trainer.state.log_history[0]["eval_loss"])
+
+            # make sure the trainer did 5 steps
+            self.assertTrue("pytorch_model.bin" in os.listdir(tmp_dir + "/checkpoint-5"))
+
+    def test_sft_trainer_infinite_with_model_epochs(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                num_train_epochs=1,
+                per_device_train_batch_size=2,
+                save_strategy="epoch",
+            )
+
+            trainer = SFTTrainer(
+                model=self.model,
+                args=training_args,
+                train_dataset=self.train_dataset,
+                eval_dataset=self.eval_dataset,
+                packing=True,
+                max_seq_length=500,
+            )
+
+            self.assertFalse(trainer.train_dataset.infinite)
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # make sure the trainer did 5 steps
+            self.assertTrue("pytorch_model.bin" in os.listdir(tmp_dir + "/checkpoint-4"))
+
     @require_peft
     def test_peft_sft_trainer(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

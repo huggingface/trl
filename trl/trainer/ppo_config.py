@@ -119,7 +119,11 @@ class PPOConfig(object):
     )
     accelerator_kwargs: Optional[dict] = field(
         default_factory=dict,
-        metadata={"help": "Keyword arguments for the accelerator (e.g. `logging_dir`)"},
+        metadata={"help": "Keyword arguments for the accelerator"},
+    )
+    project_kwargs: Optional[dict] = field(
+        default_factory=dict,
+        metadata={"help": "Keyword arguments for the accelerator project config (e.g. `logging_dir`)"},
     )
     tracker_project_name: Optional[str] = field(
         default="trl", metadata={"help": "Name of project to use for tracking"}
