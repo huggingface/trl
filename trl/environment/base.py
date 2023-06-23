@@ -175,10 +175,10 @@ class TextEnvironment:
 
         try:
             tool, query = self.parse_tool_call(history.last_text_segment)
+            if tool not in self.tools:
+                response = f"Uknown tool {tool}."
         except:
             response = "Invalid tool call."
-        if tool not in self.tools:
-            response = f"Uknown tool {tool}."
         else:
             try:
                 response = self.tools[tool](query)
