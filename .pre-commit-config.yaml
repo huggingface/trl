@@ -1,0 +1,42 @@
+repos:
+  - repo: https://github.com/PyCQA/isort
+    rev: 5.12.0
+    hooks:
+      - id: isort
+        args:
+          - --profile=black
+          - --skip-glob=wandb/**/*
+          - --thirdparty=wandb
+  - repo: https://github.com/myint/autoflake
+    rev: v1.4
+    hooks:
+      - id: autoflake
+        args:
+          - -r
+          - --exclude=wandb,__init__.py
+          - --in-place
+          - --remove-unused-variables
+          - --remove-all-unused-imports
+  - repo: https://github.com/python/black
+    rev: 22.3.0
+    hooks:
+      - id: black
+        args:
+          - --line-length=119
+          - --target-version=py38
+          - --exclude=wandb
+  - repo: https://github.com/pycqa/flake8
+    rev: 6.0.0
+    hooks:
+      - id: flake8
+        args:
+          - --ignore=E203,E501,W503,E128
+          - --max-line-length=119
+
+  # - repo: https://github.com/codespell-project/codespell
+  #   rev: v2.1.0
+  #   hooks:
+  #     - id: codespell
+  #       args:
+  #         - --ignore-words-list=nd,reacher,thist,ths,magent,ba
+  #         - --skip=docs/css/termynal.css,docs/js/termynal.js
