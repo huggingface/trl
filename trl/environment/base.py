@@ -153,10 +153,10 @@ class TextEnvironment:
         histories = [TextHistory(q, qt, system=True) for q, qt in zip(queries, queries_tokens)]
 
         while any([not history.completed for history in histories]):
-            histories = self.generate(histories)
+            self.generate(histories)
             # TODO: make this parallel rather than for-loop
             for i in range(len(histories)):
-                histories[i] = self.step(histories[i])
+                self.step(histories[i])
             turns += 1
             if turns == self.max_turns:
                 break
@@ -170,7 +170,9 @@ class TextEnvironment:
         return queries, responses, masks, rewards, histories
 
     def step(self, history):
-        history = self.task_end_check(history)
+        truncated, ended = self.task_end_check(history)
+        if ended:
+            history.complete(truncated=truncated)
         if history.completed:
             return history
 
@@ -222,14 +224,12 @@ class TextEnvironment:
         for i, response_text, response_tensor in zip(active_histories, response_texts, response_tensors):
             histories[i].append_segment(response_text, response_tensor, system=False)
 
-        return histories
-
     def task_end_check(self, history):
         """Check if the current generation sequence has finished."""
-        if history.completed:
-            return history
         truncated = False
         ended = False
+        if history.completed:
+            return truncated, ended
         if self.max_length is not None and len(history.text) > self.max_length:
             truncated = True
             ended = True
@@ -241,9 +241,7 @@ class TextEnvironment:
             ended = True
         elif self.submit_token in history.last_text_segment:
             ended = True
-        if ended:
-            history.complete(truncated=truncated)
-        return history
+        return truncated, ended
 
     def _generate_batched(
         self,
