@@ -1,9 +1,9 @@
-.PHONY: test commit
+.PHONY: test precommit
 
 check_dirs := examples tests trl
 
 test:
 	python -m pytest -n auto --dist=loadfile -s -v ./tests/
 
-commit:
+precommit:
 	pre-commit run --all-files
