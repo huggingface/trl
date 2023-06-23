@@ -230,7 +230,7 @@ class SFTTrainer(Trainer):
     ):
         if dataset is None:
             raise ValueError("The dataset should not be None")
-            
+
         # check if torch dataset / dataloader and do nothing
         if isinstance(dataset, (torch.utils.data.IterableDataset, torch.utils.data.Dataset, ConstantLengthDataset)):
             return dataset
@@ -261,7 +261,6 @@ class SFTTrainer(Trainer):
         raise ValueError(
             "You need to pass a `dataset_text_field` or `formatting_func` argument to the SFTTrainer if you want to use the `ConstantLengthDataset`."
         )
-
 
     def _prepare_non_packed_dataloader(
         self, tokenizer, dataset, dataset_text_field, max_seq_len, formatting_func=None
