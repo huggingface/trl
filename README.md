@@ -20,9 +20,11 @@
 
 ## What is it?
 
-`trl` is a full stack library where we provide a set of tools to train transformer language models with Reinforcement Learning, from the Supervised Fine-tuning step (SFT), Reward Modeling step (RM) to the Proximal Policy Optimization (PPO) step. The library is built on top of the [`transformers`](https://github.com/huggingface/transformers) library by  🤗 Hugging Face. Therefore, pre-trained language models can be directly loaded via `transformers`. At this point most of decoder architectures and encoder-decoder architectures are supported. 
+<div style="text-align: center">
+<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/TRL-readme.png">
+</div>
 
-
+`trl` is a full stack library where we provide a set of tools to train transformer language models with Reinforcement Learning, from the Supervised Fine-tuning step (SFT), Reward Modeling step (RM) to the Proximal Policy Optimization (PPO) step. The library is built on top of the [`transformers`](https://github.com/huggingface/transformers) library by  🤗 Hugging Face. Therefore, pre-trained language models can be directly loaded via `transformers`. At this point most of decoder architectures and encoder-decoder architectures are supported. Refer to the documentation or the `examples/` folder for example code snippets and how to run these tools.
 
 **Highlights:**
 
@@ -32,7 +34,7 @@
 - [`AutoModelForCausalLMWithValueHead`](https://huggingface.co/docs/trl/models#trl.AutoModelForCausalLMWithValueHead) & [`AutoModelForSeq2SeqLMWithValueHead`](https://huggingface.co/docs/trl/models#trl.AutoModelForSeq2SeqLMWithValueHead): A transformer model with an additional scalar output for each token which can be used as a value function in reinforcement learning.
 - [Examples](https://github.com/lvwerra/trl/tree/main/examples): Train GPT2 to generate positive movie reviews with a BERT sentiment classifier, full RLHF using adapters only, train GPT-j to be less toxic, [Stack-Llama example](https://huggingface.co/blog/stackllama), etc.
 
-## How it works
+## How PPO works
 Fine-tuning a language model via PPO consists of roughly three steps:
 
 1. **Rollout**: The language model generates a response or continuation based on query which could be the start of a sentence.
@@ -70,8 +72,55 @@ pip install -e .
 
 ## How to use
 
-### Example
-This is a basic example on how to use the library. Based on a query the language model creates a response which is then evaluated. The evaluation could be a human in the loop or another model's output.
+### `SFTTrainer`
+
+This is a basic example on how to use the `SFTTrainer` from the library. The `SFTTrainer` is a light wrapper around the `transformers` Trainer to easily fine-tune language models or adapters on a custom dataset.
+
+```python
+# imports
+from datasets import load_dataset
+from trl import SFTTrainer
+
+# get dataset
+dataset = load_dataset("imdb", split="train")
+
+# get trainer
+trainer = SFTTrainer(
+    "facebook/opt-350m",
+    train_dataset=dataset,
+    dataset_text_field="text",
+    max_seq_length=512,
+)
+
+# train
+trainer.train()
+```
+
+### `RewardTrainer`
+
+This is a basic example on how to use the `RewardTrainer` from the library. The `RewardTrainer` is a wrapper around the `transformers` Trainer to easily fine-tune reward models or adapters on a custom preference dataset.
+
+```python
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
+from trl import RewardTrainer
+
+model = AutoModelForSequenceClassification.from_pretrained("gpt2")
+tokenizer = AutoTokenizer.from_pretrained("gpt2")
+
+...
+
+trainer = RewardTrainer(
+    model=model,
+    tokenizer=tokenizer,
+    train_dataset=dataset,
+)
+
+trainer.train()
+```
+
+### `PPOTrainer`
+
+This is a basic example on how to use the `PPOTrainer` from the library. Based on a query the language model creates a response which is then evaluated. The evaluation could be a human in the loop or another model's output.
 
 ```python
 # imports
