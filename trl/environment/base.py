@@ -175,9 +175,15 @@ class TextEnvironment:
 
         try:
             tool, query = self.parse_tool_call(history.last_text_segment)
-            response = self.tools[tool](query)
-        except Exception as error:
-            response = str(error)
+        except:
+            response = "Invalid tool call."
+        if tool not in self.tools:
+            response = f"Uknown tool {tool}."
+        else:
+            try:
+                response = self.tools[tool](query)
+            except Exception as error:
+                response = str(error)
 
         history.append_segment(
             response + self.response_token,
