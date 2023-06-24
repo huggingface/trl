@@ -228,34 +228,25 @@ class SFTTrainer(Trainer):
         num_of_sequences,
         chars_per_token,
     ):
+        if dataset is None:
+            raise ValueError("The dataset should not be None")
+
         # check if torch dataset / dataloader and do nothing
-        if dataset is not None and (
-            isinstance(
-                dataset,
-                (torch.utils.data.IterableDataset, torch.utils.data.Dataset),
-            )
-        ):
-            is_already_dataset = True
-        elif dataset is not None and isinstance(dataset, ConstantLengthDataset):
-            is_already_dataset = True
-            packing = True
-        else:
-            is_already_dataset = False
+        if isinstance(dataset, (torch.utils.data.IterableDataset, torch.utils.data.Dataset, ConstantLengthDataset)):
+            return dataset
 
         if not packing:
-            dataset = self._prepare_non_packed_dataloader(
+            return self._prepare_non_packed_dataloader(
                 tokenizer, dataset, dataset_text_field, max_seq_length, formatting_func
             )
 
-            is_already_dataset = True
-
-        if not is_already_dataset and (dataset_text_field is not None or formatting_func is not None):
+        if dataset_text_field is not None or formatting_func is not None:
             if tokenizer is None:
                 raise ValueError(
                     "You need to pass a tokenizer when using the SFT Trainer when passing a `dataset_text_field`."
                 )
 
-            dataset = ConstantLengthDataset(
+            return ConstantLengthDataset(
                 tokenizer,
                 dataset,
                 dataset_text_field=dataset_text_field,
@@ -267,12 +258,9 @@ class SFTTrainer(Trainer):
                 eos_token_id=tokenizer.eos_token_id,
             )
 
-        elif not is_already_dataset and (dataset_text_field is None and formatting_func is None):
-            raise ValueError(
-                "You need to pass a `dataset_text_field` or `formatting_func` argument to the SFTTrainer if you want to use the `ConstantLengthDataset`."
-            )
-
-        return dataset
+        raise ValueError(
+            "You need to pass a `dataset_text_field` or `formatting_func` argument to the SFTTrainer if you want to use the `ConstantLengthDataset`."
+        )
 
     def _prepare_non_packed_dataloader(
         self, tokenizer, dataset, dataset_text_field, max_seq_len, formatting_func=None
