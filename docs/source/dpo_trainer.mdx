@@ -1,0 +1,27 @@
+# DPO Trainer
+
+TRL supports the DPO Trainer for training language models from preference data, as described in the paper [Direct Preference Optimization: Your Language Model is Secretly a Reward Model](https://arxiv.org/abs/2305.18290) by Rafailov et al., 2023.
+
+The first step as always is to train your SFT model, to ensure the data we train on is in-distribution for the DPO algorithm.
+
+## Expected dataset format
+
+The DPO trainer expects a very specific format for the dataset. Since the model will be trained to directly optimize the preference of which sentence is the most relevant, given two sentences. We provide an example from the [`Anthropic/hh-rlhf`](https://huggingface.co/datasets/Anthropic/hh-rlhf) dataset below:
+
+<div style="text-align: center">
+<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/rlhf-antropic-example.png", width="50%">
+</div>
+
+Therefore the final dataset object should contain two 4 entries at least if you use the default `DPODataCollatorWithPadding` data collator. The entries should be named:
+
+- `input_ids_chosen`
+- `attention_mask_chosen`
+- `input_ids_rejected`
+- `attention_mask_rejected`
+
+The `j` and `k` suffixes are used to denote the two sentences in the paired dataset.
+
+
+## DPOTrainer
+
+[[autodoc]] DPOTrainer

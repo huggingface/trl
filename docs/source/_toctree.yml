@@ -19,6 +19,8 @@
     title: Training your own reward model
   - local: sft_trainer
     title: Supervised fine-tuning
+  - local: dpo_trainer
+    title: DPO Trainer
   - local: extras
     title: Extras - Better model output without reinforcement learning
   title: API
