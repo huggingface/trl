@@ -10,25 +10,28 @@ from transformers import StoppingCriteria, StoppingCriteriaList
 class StringStoppingCriteria(StoppingCriteria):
     """Custom `StoppingCriteria` which checks if all generations in the batch are completed."""
 
-    def __init__(self, start_lengths, stop_strings, tokenizer):
-        self.start_lengths = start_lengths
+    def __init__(self, stop_strings, tokenizer):
         self.stop_strings = stop_strings
-        self.tokenizer = tokenizer
-        self.generated_tokens = [1 for _ in range(len(start_lengths))]
+        self.tokenizer = tokenizer   
         self.first_call=True
 
     def __call__(self, input_ids, scores, **kwargs):
         """Returns true if all generated sequences contain any of the stop strings."""
         if self.first_call:
-            self.start_lengths = [input_ids.shape[-1]-1 for _ in range(len(self.start_lengths))]
+            self.generated_tokens = [1 for _ in range(len(input_ids.shape[0]))]
+            self.start_length = input_ids.shape[-1] - 1
             self.first_call = False
-        decoded_generations = self.tokenizer.batch_decode(input_ids[:, self.start_lengths[0]:])
+        decoded_generations = self.tokenizer.batch_decode(input_ids[:, self.start_length:])
         done = []
+
         for i, decoded_generation in enumerate(decoded_generations):
             sequence_complete = any([stop_string in decoded_generation for stop_string in self.stop_strings])
             done.append(sequence_complete)
             if not sequence_complete:
                 self.generated_tokens[i] += 1
+
+        if all(done):
+            self.first_call = True
 
         return all(done)
 
@@ -215,8 +218,7 @@ class TextEnvironment:
         active_histories = [i for i, history in enumerate(histories) if not history.completed]
 
         query_tensors = [histories[i].tokens for i in active_histories]
-        input_lengths = [len(histories[i].text) for i in active_histories]
-        response_tensors = self._generate_batched(query_tensors, input_lengths)
+        response_tensors = self._generate_batched(query_tensors)
         response_texts = self.tokenizer.batch_decode(response_tensors)
 
         for i, response_text, response_tensor in zip(active_histories, response_texts, response_tensors):
@@ -244,7 +246,6 @@ class TextEnvironment:
     def _generate_batched(
         self,
         query_tensors,
-        input_lengths,
         batch_size: int = 16,
         pad_to_multiple_of: int = None,
     ):
@@ -261,7 +262,6 @@ class TextEnvironment:
             end_index = min(len(query_tensors), i + batch_size)
 
             batch = query_tensors[i:end_index]
-            batch_input_lengths = input_lengths[i:end_index]
             batch_mask = [torch.ones_like(element) for element in batch]
             inputs = {"input_ids": batch, "attention_mask": batch_mask}
 
@@ -274,7 +274,7 @@ class TextEnvironment:
             ).to(self.current_device)
 
             stopping_criteria = StringStoppingCriteria(
-                batch_input_lengths, [self.call_token, self.submit_token], self.tokenizer
+                [self.call_token, self.submit_token], self.tokenizer
             )
 
             self.generation_kwargs["stopping_criteria"] = StoppingCriteriaList([stopping_criteria])
