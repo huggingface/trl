@@ -5,7 +5,12 @@ from typing import Optional
 
 import torch
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, TrainingArguments
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    HfArgumentParser,
+    TrainingArguments,
+)
 
 from trl import DPOTrainer
 
@@ -18,16 +23,28 @@ class ScriptArguments:
     """
 
     # training parameters
-    model_name_or_path: Optional[str] = field(default="gpt2", metadata={"help": "the model name"})
-    learning_rate: Optional[float] = field(default=1e-3, metadata={"help": "optimizer learning rate"})
-    per_device_train_batch_size: Optional[int] = field(default=64, metadata={"help": "batch size per device"})
+    model_name_or_path: Optional[str] = field(
+        default="gpt2", metadata={"help": "the model name"}
+    )
+    learning_rate: Optional[float] = field(
+        default=1e-3, metadata={"help": "optimizer learning rate"}
+    )
+    per_device_train_batch_size: Optional[int] = field(
+        default=64, metadata={"help": "batch size per device"}
+    )
     gradient_accumulation_steps: Optional[int] = field(
         default=1, metadata={"help": "the number of gradient accumulation steps"}
     )
-    max_length: Optional[int] = field(default=512, metadata={"help": "max length of each sample"})
-    label_pad_token_id: Optional[int] = field(default=-100, metadata={"help": "label for non response tokens"})
+    max_length: Optional[int] = field(
+        default=512, metadata={"help": "max length of each sample"}
+    )
+    label_pad_token_id: Optional[int] = field(
+        default=-100, metadata={"help": "label for non response tokens"}
+    )
     # instrumentation
-    sanity_check: Optional[bool] = field(default=False, metadata={"help": "only train on 1000 samples"})
+    sanity_check: Optional[bool] = field(
+        default=False, metadata={"help": "only train on 1000 samples"}
+    )
     report_to: Optional[str] = field(
         default=None,
         metadata={
@@ -58,7 +75,9 @@ def preprocess_function(examples, tokenizer, max_length, label_pad_token_id):
         "labels_rejected": [],
     }
 
-    for question, response_j, response_k in zip(examples["question"], examples["response_j"], examples["response_k"]):
+    for question, response_j, response_k in zip(
+        examples["question"], examples["response_j"], examples["response_k"]
+    ):
         input_ids_query = tokenizer(question)["input_ids"]
         input_ids_response_chosen = tokenizer(response_j)["input_ids"]
         input_ids_response_rejected = tokenizer(response_k)["input_ids"]
@@ -69,14 +88,20 @@ def preprocess_function(examples, tokenizer, max_length, label_pad_token_id):
         labels_chosen = [label_pad_token_id] * len_query + input_ids_chosen[len_query:]
         input_ids_rejected = input_ids_query + input_ids_response_rejected
         attention_mask_rejected = [1] * len(input_ids_rejected)
-        labels_rejected = [label_pad_token_id] * len_query + input_ids_rejected[len_query:]
+        labels_rejected = [label_pad_token_id] * len_query + input_ids_rejected[
+            len_query:
+        ]
 
         # truncate to max_length
         new_examples["input_ids_chosen"].append(input_ids_chosen[-max_length:])
-        new_examples["attention_mask_chosen"].append(attention_mask_chosen[-max_length:])
+        new_examples["attention_mask_chosen"].append(
+            attention_mask_chosen[-max_length:]
+        )
         new_examples["labels_chosen"].append(labels_chosen[-max_length:])
         new_examples["input_ids_rejected"].append(input_ids_rejected[-max_length:])
-        new_examples["attention_mask_rejected"].append(attention_mask_rejected[-max_length:])
+        new_examples["attention_mask_rejected"].append(
+            attention_mask_rejected[-max_length:]
+        )
         new_examples["labels_rejected"].append(labels_rejected[-max_length:])
 
     return new_examples
@@ -100,7 +125,9 @@ if __name__ == "__main__":
     tokenizer.pad_token = tokenizer.eos_token
 
     # 2. Load the human stack-exchange paired dataset
-    train_dataset = load_dataset("lvwerra/stack-exchange-paired", data_dir="data/reward", split="train")
+    train_dataset = load_dataset(
+        "lvwerra/stack-exchange-paired", data_dir="data/reward", split="train"
+    )
 
     if script_args.sanity_check:
         train_dataset = train_dataset.select(range(min(len(train_dataset), 1000)))
@@ -111,7 +138,9 @@ if __name__ == "__main__":
         remove_columns=train_dataset.column_names,
         num_proc=os.cpu_count(),
         fn_kwargs=dict(
-            tokenizer=tokenizer, max_length=script_args.max_length, label_pad_token_id=script_args.label_pad_token_id
+            tokenizer=tokenizer,
+            max_length=script_args.max_length,
+            label_pad_token_id=script_args.label_pad_token_id,
         ),
     )
 
@@ -129,7 +158,12 @@ if __name__ == "__main__":
 
     # 3. initialize the DPO trainer
     dpo_trainer = DPOTrainer(
-        model, model_ref, args=training_args, beta=0.1, train_dataset=train_dataset, tokenizer=tokenizer
+        model,
+        model_ref,
+        args=training_args,
+        beta=0.1,
+        train_dataset=train_dataset,
+        tokenizer=tokenizer,
     )
 
     # 4. train
