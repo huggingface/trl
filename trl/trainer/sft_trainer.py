@@ -11,7 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import os
 import warnings
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
@@ -32,21 +31,11 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 
 from ..import_utils import is_peft_available
-from .utils import ConstantLengthDataset, DataCollatorForCompletionOnlyLM
+from .utils import ConstantLengthDataset, DataCollatorForCompletionOnlyLM, PeftSavingCallback
 
 
 if is_peft_available():
     from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_int8_training
-
-
-class PeftSavingCallback(TrainerCallback):
-    def on_save(self, args, state, control, **kwargs):
-        if args.should_save:
-            checkpoint_path = os.path.join(args.output_dir, f"checkpoint-{state.global_step}")
-            kwargs["model"].save_pretrained(checkpoint_path)
-
-            if "pytorch_model.bin" in os.listdir(checkpoint_path):
-                os.remove(os.path.join(checkpoint_path, "pytorch_model.bin"))
 
 
 class SFTTrainer(Trainer):
@@ -219,6 +208,14 @@ class SFTTrainer(Trainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
+        if self.args.max_steps > 0 and packing:
+            warnings.warn(
+                "You passed `packing=True` to the SFTTrainer, and you are training your model with `max_steps` strategy. The dataset will be iterated until the `max_steps` are reached."
+            )
+            self.train_dataset.infinite = True
+        elif self.args.max_steps == -1 and packing:
+            self.train_dataset.infinite = False
+
     def _prepare_dataset(
         self,
         dataset,
@@ -231,34 +228,25 @@ class SFTTrainer(Trainer):
         num_of_sequences,
         chars_per_token,
     ):
+        if dataset is None:
+            raise ValueError("The dataset should not be None")
+
         # check if torch dataset / dataloader and do nothing
-        if dataset is not None and (
-            isinstance(
-                dataset,
-                (torch.utils.data.IterableDataset, torch.utils.data.Dataset),
-            )
-        ):
-            is_already_dataset = True
-        elif dataset is not None and isinstance(dataset, ConstantLengthDataset):
-            is_already_dataset = True
-            packing = True
-        else:
-            is_already_dataset = False
+        if isinstance(dataset, (torch.utils.data.IterableDataset, torch.utils.data.Dataset, ConstantLengthDataset)):
+            return dataset
 
         if not packing:
-            dataset = self._prepare_non_packed_dataloader(
+            return self._prepare_non_packed_dataloader(
                 tokenizer, dataset, dataset_text_field, max_seq_length, formatting_func
             )
 
-            is_already_dataset = True
-
-        if not is_already_dataset and (dataset_text_field is not None or formatting_func is not None):
+        if dataset_text_field is not None or formatting_func is not None:
             if tokenizer is None:
                 raise ValueError(
                     "You need to pass a tokenizer when using the SFT Trainer when passing a `dataset_text_field`."
                 )
 
-            dataset = ConstantLengthDataset(
+            return ConstantLengthDataset(
                 tokenizer,
                 dataset,
                 dataset_text_field=dataset_text_field,
@@ -270,12 +258,9 @@ class SFTTrainer(Trainer):
                 eos_token_id=tokenizer.eos_token_id,
             )
 
-        elif not is_already_dataset and (dataset_text_field is None and formatting_func is None):
-            raise ValueError(
-                "You need to pass a `dataset_text_field` or `formatting_func` argument to the SFTTrainer if you want to use the `ConstantLengthDataset`."
-            )
-
-        return dataset
+        raise ValueError(
+            "You need to pass a `dataset_text_field` or `formatting_func` argument to the SFTTrainer if you want to use the `ConstantLengthDataset`."
+        )
 
     def _prepare_non_packed_dataloader(
         self, tokenizer, dataset, dataset_text_field, max_seq_len, formatting_func=None
