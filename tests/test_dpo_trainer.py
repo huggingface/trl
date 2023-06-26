@@ -30,7 +30,7 @@ class DPOTrainerTester(unittest.TestCase):
         cls.tokenizer = AutoTokenizer.from_pretrained(cls.model_id)
         cls.tokenizer.pad_token = cls.tokenizer.eos_token
 
-    def test_reward_trainer(self):
+    def test_dpo_trainer(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
                 output_dir=tmp_dir,
@@ -94,7 +94,9 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_dataset=dummy_dataset,
             )
 
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            previous_trainable_params = {
+                n: param.clone() for n, param in trainer.model.named_parameters()
+            }
 
             trainer.train()
 
@@ -106,6 +108,3 @@ class DPOTrainerTester(unittest.TestCase):
                 # check the params have changed - ignore 0 biases
                 if param.sum() != 0:
                     self.assertFalse(torch.equal(param, new_param))
-
-            preds = trainer.predict(dummy_dataset)
-            self.assertEqual(preds.predictions.shape, (4, 2))

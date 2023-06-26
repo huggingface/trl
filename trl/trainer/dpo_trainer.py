@@ -17,9 +17,14 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 from datasets import Dataset
-from transformers import DataCollator, PreTrainedModel, PreTrainedTokenizerBase, Trainer, TrainingArguments
+from transformers import (
+    DataCollator,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+    Trainer,
+    TrainingArguments,
+)
 from transformers.trainer_callback import TrainerCallback
-from transformers.trainer_pt_utils import nested_detach
 from transformers.trainer_utils import EvalPrediction
 
 from ..core import logprobs_from_logits, masked_mean
@@ -87,7 +92,9 @@ class DPOTrainer(Trainer):
             None,
             None,
         ),
-        preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
+        preprocess_logits_for_metrics: Optional[
+            Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
+        ] = None,
         max_length: Optional[int] = None,
         peft_config: Optional[Dict] = None,
     ):
@@ -96,7 +103,9 @@ class DPOTrainer(Trainer):
                 "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
             )
         elif is_peft_available() and peft_config is not None:
-            if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
+            if getattr(model, "is_loaded_in_8bit", False) or getattr(
+                model, "is_loaded_in_4bit", False
+            ):
                 model = prepare_model_for_int8_training(model)
             model = get_peft_model(model, peft_config)
 
@@ -153,7 +162,9 @@ class DPOTrainer(Trainer):
 
         # Since we inherit from trainer we always have access to an accelerator
         if hasattr(self, "accelerator"):
-            self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
+            self.ref_model = self.accelerator.prepare_model(
+                self.ref_model, evaluation_mode=True
+            )
         else:
             raise AttributeError(
                 "Your `Trainer` does not have an `accelerator` object. Consider upgrading `transformers`."
@@ -188,11 +199,19 @@ class DPOTrainer(Trainer):
                 attention_mask=inputs["attention_mask_rejected"],
             )[0]
 
-        log_prob_chosen_model = logprobs_from_logits(logits_chosen_model, inputs["input_ids_chosen"])
-        log_prob_rejected_model = logprobs_from_logits(logits_rejected_model, inputs["input_ids_rejected"])
+        log_prob_chosen_model = logprobs_from_logits(
+            logits_chosen_model, inputs["input_ids_chosen"]
+        )
+        log_prob_rejected_model = logprobs_from_logits(
+            logits_rejected_model, inputs["input_ids_rejected"]
+        )
 
-        log_prob_chosen_ref = logprobs_from_logits(logits_chosen_ref, inputs["input_ids_chosen"])
-        log_prob_rejected_ref = logprobs_from_logits(logits_rejected_ref, inputs["input_ids_rejected"])
+        log_prob_chosen_ref = logprobs_from_logits(
+            logits_chosen_ref, inputs["input_ids_chosen"]
+        )
+        log_prob_rejected_ref = logprobs_from_logits(
+            logits_rejected_ref, inputs["input_ids_rejected"]
+        )
 
         mask_chosen = (inputs["labels_chosen"] != self.label_pad_token_id).float()
         mask_rejected = (inputs["labels_rejected"] != self.label_pad_token_id).float()
@@ -205,43 +224,18 @@ class DPOTrainer(Trainer):
         pi_logratios = log_prob_chosen_model - log_prob_rejected_model
         ref_logratios = log_prob_chosen_ref - log_prob_rejected_ref
 
-        loss = -nn.functional.logsigmoid(self.beta * (pi_logratios - ref_logratios)).mean()
-        rewards_chosen = self.beta * (log_prob_chosen_model - log_prob_chosen_ref).detach()
-        rewards_rejected = self.beta * (log_prob_rejected_model - log_prob_rejected_ref).detach()
+        loss = -nn.functional.logsigmoid(
+            self.beta * (pi_logratios - ref_logratios)
+        ).mean()
+        rewards_chosen = (
+            self.beta * (log_prob_chosen_model - log_prob_chosen_ref).detach()
+        )
+        rewards_rejected = (
+            self.beta * (log_prob_rejected_model - log_prob_rejected_ref).detach()
+        )
         if return_outputs:
             return loss, {
                 "rewards_chosen": rewards_chosen,
                 "rewards_rejected": rewards_rejected,
             }
         return loss
-
-    def prediction_step(
-        self,
-        model: Union[PreTrainedModel, nn.Module],
-        inputs: Dict[str, Union[torch.Tensor, Any]],
-        prediction_loss_only: bool,
-        ignore_keys: Optional[List[str]] = None,
-    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
-        inputs = self._prepare_inputs(inputs)
-        if ignore_keys is None:
-            if hasattr(self.model, "config"):
-                ignore_keys = getattr(self.model.config, "keys_to_ignore_at_inference", [])
-            else:
-                ignore_keys = []
-
-        with torch.no_grad():
-            loss, logits_dict = self.compute_loss(model, inputs, return_outputs=True)
-
-        if prediction_loss_only:
-            return (loss, None, None)
-
-        loss = loss.detach()
-        logits = tuple(v for k, v in logits_dict.items() if k not in ignore_keys)
-        logits = nested_detach(logits)
-        # Stack accepted against rejected, mean over logits
-        # and softmax to get preferences between accepted and rejected to sum to 1
-        logits = torch.stack(logits).mean(dim=2).softmax(dim=0).T
-
-        labels = torch.zeros(logits.shape[0])
-
-        return loss, logits, labels
