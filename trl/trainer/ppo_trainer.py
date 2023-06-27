@@ -612,8 +612,10 @@ class PPOTrainer(BaseTrainer):
         model_inputs_names = list(model_inputs.keys())
 
         with torch.no_grad():
-            all_logprobs, _, values, masks = self.batched_forward_pass(self.model, queries, responses, model_inputs, response_masks=response_masks)
-            
+            all_logprobs, _, values, masks = self.batched_forward_pass(
+                self.model, queries, responses, model_inputs, response_masks=response_masks
+            )
+
             # self._show_tokens(torch.cat((queries[0], responses[0]))[1:], masks[0])
 
             # for when the model is a peft model
@@ -798,9 +800,7 @@ class PPOTrainer(BaseTrainer):
             stats[k] = v
         return stats
 
-    def prepare_model_inputs(
-        self, queries: torch.Tensor, responses: torch.Tensor
-    ):
+    def prepare_model_inputs(self, queries: torch.Tensor, responses: torch.Tensor):
         if self.is_encoder_decoder:
             input_data = self.data_collator(
                 [{"input_ids": q, "attention_mask": torch.ones_like(q)} for q in queries]
@@ -829,7 +829,7 @@ class PPOTrainer(BaseTrainer):
         responses: torch.Tensor,
         model_inputs: dict,
         return_logits: bool = False,
-        response_masks: Optional[ torch.Tensor] = None
+        response_masks: Optional[torch.Tensor] = None,
     ):
         """
         Calculate model outputs in multiple batches.
@@ -886,7 +886,9 @@ class PPOTrainer(BaseTrainer):
                         start += attention_mask[j, :].nonzero()[0]
                     end = start + len(response_batch[j])
                     if response_masks is not None:
-                        response_masks_batch[j] = torch.cat((torch.zeros_like(query_batch[j]),  response_masks_batch[j]))[1:]
+                        response_masks_batch[j] = torch.cat(
+                            (torch.zeros_like(query_batch[j]), response_masks_batch[j])
+                        )[1:]
 
                 if len(logprobs[j, start:end]) < 2:
                     raise ValueError("Responses are too short. Make sure they are at least 4 tokens long.")
@@ -1247,8 +1249,9 @@ class PPOTrainer(BaseTrainer):
         self.create_model_card(save_directory)
 
     def _show_tokens(self, tokens, masks):
-        from rich.text import Text
         from rich import print
+        from rich.text import Text
+
         text = Text()
 
         for i, (token, mask) in enumerate(zip(tokens, masks)):
