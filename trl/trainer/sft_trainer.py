@@ -144,7 +144,7 @@ class SFTTrainer(Trainer):
 
             if callbacks is None:
                 callbacks = [PeftSavingCallback]
-        elif not isinstance(model, PreTrainedModel) and not isinstance(model, PeftModel):
+        elif not isinstance(model, (PreTrainedModel, PeftModel)):
             model = AutoModelForCausalLM.from_pretrained(model)
 
         if tokenizer is None:
