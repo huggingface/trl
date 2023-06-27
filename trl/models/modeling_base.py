@@ -303,6 +303,14 @@ class PreTrainedModelWrapper(nn.Module):
         if is_resuming_training:
             model.post_init(state_dict=state_dict)
 
+        if not is_peft_model and reward_adapter is not None:
+            raise ValueError("reward_adapter can only be used with a PeftModel. ")
+        elif is_peft_model and reward_adapter is not None:
+            model.add_and_load_reward_modeling_adapter(reward_adapter)
+            model.supports_rm_adapter = True
+        else:
+            model.supports_rm_adapter = False
+
         return model
 
     @classmethod
@@ -438,6 +446,7 @@ class PreTrainedModelWrapper(nn.Module):
         for score_name_candidate in cls.supported_rm_modules:
             if any(score_name_candidate in name for name in adapter_state_dict.keys()):
                 score_name = score_name_candidate
+                # we have found the correct head name and can break
                 break
 
         score_dict = {}
@@ -464,6 +473,35 @@ class PreTrainedModelWrapper(nn.Module):
         set_peft_model_state_dict(pretrained_model, adapter_state_dict, adapter_name=adapter_name)
 
         return score
+
+    def compute_reward_score(self, input_ids, attention_mask=None, ppo_adapter_name="default", **kwargs):
+        r"""
+        Computes the reward score for a given input. The method has first to enable the adapter
+        and then compute the reward score. After that the model disables the reward modeling
+        adapter and enables the default ppo adapter again.
+        """
+        if not self.supports_rm_adapter:
+            raise ValueError("This model does not support reward modeling adapter.")
+
+        # enable rm adapter
+        self.pretrained_model.set_adapter(self.rm_adapter_name)
+        self.pretrained_model.eval()
+
+        base_model_output = self.pretrained_model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            output_hidden_states=True,
+            return_dict=True,
+            **kwargs,
+        )
+
+        last_hidden_states = base_model_output.hidden_states[-1]
+        scores = self.score(last_hidden_states)
+
+        self.pretrained_model.set_adapter(ppo_adapter_name)
+        self.pretrained_model.train()
+
+        return scores
 
 
 def create_reference_model(

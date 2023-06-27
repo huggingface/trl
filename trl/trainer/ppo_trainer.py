@@ -21,6 +21,7 @@ from typing import Callable, List, Optional, Union
 import datasets
 import torch
 from accelerate import Accelerator
+from accelerate.utils import ProjectConfiguration
 from datasets import Dataset
 from huggingface_hub import whoami
 from packaging import version
@@ -188,6 +189,7 @@ class PPOTrainer(BaseTrainer):
         self.accelerator = Accelerator(
             log_with=config.log_with,
             gradient_accumulation_steps=config.gradient_accumulation_steps,
+            project_config=ProjectConfiguration(**config.project_kwargs),
             **config.accelerator_kwargs,
         )
 
