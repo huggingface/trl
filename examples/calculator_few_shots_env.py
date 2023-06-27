@@ -83,7 +83,7 @@ env = TextEnvironment(
 )
 
 # run environment episodes
-for step in range(4000):
+for step in range(100):
     tasks = []
     answers = []
     for _ in range(batch_size):
