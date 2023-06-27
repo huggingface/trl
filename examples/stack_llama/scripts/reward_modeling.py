@@ -61,6 +61,12 @@ class ScriptArguments:
             "help": "This essentially cuts the training time in half if you want to sacrifice a little precision and have a supported GPU."
         },
     )
+    fp16: Optional[bool] = field(
+        default=False,
+        metadata={
+            "help": "This essentially cuts the training time in half if you want to sacrifice a little precision and have a supported GPU."
+        },
+    )
     num_train_epochs: Optional[int] = field(
         default=1,
         metadata={"help": "The number of training epochs for the reward model."},
@@ -130,6 +136,7 @@ training_args = TrainingArguments(
     remove_unused_columns=False,
     label_names=[],
     bf16=script_args.bf16,
+    fp16=script_args.fp16,
     logging_strategy="steps",
     logging_steps=10,
     optim=script_args.optim,
