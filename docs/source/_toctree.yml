@@ -35,4 +35,6 @@
     title: Using LLaMA with TRL
   - local: learning_tools
     title: Learning to Use Tools
+  - local: multi_adapter_rl
+    title: Multi Adapter RL (MARL) - a single base model for everything
   title: Examples

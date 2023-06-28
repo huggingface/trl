@@ -119,7 +119,11 @@ class PPOConfig(object):
     )
     accelerator_kwargs: Optional[dict] = field(
         default_factory=dict,
-        metadata={"help": "Keyword arguments for the accelerator (e.g. `logging_dir`)"},
+        metadata={"help": "Keyword arguments for the accelerator"},
+    )
+    project_kwargs: Optional[dict] = field(
+        default_factory=dict,
+        metadata={"help": "Keyword arguments for the accelerator project config (e.g. `logging_dir`)"},
     )
     tracker_project_name: Optional[str] = field(
         default="trl", metadata={"help": "Name of project to use for tracking"}
@@ -167,7 +171,7 @@ class PPOConfig(object):
                         os.environ["WANDB_TAGS"] = ",".join([existing_wandb_tag, wandb_tag])
                     else:
                         os.environ["WANDB_TAGS"] = wandb_tag
-                logging.info(f"the following tags will be used for wandb logging: {os.environ['WANDB_TAGS']}")
+                    logging.info(f"the following tags will be used for wandb logging: {os.environ['WANDB_TAGS']}")
             except ImportError:
                 raise ImportError(
                     "Please install wandb to use wandb logging. You can do this by running `pip install wandb`."

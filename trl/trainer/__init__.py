@@ -16,7 +16,7 @@
 
 # There is a circular import in the PPOTrainer if we let isort sort these
 # isort: off
-from .utils import AdaptiveKLController, FixedKLController, ConstantLengthDataset
+from .utils import AdaptiveKLController, FixedKLController, ConstantLengthDataset, DataCollatorForCompletionOnlyLM
 
 # isort: on
 

@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import os
 import random
 import warnings
 from dataclasses import dataclass
@@ -19,7 +20,7 @@ from typing import Any, Dict, List, Optional, Union
 import numpy as np
 import torch
 from torch.utils.data import IterableDataset
-from transformers import PreTrainedTokenizerBase
+from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizerBase, TrainerCallback
 
 
 class AdaptiveKLController:
@@ -48,6 +49,43 @@ class FixedKLController:
 
     def update(self, current, n_steps):
         pass
+
+
+class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
+    def __init__(self, response_template, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.response_template = response_template
+
+    def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
+        batch = super().torch_call(examples)
+
+        # The prompt ends with the response key plus a newline.  We encode this and then try to find it in the
+        # sequence of tokens.  This should just be a single token.
+        response_token_ids = self.tokenizer.encode(self.response_template, add_special_tokens=False)
+
+        labels = batch["labels"].clone()
+
+        for i in range(len(examples)):
+            response_token_ids_start_idx = None
+
+            for idx in np.where(batch["labels"][i] == response_token_ids[0])[0]:
+                # `response_token_ids` is `'### Response:\n'`, here we are just making sure that the token IDs match
+                if response_token_ids == examples[i]["input_ids"][idx : idx + len(response_token_ids)]:
+                    response_token_ids_start_idx = idx
+
+            if response_token_ids_start_idx is None:
+                raise RuntimeError(
+                    f'Could not find response key {response_token_ids} in token IDs {batch["labels"][i]}'
+                )
+
+            response_token_ids_end_idx = response_token_ids_start_idx + len(response_token_ids)
+
+            # Make pytorch loss function ignore all tokens up through the end of the response key
+            labels[i, :response_token_ids_end_idx] = -100
+
+        batch["labels"] = labels
+
+        return batch
 
 
 @dataclass
@@ -149,6 +187,8 @@ class ConstantLengthDataset(IterableDataset):
                 Number of characters per token used to estimate number of tokens in text buffer.
             eos_token_id (`int`, *optional*, defaults to `0`):
                 Id of the end of sequence token if the passed tokenizer does not have an EOS token.
+            shuffle ('bool', *optional*, defaults to True)
+                Shuffle the examples before they are returned
     """
 
     def __init__(
@@ -162,6 +202,7 @@ class ConstantLengthDataset(IterableDataset):
         num_of_sequences=1024,
         chars_per_token=3.6,
         eos_token_id=0,
+        shuffle=True,
     ):
         self.tokenizer = tokenizer
 
@@ -177,6 +218,7 @@ class ConstantLengthDataset(IterableDataset):
         self.infinite = infinite
         self.current_size = 0
         self.max_buffer_size = seq_length * chars_per_token * num_of_sequences
+        self.shuffle = shuffle
         if formatting_func is None:
             self.formatting_func = lambda x: x[dataset_text_field]
         else:
@@ -207,6 +249,7 @@ class ConstantLengthDataset(IterableDataset):
                 except StopIteration:
                     if self.infinite:
                         iterator = iter(self.dataset)
+                        warnings.warn("The dataset reached end and the iterator is reset to the start.")
                     else:
                         more_examples = False
                         break
@@ -219,10 +262,21 @@ class ConstantLengthDataset(IterableDataset):
                 input_ids = all_token_ids[i : i + self.seq_length]
                 if len(input_ids) == self.seq_length:
                     examples.append(input_ids)
-            random.shuffle(examples)
+            if self.shuffle:
+                random.shuffle(examples)
             for example in examples:
                 self.current_size += 1
                 yield {
                     "input_ids": torch.LongTensor(example),
                     "labels": torch.LongTensor(example),
                 }
+
+
+class PeftSavingCallback(TrainerCallback):
+    def on_save(self, args, state, control, **kwargs):
+        if args.should_save:
+            checkpoint_path = os.path.join(args.output_dir, f"checkpoint-{state.global_step}")
+            kwargs["model"].save_pretrained(checkpoint_path)
+
+            if "pytorch_model.bin" in os.listdir(checkpoint_path):
+                os.remove(os.path.join(checkpoint_path, "pytorch_model.bin"))
