@@ -144,7 +144,7 @@ class TextEnvironment:
         self.is_encoder_decoder = hasattr(self.model, "is_encoder_decoder")
         self.current_device = extract_model_from_parallel(self.model).pretrained_model.device
 
-    def run(self, tasks):
+    def run(self, tasks, **rewards_kwargs):
         turns = 0
 
         queries = [self.prompt + task for task in tasks]
@@ -164,7 +164,7 @@ class TextEnvironment:
             if turns == self.max_turns:
                 break
 
-        self.compute_reward(histories)
+        self.compute_reward(histories, **rewards_kwargs)
 
         # convert a list of (q, r, m) tuples to lists of all qs, rs, and ms respectively
         queries, responses, masks = map(list, zip(*[history.split_query_response_tokens() for history in histories]))
@@ -209,9 +209,10 @@ class TextEnvironment:
 
         return tool, query
 
-    def compute_reward(self, histories):
-        for history in histories:
-            history.reward = self.reward_fn(history.last_text_segment)
+    def compute_reward(self, histories, **reward_kwargs):
+        rewards = self.reward_fn([history.last_text_segment for history in histories], **reward_kwargs)
+        for history, reward in zip(histories, rewards):
+            history.reward = torch.tensor(reward)
         return histories
 
     def generate(self, histories):
