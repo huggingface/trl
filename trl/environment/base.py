@@ -18,7 +18,7 @@ class StringStoppingCriteria(StoppingCriteria):
     def __call__(self, input_ids, scores, **kwargs):
         """Returns true if all generated sequences contain any of the stop strings."""
         if self.first_call:
-            self.generated_tokens = [1 for _ in range(len(input_ids.shape[0]))]
+            self.generated_tokens = [1 for _ in range(input_ids.shape[0])]
             self.start_length = input_ids.shape[-1] - 1
             self.first_call = False
         decoded_generations = self.tokenizer.batch_decode(input_ids[:, self.start_length :])
