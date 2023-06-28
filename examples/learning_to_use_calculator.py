@@ -90,9 +90,10 @@ text_env = TextEnvironment(
 for step in range(100):
     tasks, answers = generate_data(ppo_config.batch_size)
     queries, responses, masks, rewards, histories = text_env.run(tasks, answers=answers)
+    train_stats = ppo_trainer.step(queries, responses, rewards, masks)
+    
     response_texts = [tokenizer.decode(response) for response in responses]
     query_texts = [tokenizer.decode(query) for query in queries]
-    train_stats = ppo_trainer.step(queries, responses, rewards, masks)
     texts = {"query": [qt.split("<submit>")[-1].strip() for qt in query_texts], "response": response_texts}
     ppo_trainer.log_stats(train_stats, texts, rewards)
 ppo_trainer.save_pretrained(model_id+"-calculator")
