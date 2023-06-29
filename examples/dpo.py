@@ -14,7 +14,7 @@ from trl import DPOTrainer
 @dataclass
 class ScriptArguments:
     """
-    The name of the Casual LM model we wish to fine with DPO
+    The arguments for the DPO training script.
     """
 
     # training parameters
