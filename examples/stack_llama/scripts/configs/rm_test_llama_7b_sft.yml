@@ -1,0 +1,7 @@
+model_name: huggyllama/llama-7b
+tokenizer_name: huggyllama/llama-7b
+per_device_train_batch_size: 2
+gradient_checkpointing: False
+load_in_8bit: True
+eval_subset: 500
+bf16: False
