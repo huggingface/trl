@@ -168,24 +168,25 @@ class DPOTrainer(Trainer):
             raise NotImplementedError(
                 "compute_loss is only implemented for DPODataCollatorWithPadding, please implement your own compute_loss method if you are using a custom data collator"
             )
-        logits_chosen_model = model(
-            input_ids=inputs["input_ids_chosen"],
-            attention_mask=inputs["attention_mask_chosen"],
+
+        logits_model = model(
+            input_ids=torch.cat((inputs["input_ids_chosen"], inputs["input_ids_rejected"]), dim=0),
+            attention_mask=torch.cat((inputs["attention_mask_chosen"], ["attention_mask_rejected"]), dim=0),
         )[0]
-        logits_rejected_model = model(
-            input_ids=inputs["input_ids_rejected"],
-            attention_mask=inputs["attention_mask_rejected"],
-        )[0]
+        logits_chosen_model, logits_rejected_model = logits_model.chunk(2, dim=0)
 
         with torch.no_grad():
-            logits_chosen_ref = self.ref_model(
-                input_ids=inputs["input_ids_chosen"],
-                attention_mask=inputs["attention_mask_chosen"],
+            logits_ref = self.ref_model(
+                input_ids=torch.cat((inputs["input_ids_chosen"], inputs["input_ids_rejected"]), dim=0),
+                attention_mask=torch.cat(
+                    (
+                        inputs["attention_mask_chosen"],
+                        inputs["attention_mask_rejected"],
+                    ),
+                    dim=0,
+                ),
             )[0]
-            logits_rejected_ref = self.ref_model(
-                input_ids=inputs["input_ids_rejected"],
-                attention_mask=inputs["attention_mask_rejected"],
-            )[0]
+            logits_chosen_ref, logits_rejected_ref = logits_ref.chunk(2, dim=0)
 
         log_prob_chosen_model = logprobs_from_logits(logits_chosen_model, inputs["input_ids_chosen"])
         log_prob_rejected_model = logprobs_from_logits(logits_rejected_model, inputs["input_ids_rejected"])
