@@ -63,22 +63,22 @@ class DPOTrainerTester(unittest.TestCase):
                     torch.LongTensor([1, 2]),
                 ],
                 "input_ids_rejected": [
-                    torch.LongTensor([0, 2,]),
-                    torch.LongTensor([1, 2, 0]),
-                    torch.LongTensor([0, 2,]),
-                    torch.LongTensor([1, 2, 0]),
+                    torch.LongTensor([0, 2, 0]),
+                    torch.LongTensor([1, 2]),
+                    torch.LongTensor([0, 2, 1]),
+                    torch.LongTensor([1, 2]),
                 ],
                 "attention_mask_rejected": [
-                    torch.LongTensor([1, 1]),
-                    torch.LongTensor([1, 1, 0]),
+                    torch.LongTensor([1, 1, 2]),
                     torch.LongTensor([1, 1]),
                     torch.LongTensor([1, 1, 1]),
+                    torch.LongTensor([2, 2]),
                 ],
                 "labels_rejected": [
-                    torch.LongTensor([0, 2,]),
-                    torch.LongTensor([1, 2, 0]),
-                    torch.LongTensor([0, 2,]),
-                    torch.LongTensor([1, 2, 0]),
+                    torch.LongTensor([0, 2, 1]),
+                    torch.LongTensor([1, 2]),
+                    torch.LongTensor([0, 2, 1]),
+                    torch.LongTensor([1, 2]),
                 ],
             }
             # fmt: on

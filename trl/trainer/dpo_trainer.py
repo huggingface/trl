@@ -171,7 +171,10 @@ class DPOTrainer(Trainer):
 
         logits_model = model(
             input_ids=torch.cat((inputs["input_ids_chosen"], inputs["input_ids_rejected"]), dim=0),
-            attention_mask=torch.cat((inputs["attention_mask_chosen"], ["attention_mask_rejected"]), dim=0),
+            attention_mask=torch.cat(
+                (inputs["attention_mask_chosen"], inputs["attention_mask_rejected"]),
+                dim=0,
+            ),
         )[0]
         logits_chosen_model, logits_rejected_model = logits_model.chunk(2, dim=0)
 
