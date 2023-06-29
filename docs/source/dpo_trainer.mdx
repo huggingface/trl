@@ -19,8 +19,25 @@ Therefore the final dataset object should contain two 4 entries at least if you 
 - `input_ids_rejected`
 - `attention_mask_rejected`
 
-The `j` and `k` suffixes are used to denote the two sentences in the paired dataset.
+## Using the `DPOTrainer`
 
+For a detailed example have a look at the `examples/dpo.py` script. At a high level we need to initialize the `DPOTrainer` with a `model` we wish to train, a reference `ref_model` which we will use to calculate the implicit rewards of the preferred and unpreferred data, the `beta` refers to the hyperparameter of the implicit reward, and the dataset contains the 4 entries listed above:
+
+```py
+ dpo_trainer = DPOTrainer(
+    model,
+    model_ref,
+    args=training_args,
+    beta=0.1,
+    train_dataset=train_dataset,
+    tokenizer=tokenizer,
+)
+```
+After this one can then call:
+
+```py
+dpo_trainer.train()
+```
 
 ## DPOTrainer
 
