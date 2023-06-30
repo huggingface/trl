@@ -1,12 +1,12 @@
+import logging
 from dataclasses import dataclass, field
 from typing import Optional
 
 import torch
 from accelerate import Accelerator
 from datasets import load_dataset
-from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
-
-# from peft.tuners.lora import LoraLayer
+from peft import LoraConfig, PeftModel, TaskType, get_peft_model, prepare_model_for_kbit_training
+from peft.tuners.lora import LoraLayer
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
@@ -59,12 +59,6 @@ class ScriptArguments:
             "help": "This essentially cuts the training time in half if you want to sacrifice a little precision and have a supported GPU."
         },
     )
-    fp16: Optional[bool] = field(
-        default=False,
-        metadata={
-            "help": "This essentially cuts the training time in half if you want to sacrifice a little precision and have a supported GPU."
-        },
-    )
     num_train_epochs: Optional[int] = field(
         default=1,
         metadata={"help": "The number of training epochs for the reward model."},
@@ -96,7 +90,17 @@ class ScriptArguments:
     )
     load_in_8bit: Optional[bool] = field(
         default=False,
-        metadata={"help": "Whether to run eval after the first step"},
+        metadata={"help": "Load base model in 8 bit"},
+    )
+    just_eval: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Just evaluate, don't train"},
+    )
+    checkpoint_name: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "The model that you want to train from the Hugging Face hub. E.g. gpt2, gpt2-xl, bert, etc."
+        },
     )
 
 
@@ -134,7 +138,6 @@ training_args = TrainingArguments(
     remove_unused_columns=False,
     label_names=[],
     bf16=script_args.bf16,
-    fp16=script_args.fp16,
     logging_strategy="steps",
     logging_steps=10,
     optim=script_args.optim,
@@ -147,16 +150,6 @@ tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_auth_token=True)
 tokenizer.pad_token = tokenizer.eos_token
 
 
-peft_config = LoraConfig(
-    task_type=TaskType.SEQ_CLS,
-    inference_mode=False,
-    r=8,
-    lora_alpha=32,
-    lora_dropout=0.1,
-    bias="none",
-    modules_to_save=["score"],
-)
-
 current_device = Accelerator().local_process_index
 
 if script_args.load_in_8bit:
@@ -165,32 +158,52 @@ if script_args.load_in_8bit:
         num_labels=1,
         load_in_8bit=True,
         device_map={"": current_device},
-        # torch_dtype=(torch.float32 if not script_args.bf16 else torch.bfloat16),
+        torch_dtype=(torch.float32 if not script_args.bf16 else torch.bfloat16),
     )
 
     # gradient checkpointing does not work with int8 for some reason
-    # script_args.gradient_checkpointing = False
+    if script_args.gradient_checkpointing is True:
+        logging.warn(
+            "There is currently an issue and this code cannot be run with int8, gradient checkpointing, and multi-gpu."
+            "You are currently using int8 and gradient checkpointing, if you wish to do both then make sure you are "
+            "running on a single gpu. Otherwise, disable gradient checkpointing"
+        )
     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=script_args.gradient_checkpointing)
 else:
     model = AutoModelForSequenceClassification.from_pretrained(
         script_args.model_name, num_labels=1, torch_dtype=torch.bfloat16
     )
 
-model = get_peft_model(model, peft_config)
-# del model.score.original_module
-model.print_trainable_parameters()
 
-# if script_args.load_in_8bit:
-#     for name, module in model.named_modules():
-#         if isinstance(module, LoraLayer):
-#             if script_args.bf16:
-#                 module = module.to(torch.bfloat16)
-#         if "norm" in name:
-#             module = module.to(torch.float32)
-#         if "lm_head" in name or "embed_tokens" in name:
-#             if hasattr(module, "weight"):
-#                 if script_args.bf16 and module.weight.dtype == torch.float32:
-#                     module = module.to(torch.bfloat16)
+if script_args.checkpoint_name is not None:
+    model = PeftModel.from_pretrained(model, script_args.checkpoint_name, is_trainable=True)
+else:
+    peft_config = LoraConfig(
+        task_type=TaskType.SEQ_CLS,
+        inference_mode=False,
+        r=8,
+        lora_alpha=32,
+        lora_dropout=0.1,
+        bias="none",
+        modules_to_save=["score"],
+    )
+
+    model = get_peft_model(model, peft_config)
+
+# correctly set LoRA weights to bfloat16 when using int8
+# modified from QLoRA https://github.com/artidoro/qlora/blob/main/qlora.py#L334
+if script_args.load_in_8bit and script_args.bf16:
+    for name, module in model.named_modules():
+        if isinstance(module, LoraLayer):
+            module = module.to(torch.bfloat16)
+        if "norm" in name:
+            module = module.to(torch.float32)
+        if "score" in name or "embed_tokens" in name:
+            if hasattr(module, "weight") and module.weight.dtype == torch.float32:
+                module = module.to(torch.bfloat16)
+
+
+model.print_trainable_parameters()
 
 
 # Need to do this for gpt2, because it doesn't have an official pad token.
@@ -265,7 +278,11 @@ if script_args.eval_first_step:
 
     trainer.add_callback(EvaluateFirstStepCallback())
 
-trainer.train(script_args.resume_from_checkpoint)
 
-print("Saving last checkpoint of the model")
-model.save_pretrained(output_name + "_peft_last_checkpoint")
+if script_args.just_eval:
+    trainer.evaluate()
+else:
+    trainer.train(script_args.resume_from_checkpoint)
+
+    print("Saving last checkpoint of the model")
+    model.save_pretrained(output_name + "_peft_last_checkpoint")

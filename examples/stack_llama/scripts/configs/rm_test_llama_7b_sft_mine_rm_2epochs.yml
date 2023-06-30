@@ -1,0 +1,6 @@
+model_name: /home/toolkit/huggingface/llama-7b-sft-mine
+tokenizer_name: huggyllama/llama-7b
+checkpoint_name: /home/toolkit/huggingface/llama-7b-sft-mine-rm-2epochs-adapter
+load_in_8bit: True
+bf16: False
+just_eval: True

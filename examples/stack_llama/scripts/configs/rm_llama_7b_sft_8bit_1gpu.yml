@@ -1,0 +1,7 @@
+model_name: /home/toolkit/huggingface/llama-7b-sft-mine
+tokenizer_name: huggyllama/llama-7b
+gradient_accumulation_steps: 8
+gradient_checkpointing: True
+num_train_epochs: 2
+load_in_8bit: True
+bf16: False
