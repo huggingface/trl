@@ -293,7 +293,7 @@ class SFTTrainer(Trainer):
             for length, input_ids, attention_mask in zip(
                 outputs["length"], outputs["input_ids"], outputs["attention_mask"]
             ):
-                if length == max_seq_len:
+                if length <= max_seq_len:
                     input_batch.append(input_ids)
                     attention_masks.append(attention_mask)
 
