@@ -166,16 +166,14 @@ generation_kwargs = {
     "top_p": 1.0,
     "do_sample": True,
     "pad_token_id": tokenizer.eos_token_id,
-    "max_new_tokens": 32
+    "max_new_tokens": 32,
 }
 
 for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     query_tensors = batch["input_ids"]
 
     # Get response from gpt2
-    response_tensors = ppo_trainer.generate(
-        query_tensors, return_prompt=False, **generation_kwargs
-    )
+    response_tensors = ppo_trainer.generate(query_tensors, return_prompt=False, **generation_kwargs)
     batch["response"] = tokenizer.batch_decode(response_tensors)
 
     # Compute sentiment score
