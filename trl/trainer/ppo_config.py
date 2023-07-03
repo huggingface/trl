@@ -150,6 +150,9 @@ class PPOConfig(object):
         default=1,
         metadata={"help": "Number of steps between comparison of the current reward with the best seen so far"},
     )
+    ratio_threshold: Optional[float] = field(
+        default=10.0, metadata={"help": "Skip mini-batches with high PPO ratios that can cause loss spikes"}
+    )
 
     def __post_init__(self):
         if self.forward_batch_size is not None:

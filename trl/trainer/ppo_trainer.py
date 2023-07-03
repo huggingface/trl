@@ -1045,6 +1045,15 @@ class PPOTrainer(BaseTrainer):
 
         loss = pg_loss + self.config.vf_coef * vf_loss
 
+        avg_ratio = masked_mean(ratio, mask).item()
+        if avg_ratio > self.config.ratio_threshold:
+            warnings.warn(
+                f"The average ratio of batch ({avg_ratio:.2f}) exceeds threshold {self.config.ratio_threshold:.2f}. Skipping batch."
+            )
+            pg_loss = pg_loss * 0.0
+            vf_loss = vf_loss * 0.0
+            loss = loss * 0.0
+
         entropy = masked_mean(entropy_from_logits(logits), mask)
         approxkl = 0.5 * masked_mean((logprobs - old_logprobs) ** 2, mask)
         policykl = masked_mean(old_logprobs - logprobs, mask)
