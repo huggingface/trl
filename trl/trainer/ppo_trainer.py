@@ -982,18 +982,17 @@ class PPOTrainer(BaseTrainer):
             rewards.append(reward)
         return torch.stack(rewards), torch.stack(non_score_rewards)
 
-    def _kl_penalty(self, logprob: torch.FloatTensor, ref_logprob: torch.FloatTensor)-> torch.FloatTensor:
+    def _kl_penalty(self, logprob: torch.FloatTensor, ref_logprob: torch.FloatTensor) -> torch.FloatTensor:
         if self.ppo_config.kl_penalty == "kl":
-            return  logprob - ref_logprob
-        
+            return logprob - ref_logprob
+
         if self.ppo_config.kl_penalty == "abs":
             return (logprob - ref_logprob).abs()
-        
-        if self.ppo_config.kl_penalty == "mse":
-            return 0.5*(logprob - ref_logprob).square()
-        
-        raise NotImplementedError
 
+        if self.ppo_config.kl_penalty == "mse":
+            return 0.5 * (logprob - ref_logprob).square()
+
+        raise NotImplementedError
 
     def loss(
         self,
