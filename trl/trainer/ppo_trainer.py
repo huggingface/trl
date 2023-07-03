@@ -971,7 +971,7 @@ class PPOTrainer(BaseTrainer):
         rewards, non_score_rewards = [], []
         for score, logprob, ref_logprob, mask in zip(scores, logprobs, ref_logprobs, masks):
             # compute KL penalty (from difference in logprobs)
-            kl = logprob - ref_logprob
+            kl = self._kl_penalty(logprob, ref_logprob)
             non_score_reward = -self.kl_ctl.value * kl
             non_score_rewards.append(non_score_reward)
             reward = non_score_reward.clone()
@@ -981,6 +981,19 @@ class PPOTrainer(BaseTrainer):
             reward[last_non_masked_index] += score
             rewards.append(reward)
         return torch.stack(rewards), torch.stack(non_score_rewards)
+
+    def _kl_penalty(self, logprob: torch.FloatTensor, ref_logprob: torch.FloatTensor)-> torch.FloatTensor:
+        if self.ppo_config.kl_penalty == "kl":
+            return  logprob - ref_logprob
+        
+        if self.ppo_config.kl_penalty == "abs":
+            return (logprob - ref_logprob).abs()
+        
+        if self.ppo_config.kl_penalty == "mse":
+            return 0.5*(logprob - ref_logprob).square()
+        
+        raise NotImplementedError
+
 
     def loss(
         self,

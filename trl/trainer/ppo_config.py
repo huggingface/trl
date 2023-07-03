@@ -77,6 +77,10 @@ class PPOConfig(object):
         default=0.2,
         metadata={"help": "Initial KL penalty coefficient (used for adaptive and linear control)"},
     )
+    kl_penalty: Optional[str] = field(
+        default="kl",
+        metadata={"help": "kl penalty. Options: 'kl', 'abs', 'mse'}"},
+    )
     target: Optional[float] = field(default=6, metadata={"help": "Target KL value for adaptive KL control"})
     horizon: Optional[float] = field(default=10000, metadata={"help": "Horizon for adaptive KL control"})
     gamma: Optional[float] = field(default=1, metadata={"help": "Gamma parameter for advantage calculation"})
@@ -178,6 +182,7 @@ class PPOConfig(object):
                 )
 
         self.total_ppo_epochs = int(np.ceil(self.steps / self.batch_size))
+        assert self.kl_penalty in ["kl", "abs", "mse"]
 
     def to_dict(self):
         output_dict = {}
