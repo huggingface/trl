@@ -169,6 +169,49 @@ class DPOTrainer(Trainer):
                 "compute_loss is only implemented for DPODataCollatorWithPadding, please implement your own compute_loss method if you are using a custom data collator"
             )
 
+        # concat the chosen and rejected inputs
+        max_length = max(inputs["input_ids_chosen"].shape[1], inputs["input_ids_rejected"].shape[1])
+
+        inputs["input_ids_chosen"] = torch.nn.functional.pad(
+            inputs["input_ids_chosen"],
+            (0, max_length - inputs["input_ids_chosen"].shape[1]),
+            "constant",
+            0,
+        )
+        inputs["input_ids_rejected"] = torch.nn.functional.pad(
+            inputs["input_ids_rejected"],
+            (0, max_length - inputs["input_ids_rejected"].shape[1]),
+            "constant",
+            0,
+        )
+        inputs["attention_mask_chosen"] = torch.nn.functional.pad(
+            inputs["attention_mask_chosen"],
+            (0, max_length - inputs["attention_mask_chosen"].shape[1]),
+            "constant",
+            0,
+        )
+
+        inputs["attention_mask_rejected"] = torch.nn.functional.pad(
+            inputs["attention_mask_rejected"],
+            (0, max_length - inputs["attention_mask_rejected"].shape[1]),
+            "constant",
+            0,
+        )
+
+        inputs["labels_chosen"] = torch.nn.functional.pad(
+            inputs["labels_chosen"],
+            (0, max_length - inputs["labels_chosen"].shape[1]),
+            "constant",
+            self.label_pad_token_id,
+        )
+
+        inputs["labels_rejected"] = torch.nn.functional.pad(
+            inputs["labels_rejected"],
+            (0, max_length - inputs["labels_rejected"].shape[1]),
+            "constant",
+            self.label_pad_token_id,
+        )
+
         logits_model = model(
             input_ids=torch.cat((inputs["input_ids_chosen"], inputs["input_ids_rejected"]), dim=0),
             attention_mask=torch.cat(
