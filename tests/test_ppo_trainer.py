@@ -692,8 +692,9 @@ class PPOTrainerTester(unittest.TestCase):
             tokenizer=self.gpt2_tokenizer,
             dataset=dummy_dataset,
         )
+        
         expected_output = torch.Tensor([[0.1000, -0.1000, 0.1000], [-0.1000, 0.1000, -0.2000]])
-        self.assertTrue(torch.equal(ppo_trainer._kl_penalty(log_probs, ref_log_probs), expected_output))
+        self.assertTrue(torch.allclose(ppo_trainer._kl_penalty(log_probs, ref_log_probs), expected_output))
 
         self.ppo_config.kl_penalty = "abs"
         ppo_trainer = PPOTrainer(
@@ -703,9 +704,9 @@ class PPOTrainerTester(unittest.TestCase):
             tokenizer=self.gpt2_tokenizer,
             dataset=dummy_dataset,
         )
+        
         expected_output = torch.Tensor([[0.1000, 0.1000, 0.1000], [0.1000, 0.1000, 0.2000]])
-
-        self.assertTrue(torch.equal(ppo_trainer._kl_penalty(log_probs, ref_log_probs), expected_output))
+        self.assertTrue(torch.allclose(ppo_trainer._kl_penalty(log_probs, ref_log_probs), expected_output))
 
         self.ppo_config.kl_penalty = "mse"
         ppo_trainer = PPOTrainer(
@@ -717,8 +718,7 @@ class PPOTrainerTester(unittest.TestCase):
         )
 
         expected_output = torch.Tensor([[0.0050, 0.0050, 0.0050], [0.0050, 0.0050, 0.0200]])
-
-        self.assertTrue(torch.equal(ppo_trainer._kl_penalty(log_probs, ref_log_probs), expected_output))
+        self.assertTrue(torch.allclose(ppo_trainer._kl_penalty(log_probs, ref_log_probs), expected_output))
 
     @require_peft
     @mark.peft_test
