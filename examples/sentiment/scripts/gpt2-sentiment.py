@@ -71,6 +71,7 @@ class ScriptArguments:
         default="kl",
         metadata={"help": "kl penalty. Options: 'kl', 'abs', 'mse'}"},
     )
+    seed: Optional[int] = field(default=0, metadata={"help": "the random seed"})
 
 
 parser = HfArgumentParser(ScriptArguments)
@@ -86,6 +87,7 @@ config = PPOConfig(
     early_stopping=script_args.early_stopping,
     target_kl=script_args.target_kl,
     kl_penalty=script_args.kl_penalty,
+    seed=script_args.seed,
 )
 
 
