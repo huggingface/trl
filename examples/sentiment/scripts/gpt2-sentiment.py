@@ -67,6 +67,10 @@ class ScriptArguments:
     )
     early_stopping: Optional[bool] = field(default=False, metadata={"help": "whether to early stop"})
     target_kl: Optional[float] = field(default=6, metadata={"help": "kl target for early stopping"})
+    kl_penalty: Optional[str] = field(
+        default="kl",
+        metadata={"help": "kl penalty. Options: 'kl', 'abs', 'mse'}"},
+    )
 
 
 parser = HfArgumentParser(ScriptArguments)
@@ -81,6 +85,7 @@ config = PPOConfig(
     gradient_accumulation_steps=script_args.gradient_accumulation_steps,
     early_stopping=script_args.early_stopping,
     target_kl=script_args.target_kl,
+    kl_penalty=script_args.kl_penalty,
 )
 
 
