@@ -692,7 +692,7 @@ class PPOTrainerTester(unittest.TestCase):
             tokenizer=self.gpt2_tokenizer,
             dataset=dummy_dataset,
         )
-        
+
         expected_output = torch.Tensor([[0.1000, -0.1000, 0.1000], [-0.1000, 0.1000, -0.2000]])
         self.assertTrue(torch.allclose(ppo_trainer._kl_penalty(log_probs, ref_log_probs), expected_output))
 
@@ -704,7 +704,7 @@ class PPOTrainerTester(unittest.TestCase):
             tokenizer=self.gpt2_tokenizer,
             dataset=dummy_dataset,
         )
-        
+
         expected_output = torch.Tensor([[0.1000, 0.1000, 0.1000], [0.1000, 0.1000, 0.2000]])
         self.assertTrue(torch.allclose(ppo_trainer._kl_penalty(log_probs, ref_log_probs), expected_output))
 
