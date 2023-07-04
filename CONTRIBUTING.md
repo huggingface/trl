@@ -42,6 +42,9 @@ Then before submitting your PR make sure the code quality follows the standards.
 make precommit
 ```
 
+Make sure to install `pre-commit` before running the command:
+```bash
+pip install pre-commit
 ## Do you want to contribute to the documentation?
 
 * Docs are in the `docs/` folder and can be updated there.
