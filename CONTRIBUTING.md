@@ -39,7 +39,7 @@ make test
 Then before submitting your PR make sure the code quality follows the standards. You can run the following command to format:
 
 ```bash
-make commit
+make precommit
 ```
 
 ## Do you want to contribute to the documentation?
