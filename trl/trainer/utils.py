@@ -63,6 +63,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
         ignore_index (`int`, *optional*, defaults to `-100`):
             The index to use to ignore the initial tokens with
     """
+
     def __init__(self, response_template: str, *args, ignore_index: int = -100, **kwargs):
         super().__init__(*args, mlm=False, **kwargs)
         self.response_template = response_template
