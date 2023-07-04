@@ -69,7 +69,9 @@ class ScriptArguments:
     target_kl: Optional[float] = field(default=6, metadata={"help": "kl target for early stopping"})
     kl_penalty: Optional[str] = field(
         default="kl",
-        metadata={"help": "kl penalty. Options: 'kl', 'abs', 'mse'}"},
+        metadata={
+            "help": "kl penalty options: 'kl': model_logp - ref_logp,  'abs': abs(kl) and 'mse': mean squared error mse(kl)."
+        },
     )
     seed: Optional[int] = field(default=0, metadata={"help": "the random seed"})
 
