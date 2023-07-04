@@ -119,7 +119,11 @@ class PPOConfig(object):
     )
     accelerator_kwargs: Optional[dict] = field(
         default_factory=dict,
-        metadata={"help": "Keyword arguments for the accelerator (e.g. `logging_dir`)"},
+        metadata={"help": "Keyword arguments for the accelerator"},
+    )
+    project_kwargs: Optional[dict] = field(
+        default_factory=dict,
+        metadata={"help": "Keyword arguments for the accelerator project config (e.g. `logging_dir`)"},
     )
     tracker_project_name: Optional[str] = field(
         default="trl", metadata={"help": "Name of project to use for tracking"}
@@ -146,6 +150,9 @@ class PPOConfig(object):
         default=1,
         metadata={"help": "Number of steps between comparison of the current reward with the best seen so far"},
     )
+    ratio_threshold: Optional[float] = field(
+        default=10.0, metadata={"help": "Skip mini-batches with high PPO ratios that can cause loss spikes"}
+    )
 
     def __post_init__(self):
         if self.forward_batch_size is not None:
@@ -167,7 +174,7 @@ class PPOConfig(object):
                         os.environ["WANDB_TAGS"] = ",".join([existing_wandb_tag, wandb_tag])
                     else:
                         os.environ["WANDB_TAGS"] = wandb_tag
-                logging.info(f"the following tags will be used for wandb logging: {os.environ['WANDB_TAGS']}")
+                    logging.info(f"the following tags will be used for wandb logging: {os.environ['WANDB_TAGS']}")
             except ImportError:
                 raise ImportError(
                     "Please install wandb to use wandb logging. You can do this by running `pip install wandb`."

@@ -122,9 +122,9 @@ class RewardTrainerTester(unittest.TestCase):
             training_args = TrainingArguments(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
-                max_steps=3,
+                max_steps=6,
                 remove_unused_columns=False,
-                gradient_accumulation_steps=4,
+                gradient_accumulation_steps=2,
                 learning_rate=9e-1,
                 evaluation_strategy="steps",
             )

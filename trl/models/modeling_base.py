@@ -303,6 +303,14 @@ class PreTrainedModelWrapper(nn.Module):
         if is_resuming_training:
             model.post_init(state_dict=state_dict)
 
+        if not is_peft_model and reward_adapter is not None:
+            raise ValueError("reward_adapter can only be used with a PeftModel. ")
+        elif is_peft_model and reward_adapter is not None:
+            model.add_and_load_reward_modeling_adapter(reward_adapter)
+            model.supports_rm_adapter = True
+        else:
+            model.supports_rm_adapter = False
+
         return model
 
     @classmethod

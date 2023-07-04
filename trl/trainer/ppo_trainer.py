@@ -21,6 +21,7 @@ from typing import Callable, List, Optional, Union
 import datasets
 import torch
 from accelerate import Accelerator
+from accelerate.utils import ProjectConfiguration
 from datasets import Dataset
 from huggingface_hub import whoami
 from packaging import version
@@ -188,6 +189,7 @@ class PPOTrainer(BaseTrainer):
         self.accelerator = Accelerator(
             log_with=config.log_with,
             gradient_accumulation_steps=config.gradient_accumulation_steps,
+            project_config=ProjectConfiguration(**config.project_kwargs),
             **config.accelerator_kwargs,
         )
 
@@ -1071,6 +1073,15 @@ class PPOTrainer(BaseTrainer):
         pg_clipfrac = masked_mean(torch.gt(pg_losses2, pg_losses).double(), mask)
 
         loss = pg_loss + self.config.vf_coef * vf_loss
+
+        avg_ratio = masked_mean(ratio, mask).item()
+        if avg_ratio > self.config.ratio_threshold:
+            warnings.warn(
+                f"The average ratio of batch ({avg_ratio:.2f}) exceeds threshold {self.config.ratio_threshold:.2f}. Skipping batch."
+            )
+            pg_loss = pg_loss * 0.0
+            vf_loss = vf_loss * 0.0
+            loss = loss * 0.0
 
         entropy = masked_mean(entropy_from_logits(logits), mask)
         approxkl = 0.5 * masked_mean((logprobs - old_logprobs) ** 2, mask)

@@ -47,7 +47,7 @@ tqdm.pandas()
 # the training parameters, and the PPO parameters.
 # Check the default arguments in the `PPOConfig` class for more details.
 # If you want to log with tensorboard, add the kwarg
-# `accelerator_kwargs={"logging_dir": PATH_TO_LOGS}` to the PPOConfig.
+# `project_kwargs={"logging_dir": PATH_TO_LOGS}` to the PPOConfig.
 # Define and parse arguments.
 @dataclass
 class ScriptArguments:
@@ -60,13 +60,13 @@ class ScriptArguments:
     model_name: Optional[str] = field(default="lvwerra/gpt2-imdb", metadata={"help": "the model name"})
     log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
     learning_rate: Optional[float] = field(default=1.41e-5, metadata={"help": "the learning rate"})
-    mini_batch_size: Optional[int] = field(default=16, metadata={"help": "the PPO minibatch size"})
-    batch_size: Optional[int] = field(default=256, metadata={"help": "the batch size"})
+    mini_batch_size: Optional[int] = field(default=128, metadata={"help": "the PPO minibatch size"})
+    batch_size: Optional[int] = field(default=128, metadata={"help": "the batch size"})
     gradient_accumulation_steps: Optional[int] = field(
         default=1, metadata={"help": "the number of gradient accumulation steps"}
     )
     early_stopping: Optional[bool] = field(default=False, metadata={"help": "whether to early stop"})
-    target_kl: Optional[float] = field(default=0.1, metadata={"help": "kl target for early stopping"})
+    target_kl: Optional[float] = field(default=6, metadata={"help": "kl target for early stopping"})
 
 
 parser = HfArgumentParser(ScriptArguments)

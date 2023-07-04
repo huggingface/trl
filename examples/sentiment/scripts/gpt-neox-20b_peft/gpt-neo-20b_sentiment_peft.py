@@ -51,7 +51,7 @@ from trl.core import LengthSampler
 # the training parameters, and the PPO parameters.
 # Check the default arguments in the `PPOConfig` class for more details.
 # If you want to log with tensorboard, add the kwarg
-# `accelerator_kwargs={"logging_dir": PATH_TO_LOGS}` to the PPOConfig.
+# `project_kwargs={"logging_dir": PATH_TO_LOGS}` to the PPOConfig.
 
 
 # Define and parse arguments.
