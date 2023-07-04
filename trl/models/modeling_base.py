@@ -420,6 +420,10 @@ class PreTrainedModelWrapper(nn.Module):
         argument, pointing to the id of the reward modeling adapter. The latest needs also to contain the
         score head in order to produce the reward.
         """
+        pretrained_model.load_adapter(adapter_model_id, adapter_name, is_trainable=False)
+        pretrained_model.train()
+
+        # get the score module from the adapter
         filename = os.path.join(adapter_model_id, "adapter_model.bin")
         if not os.path.exists(filename):
             try:
@@ -432,8 +436,6 @@ class PreTrainedModelWrapper(nn.Module):
             local_filename = filename
 
         adapter_state_dict = torch.load(local_filename, map_location="cpu")
-        rm_adapter_peft_config = LoraConfig.from_pretrained(adapter_model_id)
-        rm_adapter_peft_config.inference_mode = True
 
         for score_name_candidate in cls.supported_rm_modules:
             if any(score_name_candidate in name for name in adapter_state_dict.keys()):
@@ -441,14 +443,11 @@ class PreTrainedModelWrapper(nn.Module):
                 break
 
         score_dict = {}
-        copy_adapter_state_dict = adapter_state_dict.copy()
 
-        for name, _ in copy_adapter_state_dict.items():
+        for name, params in adapter_state_dict.items():
             if score_name in name:
                 key_name = ".".join(name.split(".")[-1:])
-                score_dict[key_name] = adapter_state_dict.pop(name).to(cls._get_current_device())
-
-        pretrained_model.add_adapter(adapter_name, rm_adapter_peft_config)
+                score_dict[key_name] = params.to(cls._get_current_device())
 
         num_labels, hidden_dim = score_dict["weight"].shape
         has_bias = any("bias" in name for name in adapter_state_dict.keys())
@@ -459,9 +458,6 @@ class PreTrainedModelWrapper(nn.Module):
         score.load_state_dict(score_dict)
         for param in score.parameters():
             param.requires_grad = False
-
-        # load the adapter to the model
-        set_peft_model_state_dict(pretrained_model, adapter_state_dict, adapter_name=adapter_name)
 
         return score
 
