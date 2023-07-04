@@ -426,7 +426,7 @@ class PPOTrainer(BaseTrainer):
         Returns:
             `torch.LongTensor`: A tensor of shape (`batch_size`, `gen_len`) containing response tokens.
         """
-
+        print("generating................")
         if isinstance(query_tensor, List):
             return self._generate_batched(
                 query_tensor,
@@ -485,7 +485,7 @@ class PPOTrainer(BaseTrainer):
             ).to(self.current_device)
 
             generations = self.accelerator.unwrap_model(self.model).generate(**padded_inputs, **generation_kwargs)
-
+            print(generations)
             for generation, mask in zip(generations, padded_inputs["attention_mask"]):
                 if not self.is_encoder_decoder:
                     output = generation[(1 - mask).sum() :]  # remove padding
