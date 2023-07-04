@@ -1,0 +1,14 @@
+model_name: "/home/toolkit/huggingface/llama-7b-sft-mine"
+tokenizer_name: "huggyllama/llama-7b"
+reward_adapter_name: "/home/toolkit/huggingface/llama-7b-sft-mine-rm-2epochs-8bit-adapter"
+separate_reward_model: "/home/toolkit/huggingface/llama-7b-sft-mine-rm-2epochs"
+log_with: "wandb"
+save_freq: 100
+batch_size: 8
+gradient_accumulation_steps: 16
+batched_gen: True
+output_dir: results/
+early_stopping: True
+seed: 0
+init_kl_coef: 0.02
+multi_adapter_value: True

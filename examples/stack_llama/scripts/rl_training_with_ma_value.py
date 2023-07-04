@@ -16,13 +16,14 @@ import copy
 from dataclasses import dataclass, field
 from typing import Optional
 
+import torch
 from accelerate import Accelerator, DistributedDataParallelKwargs
 from datasets import load_dataset
 from multi_adapter_model_value import AutoModelForCausalLMWithMultiAdapterValueHead
 from peft import LoraConfig
 from torch_ema import ExponentialMovingAverage
 from tqdm import tqdm
-from transformers import AutoTokenizer, HfArgumentParser
+from transformers import AutoTokenizer, HfArgumentParser, pipeline
 
 from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, set_seed
 from trl.core import LengthSampler
@@ -69,6 +70,7 @@ class ScriptArguments:
     )
     adap_kl_ctrl: Optional[bool] = field(default=True, metadata={"help": "Use adaptive KL control, otherwise linear"})
     multi_adapter_value: Optional[bool] = field(default=False)
+    separate_reward_model: Optional[str] = field(default="", metadata={"help": "the reward model name"})
 
     # EMA stuff
     ema_decay: Optional[float] = field(default=0.995, metadata={"help": "the ema decay rate"})
@@ -213,6 +215,24 @@ ppo_trainer = PPOTrainer(
     data_collator=collator,
 )
 
+if script_args.separate_reward_model:
+    device = ppo_trainer.accelerator.device
+    if ppo_trainer.accelerator.num_processes == 1:
+        device = 0 if torch.cuda.is_available() else "cpu"  # to avoid a ` pipeline` bug
+    sentiment_pipe = pipeline(
+        "sentiment-analysis",
+        model=script_args.separate_reward_model,
+        device_map={"": current_device},
+        model_kwargs={"load_in_8bit": True},
+        tokenizer=tokenizer,
+        return_token_type_ids=False,
+    )
+    sent_kwargs = {
+        "return_all_scores": True,
+        "function_to_apply": "none",
+        "batch_size": 16,
+        "truncation": True,
+    }
 # We then define the arguments to pass to the `generate` function. These arguments
 # are passed to the `generate` function of the PPOTrainer, which is a wrapper around
 # the `generate` function of the trained model.
@@ -248,7 +268,11 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
         texts, padding=True, truncation=True, return_tensors="pt", return_token_type_ids=False
     ).to(ppo_trainer.accelerator.device)
 
-    raw_rewards = ppo_trainer.compute_reward_score(**reward_inputs)
+    if script_args.separate_reward_model:
+        pipe_outputs = sentiment_pipe(texts, **sent_kwargs)
+        raw_rewards = [torch.tensor(output[0]["score"]) for output in pipe_outputs]
+    else:
+        raw_rewards = ppo_trainer.compute_reward_score(**reward_inputs)
     rewards = [(raw_rewards[i] - script_args.reward_baseline) for i in range(len(raw_rewards))]
 
     # Run PPO step

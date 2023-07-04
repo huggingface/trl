@@ -1,0 +1,5 @@
+model_name: /home/toolkit/huggingface/llama-7b-sft-mine-rm-2epochs-8bit
+tokenizer_name: huggyllama/llama-7b
+load_in_8bit: True
+bf16: False
+just_eval: True
