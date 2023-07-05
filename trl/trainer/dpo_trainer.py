@@ -340,4 +340,6 @@ class DPOTrainer(Trainer):
             )
         loss, metrics = self.get_batch_metrics(model, inputs)
 
+        if return_outputs:
+            return (loss, metrics)
         return loss
