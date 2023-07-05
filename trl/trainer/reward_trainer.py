@@ -58,7 +58,10 @@ class RewardTrainer(Trainer):
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
-        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (
+            None,
+            None,
+        ),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         max_length: Optional[int] = None,
         peft_config: Optional[Dict] = None,
@@ -158,13 +161,20 @@ class RewardTrainer(Trainer):
             raise NotImplementedError(
                 "compute_loss is only implemented for RewardDataCollatorWithPadding, please implement your own compute_loss method if you are using a custom data collator"
             )
-        rewards_chosen = model(input_ids=inputs["input_ids_chosen"], attention_mask=inputs["attention_mask_chosen"])[0]
+        rewards_chosen = model(
+            input_ids=inputs["input_ids_chosen"],
+            attention_mask=inputs["attention_mask_chosen"],
+        )[0]
         rewards_rejected = model(
-            input_ids=inputs["input_ids_rejected"], attention_mask=inputs["attention_mask_rejected"]
+            input_ids=inputs["input_ids_rejected"],
+            attention_mask=inputs["attention_mask_rejected"],
         )[0]
         loss = -nn.functional.logsigmoid(rewards_chosen - rewards_rejected).mean()
         if return_outputs:
-            return loss, {"rewards_chosen": rewards_chosen, "rewards_rejected": rewards_rejected}
+            return loss, {
+                "rewards_chosen": rewards_chosen,
+                "rewards_rejected": rewards_rejected,
+            }
         return loss
 
     def prediction_step(

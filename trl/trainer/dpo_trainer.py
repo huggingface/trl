@@ -16,14 +16,14 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from datasets import Dataset
 from transformers import DataCollator, PreTrainedModel, PreTrainedTokenizerBase, Trainer, TrainingArguments
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 
-from ..core import logprobs_from_logits, masked_mean
 from ..import_utils import is_peft_available
-from .utils import DPODataCollatorWithPadding, compute_accuracy
+from .utils import DPODataCollatorWithPadding, compute_accuracy, pad_to_length
 
 
 if is_peft_available():
@@ -76,6 +76,8 @@ class DPOTrainer(Trainer):
         args: TrainingArguments = None,
         data_collator: Optional[DataCollator] = None,
         label_pad_token_id: int = -100,
+        padding_value: int = 0,
+        truncation_mode: str = "keep_end",
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
         tokenizer: Optional[PreTrainedTokenizerBase] = None,
@@ -88,6 +90,7 @@ class DPOTrainer(Trainer):
         ),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         max_length: Optional[int] = None,
+        max_prompt_length: Optional[int] = None,
         peft_config: Optional[Dict] = None,
     ):
         if not is_peft_available() and peft_config is not None:
@@ -114,8 +117,22 @@ class DPOTrainer(Trainer):
                     UserWarning,
                 )
                 max_length = 512
+            if max_prompt_length is None:
+                warnings.warn(
+                    "When using DPODataCollatorWithPadding, you should set `max_prompt_length` in the DPOTrainer's init"
+                    " it will be set to `128` by default, but you should do it yourself in the future.",
+                    UserWarning,
+                )
+                max_prompt_length = 128
+
             data_collator = DPODataCollatorWithPadding(
-                tokenizer, max_length=max_length, label_pad_token_id=label_pad_token_id
+                tokenizer,
+                max_length=max_length,
+                max_prompt_length=max_prompt_length,
+                batch_size=args.train_batch_size,
+                label_pad_token_id=label_pad_token_id,
+                padding_value=padding_value,
+                truncation_mode=truncation_mode,
             )
 
             if args.remove_unused_columns:
@@ -132,6 +149,7 @@ class DPOTrainer(Trainer):
             self.use_dpo_data_collator = False
 
         self.label_pad_token_id = label_pad_token_id
+        self.padding_value = padding_value
 
         self.beta = beta
         self.ref_model = ref_model
@@ -158,6 +176,158 @@ class DPOTrainer(Trainer):
                 "Your `Trainer` does not have an `accelerator` object. Consider upgrading `transformers`."
             )
 
+    def concatenated_inputs(self, batch: Dict[str, Union[List, torch.LongTensor]]) -> Dict[str, torch.LongTensor]:
+        """Concatenate the chosen and rejected inputs into a single tensor.
+
+        Args:
+            batch: A batch of data. Must contain the keys 'chosen_input_ids' and 'rejected_input_ids', which are tensors of shape (batch_size, sequence_length).
+
+        Returns:
+            A dictionary containing the concatenated inputs under the key 'concatenated_input_ids'.
+        """
+        max_length = max(batch["chosen_input_ids"].shape[1], batch["rejected_input_ids"].shape[1])
+        concatenated_batch = {}
+        for k in batch:
+            if k.startswith("chosen") and isinstance(batch[k], torch.Tensor):
+                pad_value = self.label_pad_token_id if "labels" in k else self.padding_value
+                concatenated_key = k.replace("chosen", "concatenated")
+                concatenated_batch[concatenated_key] = pad_to_length(batch[k], max_length, pad_value=pad_value)
+        for k in batch:
+            if k.startswith("rejected") and isinstance(batch[k], torch.Tensor):
+                pad_value = self.label_pad_token_id if "labels" in k else self.padding_value
+                concatenated_key = k.replace("rejected", "concatenated")
+                concatenated_batch[concatenated_key] = torch.cat(
+                    (
+                        concatenated_batch[concatenated_key],
+                        pad_to_length(batch[k], max_length, pad_value=pad_value),
+                    ),
+                    dim=0,
+                )
+        return concatenated_batch
+
+    def dpo_loss(
+        self,
+        policy_chosen_logps: torch.FloatTensor,
+        policy_rejected_logps: torch.FloatTensor,
+        reference_chosen_logps: torch.FloatTensor,
+        reference_rejected_logps: torch.FloatTensor,
+        reference_free: bool = False,
+    ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+        """Compute the DPO loss for a batch of policy and reference model log probabilities.
+
+        Args:
+            policy_chosen_logps: Log probabilities of the policy model for the chosen responses. Shape: (batch_size,)
+            policy_rejected_logps: Log probabilities of the policy model for the rejected responses. Shape: (batch_size,)
+            reference_chosen_logps: Log probabilities of the reference model for the chosen responses. Shape: (batch_size,)
+            reference_rejected_logps: Log probabilities of the reference model for the rejected responses. Shape: (batch_size,)
+            beta: Temperature parameter for the DPO loss, typically something in the range of 0.1 to 0.5. We ignore the reference model as beta -> 0.
+            reference_free: If True, we ignore the _provided_ reference model and implicitly use a reference model that assigns equal probability to all responses.
+
+        Returns:
+            A tuple of three tensors: (losses, chosen_rewards, rejected_rewards).
+            The losses tensor contains the DPO loss for each example in the batch.
+            The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
+        """
+        pi_logratios = policy_chosen_logps - policy_rejected_logps
+        ref_logratios = reference_chosen_logps - reference_rejected_logps
+
+        if reference_free:
+            ref_logratios = 0
+
+        logits = pi_logratios - ref_logratios
+
+        losses = -F.logsigmoid(self.beta * logits)
+        chosen_rewards = self.beta * (policy_chosen_logps - reference_chosen_logps).detach()
+        rejected_rewards = self.beta * (policy_rejected_logps - reference_rejected_logps).detach()
+
+        return losses, chosen_rewards, rejected_rewards
+
+    def _get_batch_logps(
+        self,
+        logits: torch.FloatTensor,
+        labels: torch.LongTensor,
+        average_log_prob: bool = False,
+    ) -> torch.FloatTensor:
+        """Compute the log probabilities of the given labels under the given logits.
+
+        Args:
+            logits: Logits of the model (unnormalized). Shape: (batch_size, sequence_length, vocab_size)
+            labels: Labels for which to compute the log probabilities. Label tokens with a value of label_pad_token_id are ignored. Shape: (batch_size, sequence_length)
+            average_log_prob: If True, return the average log probability per (non-masked) token. Otherwise, return the sum of the log probabilities of the (non-masked) tokens.
+
+        Returns:
+            A tensor of shape (batch_size,) containing the average/sum log probabilities of the given labels under the given logits.
+        """
+        assert logits.shape[:-1] == labels.shape
+
+        labels = labels[:, 1:].clone()
+        logits = logits[:, :-1, :]
+        loss_mask = labels != self.label_pad_token_id
+
+        # dummy token; we'll ignore the losses on these tokens later
+        labels[labels == self.label_pad_token_id] = 0
+
+        per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
+
+        if average_log_prob:
+            return (per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)
+        else:
+            return (per_token_logps * loss_mask).sum(-1)
+
+    def concatenated_forward(
+        self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]
+    ) -> Tuple[torch.FloatTensor, torch.FloatTensor]:
+        """Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
+
+        We do this to avoid doing two forward passes, because it's faster for FSDP.
+        """
+        concatenated_batch = self.concatenated_inputs(batch)
+        all_logits = model(
+            concatenated_batch["concatenated_input_ids"],
+            attention_mask=concatenated_batch["concatenated_attention_mask"],
+        ).logits.to(torch.float32)
+        all_logps = self._get_batch_logps(
+            all_logits,
+            concatenated_batch["concatenated_labels"],
+            average_log_prob=False,
+        )
+        chosen_logps = all_logps[: batch["chosen_input_ids"].shape[0]]
+        rejected_logps = all_logps[batch["chosen_input_ids"].shape[0] :]
+        return chosen_logps, rejected_logps
+
+    def get_batch_metrics(self, model, batch: Dict[str, Union[List, torch.LongTensor]]):
+        """Compute the SFT or DPO loss and other metrics for the given batch of inputs."""
+
+        metrics = {}
+        train_test = "train"
+
+        policy_chosen_logps, policy_rejected_logps = self.concatenated_forward(model, batch)
+        with torch.no_grad():
+            (
+                reference_chosen_logps,
+                reference_rejected_logps,
+            ) = self.concatenated_forward(self.ref_model, batch)
+
+        losses, chosen_rewards, rejected_rewards = self.dpo_loss(
+            policy_chosen_logps,
+            policy_rejected_logps,
+            reference_chosen_logps,
+            reference_rejected_logps,
+        )
+        reward_accuracies = (chosen_rewards > rejected_rewards).float()
+
+        metrics[f"rewards_{train_test}/chosen"] = chosen_rewards.cpu().numpy().tolist()
+        metrics[f"rewards_{train_test}/rejected"] = rejected_rewards.cpu().numpy().tolist()
+        metrics[f"rewards_{train_test}/accuracies"] = reward_accuracies.cpu().numpy().tolist()
+        metrics[f"rewards_{train_test}/margins"] = (chosen_rewards - rejected_rewards).cpu().numpy().tolist()
+        metrics[f"logps_{train_test}/rejected"] = policy_rejected_logps.detach().cpu().numpy().tolist()
+
+        metrics[f"logps_{train_test}/chosen"] = policy_chosen_logps.detach().cpu().numpy().tolist()
+
+        metrics[f"loss/{train_test}"] = losses.detach().cpu().numpy().tolist()
+
+        return losses.mean(), metrics
+
     def compute_loss(
         self,
         model: Union[PreTrainedModel, nn.Module],
@@ -168,95 +338,6 @@ class DPOTrainer(Trainer):
             raise NotImplementedError(
                 "compute_loss is only implemented for DPODataCollatorWithPadding, please implement your own compute_loss method if you are using a custom data collator"
             )
+        loss, metrics = self.get_batch_metrics(model, inputs)
 
-        # concat the chosen and rejected inputs
-        max_length = max(inputs["input_ids_chosen"].shape[1], inputs["input_ids_rejected"].shape[1])
-
-        inputs["input_ids_chosen"] = torch.nn.functional.pad(
-            inputs["input_ids_chosen"],
-            (0, max_length - inputs["input_ids_chosen"].shape[1]),
-            "constant",
-            0,
-        )
-        inputs["input_ids_rejected"] = torch.nn.functional.pad(
-            inputs["input_ids_rejected"],
-            (0, max_length - inputs["input_ids_rejected"].shape[1]),
-            "constant",
-            0,
-        )
-        inputs["attention_mask_chosen"] = torch.nn.functional.pad(
-            inputs["attention_mask_chosen"],
-            (0, max_length - inputs["attention_mask_chosen"].shape[1]),
-            "constant",
-            0,
-        )
-
-        inputs["attention_mask_rejected"] = torch.nn.functional.pad(
-            inputs["attention_mask_rejected"],
-            (0, max_length - inputs["attention_mask_rejected"].shape[1]),
-            "constant",
-            0,
-        )
-
-        inputs["labels_chosen"] = torch.nn.functional.pad(
-            inputs["labels_chosen"],
-            (0, max_length - inputs["labels_chosen"].shape[1]),
-            "constant",
-            self.label_pad_token_id,
-        )
-
-        inputs["labels_rejected"] = torch.nn.functional.pad(
-            inputs["labels_rejected"],
-            (0, max_length - inputs["labels_rejected"].shape[1]),
-            "constant",
-            self.label_pad_token_id,
-        )
-
-        logits_model = model(
-            input_ids=torch.cat((inputs["input_ids_chosen"], inputs["input_ids_rejected"]), dim=0),
-            attention_mask=torch.cat(
-                (inputs["attention_mask_chosen"], inputs["attention_mask_rejected"]),
-                dim=0,
-            ),
-        )[0]
-        logits_chosen_model, logits_rejected_model = logits_model.chunk(2, dim=0)
-
-        with torch.no_grad():
-            logits_ref = self.ref_model(
-                input_ids=torch.cat((inputs["input_ids_chosen"], inputs["input_ids_rejected"]), dim=0),
-                attention_mask=torch.cat(
-                    (
-                        inputs["attention_mask_chosen"],
-                        inputs["attention_mask_rejected"],
-                    ),
-                    dim=0,
-                ),
-            )[0]
-            logits_chosen_ref, logits_rejected_ref = logits_ref.chunk(2, dim=0)
-
-        log_prob_chosen_model = logprobs_from_logits(logits_chosen_model, inputs["input_ids_chosen"])
-        log_prob_rejected_model = logprobs_from_logits(logits_rejected_model, inputs["input_ids_rejected"])
-
-        log_prob_chosen_ref = logprobs_from_logits(logits_chosen_ref, inputs["input_ids_chosen"])
-        log_prob_rejected_ref = logprobs_from_logits(logits_rejected_ref, inputs["input_ids_rejected"])
-
-        mask_chosen = (inputs["labels_chosen"] != self.label_pad_token_id).float()
-        mask_rejected = (inputs["labels_rejected"] != self.label_pad_token_id).float()
-
-        log_prob_chosen_model = masked_mean(log_prob_chosen_model, mask_chosen, 1)
-        log_prob_rejected_model = masked_mean(log_prob_rejected_model, mask_rejected, 1)
-        log_prob_chosen_ref = masked_mean(log_prob_chosen_ref, mask_chosen, 1)
-        log_prob_rejected_ref = masked_mean(log_prob_rejected_ref, mask_rejected, 1)
-
-        pi_logratios = log_prob_chosen_model - log_prob_rejected_model
-        ref_logratios = log_prob_chosen_ref - log_prob_rejected_ref
-
-        loss = -nn.functional.logsigmoid(self.beta * (pi_logratios - ref_logratios)).mean()
-        rewards_chosen = self.beta * (log_prob_chosen_model - log_prob_chosen_ref).detach()
-        rewards_rejected = self.beta * (log_prob_rejected_model - log_prob_rejected_ref).detach()
-        if return_outputs:
-            return loss, {
-                "rewards_chosen": rewards_chosen,
-                "rewards_rejected": rewards_rejected,
-            }
         return loss

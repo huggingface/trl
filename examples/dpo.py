@@ -1,10 +1,11 @@
 # 0. imports
-import os
+from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Dict, List, Optional, Tuple, Union
 
 import torch
-from datasets import load_dataset
+import tqdm
+from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, TrainingArguments
 
 from trl import DPOTrainer
@@ -20,14 +21,15 @@ class ScriptArguments:
     # training parameters
     model_name_or_path: Optional[str] = field(default="gpt2", metadata={"help": "the model name"})
     learning_rate: Optional[float] = field(default=1e-3, metadata={"help": "optimizer learning rate"})
-    per_device_train_batch_size: Optional[int] = field(default=64, metadata={"help": "batch size per device"})
+    per_device_train_batch_size: Optional[int] = field(default=4, metadata={"help": "batch size per device"})
     gradient_accumulation_steps: Optional[int] = field(
         default=1, metadata={"help": "the number of gradient accumulation steps"}
     )
     max_length: Optional[int] = field(default=512, metadata={"help": "max length of each sample"})
+    max_prompt_length: Optional[int] = field(default=128, metadata={"help": "max length of each sample's prompt"})
     label_pad_token_id: Optional[int] = field(default=-100, metadata={"help": "label for non response tokens"})
     # instrumentation
-    sanity_check: Optional[bool] = field(default=False, metadata={"help": "only train on 1000 samples"})
+    sanity_check: Optional[bool] = field(default=True, metadata={"help": "only train on 1000 samples"})
     report_to: Optional[str] = field(
         default=None,
         metadata={
@@ -46,40 +48,64 @@ class ScriptArguments:
     )
 
 
-# Turn the dataset into pairs of post + summaries, where text_j is the preferred question + answer and text_k is the other.
-# Then tokenize the dataset.
-def preprocess_function(examples, tokenizer, max_length, label_pad_token_id):
-    new_examples = {
-        "input_ids_chosen": [],
-        "attention_mask_chosen": [],
-        "labels_chosen": [],
-        "input_ids_rejected": [],
-        "attention_mask_rejected": [],
-        "labels_rejected": [],
+def extract_anthropic_prompt(prompt_and_response):
+    """Extract the anthropic prompt from a prompt and response pair."""
+    search_term = "\n\nAssistant:"
+    search_term_idx = prompt_and_response.rfind(search_term)
+    assert search_term_idx != -1, f"Prompt and response does not contain '{search_term}'"
+    return prompt_and_response[: search_term_idx + len(search_term)]
+
+
+def get_hh(
+    split: str, sanity_check: bool = False, silent: bool = False, cache_dir: str = None
+) -> Dict[str, Dict[str, Union[List[Tuple[int, int]], List[str], str]]]:
+    """Load the Anthropic Helpful-Harmless dataset from Huggingface and convert it to the necessary format.
+
+    The dataset is converted to a dictionary with the following structure:
+    {
+        'prompt1': {
+            'responses': List[str],
+            'pairs': List[Tuple[int, int]],
+            'sft_target': str
+        },
+        'prompt2': {
+            ...
+        },
     }
 
-    for question, response_j, response_k in zip(examples["question"], examples["response_j"], examples["response_k"]):
-        input_ids_query = tokenizer(question)["input_ids"]
-        input_ids_response_chosen = tokenizer(response_j)["input_ids"]
-        input_ids_response_rejected = tokenizer(response_k)["input_ids"]
-        len_query = len(input_ids_query)
+    Prompts should be structured as follows:
+      \n\nHuman: <prompt>\n\nAssistant:
+    Multiple turns are allowed, but the prompt should always start with \n\nHuman: and end with \n\nAssistant:.
 
-        input_ids_chosen = input_ids_query + input_ids_response_chosen
-        attention_mask_chosen = [1] * len(input_ids_chosen)
-        labels_chosen = [label_pad_token_id] * len_query + input_ids_chosen[len_query:]
-        input_ids_rejected = input_ids_query + input_ids_response_rejected
-        attention_mask_rejected = [1] * len(input_ids_rejected)
-        labels_rejected = [label_pad_token_id] * len_query + input_ids_rejected[len_query:]
+    For this dataset, the sft_target is just the chosen response.
+    """
+    dataset = load_dataset("Anthropic/hh-rlhf", split=split, cache_dir=cache_dir)
+    if sanity_check:
+        dataset = dataset.select(range(min(len(dataset), 1000)))
 
-        # truncate to max_length
-        new_examples["input_ids_chosen"].append(input_ids_chosen[-max_length:])
-        new_examples["attention_mask_chosen"].append(attention_mask_chosen[-max_length:])
-        new_examples["labels_chosen"].append(labels_chosen[-max_length:])
-        new_examples["input_ids_rejected"].append(input_ids_rejected[-max_length:])
-        new_examples["attention_mask_rejected"].append(attention_mask_rejected[-max_length:])
-        new_examples["labels_rejected"].append(labels_rejected[-max_length:])
+    def split_prompt_and_responses(ex):
+        prompt = extract_anthropic_prompt(ex["chosen"])
+        chosen_response = ex["chosen"][len(prompt) :]
+        rejected_response = ex["rejected"][len(prompt) :]
+        return prompt, chosen_response, rejected_response
 
-    return new_examples
+    data = defaultdict(lambda: defaultdict(list))
+    for row in tqdm.tqdm(dataset, desc="Processing HH", disable=silent):
+        prompt, chosen, rejected = split_prompt_and_responses(row)
+        responses = [chosen, rejected]
+        n_responses = len(data[prompt]["responses"])
+        data[prompt]["pairs"].append((n_responses, n_responses + 1))
+        data[prompt]["responses"].extend(responses)
+        data[prompt]["sft_target"] = chosen
+
+    data_dict = {"prompt": [], "responses": [], "pairs": []}
+
+    for prompt, values in data.items():
+        data_dict["prompt"].append(prompt)
+        data_dict["responses"].append(values["responses"])
+        data_dict["pairs"].append(values["pairs"])
+
+    return Dataset.from_dict(data_dict)
 
 
 if __name__ == "__main__":
@@ -99,23 +125,8 @@ if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained(script_args.model_name_or_path)
     tokenizer.pad_token = tokenizer.eos_token
 
-    # 2. Load the human stack-exchange paired dataset
-    train_dataset = load_dataset("lvwerra/stack-exchange-paired", data_dir="data/reward", split="train")
-
-    if script_args.sanity_check:
-        train_dataset = train_dataset.select(range(min(len(train_dataset), 1000)))
-
-    train_dataset = train_dataset.map(
-        preprocess_function,
-        batched=True,
-        remove_columns=train_dataset.column_names,
-        num_proc=os.cpu_count(),
-        fn_kwargs=dict(
-            tokenizer=tokenizer,
-            max_length=script_args.max_length,
-            label_pad_token_id=script_args.label_pad_token_id,
-        ),
-    )
+    # 2. Load the Anthropic Helpful-Harmless dataset
+    train_dataset = get_hh("train", sanity_check=script_args.sanity_check)
 
     # 2. initialize training arguments:
     training_args = TrainingArguments(
