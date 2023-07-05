@@ -47,7 +47,7 @@ tqdm.pandas()
 # the training parameters, and the PPO parameters.
 # Check the default arguments in the `PPOConfig` class for more details.
 # If you want to log with tensorboard, add the kwarg
-# `project_kwargs={"logging_dir": PATH_TO_LOGS}` to the PPOConfig.
+# `accelerator_kwargs={"logging_dir": PATH_TO_LOGS}` to the PPOConfig.
 # Define and parse arguments.
 @dataclass
 class ScriptArguments:
@@ -66,13 +66,13 @@ class ScriptArguments:
         default=1, metadata={"help": "the number of gradient accumulation steps"}
     )
     early_stopping: Optional[bool] = field(default=False, metadata={"help": "whether to early stop"})
-    target_kl: Optional[float] = field(default=6, metadata={"help": "kl target for early stopping"})
     kl_penalty: Optional[str] = field(
         default="kl",
         metadata={
             "help": "kl penalty options: 'kl': model_logp - ref_logp,  'abs': abs(kl) and 'mse': mean squared error mse(kl)."
         },
     )
+    target_kl: Optional[float] = field(default=0.1, metadata={"help": "kl target for early stopping"})
     seed: Optional[int] = field(default=0, metadata={"help": "the random seed"})
 
 
@@ -173,18 +173,14 @@ generation_kwargs = {
     "top_p": 1.0,
     "do_sample": True,
     "pad_token_id": tokenizer.eos_token_id,
+    "max_new_tokens": 32,
 }
-output_min_length = 4
-output_max_length = 16
-output_length_sampler = LengthSampler(output_min_length, output_max_length)
 
 for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     query_tensors = batch["input_ids"]
 
     # Get response from gpt2
-    response_tensors = ppo_trainer.generate(
-        query_tensors, return_prompt=False, length_sampler=output_length_sampler, **generation_kwargs
-    )
+    response_tensors = ppo_trainer.generate(query_tensors, return_prompt=False, **generation_kwargs)
     batch["response"] = tokenizer.batch_decode(response_tensors)
 
     # Compute sentiment score

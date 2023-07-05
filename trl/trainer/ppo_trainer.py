@@ -454,6 +454,7 @@ class PPOTrainer(BaseTrainer):
         batch_size: int = 4,
         return_prompt: bool = True,
         pad_to_multiple_of: int = None,
+        remove_padding: bool = True,
         **generation_kwargs,
     ):
         outputs = []
@@ -494,6 +495,12 @@ class PPOTrainer(BaseTrainer):
 
                 if not return_prompt and not self.is_encoder_decoder:
                     output = output[(mask).sum() :]  # remove prompt
+
+                if remove_padding and self.tokenizer.eos_token_id in output:
+                    pad_mask = output == self.tokenizer.eos_token_id
+                    pad_start = torch.nonzero(pad_mask, as_tuple=False)[0, 0].item()
+                    output = output[: pad_start + 1]  # keep the eos token at the end
+
                 outputs.append(output)
 
         self.tokenizer.padding_side = padding_side_default
@@ -883,9 +890,6 @@ class PPOTrainer(BaseTrainer):
                         start += attention_mask[j, :].nonzero()[0]
                     end = start + len(response_batch[j])
 
-                if len(logprobs[j, start:end]) < 2:
-                    raise ValueError("Responses are too short. Make sure they are at least 4 tokens long.")
-
                 masks[j, :start] = 0
                 masks[j, end:] = 0
 
@@ -1056,6 +1060,15 @@ class PPOTrainer(BaseTrainer):
         pg_clipfrac = masked_mean(torch.gt(pg_losses2, pg_losses).double(), mask)
 
         loss = pg_loss + self.config.vf_coef * vf_loss
+
+        avg_ratio = masked_mean(ratio, mask).item()
+        if avg_ratio > self.config.ratio_threshold:
+            warnings.warn(
+                f"The average ratio of batch ({avg_ratio:.2f}) exceeds threshold {self.config.ratio_threshold:.2f}. Skipping batch."
+            )
+            pg_loss = pg_loss * 0.0
+            vf_loss = vf_loss * 0.0
+            loss = loss * 0.0
 
         entropy = masked_mean(entropy_from_logits(logits), mask)
         approxkl = 0.5 * masked_mean((logprobs - old_logprobs) ** 2, mask)
