@@ -66,6 +66,12 @@ class ScriptArguments:
         default=1, metadata={"help": "the number of gradient accumulation steps"}
     )
     early_stopping: Optional[bool] = field(default=False, metadata={"help": "whether to early stop"})
+    kl_penalty: Optional[str] = field(
+        default="kl",
+        metadata={
+            "help": "kl penalty options: 'kl': model_logp - ref_logp,  'abs': abs(kl) and 'mse': mean squared error mse(kl)."
+        },
+    )
     target_kl: Optional[float] = field(default=0.1, metadata={"help": "kl target for early stopping"})
     seed: Optional[int] = field(default=0, metadata={"help": "the random seed"})
 
@@ -82,6 +88,7 @@ config = PPOConfig(
     gradient_accumulation_steps=script_args.gradient_accumulation_steps,
     early_stopping=script_args.early_stopping,
     target_kl=script_args.target_kl,
+    kl_penalty=script_args.kl_penalty,
     seed=script_args.seed,
 )
 
