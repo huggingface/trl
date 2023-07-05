@@ -60,12 +60,15 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
     Args:
         response_template (`str`): the template form that indicates the start of the response, typically something like
             '### Response:\n'
+        mlm (`bool`, *optional*, defaults to `False`): Whether or not to use masked language modeling in the underlying
+            `DataCollatorForLanguageModeling` class. Note that this option currently has no effect but is present
+             for flexibility and backwards-compatibility.
         ignore_index (`int`, *optional*, defaults to `-100`):
             The index to use to ignore the initial tokens with
     """
 
-    def __init__(self, response_template: str, *args, ignore_index: int = -100, **kwargs):
-        super().__init__(*args, mlm=False, **kwargs)
+    def __init__(self, response_template: str, *args, mlm: bool = False, ignore_index: int = -100, **kwargs):
+        super().__init__(*args, mlm=mlm, **kwargs)
         self.response_template = response_template
         self.ignore_index = ignore_index
 
