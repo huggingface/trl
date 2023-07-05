@@ -82,7 +82,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
             response_token_ids_end_idx = response_token_ids_start_idx + len(response_token_ids)
 
             # Make pytorch loss function ignore all tokens up through the end of the response key
-            labels[i, :response_token_ids_end_idx] = self.label_pad_token_id
+            labels[i, :response_token_ids_end_idx] = -100
 
         batch["labels"] = labels
 
