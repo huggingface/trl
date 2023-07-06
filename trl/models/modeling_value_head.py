@@ -157,9 +157,10 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
                 Additional keyword arguments, that are passed to the wrapped model.
         """
         kwargs["output_hidden_states"] = True  # this had already been set in the LORA / PEFT examples
+        kwargs["past_key_values"] = past_key_values
 
-        if self.is_peft_model and self.pretrained_model.active_peft_config.peft_type != "PREFIX_TUNING":
-            kwargs["past_key_values"] = past_key_values
+        if self.is_peft_model and self.pretrained_model.active_peft_config.peft_type == "PREFIX_TUNING":
+            kwargs.pop("past_key_values")
 
         base_model_output = self.pretrained_model(
             input_ids=input_ids,
@@ -394,8 +395,9 @@ class AutoModelForSeq2SeqLMWithValueHead(PreTrainedModelWrapper):
         attention_mask=None,
         **kwargs,
     ):
-        if self.is_peft_model and self.pretrained_model.active_peft_config.peft_type != "PREFIX_TUNING":
-            kwargs["past_key_values"] = past_key_values
+        kwargs["past_key_values"] = past_key_values
+        if self.is_peft_model and self.pretrained_model.active_peft_config.peft_type == "PREFIX_TUNING":
+            kwargs.pop("past_key_values")
 
         base_model_output = self.pretrained_model(
             input_ids=input_ids,
