@@ -44,41 +44,23 @@ class DPOTrainerTester(unittest.TestCase):
 
             # fmt: off
             dummy_dataset_dict = {
-                "input_ids_chosen": [
-                    torch.LongTensor([0, 1, 2,]),
-                    torch.LongTensor([1, 2]),
-                    torch.LongTensor([0, 1, 2,]),
-                    torch.LongTensor([1, 2]),
+                "prompt": [
+                    "hello",
+                    "how are you",
+                    "What is your name?",
+                    "Which is the best programming language?",
                 ],
-                "attention_mask_chosen": [
-                    torch.LongTensor([1, 1, 1]),
-                    torch.LongTensor([1, 0]),
-                    torch.LongTensor([1, 1, 1]),
-                    torch.LongTensor([1, 0]),
+                "responses": [
+                    ["hi nice to meet you", "leave me alone"],
+                    ["I am fine", "I am not fine"],
+                    ["My name is Mary", "Whats it to you?", "I dont have a name"],
+                    ["Python", "Javascript", "C++", "Java"],
                 ],
-                "labels_chosen": [
-                    torch.LongTensor([0, 1, 2,]),
-                    torch.LongTensor([1, 2]),
-                    torch.LongTensor([0, 1, 2,]),
-                    torch.LongTensor([1, 2]),
-                ],
-                "input_ids_rejected": [
-                    torch.LongTensor([0, 2, 0]),
-                    torch.LongTensor([1, 2]),
-                    torch.LongTensor([0, 2, 1]),
-                    torch.LongTensor([1, 2]),
-                ],
-                "attention_mask_rejected": [
-                    torch.LongTensor([1, 1, 2]),
-                    torch.LongTensor([1, 1]),
-                    torch.LongTensor([1, 1, 1]),
-                    torch.LongTensor([2, 2]),
-                ],
-                "labels_rejected": [
-                    torch.LongTensor([0, 2, 1]),
-                    torch.LongTensor([1, 2]),
-                    torch.LongTensor([0, 2, 1]),
-                    torch.LongTensor([1, 2]),
+                "pairs": [
+                    [[0, 1]],
+                    [[1, 0]],
+                    [[0, 2], [0, 1]],
+                    [[0, 1], [0, 2]],
                 ],
             }
             # fmt: on
