@@ -872,6 +872,66 @@ class PPOTrainerTester(unittest.TestCase):
                 else:
                     self.assertTrue(param.grad is None, f"Parameter {name} has a gradient")
 
+    @require_peft
+    @mark.peft_test
+    def test_peft_model_ppo_trainer_prompt_tuning(self):
+        from peft import PromptTuningConfig, TaskType, get_peft_model
+        from transformers import AutoModelForCausalLM
+
+        pt_config = PromptTuningConfig(
+            task_type=TaskType.CAUSAL_LM,
+            num_virtual_tokens=10,
+            tokenizer_name_or_path=self.model_id,
+            inference_mode=False,
+            token_dim=32,
+        )
+        gpt2_model = AutoModelForCausalLM.from_pretrained(self.model_id)
+
+        # this line is very important
+        def make_inputs_require_grad(module, input, output):
+            output.requires_grad_(True)
+
+        gpt2_model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
+
+        peft_model = get_peft_model(gpt2_model, pt_config)
+        model = AutoModelForCausalLMWithValueHead.from_pretrained(peft_model)
+
+        dummy_dataset = self._init_dummy_dataset()
+        self.ppo_config.batch_size = 2
+        self.ppo_config.mini_batch_size = 1
+
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=model,
+            ref_model=None,
+            tokenizer=self.gpt2_tokenizer,
+            dataset=dummy_dataset,
+        )
+
+        self.assertTrue(ppo_trainer.ref_model is None)
+
+        dummy_dataloader = ppo_trainer.dataloader
+
+        # train model with ppo
+        for query_tensor, response_tensor in dummy_dataloader:
+            # define a reward for response
+            # (this could be any reward such as human feedback or output from another model)
+            reward = [torch.tensor(1.0), torch.tensor(0.0)]
+            # train model by running a step twice
+            _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+
+            ppo_trainer.model.train()
+            ppo_trainer.model.gradient_checkpointing_enable()
+            _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+            break
+
+        # check gradients
+        for name, param in model.named_parameters():
+            if "prompt_encoder" in name or "v_head" in name:
+                self.assertTrue(param.grad is not None, f"Parameter {name} has a no gradient")
+            else:
+                self.assertTrue(param.grad is None, f"Parameter {name} has a gradient")
+
     @unittest.skip("Fix by either patching `whomai()` to work in the staging endpoint or use a dummy prod user.")
     def test_push_to_hub(self):
         REPO_NAME = "test-ppo-trainer"

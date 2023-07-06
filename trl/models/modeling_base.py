@@ -32,6 +32,7 @@ if is_peft_available():
         PeftModel,
         PeftModelForCausalLM,
         PeftModelForSeq2SeqLM,
+        PromptLearningConfig,
         get_peft_model,
         prepare_model_for_int8_training,
     )
@@ -127,6 +128,9 @@ class PreTrainedModelWrapper(nn.Module):
             )
 
         is_peft_model = False
+        is_using_prompt_learning = False
+        prompt_learning_num_virtual_tokens = None
+
         current_device = cls._get_current_device()
         if isinstance(pretrained_model_name_or_path, str):
             is_loaded_in_8bit = pretrained_kwargs["load_in_8bit"] if "load_in_8bit" in pretrained_kwargs else False
@@ -221,6 +225,9 @@ class PreTrainedModelWrapper(nn.Module):
         if is_peft_available():
             if isinstance(pretrained_model, PeftModel):
                 is_peft_model = True
+                if isinstance(pretrained_model.active_peft_config, PromptLearningConfig):
+                    is_using_prompt_learning = True
+                    prompt_learning_num_virtual_tokens = pretrained_model.active_peft_config.num_virtual_tokens
         # Then, create the full model by instantiating the wrapper class
         model = cls(pretrained_model, **trl_model_args)
 
@@ -274,6 +281,9 @@ class PreTrainedModelWrapper(nn.Module):
             state_dict = pretrained_model_name_or_path.state_dict()
 
         model.is_peft_model = is_peft_model
+        model.is_using_prompt_learning = is_using_prompt_learning
+        model.prompt_learning_num_virtual_tokens = prompt_learning_num_virtual_tokens
+
         model.current_device = current_device
 
         if is_resuming_training:

@@ -879,6 +879,9 @@ class PPOTrainer(BaseTrainer):
             masks = torch.zeros_like(attention_mask)
             masks[:, :-1] = attention_mask[:, 1:]
 
+            prompt_learning_processed_masks = []
+            prompt_learning_processed_logprobs = []
+
             for j in range(fbs):
                 if self.is_encoder_decoder:
                     # Decoder sentence starts always in the index 1 after padding in the Enc-Dec Models
@@ -892,6 +895,17 @@ class PPOTrainer(BaseTrainer):
 
                 masks[j, :start] = 0
                 masks[j, end:] = 0
+
+                if model.is_using_prompt_learning:
+                    num_new_tokens = model.prompt_learning_num_virtual_tokens
+                    prompt_mask = torch.ones_like(values[j, :num_new_tokens])
+
+                    prompt_learning_processed_masks.append(torch.cat([prompt_mask, masks[j]]))
+                    prompt_learning_processed_logprobs.append(torch.cat([torch.zeros_like(prompt_mask), logprobs[j]]))
+
+            if model.is_using_prompt_learning:
+                masks = torch.stack(prompt_learning_processed_masks)
+                logprobs = torch.stack(prompt_learning_processed_logprobs)
 
             if return_logits:
                 all_logits.append(logits)
@@ -1053,6 +1067,7 @@ class PPOTrainer(BaseTrainer):
         vf_clipfrac = masked_mean(torch.gt(vf_losses2, vf_losses1).float(), mask)
 
         ratio = torch.exp(logprobs - old_logprobs)
+
         pg_losses = -advantages * ratio
         pg_losses2 = -advantages * torch.clamp(ratio, 1.0 - self.config.cliprange, 1.0 + self.config.cliprange)
 
@@ -1071,8 +1086,11 @@ class PPOTrainer(BaseTrainer):
             loss = loss * 0.0
 
         entropy = masked_mean(entropy_from_logits(logits), mask)
-        approxkl = 0.5 * masked_mean((logprobs - old_logprobs) ** 2, mask)
-        policykl = masked_mean(old_logprobs - logprobs, mask)
+
+        logprob_diff = old_logprobs - logprobs
+
+        approxkl = 0.5 * masked_mean(logprob_diff**2, mask)
+        policykl = masked_mean(logprob_diff, mask)
         return_mean, return_var = masked_mean(returns, mask), masked_var(returns, mask)
         value_mean, value_var = masked_mean(values, mask), masked_var(values, mask)
 
