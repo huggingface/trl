@@ -1,7 +1,7 @@
 # 0. imports
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Optional
 
 import torch
 import tqdm
@@ -18,6 +18,9 @@ class ScriptArguments:
     The arguments for the DPO training script.
     """
 
+    # data parameters
+    beta: Optional[float] = field(default=0.1, metadata={"help": "the beta parameter for DPO loss"})
+
     # training parameters
     model_name_or_path: Optional[str] = field(default="gpt2", metadata={"help": "the model name"})
     learning_rate: Optional[float] = field(default=1e-3, metadata={"help": "optimizer learning rate"})
@@ -28,8 +31,9 @@ class ScriptArguments:
     max_length: Optional[int] = field(default=512, metadata={"help": "max length of each sample"})
     max_prompt_length: Optional[int] = field(default=128, metadata={"help": "max length of each sample's prompt"})
     label_pad_token_id: Optional[int] = field(default=-100, metadata={"help": "label for non response tokens"})
+    max_steps: Optional[int] = field(default=1000, metadata={"help": "max number of training steps"})
     # instrumentation
-    sanity_check: Optional[bool] = field(default=True, metadata={"help": "only train on 1000 samples"})
+    sanity_check: Optional[bool] = field(default=False, metadata={"help": "only train on 1000 samples"})
     report_to: Optional[str] = field(
         default=None,
         metadata={
@@ -56,28 +60,19 @@ def extract_anthropic_prompt(prompt_and_response):
     return prompt_and_response[: search_term_idx + len(search_term)]
 
 
-def get_hh(
-    split: str, sanity_check: bool = False, silent: bool = False, cache_dir: str = None
-) -> Dict[str, Dict[str, Union[List[Tuple[int, int]], List[str], str]]]:
-    """Load the Anthropic Helpful-Harmless dataset from Huggingface and convert it to the necessary format.
+def get_hh(split: str, sanity_check: bool = False, silent: bool = False, cache_dir: str = None) -> Dataset:
+    """Load the Anthropic Helpful-Harmless dataset from Hugging Face and convert it to the necessary format.
 
     The dataset is converted to a dictionary with the following structure:
     {
-        'prompt1': {
-            'responses': List[str],
-            'pairs': List[Tuple[int, int]],
-            'sft_target': str
-        },
-        'prompt2': {
-            ...
-        },
+        'prompt': List[str],
+        'responses': List[List[str]],
+        'pairs': List[Tuple[int, int]]
     }
 
     Prompts should be structured as follows:
       \n\nHuman: <prompt>\n\nAssistant:
     Multiple turns are allowed, but the prompt should always start with \n\nHuman: and end with \n\nAssistant:.
-
-    For this dataset, the sft_target is just the chosen response.
     """
     dataset = load_dataset("Anthropic/hh-rlhf", split=split, cache_dir=cache_dir)
     if sanity_check:
@@ -98,14 +93,15 @@ def get_hh(
         data[prompt]["responses"].extend(responses)
         data[prompt]["sft_target"] = chosen
 
-    data_dict = {"prompt": [], "responses": [], "pairs": []}
+    def gen():
+        for prompt, values in data.items():
+            yield {
+                "prompt": prompt,
+                "responses": values["responses"],
+                "pairs": values["pairs"],
+            }
 
-    for prompt, values in data.items():
-        data_dict["prompt"].append(prompt)
-        data_dict["responses"].append(values["responses"])
-        data_dict["pairs"].append(values["pairs"])
-
-    return Dataset.from_dict(data_dict)
+    return Dataset.from_generator(gen)
 
 
 if __name__ == "__main__":
@@ -128,10 +124,13 @@ if __name__ == "__main__":
     # 2. Load the Anthropic Helpful-Harmless dataset
     train_dataset = get_hh("train", sanity_check=script_args.sanity_check)
 
-    # 2. initialize training arguments:
+    # 3. Load evaluation dataset
+    eval_dataset = get_hh("test", sanity_check=script_args.sanity_check)
+
+    # 4. initialize training arguments:
     training_args = TrainingArguments(
         per_device_train_batch_size=script_args.per_device_train_batch_size,
-        max_steps=10,
+        max_steps=script_args.max_steps,
         remove_unused_columns=False,
         gradient_accumulation_steps=script_args.gradient_accumulation_steps,
         learning_rate=script_args.learning_rate,
@@ -140,15 +139,16 @@ if __name__ == "__main__":
         report_to=script_args.report_to,
     )
 
-    # 3. initialize the DPO trainer
+    # 5. initialize the DPO trainer
     dpo_trainer = DPOTrainer(
         model,
         model_ref,
         args=training_args,
-        beta=0.1,
+        beta=script_args.beta,
         train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
         tokenizer=tokenizer,
     )
 
-    # 4. train
+    # 6. train
     dpo_trainer.train()

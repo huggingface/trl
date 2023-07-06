@@ -65,6 +65,8 @@ class DPOTrainer(Trainer):
             The function to use to preprocess the logits before computing the metrics.
         max_length (`int`, defaults to `None`):
             The maximum length of the sequences in the batch. This argument is required if you want to use the default data collator.
+        max_prompt_length (`int`, defaults to `None`):
+            The maximum length of the prompt. This argument is required if you want to use the default data collator.
         peft_config (`Dict`, defaults to `None`):
             The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
     """
@@ -296,11 +298,14 @@ class DPOTrainer(Trainer):
         rejected_logps = all_logps[batch["chosen_input_ids"].shape[0] :]
         return chosen_logps, rejected_logps
 
-    def get_batch_metrics(self, model, batch: Dict[str, Union[List, torch.LongTensor]]):
-        """Compute the SFT or DPO loss and other metrics for the given batch of inputs."""
-
+    def get_batch_metrics(
+        self,
+        model,
+        batch: Dict[str, Union[List, torch.LongTensor]],
+        train_test: str = "train",
+    ):
+        """Compute the DPO loss and other metrics for the given batch of inputs for train or test."""
         metrics = {}
-        train_test = "train"
 
         policy_chosen_logps, policy_rejected_logps = self.concatenated_forward(model, batch)
         with torch.no_grad():
@@ -339,7 +344,7 @@ class DPOTrainer(Trainer):
             raise NotImplementedError(
                 "compute_loss is only implemented for DPODataCollatorWithPadding, please implement your own compute_loss method if you are using a custom data collator"
             )
-        loss, metrics = self.get_batch_metrics(model, inputs)
+        loss, metrics = self.get_batch_metrics(model, inputs, train_test="train")
 
         if return_outputs:
             return (loss, metrics)

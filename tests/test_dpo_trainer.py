@@ -57,10 +57,10 @@ class DPOTrainerTester(unittest.TestCase):
                     ["Python", "Javascript", "C++", "Java"],
                 ],
                 "pairs": [
-                    [[0, 1]],
-                    [[1, 0]],
-                    [[0, 2], [0, 1]],
-                    [[0, 1], [0, 2], [0, 3]],
+                    [(0, 1)],
+                    [(1, 0)],
+                    [(0, 2), (0, 1)],
+                    [(0, 1), (0, 2), (0, 3)],
                 ],
             }
             # fmt: on
