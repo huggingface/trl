@@ -65,6 +65,8 @@ After this one can then call:
 dpo_trainer.train()
 ```
 
+Note that the `beta` is the temperature parameter for the DPO loss, typically something in the range of `0.1` to `0.5`. We ignore the reference model as `beta` -> 0.
+
 ## DPOTrainer
 
 [[autodoc]] DPOTrainer
