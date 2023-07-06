@@ -52,9 +52,25 @@ class FixedKLController:
 
 
 class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
-    def __init__(self, response_template, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    """
+    Data collator used for completion tasks. It ensures that all the tokens of the labels are set to an 'ignore_index'
+     up to the prompt response template tokens ('response_template'). This ensure that the loss is only
+     calculated on the completion of the reponse.
+
+    Args:
+        response_template (`str`): the template form that indicates the start of the response, typically something like
+            '### Response:\n'
+        mlm (`bool`, *optional*, defaults to `False`): Whether or not to use masked language modeling in the underlying
+            `DataCollatorForLanguageModeling` class. Note that this option currently has no effect but is present
+             for flexibility and backwards-compatibility.
+        ignore_index (`int`, *optional*, defaults to `-100`):
+            The index to use to ignore the initial tokens with
+    """
+
+    def __init__(self, response_template: str, *args, mlm: bool = False, ignore_index: int = -100, **kwargs):
+        super().__init__(*args, mlm=mlm, **kwargs)
         self.response_template = response_template
+        self.ignore_index = ignore_index
 
     def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
         batch = super().torch_call(examples)
@@ -81,7 +97,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
             response_token_ids_end_idx = response_token_ids_start_idx + len(response_token_ids)
 
             # Make pytorch loss function ignore all tokens up through the end of the response key
-            labels[i, :response_token_ids_end_idx] = -100
+            labels[i, :response_token_ids_end_idx] = self.ignore_index
 
         batch["labels"] = labels
 
