@@ -131,6 +131,7 @@ if __name__ == "__main__":
     training_args = TrainingArguments(
         per_device_train_batch_size=script_args.per_device_train_batch_size,
         max_steps=script_args.max_steps,
+        logging_steps=0.1,
         remove_unused_columns=False,
         gradient_accumulation_steps=script_args.gradient_accumulation_steps,
         learning_rate=script_args.learning_rate,

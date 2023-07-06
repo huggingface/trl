@@ -322,15 +322,15 @@ class DPOTrainer(Trainer):
         )
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
-        metrics[f"rewards_{train_test}/chosen"] = chosen_rewards.cpu().numpy().tolist()
-        metrics[f"rewards_{train_test}/rejected"] = rejected_rewards.cpu().numpy().tolist()
-        metrics[f"rewards_{train_test}/accuracies"] = reward_accuracies.cpu().numpy().tolist()
-        metrics[f"rewards_{train_test}/margins"] = (chosen_rewards - rejected_rewards).cpu().numpy().tolist()
-        metrics[f"logps_{train_test}/rejected"] = policy_rejected_logps.detach().cpu().numpy().tolist()
+        metrics[f"rewards_{train_test}/chosen"] = chosen_rewards.cpu()
+        metrics[f"rewards_{train_test}/rejected"] = rejected_rewards.cpu()
+        metrics[f"rewards_{train_test}/accuracies"] = reward_accuracies.cpu()
+        metrics[f"rewards_{train_test}/margins"] = (chosen_rewards - rejected_rewards).cpu()
+        metrics[f"logps_{train_test}/rejected"] = policy_rejected_logps.detach().cpu()
 
-        metrics[f"logps_{train_test}/chosen"] = policy_chosen_logps.detach().cpu().numpy().tolist()
+        metrics[f"logps_{train_test}/chosen"] = policy_chosen_logps.detach().cpu()
 
-        metrics[f"loss/{train_test}"] = losses.detach().cpu().numpy().tolist()
+        metrics[f"loss/{train_test}"] = losses.detach().cpu()
 
         return losses.mean(), metrics
 
@@ -349,3 +349,64 @@ class DPOTrainer(Trainer):
         if return_outputs:
             return (loss, metrics)
         return loss
+
+    def get_batch_samples(self, model, batch: Dict[str, torch.LongTensor]) -> Tuple[str, str]:
+        """Generate samples from the model and reference model for the given batch of inputs."""
+
+        policy_output = model.generate(
+            batch["prompt_input_ids"],
+            attention_mask=batch["prompt_attention_mask"],
+            max_length=self.config.max_length,
+            do_sample=True,
+            pad_token_id=self.tokenizer.pad_token_id,
+        )
+
+        reference_output = self.ref_model.generate(
+            batch["prompt_input_ids"],
+            attention_mask=batch["prompt_attention_mask"],
+            max_length=self.config.max_length,
+            do_sample=True,
+            pad_token_id=self.tokenizer.pad_token_id,
+        )
+
+        policy_output = pad_to_length(policy_output, self.config.max_length, self.tokenizer.pad_token_id)
+        policy_output_decoded = self.tokenizer.batch_decode(policy_output, skip_special_tokens=True)
+
+        reference_output = pad_to_length(reference_output, self.config.max_length, self.tokenizer.pad_token_id)
+        reference_output_decoded = self.tokenizer.batch_decode(reference_output, skip_special_tokens=True)
+
+        return policy_output_decoded, reference_output_decoded
+
+    def prediction_step(
+        self,
+        model: Union[PreTrainedModel, nn.Module],
+        inputs: Dict[str, Union[torch.Tensor, Any]],
+        prediction_loss_only: bool,
+        ignore_keys: Optional[List[str]] = None,
+    ):
+        if not self.use_dpo_data_collator:
+            raise NotImplementedError(
+                "prediction_step is only implemented for DPODataCollatorWithPadding, please implement your own prediction_step method if you are using a custom data collator"
+            )
+        if ignore_keys is None:
+            if hasattr(model, "config"):
+                ignore_keys = getattr(model.config, "keys_to_ignore_at_inference", [])
+            else:
+                ignore_keys = []
+
+        with torch.no_grad():
+            loss, metrics = self.get_batch_metrics(model, inputs, train_test="test")
+
+        if prediction_loss_only:
+            return (loss.detach(), None, None)
+
+        # logits for the chosen and rejected samples
+        logits_dict = {
+            "logps_test/chosen": metrics["logps_test/chosen"],
+            "logps_test/rejected": metrics["logps_test/rejected"],
+        }
+        logits = tuple(v for k, v in logits_dict.items() if k not in ignore_keys)
+        logits = torch.stack(logits).mean(axis=1)
+        labels = torch.zeros(logits.shape[0])
+
+        return (loss.detach(), logits, labels)
