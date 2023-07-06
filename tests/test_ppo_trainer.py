@@ -884,6 +884,7 @@ class PPOTrainerTester(unittest.TestCase):
             tokenizer_name_or_path=self.model_id,
             inference_mode=False,
             token_dim=32,
+            encoder_hidden_size=32,
         )
         gpt2_model = AutoModelForCausalLM.from_pretrained(self.model_id)
 
