@@ -158,7 +158,7 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
         """
         kwargs["output_hidden_states"] = True  # this had already been set in the LORA / PEFT examples
 
-        if self.pretrained_model.active_peft_config.peft_type != "PREFIX_TUNING":
+        if self.is_peft_model and self.pretrained_model.active_peft_config.peft_type != "PREFIX_TUNING":
             kwargs["past_key_values"] = past_key_values
 
         base_model_output = self.pretrained_model(
@@ -394,7 +394,7 @@ class AutoModelForSeq2SeqLMWithValueHead(PreTrainedModelWrapper):
         attention_mask=None,
         **kwargs,
     ):
-        if self.pretrained_model.active_peft_config.peft_type != "PREFIX_TUNING":
+        if self.is_peft_model and self.pretrained_model.active_peft_config.peft_type != "PREFIX_TUNING":
             kwargs["past_key_values"] = past_key_values
 
         base_model_output = self.pretrained_model(
