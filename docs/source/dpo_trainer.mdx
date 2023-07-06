@@ -12,16 +12,42 @@ The DPO trainer expects a very specific format for the dataset. Since the model 
 <img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/rlhf-antropic-example.png", width="50%">
 </div>
 
-Therefore the final dataset object should contain two 4 entries at least if you use the default `DPODataCollatorWithPadding` data collator. The entries should be named:
+Therefore the final dataset object should contain two 3 entries at least if you use the default `DPODataCollatorWithPadding` data collator. The entries should be named:
 
-- `input_ids_chosen`
-- `attention_mask_chosen`
-- `input_ids_rejected`
-- `attention_mask_rejected`
+- `prompt`
+- `responses`
+- `pairs`
+
+for example
+
+```py
+dpo_dataset_dict = {
+    "prompt": [
+        "hello",
+        "how are you",
+        "What is your name?",
+        "Which is the best programming language?",
+    ],
+    "responses": [
+        ["hi nice to meet you", "leave me alone"],
+        ["I am not fine", "I am fine"],
+        ["My name is Mary", "Whats it to you?", "I don't have a name."],
+        ["Python", "Javascript", "C++", "Java"],
+    ],
+    "pairs": [
+        [[0, 1]],
+        [[1, 0]],
+        [[0, 2], [0, 1]],
+        [[0, 1], [0, 2], [0, 3]],
+    ],
+}
+```
+
+where the `prompt` contains the context input, `response` contains an array of at least two responses and `pairs` contains a list of positive (accepted) and negative (rejected) indices from the corresponding `responses` where the first index is the positive response and the second index is the negative one. As can be seen a prompt can have multiple responses and this is reflected in the `pairs` entry.
 
 ## Using the `DPOTrainer`
 
-For a detailed example have a look at the `examples/dpo.py` script. At a high level we need to initialize the `DPOTrainer` with a `model` we wish to train, a reference `ref_model` which we will use to calculate the implicit rewards of the preferred and unpreferred data, the `beta` refers to the hyperparameter of the implicit reward, and the dataset contains the 4 entries listed above:
+For a detailed example have a look at the `examples/dpo.py` script. At a high level we need to initialize the `DPOTrainer` with a `model` we wish to train, a reference `ref_model` which we will use to calculate the implicit rewards of the preferred and rejected response, the `beta` refers to the hyperparameter of the implicit reward, and the dataset contains the 3 entries listed above:
 
 ```py
  dpo_trainer = DPOTrainer(
