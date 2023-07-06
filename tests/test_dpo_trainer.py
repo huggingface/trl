@@ -52,7 +52,7 @@ class DPOTrainerTester(unittest.TestCase):
                 ],
                 "responses": [
                     ["hi nice to meet you", "leave me alone"],
-                    ["I am fine", "I am not fine"],
+                    ["I am not fine", "I am fine"],
                     ["My name is Mary", "Whats it to you?", "I dont have a name"],
                     ["Python", "Javascript", "C++", "Java"],
                 ],
@@ -60,7 +60,7 @@ class DPOTrainerTester(unittest.TestCase):
                     [[0, 1]],
                     [[1, 0]],
                     [[0, 2], [0, 1]],
-                    [[0, 1], [0, 2]],
+                    [[0, 1], [0, 2], [0, 3]],
                 ],
             }
             # fmt: on
