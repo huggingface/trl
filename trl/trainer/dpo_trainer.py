@@ -21,10 +21,9 @@ import torch.nn.functional as F
 from datasets import Dataset
 from transformers import DataCollator, PreTrainedModel, PreTrainedTokenizerBase, Trainer, TrainingArguments
 from transformers.trainer_callback import TrainerCallback
-from transformers.trainer_utils import EvalPrediction
 
 from ..import_utils import is_peft_available
-from .utils import DPODataCollatorWithPadding, compute_accuracy, pad_to_length
+from .utils import DPODataCollatorWithPadding, pad_to_length
 
 
 if is_peft_available():
@@ -47,6 +46,12 @@ class DPOTrainer(Trainer):
         data_collator (`transformers.DataCollator`):
             The data collator to use for training. If None is specified, the default data collator (`RewardDataCollatorWithPadding`) will be used
             which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
+        label_pad_token_id (`int`, defaults to `-100`):
+            The label pad token id. This argument is required if you want to use the default data collator.
+        padding_value (`int`, defaults to `0`):
+            The padding value. This argument is required if you want to use the default data collator.
+        truncation_mode (`str`, defaults to `keep_end`):
+            The truncation mode to use, either `keep_end` or `keep_start`. This argument is required if you want to use the default data collator.
         train_dataset (`datasets.Dataset`):
             The dataset to use for training.
         eval_dataset (`datasets.Dataset`):
@@ -55,8 +60,6 @@ class DPOTrainer(Trainer):
             The tokenizer to use for training. This argument is required if you want to use the default data collator.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
             The model initializer to use for training. If None is specified, the default model initializer will be used.
-        compute_metrics (`Callable[[transformers.EvalPrediction], Dict]`, *optional* defaults to `compute_accuracy`):
-            The metrics to use for evaluation. If no metrics are specified, the default metric (`compute_accuracy`) will be used.
         callbacks (`List[transformers.TrainerCallback]`):
             The callbacks to use for training.
         optimizers (`Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
@@ -85,7 +88,6 @@ class DPOTrainer(Trainer):
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
         tokenizer: Optional[PreTrainedTokenizerBase] = None,
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
-        compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (
             None,
@@ -104,9 +106,6 @@ class DPOTrainer(Trainer):
             if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
                 model = prepare_model_for_int8_training(model)
             model = get_peft_model(model, peft_config)
-
-        if compute_metrics is None:
-            compute_metrics = compute_accuracy
 
         if data_collator is None:
             if tokenizer is None:
@@ -165,7 +164,7 @@ class DPOTrainer(Trainer):
             eval_dataset,
             tokenizer,
             model_init,
-            compute_metrics,
+            None,
             callbacks,
             optimizers,
             preprocess_logits_for_metrics,
@@ -279,7 +278,7 @@ class DPOTrainer(Trainer):
 
     def concatenated_forward(
         self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]
-    ) -> Tuple[torch.FloatTensor, torch.FloatTensor]:
+    ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         """Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
 
         We do this to avoid doing two forward passes, because it's faster for FSDP.
@@ -296,7 +295,10 @@ class DPOTrainer(Trainer):
         )
         chosen_logps = all_logps[: batch["chosen_input_ids"].shape[0]]
         rejected_logps = all_logps[batch["chosen_input_ids"].shape[0] :]
-        return chosen_logps, rejected_logps
+
+        chosen_logits = all_logits[: batch["chosen_input_ids"].shape[0]]
+        rejected_logits = all_logits[batch["chosen_input_ids"].shape[0] :]
+        return (chosen_logps, rejected_logps, chosen_logits, rejected_logits)
 
     def get_batch_metrics(
         self,
@@ -307,11 +309,18 @@ class DPOTrainer(Trainer):
         """Compute the DPO loss and other metrics for the given batch of inputs for train or test."""
         metrics = {}
 
-        policy_chosen_logps, policy_rejected_logps = self.concatenated_forward(model, batch)
+        (
+            policy_chosen_logps,
+            policy_rejected_logps,
+            policy_chosen_logits,
+            policy_rejected_logits,
+        ) = self.concatenated_forward(model, batch)
         with torch.no_grad():
             (
                 reference_chosen_logps,
                 reference_rejected_logps,
+                _,
+                _,
             ) = self.concatenated_forward(self.ref_model, batch)
 
         losses, chosen_rewards, rejected_rewards = self.dpo_loss(
@@ -322,15 +331,17 @@ class DPOTrainer(Trainer):
         )
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
-        metrics[f"rewards_{train_test}/chosen"] = chosen_rewards.cpu()
-        metrics[f"rewards_{train_test}/rejected"] = rejected_rewards.cpu()
-        metrics[f"rewards_{train_test}/accuracies"] = reward_accuracies.cpu()
-        metrics[f"rewards_{train_test}/margins"] = (chosen_rewards - rejected_rewards).cpu()
-        metrics[f"logps_{train_test}/rejected"] = policy_rejected_logps.detach().cpu()
+        metrics[f"rewards_{train_test}/chosen"] = chosen_rewards.cpu().numpy().mean()
+        metrics[f"rewards_{train_test}/rejected"] = rejected_rewards.cpu().numpy().mean()
+        metrics[f"rewards_{train_test}/accuracies"] = reward_accuracies.cpu().numpy().mean()
+        metrics[f"rewards_{train_test}/margins"] = (chosen_rewards - rejected_rewards).cpu().numpy().mean()
+        metrics[f"logps_{train_test}/rejected"] = policy_rejected_logps.detach().cpu().numpy().mean()
+        metrics[f"logps_{train_test}/chosen"] = policy_chosen_logps.detach().cpu().numpy().mean()
 
-        metrics[f"logps_{train_test}/chosen"] = policy_chosen_logps.detach().cpu()
+        metrics[f"logits_{train_test}/rejected"] = policy_rejected_logits.detach().cpu().numpy().mean()
+        metrics[f"logits_{train_test}/chosen"] = policy_chosen_logits.detach().cpu().numpy().mean()
 
-        metrics[f"loss/{train_test}"] = losses.detach().cpu()
+        metrics[f"loss/{train_test}"] = losses.detach().cpu().numpy().mean()
 
         return losses.mean(), metrics
 
@@ -345,6 +356,10 @@ class DPOTrainer(Trainer):
                 "compute_loss is only implemented for DPODataCollatorWithPadding, please implement your own compute_loss method if you are using a custom data collator"
             )
         loss, metrics = self.get_batch_metrics(model, inputs, train_test="train")
+
+        # force log the metrics
+        if self.accelerator.is_main_process:
+            self.log_metrics("train", metrics)
 
         if return_outputs:
             return (loss, metrics)
@@ -397,13 +412,17 @@ class DPOTrainer(Trainer):
         with torch.no_grad():
             loss, metrics = self.get_batch_metrics(model, inputs, train_test="test")
 
+        # force log the metrics
+        if self.accelerator.is_main_process:
+            self.log_metrics("test", metrics)
+
         if prediction_loss_only:
             return (loss.detach(), None, None)
 
-        # logits for the chosen and rejected samples
+        # logits for the chosen and rejected samples from model
         logits_dict = {
-            "logps_test/chosen": metrics["logps_test/chosen"],
-            "logps_test/rejected": metrics["logps_test/rejected"],
+            "logits_test/chosen": metrics["logits_test/chosen"],
+            "logits_test/rejected": metrics["logits_test/rejected"],
         }
         logits = tuple(v for k, v in logits_dict.items() if k not in ignore_keys)
         logits = torch.stack(logits).mean(axis=1)
