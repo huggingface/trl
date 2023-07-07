@@ -17,7 +17,7 @@ from typing import Optional
 
 import torch
 from datasets import load_dataset
-from peft import LoraConfig, get_peft_model, prepare_model_for_int8_training
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
@@ -117,7 +117,7 @@ def create_and_prepare_model(args):
     model = AutoModelForSequenceClassification.from_pretrained(
         args.model_name, quantization_config=bnb_config, device_map=device_map
     )
-    model = prepare_model_for_int8_training(model)
+    model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=args.gradient_checkpointing)
 
     # we add `score` to the list of modules to save to
     # correctly save the score head.
@@ -176,6 +176,7 @@ def main():
         lr_scheduler_type=script_args.lr_scheduler_type,
         gradient_accumulation_steps=script_args.gradient_accumulation_steps,
         save_steps=1,
+        gradient_checkpointing=script_args.gradient_checkpointing,
     )
 
     trainer = RewardTrainer(
@@ -183,6 +184,7 @@ def main():
         args=training_args,
         tokenizer=tokenizer,
         train_dataset=dataset,
+        max_length=script_args.max_seq_length,
     )
 
     trainer.train()
