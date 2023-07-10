@@ -1184,8 +1184,8 @@ class PPOTrainer(BaseTrainer):
             elif self.config.log_with == "wandb":
                 import wandb
 
-                table_rows = [list(r) for r in zip(batch["query"], batch["response"], rewards.cpu().tolist())]
-                logs.update({"game_log": wandb.Table(columns=["query", "response", "reward"], rows=table_rows)})
+                table_rows = [list(r) for r in zip(batch["query"], batch["response"], batch["answer"], rewards.cpu().tolist())]
+                logs.update({"game_log": wandb.Table(columns=["query", "response", "answer", "reward"], rows=table_rows)})
             # All reduce rewards if distributed
             if self.is_distributed:
                 import torch.distributed as dist
