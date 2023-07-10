@@ -10,7 +10,3 @@ The included notebook compares reward-model scores of prompt based responses fro
 1. a base model (`gpt2-imdb`)
 2. `RLHF` tuned model based on this base-model 
 3. the base-model again from which we sample n responses to each prompt, score them and take the best scored one AKA the `best-of-n sampled` model
-
-
-
-
