@@ -24,6 +24,6 @@ from .base import BaseTrainer
 from .ppo_config import PPOConfig
 from .ddpo_config import DDPOConfig
 from .ppo_trainer import PPOTrainer
-from .ddpo_trainer import DDPOTrainer
+from .ddpo_trainer import DDPOTrainer, DDPOScheduler, DDPOSchedulerOutput, DDPOStableDiffusionPipeline, DDPOPipelineOutput
 from .reward_trainer import RewardTrainer, compute_accuracy
 from .sft_trainer import SFTTrainer
