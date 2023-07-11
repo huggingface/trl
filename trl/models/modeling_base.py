@@ -34,7 +34,7 @@ if is_peft_available():
         PeftModelForSeq2SeqLM,
         PromptLearningConfig,
         get_peft_model,
-        prepare_model_for_int8_training,
+        prepare_model_for_kbit_training
     )
     from peft.peft_model import set_peft_model_state_dict
 
@@ -107,7 +107,7 @@ class PreTrainedModelWrapper(nn.Module):
                 `from_pretrained` method. We also pre-process the kwargs to extract
                 the arguments that are specific to the `transformers.PreTrainedModel`
                 class and the arguments that are specific to trl models. The kwargs
-                also support `prepare_model_for_int8_training` arguments from
+                also support `prepare_model_for_kbit_training` arguments from
                 `peft` library.
         """
         if kwargs is not None:
@@ -195,7 +195,7 @@ class PreTrainedModelWrapper(nn.Module):
                 if peft_config is not None:
                     # Initialize a new peft adapter with the given config
                     if is_loaded_in_8bit or is_loaded_in_4bit:
-                        pretrained_model = prepare_model_for_int8_training(
+                        pretrained_model = prepare_model_for_kbit_training(
                             pretrained_model,
                             **peft_quantization_kwargs,
                         )
@@ -208,7 +208,7 @@ class PreTrainedModelWrapper(nn.Module):
             if peft_config is not None and isinstance(pretrained_model, PreTrainedModel):
                 # Initialize a new peft adapter with the given config
                 if is_loaded_in_8bit or is_loaded_in_4bit:
-                    pretrained_model = prepare_model_for_int8_training(
+                    pretrained_model = prepare_model_for_kbit_training(
                         pretrained_model,
                         **peft_quantization_kwargs,
                     )
@@ -321,7 +321,7 @@ class PreTrainedModelWrapper(nn.Module):
         check_peft_kwargs = False
 
         if is_peft_available():
-            from peft import prepare_model_for_int8_training
+            from peft import prepare_model_for_kbit_training
 
             check_peft_kwargs = True
 
@@ -336,7 +336,7 @@ class PreTrainedModelWrapper(nn.Module):
                 unsupported_kwargs[key] = value
 
             if check_peft_kwargs:
-                if key in prepare_model_for_int8_training.__code__.co_varnames:
+                if key in prepare_model_for_kbit_training.__code__.co_varnames:
                     peft_kwargs[key] = value
                     if key in unsupported_kwargs:
                         unsupported_kwargs.pop(key)
