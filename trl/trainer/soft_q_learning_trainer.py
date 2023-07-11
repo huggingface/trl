@@ -139,7 +139,7 @@ class SoftQLearningTrainer(BaseTrainer):
 
         batch_log = nested_detach_and_clone(additional_info, to_cpu=True)
         
-        # return batch log here so IO portion can be taken care of outside this function.
+        # return batch log here so IO portion can be taken care of outside this method
         return batch_log
 
     def sync_target_model(self, sync_type) -> None:
@@ -173,47 +173,41 @@ class SoftQLearningTrainer(BaseTrainer):
 
             logits = outputs.logits
             target_logits = target_outputs.logits
-            output_ids = batch[0] # potential trouble spot
+            output_ids = batch[1].input_ids # potential trouble spot
+            sequence_lengths = batch[1].attention_mask.sum(dim=-1)
 
         elif mode == "SQL_ON":
+
+            generation_length = batch[1].input_ids.shape[1]
+
             outputs = self.model.generate(
                 batch[0].input_ids,
                 do_sample=True,
                 top_k=self._top_k,
                 top_p=self._top_p,
                 return_dict_in_generate=True,
-                output_scores=True
+                output_scores=True,
+                max_length=generation_length,
             )
 
             # generation of on-policy training data
             on_policy_training_data = (batch[0].input_ids, outputs.sequences[:,1:])
 
-            print("on_policy_training_data: ", on_policy_training_data)
-            print(on_policy_training_data[1].shape)
-
             # has to follow the steps taken by the model
             target_outputs = self.target_model(input_ids=on_policy_training_data[0], decoder_input_ids=on_policy_training_data[1]) 
 
-            logits = outputs.scores
+            # possible problematic spot
+            logits = torch.stack(outputs.scores, dim=1)
             target_logits = target_outputs.logits
-            output_ids = outputs.sequences
-            sequence_lengths = outputs.sequences.sum(dim=-1)
+            output_ids = outputs.sequences[:,1:].contiguous()
+            sequence_lengths = (output_ids != self.tokenizer.pad_token_id).sum(dim=-1)
              
         else:
             raise NotImplementedError
         
-        predicted_texts = self.tokenizer.batch_decode(output_ids)
-        print("predicted_texts: ", predicted_texts)
-        input_texts = self.tokenizer.batch_decode(batch[0].input_ids)
-        print("input_texts: ", input_texts)
-        target_texts = self.tokenizer.batch_decode(batch[1].input_ids)
-        print("target_texts: ", target_texts)
-        print("---------------------------------")
-        print(logits)
-        print(target_logits.shape)
-        print(output_ids.shape)
-        print(sequence_lengths)
-        print("---------------------------------")
+        predicted_texts = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)
+        input_texts = self.tokenizer.batch_decode(batch[0].input_ids, skip_special_tokens=True)
+        target_texts = self.tokenizer.batch_decode(batch[1].input_ids, skip_special_tokens=True)
 
         raw_rewards, shaped_rewards, rewards_log = self.compute_rewards(
             input_texts,
@@ -263,7 +257,6 @@ class SoftQLearningTrainer(BaseTrainer):
             predictions=output_texts,
             to_tensor=True,
             mode="train")
-        print("rewards_tensor: ", rewards_tensor)
 
         rewards_tensor = rewards_tensor.to(self.device)
         shaped_rewards_tensor = self.reward_shaping_func(rewards_tensor)
@@ -468,7 +461,7 @@ def soft_q_loss_with_sparse_rewards_2(
         sequence_length: LongTensor,
         _recover_mle: bool = False,
 ) -> Tuple[FloatTensor, Dict[str, Any]]:
-
+    
     Q = gather_2d_on_last_dim(
         tensor=logits,
         index=actions,
