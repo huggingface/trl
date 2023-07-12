@@ -270,9 +270,6 @@ class SFTTrainer(Trainer):
 
         # Inspired from: https://huggingface.co/learn/nlp-course/chapter7/6?fw=pt
         def tokenize(element):
-            input_batch = []
-            attention_masks = []
-
             outputs = tokenizer(
                 element[dataset_text_field] if not use_formatting_func else formatting_func(element),
                 truncation=True,
@@ -290,19 +287,7 @@ class SFTTrainer(Trainer):
                 else:
                     self._dataset_sanity_checked = True
 
-            for length, input_ids, attention_mask in zip(
-                outputs["length"], outputs["input_ids"], outputs["attention_mask"]
-            ):
-                if length == max_seq_len:
-                    input_batch.append(input_ids)
-                    attention_masks.append(attention_mask)
-
-            if len(input_batch) == 0:
-                # warn users
-                warnings.warn(
-                    f"Found 0 samples with a length of {max_seq_len}. You might want to decrease the `max_seq_len` argument."
-                )
-            return {"input_ids": input_batch, "attention_mask": attention_masks}
+            return {"input_ids": outputs["input_ids"], "attention_mask": outputs["attention_mask"]}
 
         tokenized_dataset = dataset.map(tokenize, batched=True, remove_columns=dataset.column_names)
 
