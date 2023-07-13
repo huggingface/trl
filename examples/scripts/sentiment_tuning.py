@@ -27,29 +27,7 @@ from trl.core import LengthSampler
 
 tqdm.pandas()
 
-########################################################################
-# This is a fully working simple example to use trl with accelerate.
-#
-# This example fine-tunes a GPT2 model on the IMDB dataset using PPO
-# (proximal policy optimization).
-# in any of the following settings (with the same script):
-#   - single CPU or single GPU
-#   - multi GPUS (using PyTorch distributed mode)
-#   - multi GPUS (using DeepSpeed ZeRO-Offload stages 1 & 2)
-#   - fp16 (mixed-precision) or fp32 (normal precision)
-#
-# To run it in each of these various modes, first initialize the accelerate
-# configuration with `accelerate config`
-#
-########################################################################
 
-
-# We first define the configuration of the experiment, defining the model, the dataset,
-# the training parameters, and the PPO parameters.
-# Check the default arguments in the `PPOConfig` class for more details.
-# If you want to log with tensorboard, add the kwarg
-# `accelerator_kwargs={"logging_dir": PATH_TO_LOGS}` to the PPOConfig.
-# Define and parse arguments.
 @dataclass
 class ScriptArguments:
     """

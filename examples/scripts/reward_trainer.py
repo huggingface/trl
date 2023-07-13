@@ -31,29 +31,6 @@ from trl import RewardTrainer
 
 tqdm.pandas()
 
-########################################################################
-# This is a fully working simple example to use RewardTrainer from trl on any HF model.
-#
-# This example fine-tunes OPT model on the hh-rlhf dataset
-# We eventually use adapters from PEFT library to train Low Rank Adapters.
-# in any of the following settings (with the same script):
-#   - single CPU or single GPU
-#   - multi GPUS (using PyTorch distributed mode)
-#   - multi GPUS (using DeepSpeed ZeRO-Offload stages 1 & 2)
-#   - fp16 (mixed-precision) or fp32 (normal precision)
-#
-# To run it in each of these various modes, first initialize the accelerate
-# configuration with `accelerate config`
-#
-########################################################################
-
-########################################################################
-# NOTE for to train with a 8-bit model a more recent version of
-# transformers is required, full dependecies for this example:
-# pip install bitsandbytes datasets accelerate
-# pip install git+https://github.com/huggingface/peft.git
-########################################################################
-
 
 # Define and parse arguments.
 @dataclass
