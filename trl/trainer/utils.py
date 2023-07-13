@@ -16,7 +16,7 @@ import random
 import warnings
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 import torch
@@ -80,16 +80,12 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
         self.response_template = response_template
         self.ignore_index = ignore_index
 
-    def torch_call(
-        self, examples: List[Union[List[int], Any, Dict[str, Any]]]
-    ) -> Dict[str, Any]:
+    def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
         batch = super().torch_call(examples)
 
         # The prompt ends with the response key plus a newline.  We encode this and then try to find it in the
         # sequence of tokens.  This should just be a single token.
-        response_token_ids = self.tokenizer.encode(
-            self.response_template, add_special_tokens=False
-        )
+        response_token_ids = self.tokenizer.encode(self.response_template, add_special_tokens=False)
 
         labels = batch["labels"].clone()
 
@@ -98,10 +94,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
 
             for idx in np.where(batch["labels"][i] == response_token_ids[0])[0]:
                 # `response_token_ids` is `'### Response:\n'`, here we are just making sure that the token IDs match
-                if (
-                    response_token_ids
-                    == examples[i]["input_ids"][idx : idx + len(response_token_ids)]
-                ):
+                if response_token_ids == examples[i]["input_ids"][idx : idx + len(response_token_ids)]:
                     response_token_ids_start_idx = idx
 
             if response_token_ids_start_idx is None:
@@ -109,9 +102,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                     f'Could not find response key {response_token_ids} in token IDs {batch["labels"][i]}'
                 )
 
-            response_token_ids_end_idx = response_token_ids_start_idx + len(
-                response_token_ids
-            )
+            response_token_ids_end_idx = response_token_ids_start_idx + len(response_token_ids)
 
             # Make pytorch loss function ignore all tokens up through the end of the response key
             labels[i, :response_token_ids_end_idx] = self.ignore_index
@@ -245,9 +236,7 @@ class ConstantLengthDataset(IterableDataset):
                 f" to {eos_token_id}. If this is not the correct EOS token, make sure to pass the correct eos_token_id."
             )
 
-        self.concat_token_id = (
-            tokenizer.eos_token_id if tokenizer.eos_token_id else eos_token_id
-        )
+        self.concat_token_id = tokenizer.eos_token_id if tokenizer.eos_token_id else eos_token_id
         self.dataset = dataset
         self.seq_length = seq_length
         self.infinite = infinite
@@ -284,9 +273,7 @@ class ConstantLengthDataset(IterableDataset):
                 except StopIteration:
                     if self.infinite:
                         iterator = iter(self.dataset)
-                        warnings.warn(
-                            "The dataset reached end and the iterator is reset to the start."
-                        )
+                        warnings.warn("The dataset reached end and the iterator is reset to the start.")
                     else:
                         more_examples = False
                         break
@@ -312,9 +299,7 @@ class ConstantLengthDataset(IterableDataset):
 class PeftSavingCallback(TrainerCallback):
     def on_save(self, args, state, control, **kwargs):
         if args.should_save:
-            checkpoint_path = os.path.join(
-                args.output_dir, f"checkpoint-{state.global_step}"
-            )
+            checkpoint_path = os.path.join(args.output_dir, f"checkpoint-{state.global_step}")
             kwargs["model"].save_pretrained(checkpoint_path)
 
             if "pytorch_model.bin" in os.listdir(checkpoint_path):
@@ -349,7 +334,4 @@ class PerPromptStatTracker:
         return advantages
 
     def get_stats(self):
-        return {
-            k: {"mean": np.mean(v), "std": np.std(v), "count": len(v)}
-            for k, v in self.stats.items()
-        }
+        return {k: {"mean": np.mean(v), "std": np.std(v), "count": len(v)} for k, v in self.stats.items()}

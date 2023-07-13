@@ -7,11 +7,12 @@ from collections import defaultdict
 from concurrent import futures
 from dataclasses import asdict, dataclass
 from functools import partial
-from typing import Any, Callable, Dict, Optional
+from typing import Optional
 
 import numpy as np
 import torch
 import tqdm
+import wandb
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
@@ -19,8 +20,6 @@ from diffusers import DDIMScheduler, StableDiffusionPipeline, UNet2DConditionMod
 from diffusers.loaders import AttnProcsLayers
 from diffusers.models.attention_processor import LoRAAttnProcessor
 from PIL import Image
-
-import wandb
 
 from . import BaseTrainer, DDPOConfig
 from .utils import PerPromptStatTracker
@@ -74,14 +73,10 @@ class DDPOTrainer(BaseTrainer):
         self.config = config
 
         if config.resume_from:
-            config.resume_from = os.path.normpath(
-                os.path.expanduser(config.resume_from)
-            )
+            config.resume_from = os.path.normpath(os.path.expanduser(config.resume_from))
             if "checkpoint_" not in os.path.basename(config.resume_from):
                 # get the most recent checkpoint in this directory
-                checkpoints = list(
-                    filter(lambda x: "checkpoint_" in x, os.listdir(config.resume_from))
-                )
+                checkpoints = list(filter(lambda x: "checkpoint_" in x, os.listdir(config.resume_from)))
                 if len(checkpoints) == 0:
                     raise ValueError(f"No checkpoints found in {config.resume_from}")
                 config.resume_from = os.path.join(
@@ -90,9 +85,7 @@ class DDPOTrainer(BaseTrainer):
                 )
 
         # number of timesteps within each trajectory to train on
-        self.num_train_timesteps = int(
-            config.sample_num_steps * config.train_timestep_fraction
-        )
+        self.num_train_timesteps = int(config.sample_num_steps * config.train_timestep_fraction)
 
         accelerator_config = ProjectConfiguration(
             project_dir=os.path.join(self.config.logdir, self.config.run_name),
@@ -107,8 +100,7 @@ class DDPOTrainer(BaseTrainer):
             # we always accumulate gradients across timesteps; we want config.train.gradient_accumulation_steps to be the
             # number of *samples* we accumulate across, so we need to multiply by the number of training timesteps to get
             # the total number of optimizer steps to accumulate across.
-            gradient_accumulation_steps=config.train_gradient_accumulation_steps
-            * self.num_train_timesteps,
+            gradient_accumulation_steps=config.train_gradient_accumulation_steps * self.num_train_timesteps,
         )
 
         if self.accelerator.is_main_process:
@@ -165,22 +157,16 @@ class DDPOTrainer(BaseTrainer):
             lora_attn_procs = {}
             for name in self.sd_pipeline.unet.attn_processors.keys():
                 cross_attention_dim = (
-                    None
-                    if name.endswith("attn1.processor")
-                    else self.sd_pipeline.unet.config.cross_attention_dim
+                    None if name.endswith("attn1.processor") else self.sd_pipeline.unet.config.cross_attention_dim
                 )
                 if name.startswith("mid_block"):
                     hidden_size = self.sd_pipeline.unet.config.block_out_channels[-1]
                 elif name.startswith("up_blocks"):
                     block_id = int(name[len("up_blocks.")])
-                    hidden_size = list(
-                        reversed(self.sd_pipeline.unet.config.block_out_channels)
-                    )[block_id]
+                    hidden_size = list(reversed(self.sd_pipeline.unet.config.block_out_channels))[block_id]
                 elif name.startswith("down_blocks"):
                     block_id = int(name[len("down_blocks.")])
-                    hidden_size = self.sd_pipeline.unet.config.block_out_channels[
-                        block_id
-                    ]
+                    hidden_size = self.sd_pipeline.unet.config.block_out_channels[block_id]
 
                 lora_attn_procs[name] = LoRAAttnProcessor(
                     hidden_size=hidden_size, cross_attention_dim=cross_attention_dim
@@ -228,12 +214,8 @@ class DDPOTrainer(BaseTrainer):
                 max_length=self.sd_pipeline.tokenizer.model_max_length,
             ).input_ids.to(self.accelerator.device)
         )[0]
-        self.sample_neg_prompt_embeds = neg_prompt_embed.repeat(
-            config.sample_batch_size, 1, 1
-        )
-        self.train_neg_prompt_embeds = neg_prompt_embed.repeat(
-            config.train_batch_size, 1, 1
-        )
+        self.sample_neg_prompt_embeds = neg_prompt_embed.repeat(config.sample_batch_size, 1, 1)
+        self.train_neg_prompt_embeds = neg_prompt_embed.repeat(config.train_batch_size, 1, 1)
 
         # initialize stat tracker
         if config.per_prompt_stat_tracking:
@@ -244,14 +226,10 @@ class DDPOTrainer(BaseTrainer):
 
         # for some reason, autocast is necessary for non-lora training but for lora training it isn't necessary and it uses
         # more memory
-        self.autocast = (
-            contextlib.nullcontext if config.use_lora else self.accelerator.autocast
-        )
+        self.autocast = contextlib.nullcontext if config.use_lora else self.accelerator.autocast
 
         # Prepare everything with our `accelerator`.
-        self.trainable_layers, self.optimizer = self.accelerator.prepare(
-            trainable_layers, self.optimizer
-        )
+        self.trainable_layers, self.optimizer = self.accelerator.prepare(trainable_layers, self.optimizer)
 
         # executor to perform callbacks asynchronously. this is beneficial for the llava callbacks which makes a request to a
         # remote server running llava inference.
@@ -259,14 +237,10 @@ class DDPOTrainer(BaseTrainer):
 
         # Train!
         self.samples_per_epoch = (
-            config.sample_batch_size
-            * self.accelerator.num_processes
-            * config.sample_num_batches_per_epoch
+            config.sample_batch_size * self.accelerator.num_processes * config.sample_num_batches_per_epoch
         )
         self.total_train_batch_size = (
-            config.train_batch_size
-            * self.accelerator.num_processes
-            * config.train_gradient_accumulation_steps
+            config.train_batch_size * self.accelerator.num_processes * config.train_gradient_accumulation_steps
         )
 
         if config.resume_from:
@@ -298,14 +272,10 @@ class DDPOTrainer(BaseTrainer):
                 subfolder="unet",
             )
             tmp_unet.load_attn_procs(input_dir)
-            models[0].load_state_dict(
-                AttnProcsLayers(tmp_unet.attn_processors).state_dict()
-            )
+            models[0].load_state_dict(AttnProcsLayers(tmp_unet.attn_processors).state_dict())
             del tmp_unet
         elif not self.config.use_lora and isinstance(models[0], UNet2DConditionModel):
-            load_model = UNet2DConditionModel.from_pretrained(
-                input_dir, subfolder="unet"
-            )
+            load_model = UNet2DConditionModel.from_pretrained(input_dir, subfolder="unet")
             models[0].register_to_config(**load_model.config)
             models[0].load_state_dict(load_model.state_dict())
             del load_model
@@ -324,9 +294,7 @@ class DDPOTrainer(BaseTrainer):
             position=0,
         ):
             # generate prompts
-            prompts, prompt_metadata = zip(
-                *[self.prompt_fn() for _ in range(self.config.sample_batch_size)]
-            )
+            prompts, prompt_metadata = zip(*[self.prompt_fn() for _ in range(self.config.sample_batch_size)])
 
             # encode prompts
             prompt_ids = self.sd_pipeline.tokenizer(
@@ -353,9 +321,7 @@ class DDPOTrainer(BaseTrainer):
                 latents = sd_output.latents
                 log_probs = sd_output.log_probs
 
-            latents = torch.stack(
-                latents, dim=1
-            )  # (batch_size, num_steps + 1, 4, 64, 64)
+            latents = torch.stack(latents, dim=1)  # (batch_size, num_steps + 1, 4, 64, 64)
             # (batch_size, num_steps, 1)
             log_probs = torch.stack(log_probs, dim=1)
             timesteps = self.sd_pipeline.scheduler.timesteps.repeat(
@@ -363,9 +329,7 @@ class DDPOTrainer(BaseTrainer):
             )  # (batch_size, num_steps)
 
             # compute rewards asynchronously
-            rewards = self.executor.submit(
-                self.reward_fn, images, prompts, prompt_metadata
-            )
+            rewards = self.executor.submit(self.reward_fn, images, prompts, prompt_metadata)
             # yield to to make sure reward computation starts
             time.sleep(0)
 
@@ -374,12 +338,8 @@ class DDPOTrainer(BaseTrainer):
                     "prompt_ids": prompt_ids,
                     "prompt_embeds": prompt_embeds,
                     "timesteps": timesteps,
-                    "latents": latents[
-                        :, :-1
-                    ],  # each entry is the latent before timestep t
-                    "next_latents": latents[
-                        :, 1:
-                    ],  # each entry is the latent after timestep t
+                    "latents": latents[:, :-1],  # each entry is the latent before timestep t
+                    "next_latents": latents[:, 1:],  # each entry is the latent after timestep t
                     "log_probs": log_probs,
                     "rewards": rewards,
                 }
@@ -416,9 +376,7 @@ class DDPOTrainer(BaseTrainer):
         # this is a hack to force wandb to log the images as JPEGs instead of PNGs
         with tempfile.TemporaryDirectory() as tmpdir:
             for i, image in enumerate(images):
-                pil = Image.fromarray(
-                    (image.cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
-                )
+                pil = Image.fromarray((image.cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8))
                 pil = pil.resize((256, 256))
                 pil.save(os.path.join(tmpdir, f"{i}.jpg"))
             self.accelerator.log(
@@ -438,9 +396,7 @@ class DDPOTrainer(BaseTrainer):
         if self.config.per_prompt_stat_tracking:
             # gather the prompts across processes
             prompt_ids = self.accelerator.gather(samples["prompt_ids"]).cpu().numpy()
-            prompts = self.sd_pipeline.tokenizer.batch_decode(
-                prompt_ids, skip_special_tokens=True
-            )
+            prompts = self.sd_pipeline.tokenizer.batch_decode(prompt_ids, skip_special_tokens=True)
             advantages = self.stat_tracker.update(prompts, rewards)
         else:
             advantages = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
@@ -456,13 +412,9 @@ class DDPOTrainer(BaseTrainer):
         del samples["prompt_ids"]
 
         total_batch_size, num_timesteps = samples["timesteps"].shape
-        assert (
-            total_batch_size
-            == self.config.sample_batch_size * self.config.sample_num_batches_per_epoch
-        )
+        assert total_batch_size == self.config.sample_batch_size * self.config.sample_num_batches_per_epoch
         assert num_timesteps == self.config.sample_num_steps
 
-        #################### TRAINING ####################
         for inner_epoch in range(self.config.train_num_inner_epochs):
             # shuffle samples along batch dimension
             perm = torch.randperm(total_batch_size, device=self.accelerator.device)
@@ -470,29 +422,21 @@ class DDPOTrainer(BaseTrainer):
 
             # shuffle along time dimension independently for each sample
             perms = torch.stack(
-                [
-                    torch.randperm(num_timesteps, device=self.accelerator.device)
-                    for _ in range(total_batch_size)
-                ]
+                [torch.randperm(num_timesteps, device=self.accelerator.device) for _ in range(total_batch_size)]
             )
             for key in ["timesteps", "latents", "next_latents", "log_probs"]:
                 samples[key] = samples[key][
-                    torch.arange(total_batch_size, device=self.accelerator.device)[
-                        :, None
-                    ],
+                    torch.arange(total_batch_size, device=self.accelerator.device)[:, None],
                     perms,
                 ]
 
             # rebatch for training
             samples_batched = {
-                k: v.reshape(-1, self.config.train_batch_size, *v.shape[1:])
-                for k, v in samples.items()
+                k: v.reshape(-1, self.config.train_batch_size, *v.shape[1:]) for k, v in samples.items()
             }
 
             # dict of lists -> list of dicts for easier iteration
-            samples_batched = [
-                dict(zip(samples_batched, x)) for x in zip(*samples_batched.values())
-            ]
+            samples_batched = [dict(zip(samples_batched, x)) for x in zip(*samples_batched.values())]
 
             # train
             self.sd_pipeline.unet.train()
@@ -505,9 +449,7 @@ class DDPOTrainer(BaseTrainer):
             ):
                 if self.config.train_cfg:
                     # concat negative prompts to sample prompts to avoid two forward passes
-                    embeds = torch.cat(
-                        [self.train_neg_prompt_embeds, sample["prompt_embeds"]]
-                    )
+                    embeds = torch.cat([self.train_neg_prompt_embeds, sample["prompt_embeds"]])
                 else:
                     embeds = sample["prompt_embeds"]
 
@@ -527,10 +469,8 @@ class DDPOTrainer(BaseTrainer):
                                     embeds,
                                 ).sample
                                 noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                                noise_pred = (
-                                    noise_pred_uncond
-                                    + self.config.sample_guidance_scale
-                                    * (noise_pred_text - noise_pred_uncond)
+                                noise_pred = noise_pred_uncond + self.config.sample_guidance_scale * (
+                                    noise_pred_text - noise_pred_uncond
                                 )
                             else:
                                 noise_pred = self.sd_pipeline.unet(
@@ -565,17 +505,9 @@ class DDPOTrainer(BaseTrainer):
                         # John Schulman says that (ratio - 1) - log(ratio) is a better
                         # estimator, but most existing code uses this so...
                         # http://joschu.net/blog/kl-approx.html
-                        info["approx_kl"].append(
-                            0.5
-                            * torch.mean((log_prob - sample["log_probs"][:, j]) ** 2)
-                        )
+                        info["approx_kl"].append(0.5 * torch.mean((log_prob - sample["log_probs"][:, j]) ** 2))
                         info["clipfrac"].append(
-                            torch.mean(
-                                (
-                                    torch.abs(ratio - 1.0)
-                                    > self.config.train_clip_range
-                                ).float()
-                            )
+                            torch.mean((torch.abs(ratio - 1.0) > self.config.train_clip_range).float())
                         )
                         info["loss"].append(loss)
 
@@ -605,11 +537,7 @@ class DDPOTrainer(BaseTrainer):
             # make sure we did an optimization step at the end of the inner epoch
             assert self.accelerator.sync_gradients
 
-        if (
-            epoch != 0
-            and epoch % self.config.save_freq == 0
-            and self.accelerator.is_main_process
-        ):
+        if epoch != 0 and epoch % self.config.save_freq == 0 and self.accelerator.is_main_process:
             self.accelerator.save_state()
 
         return global_step
@@ -628,7 +556,7 @@ class DDPOTrainer(BaseTrainer):
         )
         return torch.mean(torch.maximum(unclipped_loss, clipped_loss))
 
-    def run(self, epochs: Optional[int]=None):
+    def run(self, epochs: Optional[int] = None):
         global_step = 0
         if epochs is None:
             epochs = self.config.num_epochs

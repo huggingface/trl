@@ -1,11 +1,10 @@
-import dataclasses
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
 import torch.nn as nn
+from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import rescale_noise_cfg
 from diffusers.utils import randn_tensor
-from PIL import Image
 from transformers import CLIPModel, CLIPProcessor
 
 from trl import (
@@ -25,9 +24,7 @@ def _left_broadcast(t, shape):
 
 class DDPOSchedulerExample(DDPOScheduler):
     def _get_variance(self, timestep, prev_timestep):
-        alpha_prod_t = torch.gather(self.alphas_cumprod, 0, timestep.cpu()).to(
-            timestep.device
-        )
+        alpha_prod_t = torch.gather(self.alphas_cumprod, 0, timestep.cpu()).to(timestep.device)
         alpha_prod_t_prev = torch.where(
             prev_timestep.cpu() >= 0,
             self.alphas_cumprod.gather(0, prev_timestep.cpu()),
@@ -36,9 +33,7 @@ class DDPOSchedulerExample(DDPOScheduler):
         beta_prod_t = 1 - alpha_prod_t
         beta_prod_t_prev = 1 - alpha_prod_t_prev
 
-        variance = (beta_prod_t_prev / beta_prod_t) * (
-            1 - alpha_prod_t / alpha_prod_t_prev
-        )
+        variance = (beta_prod_t_prev / beta_prod_t) * (1 - alpha_prod_t / alpha_prod_t_prev)
 
         return variance
 
@@ -94,13 +89,9 @@ class DDPOSchedulerExample(DDPOScheduler):
         # - pred_prev_sample -> "x_t-1"
 
         # 1. get previous step value (=t-1)
-        prev_timestep = (
-            timestep - self.config.num_train_timesteps // self.num_inference_steps
-        )
+        prev_timestep = timestep - self.config.num_train_timesteps // self.num_inference_steps
         # to prevent OOB on gather
-        prev_timestep = torch.clamp(
-            prev_timestep, 0, self.config.num_train_timesteps - 1
-        )
+        prev_timestep = torch.clamp(prev_timestep, 0, self.config.num_train_timesteps - 1)
 
         # 2. compute alphas, betas
         alpha_prod_t = self.alphas_cumprod.gather(0, timestep.cpu())
@@ -110,31 +101,21 @@ class DDPOSchedulerExample(DDPOScheduler):
             self.final_alpha_cumprod,
         )
         alpha_prod_t = _left_broadcast(alpha_prod_t, sample.shape).to(sample.device)
-        alpha_prod_t_prev = _left_broadcast(alpha_prod_t_prev, sample.shape).to(
-            sample.device
-        )
+        alpha_prod_t_prev = _left_broadcast(alpha_prod_t_prev, sample.shape).to(sample.device)
 
         beta_prod_t = 1 - alpha_prod_t
 
         # 3. compute predicted original sample from predicted noise also called
         # "predicted x_0" of formula (12) from https://arxiv.org/pdf/2010.02502.pdf
         if self.config.prediction_type == "epsilon":
-            pred_original_sample = (
-                sample - beta_prod_t ** (0.5) * model_output
-            ) / alpha_prod_t ** (0.5)
+            pred_original_sample = (sample - beta_prod_t ** (0.5) * model_output) / alpha_prod_t ** (0.5)
             pred_epsilon = model_output
         elif self.config.prediction_type == "sample":
             pred_original_sample = model_output
-            pred_epsilon = (
-                sample - alpha_prod_t ** (0.5) * pred_original_sample
-            ) / beta_prod_t ** (0.5)
+            pred_epsilon = (sample - alpha_prod_t ** (0.5) * pred_original_sample) / beta_prod_t ** (0.5)
         elif self.config.prediction_type == "v_prediction":
-            pred_original_sample = (alpha_prod_t**0.5) * sample - (
-                beta_prod_t**0.5
-            ) * model_output
-            pred_epsilon = (alpha_prod_t**0.5) * model_output + (
-                beta_prod_t**0.5
-            ) * sample
+            pred_original_sample = (alpha_prod_t**0.5) * sample - (beta_prod_t**0.5) * model_output
+            pred_epsilon = (alpha_prod_t**0.5) * model_output + (beta_prod_t**0.5) * sample
         else:
             raise ValueError(
                 f"prediction_type given as {self.config.prediction_type} must be one of `epsilon`, `sample`, or"
@@ -157,19 +138,13 @@ class DDPOSchedulerExample(DDPOScheduler):
 
         if use_clipped_model_output:
             # the pred_epsilon is always re-derived from the clipped x_0 in Glide
-            pred_epsilon = (
-                sample - alpha_prod_t ** (0.5) * pred_original_sample
-            ) / beta_prod_t ** (0.5)
+            pred_epsilon = (sample - alpha_prod_t ** (0.5) * pred_original_sample) / beta_prod_t ** (0.5)
 
         # 6. compute "direction pointing to x_t" of formula (12) from https://arxiv.org/pdf/2010.02502.pdf
-        pred_sample_direction = (1 - alpha_prod_t_prev - std_dev_t**2) ** (
-            0.5
-        ) * pred_epsilon
+        pred_sample_direction = (1 - alpha_prod_t_prev - std_dev_t**2) ** (0.5) * pred_epsilon
 
         # 7. compute x_t without "random noise" of formula (12) from https://arxiv.org/pdf/2010.02502.pdf
-        prev_sample_mean = (
-            alpha_prod_t_prev ** (0.5) * pred_original_sample + pred_sample_direction
-        )
+        prev_sample_mean = alpha_prod_t_prev ** (0.5) * pred_original_sample + pred_sample_direction
 
         if prev_sample is not None and generator is not None:
             raise ValueError(
@@ -319,9 +294,7 @@ class DDPOPipeline(DDPOStableDiffusionPipeline):
 
         # 3. Encode input prompt
         text_encoder_lora_scale = (
-            cross_attention_kwargs.get("scale", None)
-            if cross_attention_kwargs is not None
-            else None
+            cross_attention_kwargs.get("scale", None) if cross_attention_kwargs is not None else None
         )
         prompt_embeds = self._encode_prompt(
             prompt,
@@ -361,12 +334,8 @@ class DDPOPipeline(DDPOStableDiffusionPipeline):
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
                 # expand the latents if we are doing classifier free guidance
-                latent_model_input = (
-                    torch.cat([latents] * 2) if do_classifier_free_guidance else latents
-                )
-                latent_model_input = self.scheduler.scale_model_input(
-                    latent_model_input, t
-                )
+                latent_model_input = torch.cat([latents] * 2) if do_classifier_free_guidance else latents
+                latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
                 # predict the noise residual
                 noise_pred = self.unet(
@@ -380,22 +349,16 @@ class DDPOPipeline(DDPOStableDiffusionPipeline):
                 # perform guidance
                 if do_classifier_free_guidance:
                     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                    noise_pred = noise_pred_uncond + guidance_scale * (
-                        noise_pred_text - noise_pred_uncond
-                    )
+                    noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
 
                 if do_classifier_free_guidance and guidance_rescale > 0.0:
                     # Based on 3.4. in https://arxiv.org/pdf/2305.08891.pdf
-                    noise_pred = rescale_noise_cfg(
-                        noise_pred, noise_pred_text, guidance_rescale=guidance_rescale
-                    )
+                    noise_pred = rescale_noise_cfg(noise_pred, noise_pred_text, guidance_rescale=guidance_rescale)
 
                 # TODO: step seems to be getting multiple values of eta?
 
                 # compute the previous noisy sample x_t -> x_t-1
-                scheduler_output = self.scheduler.step(
-                    noise_pred, t, latents, **extra_step_kwargs
-                )
+                scheduler_output = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs)
                 latents = scheduler_output.latents
                 log_prob = scheduler_output.log_probs
 
@@ -403,20 +366,14 @@ class DDPOPipeline(DDPOStableDiffusionPipeline):
                 all_log_probs.append(log_prob)
 
                 # call the callback, if provided
-                if i == len(timesteps) - 1 or (
-                    (i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0
-                ):
+                if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
                     progress_bar.update()
                     if callback is not None and i % callback_steps == 0:
                         callback(i, t, latents)
 
         if not output_type == "latent":
-            image = self.vae.decode(
-                latents / self.vae.config.scaling_factor, return_dict=False
-            )[0]
-            image, has_nsfw_concept = self.run_safety_checker(
-                image, device, prompt_embeds.dtype
-            )
+            image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0]
+            image, has_nsfw_concept = self.run_safety_checker(image, device, prompt_embeds.dtype)
         else:
             image = latents
             has_nsfw_concept = None
@@ -426,9 +383,7 @@ class DDPOPipeline(DDPOStableDiffusionPipeline):
         else:
             do_denormalize = [not has_nsfw for has_nsfw in has_nsfw_concept]
 
-        image = self.image_processor.postprocess(
-            image, output_type=output_type, do_denormalize=do_denormalize
-        )
+        image = self.image_processor.postprocess(image, output_type=output_type, do_denormalize=do_denormalize)
 
         # Offload last model to CPU
         if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
@@ -539,7 +494,10 @@ animals = [
     "kangaroo",
 ]
 
-prompt_fn = lambda: (np.random.choice(animals), {})
+
+def prompt_fn():
+    return np.random.choice(animals), {}
+
 
 if __name__ == "__main__":
     config = DDPOConfig(
@@ -551,9 +509,7 @@ if __name__ == "__main__":
     # revision of the model to load.
     pretrained_revision = "main"
 
-    pipeline = DDPOPipeline.from_pretrained(
-        pretrained_model, revision=pretrained_revision
-    )
+    pipeline = DDPOPipeline.from_pretrained(pretrained_model, revision=pretrained_revision)
 
     pipeline.scheduler = DDPOSchedulerExample.from_config(pipeline.scheduler.config)
 
