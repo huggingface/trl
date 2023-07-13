@@ -19,14 +19,14 @@
     title: Training your own reward model
   - local: sft_trainer
     title: Supervised fine-tuning
-  - local: extras
-    title: Extras - Better model output without reinforcement learning
+  - local: best_of_n
+    title: Best of N sampling - Better model output without reinforcement learning
   title: API
 - sections: 
   - local: sentiment_tuning
     title: Sentiment Tuning
   - local: lora_tuning_peft
-    title: Peft support - Low rank adaption of 8 bit models
+    title: Training with PEFT
   - local: detoxifying_a_lm
     title: Detoxifying a Language Model
   - local: using_llama_models
