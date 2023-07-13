@@ -542,7 +542,11 @@ animals = [
 prompt_fn = lambda: (np.random.choice(animals), {})
 
 if __name__ == "__main__":
-    config = DDPOConfig()
+    config = DDPOConfig(
+        num_epochs=200,
+        train_gradient_accumulation_steps=1,
+        per_prompt_stat_tracking_buffer_size=32,
+    )
     pretrained_model = "runwayml/stable-diffusion-v1-5"
     # revision of the model to load.
     pretrained_revision = "main"
@@ -555,4 +559,4 @@ if __name__ == "__main__":
 
     trainer = DDPOTrainer(config, aesthetic_score(), prompt_fn, pipeline)
 
-    trainer.step(1, 1)
+    trainer.run()

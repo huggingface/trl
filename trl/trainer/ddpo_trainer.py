@@ -3,6 +3,7 @@ import datetime
 import os
 import tempfile
 import time
+from collections import defaultdict
 from concurrent import futures
 from dataclasses import asdict, dataclass
 from functools import partial
@@ -18,7 +19,6 @@ from diffusers import DDIMScheduler, StableDiffusionPipeline, UNet2DConditionMod
 from diffusers.loaders import AttnProcsLayers
 from diffusers.models.attention_processor import LoRAAttnProcessor
 from PIL import Image
-from collections import defaultdict
 
 import wandb
 
@@ -268,6 +268,13 @@ class DDPOTrainer(BaseTrainer):
             * self.accelerator.num_processes
             * config.train_gradient_accumulation_steps
         )
+
+        if config.resume_from:
+            logger.info(f"Resuming from {config.resume_from}")
+            self.accelerator.load_state(config.resume_from)
+            self.first_epoch = int(config.resume_from.split("_")[-1]) + 1
+        else:
+            self.first_epoch = 0
 
     def _save_model_hook(self, models, weights, output_dir):
         assert len(models) == 1
@@ -605,13 +612,14 @@ class DDPOTrainer(BaseTrainer):
         ):
             self.accelerator.save_state()
 
+        return global_step
+
     def loss(
         self,
         advantages: torch.Tensor,
         clip_range: float,
         ratio: torch.Tensor,
     ):
-        print(">>",advantages)
         unclipped_loss = -advantages * ratio
         clipped_loss = -advantages * torch.clamp(
             ratio,
@@ -619,3 +627,10 @@ class DDPOTrainer(BaseTrainer):
             1.0 + clip_range,
         )
         return torch.mean(torch.maximum(unclipped_loss, clipped_loss))
+
+    def run(self, epochs: Optional[int]=None):
+        global_step = 0
+        if epochs is None:
+            epochs = self.config.num_epochs
+        for epoch in range(self.first_epoch, epochs):
+            global_step = self.step(epoch, global_step)
