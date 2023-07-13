@@ -8,9 +8,9 @@ from dataclasses import asdict, dataclass
 from functools import partial
 from typing import Any, Callable, Dict, Optional
 
+import numpy as np
 import torch
 import tqdm
-import wandb
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
@@ -18,6 +18,9 @@ from diffusers import DDIMScheduler, StableDiffusionPipeline, UNet2DConditionMod
 from diffusers.loaders import AttnProcsLayers
 from diffusers.models.attention_processor import LoRAAttnProcessor
 from PIL import Image
+from collections import defaultdict
+
+import wandb
 
 from . import BaseTrainer, DDPOConfig
 from .utils import PerPromptStatTracker
@@ -50,6 +53,7 @@ class DDPOScheduler(DDIMScheduler):
 class DDPOStableDiffusionPipeline(StableDiffusionPipeline):
     def __call__(self, **kwargs) -> DDPOPipelineOutput:
         raise NotImplementedError
+
 
 class DDPOTrainer(BaseTrainer):
     def __init__(
@@ -314,9 +318,7 @@ class DDPOTrainer(BaseTrainer):
         ):
             # generate prompts
             prompts, prompt_metadata = zip(
-                *[
-                    self.prompt_fn() for _ in range(self.config.sample_batch_size)
-                ]
+                *[self.prompt_fn() for _ in range(self.config.sample_batch_size)]
             )
 
             # encode prompts
@@ -550,7 +552,7 @@ class DDPOTrainer(BaseTrainer):
 
                         ratio = torch.exp(log_prob - sample["log_probs"][:, j])
 
-                        loss = self.loss(sample, self.config.train_clip_range, ratio)
+                        loss = self.loss(advantages, self.config.train_clip_range, ratio)
 
                         # debugging values
                         # John Schulman says that (ratio - 1) - log(ratio) is a better
@@ -609,6 +611,7 @@ class DDPOTrainer(BaseTrainer):
         clip_range: float,
         ratio: torch.Tensor,
     ):
+        print(">>",advantages)
         unclipped_loss = -advantages * ratio
         clipped_loss = -advantages * torch.clamp(
             ratio,

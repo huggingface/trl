@@ -1,3 +1,4 @@
+import dataclasses
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -6,7 +7,6 @@ import torch.nn as nn
 from diffusers.utils import randn_tensor
 from PIL import Image
 from transformers import CLIPModel, CLIPProcessor
-import dataclasses
 
 from trl import (
     DDPOConfig,
@@ -24,6 +24,24 @@ def _left_broadcast(t, shape):
 
 
 class DDPOSchedulerExample(DDPOScheduler):
+    def _get_variance(self, timestep, prev_timestep):
+        alpha_prod_t = torch.gather(self.alphas_cumprod, 0, timestep.cpu()).to(
+            timestep.device
+        )
+        alpha_prod_t_prev = torch.where(
+            prev_timestep.cpu() >= 0,
+            self.alphas_cumprod.gather(0, prev_timestep.cpu()),
+            self.final_alpha_cumprod,
+        ).to(timestep.device)
+        beta_prod_t = 1 - alpha_prod_t
+        beta_prod_t_prev = 1 - alpha_prod_t_prev
+
+        variance = (beta_prod_t_prev / beta_prod_t) * (
+            1 - alpha_prod_t / alpha_prod_t_prev
+        )
+
+        return variance
+
     def step(
         self,
         model_output: torch.FloatTensor,
@@ -133,7 +151,7 @@ class DDPOSchedulerExample(DDPOScheduler):
 
         # 5. compute variance: "sigma_t(η)" -> see formula (16)
         # σ_t = sqrt((1 − α_t−1)/(1 − α_t)) * sqrt(1 − α_t/α_t−1)
-        variance = self._get_variance(self, timestep, prev_timestep)
+        variance = self._get_variance(timestep, prev_timestep)
         std_dev_t = eta * variance ** (0.5)
         std_dev_t = _left_broadcast(std_dev_t, sample.shape).to(sample.device)
 
@@ -172,7 +190,7 @@ class DDPOSchedulerExample(DDPOScheduler):
         log_prob = (
             -((prev_sample.detach() - prev_sample_mean) ** 2) / (2 * (std_dev_t**2))
             - torch.log(std_dev_t)
-            - torch.log(torch.sqrt(2 * torch.as_tensor(math.pi)))
+            - torch.log(torch.sqrt(2 * torch.as_tensor(np.pi)))
         )
         # mean along all but batch dimension
         log_prob = log_prob.mean(dim=tuple(range(1, log_prob.ndim)))
@@ -181,6 +199,7 @@ class DDPOSchedulerExample(DDPOScheduler):
 
 
 class DDPOPipeline(DDPOStableDiffusionPipeline):
+    @torch.no_grad()
     def __call__(
         self,
         prompt: Optional[Union[str, List[str]]] = None,
@@ -333,7 +352,7 @@ class DDPOPipeline(DDPOStableDiffusionPipeline):
         )
 
         # 6. Prepare extra step kwargs. TODO: Logic should ideally just be moved out of the pipeline
-        extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
+        extra_step_kwargs = {"eta": eta}
 
         # 7. Denoising loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
@@ -370,16 +389,15 @@ class DDPOPipeline(DDPOStableDiffusionPipeline):
                     noise_pred = rescale_noise_cfg(
                         noise_pred, noise_pred_text, guidance_rescale=guidance_rescale
                     )
-                
+
                 # TODO: step seems to be getting multiple values of eta?
-                print(extra_step_kwargs)
 
                 # compute the previous noisy sample x_t -> x_t-1
                 scheduler_output = self.scheduler.step(
-                    self.scheduler, noise_pred, t, latents, **extra_step_kwargs
+                    noise_pred, t, latents, **extra_step_kwargs
                 )
                 latents = scheduler_output.latents
-                log_prob = scheduler_output.log_prob
+                log_prob = scheduler_output.log_probs
 
                 all_latents.append(latents)
                 all_log_probs.append(log_prob)
@@ -471,6 +489,7 @@ def aesthetic_score():
 
     return _fn
 
+
 # prompt function
 animals = [
     "cat",
@@ -517,7 +536,7 @@ animals = [
     "bat",
     "gorilla",
     "hedgehog",
-    "kangaroo"
+    "kangaroo",
 ]
 
 prompt_fn = lambda: (np.random.choice(animals), {})
@@ -528,10 +547,12 @@ if __name__ == "__main__":
     # revision of the model to load.
     pretrained_revision = "main"
 
-    pipeline = DDPOPipeline.from_pretrained(pretrained_model, revision=pretrained_revision)
+    pipeline = DDPOPipeline.from_pretrained(
+        pretrained_model, revision=pretrained_revision
+    )
 
     pipeline.scheduler = DDPOSchedulerExample.from_config(pipeline.scheduler.config)
 
     trainer = DDPOTrainer(config, aesthetic_score(), prompt_fn, pipeline)
 
-    trainer.step(1,1)
+    trainer.step(1, 1)

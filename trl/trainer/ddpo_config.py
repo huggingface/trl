@@ -74,8 +74,12 @@ class DDPOConfig(object):
     train_learning_rate: Optional[float] = field(
         default=3e-4, metadata={"help": "Learning rate."}
     )
-    train_adam_beta1: Optional[float] = field(default=0.9, metadata={"help": "Adam beta1."})
-    train_adam_beta2: Optional[float] = field(default=0.999, metadata={"help": "Adam beta2."})
+    train_adam_beta1: Optional[float] = field(
+        default=0.9, metadata={"help": "Adam beta1."}
+    )
+    train_adam_beta2: Optional[float] = field(
+        default=0.999, metadata={"help": "Adam beta2."}
+    )
     train_adam_weight_decay: Optional[float] = field(
         default=1e-4, metadata={"help": "Adam weight decay."}
     )
@@ -85,7 +89,7 @@ class DDPOConfig(object):
     train_gradient_accumulation_steps: Optional[int] = field(
         default=1, metadata={"help": "Number of gradient accumulation steps."}
     )
-    max_grad_norm: Optional[float] = field(
+    train_max_grad_norm: Optional[float] = field(
         default=1.0, metadata={"help": "Maximum gradient norm for gradient clipping."}
     )
     train_num_inner_epochs: Optional[int] = field(
@@ -109,9 +113,7 @@ class DDPOConfig(object):
 
     per_prompt_stat_tracking: Optional[bool] = field(
         default=False,
-        metadata={
-            "help": "Whether to track statistics for each prompt separately."
-        },
+        metadata={"help": "Whether to track statistics for each prompt separately."},
     )
 
     per_prompt_stat_tracking_buffer_size: Optional[int] = field(
