@@ -206,5 +206,6 @@ class RewardTrainer(Trainer):
         logits = torch.stack(logits).mean(dim=2).softmax(dim=0).T
 
         labels = torch.zeros(logits.shape[0])
+        labels = self._prepare_inputs(labels)
 
         return loss, logits, labels
