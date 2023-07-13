@@ -1,14 +1,20 @@
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+
+import numpy as np
 import torch
-from typing import Optional, Tuple, Union, List, Callable, Dict, Any
+import torch.nn as nn
+from diffusers.utils import randn_tensor
+from PIL import Image
+from transformers import CLIPModel, CLIPProcessor
+import dataclasses
 
 from trl import (
     DDPOConfig,
-    DDPOTrainer,
+    DDPOPipelineOutput,
     DDPOScheduler,
-    DDPOStableDiffusionPipeline,
-    DDPOPipelineOutput,
-    DDPOPipelineOutput,
     DDPOSchedulerOutput,
+    DDPOStableDiffusionPipeline,
+    DDPOTrainer,
 )
 
 
@@ -177,7 +183,7 @@ class DDPOSchedulerExample(DDPOScheduler):
 class DDPOPipeline(DDPOStableDiffusionPipeline):
     def __call__(
         self,
-        prompt: Union[str, List[str]],
+        prompt: Optional[Union[str, List[str]]] = None,
         height: Optional[int] = None,
         width: Optional[int] = None,
         num_inference_steps: int = 50,
@@ -364,11 +370,16 @@ class DDPOPipeline(DDPOStableDiffusionPipeline):
                     noise_pred = rescale_noise_cfg(
                         noise_pred, noise_pred_text, guidance_rescale=guidance_rescale
                     )
+                
+                # TODO: step seems to be getting multiple values of eta?
+                print(extra_step_kwargs)
 
                 # compute the previous noisy sample x_t -> x_t-1
-                latents, log_prob = ddim_step_with_logprob(
+                scheduler_output = self.scheduler.step(
                     self.scheduler, noise_pred, t, latents, **extra_step_kwargs
                 )
+                latents = scheduler_output.latents
+                log_prob = scheduler_output.log_prob
 
                 all_latents.append(latents)
                 all_log_probs.append(log_prob)
@@ -408,5 +419,119 @@ class DDPOPipeline(DDPOStableDiffusionPipeline):
         return DDPOPipelineOutput(image, all_latents, all_log_probs)
 
 
+# reward function
+class MLP(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.layers = nn.Sequential(
+            nn.Linear(768, 1024),
+            nn.Dropout(0.2),
+            nn.Linear(1024, 128),
+            nn.Dropout(0.2),
+            nn.Linear(128, 64),
+            nn.Dropout(0.1),
+            nn.Linear(64, 16),
+            nn.Linear(16, 1),
+        )
+
+    @torch.no_grad()
+    def forward(self, embed):
+        return self.layers(embed)
+
+
+class AestheticScorer(torch.nn.Module):
+    def __init__(self, dtype):
+        super().__init__()
+        self.clip = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
+        self.processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
+        self.mlp = MLP()
+        state_dict = torch.load("./sac+logos+ava1-l14-linearMSE.pth")
+        self.mlp.load_state_dict(state_dict)
+        self.dtype = dtype
+        self.eval()
+
+    @torch.no_grad()
+    def __call__(self, images):
+        device = next(self.parameters()).device
+        inputs = self.processor(images=images, return_tensors="pt")
+        inputs = {k: v.to(self.dtype).to(device) for k, v in inputs.items()}
+        embed = self.clip.get_image_features(**inputs)
+        # normalize embedding
+        embed = embed / torch.linalg.vector_norm(embed, dim=-1, keepdim=True)
+        return self.mlp(embed).squeeze(1)
+
+
+def aesthetic_score():
+    scorer = AestheticScorer(dtype=torch.float32).cuda()
+
+    def _fn(images, prompts, metadata):
+        images = (images * 255).round().clamp(0, 255).to(torch.uint8)
+        scores = scorer(images)
+        return scores, {}
+
+    return _fn
+
+# prompt function
+animals = [
+    "cat",
+    "dog",
+    "horse",
+    "monkey",
+    "rabbit",
+    "zebra",
+    "spider",
+    "bird",
+    "sheep",
+    "deer",
+    "cow",
+    "goat",
+    "lion",
+    "tiger",
+    "bear",
+    "raccoon",
+    "fox",
+    "wolf",
+    "lizard",
+    "beetle",
+    "ant",
+    "butterfly",
+    "fish",
+    "shark",
+    "whale",
+    "dolphin",
+    "squirrel",
+    "mouse",
+    "rat",
+    "snake",
+    "turtle",
+    "frog",
+    "chicken",
+    "duck",
+    "goose",
+    "bee",
+    "pig",
+    "turkey",
+    "fly",
+    "llama",
+    "camel",
+    "bat",
+    "gorilla",
+    "hedgehog",
+    "kangaroo"
+]
+
+prompt_fn = lambda: (np.random.choice(animals), {})
+
 if __name__ == "__main__":
-    pass
+    config = DDPOConfig()
+    pretrained_model = "runwayml/stable-diffusion-v1-5"
+    # revision of the model to load.
+    pretrained_revision = "main"
+
+    pipeline = DDPOPipeline.from_pretrained(pretrained_model, revision=pretrained_revision)
+
+    pipeline.scheduler = DDPOSchedulerExample.from_config(pipeline.scheduler.config)
+
+    trainer = DDPOTrainer(config, aesthetic_score(), prompt_fn, pipeline)
+
+    trainer.step(1,1)

@@ -71,18 +71,18 @@ class DDPOConfig(object):
         default=False,
         metadata={"help": "Whether to use the 8bit Adam optimizer from bitsandbytes."},
     )
-    learning_rate: Optional[float] = field(
+    train_learning_rate: Optional[float] = field(
         default=3e-4, metadata={"help": "Learning rate."}
     )
-    adam_beta1: Optional[float] = field(default=0.9, metadata={"help": "Adam beta1."})
-    adam_beta2: Optional[float] = field(default=0.999, metadata={"help": "Adam beta2."})
-    adam_weight_decay: Optional[float] = field(
+    train_adam_beta1: Optional[float] = field(default=0.9, metadata={"help": "Adam beta1."})
+    train_adam_beta2: Optional[float] = field(default=0.999, metadata={"help": "Adam beta2."})
+    train_adam_weight_decay: Optional[float] = field(
         default=1e-4, metadata={"help": "Adam weight decay."}
     )
-    adam_epsilon: Optional[float] = field(
+    train_adam_epsilon: Optional[float] = field(
         default=1e-8, metadata={"help": "Adam epsilon."}
     )
-    gradient_accumulation_steps: Optional[int] = field(
+    train_gradient_accumulation_steps: Optional[int] = field(
         default=1, metadata={"help": "Number of gradient accumulation steps."}
     )
     max_grad_norm: Optional[float] = field(
@@ -106,16 +106,14 @@ class DDPOConfig(object):
     train_timestep_fraction: Optional[float] = field(
         default=1.0, metadata={"help": "The fraction of timesteps to train on."}
     )
-    prompt_fn: Optional[str] = field(
-        default="imagenet_animals", metadata={"help": "Prompt function to use."}
+
+    per_prompt_stat_tracking: Optional[bool] = field(
+        default=False,
+        metadata={
+            "help": "Whether to track statistics for each prompt separately."
+        },
     )
-    prompt_fn_kwargs: Optional[dict] = field(
-        default_factory=dict,
-        metadata={"help": "Kwargs to pass to the prompt function."},
-    )
-    reward_fn: Optional[str] = field(
-        default="jpeg_compressibility", metadata={"help": "Reward function to use."}
-    )
+
     per_prompt_stat_tracking_buffer_size: Optional[int] = field(
         default=16,
         metadata={
