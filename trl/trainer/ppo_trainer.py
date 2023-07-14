@@ -1136,6 +1136,12 @@ class PPOTrainer(BaseTrainer):
                 " that the generation kwargs are set correctly, or review your training hyperparameters."
             )
 
+        if mean_kl.item() < -10.0:
+            warnings.warn(
+                f"KL divergence is becoming very negative: {mean_kl.item():.2f} - this might be a precursor for failed training."
+                f" Here is the kl penalty score per token - tokens : {data['queries']} | kl {kl_list}."
+            )
+
         stats = {
             "objective/kl": mean_kl,
             "objective/kl_dist": kl_list,
