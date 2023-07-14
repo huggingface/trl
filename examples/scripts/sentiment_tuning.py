@@ -134,6 +134,7 @@ set_seed(config.seed)
 if not script_args.use_peft:
     ref_model = trl_model_class.from_pretrained(config.model_name)
     device_map = None
+    peft_config = None
 else:
     peft_config = LoraConfig(
         r=16,
