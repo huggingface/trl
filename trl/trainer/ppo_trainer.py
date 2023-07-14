@@ -1139,7 +1139,7 @@ class PPOTrainer(BaseTrainer):
         if mean_kl.item() < -10.0:
             warnings.warn(
                 f"KL divergence is becoming very negative: {mean_kl.item():.2f} - this might be a precursor for failed training."
-                f" Here is the kl penalty score per token - tokens : {data['queries']} | kl {kl_list}."
+                f" Here is the mea, kl penalty score per token {kl_list}."
             )
 
         stats = {
