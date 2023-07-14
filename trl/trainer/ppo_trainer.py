@@ -788,12 +788,12 @@ class PPOTrainer(BaseTrainer):
     def _kl_warning(self, non_score_reward, responses, masks):
         avg_kl = masked_mean(non_score_reward, masks, axis=-1)
         for i, kl in enumerate(avg_kl):
-            if kl<-10:
+            if kl < -10:
                 warning_str = f"The average KL for sequence is below threshold ({kl.item():.2f}). Per token KL: "
                 for token_index in range(non_score_reward.shape[1]):
-                    if masks[i, token_index]==1:
+                    if masks[i, token_index] == 1:
                         # TODO: a bug adds an unnecessary masked token at position 0 which is why we offset -1
-                        token = self.tokenizer.convert_ids_to_tokens([responses[i][token_index-1]])[0]
+                        token = self.tokenizer.convert_ids_to_tokens([responses[i][token_index - 1]])[0]
                         per_token_kl = non_score_reward[i, token_index]
                         warning_str += f"[{token}, {per_token_kl:.2f}] "
                 warnings.warn(warning_str)
