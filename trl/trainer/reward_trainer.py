@@ -27,7 +27,7 @@ from .utils import PeftSavingCallback, RewardDataCollatorWithPadding, compute_ac
 
 
 if is_peft_available():
-    from peft import PeftModel, get_peft_model
+    from peft import PeftModel, get_peft_model, prepare_model_for_int8_training
 
 
 class RewardTrainer(Trainer):
@@ -103,6 +103,9 @@ class RewardTrainer(Trainer):
                 "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
             )
         elif is_peft_available() and peft_config is not None:
+            if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_quantized", False):
+                model = prepare_model_for_int8_training(model)
+
             model = get_peft_model(model, peft_config)
 
         if is_peft_available() and callbacks is None and isinstance(model, PeftModel):
@@ -205,5 +208,6 @@ class RewardTrainer(Trainer):
         logits = torch.stack(logits).mean(dim=2).softmax(dim=0).T
 
         labels = torch.zeros(logits.shape[0])
+        labels = self._prepare_inputs(labels)
 
         return loss, logits, labels

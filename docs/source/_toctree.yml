@@ -6,9 +6,9 @@
   - local: installation
     title: Installation
   - local: customization
-    title: Customize your training
+    title: Customize your Training
   - local: logging
-    title: Understanding logs
+    title: Understanding Logs
   title: Get started
 - sections:
   - local: models
@@ -16,25 +16,21 @@
   - local: trainer
     title: Trainer Classes
   - local: reward_trainer
-    title: Training your own reward model
+    title: Reward Model Training
   - local: sft_trainer
-    title: Supervised fine-tuning
-  - local: dpo_trainer
-    title: DPO Trainer
-  - local: extras
-    title: Extras - Better model output without reinforcement learning
+    title: Supervised Fine-Tuning
+  - local: best_of_n
+    title: Best of N Sampling
   title: API
 - sections: 
   - local: sentiment_tuning
     title: Sentiment Tuning
   - local: lora_tuning_peft
-    title: Peft support - Low rank adaption of 8 bit models
-  - local: summarization_reward_tuning
-    title: Summarization Reward Tuning
+    title: Training with PEFT
   - local: detoxifying_a_lm
     title: Detoxifying a Language Model
   - local: using_llama_models
-    title: Using LLaMA with TRL
+    title: Training StackLlama
   - local: multi_adapter_rl
-    title: Multi Adapter RL (MARL) - a single base model for everything
+    title: Multi Adapter RLHF
   title: Examples

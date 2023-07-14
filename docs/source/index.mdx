@@ -4,6 +4,28 @@
 
 # TRL - Transformer Reinforcement Learning
 
-With the TRL (Transformer Reinforcement Learning) library you can train transformer language models with reinforcement learning. The library is integrated with 🤗 [transformers](https://github.com/huggingface/transformers).
+TRL is a full stack library where we provide a set of tools to train transformer language models with Reinforcement Learning, from the Supervised Fine-tuning step (SFT), Reward Modeling step (RM) to the Proximal Policy Optimization (PPO) step. 
+The library is integrated with 🤗 [transformers](https://github.com/huggingface/transformers).
 
-TRL supports decoder models such as GPT-2, BLOOM, GPT-Neo which can all be optimized using Proximal Policy Optimization (PPO). You can find installation instructions in the [installation guide](installation) and an introduction to the library in the [Quickstart section](quickstart). There is also a more [in-depth example](sentiment_tuning) to tune GPT-2 to produce positive movie reviews.
+<div style="text-align: center">
+<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/TRL-readme.png">
+</div>
+
+Check the appropriate sections of the documentation depending on your needs:
+
+API documentation:
+
+- [Model Classes](models): *A brief overview of what each public model class does.*
+- [`SFTTrainer`](sft_trainer): *Supervise Fine-tune your model easily with `SFTTrainer`*
+- [`RewardTrainer`](reward_trainer): *Train easily your reward model using `RewardTrainer`.*
+- [`PPOTrainer`](trainer): *Further fine-tune the supervised fine-tuned model using PPO algorithm*
+- [Best-of-N Samppling](best-of-n): *Use best of n sampling as an alternative way to sample predictions from your active model*
+
+
+Examples: 
+
+- [Sentiment Tuning](sentiment_tuning): *Fine tune your model to generate positive movie contents*
+- [Training with PEFT](lora_tuning_peft): *Memory efficient RLHF training using adapters with PEFT*
+- [Detoxifying LLMs](detoxifying_a_lm): *Detoxify your language model through RLHF*
+- [StackLlama](using_llama_models): *End-to-end RLHF training of a Llama model on Stack exchange dataset*
+- [Multi-Adapter Training](multi_adapter_rl): *Use a single base model and multiple adapters for memory efficient end-to-end training*
