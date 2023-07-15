@@ -86,3 +86,7 @@ class DDPOConfig(object):
         default=16,
         metadata={"help": "The minimum number of reward values to store in the buffer."},
     )
+    async_reward_computation: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Whether to compute rewards asynchronously."},
+    )

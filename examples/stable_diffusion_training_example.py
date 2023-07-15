@@ -1,10 +1,14 @@
+import os
+import tempfile
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
 import torch.nn as nn
+import wandb
 from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import rescale_noise_cfg
 from diffusers.utils import randn_tensor
+from PIL import Image
 from transformers import CLIPModel, CLIPProcessor
 
 from trl import (
@@ -499,6 +503,28 @@ def prompt_fn():
     return np.random.choice(animals), {}
 
 
+def image_outputs_hook(images_and_prompts, rewards, global_step, accelerate_logger):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # extract the last one
+        prompts, images = zip(*images_and_prompts[-1])
+        for i, image in enumerate(images):
+            pil = Image.fromarray((image.cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8))
+            pil = pil.resize((256, 256))
+            pil.save(os.path.join(tmpdir, f"{i}.jpg"))
+        accelerate_logger(
+            {
+                "images": [
+                    wandb.Image(
+                        os.path.join(tmpdir, f"{i}.jpg"),
+                        caption=f"{prompt:.25} | {reward:.2f}",
+                    )
+                    for i, (prompt, reward) in enumerate(zip(prompts, rewards))
+                ],
+            },
+            step=global_step,
+        )
+
+
 if __name__ == "__main__":
     config = DDPOConfig(
         num_epochs=200,
@@ -513,6 +539,6 @@ if __name__ == "__main__":
 
     pipeline.scheduler = DDPOSchedulerExample.from_config(pipeline.scheduler.config)
 
-    trainer = DDPOTrainer(config, aesthetic_score(), prompt_fn, pipeline)
+    trainer = DDPOTrainer(config, aesthetic_score(), prompt_fn, pipeline, image_outputs_hook=image_outputs_hook)
 
     trainer.run()

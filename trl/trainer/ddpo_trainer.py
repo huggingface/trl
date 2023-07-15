@@ -1,25 +1,21 @@
 import contextlib
 import datetime
 import os
-import tempfile
 import time
 from collections import defaultdict
 from concurrent import futures
 from dataclasses import asdict, dataclass
 from functools import partial
-from typing import Optional
+from typing import Any, Callable, Optional
 
-import numpy as np
 import torch
 import tqdm
-import wandb
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
 from diffusers import DDIMScheduler, StableDiffusionPipeline, UNet2DConditionModel
 from diffusers.loaders import AttnProcsLayers
 from diffusers.models.attention_processor import LoRAAttnProcessor
-from PIL import Image
 
 from . import BaseTrainer, DDPOConfig
 from .utils import PerPromptStatTracker
@@ -61,6 +57,7 @@ class DDPOTrainer(BaseTrainer):
         reward_function,
         prompt_function,
         sd_pipeline: DDPOStableDiffusionPipeline,
+        image_outputs_hook: Callable[[Any, Any, Any, int], Any],  # should make a default for this
     ):
         unique_id = datetime.datetime.now().strftime("%Y.%m.%d_%H.%M.%S")
         if not config.run_name:
@@ -71,6 +68,7 @@ class DDPOTrainer(BaseTrainer):
         self.prompt_fn = prompt_function  # TODO: move this elsewhere
         self.reward_fn = reward_function  # TODO: move this elsewhere
         self.config = config
+        self.image_outputs_callback = image_outputs_hook
 
         if config.resume_from:
             config.resume_from = os.path.normpath(os.path.expanduser(config.resume_from))
@@ -94,7 +92,7 @@ class DDPOTrainer(BaseTrainer):
         )
 
         self.accelerator = Accelerator(
-            log_with="wandb",
+            log_with="wandb",  # TODO: should be made config
             mixed_precision=config.mixed_precision,
             project_config=accelerator_config,
             # we always accumulate gradients across timesteps; we want config.train.gradient_accumulation_steps to be the
@@ -184,26 +182,7 @@ class DDPOTrainer(BaseTrainer):
         if self.config.allow_tf32:
             torch.backends.cuda.matmul.allow_tf32 = True
 
-        # Initialize the optimizer
-        if self.config.train_use_8bit_adam:
-            try:
-                import bitsandbytes as bnb
-            except ImportError:
-                raise ImportError(
-                    "Please install bitsandbytes to use 8-bit Adam. You can do so by running `pip install bitsandbytes`"
-                )
-
-            optimizer_cls = bnb.optim.AdamW8bit
-        else:
-            optimizer_cls = torch.optim.AdamW
-
-        self.optimizer = optimizer_cls(
-            trainable_layers.parameters(),
-            lr=config.train_learning_rate,
-            betas=(config.train_adam_beta1, config.train_adam_beta2),
-            weight_decay=config.train_adam_weight_decay,
-            eps=config.train_adam_epsilon,
-        )
+        self.optimizer = self.initialize_optimizer(trainable_layers.parameters())
 
         neg_prompt_embed = self.sd_pipeline.text_encoder(
             self.sd_pipeline.tokenizer(
@@ -283,81 +262,81 @@ class DDPOTrainer(BaseTrainer):
             raise ValueError(f"Unknown model type {type(models[0])}")
         models.pop()  # ensures that accelerate doesn't try to handle loading of the model
 
-    def step(self, epoch: int, global_step: int):
-        self.sd_pipeline.unet.eval()
-        samples = []
-        prompts = []
-        for i in tqdm(
-            range(self.config.sample_num_batches_per_epoch),
-            desc=f"Epoch {epoch}: sampling",
-            disable=not self.accelerator.is_local_main_process,
-            position=0,
-        ):
-            # generate prompts
-            prompts, prompt_metadata = zip(*[self.prompt_fn() for _ in range(self.config.sample_batch_size)])
+    def _sampling_step(self, n, is_async=False):
+        # generate prompts
+        prompts, prompt_metadata = zip(*[self.prompt_fn() for _ in range(n)])
 
-            # encode prompts
-            prompt_ids = self.sd_pipeline.tokenizer(
-                prompts,
-                return_tensors="pt",
-                padding="max_length",
-                truncation=True,
-                max_length=self.sd_pipeline.tokenizer.model_max_length,
-            ).input_ids.to(self.accelerator.device)
-            prompt_embeds = self.sd_pipeline.text_encoder(prompt_ids)[0]
+        # encode prompts
+        prompt_ids = self.sd_pipeline.tokenizer(
+            prompts,
+            return_tensors="pt",
+            padding="max_length",
+            truncation=True,
+            max_length=self.sd_pipeline.tokenizer.model_max_length,
+        ).input_ids.to(self.accelerator.device)
+        prompt_embeds = self.sd_pipeline.text_encoder(prompt_ids)[0]
 
-            # sample
-            with self.autocast():
-                sd_output = self.sd_pipeline(
-                    prompt_embeds=prompt_embeds,
-                    negative_prompt_embeds=self.sample_neg_prompt_embeds,
-                    num_inference_steps=self.config.sample_num_steps,
-                    guidance_scale=self.config.sample_guidance_scale,
-                    eta=self.config.sample_eta,
-                    output_type="pt",
-                )
-
-                images = sd_output.images
-                latents = sd_output.latents
-                log_probs = sd_output.log_probs
-
-            latents = torch.stack(latents, dim=1)  # (batch_size, num_steps + 1, 4, 64, 64)
-            # (batch_size, num_steps, 1)
-            log_probs = torch.stack(log_probs, dim=1)
-            timesteps = self.sd_pipeline.scheduler.timesteps.repeat(
-                self.config.sample_batch_size, 1
-            )  # (batch_size, num_steps)
-
-            # compute rewards asynchronously
-            rewards = self.executor.submit(self.reward_fn, images, prompts, prompt_metadata)
-            # yield to to make sure reward computation starts
-            time.sleep(0)
-
-            samples.append(
-                {
-                    "prompt_ids": prompt_ids,
-                    "prompt_embeds": prompt_embeds,
-                    "timesteps": timesteps,
-                    "latents": latents[:, :-1],  # each entry is the latent before timestep t
-                    "next_latents": latents[:, 1:],  # each entry is the latent after timestep t
-                    "log_probs": log_probs,
-                    "rewards": rewards,
-                }
+        # sample
+        with self.autocast():
+            sd_output = self.sd_pipeline(
+                prompt_embeds=prompt_embeds,
+                negative_prompt_embeds=self.sample_neg_prompt_embeds,
+                num_inference_steps=self.config.sample_num_steps,
+                guidance_scale=self.config.sample_guidance_scale,
+                eta=self.config.sample_eta,
+                output_type="pt",
             )
 
-        # wait for all rewards to be computed
-        for sample in tqdm(
-            samples,
-            desc="Waiting for rewards",
-            disable=not self.accelerator.is_local_main_process,
-            position=0,
-        ):
-            rewards, reward_metadata = sample["rewards"].result()
+            images = sd_output.images
+            latents = sd_output.latents
+            log_probs = sd_output.log_probs
+
+        latents = torch.stack(latents, dim=1)  # (batch_size, num_steps + 1, 4, 64, 64)
+        # (batch_size, num_steps, 1)
+        log_probs = torch.stack(log_probs, dim=1)
+        timesteps = self.sd_pipeline.scheduler.timesteps.repeat(
+            self.config.sample_batch_size, 1
+        )  # (batch_size, num_steps)
+
+        # compute rewards asynchronously
+        # possible problematic area
+        if is_async:
+            rewards = self.executor.submit(self.reward_fn, images, prompts, prompt_metadata)
+            # yield to to make sure reward computation starts
+            # TODO:check to see if this is necessary
+            time.sleep(0)
+        else:
+            rewards = self.reward_fn(images, prompts, prompt_metadata)
+
+        return {
+            "prompt_ids": prompt_ids,
+            "prompt_embeds": prompt_embeds,
+            "timesteps": timesteps,
+            "latents": latents[:, :-1],  # each entry is the latent before timestep t
+            "next_latents": latents[:, 1:],  # each entry is the latent after timestep t
+            "log_probs": log_probs,
+            "rewards": rewards,
+        }, zip(prompts, images)
+
+    def step(self, epoch: int, global_step: int):
+        self.sd_pipeline.unet.eval()
+        samples = [
+            self._sampling_step(self.config.sample_batch_size, self.config.async_reward_computation)
+            for _ in range(self.config.sample_num_batches_per_epoch)
+        ]
+
+        # wait for all rewards to be computed if async
+        prompts_and_images = []
+        for sample, pi in samples:
+            prompts_and_images.append(pi)
+            rewards, reward_metadata = (
+                sample["rewards"].result() if self.config.async_reward_computation else sample["rewards"]
+            )
             # accelerator.print(reward_metadata)
             sample["rewards"] = torch.as_tensor(rewards, device=self.accelerator.device)
 
         # collate samples into dict where each entry has shape (num_batches_per_epoch * sample.batch_size, ...)
-        samples = {k: torch.cat([s[k] for s in samples]) for k in samples[0].keys()}
+        samples = {k: torch.cat([s[k] for s, _ in samples]) for k in samples[0][0].keys()}
 
         # gather rewards across processes
         rewards = self.accelerator.gather(samples["rewards"]).cpu().numpy()
@@ -372,25 +351,7 @@ class DDPOTrainer(BaseTrainer):
             },
             step=global_step,
         )
-        # Do we need this hack?
-        # this is a hack to force wandb to log the images as JPEGs instead of PNGs
-        with tempfile.TemporaryDirectory() as tmpdir:
-            for i, image in enumerate(images):
-                pil = Image.fromarray((image.cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8))
-                pil = pil.resize((256, 256))
-                pil.save(os.path.join(tmpdir, f"{i}.jpg"))
-            self.accelerator.log(
-                {
-                    "images": [
-                        wandb.Image(
-                            os.path.join(tmpdir, f"{i}.jpg"),
-                            caption=f"{prompt:.25} | {reward:.2f}",
-                        )
-                        for i, (prompt, reward) in enumerate(zip(prompts, rewards))
-                    ],
-                },
-                step=global_step,
-            )
+        self.image_outputs_callback(prompts_and_images, rewards, global_step, self.accelerator.log)
 
         # per-prompt mean/std tracking
         if self.config.per_prompt_stat_tracking:
@@ -462,6 +423,7 @@ class DDPOTrainer(BaseTrainer):
                 ):
                     with self.accelerator.accumulate(self.sd_pipeline.unet):
                         with self.autocast():
+                            # latents, timesteps, next_latents, advantages
                             if self.config.train_cfg:
                                 noise_pred = self.sd_pipeline.unet(
                                     torch.cat([sample["latents"][:, j]] * 2),
@@ -542,6 +504,9 @@ class DDPOTrainer(BaseTrainer):
 
         return global_step
 
+    def timestep(self, epoch: int, global_step: int, time_step, samples):
+        pass
+
     def loss(
         self,
         advantages: torch.Tensor,
@@ -555,6 +520,34 @@ class DDPOTrainer(BaseTrainer):
             1.0 + clip_range,
         )
         return torch.mean(torch.maximum(unclipped_loss, clipped_loss))
+
+    # TODO:
+    # async a configurable thing
+    # check to see if the latest images are the only ones logged
+    # seperate into sampling stage,
+    # make function a parameter to deal with images
+    #
+
+    def initialize_optimizer(self, trainable_layers_parameters):
+        if self.config.train_use_8bit_adam:
+            try:
+                import bitsandbytes as bnb
+            except ImportError:
+                raise ImportError(
+                    "Please install bitsandbytes to use 8-bit Adam. You can do so by running `pip install bitsandbytes`"
+                )
+
+            optimizer_cls = bnb.optim.AdamW8bit
+        else:
+            optimizer_cls = torch.optim.AdamW
+
+        return optimizer_cls(
+            trainable_layers_parameters,
+            lr=self.config.train_learning_rate,
+            betas=(self.config.train_adam_beta1, self.config.train_adam_beta2),
+            weight_decay=self.config.train_adam_weight_decay,
+            eps=self.config.train_adam_epsilon,
+        )
 
     def run(self, epochs: Optional[int] = None):
         global_step = 0
