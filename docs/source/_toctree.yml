@@ -21,6 +21,8 @@
     title: Supervised Fine-Tuning
   - local: best_of_n
     title: Best of N Sampling
+  - local: dpo_trainer
+    title: DPO Trainer
   title: API
 - sections: 
   - local: sentiment_tuning
