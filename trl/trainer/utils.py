@@ -68,7 +68,14 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
             The index to use to ignore the initial tokens with
     """
 
-    def __init__(self, response_template: str, *args, mlm: bool = False, ignore_index: int = -100, **kwargs):
+    def __init__(
+        self,
+        response_template: str,
+        *args,
+        mlm: bool = False,
+        ignore_index: int = -100,
+        **kwargs,
+    ):
         super().__init__(*args, mlm=mlm, **kwargs)
         self.response_template = response_template
         self.ignore_index = ignore_index
@@ -196,6 +203,8 @@ class DPODataCollatorWithPadding:
             The label used for masking.
         padding_value (`int`, defaults to 0):
             The value used for padding.
+        truncation_mode: (`str`, defaults to "keep_end"):
+            The truncation mode to use when truncating the prompt + chosen/rejected responses.
     """
     tokenizer: PreTrainedTokenizerBase
     padding: Union[bool, str] = True

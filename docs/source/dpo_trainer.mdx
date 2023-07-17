@@ -13,13 +13,13 @@ The DPO trainer expects a very specific format for the dataset. Since the model 
 <img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/rlhf-antropic-example.png", width="50%">
 </div>
 
-Therefore the final dataset object should contain two 3 entries at least if you use the default `DPODataCollatorWithPadding` data collator. The entries should be named:
+Therefore the final dataset object should contain these 3 entries if you use the default `DPODataCollatorWithPadding` data collator. The entries should be named:
 
 - `prompt`
 - `responses`
 - `pairs`
 
-for example
+for example:
 
 ```py
 dpo_dataset_dict = {
