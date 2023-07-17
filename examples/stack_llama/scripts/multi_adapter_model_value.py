@@ -96,6 +96,9 @@ class AutoModelForCausalLMWithMultiAdapterValueHead(AutoModelForCausalLMWithValu
         """
         kwargs["output_hidden_states"] = True  # this had already been set in the LORA / PEFT examples
 
+        self.pretrained_model.set_adapter(self.policy_adapter_name)
+        self.pretrained_model.train()
+
         base_model_output = self.pretrained_model(
             input_ids=input_ids,
             past_key_values=past_key_values,
