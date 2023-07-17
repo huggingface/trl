@@ -256,7 +256,8 @@ class PPOTrainer(BaseTrainer):
         self.data_collator = DataCollatorForLanguageModeling(self.tokenizer, mlm=False)
         if optimizer is None:
             self.optimizer = Adam(
-                filter(lambda p: p.requires_grad, self.model.parameters()), lr=self.config.learning_rate
+                filter(lambda p: p.requires_grad, self.model.parameters()),
+                lr=self.config.learning_rate,
             )
         else:
             self.optimizer = optimizer
@@ -291,7 +292,11 @@ class PPOTrainer(BaseTrainer):
             self.dataloader,
             self.lr_scheduler,
         ) = self.accelerator.prepare(
-            self.model, self.optimizer, self.data_collator, self.dataloader, self.lr_scheduler
+            self.model,
+            self.optimizer,
+            self.data_collator,
+            self.dataloader,
+            self.lr_scheduler,
         )
         if is_deepspeed_used:
             # 8 bit models are already set on the correct device
@@ -300,7 +305,7 @@ class PPOTrainer(BaseTrainer):
                 or getattr(self.ref_model.pretrained_model, "is_loaded_in_4bit", False)
             ):
                 # DS integration only allows for single model and as `ref_model` is only used for
-                # `KL devergence loss`,i.e, in eval model, just have it be on the respective device and
+                # `KL divergence loss`,i.e, in eval model, just have it be on the respective device and
                 # there is no need to pass it to the `accelerator.prepare` call
                 self.ref_model = self.ref_model.to(self.accelerator.device)
 
@@ -393,7 +398,9 @@ class PPOTrainer(BaseTrainer):
 
         if version.parse(datasets.__version__) < version.parse("1.4.0"):
             dataset.set_format(
-                type=dataset.format["type"], columns=columns, format_kwargs=dataset.format["format_kwargs"]
+                type=dataset.format["type"],
+                columns=columns,
+                format_kwargs=dataset.format["format_kwargs"],
             )
             return dataset
         else:
@@ -454,6 +461,7 @@ class PPOTrainer(BaseTrainer):
         batch_size: int = 4,
         return_prompt: bool = True,
         pad_to_multiple_of: int = None,
+        remove_padding: bool = True,
         **generation_kwargs,
     ):
         outputs = []
@@ -494,6 +502,12 @@ class PPOTrainer(BaseTrainer):
 
                 if not return_prompt and not self.is_encoder_decoder:
                     output = output[(mask).sum() :]  # remove prompt
+
+                if remove_padding and self.tokenizer.eos_token_id in output:
+                    pad_mask = output == self.tokenizer.eos_token_id
+                    pad_start = torch.nonzero(pad_mask, as_tuple=False)[0, 0].item()
+                    output = output[: pad_start + 1]  # keep the eos token at the end
+
                 outputs.append(output)
 
         self.tokenizer.padding_side = padding_side_default
@@ -592,7 +606,10 @@ class PPOTrainer(BaseTrainer):
             pad_first = self.tokenizer.padding_side == "left"
 
             model_inputs["input_ids"] = self.accelerator.pad_across_processes(
-                model_inputs["input_ids"], dim=1, pad_index=self.tokenizer.pad_token_id, pad_first=pad_first
+                model_inputs["input_ids"],
+                dim=1,
+                pad_index=self.tokenizer.pad_token_id,
+                pad_first=pad_first,
             )
             model_inputs["attention_mask"] = self.accelerator.pad_across_processes(
                 model_inputs["attention_mask"], dim=1, pad_index=0, pad_first=pad_first
@@ -605,7 +622,10 @@ class PPOTrainer(BaseTrainer):
                     pad_first=pad_first,
                 )
                 model_inputs["decoder_attention_mask"] = self.accelerator.pad_across_processes(
-                    model_inputs["decoder_attention_mask"], dim=1, pad_index=0, pad_first=pad_first
+                    model_inputs["decoder_attention_mask"],
+                    dim=1,
+                    pad_index=0,
+                    pad_first=pad_first,
                 )
 
         model_inputs_names = list(model_inputs.keys())
@@ -615,7 +635,8 @@ class PPOTrainer(BaseTrainer):
 
             # for when the model is a peft model
             if self.is_peft_model and hasattr(
-                self.accelerator.unwrap_model(self.model).pretrained_model, "disable_adapter"
+                self.accelerator.unwrap_model(self.model).pretrained_model,
+                "disable_adapter",
             ):
                 with self.accelerator.unwrap_model(self.model).pretrained_model.disable_adapter():
                     ref_logprobs, _, _, _ = self.batched_forward_pass(self.model, queries, responses, model_inputs)
@@ -673,7 +694,11 @@ class PPOTrainer(BaseTrainer):
                 with self.accelerator.accumulate(self.model):
                     model_inputs = {k: batch[k] for k in model_inputs_names}
                     logprobs, logits, vpreds, _ = self.batched_forward_pass(
-                        self.model, batch["queries"], batch["responses"], model_inputs, return_logits=True
+                        self.model,
+                        batch["queries"],
+                        batch["responses"],
+                        model_inputs,
+                        return_logits=True,
                     )
                     if (i % self.config.gradient_accumulation_steps) == 0:
                         self.optimizer.zero_grad()
@@ -725,7 +750,10 @@ class PPOTrainer(BaseTrainer):
         stats["ppo/learning_rate"] = self.optimizer.param_groups[0]["lr"]
 
         # Update the KL control - multiply the batch_size by the number of processes
-        self.kl_ctl.update(stats["objective/kl"], self.config.batch_size * self.accelerator.num_processes)
+        self.kl_ctl.update(
+            stats["objective/kl"],
+            self.config.batch_size * self.accelerator.num_processes,
+        )
 
         # Log the total ppo time
         timing["time/ppo/total"] = time.time() - t0
@@ -883,9 +911,6 @@ class PPOTrainer(BaseTrainer):
                         start += attention_mask[j, :].nonzero()[0]
                     end = start + len(response_batch[j])
 
-                if len(logprobs[j, start:end]) < 2:
-                    raise ValueError("Responses are too short. Make sure they are at least 4 tokens long.")
-
                 masks[j, :start] = 0
                 masks[j, end:] = 0
 
@@ -942,7 +967,8 @@ class PPOTrainer(BaseTrainer):
 
         if self.config.max_grad_norm is not None:
             torch.nn.utils.clip_grad_norm_(
-                filter(lambda p: p.requires_grad, self.model.parameters()), self.config.max_grad_norm
+                filter(lambda p: p.requires_grad, self.model.parameters()),
+                self.config.max_grad_norm,
             )
 
         t = time.time()
@@ -1000,7 +1026,7 @@ class PPOTrainer(BaseTrainer):
         rewards, non_score_rewards = [], []
         for score, logprob, ref_logprob, mask in zip(scores, logprobs, ref_logprobs, masks):
             # compute KL penalty (from difference in logprobs)
-            kl = logprob - ref_logprob
+            kl = self._kl_penalty(logprob, ref_logprob)
             non_score_reward = -self.kl_ctl.value * kl
             non_score_rewards.append(non_score_reward)
             reward = non_score_reward.clone()
@@ -1010,6 +1036,18 @@ class PPOTrainer(BaseTrainer):
             reward[last_non_masked_index] += score
             rewards.append(reward)
         return torch.stack(rewards), torch.stack(non_score_rewards)
+
+    def _kl_penalty(self, logprob: torch.FloatTensor, ref_logprob: torch.FloatTensor) -> torch.FloatTensor:
+        if self.config.kl_penalty == "kl":
+            return logprob - ref_logprob
+
+        if self.config.kl_penalty == "abs":
+            return (logprob - ref_logprob).abs()
+
+        if self.config.kl_penalty == "mse":
+            return 0.5 * (logprob - ref_logprob).square()
+
+        raise NotImplementedError
 
     def loss(
         self,
@@ -1057,20 +1095,23 @@ class PPOTrainer(BaseTrainer):
         advantages = advantages.detach()
 
         vpredclipped = clip_by_value(
-            vpreds, values - self.config.cliprange_value, values + self.config.cliprange_value
+            vpreds,
+            values - self.config.cliprange_value,
+            values + self.config.cliprange_value,
         )
 
         vf_losses1 = (vpreds - returns) ** 2
         vf_losses2 = (vpredclipped - returns) ** 2
         vf_loss = 0.5 * masked_mean(torch.max(vf_losses1, vf_losses2), mask)
-        vf_clipfrac = masked_mean(torch.gt(vf_losses2, vf_losses1).double(), mask)
+        vf_clipfrac = masked_mean(torch.gt(vf_losses2, vf_losses1).float(), mask)
 
         ratio = torch.exp(logprobs - old_logprobs)
+
         pg_losses = -advantages * ratio
         pg_losses2 = -advantages * torch.clamp(ratio, 1.0 - self.config.cliprange, 1.0 + self.config.cliprange)
 
         pg_loss = masked_mean(torch.max(pg_losses, pg_losses2), mask)
-        pg_clipfrac = masked_mean(torch.gt(pg_losses2, pg_losses).double(), mask)
+        pg_clipfrac = masked_mean(torch.gt(pg_losses2, pg_losses).float(), mask)
 
         loss = pg_loss + self.config.vf_coef * vf_loss
 
@@ -1084,8 +1125,10 @@ class PPOTrainer(BaseTrainer):
             loss = loss * 0.0
 
         entropy = masked_mean(entropy_from_logits(logits), mask)
+
         approxkl = 0.5 * masked_mean((logprobs - old_logprobs) ** 2, mask)
         policykl = masked_mean(old_logprobs - logprobs, mask)
+
         return_mean, return_var = masked_mean(returns, mask), masked_var(returns, mask)
         value_mean, value_var = masked_mean(values, mask), masked_var(values, mask)
 
@@ -1238,7 +1281,10 @@ class PPOTrainer(BaseTrainer):
                 # update the current step
                 self.current_step += 1
 
-            self.accelerator.log(logs, step=self.current_step if self.config.log_with == "tensorboard" else None)
+            self.accelerator.log(
+                logs,
+                step=self.current_step if self.config.log_with == "tensorboard" else None,
+            )
 
         else:
             if self.is_distributed:

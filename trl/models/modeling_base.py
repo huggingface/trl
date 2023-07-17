@@ -32,6 +32,7 @@ if is_peft_available():
         PeftModel,
         PeftModelForCausalLM,
         PeftModelForSeq2SeqLM,
+        PromptLearningConfig,
         get_peft_model,
         prepare_model_for_int8_training,
     )
@@ -136,6 +137,7 @@ class PreTrainedModelWrapper(nn.Module):
             )
 
         is_peft_model = False
+
         current_device = cls._get_current_device()
         if isinstance(pretrained_model_name_or_path, str):
             is_loaded_in_8bit = pretrained_kwargs["load_in_8bit"] if "load_in_8bit" in pretrained_kwargs else False
@@ -230,6 +232,11 @@ class PreTrainedModelWrapper(nn.Module):
         if is_peft_available():
             if isinstance(pretrained_model, PeftModel):
                 is_peft_model = True
+                # for backward compatibility
+                if hasattr(pretrained_model, "active_peft_config") and isinstance(
+                    pretrained_model.active_peft_config, PromptLearningConfig
+                ):
+                    raise ValueError("PromptLearningConfig is not supported for PPO training.")
         # Then, create the full model by instantiating the wrapper class
 
         if not is_peft_model and reward_adapter is not None:
@@ -298,6 +305,7 @@ class PreTrainedModelWrapper(nn.Module):
             state_dict = pretrained_model_name_or_path.state_dict()
 
         model.is_peft_model = is_peft_model
+
         model.current_device = current_device
 
         if is_resuming_training:
@@ -308,17 +316,15 @@ class PreTrainedModelWrapper(nn.Module):
     @classmethod
     def _get_current_device(cls):
         r"""
-        Get the current device using the `Accelerate` object - We just return the
-        process index of the `Accelerate` object to handle corner cases when running scripts
-        in distributed setups.
+        Get the current device. For GPU, we return the local process index using the `Accelerator`
+        object to handle corner cases when running scripts in distributed environments.
 
         Returns:
-            current_device (`int`):
-                The current device index.
+            current_device (`Union[int, str]`):
+                The current device.
         """
         dummy_accelerator = Accelerator()
-        current_device = dummy_accelerator.process_index
-        return current_device if torch.cuda.is_available() else "cpu"
+        return dummy_accelerator.local_process_index if torch.cuda.is_available() else "cpu"
 
     @classmethod
     def _split_kwargs(cls, kwargs):
