@@ -3,6 +3,7 @@ import tempfile
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
+import requests
 import torch
 import torch.nn as nn
 import wandb
@@ -417,12 +418,23 @@ class MLP(nn.Module):
 
 
 class AestheticScorer(torch.nn.Module):
-    def __init__(self, dtype):
+    def __init__(self, dtype, cache=".", weights_fname="sac+logos+ava1-l14-linearMSE.pth"):
         super().__init__()
         self.clip = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
         self.processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
         self.mlp = MLP()
-        state_dict = torch.load("./sac+logos+ava1-l14-linearMSE.pth")
+        self.loadpath = os.path.join(cache, weights_fname)
+        if not os.path.exists(self.loadpath):
+            url = (
+                "https://github.com/christophschuhmann/"
+                f"improved-aesthetic-predictor/blob/main/{weights_fname}?raw=true"
+            )
+            r = requests.get(url)
+
+            with open(self.loadpath, "wb") as f:
+                f.write(r.content)
+
+        state_dict = torch.load(self.loadpath)
         self.mlp.load_state_dict(state_dict)
         self.dtype = dtype
         self.eval()
@@ -506,7 +518,7 @@ def prompt_fn():
 def image_outputs_hook(images_and_prompts, rewards, global_step, accelerate_logger):
     with tempfile.TemporaryDirectory() as tmpdir:
         # extract the last one
-        prompts, images = zip(*images_and_prompts[-1])
+        images, prompts, _ = images_and_prompts[-1]
         for i, image in enumerate(images):
             pil = Image.fromarray((image.cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8))
             pil = pil.resize((256, 256))
@@ -539,6 +551,12 @@ if __name__ == "__main__":
 
     pipeline.scheduler = DDPOSchedulerExample.from_config(pipeline.scheduler.config)
 
-    trainer = DDPOTrainer(config, aesthetic_score(), prompt_fn, pipeline, image_outputs_hook=image_outputs_hook)
+    trainer = DDPOTrainer(
+        config,
+        aesthetic_score(),
+        prompt_fn,
+        pipeline,
+        image_outputs_hook=image_outputs_hook,
+    )
 
     trainer.run()
