@@ -204,7 +204,7 @@ class DPOTrainer(Trainer):
                         pad_to_length(batch[k], max_length, pad_value=pad_value),
                     ),
                     dim=0,
-                )
+                ).to(self.accelerator.device)
         return concatenated_batch
 
     def dpo_loss(
