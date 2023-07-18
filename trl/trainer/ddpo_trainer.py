@@ -1,16 +1,18 @@
+# NOTE: code heavily inspired by https://github.com/kvablack/ddpo-pytorch
+
 import contextlib
 import datetime
 import os
 from collections import defaultdict
 from concurrent import futures
 from dataclasses import asdict, dataclass
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Tuple
 
 import torch
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
-from diffusers import DDIMScheduler, StableDiffusionPipeline, UNet2DConditionModel
+from diffusers import StableDiffusionPipeline, UNet2DConditionModel
 from diffusers.loaders import AttnProcsLayers
 from diffusers.models.attention_processor import LoRAAttnProcessor
 
@@ -30,19 +32,15 @@ class DDPOPipelineOutput(object):
 
 @dataclass
 class DDPOSchedulerOutput(object):
-    # timesteps: torch.Tensor huh?
     latents: torch.Tensor
     log_probs: torch.Tensor
 
 
-# NOTE: possible problematic area
-class DDPOScheduler(DDIMScheduler):
-    def step(self, *args) -> DDPOSchedulerOutput:
+class DDPOStableDiffusionPipeline(StableDiffusionPipeline):
+    def __call__(self, *args, **kwargs) -> DDPOPipelineOutput:
         raise NotImplementedError
 
-
-class DDPOStableDiffusionPipeline(StableDiffusionPipeline):
-    def __call__(self, **kwargs) -> DDPOPipelineOutput:
+    def scheduler_step(self, *args, **kwargs) -> DDPOSchedulerOutput:
         raise NotImplementedError
 
 
@@ -50,8 +48,8 @@ class DDPOTrainer(BaseTrainer):
     def __init__(
         self,
         config: DDPOConfig,
-        reward_function,
-        prompt_function,
+        reward_function: Callable[[torch.Tensor, Tuple[str], Tuple[Any]], torch.Tensor],
+        prompt_function: Callable[[], Tuple[str, Any]],
         sd_pipeline: DDPOStableDiffusionPipeline,
         image_outputs_hook: Callable[[Any, Any, Any, int], Any],  # should make a default for this
     ):
@@ -93,7 +91,7 @@ class DDPOTrainer(BaseTrainer):
         )
 
         self.accelerator = Accelerator(
-            log_with="wandb",  # TODO: should be made config
+            log_with=self.config.log_with,
             mixed_precision=self.config.mixed_precision,
             project_config=accelerator_config,
             # we always accumulate gradients across timesteps; we want config.train.gradient_accumulation_steps to be the
@@ -134,10 +132,6 @@ class DDPOTrainer(BaseTrainer):
             desc="Timestep",
             dynamic_ncols=True,
         )
-        # switch to DDIM scheduler (NOTE: THE USER SHOULD DO THIS)
-        # self.sd_pipeline_wrapper.pipeline.scheduler = DDIMScheduler.from_config(
-        #    self.pipeline.scheduler.config
-        # )
 
         # For mixed precision training we cast all non-trainable weigths (vae, non-lora text_encoder and non-lora unet) to half-precision
         # as these weights are only used for inference, keeping weights in full precision is not required.
@@ -231,6 +225,7 @@ class DDPOTrainer(BaseTrainer):
             rewards = []
             for images, prompts, prompt_metadata in prompt_image_pairs:
                 reward, reward_metadata = self.reward_fn(images, prompts, prompt_metadata)
+                print(reward)
                 rewards.append(torch.as_tensor(reward, device=self.accelerator.device))
         else:
             # submit all jobs
@@ -476,7 +471,7 @@ class DDPOTrainer(BaseTrainer):
                         # compute the log prob of next_latents given latents under the current model
 
                         # this should be setup somewhere
-                        scheduler_step_output = self.sd_pipeline.scheduler.step(
+                        scheduler_step_output = self.sd_pipeline.scheduler_step(
                             noise_pred,
                             sample["timesteps"][:, j],
                             sample["latents"][:, j],

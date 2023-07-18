@@ -15,7 +15,6 @@ from .trainer import (
     DataCollatorForCompletionOnlyLM,
     DDPOConfig,
     DDPOPipelineOutput,
-    DDPOScheduler,
     DDPOSchedulerOutput,
     DDPOStableDiffusionPipeline,
     DDPOTrainer,

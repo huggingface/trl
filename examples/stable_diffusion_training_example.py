@@ -7,19 +7,13 @@ import requests
 import torch
 import torch.nn as nn
 import wandb
+from diffusers import DDIMScheduler
 from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import rescale_noise_cfg
 from diffusers.utils import randn_tensor
 from PIL import Image
 from transformers import CLIPModel, CLIPProcessor
 
-from trl import (
-    DDPOConfig,
-    DDPOPipelineOutput,
-    DDPOScheduler,
-    DDPOSchedulerOutput,
-    DDPOStableDiffusionPipeline,
-    DDPOTrainer,
-)
+from trl import DDPOConfig, DDPOPipelineOutput, DDPOSchedulerOutput, DDPOStableDiffusionPipeline, DDPOTrainer
 
 
 def _left_broadcast(t, shape):
@@ -27,7 +21,7 @@ def _left_broadcast(t, shape):
     return t.reshape(t.shape + (1,) * (len(shape) - t.ndim)).broadcast_to(shape)
 
 
-class DDPOSchedulerExample(DDPOScheduler):
+class DDPOSchedulerExample(DDIMScheduler):
     def _get_variance(self, timestep, prev_timestep):
         alpha_prod_t = torch.gather(self.alphas_cumprod, 0, timestep.cpu()).to(timestep.device)
         alpha_prod_t_prev = torch.where(
@@ -396,6 +390,9 @@ class DDPOPipeline(DDPOStableDiffusionPipeline):
 
         return DDPOPipelineOutput(image, all_latents, all_log_probs)
 
+    def scheduler_step(self, *args, **kwargs) -> DDPOSchedulerOutput:
+        return self.scheduler.step(*args, **kwargs)
+
 
 # reward function
 class MLP(nn.Module):
@@ -542,6 +539,7 @@ if __name__ == "__main__":
         num_epochs=200,
         train_gradient_accumulation_steps=1,
         per_prompt_stat_tracking_buffer_size=32,
+        sample_batch_size=2,
     )
     pretrained_model = "runwayml/stable-diffusion-v1-5"
     # revision of the model to load.

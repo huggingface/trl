@@ -17,6 +17,12 @@ class DDPOConfig(object):
         default="logs",
         metadata={"help": "Top-level logging directory for checkpoint saving."},
     )
+    log_with: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Log with either 'wandb' or 'tensorboard', check  https://huggingface.co/docs/accelerate/usage_guides/tracking for more details"
+        },
+    )
     num_epochs: Optional[int] = field(default=100, metadata={"help": "Number of epochs to train."})
     save_freq: Optional[int] = field(
         default=20,
