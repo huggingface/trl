@@ -20,6 +20,7 @@ from typing import Callable, List, Optional, Union
 
 import datasets
 import torch
+import torch.nn.functional as F
 from accelerate import Accelerator
 from accelerate.utils import ProjectConfiguration
 from datasets import Dataset
@@ -630,8 +631,10 @@ class PPOTrainer(BaseTrainer):
 
         model_inputs_names = list(model_inputs.keys())
 
+        full_kl_penalty = self.config.kl_penalty=="all"
+
         with torch.no_grad():
-            all_logprobs, _, values, masks = self.batched_forward_pass(self.model, queries, responses, model_inputs)
+            all_logprobs, logits_or_none, values, masks = self.batched_forward_pass(self.model, queries, responses, model_inputs, return_logits=full_kl_penalty)
 
             # for when the model is a peft model
             if self.is_peft_model and hasattr(
@@ -639,19 +642,26 @@ class PPOTrainer(BaseTrainer):
                 "disable_adapter",
             ):
                 with self.accelerator.unwrap_model(self.model).pretrained_model.disable_adapter():
-                    ref_logprobs, _, _, _ = self.batched_forward_pass(self.model, queries, responses, model_inputs)
+                    ref_logprobs, ref_logits_or_none, _, _ = self.batched_forward_pass(self.model, queries, responses, model_inputs, return_logits=full_kl_penalty)
             elif self.is_peft_model and not hasattr(self.model.pretrained_model, "disable_adapter"):
                 raise ValueError(
                     "You are using a `peft` version that does not support `disable_adapter`. Please update your `peft` version to the latest version."
                 )
 
             else:
-                ref_logprobs, _, _, _ = self.batched_forward_pass(self.ref_model, queries, responses, model_inputs)
+                ref_logprobs, ref_logits_or_none, _, _ = self.batched_forward_pass(self.ref_model, queries, responses, model_inputs, return_logits=full_kl_penalty)
 
         timing["time/ppo/forward_pass"] = time.time() - t
 
         t = time.time()
-        rewards, non_score_reward = self.compute_rewards(scores, all_logprobs, ref_logprobs, masks)
+        
+        if full_kl_penalty:
+            active_full_logprobs = logprobs_from_logits(logits_or_none[:, :-1, :], None, gather=False)
+            ref_full_logprobs = logprobs_from_logits(ref_logits_or_none[:, :-1, :], None, gather=False)
+            
+            rewards, non_score_reward = self.compute_rewards(scores, active_full_logprobs, ref_full_logprobs, masks)
+        else:
+            rewards, non_score_reward = self.compute_rewards(scores, all_logprobs, ref_logprobs, masks)
         timing["time/ppo/compute_rewards"] = time.time() - t
 
         # upcast to float32 to avoid dataset issues
@@ -1017,6 +1027,9 @@ class PPOTrainer(BaseTrainer):
 
         if self.config.kl_penalty == "mse":
             return 0.5 * (logprob - ref_logprob).square()
+        
+        if self.config.kl_penalty == "full":
+            return F.kl_div(logprob, ref_logprob, log_target=True, reduction='none').sum(-1)
 
         raise NotImplementedError
 
