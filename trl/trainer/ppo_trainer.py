@@ -662,8 +662,8 @@ class PPOTrainer(BaseTrainer):
         t = time.time()
 
         if full_kl_penalty:
-            active_full_logprobs = logprobs_from_logits(logits_or_none[:, :-1, :], None, gather=False)
-            ref_full_logprobs = logprobs_from_logits(ref_logits_or_none[:, :-1, :], None, gather=False)
+            active_full_logprobs = logprobs_from_logits(logits_or_none, None, gather=False)
+            ref_full_logprobs = logprobs_from_logits(ref_logits_or_none, None, gather=False)
 
             rewards, non_score_reward = self.compute_rewards(scores, active_full_logprobs, ref_full_logprobs, masks)
         else:
