@@ -16,8 +16,8 @@ The DPO trainer expects a very specific format for the dataset. Since the model 
 Therefore the final dataset object should contain these 3 entries if you use the default `DPODataCollatorWithPadding` data collator. The entries should be named:
 
 - `prompt`
-- `responses`
-- `pairs`
+- `chosen`
+- `rejected`
 
 for example:
 
@@ -27,24 +27,33 @@ dpo_dataset_dict = {
         "hello",
         "how are you",
         "What is your name?",
+        "What is your name?",
+        "Which is the best programming language?",
+        "Which is the best programming language?",
         "Which is the best programming language?",
     ],
-    "responses": [
-        ["hi nice to meet you", "leave me alone"],
-        ["I am not fine", "I am fine"],
-        ["My name is Mary", "Whats it to you?", "I don't have a name."],
-        ["Python", "Javascript", "C++", "Java"],
+    "chosen": [
+        "hi nice to meet you",
+        "I am fine",
+        "My name is Mary",
+        "My name is Mary",
+        "Python",
+        "Python",
+        "Java",
     ],
-    "pairs": [
-        [(0, 1)],
-        [(1, 0)],
-        [(0, 2), (0, 1)],
-        [(0, 1), (0, 2), (0, 3)],
+    "rejected": [
+        "leave me alone",
+        "I am not fine",
+        "Whats it to you?",
+        "I dont have a name",
+        "Javascript",
+        "C++",
+        "C++",
     ],
 }
 ```
 
-where the `prompt` contains the context input, `responses` contains an array of at least two responses and `pairs` contains a tuple of positive (accepted) and negative (rejected) indices from the corresponding `responses` where the first index is the positive response and the second index is the negative one. As can be seen a prompt can have multiple responses and this is reflected in the `pairs` entry.
+where the `prompt` contains the context inputs, `chosen` contains the corresponding chosen responses and `rejected` contains the corresponding negative (rejected) responses. As can be seen a prompt can have multiple responses and this is reflected in the entries being repeated in the dictionary's value arrays.
 
 ## Using the `DPOTrainer`
 
