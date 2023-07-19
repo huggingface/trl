@@ -3,7 +3,6 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional
 
 import torch
-import tqdm
 from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, TrainingArguments
 
