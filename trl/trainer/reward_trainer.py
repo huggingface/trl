@@ -162,7 +162,7 @@ class RewardTrainer(Trainer):
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
         if not self.use_reward_data_collator:
             warnings.warn(
-                "The current compute_loss is implemented for RewardDataCollatorWithPadding"
+                "The current compute_loss is implemented for RewardDataCollatorWithPadding,"
                 " if you are using a custom data collator make sure you know what you are doing or"
                 " implement your own compute_loss method."
             )
