@@ -631,7 +631,7 @@ class PPOTrainer(BaseTrainer):
 
         model_inputs_names = list(model_inputs.keys())
 
-        full_kl_penalty = self.config.kl_penalty == "all"
+        full_kl_penalty = self.config.kl_penalty == "full"
 
         with torch.no_grad():
             all_logprobs, logits_or_none, values, masks = self.batched_forward_pass(
