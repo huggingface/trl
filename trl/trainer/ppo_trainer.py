@@ -678,7 +678,6 @@ class PPOTrainer(BaseTrainer):
                 mini_batch_inds = b_inds[mini_batch_start:mini_batch_end]
 
                 # set optimizer to zero for gradient accumulation
-                self.optimizer.zero_grad()
                 for micro_batch_start in range(0, self.config.mini_batch_size, self.config.micro_batch_size ):
                     micro_batch_end = micro_batch_start + self.config.micro_batch_size 
                     micro_batch_inds = mini_batch_inds[micro_batch_start:micro_batch_end]
@@ -703,7 +702,7 @@ class PPOTrainer(BaseTrainer):
                             model_inputs,
                             return_logits=True,
                         )
-                        train_stats = self.backpropagate(
+                        train_stats = self.train_microbatch(
                             micro_batch_dict["logprobs"],
                             micro_batch_dict["values"],
                             micro_batch_dict["rewards"],
@@ -713,12 +712,6 @@ class PPOTrainer(BaseTrainer):
                             micro_batch_dict["masks"],
                         )
                         all_stats.append(train_stats)
-                    if self.config.max_grad_norm is not None:
-                        torch.nn.utils.clip_grad_norm_(
-                            filter(lambda p: p.requires_grad, self.model.parameters()),
-                            self.config.max_grad_norm,
-                        )
-                    self.optimizer.step()
                         
             
             # typically, early stopping is done at the epoch level
@@ -937,7 +930,7 @@ class PPOTrainer(BaseTrainer):
         )
 
     @PPODecorators.empty_cuda_cache()
-    def backpropagate(
+    def train_microbatch(
         self,
         old_logprobs: torch.FloatTensor,
         values: torch.FloatTensor,
@@ -971,6 +964,13 @@ class PPOTrainer(BaseTrainer):
         loss_p, loss_v, train_stats = self.loss(old_logprobs, values, rewards, logits, vpreds, logprobs, mask)
         loss = loss_p + loss_v
         self.accelerator.backward(loss)
+        if self.config.max_grad_norm is not None:
+            torch.nn.utils.clip_grad_norm_(
+                filter(lambda p: p.requires_grad, self.model.parameters()),
+                self.config.max_grad_norm,
+            )
+        self.optimizer.step()
+        self.optimizer.zero_grad()
         return train_stats
 
     def compute_rewards(
