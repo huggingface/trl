@@ -100,6 +100,9 @@ class PPOConfig(object):
         metadata={"help": "Number of samples forward passed through model at a time"},
     )
     mini_batch_size: Optional[int] = field(
+        default=1, metadata={"help": "Number of samples optimized in each mini batch"}
+    )
+    micro_batch_size: Optional[int] = field(
         default=1, metadata={"help": "Number of samples optimized inside PPO together"}
     )
     gradient_accumulation_steps: Optional[int] = field(

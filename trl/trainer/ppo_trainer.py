@@ -703,7 +703,7 @@ class PPOTrainer(BaseTrainer):
                             model_inputs,
                             return_logits=True,
                         )
-                        train_stats = self.train_minibatch(
+                        train_stats = self.backpropagate(
                             micro_batch_dict["logprobs"],
                             micro_batch_dict["values"],
                             micro_batch_dict["rewards"],
@@ -713,6 +713,12 @@ class PPOTrainer(BaseTrainer):
                             micro_batch_dict["masks"],
                         )
                         all_stats.append(train_stats)
+                    if self.config.max_grad_norm is not None:
+                        torch.nn.utils.clip_grad_norm_(
+                            filter(lambda p: p.requires_grad, self.model.parameters()),
+                            self.config.max_grad_norm,
+                        )
+                    self.optimizer.step()
                         
             
             # typically, early stopping is done at the epoch level
@@ -931,7 +937,7 @@ class PPOTrainer(BaseTrainer):
         )
 
     @PPODecorators.empty_cuda_cache()
-    def train_minibatch(
+    def backpropagate(
         self,
         old_logprobs: torch.FloatTensor,
         values: torch.FloatTensor,
@@ -965,16 +971,6 @@ class PPOTrainer(BaseTrainer):
         loss_p, loss_v, train_stats = self.loss(old_logprobs, values, rewards, logits, vpreds, logprobs, mask)
         loss = loss_p + loss_v
         self.accelerator.backward(loss)
-
-        if self.config.max_grad_norm is not None:
-            torch.nn.utils.clip_grad_norm_(
-                filter(lambda p: p.requires_grad, self.model.parameters()),
-                self.config.max_grad_norm,
-            )
-
-        t = time.time()
-        self.optimizer.step()
-        train_stats["time/ppo/optimizer_step"] = torch.Tensor([time.time() - t]).to(self.current_device)
         return train_stats
 
     def compute_rewards(
