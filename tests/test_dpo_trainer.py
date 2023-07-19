@@ -48,19 +48,28 @@ class DPOTrainerTester(unittest.TestCase):
                     "hello",
                     "how are you",
                     "What is your name?",
+                    "What is your name?",
+                    "Which is the best programming language?",
+                    "Which is the best programming language?",
                     "Which is the best programming language?",
                 ],
-                "responses": [
-                    ["hi nice to meet you", "leave me alone"],
-                    ["I am not fine", "I am fine"],
-                    ["My name is Mary", "Whats it to you?", "I dont have a name"],
-                    ["Python", "Javascript", "C++", "Java"],
+                "chosen": [
+                    "hi nice to meet you",
+                    "I am fine",
+                    "My name is Mary",
+                    "My name is Mary",
+                    "Python",
+                    "Python",
+                    "Python",
                 ],
-                "pairs": [
-                    [(0, 1)],
-                    [(1, 0)],
-                    [(0, 2), (0, 1)],
-                    [(0, 1), (0, 2), (0, 3)],
+                "rejected": [
+                    "leave me alone",
+                    "I am not fine",
+                    "Whats it to you?",
+                    "I dont have a name",
+                    "Javascript",
+                    "C++",
+                    "Java",
                 ],
             }
             # fmt: on
