@@ -663,7 +663,8 @@ class PPOTrainer(BaseTrainer):
             "rewards": rewards,
             "masks": masks,
         }
-        micro_batch_size = self.config.mini_batch_size // self.config.gradient_accumulation_steps
+        batch_dict.update(model_inputs)
+        self.config.micro_batch_size = self.config.mini_batch_size // self.config.gradient_accumulation_steps
 
         t = time.time()
         all_stats = []
@@ -678,31 +679,41 @@ class PPOTrainer(BaseTrainer):
 
                 # set optimizer to zero for gradient accumulation
                 self.optimizer.zero_grad()
-                for micro_batch_start in range(0, self.config.mini_batch_size, micro_batch_size):
-                    micro_batch_end = micro_batch_start + micro_batch_size
+                for micro_batch_start in range(0, self.config.mini_batch_size, self.config.micro_batch_size ):
+                    micro_batch_end = micro_batch_start + self.config.micro_batch_size 
                     micro_batch_inds = mini_batch_inds[micro_batch_start:micro_batch_end]
-                    mini_batch_dict = {key: val[micro_batch_inds] for key, val in batch_dict.items()}
-
+                    micro_batch_dict = {
+                        "logprobs": batch_dict["logprobs"][micro_batch_inds],
+                        "values": batch_dict["values"][micro_batch_inds],
+                        "rewards": batch_dict["rewards"][micro_batch_inds],
+                        "masks": batch_dict["masks"][micro_batch_inds],
+                        # hacks: the queries and responses are ragged.
+                        "queries": [batch_dict["queries"][i] for i in micro_batch_inds],
+                        "responses": [batch_dict["responses"][i] for i in micro_batch_inds],
+                    }
+                    for k in model_inputs_names:
+                        micro_batch_dict[k] = batch_dict[k][micro_batch_inds]
                     with self.accelerator.accumulate(self.model):
-                        breakpoint()
-                        model_inputs = {k: mini_batch_dict[k] for k in model_inputs_names}
+                        model_inputs = {k: micro_batch_dict[k] for k in model_inputs_names}
+                        
                         logprobs, logits, vpreds, _ = self.batched_forward_pass(
                             self.model,
-                            mini_batch_dict["queries"],
-                            mini_batch_dict["responses"],
+                            micro_batch_dict["queries"],
+                            micro_batch_dict["responses"],
                             model_inputs,
                             return_logits=True,
                         )
                         train_stats = self.train_minibatch(
-                            mini_batch_dict["logprobs"],
-                            mini_batch_dict["values"],
-                            mini_batch_dict["rewards"],
+                            micro_batch_dict["logprobs"],
+                            micro_batch_dict["values"],
+                            micro_batch_dict["rewards"],
                             logprobs,
                             logits,
                             vpreds,
-                            mini_batch_dict["masks"],
+                            micro_batch_dict["masks"],
                         )
                         all_stats.append(train_stats)
+                        
             
             # typically, early stopping is done at the epoch level
             if self.config.early_stopping:
@@ -867,7 +878,7 @@ class PPOTrainer(BaseTrainer):
                 - all_values (`torch.FloatTensor`): Values of the responses, shape (`batch_size`, `response_length`)
         """
         bs = len(queries)
-        fbs = self.config.mini_batch_size
+        fbs = self.config.micro_batch_size
         all_logprobs = []
         all_logits = []
         all_masks = []
