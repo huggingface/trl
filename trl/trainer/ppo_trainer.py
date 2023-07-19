@@ -1029,7 +1029,8 @@ class PPOTrainer(BaseTrainer):
             return 0.5 * (logprob - ref_logprob).square()
         
         if self.config.kl_penalty == "full":
-            return F.kl_div(logprob, ref_logprob, log_target=True, reduction='none').sum(-1)
+            # Flip is required due to this issue? :https://github.com/pytorch/pytorch/issues/57459
+            return F.kl_div(ref_logprob, logprob,  log_target=True, reduction='none').sum(-1) 
 
         raise NotImplementedError
 
