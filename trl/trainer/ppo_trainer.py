@@ -25,7 +25,6 @@ from accelerate.utils import ProjectConfiguration
 from datasets import Dataset
 from huggingface_hub import whoami
 from packaging import version
-from requests.exceptions import HTTPError
 from torch.optim import Adam
 from transformers import (
     DataCollatorForLanguageModeling,
@@ -1277,7 +1276,7 @@ class PPOTrainer(BaseTrainer):
         try:
             user = whoami()["name"]
         # handle the offline case
-        except HTTPError:
+        except:  # noqa
             warnings.warn("Cannot retrieve user information assuming you are running in offline mode.")
             return
 
