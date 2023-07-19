@@ -8,15 +8,17 @@ from .import_utils import is_peft_available
 from .models import (
     AutoModelForCausalLMWithValueHead,
     AutoModelForSeq2SeqLMWithValueHead,
+    DDPOPipelineOutput,
+    DDPOSchedulerOutput,
+    DDPOStableDiffusionPipeline,
+    DefaultDDPOPipeline,
+    DefaultDDPOScheduler,
     PreTrainedModelWrapper,
     create_reference_model,
 )
 from .trainer import (
     DataCollatorForCompletionOnlyLM,
     DDPOConfig,
-    DDPOPipelineOutput,
-    DDPOSchedulerOutput,
-    DDPOStableDiffusionPipeline,
     DDPOTrainer,
     PPOConfig,
     PPOTrainer,

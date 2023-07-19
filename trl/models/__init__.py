@@ -15,6 +15,13 @@
 # limitations under the License.
 from .modeling_base import PreTrainedModelWrapper, create_reference_model
 from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
+from .modelling_sd_base import (
+    DDPOPipelineOutput,
+    DDPOSchedulerOutput,
+    DDPOStableDiffusionPipeline,
+    DefaultDDPOPipeline,
+    DefaultDDPOScheduler,
+)
 
 
 SUPPORTED_ARCHITECTURES = (

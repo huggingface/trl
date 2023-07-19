@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from typing import Optional
 
+from ..core import flatten_dict
+
 
 @dataclass
 class DDPOConfig(object):
@@ -22,6 +24,21 @@ class DDPOConfig(object):
         metadata={
             "help": "Log with either 'wandb' or 'tensorboard', check  https://huggingface.co/docs/accelerate/usage_guides/tracking for more details"
         },
+    )
+    tracker_kwargs: Optional[dict] = field(
+        default_factory=dict,
+        metadata={"help": "Keyword arguments for the tracker (e.g. wandb_project)"},
+    )
+    accelerator_kwargs: Optional[dict] = field(
+        default_factory=dict,
+        metadata={"help": "Keyword arguments for the accelerator"},
+    )
+    project_kwargs: Optional[dict] = field(
+        default_factory=dict,
+        metadata={"help": "Keyword arguments for the accelerator project config (e.g. `logging_dir`)"},
+    )
+    tracker_project_name: Optional[str] = field(
+        default="trl", metadata={"help": "Name of project to use for tracking"}
     )
     num_epochs: Optional[int] = field(default=100, metadata={"help": "Number of epochs to train."})
     save_freq: Optional[int] = field(
@@ -96,3 +113,9 @@ class DDPOConfig(object):
         default=False,
         metadata={"help": "Whether to compute rewards asynchronously."},
     )
+
+    def to_dict(self):
+        output_dict = {}
+        for key, value in self.__dict__.items():
+            output_dict[key] = value
+        return flatten_dict(output_dict)

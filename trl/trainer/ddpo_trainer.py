@@ -5,43 +5,22 @@ import datetime
 import os
 from collections import defaultdict
 from concurrent import futures
-from dataclasses import asdict, dataclass
 from typing import Any, Callable, Optional, Tuple
 
 import torch
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
-from diffusers import StableDiffusionPipeline, UNet2DConditionModel
+from diffusers import UNet2DConditionModel
 from diffusers.loaders import AttnProcsLayers
 from diffusers.models.attention_processor import LoRAAttnProcessor
 
+from ..models import DDPOStableDiffusionPipeline
 from . import BaseTrainer, DDPOConfig
 from .utils import PerPromptStatTracker
 
 
 logger = get_logger(__name__)
-
-
-@dataclass
-class DDPOPipelineOutput(object):
-    images: torch.Tensor
-    latents: torch.Tensor
-    log_probs: torch.Tensor
-
-
-@dataclass
-class DDPOSchedulerOutput(object):
-    latents: torch.Tensor
-    log_probs: torch.Tensor
-
-
-class DDPOStableDiffusionPipeline(StableDiffusionPipeline):
-    def __call__(self, *args, **kwargs) -> DDPOPipelineOutput:
-        raise NotImplementedError
-
-    def scheduler_step(self, *args, **kwargs) -> DDPOSchedulerOutput:
-        raise NotImplementedError
 
 
 class DDPOTrainer(BaseTrainer):
@@ -84,34 +63,38 @@ class DDPOTrainer(BaseTrainer):
         # number of timesteps within each trajectory to train on
         self.num_train_timesteps = int(self.config.sample_num_steps * self.config.train_timestep_fraction)
 
-        accelerator_config = ProjectConfiguration(
-            project_dir=os.path.join(self.config.logdir, self.config.run_name),
-            automatic_checkpoint_naming=True,
-            total_limit=config.num_checkpoint_limit,
-        )
+        # accelerator_config = ProjectConfiguration(
+        #    project_dir=os.path.join(self.config.logdir, self.config.run_name),
+        #    automatic_checkpoint_naming=True,
+        #    total_limit=config.num_checkpoint_limit,
+        # )
 
         self.accelerator = Accelerator(
             log_with=self.config.log_with,
             mixed_precision=self.config.mixed_precision,
-            project_config=accelerator_config,
+            project_config=ProjectConfiguration(**self.config.project_kwargs),
             # we always accumulate gradients across timesteps; we want config.train.gradient_accumulation_steps to be the
             # number of *samples* we accumulate across, so we need to multiply by the number of training timesteps to get
             # the total number of optimizer steps to accumulate across.
             gradient_accumulation_steps=self.config.train_gradient_accumulation_steps * self.num_train_timesteps,
+            **self.config.accelerator_kwargs,
         )
 
         self._config_check()
 
+        is_using_tensorboard = config.log_with is not None and config.log_with == "tensorboard"
+
         if self.accelerator.is_main_process:
             self.accelerator.init_trackers(
-                project_name="ddpo-pytorch",
-                config=asdict(config),
-                init_kwargs={"wandb": {"name": config.run_name}},
+                config.tracker_project_name,
+                config=dict(ddpo_trainer_config=config.to_dict()) if not is_using_tensorboard else config.to_dict(),
+                # init_kwargs={"wandb": {"name": config.run_name}},
+                # init_kwargs=self.config.tracker_kwargs,
+                init_kwargs={"logging_dir": "othello"},
             )
 
         logger.info(f"\n{config}")
 
-        # set seed (device_specific is very important to get different prompts on different devices)
         set_seed(self.config.seed, device_specific=True)
 
         # load scheduler, tokenizer and models. (NOTE: should the user do this?)

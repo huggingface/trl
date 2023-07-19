@@ -22,7 +22,7 @@ from .utils import AdaptiveKLController, FixedKLController, ConstantLengthDatase
 
 from .base import BaseTrainer
 from .ddpo_config import DDPOConfig
-from .ddpo_trainer import DDPOPipelineOutput, DDPOSchedulerOutput, DDPOStableDiffusionPipeline, DDPOTrainer
+from .ddpo_trainer import DDPOTrainer
 from .ppo_config import PPOConfig
 from .ppo_trainer import PPOTrainer
 from .reward_trainer import RewardTrainer, compute_accuracy
