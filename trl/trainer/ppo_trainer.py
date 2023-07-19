@@ -19,6 +19,7 @@ import warnings
 from typing import Callable, List, Optional, Union
 
 import datasets
+import numpy as np
 import torch
 from accelerate import Accelerator
 from accelerate.utils import ProjectConfiguration
@@ -654,7 +655,7 @@ class PPOTrainer(BaseTrainer):
         timing["time/ppo/compute_rewards"] = time.time() - t
 
         # upcast to float32 to avoid dataset issues
-        mini_batch_dict = {
+        batch_dict = {
             "queries": queries,
             "responses": responses,
             "logprobs": all_logprobs.to(torch.float32),
@@ -662,25 +663,7 @@ class PPOTrainer(BaseTrainer):
             "rewards": rewards,
             "masks": masks,
         }
-
-        def collator(data):
-            return_dict = dict()
-            for key in data[0]:
-                if key in ["queries", "responses"]:
-                    return_dict[key] = [d[key] for d in data]
-                else:
-                    return_dict[key] = torch.stack([d[key] for d in data]).to(self.current_device)
-            return return_dict
-
-        mini_batch_dict.update(model_inputs)
-        mini_batch_data = Dataset.from_dict(mini_batch_dict)
-        mini_batch_data.set_format("torch")
-        mini_batch_dataloader = torch.utils.data.DataLoader(
-            mini_batch_data,
-            batch_size=self.config.mini_batch_size,
-            shuffle=True,
-            collate_fn=collator,
-        )
+        micro_batch_size = self.config.mini_batch_size // self.config.gradient_accumulation_steps
 
         t = time.time()
         all_stats = []
@@ -688,37 +671,45 @@ class PPOTrainer(BaseTrainer):
         for _ in range(self.config.ppo_epochs):
             if early_stop:
                 break
+            b_inds = np.random.permutation(bs)
+            for mini_batch_start in range(0, bs, self.config.mini_batch_size):
+                mini_batch_end = mini_batch_start + self.config.mini_batch_size
+                mini_batch_inds = b_inds[mini_batch_start:mini_batch_end]
 
-            for i, batch in enumerate(mini_batch_dataloader):
-                with self.accelerator.accumulate(self.model):
-                    model_inputs = {k: batch[k] for k in model_inputs_names}
-                    logprobs, logits, vpreds, _ = self.batched_forward_pass(
-                        self.model,
-                        batch["queries"],
-                        batch["responses"],
-                        model_inputs,
-                        return_logits=True,
-                    )
-                    if (i % self.config.gradient_accumulation_steps) == 0:
-                        self.optimizer.zero_grad()
+                # set optimizer to zero for gradient accumulation
+                self.optimizer.zero_grad()
+                for micro_batch_start in range(0, self.config.mini_batch_size, micro_batch_size):
+                    micro_batch_end = micro_batch_start + micro_batch_size
+                    micro_batch_inds = mini_batch_inds[micro_batch_start:micro_batch_end]
+                    mini_batch_dict = {key: val[micro_batch_inds] for key, val in batch_dict.items()}
 
-                    train_stats = self.train_minibatch(
-                        batch["logprobs"],
-                        batch["values"],
-                        batch["rewards"],
-                        logprobs,
-                        logits,
-                        vpreds,
-                        batch["masks"],
-                    )
-
-                    all_stats.append(train_stats)
-
-                    if self.config.early_stopping:
-                        policykl = train_stats["policy/policykl"]
-                        early_stop = self._early_stop(policykl)
-                        if early_stop:
-                            break
+                    with self.accelerator.accumulate(self.model):
+                        breakpoint()
+                        model_inputs = {k: mini_batch_dict[k] for k in model_inputs_names}
+                        logprobs, logits, vpreds, _ = self.batched_forward_pass(
+                            self.model,
+                            mini_batch_dict["queries"],
+                            mini_batch_dict["responses"],
+                            model_inputs,
+                            return_logits=True,
+                        )
+                        train_stats = self.train_minibatch(
+                            mini_batch_dict["logprobs"],
+                            mini_batch_dict["values"],
+                            mini_batch_dict["rewards"],
+                            logprobs,
+                            logits,
+                            vpreds,
+                            mini_batch_dict["masks"],
+                        )
+                        all_stats.append(train_stats)
+            
+            # typically, early stopping is done at the epoch level
+            if self.config.early_stopping:
+                policykl = train_stats["policy/policykl"]
+                early_stop = self._early_stop(policykl)
+                if early_stop:
+                    break
 
         timing["time/ppo/optimize_step"] = time.time() - t
 
