@@ -326,23 +326,18 @@ class DPODataCollatorWithPadding:
         return padded_batch
 
     def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
-        batch = []
+        tokenized_batch = []
+
         for feature in features:
             prompt = feature["prompt"]
-            responses = feature["responses"]
-            pairs = feature["pairs"]
+            chosen = feature["chosen"]
+            rejected = feature["rejected"]
 
-            done = False
-            for p in pairs:
-                if done:
-                    break
+            batch_element = self.tokenize_batch_element(prompt, chosen, rejected)
+            tokenized_batch.append(batch_element)
 
-                batch_element = self.tokenize_batch_element(prompt, responses[p[0]], responses[p[1]])
-                batch.append(batch_element)
-
-                done = len(batch) == self.batch_size
-
-        return self.collate(batch)
+        # return collated batch
+        return self.collate(tokenized_batch)
 
 
 class ConstantLengthDataset(IterableDataset):
