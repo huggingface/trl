@@ -95,11 +95,12 @@ def get_hh(split: str, sanity_check: bool = False, silent: bool = False, cache_d
 
     def gen():
         for prompt, values in data.items():
-            yield {
-                "prompt": prompt,
-                "responses": values["responses"],
-                "pairs": values["pairs"],
-            }
+            for p in values["pairs"]:
+                yield {
+                    "prompt": prompt,
+                    "chosen": values["responses"][p[0]],
+                    "rejected": values["responses"][p[1]],
+                }
 
     return Dataset.from_generator(gen)
 
