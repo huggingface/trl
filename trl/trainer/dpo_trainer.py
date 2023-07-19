@@ -353,8 +353,9 @@ class DPOTrainer(Trainer):
         return_outputs=False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
         if not self.use_dpo_data_collator:
-            raise NotImplementedError(
-                "compute_loss is only implemented for DPODataCollatorWithPadding, please implement your own compute_loss method if you are using a custom data collator"
+            warnings.warn(
+                "compute_loss is only implemented for DPODataCollatorWithPadding, and you passed a datacollator that is different than "
+                "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
             )
         loss, metrics = self.get_batch_metrics(model, inputs, train_test="train")
 
@@ -401,8 +402,9 @@ class DPOTrainer(Trainer):
         ignore_keys: Optional[List[str]] = None,
     ):
         if not self.use_dpo_data_collator:
-            raise NotImplementedError(
-                "prediction_step is only implemented for DPODataCollatorWithPadding, please implement your own prediction_step method if you are using a custom data collator"
+            warnings.warn(
+                "prediction_step is only implemented for DPODataCollatorWithPadding, and you passed a datacollator that is different than "
+                "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
             )
         if ignore_keys is None:
             if hasattr(model, "config"):

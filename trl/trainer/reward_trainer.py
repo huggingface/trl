@@ -161,8 +161,10 @@ class RewardTrainer(Trainer):
         return_outputs=False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
         if not self.use_reward_data_collator:
-            raise NotImplementedError(
-                "compute_loss is only implemented for RewardDataCollatorWithPadding, please implement your own compute_loss method if you are using a custom data collator"
+            warnings.warn(
+                "The current compute_loss is implemented for RewardDataCollatorWithPadding,"
+                " if you are using a custom data collator make sure you know what you are doing or"
+                " implement your own compute_loss method."
             )
         rewards_chosen = model(
             input_ids=inputs["input_ids_chosen"],
