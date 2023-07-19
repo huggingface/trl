@@ -53,6 +53,7 @@ class ScriptArguments:
     output_dir: Optional[str] = field(default="output", metadata={"help": "the output directory"})
     peft_lora_r: Optional[int] = field(default=64, metadata={"help": "the r parameter of the LoRA adapters"})
     peft_lora_alpha: Optional[int] = field(default=16, metadata={"help": "the alpha parameter of the LoRA adapters"})
+    logging_steps: Optional[int] = field(default=1, metadata={"help": "the number of logging steps"})
 
 
 parser = HfArgumentParser(ScriptArguments)
@@ -90,6 +91,7 @@ training_args = TrainingArguments(
     per_device_train_batch_size=script_args.batch_size,
     gradient_accumulation_steps=script_args.gradient_accumulation_steps,
     learning_rate=script_args.learning_rate,
+    logging_steps=script_args.logging_steps,
 )
 
 # Step 4: Define the LoraConfig
