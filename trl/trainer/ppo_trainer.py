@@ -660,7 +660,6 @@ class PPOTrainer(BaseTrainer):
             values, advantages, returns = self.compute_advantages(values, rewards, masks)
             timing["time/ppo/compute_advantages"] = time.time() - t
 
-
         # upcast to float32 to avoid dataset issues
         batch_dict = {
             "queries": queries,
@@ -684,10 +683,10 @@ class PPOTrainer(BaseTrainer):
             for mini_batch_start in range(0, bs, self.config.mini_batch_size):
                 mini_batch_end = mini_batch_start + self.config.mini_batch_size
                 mini_batch_inds = b_inds[mini_batch_start:mini_batch_end]
-                
+
                 # set optimizer to zero for gradient accumulation
-                for micro_batch_start in range(0, self.config.mini_batch_size, self.config.micro_batch_size ):
-                    micro_batch_end = micro_batch_start + self.config.micro_batch_size 
+                for micro_batch_start in range(0, self.config.mini_batch_size, self.config.micro_batch_size):
+                    micro_batch_end = micro_batch_start + self.config.micro_batch_size
                     micro_batch_inds = mini_batch_inds[micro_batch_start:micro_batch_end]
                     micro_batch_dict = {
                         "logprobs": batch_dict["logprobs"][micro_batch_inds],
@@ -703,7 +702,7 @@ class PPOTrainer(BaseTrainer):
                         micro_batch_dict[k] = batch_dict[k][micro_batch_inds]
                     with self.accelerator.accumulate(self.model):
                         model_inputs = {k: micro_batch_dict[k] for k in model_inputs_names}
-                        
+
                         logprobs, logits, vpreds, _ = self.batched_forward_pass(
                             self.model,
                             micro_batch_dict["queries"],
@@ -722,8 +721,7 @@ class PPOTrainer(BaseTrainer):
                             micro_batch_dict["returns"],
                         )
                         all_stats.append(train_stats)
-                        
-            
+
             # typically, early stopping is done at the epoch level
             if self.config.early_stopping:
                 policykl = train_stats["policy/policykl"]
@@ -970,7 +968,9 @@ class PPOTrainer(BaseTrainer):
             train_stats (dict[str, `torch.Tensor`]):
                 Dictionary of training statistics
         """
-        loss_p, loss_v, train_stats = self.loss(old_logprobs, values, logits, vpreds, logprobs, mask, advantages, returns)
+        loss_p, loss_v, train_stats = self.loss(
+            old_logprobs, values, logits, vpreds, logprobs, mask, advantages, returns
+        )
         loss = loss_p + loss_v
         self.accelerator.backward(loss)
         if self.config.max_grad_norm is not None:
