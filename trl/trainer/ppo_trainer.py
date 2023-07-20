@@ -52,6 +52,7 @@ from ..core import (
 from ..import_utils import is_torch_greater_2_0
 from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper, create_reference_model
 from . import AdaptiveKLController, BaseTrainer, FixedKLController, PPOConfig
+from .utils import exact_div
 
 
 MODEL_CARD_TEMPLATE = """---
@@ -252,6 +253,12 @@ class PPOTrainer(BaseTrainer):
             self.dataloader = None
         else:
             self.dataloader = None
+
+        self.config.micro_batch_size = exact_div(
+            self.config.mini_batch_size,
+            self.config.gradient_accumulation_steps,
+            "`mini_batch_size` must be a multiple of `gradient_accumulation_steps`",
+        )
 
         # Step 3: Initialize optimizer and data collator
         self.data_collator = DataCollatorForLanguageModeling(self.tokenizer, mlm=False)
@@ -671,7 +678,6 @@ class PPOTrainer(BaseTrainer):
             "returns": returns,
         }
         batch_dict.update(model_inputs)
-        self.config.micro_batch_size = self.config.mini_batch_size // self.config.gradient_accumulation_steps
 
         t = time.time()
         all_stats = []
