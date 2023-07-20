@@ -163,7 +163,7 @@ class SFTTrainer(Trainer):
                 f"You didn't pass a `max_seq_length` argument to the SFTTrainer, this will default to {max_seq_length}"
             )
 
-        self.num_proc = num_proc
+        self.dataset_num_proc = dataset_num_proc
         if not packing:
             if dataset_text_field is None and formatting_func is None:
                 raise ValueError(
