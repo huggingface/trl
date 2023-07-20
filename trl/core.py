@@ -108,26 +108,17 @@ def whiten(values, shift_mean=True):
 
 def masked_mean(values, mask, axis=None):
     """Compute mean of tensor with a masked values."""
-    if axis is not None:
-        return (values * mask).sum(axis=axis) / mask.sum(axis=axis)
-    else:
-        return (values * mask).sum() / mask.sum()
+    return (values * mask).mean(axis=axis)
 
 
 def masked_var(values, mask, unbiased=True):
     """Compute variance of tensor with masked values."""
-    mean = masked_mean(values, mask)
-    centered_values = values - mean
-    variance = masked_mean(centered_values**2, mask)
-    if unbiased:
-        bessel_correction = mask.sum() / (mask.sum() - 1)
-        variance = variance * bessel_correction
-    return variance
+    return (values * mask).var(unbiased=unbiased)
 
 
 def masked_whiten(values, mask, shift_mean=True):
     """Whiten values with masked values."""
-    mean, var = masked_mean(values, mask), masked_var(values, mask)
+    mean, var = masked_mean(values, mask), masked_var(values, mask, unbiased=False)
     whitened = (values - mean) * torch.rsqrt(var + 1e-8)
     if not shift_mean:
         whitened += mean

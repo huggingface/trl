@@ -202,6 +202,7 @@ class PPOTrainer(BaseTrainer):
         )
 
         self.model = model
+        self.model_params = filter(lambda p: p.requires_grad, self.model.parameters())
         self.is_encoder_decoder = hasattr(self.model, "is_encoder_decoder")
         self.is_peft_model = getattr(self.model, "is_peft_model", False)
 
@@ -965,10 +966,8 @@ class PPOTrainer(BaseTrainer):
         loss = loss_p + loss_v
         self.accelerator.backward(loss)
         if self.config.max_grad_norm is not None:
-            torch.nn.utils.clip_grad_norm_(
-                filter(lambda p: p.requires_grad, self.model.parameters()),
-                self.config.max_grad_norm,
-            )
+            if self.accelerator.sync_gradients:
+                self.accelerator.clip_grad_norm_(self.model_params, self.config.max_grad_norm)
         self.optimizer.step()
         self.optimizer.zero_grad()
         return train_stats
