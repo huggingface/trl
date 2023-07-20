@@ -293,7 +293,8 @@ class SFTTrainer(Trainer):
 
             return {"input_ids": outputs["input_ids"], "attention_mask": outputs["attention_mask"]}
 
-        tokenized_dataset = dataset.map(tokenize, batched=True, remove_columns=dataset.column_names,
-                                        num_proc=self.num_proc)
+        tokenized_dataset = dataset.map(
+            tokenize, batched=True, remove_columns=dataset.column_names, num_proc=self.num_proc
+        )
 
         return tokenized_dataset
