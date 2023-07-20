@@ -89,7 +89,7 @@ class SFTTrainer(Trainer):
         packing (`Optional[bool]`):
             Used only in case `dataset_text_field` is passed. This argument is used by the `ConstantLengthDataset` to pack the sequences
             of the dataset.
-        num_proc (`Optional[int]`):
+        dataset_num_proc (`Optional[int]`):
             The number of workers to use to tokenize the data. Only used when `packing=False`. Defaults to None.
     """
 
