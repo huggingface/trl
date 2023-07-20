@@ -131,7 +131,6 @@ class DPOTrainer(Trainer):
                 tokenizer,
                 max_length=max_length,
                 max_prompt_length=max_prompt_length,
-                batch_size=args.train_batch_size,
                 label_pad_token_id=label_pad_token_id,
                 padding_value=padding_value,
                 truncation_mode=truncation_mode,
