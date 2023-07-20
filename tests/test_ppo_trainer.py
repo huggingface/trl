@@ -547,17 +547,19 @@ class PPOTrainerTester(unittest.TestCase):
         vpreds = values + 0.1
 
         score, non_score = ppo_trainer.compute_rewards(dummy_scores, all_logprobs, ref_logprobs, mask)
+        values, advantages, returns = ppo_trainer.compute_advantages(values, score, mask)
 
         # just make sure a dummy loss is computed
         idx = 0
         pg_loss, v_loss, _ = ppo_trainer.loss(
             all_logprobs[idx].unsqueeze(0),
             values[idx].unsqueeze(0),
-            score[idx].unsqueeze(0),
             logits[idx].unsqueeze(0),
             vpreds[idx].unsqueeze(0),
             ref_logprobs[idx].unsqueeze(0),
             mask[idx].unsqueeze(0),
+            advantages[idx].unsqueeze(0),
+            returns[idx].unsqueeze(0),
         )
 
         self.assertAlmostEqual(pg_loss.item(), 0.62516, 4)
@@ -1037,10 +1039,9 @@ class PPOTrainerTester(unittest.TestCase):
             _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
             break
 
-        model_grad = gpt2_model.v_head.summary.weight.grad.clone()
+        model_grad = gpt2_model.v_head.summary.weight
 
         self.ppo_config.gradient_accumulation_steps = 2
-        self.ppo_config.mini_batch_size = 1
 
         ppo_trainer = PPOTrainer(
             config=self.ppo_config,
@@ -1061,7 +1062,7 @@ class PPOTrainerTester(unittest.TestCase):
             _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
             break
 
-        model_grad_acc = gpt2_model_clone.v_head.summary.weight.grad.clone()
+        model_grad_acc = gpt2_model_clone.v_head.summary.weight
         self.assertTrue(torch.allclose(model_grad_acc, model_grad, rtol=1e-3, atol=1e-3))
 
     @unittest.skip("Fix by either patching `whomai()` to work in the staging endpoint or use a dummy prod user.")
