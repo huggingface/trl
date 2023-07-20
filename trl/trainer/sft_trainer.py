@@ -89,6 +89,8 @@ class SFTTrainer(Trainer):
         packing (`Optional[bool]`):
             Used only in case `dataset_text_field` is passed. This argument is used by the `ConstantLengthDataset` to pack the sequences
             of the dataset.
+        num_proc (`Optional[int]`):
+            The number of workers to use to tokenize the data. Only used when `packing=False`. Defaults to None.
     """
 
     def __init__(
@@ -112,6 +114,7 @@ class SFTTrainer(Trainer):
         infinite: Optional[bool] = False,
         num_of_sequences: Optional[int] = 1024,
         chars_per_token: Optional[float] = 3.6,
+        num_proc: Optional[int] = None,
     ):
         if isinstance(model, str):
             warnings.warn(
@@ -160,6 +163,7 @@ class SFTTrainer(Trainer):
                 f"You didn't pass a `max_seq_length` argument to the SFTTrainer, this will default to {max_seq_length}"
             )
 
+        self.num_proc = num_proc
         if not packing:
             if dataset_text_field is None and formatting_func is None:
                 raise ValueError(
@@ -289,6 +293,7 @@ class SFTTrainer(Trainer):
 
             return {"input_ids": outputs["input_ids"], "attention_mask": outputs["attention_mask"]}
 
-        tokenized_dataset = dataset.map(tokenize, batched=True, remove_columns=dataset.column_names)
+        tokenized_dataset = dataset.map(tokenize, batched=True, remove_columns=dataset.column_names,
+                                        num_proc=self.num_proc)
 
         return tokenized_dataset
