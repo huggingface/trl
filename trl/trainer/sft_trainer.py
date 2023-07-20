@@ -91,6 +91,9 @@ class SFTTrainer(Trainer):
             of the dataset.
         dataset_num_proc (`Optional[int]`):
             The number of workers to use to tokenize the data. Only used when `packing=False`. Defaults to None.
+        dataset_batch_size (`int`):
+            Number of examples per batch provided to tokenize. If batch_size <= 0 or batch_size == None,
+             provide the full dataset as a single batch to tokenize. Defaults to 1000
     """
 
     def __init__(
@@ -115,6 +118,7 @@ class SFTTrainer(Trainer):
         num_of_sequences: Optional[int] = 1024,
         chars_per_token: Optional[float] = 3.6,
         dataset_num_proc: Optional[int] = None,
+        dataset_batch_size: int = 1000,
     ):
         if isinstance(model, str):
             warnings.warn(
@@ -164,6 +168,7 @@ class SFTTrainer(Trainer):
             )
 
         self.dataset_num_proc = dataset_num_proc
+        self.dataset_batch_size = dataset_batch_size
         if not packing:
             if dataset_text_field is None and formatting_func is None:
                 raise ValueError(
@@ -294,7 +299,11 @@ class SFTTrainer(Trainer):
             return {"input_ids": outputs["input_ids"], "attention_mask": outputs["attention_mask"]}
 
         tokenized_dataset = dataset.map(
-            tokenize, batched=True, remove_columns=dataset.column_names, num_proc=self.dataset_num_proc
+            tokenize,
+            batched=True,
+            remove_columns=dataset.column_names,
+            num_proc=self.dataset_num_proc,
+            batch_size=self.dataset_batch_size,
         )
 
         return tokenized_dataset
