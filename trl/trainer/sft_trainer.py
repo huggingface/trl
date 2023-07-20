@@ -94,6 +94,10 @@ class SFTTrainer(Trainer):
         dataset_batch_size (`int`):
             The number of examples to tokenize per batch. If batch_size <= 0 or batch_size == None,
             tokenize the full dataset as a single batch. Defaults to 1000.
+        prepare_datasets (`bool`):
+            Whether to automatically prepare the given datasets based on the other given arguments, e.g. tokenization,
+            packing. You may want to disable this if your dataset has already been processed (e.g. tokenized) in
+            the format that you like. Defaults to `False`.
     """
 
     def __init__(
@@ -119,6 +123,7 @@ class SFTTrainer(Trainer):
         chars_per_token: Optional[float] = 3.6,
         dataset_num_proc: Optional[int] = None,
         dataset_batch_size: int = 1000,
+        prepare_datasets: bool = True,
     ):
         if isinstance(model, str):
             warnings.warn(
@@ -169,6 +174,8 @@ class SFTTrainer(Trainer):
 
         self.dataset_num_proc = dataset_num_proc
         self.dataset_batch_size = dataset_batch_size
+        self.prepare_datasets = prepare_datasets
+
         if not packing:
             if dataset_text_field is None and formatting_func is None:
                 raise ValueError(
@@ -178,7 +185,7 @@ class SFTTrainer(Trainer):
             if data_collator is None:
                 data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
-        if train_dataset is not None:
+        if train_dataset is not None and self.prepare_datasets:
             train_dataset = self._prepare_dataset(
                 train_dataset,
                 tokenizer,
@@ -190,7 +197,7 @@ class SFTTrainer(Trainer):
                 num_of_sequences,
                 chars_per_token,
             )
-        if eval_dataset is not None:
+        if eval_dataset is not None and self.prepare_datasets:
             eval_dataset = self._prepare_dataset(
                 eval_dataset,
                 tokenizer,
