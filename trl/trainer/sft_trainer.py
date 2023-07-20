@@ -92,8 +92,8 @@ class SFTTrainer(Trainer):
         dataset_num_proc (`Optional[int]`):
             The number of workers to use to tokenize the data. Only used when `packing=False`. Defaults to None.
         dataset_batch_size (`int`):
-            Number of examples per batch provided to tokenize. If batch_size <= 0 or batch_size == None,
-             provide the full dataset as a single batch to tokenize. Defaults to 1000
+            The number of examples to tokenize per batch. If batch_size <= 0 or batch_size == None,
+            tokenize the full dataset as a single batch. Defaults to 1000.
     """
 
     def __init__(
