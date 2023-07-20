@@ -114,7 +114,7 @@ class SFTTrainer(Trainer):
         infinite: Optional[bool] = False,
         num_of_sequences: Optional[int] = 1024,
         chars_per_token: Optional[float] = 3.6,
-        num_proc: Optional[int] = None,
+        dataset_num_proc: Optional[int] = None,
     ):
         if isinstance(model, str):
             warnings.warn(
