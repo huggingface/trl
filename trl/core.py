@@ -99,7 +99,7 @@ def logprobs_from_logits(logits, labels):
 
 def whiten(values, shift_mean=True):
     """Whiten values."""
-    mean, var = torch.mean(values), torch.var(values)
+    mean, var = torch.mean(values), torch.var(values, unbiased=False)
     whitened = (values - mean) * torch.rsqrt(var + 1e-8)
     if not shift_mean:
         whitened += mean
@@ -108,12 +108,21 @@ def whiten(values, shift_mean=True):
 
 def masked_mean(values, mask, axis=None):
     """Compute mean of tensor with a masked values."""
-    return (values * mask).mean(axis=axis)
+    if axis is not None:
+        return (values * mask).sum(axis=axis) / mask.sum(axis=axis)
+    else:
+        return (values * mask).sum() / mask.sum()
 
 
 def masked_var(values, mask, unbiased=True):
     """Compute variance of tensor with masked values."""
-    return (values * mask).var(unbiased=unbiased)
+    mean = masked_mean(values, mask)
+    centered_values = values - mean
+    variance = masked_mean(centered_values**2, mask)
+    if unbiased:
+        bessel_correction = mask.sum() / (mask.sum() - 1 + 1e-8)
+        variance = variance * bessel_correction
+    return variance
 
 
 def masked_whiten(values, mask, shift_mean=True):
