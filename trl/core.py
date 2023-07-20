@@ -120,9 +120,9 @@ def masked_var(values, mask, unbiased=True):
     centered_values = values - mean
     variance = masked_mean(centered_values**2, mask)
     if unbiased:
-        mask_sum = mask.sum(dim=1)
-        # avoid division by 0 in case there is only one element
-        mask_sum[mask_sum == 1] = 0
+        mask_sum = mask.sum()
+        # note that if mask_sum == 1, then there is a division by zero issue
+        # to avoid it you just need to use a larger minibatch_size
         bessel_correction = mask_sum / (mask_sum - 1)
         variance = variance * bessel_correction
     return variance
