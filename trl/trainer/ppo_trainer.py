@@ -259,12 +259,6 @@ class PPOTrainer(BaseTrainer):
             self.config.gradient_accumulation_steps,
             "`mini_batch_size` must be a multiple of `gradient_accumulation_steps`",
         )
-        if self.config.mini_batch_size < 3:
-            raise ValueError(
-                "`mini_batch_size` should be much larger as a low `mini_batch_size` can"
-                "lead to division by zeros in advantage normalizations."
-                "If you are running into memory issues, consider using more `gradient_accumulation_steps`"
-            )
         assert self.config.batch_size >= self.config.mini_batch_size >= self.config.micro_batch_size, (
             f"`batch_size` must be same or greater than `mini_batch_size` and `mini_batch_size` must be same or greater than"
             f"`micro_batch_size` - got batch_size: {self.config.batch_size}, mini_batch_size: {self.config.mini_batch_size},"
