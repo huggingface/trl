@@ -99,7 +99,7 @@ def logprobs_from_logits(logits, labels):
 
 def whiten(values, shift_mean=True):
     """Whiten values."""
-    mean, var = torch.mean(values), torch.var(values, unbiased=False)
+    mean, var = torch.mean(values), torch.var(values)
     whitened = (values - mean) * torch.rsqrt(var + 1e-8)
     if not shift_mean:
         whitened += mean
@@ -127,7 +127,7 @@ def masked_var(values, mask, unbiased=True):
 
 def masked_whiten(values, mask, shift_mean=True):
     """Whiten values with masked values."""
-    mean, var = masked_mean(values, mask), masked_var(values, mask, unbiased=False)
+    mean, var = masked_mean(values, mask), masked_var(values, mask)
     whitened = (values - mean) * torch.rsqrt(var + 1e-8)
     if not shift_mean:
         whitened += mean
