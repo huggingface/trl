@@ -5,14 +5,11 @@ import numpy as np
 import requests
 import torch
 import torch.nn as nn
-import wandb
 from PIL import Image
 from transformers import CLIPModel, CLIPProcessor
 
 from trl import DDPOConfig, DDPOTrainer, DefaultDDPOPipeline, DefaultDDPOScheduler
 
-
-# reward function
 class MLP(nn.Module):
     def __init__(self):
         super().__init__()
@@ -33,7 +30,9 @@ class MLP(nn.Module):
 
 
 class AestheticScorer(torch.nn.Module):
-    def __init__(self, dtype, cache=".", weights_fname="sac+logos+ava1-l14-linearMSE.pth"):
+    def __init__(
+        self, dtype, cache=".", weights_fname="sac+logos+ava1-l14-linearMSE.pth"
+    ):
         super().__init__()
         self.clip = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
         self.processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
@@ -91,24 +90,6 @@ animals = [
     "cow",
     "goat",
     "lion",
-    "tiger",
-    "bear",
-    "raccoon",
-    "fox",
-    "wolf",
-    "lizard",
-    "beetle",
-    "ant",
-    "butterfly",
-    "fish",
-    "shark",
-    "whale",
-    "dolphin",
-    "squirrel",
-    "mouse",
-    "rat",
-    "snake",
-    "turtle",
     "frog",
     "chicken",
     "duck",
@@ -130,26 +111,36 @@ def prompt_fn():
     return np.random.choice(animals), {}
 
 
-def image_outputs_hook(images_and_prompts, rewards, global_step, accelerate_logger):
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # extract the last one
-        images, prompts, _ = images_and_prompts[-1]
-        for i, image in enumerate(images):
-            pil = Image.fromarray((image.cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8))
-            pil = pil.resize((256, 256))
-            pil.save(os.path.join(tmpdir, f"{i}.jpg"))
-        accelerate_logger(
-            {
-                "images": [
-                    wandb.Image(
-                        os.path.join(tmpdir, f"{i}.jpg"),
-                        caption=f"{prompt:.25} | {reward:.2f}",
-                    )
-                    for i, (prompt, reward) in enumerate(zip(prompts, rewards))
-                ],
-            },
-            step=global_step,
+def image_outputs_hook(image_data, global_step, accelerate_logger):
+    # extract the last one
+    result = {}
+    images, prompts, _, rewards = image_data[-1]
+    for i, image in enumerate(images):
+        pil = Image.fromarray(
+            (image.cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
         )
+        pil = pil.resize((256, 256))
+        result[f"{prompts[i]:.25} | {rewards[i]:.2f}"] = [pil]
+    accelerate_logger.log_images(
+        result,
+        step=global_step,
+    )
+
+
+def image_outputs_hook2(image_data, global_step, accelerate_logger):
+    # extract the last one
+    result = {}
+    images, prompts, _, rewards = image_data[-1]
+
+    for i, image in enumerate(images):
+        prompt = prompts[i]
+        reward = rewards[i].item()
+        result[f"{prompt:.25} | {reward:.2f}"] = image.cpu().unsqueeze(0)
+
+    accelerate_logger.log_images(
+        result,
+        step=global_step,
+    )
 
 
 if __name__ == "__main__":
@@ -158,15 +149,21 @@ if __name__ == "__main__":
         train_gradient_accumulation_steps=1,
         per_prompt_stat_tracking_buffer_size=32,
         sample_batch_size=1,
-        tracker_project_name="gintkoi",
+        tracker_project_name="stable_diffusion_training",
         log_with="tensorboard",
-        project_kwargs={"logging_dir": "./logs", "automatic_checkpoint_naming": True, "total_limit": 5},
+        project_kwargs={
+            "logging_dir": "./logs",
+            "automatic_checkpoint_naming": True,
+            "total_limit": 5,
+        },
     )
     pretrained_model = "runwayml/stable-diffusion-v1-5"
     # revision of the model to load.
     pretrained_revision = "main"
 
-    pipeline = DefaultDDPOPipeline.from_pretrained(pretrained_model, revision=pretrained_revision)
+    pipeline = DefaultDDPOPipeline.from_pretrained(
+        pretrained_model, revision=pretrained_revision
+    )
 
     pipeline.scheduler = DefaultDDPOScheduler.from_config(pipeline.scheduler.config)
 
@@ -175,7 +172,7 @@ if __name__ == "__main__":
         aesthetic_score(),
         prompt_fn,
         pipeline,
-        image_outputs_hook=image_outputs_hook,
+        image_outputs_hook=image_outputs_hook2,
     )
 
     trainer.run()

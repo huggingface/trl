@@ -1,3 +1,4 @@
+import warnings
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -113,9 +114,19 @@ class DDPOConfig(object):
         default=False,
         metadata={"help": "Whether to compute rewards asynchronously."},
     )
+    negative_prompts: Optional[str] = field(
+        default="",
+        metadata={"help": "Comma-separated list of prompts to use as negative examples."},
+    )
 
     def to_dict(self):
         output_dict = {}
         for key, value in self.__dict__.items():
             output_dict[key] = value
         return flatten_dict(output_dict)
+
+    def __post_init__(self):
+        if self.log_with not in ["wandb", "tensorboard"]:
+            warnings.warn(
+                ("Accelerator tracking only supports image logging if `log_with` is set to 'wandb' or 'tensorboard'.")
+            )
