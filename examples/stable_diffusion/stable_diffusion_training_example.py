@@ -4,7 +4,6 @@ import numpy as np
 import requests
 import torch
 import torch.nn as nn
-from PIL import Image
 from transformers import CLIPModel, CLIPProcessor
 
 from trl import DDPOConfig, DDPOTrainer, DefaultDDPOPipeline, DefaultDDPOScheduler
@@ -109,21 +108,7 @@ def prompt_fn():
     return np.random.choice(animals), {}
 
 
-def image_outputs_hook(image_data, global_step, accelerate_logger):
-    # extract the last one
-    result = {}
-    images, prompts, _, rewards = image_data[-1]
-    for i, image in enumerate(images):
-        pil = Image.fromarray((image.cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8))
-        pil = pil.resize((256, 256))
-        result[f"{prompts[i]:.25} | {rewards[i]:.2f}"] = [pil]
-    accelerate_logger.log_images(
-        result,
-        step=global_step,
-    )
-
-
-def image_outputs_hook2(image_data, global_step, accelerate_logger):
+def image_outputs_logger(image_data, global_step, accelerate_logger):
     # extract the last one
     result = {}
     images, prompts, _, rewards = image_data[-1]
@@ -166,7 +151,7 @@ if __name__ == "__main__":
         aesthetic_score(),
         prompt_fn,
         pipeline,
-        image_outputs_hook=image_outputs_hook2,
+        image_outputs_hook=image_outputs_logger,
     )
 
     trainer.run()

@@ -203,8 +203,6 @@ class DDPOTrainer(BaseTrainer):
                 torch.as_tensor(reward.result(), device=self.accelerator.device) for reward, _ in rewards
             ]  # ignoring metadata
 
-        print("original shape of rewards: ", len(rewards), rewards[0].shape)
-
         return self.accelerator.gather(rewards)
 
     def step(self, epoch: int, global_step: int):
