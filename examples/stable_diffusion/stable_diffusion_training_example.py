@@ -1,5 +1,4 @@
 import os
-import tempfile
 
 import numpy as np
 import requests
@@ -9,6 +8,7 @@ from PIL import Image
 from transformers import CLIPModel, CLIPProcessor
 
 from trl import DDPOConfig, DDPOTrainer, DefaultDDPOPipeline, DefaultDDPOScheduler
+
 
 class MLP(nn.Module):
     def __init__(self):
@@ -30,9 +30,7 @@ class MLP(nn.Module):
 
 
 class AestheticScorer(torch.nn.Module):
-    def __init__(
-        self, dtype, cache=".", weights_fname="sac+logos+ava1-l14-linearMSE.pth"
-    ):
+    def __init__(self, dtype, cache=".", weights_fname="sac+logos+ava1-l14-linearMSE.pth"):
         super().__init__()
         self.clip = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
         self.processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
@@ -116,9 +114,7 @@ def image_outputs_hook(image_data, global_step, accelerate_logger):
     result = {}
     images, prompts, _, rewards = image_data[-1]
     for i, image in enumerate(images):
-        pil = Image.fromarray(
-            (image.cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
-        )
+        pil = Image.fromarray((image.cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8))
         pil = pil.resize((256, 256))
         result[f"{prompts[i]:.25} | {rewards[i]:.2f}"] = [pil]
     accelerate_logger.log_images(
@@ -161,9 +157,7 @@ if __name__ == "__main__":
     # revision of the model to load.
     pretrained_revision = "main"
 
-    pipeline = DefaultDDPOPipeline.from_pretrained(
-        pretrained_model, revision=pretrained_revision
-    )
+    pipeline = DefaultDDPOPipeline.from_pretrained(pretrained_model, revision=pretrained_revision)
 
     pipeline.scheduler = DefaultDDPOScheduler.from_config(pipeline.scheduler.config)
 

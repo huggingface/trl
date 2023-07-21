@@ -18,9 +18,9 @@ from .models import (
 )
 from .trainer import (
     DataCollatorForCompletionOnlyLM,
-    DPOTrainer,
     DDPOConfig,
     DDPOTrainer,
+    DPOTrainer,
     PPOConfig,
     PPOTrainer,
     RewardTrainer,
