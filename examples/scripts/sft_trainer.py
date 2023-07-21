@@ -65,11 +65,14 @@ if script_args.load_in_8bit and script_args.load_in_4bit:
     raise ValueError("You can't load the model in 8 bits and 4 bits at the same time")
 elif script_args.load_in_8bit or script_args.load_in_4bit:
     quantization_config = BitsAndBytesConfig(
-        load_in_8bit=script_args.load_in_8bit, load_in_4bit=script_args.load_in_4bit
+        load_in_8bit=script_args.load_in_8bit,
+        load_in_4bit=script_args.load_in_4bit,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.float32,
     )
     # This means: fit the entire model on the GPU:0
     device_map = {"": 0}
-    torch_dtype = torch.bfloat16
+    torch_dtype = torch.float32
 else:
     device_map = None
     quantization_config = None
@@ -94,6 +97,7 @@ training_args = TrainingArguments(
     gradient_accumulation_steps=script_args.gradient_accumulation_steps,
     learning_rate=script_args.learning_rate,
     logging_steps=script_args.logging_steps,
+    optim="paged_adamw_32bit",
 )
 
 # Step 4: Define the LoraConfig
@@ -115,5 +119,9 @@ trainer = SFTTrainer(
     dataset_text_field=script_args.dataset_text_field,
     peft_config=peft_config,
 )
+
+for name, module in trainer.model.named_modules():
+    if "norm" in name:
+        module = module.to(torch.float32)
 
 trainer.train()
