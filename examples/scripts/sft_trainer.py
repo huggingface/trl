@@ -15,6 +15,7 @@
 from dataclasses import dataclass, field
 from typing import Optional
 
+import torch
 from datasets import load_dataset
 from peft import LoraConfig
 from tqdm import tqdm
@@ -50,6 +51,10 @@ class ScriptArguments:
     use_peft: Optional[bool] = field(default=False, metadata={"help": "Wether to use PEFT or not to train adapters"})
     trust_remote_code: Optional[bool] = field(default=True, metadata={"help": "Enable `trust_remote_code`"})
     output_dir: Optional[str] = field(default="output", metadata={"help": "the output directory"})
+    peft_lora_r: Optional[int] = field(default=64, metadata={"help": "the r parameter of the LoRA adapters"})
+    peft_lora_alpha: Optional[int] = field(default=16, metadata={"help": "the alpha parameter of the LoRA adapters"})
+    logging_steps: Optional[int] = field(default=1, metadata={"help": "the number of logging steps"})
+    use_auth_token: Optional[bool] = field(default=True, metadata={"help": "Use HF auth token to access the model"})
 
 
 parser = HfArgumentParser(ScriptArguments)
@@ -64,15 +69,19 @@ elif script_args.load_in_8bit or script_args.load_in_4bit:
     )
     # This means: fit the entire model on the GPU:0
     device_map = {"": 0}
+    torch_dtype = torch.bfloat16
 else:
     device_map = None
     quantization_config = None
+    torch_dtype = None
 
 model = AutoModelForCausalLM.from_pretrained(
     script_args.model_name,
     quantization_config=quantization_config,
     device_map=device_map,
     trust_remote_code=script_args.trust_remote_code,
+    torch_dtype=torch_dtype,
+    use_auth_token=script_args.use_auth_token,
 )
 
 # Step 2: Load the dataset
@@ -84,13 +93,14 @@ training_args = TrainingArguments(
     per_device_train_batch_size=script_args.batch_size,
     gradient_accumulation_steps=script_args.gradient_accumulation_steps,
     learning_rate=script_args.learning_rate,
+    logging_steps=script_args.logging_steps,
 )
 
 # Step 4: Define the LoraConfig
 if script_args.use_peft:
     peft_config = LoraConfig(
-        r=16,
-        lora_alpha=16,
+        r=script_args.peft_lora_r,
+        lora_alpha=script_args.peft_lora_alpha,
         bias="none",
         task_type="CAUSAL_LM",
     )
