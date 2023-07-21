@@ -203,6 +203,12 @@ class SFTTrainer(Trainer):
                 chars_per_token,
             )
 
+        if tokenizer.padding_side is not None and tokenizer.padding != "right":
+            warnings.warn(
+                "You passed a tokenizer with `padding_side` not equal to `right` to the SFTTrainer. This might lead to some unexpected behaviour due to "
+                "overflow issues when training a model in half-precision. You might consider adding `tokenizer.padding_side = 'right'` to your code."
+            )
+
         super().__init__(
             model=model,
             args=args,
