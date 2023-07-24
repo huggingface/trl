@@ -55,6 +55,8 @@ class ScriptArguments:
     peft_lora_alpha: Optional[int] = field(default=16, metadata={"help": "the alpha parameter of the LoRA adapters"})
     logging_steps: Optional[int] = field(default=1, metadata={"help": "the number of logging steps"})
     use_auth_token: Optional[bool] = field(default=True, metadata={"help": "Use HF auth token to access the model"})
+    num_train_epochs: Optional[int] = field(default=3, metadata={"help": "the number of training epochs"})
+    max_steps: Optional[int] = field(default=-1, metadata={"help": "the number of training steps"})
 
 
 parser = HfArgumentParser(ScriptArguments)
@@ -94,6 +96,8 @@ training_args = TrainingArguments(
     gradient_accumulation_steps=script_args.gradient_accumulation_steps,
     learning_rate=script_args.learning_rate,
     logging_steps=script_args.logging_steps,
+    num_train_epochs=script_args.num_train_epochs,
+    max_steps=script_args.max_steps,
 )
 
 # Step 4: Define the LoraConfig
