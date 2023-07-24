@@ -36,7 +36,7 @@ class ScriptArguments:
 
     model_name: Optional[str] = field(default="facebook/opt-350m", metadata={"help": "the model name"})
     dataset_name: Optional[str] = field(
-        default="timdettmers/openassistant-guanaco", metadata={"help": "the model name"}
+        default="timdettmers/openassistant-guanaco", metadata={"help": "the dataset name"}
     )
     dataset_text_field: Optional[str] = field(default="text", metadata={"help": "the text field of the dataset"})
     log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
