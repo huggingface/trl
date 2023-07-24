@@ -20,9 +20,8 @@ import enum
 from functools import partial
 import torch.nn.functional as F
 from typing import Union, Any
+import numpy as np
 
-
-# TODO: remember the optimizer
 
 BoolTensor = Union[torch.BoolTensor, torch.cuda.BoolTensor]
 LongTensor = Union[torch.LongTensor, torch.cuda.LongTensor]
@@ -31,7 +30,6 @@ FloatTensor = Union[torch.FloatTensor, torch.cuda.FloatTensor]
 class ForwardMode(enum.Enum):
     SQL_OFF = "SQL_OFF"
     SQL_ON = "SQL_ON"
-
 
 # forget config for now, transfer to config later
 class SoftQLearningTrainer(BaseTrainer):
@@ -59,11 +57,12 @@ class SoftQLearningTrainer(BaseTrainer):
             beam_width: Optional[int] = None,
             reward_function: Callable[[List[str], List[str], List[str]], Tuple[FloatTensor, Dict[str, Any]]] = None,
             tokenizer = None,
-            device = "cpu",
+            device = "cuda:0",
             reward_shaping_func: Callable[[FloatTensor], FloatTensor] = lambda r:r,
     ):
         self.model = model
-        if target_model is None:
+        target_model_empty = target_model is None
+        if target_model_empty:
             self.target_model = copy.deepcopy(self.model)
         else:
             self.target_model = target_model
@@ -88,7 +87,13 @@ class SoftQLearningTrainer(BaseTrainer):
         self.device = device
         self.reward_shaping_func = reward_shaping_func
 
-    def step(self, step):
+        trainable_params = [p for p in model.parameters() if p.requires_grad]
+        if not target_model_empty:
+            trainable_params.extend([p for p in self.target_model.parameters() if p.requires_grad])
+
+        self.optimizer = torch.optim.Adam(trainable_params, lr=1e-4)
+
+    def step(self, batch, step):
         #if PREPROCESS_TARGET_TEXTS is True:
         #        if not isinstance(batch, tx.data.Batch):
         #            raise TypeError
@@ -123,7 +128,7 @@ class SoftQLearningTrainer(BaseTrainer):
         loss_list = []
         additional_info_list = []
         for mode in modes:
-            _loss, _additional_info = self._forward_SQL(
+            _,_loss, _additional_info = self._forward_SQL(
                 mode=mode,
                 batch=batch)
 
@@ -135,7 +140,7 @@ class SoftQLearningTrainer(BaseTrainer):
         additional_info = unionize_dicts(additional_info_list)
 
         loss.backward()
-        train_op()
+        self.optimizer.step()
 
         batch_log = nested_detach_and_clone(additional_info, to_cpu=True)
         
@@ -166,17 +171,17 @@ class SoftQLearningTrainer(BaseTrainer):
 
     def _forward_SQL(self, mode, batch):
 
-        if mode == "SQL_OFF":
+        if mode == ForwardMode.SQL_OFF:
             # teacher forcing
-            outputs = self.model(*batch)
-            target_outputs = self.target_model(*batch)
+            outputs = self.model(input_ids=batch[0].input_ids, decoder_input_ids=batch[1].input_ids)
+            target_outputs = self.target_model(input_ids=batch[0].input_ids, decoder_input_ids=batch[1].input_ids)
 
-            logits = outputs.logits
-            target_logits = target_outputs.logits
-            output_ids = batch[1].input_ids # potential trouble spot
-            sequence_lengths = batch[1].attention_mask.sum(dim=-1)
+            logits = outputs.logits.to(self.device)
+            target_logits = target_outputs.logits.to(self.device)
+            output_ids = batch[1].input_ids.to(self.device) # potential trouble spot
+            sequence_lengths = batch[1].attention_mask.sum(dim=-1).to(self.device)
 
-        elif mode == "SQL_ON":
+        elif mode == ForwardMode.SQL_ON:
 
             generation_length = batch[1].input_ids.shape[1]
 
@@ -197,10 +202,10 @@ class SoftQLearningTrainer(BaseTrainer):
             target_outputs = self.target_model(input_ids=on_policy_training_data[0], decoder_input_ids=on_policy_training_data[1]) 
 
             # possible problematic spot
-            logits = torch.stack(outputs.scores, dim=1)
-            target_logits = target_outputs.logits
-            output_ids = outputs.sequences[:,1:].contiguous()
-            sequence_lengths = (output_ids != self.tokenizer.pad_token_id).sum(dim=-1)
+            logits = torch.stack(outputs.scores, dim=1).to(self.device)
+            target_logits = target_outputs.logits.to(self.device)
+            output_ids = outputs.sequences[:,1:].contiguous().to(self.device)
+            sequence_lengths = (output_ids != self.tokenizer.pad_token_id).sum(dim=-1).to(self.device)
              
         else:
             raise NotImplementedError
@@ -258,7 +263,7 @@ class SoftQLearningTrainer(BaseTrainer):
             to_tensor=True,
             mode="train")
 
-        rewards_tensor = rewards_tensor.to(self.device)
+        rewards_tensor = rewards_tensor #.to(self.device)
         shaped_rewards_tensor = self.reward_shaping_func(rewards_tensor)
         return rewards_tensor, shaped_rewards_tensor, rewards_log
 
@@ -395,13 +400,13 @@ def soft_q_loss_with_sparse_rewards(
         sequence_length=sequence_length
     )
 
-    loss = tx.losses.mask_and_reduce(
+    loss = mask_and_reduce(
         sequence=raw_losses,
         sequence_length=sequence_length)
     loss_log = {
         "loss": loss,
         "sequence_length": sequence_length.float().mean(),
-        "loss-normalized": tx.losses.mask_and_reduce(
+        "loss-normalized": mask_and_reduce(
             sequence=raw_losses,
             sequence_length=sequence_length,
             average_across_timesteps=True,
@@ -758,3 +763,362 @@ def large_margin_classification_loss(
     }
 
     return raw_losses, quantities_to_log
+
+
+def masked_reverse_cumsum(
+        X: FloatTensor,
+        lengths: LongTensor,
+        dim: int
+) -> FloatTensor:
+    masked_X = X * sequence_mask(
+        lengths,
+        max_len=X.shape[1])
+
+    return (masked_X
+            .flip(dims=[dim])
+            .cumsum(dim=dim)
+            .flip(dims=[dim]))
+
+
+def get_masked_mean_min_max(
+        X: FloatTensor,
+        lengths: LongTensor
+) -> Tuple[FloatTensor, FloatTensor, FloatTensor]:
+    if X.ndim != 2 and lengths.ndim != 1:
+        raise ValueError
+
+    if X.shape[0] != lengths.shape[0]:
+        raise ValueError
+
+    mask = get_lengths_mask(
+        X=X,
+        lengths=lengths)
+
+    masked_min = X.masked_fill(~mask, np.inf).min(dim=1)
+    masked_max = X.masked_fill(~mask, -np.inf).max(dim=1)
+    masked_mean = mask_and_reduce(
+        sequence=X,
+        sequence_length=lengths,
+        average_across_timesteps=True,
+        sum_over_timesteps=False)
+
+    return (masked_mean,
+            masked_min.values.mean(),
+            masked_max.values.mean())
+
+def mask_and_reduce(sequence: torch.Tensor,
+                    sequence_length: torch.LongTensor,
+                    rank: int = 2,
+                    average_across_batch: bool = True,
+                    average_across_timesteps: bool = False,
+                    sum_over_batch: bool = False,
+                    sum_over_timesteps: bool = True,
+                    dtype: Optional[torch.dtype] = None) -> torch.Tensor:
+    r"""Masks out sequence entries that are beyond the respective sequence
+    lengths, and reduces (average or sum) away dimensions.
+
+    This is a combination of :func:`~texar.torch.utils.shapes.mask_sequences`
+    and :func:`~texar.torch.losses.losses_utils.reduce_batch_time`.
+
+    Args:
+        sequence: A tensor of sequence values.
+            If `time_major=False` (default), this must be a tensor of shape
+            `[batch_size, max_time, d_2, ..., d_rank]`, where the rank of
+            the tensor is specified with :attr:`rank`.
+            The batch and time dimensions are exchanged if `time_major` is True.
+        sequence_length: A tensor of shape `[batch_size]`. Time steps beyond
+            the respective sequence lengths will be made zero. If `None`,
+            no masking is performed.
+        rank (int): The rank of :attr:`sequence`. Must be >= 2. Default is 2,
+            i.e., `sequence` is a 2D Tensor consisting of batch and time
+            dimensions.
+        average_across_timesteps (bool): If set, average the sequence across
+            the time dimension. Must not set `average_across_timesteps`
+            and `sum_over_timesteps` at the same time.
+        average_across_batch (bool): If set, average the sequence across the
+            batch dimension. Must not set `average_across_batch`'
+            and `sum_over_batch` at the same time.
+        average_across_remaining (bool): If set, average the sequence across the
+            remaining dimensions. Must not set `average_across_remaining`'
+            and `sum_over_remaining` at the same time.
+        sum_over_timesteps (bool): If set, sum the sequence across the time
+            dimension. Must not set `average_across_timesteps` and
+            `sum_over_timesteps` at the same time.
+        sum_over_batch (bool): If set, sum the sequence across the batch
+            dimension. Must not set `average_across_batch` and `sum_over_batch`
+            at the same time.
+        sum_over_remaining (bool): If set, sum the sequence across the remaining
+            dimension. Must not set `average_across_remaining` and
+            `sum_over_remaining` at the same time.
+        dtype (torch.dtype): The dtype of the returned mask.
+        time_major (bool): The shape format of the inputs. If `True`,
+            :attr:`sequence` must have shape `[max_time, batch_size, ...]`.
+            If `False` (default), `sequence` must have
+            shape `[batch_size, max_time, ...]`.
+
+    Returns:
+        A tensor containing the masked and reduced sequence.
+    """
+    if rank < 2:
+        raise ValueError('`rank` must be >= 2.')
+
+    if sequence_length is not None:
+        sequence = mask_sequences(sequence,
+                                  sequence_length,
+                                  dtype=dtype)
+
+    sequence = reduce_batch_time(sequence,
+                                 sequence_length,
+                                 average_across_batch,
+                                 average_across_timesteps,
+                                 sum_over_batch,
+                                 sum_over_timesteps)
+
+    reduce_time = average_across_timesteps or sum_over_timesteps
+    reduce_batch = average_across_batch or sum_over_batch
+
+    return sequence
+
+def reduce_batch_time(sequence: torch.Tensor,
+                      sequence_length: torch.LongTensor,
+                      average_across_batch: bool = True,
+                      average_across_timesteps: bool = False,
+                      sum_over_batch: bool = False,
+                      sum_over_timesteps: bool = True) -> torch.Tensor:
+    r"""Average or sum over the respective dimensions of :attr:`sequence`, which
+    is of shape `[batch_size, max_time, ...]`.
+
+    Assumes :attr:`sequence` has been properly masked according to
+    :attr:`sequence_length`.
+
+    Args:
+        sequence: A tensor to reduce.
+        sequence_length: A tensor of shape `[batch_size]`. Time steps beyond
+            the respective sequence lengths will be made zero. If `None`,
+            no masking is performed.
+        average_across_batch (bool): If set, average the sequence across the
+            batch dimension. Must not set `average_across_batch`'
+            and `sum_over_batch` at the same time.
+        average_across_timesteps (bool): If set, average the sequence across
+            the time dimension. Must not set `average_across_timesteps`
+            and `sum_over_timesteps` at the same time.
+        sum_over_batch (bool): If set, sum the sequence across the
+            batch dimension. Must not set `average_across_batch`
+            and `sum_over_batch` at the same time.
+        sum_over_timesteps (bool): If set, sum the sequence across the
+            time dimension. Must not set `average_across_timesteps`
+            and `sum_over_timesteps` at the same time.
+
+    Returns:
+        A tensor with dimension reduction.
+    """
+    if average_across_timesteps and sum_over_timesteps:
+        raise ValueError("Only one of `average_across_timesteps` and "
+                         "`sum_over_timesteps` can be set.")
+    if average_across_batch and sum_over_batch:
+        raise ValueError("Only one of `average_across_batch` and "
+                         "`sum_over_batch` can be set.")
+
+    if sum_over_timesteps:
+        sequence = torch.sum(sequence, dim=1)
+    elif average_across_timesteps:
+        sequence = (torch.sum(sequence, dim=1).float() /
+                    sequence_length.float())
+
+    if sum_over_batch:
+        sequence = torch.sum(sequence, dim=0)
+    elif average_across_batch:
+        sequence = torch.mean(sequence, dim=0)
+
+    return sequence
+
+
+def get_lengths_mask(
+        X: FloatTensor,
+        lengths: LongTensor
+) -> FloatTensor:
+
+    if any([
+        X.ndim != 2,
+        lengths.ndim != 1,
+        X.shape[0] != lengths.shape[0]],
+    ):
+        raise ValueError
+
+    return sequence_mask(lengths, max_len=X.shape[1])
+
+
+def sequence_mask(lengths: Union[torch.LongTensor, List[int]],
+                  max_len: Optional[int] = None,
+                  dtype: Optional[torch.dtype] = None,
+                  device: Optional[torch.device] = None) -> torch.ByteTensor:
+    r"""Return a mask tensor representing the first N positions of each cell.
+
+    If ``lengths`` has shape ``[d_1, d_2, ..., d_n]`` the resulting tensor
+    ``mask`` has dtype ``dtype`` and shape ``[d_1, d_2, ..., d_n, maxlen]``,
+    with
+
+    ```
+    mask[i_1, i_2, ..., i_n, j] = (j < lengths[i_1, i_2, ..., i_n])
+    ```
+
+    Examples:
+
+    ```python
+    sequence_mask([1, 3, 2], 5)  # [[True, False, False, False, False],
+                                 #  [True,  True,  True, False, False],
+                                 #  [True,  True, False, False, False]]
+
+    sequence_mask([[1, 3],[2,0]])  # [[[ True, False, False],
+                                   #   [ True,  True,  True]],
+                                   #  [[ True,  True, False],
+                                   #   [False, False, False]]]
+    ```
+
+    Args:
+        lengths: integer tensor or list of int, all its values <= max_len.
+        max_len: scalar integer tensor, size of last dimension of returned
+            tensor. Default is the maximum value in ``lengths``.
+        dtype: the desired data type of returned tensor. Default: if None,
+            returns :torch:`ByteTensor`.
+        device: the desired device of returned tensor. Default: if None, uses
+            the current device for the default tensor type.
+    Returns:
+        A mask tensor of shape :python:`lengths.shape + (max_len,)`, cast to
+        specified dtype.
+    Raises:
+        ValueError: if ``max_len`` is not a scalar.
+    """
+    if not isinstance(lengths, torch.Tensor):
+        lengths = torch.tensor(lengths, device=device)
+    elif device is None:
+        device = lengths.device
+    lengths: torch.LongTensor
+    if max_len is None:
+        max_len = torch.max(lengths).item()
+
+    size = lengths.size()
+    row_vector = torch.arange(max_len, device=device, dtype=lengths.dtype).view(
+        *([1] * len(size)), -1).expand(*size, max_len)
+    mask = (row_vector < lengths.unsqueeze(-1)).to(device=device)
+    if dtype is not None:
+        mask = mask.to(dtype=dtype)
+
+    return mask
+
+def mask_sequences(sequence: Union[torch.Tensor, List[int]],
+                   sequence_length: Union[torch.LongTensor, List[int]],
+                   dtype: Optional[torch.dtype] = None) -> torch.Tensor:
+    r"""Masks out sequence entries that are beyond the respective sequence
+    lengths. Masks along the time dimension.
+
+    :attr:`sequence` and :attr:`sequence_length` can either be python
+    arrays or Tensors, respectively. If both are Python arrays (or None), the
+    return will be a Python array as well.
+
+    Args:
+        sequence: A Tensor or Python array of sequence values.
+            If ``time_major==False`` (default), this must be a Tensor of shape
+            ``[batch_size, max_time, ...]``. The batch and time dimension is
+            exchanged if ``time_major==True``.
+        sequence_length: A Tensor or python array of shape ``[batch_size]``.
+            Time steps beyond the respective sequence lengths will be
+            made zero.
+        dtype (dtype): Type of :attr:`sequence`. If `None`, infer from
+            :attr:`sequence` automatically.
+        time_major (bool): The shape format of the inputs. If `True`,
+            :attr:`sequence` must have shape
+            ``[max_time, batch_size, ...]``.
+            If `False` (default), :attr:`sequence` must have
+            shape ``[batch_size, max_time, ...]``.
+
+    Returns:
+        The masked sequence, i.e., a Tensor or python array of the same shape
+        as :attr:`sequence` but with masked-out entries (set to zero).
+
+        If both :attr:`sequence` and :attr:`sequence_length` are python
+        arrays, the returned value is a python array as well.
+    """
+    if not torch.is_tensor(sequence):
+        sequence = torch.tensor(sequence, dtype=dtype)
+    sequence: torch.Tensor
+
+    rank = sequence.dim()
+    if rank < 2:
+        raise ValueError("`sequence` must be 2D or higher order.")
+
+    max_time = sequence.size(1)
+    if dtype is None:
+        dtype = sequence.dtype
+    mask = sequence_mask(sequence_length, max_time, dtype=dtype)
+    mask = mask.view(*mask.size(), *([1] * (rank - 2)))
+    sequence = sequence * mask
+
+    return sequence
+
+
+def nested_detach_and_clone(obj: Any, to_cpu: bool = False, to_numpy: bool = False):
+    if to_cpu is False and to_numpy is True:
+        raise ValueError("Numpy has to be on CPU")
+
+    def _operation(X: torch.Tensor) -> Union[torch.Tensor, np.ndarray]:
+        # https://stackoverflow.com/questions/55266154/pytorch-preferred-way-to-copy-a-tensor
+        _X = X.detach().clone()
+        if to_cpu is True:
+            _X = _X.cpu()
+
+        if to_numpy is True:
+            _X = _X.numpy()
+
+        return _X
+
+    return nested_tensor_operation(obj=obj, tensor_operation=_operation)
+
+
+def nested_to_cuda(obj: Any):
+
+    def _operation(X: torch.Tensor) -> torch.Tensor:
+        return X.cuda()
+
+    return nested_tensor_operation(obj=obj, tensor_operation=_operation)
+
+
+def nested_tensor_operation(obj: Any, tensor_operation: Callable[[torch.Tensor], Any]) -> Any:
+    """Nested Application of `detach().clone()`.
+
+       This function will remove gradients and reference.
+    """
+    if isinstance(obj, (list, tuple)):
+        return [
+            nested_tensor_operation(
+                obj=_obj,
+                tensor_operation=tensor_operation)
+            for _obj in obj]
+
+    if isinstance(obj, dict):
+        new_dict_obj = {}
+        for key, val in obj.items():
+            if not isinstance(key, str):
+                raise NotImplementedError
+
+            new_dict_obj[key] = nested_tensor_operation(
+                obj=val,
+                tensor_operation=tensor_operation)
+
+        return new_dict_obj
+
+    if isinstance(obj, torch.Tensor):
+        return tensor_operation(obj)
+
+    if obj is None:
+        return obj
+
+    if isinstance(obj, bool):
+        # Special handling, since `bool` is subclass of `int
+        # https://stackoverflow.com/questions/37888620/comparing-boolean-and-int-using-isinstance
+        return obj
+
+    if isinstance(obj, (int, float, str)):
+        return obj
+
+    raise TypeError(f"Unrecognized type {type(obj)}")

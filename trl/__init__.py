@@ -11,4 +11,4 @@ from .models import (
     PreTrainedModelWrapper,
     create_reference_model,
 )
-from .trainer import DataCollatorForCompletionOnlyLM, PPOConfig, PPOTrainer, RewardTrainer, SFTTrainer, SoftQLearningConfig, SoftQLearningTrainer
+from .trainer import DataCollatorForCompletionOnlyLM, PPOConfig, PPOTrainer, RewardTrainer, SFTTrainer, SoftQLearningConfig, SoftQLearningTrainer, ForwardMode

@@ -1,7 +1,7 @@
 import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import BertTokenizer, BertConfig, EncoderDecoderConfig, EncoderDecoderModel, pipeline, PreTrainedModel, PreTrainedTokenizerFast
-from trl import SoftQLearningTrainer
+from trl import SoftQLearningTrainer, ForwardMode
 from typing import List, Tuple, Union, Dict, Optional, Callable, Any
 import numpy as np
 from collections import defaultdict
@@ -320,8 +320,10 @@ qtrainer = SoftQLearningTrainer(model=model,
                                 device=device,
                                 )
 #
-for batch in dataloader:
-    qtrainer._forward_SQL("SQL_ON", batch)
+for i,batch in enumerate(dataloader):
+    # qtrainer._forward_SQL(ForwardMode.SQL_OFF, batch)
+    logs = qtrainer.step(batch,i)
+    print(logs)
 
 
 
