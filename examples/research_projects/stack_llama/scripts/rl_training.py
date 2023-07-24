@@ -208,8 +208,8 @@ ppo_trainer = PPOTrainer(
     optimizer=optimizer,
 )
 
-# We then build the sentiment analysis pipeline using our reward model, passing the 
-# model name and the sentiment analysis pipeline arguments. Let's also make sure to 
+# We then build the sentiment analysis pipeline using our reward model, passing the
+# model name and the sentiment analysis pipeline arguments. Let's also make sure to
 # set the device to the same device as the PPOTrainer.
 device = ppo_trainer.accelerator.device
 if ppo_trainer.accelerator.num_processes == 1:
