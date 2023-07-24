@@ -198,7 +198,6 @@ class DPODataCollatorWithPadding:
             The maximum length of the sequence to be processed.
         max_prompt_length (`Optional[int]`, `optional`, defaults to `None`):
             The maximum length of the prompt to be processed.
-        batch_size (`Optional[int]`, `optional`, defaults to `None`):
         label_pad_token_id (`int`, defaults to -100):
             The label used for masking.
         padding_value (`int`, defaults to 0):
@@ -210,7 +209,6 @@ class DPODataCollatorWithPadding:
     padding: Union[bool, str] = True
     max_length: Optional[int] = None
     max_prompt_length: Optional[int] = None
-    batch_size: Optional[int] = None
     label_pad_token_id: int = -100
     padding_value: int = 0
     truncation_mode: str = "keep_end"
@@ -228,8 +226,8 @@ class DPODataCollatorWithPadding:
             we truncate the prompt; if we're still too long, we truncate the chosen/rejected.
 
         We also create the labels for the chosen/rejected responses, which are of length equal to
-            the sum of the length of the prompt and the chosen/rejected response, with -100 for the
-            prompt tokens.
+            the sum of the length of the prompt and the chosen/rejected response, with
+            label_pad_token_id  for the prompt tokens.
         """
         chosen_tokens = self.tokenizer(chosen, add_special_tokens=False)
         rejected_tokens = self.tokenizer(rejected, add_special_tokens=False)
