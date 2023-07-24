@@ -45,7 +45,6 @@ class ScriptArguments:
         default=1, metadata={"help": "the number of gradient accumulation steps"}
     )
     early_stopping: Optional[bool] = field(default=False, metadata={"help": "whether to early stop"})
-    target_kl: Optional[float] = field(default=6, metadata={"help": "kl target for early stopping"})
     use_peft: Optional[bool] = field(default=False, metadata={"help": "whether to use peft"})
     use_seq2seq: Optional[bool] = field(default=False, metadata={"help": "whether to use seq2seq models"})
     kl_penalty: Optional[str] = field(
@@ -56,6 +55,9 @@ class ScriptArguments:
     )
     target_kl: Optional[float] = field(default=0.1, metadata={"help": "kl target for early stopping"})
     seed: Optional[int] = field(default=0, metadata={"help": "the random seed"})
+    use_score_scaling: Optional[bool] = field(default=False, metadata={"help": "Use score scaling"})
+    use_score_norm: Optional[bool] = field(default=False, metadata={"help": "Use score normalization"})
+    score_clip: Optional[float] = field(default=None, metadata={"help": "Score clipping"})
 
 
 parser = HfArgumentParser(ScriptArguments)
@@ -72,6 +74,9 @@ config = PPOConfig(
     target_kl=script_args.target_kl,
     kl_penalty=script_args.kl_penalty,
     seed=script_args.seed,
+    use_score_scaling=script_args.use_score_scaling,
+    use_score_norm=script_args.use_score_norm,
+    score_clip=script_args.score_clip,
 )
 
 
