@@ -159,15 +159,9 @@ class PPOConfig(object):
     ratio_threshold: Optional[float] = field(
         default=10.0, metadata={"help": "Skip mini-batches with high PPO ratios that can cause loss spikes"}
     )
-    use_score_scaling: Optional[bool] = field(
-        default=False, metadata={"help": "Use score scaling"}
-    )
-    use_score_norm: Optional[bool] = field(
-        default=False, metadata={"help": "Use score normalization"}
-    )
-    score_clip: Optional[float] = field(
-        default=None, metadata={"help": "Score clipping"}
-    )
+    use_score_scaling: Optional[bool] = field(default=False, metadata={"help": "Use score scaling"})
+    use_score_norm: Optional[bool] = field(default=False, metadata={"help": "Use score normalization"})
+    score_clip: Optional[float] = field(default=None, metadata={"help": "Score clipping"})
 
     def __post_init__(self):
         if self.forward_batch_size is not None:
