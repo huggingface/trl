@@ -43,7 +43,7 @@ class DDPOConfig(object):
     )
     num_epochs: Optional[int] = field(default=100, metadata={"help": "Number of epochs to train."})
     save_freq: Optional[int] = field(
-        default=20,
+        default=1,
         metadata={"help": "Number of epochs between saving model checkpoints."},
     )
     num_checkpoint_limit: Optional[int] = field(

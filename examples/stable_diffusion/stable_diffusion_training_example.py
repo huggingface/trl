@@ -129,6 +129,7 @@ if __name__ == "__main__":
         num_epochs=200,
         train_gradient_accumulation_steps=1,
         per_prompt_stat_tracking_buffer_size=32,
+        sample_num_batches_per_epoch=2,
         sample_batch_size=1,
         tracker_project_name="stable_diffusion_training",
         log_with="tensorboard",
@@ -136,6 +137,7 @@ if __name__ == "__main__":
             "logging_dir": "./logs",
             "automatic_checkpoint_naming": True,
             "total_limit": 5,
+            "project_dir": "./save",
         },
     )
     pretrained_model = "runwayml/stable-diffusion-v1-5"
@@ -151,7 +153,7 @@ if __name__ == "__main__":
         aesthetic_score(),
         prompt_fn,
         pipeline,
-        image_outputs_hook=image_outputs_logger,
+        image_samples_hook=image_outputs_logger,
     )
 
     trainer.run()
