@@ -26,4 +26,4 @@ from .ppo_trainer import PPOTrainer
 from .reward_trainer import RewardTrainer, compute_accuracy
 from .sft_trainer import SFTTrainer
 from .soft_q_learning_config import SoftQLearningConfig
-from .soft_q_learning_trainer import SoftQLearningTrainer, ForwardMode
+from .soft_q_learning_trainer import ForwardMode, SoftQLearningTrainer
