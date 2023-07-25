@@ -89,23 +89,6 @@ class SoftQLearningTrainer(BaseTrainer):
         self.optimizer = torch.optim.Adam(trainable_params, lr=target_learning_rate)
 
     def step(self, batch, step):
-        # if PREPROCESS_TARGET_TEXTS is True:
-        #        if not isinstance(batch, tx.data.Batch):
-        #            raise TypeError
-        #        batch._batch["target_text"] = preprocess_target_texts(
-        #            tokens_or_list_of_tokens=batch["target_text"],
-        #            vocab=model._model.target_vocab,
-        #            remove_special_tokens=False)
-
-        # Do not sync when we learn the target model
-        # if self.config.target_sync_method == "learn":
-        #    if target_train_op is None:
-        #        raise ValueError
-        #    target_train_op()
-
-        # If we use polyak-averaging
-        # just do update every step
-        # NOTE: wonder why this doesn't have a target_sync_steps portion
         if self.target_sync_method == "polyak":
             self.sync_target_model("polyak")
 
@@ -223,7 +206,7 @@ class SoftQLearningTrainer(BaseTrainer):
             input_texts, target_texts, predicted_texts
         )
 
-        sql_loss, sql_loss_log = soft_q_loss_with_sparse_rewards(
+        sql_loss, sql_loss_log = self.loss(
             implementation=self.sql_loss_impl,
             logits=logits,
             logits_=target_logits,
@@ -259,8 +242,112 @@ class SoftQLearningTrainer(BaseTrainer):
 
         return logits, sql_loss, sql_loss_log
 
-    def loss(self, *args):
-        raise NotImplementedError("Not implemented")
+    def loss(
+        self,
+        implementation: str,
+        logits: FloatTensor,
+        logits_: FloatTensor,
+        actions: LongTensor,
+        rewards: FloatTensor,
+        sequence_length: LongTensor,
+        coefficient: Optional[float] = None,
+        margin_constant: Optional[float] = None,
+        margin_coefficient: Optional[float] = None,
+    ):
+        """Soft Q Learning Loss Functions with Sparse Rewards
+
+        Arguments:
+            implementation: string, which loss function to use
+            logits:          [batch_size, sequence_length, vocab_size]
+            logits_:         [batch_size, sequence_length, vocab_size]
+            logits_pi:       [batch_size, sequence_length, vocab_size]
+            actions:         [batch_size, sequence_length]
+            rewards:         [batch_size]
+            sequence_length: [batch_size]
+        """
+
+        if implementation not in [
+            "v0",
+            "v1",
+            "v2",
+            "v3",
+            "v2_v2r",
+            "v3_v3r",
+            "v2_v2r_v3_v3r",
+        ]:
+            raise ValueError
+
+        if not torch.is_tensor(rewards):
+            raise TypeError
+
+        if rewards.ndim != 1 or logits.shape[0] != rewards.shape[0]:
+            raise ValueError
+
+        if implementation == "v0":
+            _sql_loss_func = soft_q_loss_with_sparse_rewards_0
+
+        elif implementation == "v1":
+            _sql_loss_func = soft_q_loss_with_sparse_rewards_1
+
+        elif implementation == "v2":
+            _sql_loss_func = soft_q_loss_with_sparse_rewards_2
+
+        if implementation == "v3":
+            _sql_loss_func = soft_q_loss_with_sparse_rewards_3
+
+        if implementation == "v2_v2r":
+            _sql_loss_func = partial(
+                soft_q_loss_with_sparse_rewards_2_2_reversed,
+                coefficient=coefficient,
+                margin_constant=margin_constant,
+                margin_coefficient=margin_coefficient,
+            )
+
+        if implementation == "v3_v3r":
+            _sql_loss_func = partial(
+                soft_q_loss_with_sparse_rewards_3_3_reversed, coefficient=coefficient
+            )
+
+        if implementation == "v2_v2r_v3_v3r":
+            _sql_loss_func = partial(
+                soft_q_loss_with_sparse_rewards_2_2_reversed_3_3_reversed,
+                coefficient=coefficient,
+            )
+
+        if logits.shape != logits_.shape:
+            raise ValueError(
+                f"`logits.shape` = {logits.shape}, but "
+                f"`logits_.shape` = {logits_.shape}"
+            )
+
+        raw_losses, quantities_to_log = _sql_loss_func(
+            logits=logits,
+            logits_=logits_,
+            actions=actions,
+            rewards=rewards,
+            sequence_length=sequence_length,
+        )
+
+        loss = mask_and_reduce(sequence=raw_losses, sequence_length=sequence_length)
+        loss_log = {
+            "loss": loss,
+            "sequence_length": sequence_length.float().mean(),
+            "loss-normalized": mask_and_reduce(
+                sequence=raw_losses,
+                sequence_length=sequence_length,
+                average_across_timesteps=True,
+                sum_over_timesteps=False,
+            ),
+        }
+
+        # for key, value in quantities_to_log.items():
+        #    masked_mean, masked_min, masked_max = get_masked_mean_min_max(
+        #        value, lengths=sequence_length)
+        #    loss_log[f"{key}/min"] = masked_min
+        #    loss_log[f"{key}/max"] = masked_max
+        #    loss_log[f"{key}/mean"] = masked_mean
+
+        return loss, loss_log
 
     def compute_rewards(self, source_texts, target_texts, output_texts):
         rewards_tensor, rewards_log = self.reward_function(
@@ -311,112 +398,6 @@ def add_prefix_to_dict_keys_inplace(
 
         new_key = f"{prefix}{key}"
         d[new_key] = d.pop(key)
-
-
-def soft_q_loss_with_sparse_rewards(
-    implementation: str,
-    logits: FloatTensor,
-    logits_: FloatTensor,
-    actions: LongTensor,
-    rewards: FloatTensor,
-    sequence_length: LongTensor,
-    coefficient: Optional[float] = None,
-    margin_constant: Optional[float] = None,
-    margin_coefficient: Optional[float] = None,
-) -> Tuple[FloatTensor, Dict[str, Any]]:
-    """Soft Q Learning Loss Functions with Sparse Rewards
-
-    Arguments:
-        implementation: string, which loss function to use
-        logits:          [batch_size, sequence_length, vocab_size]
-        logits_:         [batch_size, sequence_length, vocab_size]
-        logits_pi:       [batch_size, sequence_length, vocab_size]
-        actions:         [batch_size, sequence_length]
-        rewards:         [batch_size]
-        sequence_length: [batch_size]
-    """
-    if implementation not in [
-        "v0",
-        "v1",
-        "v2",
-        "v3",
-        "v2_v2r",
-        "v3_v3r",
-        "v2_v2r_v3_v3r",
-    ]:
-        raise ValueError
-
-    if not torch.is_tensor(rewards):
-        raise TypeError
-
-    if rewards.ndim != 1 or logits.shape[0] != rewards.shape[0]:
-        raise ValueError
-
-    if implementation == "v0":
-        _sql_loss_func = soft_q_loss_with_sparse_rewards_0
-
-    elif implementation == "v1":
-        _sql_loss_func = soft_q_loss_with_sparse_rewards_1
-
-    elif implementation == "v2":
-        _sql_loss_func = soft_q_loss_with_sparse_rewards_2
-
-    if implementation == "v3":
-        _sql_loss_func = soft_q_loss_with_sparse_rewards_3
-
-    if implementation == "v2_v2r":
-        _sql_loss_func = partial(
-            soft_q_loss_with_sparse_rewards_2_2_reversed,
-            coefficient=coefficient,
-            margin_constant=margin_constant,
-            margin_coefficient=margin_coefficient,
-        )
-
-    if implementation == "v3_v3r":
-        _sql_loss_func = partial(
-            soft_q_loss_with_sparse_rewards_3_3_reversed, coefficient=coefficient
-        )
-
-    if implementation == "v2_v2r_v3_v3r":
-        _sql_loss_func = partial(
-            soft_q_loss_with_sparse_rewards_2_2_reversed_3_3_reversed,
-            coefficient=coefficient,
-        )
-
-    if logits.shape != logits_.shape:
-        raise ValueError(
-            f"`logits.shape` = {logits.shape}, but "
-            f"`logits_.shape` = {logits_.shape}"
-        )
-
-    raw_losses, quantities_to_log = _sql_loss_func(
-        logits=logits,
-        logits_=logits_,
-        actions=actions,
-        rewards=rewards,
-        sequence_length=sequence_length,
-    )
-
-    loss = mask_and_reduce(sequence=raw_losses, sequence_length=sequence_length)
-    loss_log = {
-        "loss": loss,
-        "sequence_length": sequence_length.float().mean(),
-        "loss-normalized": mask_and_reduce(
-            sequence=raw_losses,
-            sequence_length=sequence_length,
-            average_across_timesteps=True,
-            sum_over_timesteps=False,
-        ),
-    }
-
-    # for key, value in quantities_to_log.items():
-    #    masked_mean, masked_min, masked_max = get_masked_mean_min_max(
-    #        value, lengths=sequence_length)
-    #    loss_log[f"{key}/min"] = masked_min
-    #    loss_log[f"{key}/max"] = masked_max
-    #    loss_log[f"{key}/mean"] = masked_mean
-
-    return loss, loss_log
 
 
 def soft_q_loss_with_sparse_rewards_1(
