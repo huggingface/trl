@@ -113,7 +113,7 @@ class GPT2TopicReward(object):
 
         if topic_scores_aggregator is None:
             # Use the average by default
-            topic_scores_aggregator = lambda scores: np.mean(scores)
+            topic_scores_aggregator = np.mean
 
         # if include_perplexity is True:
         #    sql_utils.colorful_warning("Adding Perplexity-based Reward", bg="blue")

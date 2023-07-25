@@ -1,6 +1,5 @@
 from dataclasses import dataclass, field
 from typing import Optional
-import os
 
 
 @dataclass
@@ -98,36 +97,8 @@ class SoftQLearningConfig(object):
         metadata={"help": "Number of steps between comparison of the current reward with the best seen so far"},
     )
 
-    def __post_init__(self):
-        if self.forward_batch_size is not None:
-            warnings.warn(
-                "Note that using `forward_batch_size` is deprecated, use `mini_batch_size` instead. By setting it you overwrite `mini_batch_size` which affects both the batch size during forward passes and also the mini batch size for PPO optimization."
-            )
-            self.mini_batch_size = self.forward_batch_size
-
-        # check if wandb is installed
-        if self.log_with == "wandb":
-            # raise error if wandb is not installed
-            try:
-                import wandb  # noqa: F401
-
-                existing_wandb_tag = os.environ.get("WANDB_TAGS", "")
-                wandb_tag = autotag()
-                if len(wandb_tag) > 0:
-                    if len(existing_wandb_tag) > 0:
-                        os.environ["WANDB_TAGS"] = ",".join([existing_wandb_tag, wandb_tag])
-                    else:
-                        os.environ["WANDB_TAGS"] = wandb_tag
-                    logging.info(f"the following tags will be used for wandb logging: {os.environ['WANDB_TAGS']}")
-            except ImportError:
-                raise ImportError(
-                    "Please install wandb to use wandb logging. You can do this by running `pip install wandb`."
-                )
-
-        self.total_ppo_epochs = int(np.ceil(self.steps / self.batch_size))
-
-    def to_dict(self):
-        output_dict = {}
-        for key, value in self.__dict__.items():
-            output_dict[key] = value
-        return flatten_dict(output_dict)
+    # def to_dict(self):
+    #    output_dict = {}
+    #    for key, value in self.__dict__.items():
+    #        output_dict[key] = value
+    #    return flatten_dict(output_dict)

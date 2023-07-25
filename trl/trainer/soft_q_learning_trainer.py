@@ -7,13 +7,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from ..core import entropy_from_logits, mask_and_reduce, masked_reverse_cumsum
 from ..models import PreTrainedModelWrapper
-from ..core import (
-    mask_and_reduce,
-    masked_reverse_cumsum,
-    get_masked_mean_min_max,
-    entropy_from_logits,
-)
 from . import BaseTrainer
 
 
@@ -50,9 +45,7 @@ class SoftQLearningTrainer(BaseTrainer):
         top_k: Optional[int] = None,
         top_p: Optional[float] = None,
         beam_width: Optional[int] = None,
-        reward_function: Callable[
-            [List[str], List[str], List[str]], Tuple[FloatTensor, Dict[str, Any]]
-        ] = None,
+        reward_function: Callable[[List[str], List[str], List[str]], Tuple[FloatTensor, Dict[str, Any]]] = None,
         tokenizer=None,
         device="cuda:0",
         reward_shaping_func: Callable[[FloatTensor], FloatTensor] = lambda r: r,
@@ -134,25 +127,16 @@ class SoftQLearningTrainer(BaseTrainer):
         # would yield the same parameter orders.
         # https://towardsdatascience.com/double-deep-q-networks-905dd8325412
         elif sync_type == "polyak":
-            for param_, param in zip(
-                self.target_model.parameters(), self.model.parameters()
-            ):
-                param_.data.copy_(
-                    (1 - self.target_learning_rate) * param_
-                    + self.target_learning_rate * param
-                )
+            for param_, param in zip(self.target_model.parameters(), self.model.parameters()):
+                param_.data.copy_((1 - self.target_learning_rate) * param_ + self.target_learning_rate * param)
         else:
             raise ValueError(f"Unknown sync type: {sync_type}")
 
     def _forward_SQL(self, mode, batch):
         if mode == ForwardMode.SQL_OFF:
             # teacher forcing
-            outputs = self.model(
-                input_ids=batch[0].input_ids, decoder_input_ids=batch[1].input_ids
-            )
-            target_outputs = self.target_model(
-                input_ids=batch[0].input_ids, decoder_input_ids=batch[1].input_ids
-            )
+            outputs = self.model(input_ids=batch[0].input_ids, decoder_input_ids=batch[1].input_ids)
+            target_outputs = self.target_model(input_ids=batch[0].input_ids, decoder_input_ids=batch[1].input_ids)
 
             logits = outputs.logits.to(self.device)
             target_logits = target_outputs.logits.to(self.device)
@@ -185,26 +169,16 @@ class SoftQLearningTrainer(BaseTrainer):
             logits = torch.stack(outputs.scores, dim=1).to(self.device)
             target_logits = target_outputs.logits.to(self.device)
             output_ids = outputs.sequences[:, 1:].contiguous().to(self.device)
-            sequence_lengths = (
-                (output_ids != self.tokenizer.pad_token_id).sum(dim=-1).to(self.device)
-            )
+            sequence_lengths = (output_ids != self.tokenizer.pad_token_id).sum(dim=-1).to(self.device)
 
         else:
             raise NotImplementedError
 
-        predicted_texts = self.tokenizer.batch_decode(
-            output_ids, skip_special_tokens=True
-        )
-        input_texts = self.tokenizer.batch_decode(
-            batch[0].input_ids, skip_special_tokens=True
-        )
-        target_texts = self.tokenizer.batch_decode(
-            batch[1].input_ids, skip_special_tokens=True
-        )
+        predicted_texts = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)
+        input_texts = self.tokenizer.batch_decode(batch[0].input_ids, skip_special_tokens=True)
+        target_texts = self.tokenizer.batch_decode(batch[1].input_ids, skip_special_tokens=True)
 
-        raw_rewards, shaped_rewards, rewards_log = self.compute_rewards(
-            input_texts, target_texts, predicted_texts
-        )
+        raw_rewards, shaped_rewards, rewards_log = self.compute_rewards(input_texts, target_texts, predicted_texts)
 
         sql_loss, sql_loss_log = self.loss(
             implementation=self.sql_loss_impl,
@@ -216,14 +190,8 @@ class SoftQLearningTrainer(BaseTrainer):
             coefficient=self.sql_loss_coefficients,
             # Do not add margin losses unless the
             # actions are ground truth actions.
-            margin_constant=(
-                self.sql_loss_margin_constant if mode == ForwardMode.SQL_OFF else None
-            ),
-            margin_coefficient=(
-                self.sql_loss_margin_coefficient
-                if mode == ForwardMode.SQL_OFF
-                else None
-            ),
+            margin_constant=(self.sql_loss_margin_constant if mode == ForwardMode.SQL_OFF else None),
+            margin_coefficient=(self.sql_loss_margin_coefficient if mode == ForwardMode.SQL_OFF else None),
         )
 
         add_prefix_to_dict_keys_inplace(rewards_log, prefix=f"{mode.value}/rewards/")
@@ -304,9 +272,7 @@ class SoftQLearningTrainer(BaseTrainer):
             )
 
         if implementation == "v3_v3r":
-            _sql_loss_func = partial(
-                soft_q_loss_with_sparse_rewards_3_3_reversed, coefficient=coefficient
-            )
+            _sql_loss_func = partial(soft_q_loss_with_sparse_rewards_3_3_reversed, coefficient=coefficient)
 
         if implementation == "v2_v2r_v3_v3r":
             _sql_loss_func = partial(
@@ -315,10 +281,7 @@ class SoftQLearningTrainer(BaseTrainer):
             )
 
         if logits.shape != logits_.shape:
-            raise ValueError(
-                f"`logits.shape` = {logits.shape}, but "
-                f"`logits_.shape` = {logits_.shape}"
-            )
+            raise ValueError(f"`logits.shape` = {logits.shape}, but " f"`logits_.shape` = {logits_.shape}")
 
         raw_losses, quantities_to_log = _sql_loss_func(
             logits=logits,
@@ -373,15 +336,11 @@ def unionize_dicts(dict_list):
     return merged_dict
 
 
-def gather_2d_on_last_dim(
-    tensor: FloatTensor, index: LongTensor, shape: torch.Size
-) -> FloatTensor:
+def gather_2d_on_last_dim(tensor: FloatTensor, index: LongTensor, shape: torch.Size) -> FloatTensor:
     """Simplified version of `tf.gather_nd` in PyTorch"""
     flattened_tensor = tensor.view(-1, tensor.shape[-1])
     flattened_index = index.view(-1)
-    flattened_gathered_tensor = flattened_tensor[
-        torch.arange(flattened_index.shape[0]), flattened_index
-    ]
+    flattened_gathered_tensor = flattened_tensor[torch.arange(flattened_index.shape[0]), flattened_index]
     return flattened_gathered_tensor.view(shape)
 
 
@@ -451,9 +410,7 @@ def soft_q_loss_with_sparse_rewards_2(
     # the episode ends, thus depends on `sequence_length`
     terminal_V_ = V_[torch.arange(sequence_length.shape[0]), sequence_length - 1]
     Q_[torch.arange(sequence_length.shape[0]), sequence_length - 1] = rewards
-    A_[torch.arange(sequence_length.shape[0]), sequence_length - 1] = (
-        rewards - terminal_V_
-    )
+    A_[torch.arange(sequence_length.shape[0]), sequence_length - 1] = rewards - terminal_V_
 
     # if _recover_mle is True:
     #    sql_utils.colorful_warning("Recover-MLE Mode", bg="red")
@@ -684,14 +641,10 @@ def large_margin_classification_loss(
         expert_actions: [batch_size, sequence_length]
     """
     # [0, 0, 0, ..., 1, 1, 1, ..., N, N, N, ...]
-    batch_indices = torch.arange(expert_actions.shape[0]).repeat_interleave(
-        expert_actions.shape[1], dim=0
-    )
+    batch_indices = torch.arange(expert_actions.shape[0]).repeat_interleave(expert_actions.shape[1], dim=0)
 
     # [0, 1, 2, ..., 0, 1, 2, ..., 0, 1, 2, ...]
-    sequence_indices = torch.arange(expert_actions.shape[1]).repeat(
-        expert_actions.shape[0]
-    )
+    sequence_indices = torch.arange(expert_actions.shape[1]).repeat(expert_actions.shape[0])
 
     # indices for the expert actions
     indices = (batch_indices, sequence_indices, expert_actions.flatten())
@@ -701,9 +654,7 @@ def large_margin_classification_loss(
     margin[indices] = 0
 
     # [batch_size, sequence_length]
-    raw_losses = (logits + margin).max(dim=-1).values - logits[indices].view(
-        expert_actions.shape
-    )
+    raw_losses = (logits + margin).max(dim=-1).values - logits[indices].view(expert_actions.shape)
 
     quantities_to_log = {
         "loss": raw_losses,
@@ -730,18 +681,13 @@ def nested_detach_and_clone(obj: Any, to_cpu: bool = False, to_numpy: bool = Fal
     return nested_tensor_operation(obj=obj, tensor_operation=_operation)
 
 
-def nested_tensor_operation(
-    obj: Any, tensor_operation: Callable[[torch.Tensor], Any]
-) -> Any:
+def nested_tensor_operation(obj: Any, tensor_operation: Callable[[torch.Tensor], Any]) -> Any:
     """Nested Application of `detach().clone()`.
 
     This function will remove gradients and reference.
     """
     if isinstance(obj, (list, tuple)):
-        return [
-            nested_tensor_operation(obj=_obj, tensor_operation=tensor_operation)
-            for _obj in obj
-        ]
+        return [nested_tensor_operation(obj=_obj, tensor_operation=tensor_operation) for _obj in obj]
 
     if isinstance(obj, dict):
         new_dict_obj = {}
@@ -749,9 +695,7 @@ def nested_tensor_operation(
             if not isinstance(key, str):
                 raise NotImplementedError
 
-            new_dict_obj[key] = nested_tensor_operation(
-                obj=val, tensor_operation=tensor_operation
-            )
+            new_dict_obj[key] = nested_tensor_operation(obj=val, tensor_operation=tensor_operation)
 
         return new_dict_obj
 

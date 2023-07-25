@@ -15,13 +15,13 @@
 import gc
 import random
 from contextlib import contextmanager
+from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 from transformers import top_k_top_p_filtering
-from typing import Optional, Union, List, Tuple
 
 
 try:
@@ -257,7 +257,9 @@ class PPODecorators(object):
             torch.cuda.empty_cache()
             gc.collect()
 
-#==================== texar code =========================
+
+# ==================== texar code =========================
+
 
 def mask_and_reduce(
     sequence: torch.Tensor,
@@ -512,7 +514,9 @@ def masked_reverse_cumsum(X: torch.FloatTensor, lengths: torch.LongTensor, dim: 
     return masked_X.flip(dims=[dim]).cumsum(dim=dim).flip(dims=[dim])
 
 
-def get_masked_mean_min_max(X: torch.FloatTensor, lengths: torch.LongTensor) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+def get_masked_mean_min_max(
+    X: torch.FloatTensor, lengths: torch.LongTensor
+) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
     if X.ndim != 2 and lengths.ndim != 1:
         raise ValueError
 
