@@ -166,9 +166,7 @@ class GPT2TopicReward(object):
             replace=True,
         ).tolist()
 
-        new_strings = [self._generator.tokenizer.convert_tokens_to_string(s.split()) for s in strings]
-
-        return [f"{s_1} {s_2}" for s_1, s_2 in zip(new_strings, inputs)]
+        return [f"{s_1} {s_2}" for s_1, s_2 in zip(strings, inputs)]
 
     def _compute_nll_reward(self, sentences: List[str]) -> FloatTensor:
         nlls, _ = compute_perplexities(
@@ -297,7 +295,7 @@ qtrainer = SoftQLearningTrainer(
     model=model,
     tokenizer=tokenizer,
     reward_function=GPT2TopicReward(),
-    mix_strategy="alternate",
+    mix_strategy="mix",
     reward_shaping=True,
     sql_loss_impl="v2_v2r_v3_v3r",
     target_model=None,
