@@ -19,10 +19,11 @@ import torch
 from datasets import load_dataset
 from peft import LoraConfig
 from tqdm import tqdm
-from transformers import LlamaTokenizer, BitsAndBytesConfig, HfArgumentParser
+from transformers import BitsAndBytesConfig, HfArgumentParser, LlamaTokenizer
 
 from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer
 from trl.core import LengthSampler
+
 
 input_min_text_length = 6
 input_max_text_length = 12
@@ -36,12 +37,16 @@ class ScriptArguments:
 
     model_name: Optional[str] = field(default="huggyllama/llama-7b", metadata={"help": "the model name"})
     dataset_name: Optional[str] = field(default="Anthropic/hh-rlhf", metadata={"help": "the dataset name"})
-    rm_adapter: Optional[str] = field(default="trl-lib/llama-7b-hh-rm-adapter", metadata={"help": "the rm adapter name"})
+    rm_adapter: Optional[str] = field(
+        default="trl-lib/llama-7b-hh-rm-adapter", metadata={"help": "the rm adapter name"}
+    )
     log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
     use_safetensors: Optional[bool] = field(default=False, metadata={"help": "Use safetensors"})
     seed: Optional[int] = field(default=0, metadata={"help": "the random seed"})
     use_score_scaling: Optional[bool] = field(default=False, metadata={"help": "Use score scaling"})
-    use_score_norm: Optional[bool] = field(default=False, metadata={"help": "Use score normalization"})
+    use_score_norm: Optional[bool] = field(
+        default=False, metadata={"help": "Use score normalization. Only applicable if use_score_scaling is True"}
+    )
     score_clip: Optional[float] = field(default=None, metadata={"help": "Score clipping"})
 
 
@@ -73,10 +78,7 @@ lora_config = LoraConfig(
     task_type="CAUSAL_LM",
 )
 nf4_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_quant_type="nf4",
-    bnb_4bit_use_double_quant=True,
-    bnb_4bit_compute_dtype=torch.bfloat16
+    load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_use_double_quant=True, bnb_4bit_compute_dtype=torch.bfloat16
 )
 model = AutoModelForCausalLMWithValueHead.from_pretrained(
     script_args.model_name,

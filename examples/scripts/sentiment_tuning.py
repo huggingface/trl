@@ -56,7 +56,9 @@ class ScriptArguments:
     target_kl: Optional[float] = field(default=0.1, metadata={"help": "kl target for early stopping"})
     seed: Optional[int] = field(default=0, metadata={"help": "the random seed"})
     use_score_scaling: Optional[bool] = field(default=False, metadata={"help": "Use score scaling"})
-    use_score_norm: Optional[bool] = field(default=False, metadata={"help": "Use score normalization"})
+    use_score_norm: Optional[bool] = field(
+        default=False, metadata={"help": "Use score normalization. Only applicable if use_score_scaling is True"}
+    )
     score_clip: Optional[float] = field(default=None, metadata={"help": "Score clipping"})
 
 
