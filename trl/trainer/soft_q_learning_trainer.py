@@ -8,7 +8,12 @@ import torch
 import torch.nn.functional as F
 
 from ..models import PreTrainedModelWrapper
-from ..core import mask_and_reduce, masked_reverse_cumsum, get_masked_mean_min_max, entropy_from_logits
+from ..core import (
+    mask_and_reduce,
+    masked_reverse_cumsum,
+    get_masked_mean_min_max,
+    entropy_from_logits,
+)
 from . import BaseTrainer
 
 
@@ -80,10 +85,6 @@ class SoftQLearningTrainer(BaseTrainer):
         self.reward_shaping_func = reward_shaping_func
 
         trainable_params = [p for p in model.parameters() if p.requires_grad]
-        if not target_model_empty:
-            trainable_params.extend(
-                [p for p in self.target_model.parameters() if p.requires_grad]
-            )
 
         self.optimizer = torch.optim.Adam(trainable_params, lr=target_learning_rate)
 
@@ -158,9 +159,7 @@ class SoftQLearningTrainer(BaseTrainer):
                     + self.target_learning_rate * param
                 )
         else:
-            # log warning
-            # TODO: come back here
-            return
+            raise ValueError(f"Unknown sync type: {sync_type}")
 
     def _forward_SQL(self, mode, batch):
         if mode == ForwardMode.SQL_OFF:
@@ -487,7 +486,7 @@ def soft_q_loss_with_sparse_rewards_2(
         "Q_": Q_,
         "V_": V_,
         "A_": A_,
-        "H":  entropy_from_logits(logits),
+        "H": entropy_from_logits(logits),
         "H_": entropy_from_logits(logits_),
     }
 
