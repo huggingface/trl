@@ -1,11 +1,12 @@
 from dataclasses import dataclass, field
 from typing import Optional
+import os
 
 
 @dataclass
 class SoftQLearningConfig(object):
     """
-    Configuration class for PPOTrainer
+    Configuration class for Soft Q-Learning Trainer
     """
 
     task_name: Optional[str] = field(

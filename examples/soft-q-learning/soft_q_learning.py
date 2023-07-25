@@ -97,8 +97,8 @@ def compute_perplexities(
 
 
 class GPT2TopicReward(object):
-    WORDLISTS_BASE_DIR = "./experimental_data/wordlists"
-    PPLM_INPUTS_FILE_NAME = "./experimental_data/pplm-inputs.txt"
+    WORDLISTS_BASE_DIR = "./demo_data/wordlists"
+    PPLM_INPUTS_FILE_NAME = "./demo_data/pplm-inputs.txt"
     TOPICS = ["legal", "politics", "computers", "space", "religion", "science", "military"]
 
     def __init__(
@@ -203,6 +203,7 @@ class GPT2TopicReward(object):
         #     - List of length `num_return_sequences`
         #         - Dict of {"generated_text": str}
         formatted_prompts = self._format_prompts(prompts)
+        print(formatted_prompts)
         generator_outputs: List[List[Dict[str, Any]]] = self._generator(
             formatted_prompts,
             max_length=self._max_length,
@@ -279,8 +280,8 @@ class GPT2TopicReward(object):
         return self.forward(topics=sources, prompts=predictions, to_tensor=to_tensor, mode=mode)
 
 
-source_file_name = "./experimental_data/train.sources.20210424"
-labels_file_name = "./experimental_data/train.targets.20210424"
+source_file_name = "./demo_data/train.sources.20210424"
+labels_file_name = "./demo_data/train.targets.20210424"
 
 config_decoder, config_encoder = BertConfig(), BertConfig()
 config = EncoderDecoderConfig.from_encoder_decoder_configs(config_encoder, config_decoder)
@@ -296,7 +297,7 @@ qtrainer = SoftQLearningTrainer(
     model=model,
     tokenizer=tokenizer,
     reward_function=GPT2TopicReward(),
-    mix_strategy="mix",
+    mix_strategy="alternate",
     reward_shaping=True,
     sql_loss_impl="v2_v2r_v3_v3r",
     target_model=None,
