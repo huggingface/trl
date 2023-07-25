@@ -36,10 +36,15 @@ First you want to make sure that all the tests pass:
 make test
 ```
 
-Then before submitting your PR make sure the code quality follows the standards. You can run the following command to format and test:
+Then before submitting your PR make sure the code quality follows the standards. You can run the following command to format:
 
 ```bash
-make style && make quality
+make precommit
+```
+
+Make sure to install `pre-commit` before running the command:
+```bash
+pip install pre-commit
 ```
 
 ## Do you want to contribute to the documentation?

@@ -77,6 +77,12 @@ class PPOConfig(object):
         default=0.2,
         metadata={"help": "Initial KL penalty coefficient (used for adaptive and linear control)"},
     )
+    kl_penalty: Optional[str] = field(
+        default="kl",
+        metadata={
+            "help": "kl penalty options: 'kl': model_logp - ref_logp,  'abs': abs(kl) and 'mse': mean squared error mse(kl)."
+        },
+    )
     target: Optional[float] = field(default=6, metadata={"help": "Target KL value for adaptive KL control"})
     horizon: Optional[float] = field(default=10000, metadata={"help": "Horizon for adaptive KL control"})
     gamma: Optional[float] = field(default=1, metadata={"help": "Gamma parameter for advantage calculation"})
@@ -150,6 +156,9 @@ class PPOConfig(object):
         default=1,
         metadata={"help": "Number of steps between comparison of the current reward with the best seen so far"},
     )
+    ratio_threshold: Optional[float] = field(
+        default=10.0, metadata={"help": "Skip mini-batches with high PPO ratios that can cause loss spikes"}
+    )
 
     def __post_init__(self):
         if self.forward_batch_size is not None:
@@ -171,13 +180,14 @@ class PPOConfig(object):
                         os.environ["WANDB_TAGS"] = ",".join([existing_wandb_tag, wandb_tag])
                     else:
                         os.environ["WANDB_TAGS"] = wandb_tag
-                logging.info(f"the following tags will be used for wandb logging: {os.environ['WANDB_TAGS']}")
+                    logging.info(f"the following tags will be used for wandb logging: {os.environ['WANDB_TAGS']}")
             except ImportError:
                 raise ImportError(
                     "Please install wandb to use wandb logging. You can do this by running `pip install wandb`."
                 )
 
         self.total_ppo_epochs = int(np.ceil(self.steps / self.batch_size))
+        assert self.kl_penalty in ["kl", "abs", "mse"]
 
     def to_dict(self):
         output_dict = {}

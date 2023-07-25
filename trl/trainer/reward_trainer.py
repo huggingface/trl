@@ -14,7 +14,6 @@
 import warnings
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-import numpy as np
 import torch
 import torch.nn as nn
 from datasets import Dataset
@@ -24,21 +23,11 @@ from transformers.trainer_pt_utils import nested_detach
 from transformers.trainer_utils import EvalPrediction
 
 from ..import_utils import is_peft_available
-from .utils import PeftSavingCallback, RewardDataCollatorWithPadding
+from .utils import PeftSavingCallback, RewardDataCollatorWithPadding, compute_accuracy
 
 
 if is_peft_available():
-    from peft import PeftModel, get_peft_model
-
-
-def compute_accuracy(eval_pred) -> Dict[str, float]:
-    predictions, labels = eval_pred
-    # Here, predictions is rewards_chosen and rewards_rejected.
-    # We want to see how much of the time rewards_chosen > rewards_rejected.
-    predictions = np.argmax(predictions, axis=1)
-
-    accuracy = np.array(predictions == labels, dtype=float).mean().item()
-    return {"accuracy": accuracy}
+    from peft import PeftModel, get_peft_model, prepare_model_for_int8_training
 
 
 class RewardTrainer(Trainer):
@@ -69,7 +58,10 @@ class RewardTrainer(Trainer):
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
-        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (
+            None,
+            None,
+        ),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         max_length: Optional[int] = None,
         peft_config: Optional[Dict] = None,
@@ -111,6 +103,9 @@ class RewardTrainer(Trainer):
                 "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
             )
         elif is_peft_available() and peft_config is not None:
+            if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_quantized", False):
+                model = prepare_model_for_int8_training(model)
+
             model = get_peft_model(model, peft_config)
 
         if is_peft_available() and callbacks is None and isinstance(model, PeftModel):
@@ -166,16 +161,25 @@ class RewardTrainer(Trainer):
         return_outputs=False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
         if not self.use_reward_data_collator:
-            raise NotImplementedError(
-                "compute_loss is only implemented for RewardDataCollatorWithPadding, please implement your own compute_loss method if you are using a custom data collator"
+            warnings.warn(
+                "The current compute_loss is implemented for RewardDataCollatorWithPadding,"
+                " if you are using a custom data collator make sure you know what you are doing or"
+                " implement your own compute_loss method."
             )
-        rewards_chosen = model(input_ids=inputs["input_ids_chosen"], attention_mask=inputs["attention_mask_chosen"])[0]
+        rewards_chosen = model(
+            input_ids=inputs["input_ids_chosen"],
+            attention_mask=inputs["attention_mask_chosen"],
+        )[0]
         rewards_rejected = model(
-            input_ids=inputs["input_ids_rejected"], attention_mask=inputs["attention_mask_rejected"]
+            input_ids=inputs["input_ids_rejected"],
+            attention_mask=inputs["attention_mask_rejected"],
         )[0]
         loss = -nn.functional.logsigmoid(rewards_chosen - rewards_rejected).mean()
         if return_outputs:
-            return loss, {"rewards_chosen": rewards_chosen, "rewards_rejected": rewards_rejected}
+            return loss, {
+                "rewards_chosen": rewards_chosen,
+                "rewards_rejected": rewards_rejected,
+            }
         return loss
 
     def prediction_step(
@@ -206,5 +210,6 @@ class RewardTrainer(Trainer):
         logits = torch.stack(logits).mean(dim=2).softmax(dim=0).T
 
         labels = torch.zeros(logits.shape[0])
+        labels = self._prepare_inputs(labels)
 
         return loss, logits, labels

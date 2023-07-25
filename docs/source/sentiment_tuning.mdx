@@ -6,12 +6,11 @@ Here's an overview of the notebooks and scripts in the [trl repository](https://
 
 | File | Description | Colab link |
 |---|---| --- |
-| [`gpt2-sentiment.ipynb`](https://github.com/lvwerra/trl/blob/main/examples/sentiment/notebooks/gpt2-sentiment.ipynb) | Fine-tune GPT2 to generate positive movie reviews. | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/lvwerra/trl/blob/main/examples/sentiment/notebooks/gpt2-sentiment.ipynb)
+| [`gpt2-sentiment.ipynb`](https://github.com/lvwerra/trl/blob/main/examples/notebooks/gpt2-sentiment.ipynb) | Fine-tune GPT2 to generate positive movie reviews. | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/lvwerra/trl/blob/main/examples/sentiment/notebooks/gpt2-sentiment.ipynb)
  |
-| [`gpt2-sentiment-control.ipynb`](https://github.com/lvwerra/trl/blob/main/examples/sentiment/notebooks/gpt2-sentiment-control.ipynb)  | Fine-tune GPT2 to generate movie reviews with controlled sentiment. | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/lvwerra/trl/blob/main/examples/sentiment/notebooks/gpt2-sentiment-control.ipynb)
+| [`gpt2-sentiment-control.ipynb`](https://github.com/lvwerra/trl/blob/main/examples/notebooks/gpt2-sentiment-control.ipynb)  | Fine-tune GPT2 to generate movie reviews with controlled sentiment. | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/lvwerra/trl/blob/main/examples/sentiment/notebooks/gpt2-sentiment-control.ipynb)
   |
-| [`gpt2-sentiment.py`](https://github.com/lvwerra/trl/blob/main/examples/sentiment/scripts/gpt2-sentiment.py) | Same as the notebook, but easier to use to use in multi-GPU setup. | x | 
-| [`t5-sentiment.py`](https://github.com/lvwerra/trl/blob/main/examples/sentiment/scripts/t5-sentiment.py) | Same as GPT2 script, but for a Seq2Seq model (T5). | x | 
+| [`gpt2-sentiment.py`](https://github.com/lvwerra/trl/blob/main/examples/ppo_trainer/sentiment_tuning.py) | Same as the notebook, but easier to use to use in multi-GPU setup with any architecture. | x | 
 
 
 ## Installation
@@ -31,5 +30,9 @@ The `trl` library is powered by `accelerate`. As such it is best to configure an
 
 ```bash
 accelerate config # will prompt you to define the training configuration
-accelerate launch scripts/gpt2-sentiment.py # launches training
+accelerate launch yourscript.py # launches training
 ```
+
+## Few notes on multi-GPU 
+
+To run in multi-GPU setup with DDP (distributed Data Parallel) change the `device_map` value to `device_map={"": Accelerator().process_index}` and make sure to run your script with `accelerate launch yourscript.py`. If you want to apply naive pipeline parallelism you can use `device_map="auto"`.

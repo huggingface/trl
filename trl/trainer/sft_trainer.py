@@ -89,6 +89,11 @@ class SFTTrainer(Trainer):
         packing (`Optional[bool]`):
             Used only in case `dataset_text_field` is passed. This argument is used by the `ConstantLengthDataset` to pack the sequences
             of the dataset.
+        dataset_num_proc (`Optional[int]`):
+            The number of workers to use to tokenize the data. Only used when `packing=False`. Defaults to None.
+        dataset_batch_size (`int`):
+            The number of examples to tokenize per batch. If batch_size <= 0 or batch_size == None,
+            tokenize the full dataset as a single batch. Defaults to 1000.
     """
 
     def __init__(
@@ -112,6 +117,8 @@ class SFTTrainer(Trainer):
         infinite: Optional[bool] = False,
         num_of_sequences: Optional[int] = 1024,
         chars_per_token: Optional[float] = 3.6,
+        dataset_num_proc: Optional[int] = None,
+        dataset_batch_size: int = 1000,
     ):
         if isinstance(model, str):
             warnings.warn(
@@ -144,7 +151,7 @@ class SFTTrainer(Trainer):
 
             if callbacks is None:
                 callbacks = [PeftSavingCallback]
-        elif not isinstance(model, PreTrainedModel):
+        elif not isinstance(model, (PreTrainedModel, PeftModel)):
             model = AutoModelForCausalLM.from_pretrained(model)
 
         if tokenizer is None:
@@ -160,6 +167,8 @@ class SFTTrainer(Trainer):
                 f"You didn't pass a `max_seq_length` argument to the SFTTrainer, this will default to {max_seq_length}"
             )
 
+        self.dataset_num_proc = dataset_num_proc
+        self.dataset_batch_size = dataset_batch_size
         if not packing:
             if dataset_text_field is None and formatting_func is None:
                 raise ValueError(
@@ -192,6 +201,12 @@ class SFTTrainer(Trainer):
                 infinite,
                 num_of_sequences,
                 chars_per_token,
+            )
+
+        if tokenizer.padding_side is not None and tokenizer.padding_side != "right":
+            warnings.warn(
+                "You passed a tokenizer with `padding_side` not equal to `right` to the SFTTrainer. This might lead to some unexpected behaviour due to "
+                "overflow issues when training a model in half-precision. You might consider adding `tokenizer.padding_side = 'right'` to your code."
             )
 
         super().__init__(
@@ -228,34 +243,25 @@ class SFTTrainer(Trainer):
         num_of_sequences,
         chars_per_token,
     ):
+        if dataset is None:
+            raise ValueError("The dataset should not be None")
+
         # check if torch dataset / dataloader and do nothing
-        if dataset is not None and (
-            isinstance(
-                dataset,
-                (torch.utils.data.IterableDataset, torch.utils.data.Dataset),
-            )
-        ):
-            is_already_dataset = True
-        elif dataset is not None and isinstance(dataset, ConstantLengthDataset):
-            is_already_dataset = True
-            packing = True
-        else:
-            is_already_dataset = False
+        if isinstance(dataset, (torch.utils.data.IterableDataset, torch.utils.data.Dataset, ConstantLengthDataset)):
+            return dataset
 
         if not packing:
-            dataset = self._prepare_non_packed_dataloader(
+            return self._prepare_non_packed_dataloader(
                 tokenizer, dataset, dataset_text_field, max_seq_length, formatting_func
             )
 
-            is_already_dataset = True
-
-        if not is_already_dataset and (dataset_text_field is not None or formatting_func is not None):
+        if dataset_text_field is not None or formatting_func is not None:
             if tokenizer is None:
                 raise ValueError(
                     "You need to pass a tokenizer when using the SFT Trainer when passing a `dataset_text_field`."
                 )
 
-            dataset = ConstantLengthDataset(
+            return ConstantLengthDataset(
                 tokenizer,
                 dataset,
                 dataset_text_field=dataset_text_field,
@@ -267,12 +273,9 @@ class SFTTrainer(Trainer):
                 eos_token_id=tokenizer.eos_token_id,
             )
 
-        elif not is_already_dataset and (dataset_text_field is None and formatting_func is None):
-            raise ValueError(
-                "You need to pass a `dataset_text_field` or `formatting_func` argument to the SFTTrainer if you want to use the `ConstantLengthDataset`."
-            )
-
-        return dataset
+        raise ValueError(
+            "You need to pass a `dataset_text_field` or `formatting_func` argument to the SFTTrainer if you want to use the `ConstantLengthDataset`."
+        )
 
     def _prepare_non_packed_dataloader(
         self, tokenizer, dataset, dataset_text_field, max_seq_len, formatting_func=None
@@ -282,16 +285,13 @@ class SFTTrainer(Trainer):
 
         # Inspired from: https://huggingface.co/learn/nlp-course/chapter7/6?fw=pt
         def tokenize(element):
-            input_batch = []
-            attention_masks = []
-
             outputs = tokenizer(
                 element[dataset_text_field] if not use_formatting_func else formatting_func(element),
                 truncation=True,
-                padding=True,
+                padding=False,
                 max_length=max_seq_len,
                 return_overflowing_tokens=False,
-                return_length=True,
+                return_length=False,
             )
 
             if use_formatting_func and not self._dataset_sanity_checked:
@@ -302,20 +302,14 @@ class SFTTrainer(Trainer):
                 else:
                     self._dataset_sanity_checked = True
 
-            for length, input_ids, attention_mask in zip(
-                outputs["length"], outputs["input_ids"], outputs["attention_mask"]
-            ):
-                if length == max_seq_len:
-                    input_batch.append(input_ids)
-                    attention_masks.append(attention_mask)
+            return {"input_ids": outputs["input_ids"], "attention_mask": outputs["attention_mask"]}
 
-            if len(input_batch) == 0:
-                # warn users
-                warnings.warn(
-                    f"Found 0 samples with a length of {max_seq_len}. You might want to decrease the `max_seq_len` argument."
-                )
-            return {"input_ids": input_batch, "attention_mask": attention_masks}
-
-        tokenized_dataset = dataset.map(tokenize, batched=True, remove_columns=dataset.column_names)
+        tokenized_dataset = dataset.map(
+            tokenize,
+            batched=True,
+            remove_columns=dataset.column_names,
+            num_proc=self.dataset_num_proc,
+            batch_size=self.dataset_batch_size,
+        )
 
         return tokenized_dataset

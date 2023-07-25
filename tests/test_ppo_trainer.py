@@ -679,6 +679,47 @@ class PPOTrainerTester(unittest.TestCase):
                 f"Parameter {name} has a gradient larger than max_grad_norm",
             )
 
+    def test_ppo_trainer_kl_penalty(self):
+        dummy_dataset = self._init_dummy_dataset()
+
+        log_probs = torch.Tensor([[0.5, 0.2, 0.1], [0.6, 0.2, 0.1]])
+        ref_log_probs = torch.Tensor([[0.4, 0.3, 0.0], [0.7, 0.1, 0.3]])
+
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=self.gpt2_model,
+            ref_model=None,
+            tokenizer=self.gpt2_tokenizer,
+            dataset=dummy_dataset,
+        )
+
+        expected_output = torch.Tensor([[0.1000, -0.1000, 0.1000], [-0.1000, 0.1000, -0.2000]])
+        self.assertTrue(torch.allclose(ppo_trainer._kl_penalty(log_probs, ref_log_probs), expected_output))
+
+        self.ppo_config.kl_penalty = "abs"
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=self.gpt2_model,
+            ref_model=None,
+            tokenizer=self.gpt2_tokenizer,
+            dataset=dummy_dataset,
+        )
+
+        expected_output = torch.Tensor([[0.1000, 0.1000, 0.1000], [0.1000, 0.1000, 0.2000]])
+        self.assertTrue(torch.allclose(ppo_trainer._kl_penalty(log_probs, ref_log_probs), expected_output))
+
+        self.ppo_config.kl_penalty = "mse"
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=self.gpt2_model,
+            ref_model=None,
+            tokenizer=self.gpt2_tokenizer,
+            dataset=dummy_dataset,
+        )
+
+        expected_output = torch.Tensor([[0.0050, 0.0050, 0.0050], [0.0050, 0.0050, 0.0200]])
+        self.assertTrue(torch.allclose(ppo_trainer._kl_penalty(log_probs, ref_log_probs), expected_output))
+
     @require_peft
     @mark.peft_test
     def test_peft_model_ppo_trainer(self):
