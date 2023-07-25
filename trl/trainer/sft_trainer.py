@@ -280,7 +280,7 @@ class SFTTrainer(Trainer):
     def _prepare_non_packed_dataloader(
         self, tokenizer, dataset, dataset_text_field, max_seq_len, formatting_func=None
     ):
-        use_formatting_func = formatting_func is not None and dataset_text_field is None
+        use_formatting_func = formatting_func is not None and dataset_text_field is not None
         self._dataset_sanity_checked = False
 
         # Inspired from: https://huggingface.co/learn/nlp-course/chapter7/6?fw=pt
