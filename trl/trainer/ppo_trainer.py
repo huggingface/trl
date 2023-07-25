@@ -595,7 +595,8 @@ class PPOTrainer(BaseTrainer):
 
         if self.config.score_clip is not None:
             # Score clipping
-            scores = torch.clip(scores, -self.config.score_clip, self.config.score_clip)
+            scores_dtype = scores.dtype
+            scores = torch.clip(scores.float(), -self.config.score_clip, self.config.score_clip).to(dtype=scores_dtype)
 
         # if we want to push best model to the hub
         if hasattr(self, "highest_reward"):
