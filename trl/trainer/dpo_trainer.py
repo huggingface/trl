@@ -334,15 +334,15 @@ class DPOTrainer(Trainer):
         )
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
-        metrics[f"{train_eval}_rewards/chosen"] = chosen_rewards.cpu().numpy().mean()
-        metrics[f"{train_eval}_rewards/rejected"] = rejected_rewards.cpu().numpy().mean()
-        metrics[f"{train_eval}_rewards/accuracies"] = reward_accuracies.cpu().numpy().mean()
-        metrics[f"{train_eval}_rewards/margins"] = (chosen_rewards - rejected_rewards).cpu().numpy().mean()
-        metrics[f"{train_eval}_logps/rejected"] = policy_rejected_logps.detach().cpu().numpy().mean()
-        metrics[f"{train_eval}_logps/chosen"] = policy_chosen_logps.detach().cpu().numpy().mean()
-
-        metrics[f"{train_eval}_logits/rejected"] = policy_rejected_logits.detach().cpu().numpy().mean()
-        metrics[f"{train_eval}_logits/chosen"] = policy_chosen_logits.detach().cpu().numpy().mean()
+        prefix = "eval_" if train_eval == "eval" else ""
+        metrics[f"{prefix}rewards/chosen"] = chosen_rewards.cpu().numpy().mean()
+        metrics[f"{prefix}rewards/rejected"] = rejected_rewards.cpu().numpy().mean()
+        metrics[f"{prefix}rewards/accuracies"] = reward_accuracies.cpu().numpy().mean()
+        metrics[f"{prefix}rewards/margins"] = (chosen_rewards - rejected_rewards).cpu().numpy().mean()
+        metrics[f"{prefix}logps/rejected"] = policy_rejected_logps.detach().cpu().numpy().mean()
+        metrics[f"{prefix}logps/chosen"] = policy_chosen_logps.detach().cpu().numpy().mean()
+        metrics[f"{prefix}logits/rejected"] = policy_rejected_logits.detach().cpu().numpy().mean()
+        metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.detach().cpu().numpy().mean()
 
         return losses.mean(), metrics
 
