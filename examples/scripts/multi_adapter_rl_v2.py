@@ -99,6 +99,7 @@ def collator(data):
 
 config = PPOConfig(
     model_name=script_args.model_name,
+    log_with=script_args.log_with,
     learning_rate=1e-5,
     batch_size=8,
     mini_batch_size=2,
