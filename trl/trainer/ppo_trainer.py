@@ -331,7 +331,7 @@ class PPOTrainer(BaseTrainer):
             self.highest_reward = torch.tensor(-float("inf"))
 
         # post process for PP
-        if not getattr(self.model, "is_sequential_parallel", False):
+        if getattr(self.model, "is_sequential_parallel", False):
             self.current_device = self.accelerator.device
         else:
             self.current_device = torch.device("cuda:0")
