@@ -44,6 +44,9 @@ class ScriptArguments:
     dataset_text_field: Optional[str] = field(default="text", metadata={"help": "the text field of the dataset"})
     log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
     logging_steps: Optional[int] = field(default=500, metadata={"help": "the number of update steps between two logs"})
+    eval_split: Optional[str] = field(
+        default="none", metadata={"help": "the dataset split to evaluate on; default to 'none' (no evaluation)"}
+        )
     learning_rate: Optional[float] = field(default=1.41e-5, metadata={"help": "the learning rate"})
     batch_size: Optional[int] = field(default=64, metadata={"help": "the batch size"})
     num_train_epochs: Optional[int] = field(default=1, metadata={"help": "the number of training epochs"})
@@ -85,7 +88,7 @@ model = AutoModelForSequenceClassification.from_pretrained(
 # Step 2: Load the dataset and pre-process it
 tokenizer = AutoTokenizer.from_pretrained(script_args.model_name)
 train_dataset = load_dataset(script_args.dataset_name, split="train")
-eval_dataset = load_dataset(script_args.dataset_name, split="test")
+
 
 # Turn the dataset into pairs of post + summaries, where text_j is the preferred question + answer and text_k is the other.
 # Then tokenize the dataset.
@@ -122,15 +125,22 @@ train_dataset = train_dataset.filter(
     and len(x["input_ids_rejected"]) <= script_args.seq_length
 )
 
-eval_dataset = eval_dataset.map(
-    preprocess_function,
-    batched=True,
-    num_proc=4,
-)
-eval_dataset = eval_dataset.filter(
-    lambda x: len(x["input_ids_chosen"]) <= script_args.seq_length
-    and len(x["input_ids_rejected"]) <= script_args.seq_length
-)
+if script_args.eval_split == "none":
+    eval_dataset = None
+else:
+    eval_dataset = load_dataset(
+        script_args.dataset_name, split=script_args.eval_split
+    )
+
+    eval_dataset = eval_dataset.map(
+        preprocess_function,
+        batched=True,
+        num_proc=4,
+    )
+    eval_dataset = eval_dataset.filter(
+        lambda x: len(x["input_ids_chosen"]) <= script_args.seq_length
+        and len(x["input_ids_rejected"]) <= script_args.seq_length
+    )
 
 
 # Step 3: Define the training arguments
@@ -144,7 +154,7 @@ training_args = TrainingArguments(
     remove_unused_columns=False,
     optim="adamw_torch",
     logging_steps=script_args.logging_steps,
-    evaluation_strategy="steps",
+    evaluation_strategy="steps" if script_args.eval_split != "none" else "no",
 )
 
 # Step 4: Define the LoraConfig
