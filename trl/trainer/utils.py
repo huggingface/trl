@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 import torch
+from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import IterableDataset
 from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizerBase, TrainerCallback
 
@@ -52,9 +53,32 @@ class FixedKLController:
 
 
 class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
-    def __init__(self, response_template, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    """
+    Data collator used for completion tasks. It ensures that all the tokens of the labels are set to an 'ignore_index'
+     up to the prompt response template tokens ('response_template'). This ensure that the loss is only
+     calculated on the completion of the reponse.
+
+    Args:
+        response_template (`str`): the template form that indicates the start of the response, typically something like
+            '### Response:\n'
+        mlm (`bool`, *optional*, defaults to `False`): Whether or not to use masked language modeling in the underlying
+            `DataCollatorForLanguageModeling` class. Note that this option currently has no effect but is present
+             for flexibility and backwards-compatibility.
+        ignore_index (`int`, *optional*, defaults to `-100`):
+            The index to use to ignore the initial tokens with
+    """
+
+    def __init__(
+        self,
+        response_template: str,
+        *args,
+        mlm: bool = False,
+        ignore_index: int = -100,
+        **kwargs,
+    ):
+        super().__init__(*args, mlm=mlm, **kwargs)
         self.response_template = response_template
+        self.ignore_index = ignore_index
 
     def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
         batch = super().torch_call(examples)
@@ -81,7 +105,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
             response_token_ids_end_idx = response_token_ids_start_idx + len(response_token_ids)
 
             # Make pytorch loss function ignore all tokens up through the end of the response key
-            labels[i, :response_token_ids_end_idx] = -100
+            labels[i, :response_token_ids_end_idx] = self.ignore_index
 
         batch["labels"] = labels
 
@@ -91,7 +115,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
 @dataclass
 class RewardDataCollatorWithPadding:
     r"""
-    Reward DataCollator class that padds the inputs to the maximum length of the batch.
+    Reward DataCollator class that pads the inputs to the maximum length of the batch.
     Args:
         tokenizer (`PreTrainedTokenizerBase`):
             The tokenizer used for encoding the data.
@@ -161,6 +185,161 @@ class RewardDataCollatorWithPadding:
         return batch
 
 
+@dataclass
+class DPODataCollatorWithPadding:
+    r"""
+    DPO DataCollator class that pads the inputs to the maximum length of the batch.
+    Args:
+        tokenizer (`PreTrainedTokenizerBase`):
+            The tokenizer used for encoding the data.
+        padding (`Union[bool, str, `PaddingStrategy`]`, `optional`, defaults to `True`):
+            padding_strategy to pass to the tokenizer.
+        max_length (`Optional[int]`, `optional`, defaults to `None`):
+            The maximum length of the sequence to be processed.
+        max_prompt_length (`Optional[int]`, `optional`, defaults to `None`):
+            The maximum length of the prompt to be processed.
+        batch_size (`Optional[int]`, `optional`, defaults to `None`):
+        label_pad_token_id (`int`, defaults to -100):
+            The label used for masking.
+        padding_value (`int`, defaults to 0):
+            The value used for padding.
+        truncation_mode: (`str`, defaults to "keep_end"):
+            The truncation mode to use when truncating the prompt + chosen/rejected responses.
+    """
+    tokenizer: PreTrainedTokenizerBase
+    padding: Union[bool, str] = True
+    max_length: Optional[int] = None
+    max_prompt_length: Optional[int] = None
+    batch_size: Optional[int] = None
+    label_pad_token_id: int = -100
+    padding_value: int = 0
+    truncation_mode: str = "keep_end"
+
+    def tokenize_batch_element(
+        self,
+        prompt: str,
+        chosen: str,
+        rejected: str,
+    ) -> Dict:
+        """Tokenize a single batch element.
+
+        At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
+            in case the prompt + chosen or prompt + rejected responses is/are too long. First
+            we truncate the prompt; if we're still too long, we truncate the chosen/rejected.
+
+        We also create the labels for the chosen/rejected responses, which are of length equal to
+            the sum of the length of the prompt and the chosen/rejected response, with -100 for the
+            prompt tokens.
+        """
+        chosen_tokens = self.tokenizer(chosen, add_special_tokens=False)
+        rejected_tokens = self.tokenizer(rejected, add_special_tokens=False)
+        prompt_tokens = self.tokenizer(prompt, add_special_tokens=False)
+
+        assert self.tokenizer.eos_token_id not in prompt_tokens["input_ids"], f"Prompt contains EOS token: {prompt}"
+        assert (
+            self.tokenizer.eos_token_id not in chosen_tokens["input_ids"]
+        ), f"Chosen response contains EOS token: {chosen}"
+        assert (
+            self.tokenizer.eos_token_id not in rejected_tokens["input_ids"]
+        ), f"Rejected response contains EOS token: {rejected}"
+
+        chosen_tokens["input_ids"].append(self.tokenizer.eos_token_id)
+        chosen_tokens["attention_mask"].append(1)
+
+        rejected_tokens["input_ids"].append(self.tokenizer.eos_token_id)
+        rejected_tokens["attention_mask"].append(1)
+
+        longer_response_length = max(len(chosen_tokens["input_ids"]), len(rejected_tokens["input_ids"]))
+
+        # if combined sequence is too long, truncate the prompt
+        if len(prompt_tokens["input_ids"]) + longer_response_length > self.max_length:
+            if self.truncation_mode == "keep_start":
+                prompt_tokens = {k: v[: self.max_prompt_length] for k, v in prompt_tokens.items()}
+            elif self.truncation_mode == "keep_end":
+                prompt_tokens = {k: v[-self.max_prompt_length :] for k, v in prompt_tokens.items()}
+            else:
+                raise ValueError(f"Unknown truncation mode: {self.truncation_mode}")
+
+        # if that's still too long, truncate the response
+        if len(prompt_tokens["input_ids"]) + longer_response_length > self.max_length:
+            chosen_tokens = {k: v[: self.max_length - self.max_prompt_length] for k, v in chosen_tokens.items()}
+            rejected_tokens = {k: v[: self.max_length - self.max_prompt_length] for k, v in rejected_tokens.items()}
+
+        # Create labels
+        chosen_sequence_tokens = {k: prompt_tokens[k] + chosen_tokens[k] for k in chosen_tokens}
+        rejected_sequence_tokens = {k: prompt_tokens[k] + rejected_tokens[k] for k in rejected_tokens}
+        chosen_sequence_tokens["labels"] = chosen_sequence_tokens["input_ids"][:]
+        chosen_sequence_tokens["labels"][: len(prompt_tokens["input_ids"])] = [self.label_pad_token_id] * len(
+            prompt_tokens["input_ids"]
+        )
+        rejected_sequence_tokens["labels"] = rejected_sequence_tokens["input_ids"][:]
+        rejected_sequence_tokens["labels"][: len(prompt_tokens["input_ids"])] = [self.label_pad_token_id] * len(
+            prompt_tokens["input_ids"]
+        )
+
+        batch = {}
+
+        batch["prompt"] = prompt
+        batch["chosen"] = prompt + chosen
+        batch["rejected"] = prompt + rejected
+        batch["chosen_response_only"] = chosen
+        batch["rejected_response_only"] = rejected
+
+        for k, toks in {
+            "chosen": chosen_sequence_tokens,
+            "rejected": rejected_sequence_tokens,
+            "prompt": prompt_tokens,
+        }.items():
+            for type_key, tokens in toks.items():
+                if type_key == "token_type_ids":
+                    continue
+                batch[f"{k}_{type_key}"] = tokens
+
+        return batch
+
+    def collate(self, batch):
+        # first, pad everything to the same length
+        padded_batch = {}
+        for k in batch[0].keys():
+            if k.endswith("_input_ids") or k.endswith("_attention_mask") or k.endswith("_labels"):
+                # adapted from https://stackoverflow.com/questions/73256206
+                if "prompt" in k:
+                    to_pad = [torch.LongTensor(ex[k][::-1]) for ex in batch]
+                else:
+                    to_pad = [torch.LongTensor(ex[k]) for ex in batch]
+                if k.endswith("_input_ids"):
+                    padding_value = self.tokenizer.pad_token_id
+                elif k.endswith("_labels"):
+                    padding_value = self.label_pad_token_id
+                elif k.endswith("_attention_mask"):
+                    padding_value = self.padding_value
+                else:
+                    raise ValueError(f"Unexpected key in batch '{k}'")
+
+                padded_batch[k] = pad_sequence(to_pad, batch_first=True, padding_value=padding_value)
+                # for the prompt, flip back so padding is on left side
+                if "prompt" in k:
+                    padded_batch[k] = padded_batch[k].flip(dims=[1])
+            else:
+                padded_batch[k] = [ex[k] for ex in batch]
+
+        return padded_batch
+
+    def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
+        tokenized_batch = []
+
+        for feature in features:
+            prompt = feature["prompt"]
+            chosen = feature["chosen"]
+            rejected = feature["rejected"]
+
+            batch_element = self.tokenize_batch_element(prompt, chosen, rejected)
+            tokenized_batch.append(batch_element)
+
+        # return collated batch
+        return self.collate(tokenized_batch)
+
+
 class ConstantLengthDataset(IterableDataset):
     """
     Iterable dataset that returns constant length chunks of tokens from stream of text files.
@@ -169,7 +348,7 @@ class ConstantLengthDataset(IterableDataset):
 
         Args:
             tokenizer (`transformers.PreTrainedTokenizer`):
-                The processor used for proccessing the data.
+                The processor used for processing the data.
             dataset (`dataset.Dataset`):
                 Dataset with text files.
             dataset_text_field (`str`, **optional**):
@@ -229,7 +408,7 @@ class ConstantLengthDataset(IterableDataset):
             if len(formatting_func_signature) > 1:
                 warnings.warn(
                     "The passed formatting_func has more than one argument. Usually that function should have a single argument `example`"
-                    " which corresponds to the dictonnary returned by each element of the dataset. Make sure you know what you are doing."
+                    " which corresponds to the dictionary returned by each element of the dataset. Make sure you know what you are doing."
                 )
 
     def __len__(self):
@@ -280,3 +459,28 @@ class PeftSavingCallback(TrainerCallback):
 
             if "pytorch_model.bin" in os.listdir(checkpoint_path):
                 os.remove(os.path.join(checkpoint_path, "pytorch_model.bin"))
+
+
+def compute_accuracy(eval_pred) -> Dict[str, float]:
+    predictions, labels = eval_pred
+    # Here, predictions is rewards_chosen and rewards_rejected.
+    # We want to see how much of the time rewards_chosen > rewards_rejected.
+    predictions = np.argmax(predictions, axis=1)
+
+    accuracy = np.array(predictions == labels, dtype=float).mean().item()
+    return {"accuracy": accuracy}
+
+
+def pad_to_length(tensor: torch.Tensor, length: int, pad_value: Union[int, float], dim: int = -1) -> torch.Tensor:
+    if tensor.size(dim) >= length:
+        return tensor
+    else:
+        pad_size = list(tensor.shape)
+        pad_size[dim] = length - tensor.size(dim)
+        return torch.cat(
+            [
+                tensor,
+                pad_value * torch.ones(*pad_size, dtype=tensor.dtype, device=tensor.device),
+            ],
+            dim=dim,
+        )
