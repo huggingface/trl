@@ -11,7 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import os
 import warnings
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
@@ -32,21 +31,11 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 
 from ..import_utils import is_peft_available
-from .utils import ConstantLengthDataset, DataCollatorForCompletionOnlyLM
+from .utils import ConstantLengthDataset, DataCollatorForCompletionOnlyLM, PeftSavingCallback
 
 
 if is_peft_available():
     from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_int8_training
-
-
-class PeftSavingCallback(TrainerCallback):
-    def on_save(self, args, state, control, **kwargs):
-        if args.should_save:
-            checkpoint_path = os.path.join(args.output_dir, f"checkpoint-{state.global_step}")
-            kwargs["model"].save_pretrained(checkpoint_path)
-
-            if "pytorch_model.bin" in os.listdir(checkpoint_path):
-                os.remove(os.path.join(checkpoint_path, "pytorch_model.bin"))
 
 
 class SFTTrainer(Trainer):
@@ -218,6 +207,14 @@ class SFTTrainer(Trainer):
             optimizers=optimizers,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
+
+        if self.args.max_steps > 0 and packing:
+            warnings.warn(
+                "You passed `packing=True` to the SFTTrainer, and you are training your model with `max_steps` strategy. The dataset will be iterated until the `max_steps` are reached."
+            )
+            self.train_dataset.infinite = True
+        elif self.args.max_steps == -1 and packing:
+            self.train_dataset.infinite = False
 
     def _prepare_dataset(
         self,

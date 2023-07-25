@@ -24,11 +24,11 @@ from transformers.trainer_pt_utils import nested_detach
 from transformers.trainer_utils import EvalPrediction
 
 from ..import_utils import is_peft_available
-from .utils import RewardDataCollatorWithPadding
+from .utils import PeftSavingCallback, RewardDataCollatorWithPadding
 
 
 if is_peft_available():
-    from peft import get_peft_model
+    from peft import PeftModel, get_peft_model
 
 
 def compute_accuracy(eval_pred) -> Dict[str, float]:
@@ -112,6 +112,9 @@ class RewardTrainer(Trainer):
             )
         elif is_peft_available() and peft_config is not None:
             model = get_peft_model(model, peft_config)
+
+        if is_peft_available() and callbacks is None and isinstance(model, PeftModel):
+            callbacks = [PeftSavingCallback()]
 
         if compute_metrics is None:
             compute_metrics = compute_accuracy
