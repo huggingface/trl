@@ -11,22 +11,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import inspect
-import os
-import time
 import typing
 import warnings
-from typing import Callable, List, Optional, Union
+from typing import List, Optional, Union
 
-import datasets
 import torch
 import torch.nn.functional as F
 from accelerate import Accelerator, DistributedDataParallelKwargs
 from accelerate.utils import ProjectConfiguration
-
 from datasets import Dataset
-from huggingface_hub import whoami
-from packaging import version
 from torch.optim import Adam
 from transformers import (
     DataCollatorForLanguageModeling,
@@ -34,28 +27,13 @@ from transformers import (
     PreTrainedTokenizerBase,
     PreTrainedTokenizerFast,
 )
-from transformers.trainer_pt_utils import LabelSmoother
 
 from trl.trainer.ppo_trainer import PPOTrainer
 
-from ..core import (
-    WANDB_PADDING,
-    PPODecorators,
-    clip_by_value,
-    convert_to_scalar,
-    entropy_from_logits,
-    flatten_dict,
-    logprobs_from_logits,
-    masked_mean,
-    masked_var,
-    masked_whiten,
-    set_seed,
-    stack_dicts,
-    stats_to_np,
-)
+from ..core import PPODecorators, set_seed
 from ..import_utils import is_torch_greater_2_0
-from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper, create_reference_model
-from . import AdaptiveKLController, BaseTrainer, FixedKLController, PPOConfig
+from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper
+from . import AdaptiveKLController, FixedKLController, PPOConfig
 
 
 MODEL_CARD_TEMPLATE = """---
@@ -187,7 +165,9 @@ class RSTrainer(PPOTrainer):
             gradient_accumulation_steps=config.gradient_accumulation_steps,
             project_config=ProjectConfiguration(**config.project_kwargs),
             **config.accelerator_kwargs,
-            kwargs_handlers=[DistributedDataParallelKwargs(find_unused_parameters=True)] # required as we use a LLM with value head
+            kwargs_handlers=[
+                DistributedDataParallelKwargs(find_unused_parameters=True)
+            ],  # required as we use a LLM with value head
         )
 
         is_using_tensorboard = config.log_with is not None and config.log_with == "tensorboard"
@@ -306,9 +286,6 @@ class RSTrainer(PPOTrainer):
 
         PPODecorators.optimize_cuda_cache = self.config.optimize_cuda_cache
 
-
-
-
     @PPODecorators.empty_cuda_cache()
     def step(
         self,
@@ -332,12 +309,12 @@ class RSTrainer(PPOTrainer):
         """
         bs = self.config.batch_size
         gen_k = len(responses) // len(queries)
-        
+
         # take the top 1
         scores2 = torch.Tensor(scores).reshape(bs, gen_k)
         best_score_inds = torch.argmax(scores2, dim=1) + torch.arange(0, len(responses), gen_k, dtype=torch.int32)
         best_responses = [responses[i] for i in best_score_inds]
-        
+
         model_inputs = self.prepare_model_inputs(queries, best_responses)
 
         if self.is_distributed:
@@ -367,12 +344,12 @@ class RSTrainer(PPOTrainer):
                 )
 
         model_inputs_names = list(model_inputs.keys())
-        
+
         # upcast to float32 to avoid dataset issues
         mini_batch_dict = {
             "queries": queries,
             "responses": best_responses,
-            #"masks": masks,
+            # "masks": masks,
         }
 
         def collator(data):
@@ -394,22 +371,21 @@ class RSTrainer(PPOTrainer):
             collate_fn=collator,
         )
         all_stats = []
-        
-        
+
         for i, batch in enumerate(mini_batch_dataloader):
             with self.accelerator.accumulate(self.model):
                 model_inputs = {k: batch[k] for k in model_inputs_names}
-                minibatch_size = len(model_inputs["input_ids"])    
+                minibatch_size = len(model_inputs["input_ids"])
                 logits, _, _ = self.model(**model_inputs)
-                
+
                 # next token prediction
                 labels = model_inputs["input_ids"]
                 logits = logits[..., :-1, :].contiguous()
                 labels = labels[..., 1:].contiguous()
-                
+
                 log_probs = -F.log_softmax(logits, dim=-1)
-                nll_loss = log_probs.gather(dim=-1, index=labels.unsqueeze(-1)).squeeze(-1)    
-                
+                nll_loss = log_probs.gather(dim=-1, index=labels.unsqueeze(-1)).squeeze(-1)
+
                 # add masking of loss
                 attention_mask = batch["attention_mask"]
                 masks = batch["attention_mask"][:, 1:]
@@ -426,18 +402,16 @@ class RSTrainer(PPOTrainer):
 
                     masks[j, :start] = 0
                     masks[j, end:] = 0
-                
+
                 masked_nll_loss = (nll_loss * masks).sum() / masks.sum()
                 self.accelerator.backward(masked_nll_loss)
-                
+
                 self.optimizer.step()
                 self.optimizer.zero_grad()
-                
+
                 # update stats etc
-                all_stats.append(
-                    dict(loss=dict(total=masked_nll_loss.detach()))
-                )
-                
+                all_stats.append(dict(loss=dict(total=masked_nll_loss.detach())))
+
         return all_stats
 
     # def log_stats(
@@ -449,5 +423,5 @@ class RSTrainer(PPOTrainer):
     #     # repeat queries so all generations are logged
     #     n_repeats = len(batch["query"]) // len(batch["response"])
     #     batch["query"] = [q for q in batch["query"] for _ in range(n_repeats)]
-        
+
     #     super().log_stats(stats, batch, rewards)

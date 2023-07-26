@@ -22,11 +22,8 @@ from tqdm import tqdm
 from transformers import AutoTokenizer, HfArgumentParser, pipeline
 
 from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead, PPOConfig, set_seed
-from trl.trainer.rs_trainer import RSTrainer
-
-
-
 from trl.core import LengthSampler
+from trl.trainer.rs_trainer import RSTrainer
 
 
 tqdm.pandas()
@@ -181,7 +178,7 @@ generation_kwargs = {
     "do_sample": True,
     "pad_token_id": tokenizer.eos_token_id,
     "max_new_tokens": 32,
-    "num_return_sequences" : script_args.generation_n_k
+    "num_return_sequences": script_args.generation_n_k,
 }
 
 for epoch, batch in tqdm(enumerate(rs_trainer.dataloader)):

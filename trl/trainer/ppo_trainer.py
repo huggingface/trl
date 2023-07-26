@@ -498,8 +498,8 @@ class PPOTrainer(BaseTrainer):
             ).to(self.current_device)
 
             generations = self.accelerator.unwrap_model(self.model).generate(**padded_inputs, **generation_kwargs)
-            n_repeats = generation_kwargs.get("num_return_sequences", 1) # used for rejection sampling
-            
+            n_repeats = generation_kwargs.get("num_return_sequences", 1)  # used for rejection sampling
+
             for generation, mask in zip(generations, padded_inputs["attention_mask"].repeat(n_repeats, 1)):
                 if not self.is_encoder_decoder:
                     output = generation[(1 - mask).sum() :]  # remove padding
