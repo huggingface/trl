@@ -21,8 +21,9 @@ from typing import Callable, List, Optional, Union
 import datasets
 import torch
 import torch.nn.functional as F
-from accelerate import Accelerator
+from accelerate import Accelerator, DistributedDataParallelKwargs
 from accelerate.utils import ProjectConfiguration
+
 from datasets import Dataset
 from huggingface_hub import whoami
 from packaging import version
@@ -186,6 +187,7 @@ class RSTrainer(PPOTrainer):
             gradient_accumulation_steps=config.gradient_accumulation_steps,
             project_config=ProjectConfiguration(**config.project_kwargs),
             **config.accelerator_kwargs,
+            kwargs_handlers=[DistributedDataParallelKwargs(find_unused_parameters=True)] # required as we use a LLM with value head
         )
 
         is_using_tensorboard = config.log_with is not None and config.log_with == "tensorboard"
@@ -426,23 +428,26 @@ class RSTrainer(PPOTrainer):
                     masks[j, end:] = 0
                 
                 masked_nll_loss = (nll_loss * masks).sum() / masks.sum()
-                masked_nll_loss.backward()
+                self.accelerator.backward(masked_nll_loss)
                 
                 self.optimizer.step()
                 self.optimizer.zero_grad()
                 
                 # update stats etc
+                all_stats.append(
+                    dict(loss=dict(total=masked_nll_loss.detach()))
+                )
                 
         return all_stats
 
-    def log_stats(
-        self,
-        stats: dict,
-        batch: dict,
-        rewards: List[torch.FloatTensor],
-    ):
-        # repeat queries so all generations are logged
-        n_repeats = len(batch["query"]) // len(batch["response"])
-        batch["query"] = [q for q in batch["query"] for _ in range(n_repeats)]
+    # def log_stats(
+    #     self,
+    #     stats: dict,
+    #     batch: dict,
+    #     rewards: List[torch.FloatTensor],
+    # ):
+    #     # repeat queries so all generations are logged
+    #     n_repeats = len(batch["query"]) // len(batch["response"])
+    #     batch["query"] = [q for q in batch["query"] for _ in range(n_repeats)]
         
-        super().log_stats(stats, batch, rewards)
+    #     super().log_stats(stats, batch, rewards)

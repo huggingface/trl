@@ -199,5 +199,5 @@ for epoch, batch in tqdm(enumerate(rs_trainer.dataloader)):
 
     # Run PPO step
     stats = rs_trainer.step(query_tensors, response_tensors, rewards)
-    
+    batch["query"] = [q for q in batch["query"] for _ in range(n_repeats)]
     rs_trainer.log_stats(stats, batch, rewards)
