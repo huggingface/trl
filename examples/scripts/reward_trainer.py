@@ -46,7 +46,7 @@ class ScriptArguments:
     logging_steps: Optional[int] = field(default=500, metadata={"help": "the number of update steps between two logs"})
     eval_split: Optional[str] = field(
         default="none", metadata={"help": "the dataset split to evaluate on; default to 'none' (no evaluation)"}
-        )
+    )
     learning_rate: Optional[float] = field(default=1.41e-5, metadata={"help": "the learning rate"})
     batch_size: Optional[int] = field(default=64, metadata={"help": "the batch size"})
     num_train_epochs: Optional[int] = field(default=1, metadata={"help": "the number of training epochs"})
@@ -128,9 +128,7 @@ train_dataset = train_dataset.filter(
 if script_args.eval_split == "none":
     eval_dataset = None
 else:
-    eval_dataset = load_dataset(
-        script_args.dataset_name, split=script_args.eval_split
-    )
+    eval_dataset = load_dataset(script_args.dataset_name, split=script_args.eval_split)
 
     eval_dataset = eval_dataset.map(
         preprocess_function,
