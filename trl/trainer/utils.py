@@ -59,6 +59,8 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
     calculated on the completion made by the assistant.
 
     Args:
+        instruction_template (`Optional[str]`): the template form that indicates the start of the human instruction, typically something like
+            '### Human:\n'. Useful for assistant-style conversation datasets
         response_template (`str`): the template form that indicates the start of the response, typically something like
             '### Response:\n'
         mlm (`bool`, *optional*, defaults to `False`): Whether or not to use masked language modeling in the underlying
@@ -69,38 +71,63 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
     """
 
     def __init__(
-        self, instruction_template, assistant_template, *args, mlm: bool = False, ignore_index: int = -100, **kwargs
+        self,
+        response_template: str,
+        instruction_template: Optional[str] = None,
+        *args,
+        mlm: bool = False,
+        ignore_index: int = -100,
+        **kwargs,
     ):
         super().__init__(*args, mlm=mlm, **kwargs)
         self.instruction_template = instruction_template
-        self.assistant_template = assistant_template
+        self.response_template = response_template
         self.ignore_index = ignore_index
 
     def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
         batch = super().torch_call(examples)
 
-        assistant_token_ids = self.tokenizer.encode(self.assistant_template, add_special_tokens=False)
+        response_token_ids = self.tokenizer.encode(self.response_template, add_special_tokens=False)
 
         labels = batch["labels"].clone()
 
-        for i in range(len(examples)):
-            assistant_token_ids_idxs = []
-            human_token_ids_idxs = []
+        if self.instruction_template is None:
+            for i in range(len(examples)):
+                response_token_ids_start_idx = None
 
-            for assistant_idx in np.where(batch["labels"][i] == assistant_token_ids[0])[0]:
-                # find the indexes of the start of an assistant answer.
-                if (
-                    assistant_token_ids
-                    == examples[i]["input_ids"][assistant_idx : assistant_idx + len(assistant_token_ids)]
-                ):
-                    assistant_token_ids_idxs.append(assistant_idx + len(assistant_token_ids))
+                for idx in np.where(batch["labels"][i] == response_token_ids[0])[0]:
+                    # `response_token_ids` is `'### Response:\n'`, here we are just making sure that the token IDs match
+                    if response_token_ids == examples[i]["input_ids"][idx : idx + len(response_token_ids)]:
+                        response_token_ids_start_idx = idx
 
-            if len(assistant_token_ids) == 0:
-                raise RuntimeError(
-                    f'Could not find response key {assistant_token_ids} in token IDs {batch["labels"][i]}'
-                )
+                if response_token_ids_start_idx is None:
+                    raise RuntimeError(
+                        f'Could not find response key {response_token_ids} in token IDs {batch["labels"][i]}'
+                    )
 
-            if self.instruction_template is not None:
+                response_token_ids_end_idx = response_token_ids_start_idx + len(response_token_ids)
+
+                # Make pytorch loss function ignore all tokens up through the end of the response key
+                labels[i, :response_token_ids_end_idx] = self.ignore_index
+
+        else:
+            for i in range(len(examples)):
+                response_token_ids_idxs = []
+                human_token_ids_idxs = []
+
+                for assistant_idx in np.where(batch["labels"][i] == response_token_ids[0])[0]:
+                    # find the indexes of the start of a response.
+                    if (
+                        response_token_ids
+                        == examples[i]["input_ids"][assistant_idx : assistant_idx + len(response_token_ids)]
+                    ):
+                        response_token_ids_idxs.append(assistant_idx + len(response_token_ids))
+
+                if len(response_token_ids) == 0:
+                    raise RuntimeError(
+                        f'Could not find response key {response_token_ids} in token IDs {batch["labels"][i]}'
+                    )
+
                 human_token_ids = self.tokenizer.encode(self.instruction_template, add_special_tokens=False)
                 for human_idx in np.where(batch["labels"][i] == human_token_ids[0])[0]:
                     # find the indexes of the start of a human answer.
@@ -112,21 +139,15 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                         f'Could not find response key {human_token_ids} in token IDs {batch["labels"][i]}'
                     )
 
-                for idx, (start, end) in enumerate(zip(human_token_ids_idxs, assistant_token_ids_idxs)):
-                    # Make pytorch loss function ignore all non assistant tokens
+                for idx, (start, end) in enumerate(zip(human_token_ids_idxs, response_token_ids_idxs)):
+                    # Make pytorch loss function ignore all non response tokens
                     if idx != 0:
                         labels[i, start:end] = self.ignore_index
                     else:
                         labels[i, :end] = self.ignore_index
 
-                if len(assistant_token_ids_idxs) < len(human_token_ids_idxs):
+                if len(response_token_ids_idxs) < len(human_token_ids_idxs):
                     labels[i, human_token_ids_idxs[-1] :] = self.ignore_index
-
-            elif len(assistant_token_ids_idxs) == 1:
-                labels[i, : assistant_token_ids_idxs[0]] = self.ignore_index
-
-            else:
-                raise RuntimeError(f"Find multiple response token ids but no instruction tokens were provided.")
 
         batch["labels"] = labels
 
