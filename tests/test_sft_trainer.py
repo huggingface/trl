@@ -427,7 +427,7 @@ class SFTTrainerTester(unittest.TestCase):
         instruction_template = "### Human:"
         assistant_template = "### Assistant:"
         data_collator = DataCollatorForCompletionOnlyLM(
-            instruction_template, assistant_template, tokenizer=self.tokenizer, mlm=False
+            response_template=assistant_template, instruction_template=instruction_template, tokenizer=self.tokenizer, mlm=False
         )
 
         text = """### Human: Hello all this should be masked.### Assistant: I should not be masked.### Human: All this should be masked too.### Assistant: I should not be masked too."""
