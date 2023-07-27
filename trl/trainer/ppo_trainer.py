@@ -715,8 +715,8 @@ class PPOTrainer(BaseTrainer):
                         model_inputs,
                         return_logits=True,
                     )
-                    if (i % self.config.gradient_accumulation_steps) == 0:
-                        self.optimizer.zero_grad()
+                    # if (i % self.config.gradient_accumulation_steps) == 0:
+                    #    self.optimizer.zero_grad()
 
                     train_stats = self.train_minibatch(
                         batch["logprobs"],
@@ -988,6 +988,7 @@ class PPOTrainer(BaseTrainer):
 
         t = time.time()
         self.optimizer.step()
+        self.optimizer.zero_grad()
         train_stats["time/ppo/optimizer_step"] = torch.Tensor([time.time() - t]).to(self.current_device)
         return train_stats
 

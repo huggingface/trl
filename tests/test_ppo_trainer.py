@@ -159,8 +159,8 @@ class PPOTrainerTester(unittest.TestCase):
         # create a dummy dataset
         min_length = min(len(query_tensor[0]), len(response_tensor[0]))
         dummy_dataset = DummyDataset(
-            [query_tensor[:, :min_length].squeeze(0) for _ in range(2)],
-            [response_tensor[:, :min_length].squeeze(0) for _ in range(2)],
+            [query_tensor[:, :min_length].squeeze(0) for _ in range(8)],
+            [response_tensor[:, :min_length].squeeze(0) for _ in range(8)],
         )
 
         return dummy_dataset
@@ -1127,7 +1127,6 @@ class PPOTrainerTester(unittest.TestCase):
             reward = [torch.tensor(1.0), torch.tensor(1.0)]
             # train model by running a step twice
             _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
-            break
 
         model_grad = gpt2_model.v_head.summary.weight.grad.clone()
 
@@ -1151,7 +1150,6 @@ class PPOTrainerTester(unittest.TestCase):
             reward = [torch.tensor(1.0), torch.tensor(1.0)]
             # train model by running a step twice
             _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
-            break
 
         model_grad_acc = gpt2_model_clone.v_head.summary.weight.grad.clone()
         self.assertTrue(torch.allclose(model_grad_acc, model_grad, rtol=1e-3, atol=1e-3))
