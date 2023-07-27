@@ -715,8 +715,6 @@ class PPOTrainer(BaseTrainer):
                         model_inputs,
                         return_logits=True,
                     )
-                    # if (i % self.config.gradient_accumulation_steps) == 0:
-                    #    self.optimizer.zero_grad()
 
                     train_stats = self.train_minibatch(
                         batch["logprobs"],
