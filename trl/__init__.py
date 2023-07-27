@@ -14,7 +14,6 @@ from .models import (
 from .trainer import (
     DataCollatorForCompletionOnlyLM,
     DPOTrainer,
-    ForwardMode,
     PPOConfig,
     PPOTrainer,
     RewardTrainer,

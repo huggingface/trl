@@ -1,25 +1,21 @@
 import copy
-import enum
 from functools import partial
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
 import torch.nn.functional as F
+from accelerate import Accelerator
+from accelerate.utils import ProjectConfiguration
 
-from ..core import entropy_from_logits, mask_and_reduce, masked_reverse_cumsum
+from ..core import entropy_from_logits, mask_and_reduce, masked_reverse_cumsum, set_seed
 from ..models import PreTrainedModelWrapper
-from . import BaseTrainer
+from . import BaseTrainer, SoftQLearningConfig
 
 
 BoolTensor = Union[torch.BoolTensor, torch.cuda.BoolTensor]
 LongTensor = Union[torch.LongTensor, torch.cuda.LongTensor]
 FloatTensor = Union[torch.FloatTensor, torch.cuda.FloatTensor]
-
-
-class ForwardMode(enum.Enum):
-    SQL_OFF = "SQL_OFF"
-    SQL_ON = "SQL_ON"
 
 
 # forget config for now, transfer to config later
@@ -30,26 +26,16 @@ class SoftQLearningTrainer(BaseTrainer):
         self,
         model: Union[PreTrainedModelWrapper, torch.nn.Module],
         target_model: Optional[Callable[[], torch.nn.Module]],  # make this optional
-        sql_loss_impl: str,  # this could also be a callable
-        target_update_method: Optional[str],
-        target_learning_rate: float,
-        mix_strategy: str,
-        reward_shaping: bool,
-        # reward_shaping_old_min: float,
-        # reward_shaping_old_max: float,
-        # reward_shaping_new_min: float,
-        # reward_shaping_new_max: float,
-        sql_loss_coefficients: Optional[float] = None,
-        sql_loss_margin_constant: Optional[float] = None,
-        sql_loss_margin_coefficient: Optional[float] = None,
-        top_k: Optional[int] = None,
-        top_p: Optional[float] = None,
-        beam_width: Optional[int] = None,
-        reward_function: Callable[[List[str], List[str], List[str]], Tuple[FloatTensor, Dict[str, Any]]] = None,
+        config: SoftQLearningConfig,
+        reward_function: Callable[[List[str], List[str], List[str]], Tuple[FloatTensor, Dict[str, Any]]],
         tokenizer=None,
         device="cuda:0",
+        # reward_shaping: bool,
+        loss_function: Optional[Callable] = None,
         reward_shaping_func: Callable[[FloatTensor], FloatTensor] = lambda r: r,
     ):
+        set_seed(config.seed)
+
         self.model = model
         target_model_empty = target_model is None
         if target_model_empty:
@@ -57,29 +43,48 @@ class SoftQLearningTrainer(BaseTrainer):
         else:
             self.target_model = target_model
 
-        self.target_learning_rate = target_learning_rate
-        self.target_sync_method = target_update_method
-        self.mix_strategy = mix_strategy
+        if config.loss_implementation and loss_function:
+            raise ValueError("Cannot specify both `loss_implementation` and `loss_function`")
+        if not (config.loss_implementation or loss_function):
+            raise ValueError("Must specify either `loss_implementation` or `loss_function`")
+
+        self.target_sync_method = config.target_sync_method
+        self.mix_strategy = config.mix_strategy
         self.reward_function = reward_function
-        self.tokenizer = tokenizer
-        self.sql_loss_impl = sql_loss_impl
-        self.reward_shaping = reward_shaping
+        self.tokenizer = tokenizer  # keep
+        self.loss_impl = config.loss_implementation
+        self.target_learning_rate = config.target_learning_rate
+        # self.reward_shaping = reward_shaping
         # self.reward_shaping_old_min = reward_shaping_old_min
         # self.reward_shaping_old_max = reward_shaping_old_max
         # self.reward_shaping_new_min = reward_shaping_new_min
         # self.reward_shaping_new_max = reward_shaping_new_max
-        self.sql_loss_coefficients = sql_loss_coefficients
-        self.sql_loss_margin_constant = sql_loss_margin_constant
-        self.sql_loss_margin_coefficient = sql_loss_margin_coefficient
-        self._top_k = top_k
-        self._top_p = top_p
-        self._beam_width = beam_width
+        self.loss_coefficients = config.loss_coefficient
+        self.loss_margin_constant = config.loss_margin_constant
+        self.loss_margin_coefficient = config.loss_margin_coefficient
+        self.top_k = config.top_k
+        self.top_p = config.top_p
         self.device = device
         self.reward_shaping_func = reward_shaping_func
 
         trainable_params = [p for p in model.parameters() if p.requires_grad]
 
-        self.optimizer = torch.optim.Adam(trainable_params, lr=target_learning_rate)
+        is_using_tensorboard = config.log_with is not None and config.log_with == "tensorboard"
+
+        self.accelerator = Accelerator(
+            log_with=config.log_with,
+            gradient_accumulation_steps=config.gradient_accumulation_steps,
+            project_config=ProjectConfiguration(**config.project_kwargs),
+            **config.accelerator_kwargs,
+        )
+
+        self.accelerator.init_trackers(
+            config.tracker_project_name,
+            config=dict(soft_q_learning_config=config.to_dict()) if not is_using_tensorboard else config.to_dict(),
+            init_kwargs=config.tracker_kwargs,
+        )
+
+        self.optimizer = torch.optim.Adam(trainable_params, lr=config.learning_rate)
 
     def step(self, batch, step):
         if self.target_sync_method == "polyak":
@@ -88,7 +93,7 @@ class SoftQLearningTrainer(BaseTrainer):
         elif self.target_sync_method == "copy" and step % self.target_sync_steps == 0:
             self.sync_target_model("copy")
 
-        candidate_modes = [ForwardMode.SQL_OFF, ForwardMode.SQL_ON]
+        candidate_modes = ["SQL_OFF", "SQL_ON"]
 
         if self.mix_strategy == "alternate":
             modes = [candidate_modes[step % len(candidate_modes)]]
@@ -98,20 +103,23 @@ class SoftQLearningTrainer(BaseTrainer):
 
         loss_list = []
         additional_info_list = []
-        for mode in modes:
-            _, _loss, _additional_info = self._forward_SQL(mode=mode, batch=batch)
+        with self.accelerator.accumulate(self.model):
+            for mode in modes:
+                _, _loss, _additional_info = self._forward_SQL(mode=mode, batch=batch)
 
-            loss_list.append(_loss)
-            additional_info_list.append(_additional_info)
+                loss_list.append(_loss)
+                additional_info_list.append(_additional_info)
 
-        # https://discuss.pytorch.org/t/get-the-mean-from-a-list-of-tensors/31989/2
-        loss = torch.mean(torch.stack(loss_list))
-        additional_info = unionize_dicts(additional_info_list)
+            # https://discuss.pytorch.org/t/get-the-mean-from-a-list-of-tensors/31989/2
+            loss = torch.mean(torch.stack(loss_list))
+            additional_info = unionize_dicts(additional_info_list)
 
-        loss.backward()
-        self.optimizer.step()
+            self.accelerator.backward(loss)
+            self.optimizer.step()
+            self.optimizer.zero_grad()
 
         batch_log = nested_detach_and_clone(additional_info, to_cpu=True)
+        self.accelerator.log(batch_log)
 
         # return batch log here so IO portion can be taken care of outside this method
         return batch_log
@@ -133,7 +141,7 @@ class SoftQLearningTrainer(BaseTrainer):
             raise ValueError(f"Unknown sync type: {sync_type}")
 
     def _forward_SQL(self, mode, batch):
-        if mode == ForwardMode.SQL_OFF:
+        if mode == "SQL_OFF":
             # teacher forcing
             outputs = self.model(input_ids=batch[0].input_ids, decoder_input_ids=batch[1].input_ids)
             target_outputs = self.target_model(input_ids=batch[0].input_ids, decoder_input_ids=batch[1].input_ids)
@@ -143,14 +151,14 @@ class SoftQLearningTrainer(BaseTrainer):
             output_ids = batch[1].input_ids.to(self.device)  # potential trouble spot
             sequence_lengths = batch[1].attention_mask.sum(dim=-1).to(self.device)
 
-        elif mode == ForwardMode.SQL_ON:
+        elif mode == "SQL_ON":
             generation_length = batch[1].input_ids.shape[1]
 
             outputs = self.model.generate(
                 batch[0].input_ids,
                 do_sample=True,
-                top_k=self._top_k,
-                top_p=self._top_p,
+                top_k=self.top_k,
+                top_p=self.top_p,
                 return_dict_in_generate=True,
                 output_scores=True,
                 max_length=generation_length,
@@ -181,29 +189,29 @@ class SoftQLearningTrainer(BaseTrainer):
         raw_rewards, shaped_rewards, rewards_log = self.compute_rewards(input_texts, target_texts, predicted_texts)
 
         sql_loss, sql_loss_log = self.loss(
-            implementation=self.sql_loss_impl,
+            implementation=self.loss_impl,
             logits=logits,
             logits_=target_logits,
             actions=output_ids,
             rewards=shaped_rewards,
             sequence_length=sequence_lengths,
-            coefficient=self.sql_loss_coefficients,
+            coefficient=self.loss_coefficients,
             # Do not add margin losses unless the
             # actions are ground truth actions.
-            margin_constant=(self.sql_loss_margin_constant if mode == ForwardMode.SQL_OFF else None),
-            margin_coefficient=(self.sql_loss_margin_coefficient if mode == ForwardMode.SQL_OFF else None),
+            margin_constant=(self.loss_margin_constant if mode == "SQL_OFF" else None),
+            margin_coefficient=(self.loss_margin_coefficient if mode == "SQL_OFF" else None),
         )
 
-        add_prefix_to_dict_keys_inplace(rewards_log, prefix=f"{mode.value}/rewards/")
-        add_prefix_to_dict_keys_inplace(sql_loss_log, prefix=f"{mode.value}/")
+        add_prefix_to_dict_keys_inplace(rewards_log, prefix=f"{mode}/rewards/")
+        add_prefix_to_dict_keys_inplace(sql_loss_log, prefix=f"{mode}/")
 
         sql_loss_log = unionize_dicts(
             [
                 rewards_log,
                 sql_loss_log,
                 {
-                    f"{mode.value}/rewards/raw": raw_rewards.mean(),
-                    f"{mode.value}/rewards/shaped": shaped_rewards.mean(),
+                    f"{mode}/rewards/raw": raw_rewards.mean(),
+                    f"{mode}/rewards/shaped": shaped_rewards.mean(),
                 },
             ]
         )
@@ -260,10 +268,10 @@ class SoftQLearningTrainer(BaseTrainer):
         elif implementation == "v2":
             _sql_loss_func = soft_q_loss_with_sparse_rewards_2
 
-        if implementation == "v3":
+        elif implementation == "v3":
             _sql_loss_func = soft_q_loss_with_sparse_rewards_3
 
-        if implementation == "v2_v2r":
+        elif implementation == "v2_v2r":
             _sql_loss_func = partial(
                 soft_q_loss_with_sparse_rewards_2_2_reversed,
                 coefficient=coefficient,
@@ -271,10 +279,10 @@ class SoftQLearningTrainer(BaseTrainer):
                 margin_coefficient=margin_coefficient,
             )
 
-        if implementation == "v3_v3r":
+        elif implementation == "v3_v3r":
             _sql_loss_func = partial(soft_q_loss_with_sparse_rewards_3_3_reversed, coefficient=coefficient)
 
-        if implementation == "v2_v2r_v3_v3r":
+        else:
             _sql_loss_func = partial(
                 soft_q_loss_with_sparse_rewards_2_2_reversed_3_3_reversed,
                 coefficient=coefficient,
@@ -337,11 +345,8 @@ def unionize_dicts(dict_list):
 
 
 def gather_2d_on_last_dim(tensor: FloatTensor, index: LongTensor, shape: torch.Size) -> FloatTensor:
-    """Simplified version of `tf.gather_nd` in PyTorch"""
-    flattened_tensor = tensor.view(-1, tensor.shape[-1])
-    flattened_index = index.view(-1)
-    flattened_gathered_tensor = flattened_tensor[torch.arange(flattened_index.shape[0]), flattened_index]
-    return flattened_gathered_tensor.view(shape)
+    index = index.unsqueeze(-1)
+    return tensor.gather(-1, index).view(shape)
 
 
 def add_prefix_to_dict_keys_inplace(

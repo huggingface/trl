@@ -15,7 +15,7 @@ from transformers import (
     pipeline,
 )
 
-from trl import SoftQLearningTrainer
+from trl import SoftQLearningConfig, SoftQLearningTrainer
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -291,17 +291,24 @@ model.config.pad_token_id = tokenizer.pad_token_id
 dataset = CustomTextDataset(source_file_name, labels_file_name)
 dataloader = DataLoader(dataset, batch_size=5, shuffle=True, collate_fn=collate_fn)
 
+config = SoftQLearningConfig(
+    mix_strategy="mix",
+    target_sync_method="polyak",
+    loss_implementation="v1",
+    learning_rate=0.001,
+    target_learning_rate=0.001,
+    log_with="wandb",
+    tracker_kwargs={"wandb_project": "soft-q-learning"},
+    gradient_accumulation_steps=1,
+)
+
 qtrainer = SoftQLearningTrainer(
     model=model,
     tokenizer=tokenizer,
     reward_function=GPT2TopicReward(),
-    mix_strategy="mix",
-    reward_shaping=True,
-    sql_loss_impl="v2_v2r_v3_v3r",
     target_model=None,
-    target_update_method="polyak",
-    target_learning_rate=0.001,
     device=device,
+    config=config,
 )
 #
 for i, batch in enumerate(dataloader):
