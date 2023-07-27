@@ -166,7 +166,7 @@ class PPOTrainerTester(unittest.TestCase):
         return dummy_dataset
 
     def test_drop_last_dataloader(self):
-        self.ppo_config = PPOConfig(batch_size=3, mini_batch_size=1, log_with=None)
+        self.ppo_config = PPOConfig(batch_size=9, mini_batch_size=1, log_with=None)
 
         dummy_dataset = self._init_dummy_dataset()
 
