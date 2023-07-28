@@ -97,6 +97,8 @@ class DPOTrainer(Trainer):
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         max_length: Optional[int] = None,
         max_prompt_length: Optional[int] = None,
+        max_target_length: Optional[int] = None,
+        is_encoder_decoder: bool = None,
         peft_config: Optional[Dict] = None,
     ):
         if not is_peft_available() and peft_config is not None:
@@ -128,6 +130,14 @@ class DPOTrainer(Trainer):
                 )
                 max_prompt_length = 128
 
+            if max_target_length is None & is_encoder_decoder:
+                warnings.warn(
+                    "When using DPODataCollatorWithPadding with an encoder decoder architecture, you should set `max_target_length` in the DPOTrainer's init"
+                    " it will be set to `128` by default, but you should do it yourself in the future.",
+                    UserWarning,
+                )
+                max_target_length = 128
+
             data_collator = DPODataCollatorWithPadding(
                 tokenizer,
                 max_length=max_length,
@@ -135,6 +145,8 @@ class DPOTrainer(Trainer):
                 label_pad_token_id=label_pad_token_id,
                 padding_value=padding_value,
                 truncation_mode=truncation_mode,
+                is_encoder_decoder=is_encoder_decoder,
+                max_target_length=max_target_length
             )
 
             if args.remove_unused_columns:
@@ -155,6 +167,7 @@ class DPOTrainer(Trainer):
 
         self.beta = beta
         self.ref_model = ref_model
+        self.is_encoder_decoder = is_encoder_decoder
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
@@ -189,24 +202,46 @@ class DPOTrainer(Trainer):
         Returns:
             A dictionary containing the concatenated inputs under the key 'concatenated_input_ids'.
         """
-        max_length = max(batch["chosen_input_ids"].shape[1], batch["rejected_input_ids"].shape[1])
         concatenated_batch = {}
-        for k in batch:
-            if k.startswith("chosen") and isinstance(batch[k], torch.Tensor):
-                pad_value = self.label_pad_token_id if "labels" in k else self.padding_value
-                concatenated_key = k.replace("chosen", "concatenated")
-                concatenated_batch[concatenated_key] = pad_to_length(batch[k], max_length, pad_value=pad_value)
-        for k in batch:
-            if k.startswith("rejected") and isinstance(batch[k], torch.Tensor):
-                pad_value = self.label_pad_token_id if "labels" in k else self.padding_value
-                concatenated_key = k.replace("rejected", "concatenated")
-                concatenated_batch[concatenated_key] = torch.cat(
-                    (
-                        concatenated_batch[concatenated_key],
-                        pad_to_length(batch[k], max_length, pad_value=pad_value),
-                    ),
-                    dim=0,
-                ).to(self.accelerator.device)
+        
+        if self.is_encoder_decoder:
+            max_length = max(batch["chosen_labels"].shape[1], batch["rejected_labels"].shape[1])
+            for k in batch:
+                if k.startswith("chosen") and isinstance(batch[k], torch.Tensor):
+                    pad_value = self.label_pad_token_id 
+                    concatenated_key = k.replace("chosen", "concatenated")
+                    concatenated_batch[concatenated_key] = pad_to_length(batch[k], max_length, pad_value=pad_value)
+            for k in batch:
+                if k.startswith("rejected") and isinstance(batch[k], torch.Tensor):
+                    pad_value = self.label_pad_token_id
+                    concatenated_key = k.replace("rejected", "concatenated")
+                    concatenated_batch[concatenated_key] = torch.cat(
+                        (
+                            concatenated_batch[concatenated_key],
+                            pad_to_length(batch[k], max_length, pad_value=pad_value),
+                        ),
+                        dim=0,
+                    ).to(self.accelerator.device)
+            concatenated_batch["concatenated_input_ids"] = batch["prompt_input_ids"].repeat(2,1)
+            concatenated_batch["concatenated_attention_mask"] = batch["prompt_attention_mask"].repeat(2,1)
+        else:
+            max_length = max(batch["chosen_input_ids"].shape[1], batch["rejected_input_ids"].shape[1])
+            for k in batch:
+                if k.startswith("chosen") and isinstance(batch[k], torch.Tensor):
+                    pad_value = self.label_pad_token_id if "labels" in k else self.padding_value
+                    concatenated_key = k.replace("chosen", "concatenated")
+                    concatenated_batch[concatenated_key] = pad_to_length(batch[k], max_length, pad_value=pad_value)
+            for k in batch:
+                if k.startswith("rejected") and isinstance(batch[k], torch.Tensor):
+                    pad_value = self.label_pad_token_id if "labels" in k else self.padding_value
+                    concatenated_key = k.replace("rejected", "concatenated")
+                    concatenated_batch[concatenated_key] = torch.cat(
+                        (
+                            concatenated_batch[concatenated_key],
+                            pad_to_length(batch[k], max_length, pad_value=pad_value),
+                        ),
+                        dim=0,
+                    ).to(self.accelerator.device)
         return concatenated_batch
 
     def dpo_loss(
@@ -265,8 +300,9 @@ class DPOTrainer(Trainer):
         if logits.shape[:-1] != labels.shape:
             raise ValueError("Logits (batch and sequence length dim) and labels must have the same shape.")
 
-        labels = labels[:, 1:].clone()
-        logits = logits[:, :-1, :]
+        if not self.is_encoder_decoder:
+            labels = labels[:, 1:].clone()
+            logits = logits[:, :-1, :]
         loss_mask = labels != self.label_pad_token_id
 
         # dummy token; we'll ignore the losses on these tokens later
@@ -287,10 +323,19 @@ class DPOTrainer(Trainer):
         We do this to avoid doing two forward passes, because it's faster for FSDP.
         """
         concatenated_batch = self.concatenated_inputs(batch)
-        all_logits = model(
-            concatenated_batch["concatenated_input_ids"],
-            attention_mask=concatenated_batch["concatenated_attention_mask"],
-        ).logits.to(torch.float32)
+
+        if self.is_encoder_decoder:
+            all_logits = model(
+                concatenated_batch["concatenated_input_ids"],
+                attention_mask=concatenated_batch["concatenated_attention_mask"],
+                labels = concatenated_batch["concatenated_labels"]
+            ).logits.to(torch.float32)
+        else:
+            all_logits = model(
+                concatenated_batch["concatenated_input_ids"],
+                attention_mask=concatenated_batch["concatenated_attention_mask"],
+            ).logits.to(torch.float32)
+
         all_logps = self._get_batch_logps(
             all_logits,
             concatenated_batch["concatenated_labels"],
