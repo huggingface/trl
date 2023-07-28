@@ -122,3 +122,6 @@ trainer = SFTTrainer(
 )
 
 trainer.train()
+
+# Step 6: Save the model
+trainer.save_model(script_args.output_dir)
