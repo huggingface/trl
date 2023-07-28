@@ -212,6 +212,8 @@ class DPODataCollatorWithPadding:
     label_pad_token_id: int = -100
     padding_value: int = 0
     truncation_mode: str = "keep_end"
+    is_encoder_decoder: Optional[bool] = False
+    max_target_length: Optional[int] = 256
 
     def tokenize_batch_element(
         self,
@@ -229,97 +231,124 @@ class DPODataCollatorWithPadding:
             the sum of the length of the prompt and the chosen/rejected response, with
             label_pad_token_id  for the prompt tokens.
         """
-        chosen_tokens = self.tokenizer(chosen, add_special_tokens=False)
-        rejected_tokens = self.tokenizer(rejected, add_special_tokens=False)
-        prompt_tokens = self.tokenizer(prompt, add_special_tokens=False)
+        
+        if not self.is_encoder_decoder:
+            chosen_tokens = self.tokenizer(chosen, add_special_tokens=False)
+            rejected_tokens = self.tokenizer(rejected, add_special_tokens=False)
+            prompt_tokens = self.tokenizer(prompt, add_special_tokens=False)
 
-        assert self.tokenizer.eos_token_id not in prompt_tokens["input_ids"], f"Prompt contains EOS token: {prompt}"
-        assert (
-            self.tokenizer.eos_token_id not in chosen_tokens["input_ids"]
-        ), f"Chosen response contains EOS token: {chosen}"
-        assert (
-            self.tokenizer.eos_token_id not in rejected_tokens["input_ids"]
-        ), f"Rejected response contains EOS token: {rejected}"
+            assert self.tokenizer.eos_token_id not in prompt_tokens["input_ids"], f"Prompt contains EOS token: {prompt}"
+            assert (
+                self.tokenizer.eos_token_id not in chosen_tokens["input_ids"]
+            ), f"Chosen response contains EOS token: {chosen}"
+            assert (
+                self.tokenizer.eos_token_id not in rejected_tokens["input_ids"]
+            ), f"Rejected response contains EOS token: {rejected}"
 
-        chosen_tokens["input_ids"].append(self.tokenizer.eos_token_id)
-        chosen_tokens["attention_mask"].append(1)
+            chosen_tokens["input_ids"].append(self.tokenizer.eos_token_id)
+            chosen_tokens["attention_mask"].append(1)
 
-        rejected_tokens["input_ids"].append(self.tokenizer.eos_token_id)
-        rejected_tokens["attention_mask"].append(1)
+            rejected_tokens["input_ids"].append(self.tokenizer.eos_token_id)
+            rejected_tokens["attention_mask"].append(1)
 
-        longer_response_length = max(len(chosen_tokens["input_ids"]), len(rejected_tokens["input_ids"]))
+            longer_response_length = max(len(chosen_tokens["input_ids"]), len(rejected_tokens["input_ids"]))
 
-        # if combined sequence is too long, truncate the prompt
-        if len(prompt_tokens["input_ids"]) + longer_response_length > self.max_length:
-            if self.truncation_mode == "keep_start":
-                prompt_tokens = {k: v[: self.max_prompt_length] for k, v in prompt_tokens.items()}
-            elif self.truncation_mode == "keep_end":
-                prompt_tokens = {k: v[-self.max_prompt_length :] for k, v in prompt_tokens.items()}
-            else:
-                raise ValueError(f"Unknown truncation mode: {self.truncation_mode}")
+            # if combined sequence is too long, truncate the prompt
+            if len(prompt_tokens["input_ids"]) + longer_response_length > self.max_length:
+                if self.truncation_mode == "keep_start":
+                    prompt_tokens = {k: v[: self.max_prompt_length] for k, v in prompt_tokens.items()}
+                elif self.truncation_mode == "keep_end":
+                    prompt_tokens = {k: v[-self.max_prompt_length :] for k, v in prompt_tokens.items()}
+                else:
+                    raise ValueError(f"Unknown truncation mode: {self.truncation_mode}")
 
-        # if that's still too long, truncate the response
-        if len(prompt_tokens["input_ids"]) + longer_response_length > self.max_length:
-            chosen_tokens = {k: v[: self.max_length - self.max_prompt_length] for k, v in chosen_tokens.items()}
-            rejected_tokens = {k: v[: self.max_length - self.max_prompt_length] for k, v in rejected_tokens.items()}
+            # if that's still too long, truncate the response
+            if len(prompt_tokens["input_ids"]) + longer_response_length > self.max_length:
+                chosen_tokens = {k: v[: self.max_length - self.max_prompt_length] for k, v in chosen_tokens.items()}
+                rejected_tokens = {k: v[: self.max_length - self.max_prompt_length] for k, v in rejected_tokens.items()}
 
-        # Create labels
-        chosen_sequence_tokens = {k: prompt_tokens[k] + chosen_tokens[k] for k in chosen_tokens}
-        rejected_sequence_tokens = {k: prompt_tokens[k] + rejected_tokens[k] for k in rejected_tokens}
-        chosen_sequence_tokens["labels"] = chosen_sequence_tokens["input_ids"][:]
-        chosen_sequence_tokens["labels"][: len(prompt_tokens["input_ids"])] = [self.label_pad_token_id] * len(
-            prompt_tokens["input_ids"]
-        )
-        rejected_sequence_tokens["labels"] = rejected_sequence_tokens["input_ids"][:]
-        rejected_sequence_tokens["labels"][: len(prompt_tokens["input_ids"])] = [self.label_pad_token_id] * len(
-            prompt_tokens["input_ids"]
-        )
+            # Create labels
+            chosen_sequence_tokens = {k: prompt_tokens[k] + chosen_tokens[k] for k in chosen_tokens}
+            rejected_sequence_tokens = {k: prompt_tokens[k] + rejected_tokens[k] for k in rejected_tokens}
+            chosen_sequence_tokens["labels"] = chosen_sequence_tokens["input_ids"][:]
+            chosen_sequence_tokens["labels"][: len(prompt_tokens["input_ids"])] = [self.label_pad_token_id] * len(
+                prompt_tokens["input_ids"]
+            )
+            rejected_sequence_tokens["labels"] = rejected_sequence_tokens["input_ids"][:]
+            rejected_sequence_tokens["labels"][: len(prompt_tokens["input_ids"])] = [self.label_pad_token_id] * len(
+                prompt_tokens["input_ids"]
+            )
 
-        batch = {}
+            batch = {}
 
-        batch["prompt"] = prompt
-        batch["chosen"] = prompt + chosen
-        batch["rejected"] = prompt + rejected
-        batch["chosen_response_only"] = chosen
-        batch["rejected_response_only"] = rejected
+            batch["prompt"] = prompt
+            batch["chosen"] = prompt + chosen
+            batch["rejected"] = prompt + rejected
+            batch["chosen_response_only"] = chosen
+            batch["rejected_response_only"] = rejected
 
-        for k, toks in {
-            "chosen": chosen_sequence_tokens,
-            "rejected": rejected_sequence_tokens,
-            "prompt": prompt_tokens,
-        }.items():
-            for type_key, tokens in toks.items():
-                if type_key == "token_type_ids":
-                    continue
-                batch[f"{k}_{type_key}"] = tokens
-
-        return batch
+            for k, toks in {
+                "chosen": chosen_sequence_tokens,
+                "rejected": rejected_sequence_tokens,
+                "prompt": prompt_tokens,
+            }.items():
+                for type_key, tokens in toks.items():
+                    if type_key == "token_type_ids":
+                        continue
+                    batch[f"{k}_{type_key}"] = tokens
+            
+        else:
+            chosen_tokens = self.tokenizer(chosen, truncation = True, max_length = self.max_target_length, add_special_tokens=True)
+            rejected_tokens = self.tokenizer(rejected, truncation = True, max_length = self.max_target_length, add_special_tokens=True)
+            prompt_tokens = self.tokenizer(prompt, truncation = True, max_length = self.max_prompt_length, add_special_tokens=True)
+            
+            
+        return {
+            "chosen_labels": chosen_tokens["input_ids"],
+            "rejected_labels": rejected_tokens["input_ids"],
+            "prompt_input_ids": prompt_tokens["input_ids"],
+            "prompt_attention_mask": prompt_tokens["attention_mask"]
+        }
 
     def collate(self, batch):
         # first, pad everything to the same length
         padded_batch = {}
         for k in batch[0].keys():
-            if k.endswith("_input_ids") or k.endswith("_attention_mask") or k.endswith("_labels"):
-                # adapted from https://stackoverflow.com/questions/73256206
-                if "prompt" in k:
-                    to_pad = [torch.LongTensor(ex[k][::-1]) for ex in batch]
-                else:
-                    to_pad = [torch.LongTensor(ex[k]) for ex in batch]
-                if k.endswith("_input_ids"):
+            if self.is_encoder_decoder:
+                to_pad = [torch.LongTensor(ex[k]) for ex in batch]
+            
+                if (k.startswith("prompt")) & (k.endswith("input_ids")):
                     padding_value = self.tokenizer.pad_token_id
-                elif k.endswith("_labels"):
-                    padding_value = self.label_pad_token_id
                 elif k.endswith("_attention_mask"):
-                    padding_value = self.padding_value
+                    padding_value = 0
+                elif (k.startswith("chosen")) | (k.startswith("rejected")):
+                    padding_value = self.label_pad_token_id
                 else:
                     raise ValueError(f"Unexpected key in batch '{k}'")
 
                 padded_batch[k] = pad_sequence(to_pad, batch_first=True, padding_value=padding_value)
-                # for the prompt, flip back so padding is on left side
-                if "prompt" in k:
-                    padded_batch[k] = padded_batch[k].flip(dims=[1])
             else:
-                padded_batch[k] = [ex[k] for ex in batch]
+                if k.endswith("_input_ids") or k.endswith("_attention_mask") or k.endswith("_labels"):
+                    # adapted from https://stackoverflow.com/questions/73256206
+                    if "prompt" in k:
+                        to_pad = [torch.LongTensor(ex[k][::-1]) for ex in batch]
+                    else:
+                        to_pad = [torch.LongTensor(ex[k]) for ex in batch]
+                    if k.endswith("_input_ids"):
+                        padding_value = self.tokenizer.pad_token_id
+                    elif k.endswith("_labels"):
+                        padding_value = self.label_pad_token_id
+                    elif k.endswith("_attention_mask"):
+                        padding_value = self.padding_value
+                    else:
+                        raise ValueError(f"Unexpected key in batch '{k}'")
+
+                    padded_batch[k] = pad_sequence(to_pad, batch_first=True, padding_value=padding_value)
+                    # for the prompt, flip back so padding is on left side
+                    if "prompt" in k:
+                        padded_batch[k] = padded_batch[k].flip(dims=[1])
+                else:
+                    padded_batch[k] = [ex[k] for ex in batch]
 
         return padded_batch
 
