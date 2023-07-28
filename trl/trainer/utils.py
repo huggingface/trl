@@ -83,49 +83,46 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
         self.instruction_template = instruction_template
         self.response_template = response_template
         self.ignore_index = ignore_index
+        self.response_token_ids = self.tokenizer.encode(self.response_template, add_special_tokens=False)
 
     def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
         batch = super().torch_call(examples)
-
-        response_token_ids = self.tokenizer.encode(self.response_template, add_special_tokens=False)
-
-        labels = batch["labels"].clone()
 
         if self.instruction_template is None:
             for i in range(len(examples)):
                 response_token_ids_start_idx = None
 
-                for idx in np.where(batch["labels"][i] == response_token_ids[0])[0]:
+                for idx in np.where(batch["labels"][i] == self.response_token_ids[0])[0]:
                     # `response_token_ids` is `'### Response:\n'`, here we are just making sure that the token IDs match
-                    if response_token_ids == examples[i]["input_ids"][idx : idx + len(response_token_ids)]:
+                    if self.response_token_ids == examples[i]["input_ids"][idx : idx + len(self.response_token_ids)]:
                         response_token_ids_start_idx = idx
 
                 if response_token_ids_start_idx is None:
                     raise RuntimeError(
-                        f'Could not find response key {response_token_ids} in token IDs {batch["labels"][i]}'
+                        f'Could not find response key {self.response_token_ids} in token IDs {batch["labels"][i]}'
                     )
 
-                response_token_ids_end_idx = response_token_ids_start_idx + len(response_token_ids)
+                response_token_ids_end_idx = response_token_ids_start_idx + len(self.response_token_ids)
 
                 # Make pytorch loss function ignore all tokens up through the end of the response key
-                labels[i, :response_token_ids_end_idx] = self.ignore_index
+                batch["labels"][i, :response_token_ids_end_idx] = self.ignore_index
 
         else:
             for i in range(len(examples)):
                 response_token_ids_idxs = []
                 human_token_ids_idxs = []
 
-                for assistant_idx in np.where(batch["labels"][i] == response_token_ids[0])[0]:
+                for assistant_idx in np.where(batch["labels"][i] == self.response_token_ids[0])[0]:
                     # find the indexes of the start of a response.
                     if (
-                        response_token_ids
-                        == examples[i]["input_ids"][assistant_idx : assistant_idx + len(response_token_ids)]
+                        self.response_token_ids
+                        == examples[i]["input_ids"][assistant_idx : assistant_idx + len(self.response_token_ids)]
                     ):
-                        response_token_ids_idxs.append(assistant_idx + len(response_token_ids))
+                        response_token_ids_idxs.append(assistant_idx + len(self.response_token_ids))
 
-                if len(response_token_ids) == 0:
+                if len(self.response_token_ids) == 0:
                     raise RuntimeError(
-                        f'Could not find response key {response_token_ids} in token IDs {batch["labels"][i]}'
+                        f'Could not find response key {self.response_token_ids} in token IDs {batch["labels"][i]}'
                     )
 
                 human_token_ids = self.tokenizer.encode(self.instruction_template, add_special_tokens=False)
@@ -142,14 +139,12 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                 for idx, (start, end) in enumerate(zip(human_token_ids_idxs, response_token_ids_idxs)):
                     # Make pytorch loss function ignore all non response tokens
                     if idx != 0:
-                        labels[i, start:end] = self.ignore_index
+                        batch["labels"][i, start:end] = self.ignore_index
                     else:
-                        labels[i, :end] = self.ignore_index
+                        batch["labels"][i, :end] = self.ignore_index
 
                 if len(response_token_ids_idxs) < len(human_token_ids_idxs):
-                    labels[i, human_token_ids_idxs[-1] :] = self.ignore_index
-
-        batch["labels"] = labels
+                    batch["labels"][i, human_token_ids_idxs[-1] :] = self.ignore_index
 
         return batch
 
