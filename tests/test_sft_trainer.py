@@ -434,7 +434,6 @@ class SFTTrainerTester(unittest.TestCase):
 
         text = """### Human: Hello all this should be masked.### Assistant: I should not be masked.### Human: All this should be masked too.### Assistant: I should not be masked too."""
         encoded_text = self.tokenizer(text)
-        encoded_text["input_ids"] = encoded_text["input_ids"]
 
         examples = [encoded_text]
 
