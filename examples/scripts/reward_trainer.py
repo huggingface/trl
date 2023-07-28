@@ -36,7 +36,7 @@ tqdm.pandas()
 @dataclass
 class ScriptArguments:
     """
-    The name of the Casual LM model we wish to fine with SFTTrainer
+    The name of the Casual LM model we wish to fine with RewardTrainer
     """
 
     model_name: Optional[str] = field(default="facebook/opt-350m", metadata={"help": "the model name"})
