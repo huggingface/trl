@@ -21,7 +21,7 @@ import numpy as np
 import torch
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import IterableDataset
-from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizerBase, TrainerCallback, PreTrainedModel
+from transformers import DataCollatorForLanguageModeling, PreTrainedModel, PreTrainedTokenizerBase, TrainerCallback
 
 
 class AdaptiveKLController:
@@ -272,15 +272,17 @@ class DPODataCollatorWithPadding:
             the sum of the length of the prompt and the chosen/rejected response, with
             label_pad_token_id  for the prompt tokens.
         """
-        
+
         batch = {}
-        
+
         if not self.is_encoder_decoder:
             chosen_tokens = self.tokenizer(chosen, add_special_tokens=False)
             rejected_tokens = self.tokenizer(rejected, add_special_tokens=False)
             prompt_tokens = self.tokenizer(prompt, add_special_tokens=False)
 
-            assert self.tokenizer.eos_token_id not in prompt_tokens["input_ids"], f"Prompt contains EOS token: {prompt}"
+            assert (
+                self.tokenizer.eos_token_id not in prompt_tokens["input_ids"]
+            ), f"Prompt contains EOS token: {prompt}"
             assert (
                 self.tokenizer.eos_token_id not in chosen_tokens["input_ids"]
             ), f"Chosen response contains EOS token: {chosen}"
@@ -308,7 +310,9 @@ class DPODataCollatorWithPadding:
             # if that's still too long, truncate the response
             if len(prompt_tokens["input_ids"]) + longer_response_length > self.max_length:
                 chosen_tokens = {k: v[: self.max_length - self.max_prompt_length] for k, v in chosen_tokens.items()}
-                rejected_tokens = {k: v[: self.max_length - self.max_prompt_length] for k, v in rejected_tokens.items()}
+                rejected_tokens = {
+                    k: v[: self.max_length - self.max_prompt_length] for k, v in rejected_tokens.items()
+                }
 
             # Create labels
             chosen_sequence_tokens = {k: prompt_tokens[k] + chosen_tokens[k] for k in chosen_tokens}
@@ -331,31 +335,37 @@ class DPODataCollatorWithPadding:
                     if type_key == "token_type_ids":
                         continue
                     batch[f"{k}_{type_key}"] = tokens
-            
+
         else:
-            chosen_tokens = self.tokenizer(chosen, truncation = True, max_length = self.max_target_length, add_special_tokens=True)
-            rejected_tokens = self.tokenizer(rejected, truncation = True, max_length = self.max_target_length, add_special_tokens=True)
-            prompt_tokens = self.tokenizer(prompt, truncation = True, max_length = self.max_prompt_length, add_special_tokens=True)
-            
-            batch["chosen_labels"] =  chosen_tokens["input_ids"],
-            batch["rejected_labels"] = rejected_tokens["input_ids"],
-            batch["prompt_input_ids"] = prompt_tokens["input_ids"],
+            chosen_tokens = self.tokenizer(
+                chosen, truncation=True, max_length=self.max_target_length, add_special_tokens=True
+            )
+            rejected_tokens = self.tokenizer(
+                rejected, truncation=True, max_length=self.max_target_length, add_special_tokens=True
+            )
+            prompt_tokens = self.tokenizer(
+                prompt, truncation=True, max_length=self.max_prompt_length, add_special_tokens=True
+            )
+
+            batch["chosen_labels"] = (chosen_tokens["input_ids"],)
+            batch["rejected_labels"] = (rejected_tokens["input_ids"],)
+            batch["prompt_input_ids"] = (prompt_tokens["input_ids"],)
             batch["prompt_attention_mask"] = prompt_tokens["attention_mask"]
 
-            if (
-                self.model is not None
-                and hasattr(self.model, "prepare_decoder_input_ids_from_labels")
-            ):
-                batch["rejected_decoder_input_ids"] = self.model.prepare_decoder_input_ids_from_labels(labels=batch["rejected_labels"])
-                batch["chosen_decoder_input_ids"] = self.model.prepare_decoder_input_ids_from_labels(labels=batch["chosen_labels"])
-
+            if self.model is not None and hasattr(self.model, "prepare_decoder_input_ids_from_labels"):
+                batch["rejected_decoder_input_ids"] = self.model.prepare_decoder_input_ids_from_labels(
+                    labels=batch["rejected_labels"]
+                )
+                batch["chosen_decoder_input_ids"] = self.model.prepare_decoder_input_ids_from_labels(
+                    labels=batch["chosen_labels"]
+                )
 
         batch["prompt"] = prompt
         batch["chosen"] = prompt + chosen
         batch["rejected"] = prompt + rejected
         batch["chosen_response_only"] = chosen
         batch["rejected_response_only"] = rejected
-            
+
         return batch
 
     def collate(self, batch):
@@ -364,7 +374,7 @@ class DPODataCollatorWithPadding:
         for k in batch[0].keys():
             if self.is_encoder_decoder:
                 to_pad = [torch.LongTensor(ex[k]) for ex in batch]
-            
+
                 if (k.startswith("prompt")) and (k.endswith("input_ids")):
                     padding_value = self.tokenizer.pad_token_id
                 elif k.endswith("_attention_mask"):

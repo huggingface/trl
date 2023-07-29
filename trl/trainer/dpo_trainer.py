@@ -113,12 +113,9 @@ class DPOTrainer(Trainer):
         if model is not None:
             self.is_encoder_decoder = model.config.is_encoder_decoder
         elif is_encoder_decoder is None:
-            raise ValueError(
-                "When no model is provided, you need to pass the parameter is_encoder_decoder."
-            )
+            raise ValueError("When no model is provided, you need to pass the parameter is_encoder_decoder.")
         else:
             self.is_encoder_decoder = is_encoder_decoder
-
 
         if data_collator is None:
             if tokenizer is None:
@@ -156,7 +153,7 @@ class DPOTrainer(Trainer):
                 padding_value=padding_value,
                 truncation_mode=truncation_mode,
                 is_encoder_decoder=is_encoder_decoder,
-                max_target_length=max_target_length
+                max_target_length=max_target_length,
             )
 
             if args.remove_unused_columns:
@@ -212,7 +209,7 @@ class DPOTrainer(Trainer):
             A dictionary containing the concatenated inputs under the key 'concatenated_input_ids'.
         """
         concatenated_batch = {}
-        
+
         if self.is_encoder_decoder:
             max_length = max(batch["chosen_labels"].shape[1], batch["rejected_labels"].shape[1])
         else:
@@ -236,9 +233,9 @@ class DPOTrainer(Trainer):
                 ).to(self.accelerator.device)
 
         if self.is_encoder_decoder:
-            concatenated_batch["concatenated_input_ids"] = batch["prompt_input_ids"].repeat(2,1)
-            concatenated_batch["concatenated_attention_mask"] = batch["prompt_attention_mask"].repeat(2,1)
-        
+            concatenated_batch["concatenated_input_ids"] = batch["prompt_input_ids"].repeat(2, 1)
+            concatenated_batch["concatenated_attention_mask"] = batch["prompt_attention_mask"].repeat(2, 1)
+
         return concatenated_batch
 
     def dpo_loss(
@@ -321,7 +318,14 @@ class DPOTrainer(Trainer):
         """
         concatenated_batch = self.concatenated_inputs(batch)
 
-        model_kwargs = {"labels": concatenated_batch["concatenated_labels"],"decoder_input_ids": concatenated_batch.pop(["concatenated_decoder_input_ids"], None)} if self.is_encoder_decoder else {}
+        model_kwargs = (
+            {
+                "labels": concatenated_batch["concatenated_labels"],
+                "decoder_input_ids": concatenated_batch.pop(["concatenated_decoder_input_ids"], None),
+            }
+            if self.is_encoder_decoder
+            else {}
+        )
         all_logits = model(
             concatenated_batch["concatenated_input_ids"],
             attention_mask=concatenated_batch["concatenated_attention_mask"],
