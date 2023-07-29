@@ -321,7 +321,7 @@ class DPOTrainer(Trainer):
         """
         concatenated_batch = self.concatenated_inputs(batch)
 
-        model_kwargs = {"labels": concatenated_batch["concatenated_labels"]} if self.is_encoder_decoder else {}
+        model_kwargs = {"labels": concatenated_batch["concatenated_labels"],"decoder_input_ids": concatenated_batch.pop(["concatenated_decoder_input_ids"], None)} if self.is_encoder_decoder else {}
         all_logits = model(
             concatenated_batch["concatenated_input_ids"],
             attention_mask=concatenated_batch["concatenated_attention_mask"],

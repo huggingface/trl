@@ -346,8 +346,8 @@ class DPODataCollatorWithPadding:
                 self.model is not None
                 and hasattr(self.model, "prepare_decoder_input_ids_from_labels")
             ):
-                batch["rejected_decoder_input_ids"] = self.model.prepare_decoder_input_ids_from_labels(labels=batch["chosen_labels"])
-                batch["chosen_decoder_input_ids"] = self.model.prepare_decoder_input_ids_from_labels(labels=batch["rejected_labels"])
+                batch["rejected_decoder_input_ids"] = self.model.prepare_decoder_input_ids_from_labels(labels=batch["rejected_labels"])
+                batch["chosen_decoder_input_ids"] = self.model.prepare_decoder_input_ids_from_labels(labels=batch["chosen_labels"])
 
 
         batch["prompt"] = prompt
