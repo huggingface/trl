@@ -254,7 +254,7 @@ class DPODataCollatorWithPadding:
     padding_value: int = 0
     truncation_mode: str = "keep_end"
     is_encoder_decoder: Optional[bool] = False
-    max_target_length: Optional[int] = 256
+    max_target_length: Optional[int] = None
 
     def tokenize_batch_element(
         self,
@@ -337,7 +337,6 @@ class DPODataCollatorWithPadding:
                     batch[f"{k}_{type_key}"] = tokens
 
         else:
-            print("Is encoder decoder")
             chosen_tokens = self.tokenizer(
                 chosen, truncation=True, max_length=self.max_target_length, add_special_tokens=True
             )
@@ -348,9 +347,9 @@ class DPODataCollatorWithPadding:
                 prompt, truncation=True, max_length=self.max_prompt_length, add_special_tokens=True
             )
 
-            batch["chosen_labels"] = (chosen_tokens["input_ids"],)
-            batch["rejected_labels"] = (rejected_tokens["input_ids"],)
-            batch["prompt_input_ids"] = (prompt_tokens["input_ids"],)
+            batch["chosen_labels"] = chosen_tokens["input_ids"]
+            batch["rejected_labels"] = rejected_tokens["input_ids"]
+            batch["prompt_input_ids"] = prompt_tokens["input_ids"]
             batch["prompt_attention_mask"] = prompt_tokens["attention_mask"]
 
             if self.model is not None and hasattr(self.model, "prepare_decoder_input_ids_from_labels"):
@@ -381,11 +380,10 @@ class DPODataCollatorWithPadding:
                         padding_value = self.tokenizer.pad_token_id
                     elif k.endswith("_attention_mask"):
                         padding_value = 0
-                    elif (k.startswith("chosen")) or (k.startswith("rejected")):
+                    elif (k.startswith("chosen")) or (k.startswith("rejected")) or ("decoder" in k):
                         padding_value = self.label_pad_token_id
                     else:
                         raise ValueError(f"Unexpected key in batch '{k}'")
-
                     padded_batch[k] = pad_sequence(to_pad, batch_first=True, padding_value=padding_value)
                 else:
                     # adapted from https://stackoverflow.com/questions/73256206

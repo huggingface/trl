@@ -137,7 +137,7 @@ class DPOTrainer(Trainer):
                 )
                 max_prompt_length = 128
 
-            if max_target_length is None and is_encoder_decoder:
+            if max_target_length is None and self.is_encoder_decoder:
                 warnings.warn(
                     "When using DPODataCollatorWithPadding with an encoder decoder architecture, you should set `max_target_length` in the DPOTrainer's init"
                     " it will be set to `128` by default, but you should do it yourself in the future.",
@@ -152,7 +152,7 @@ class DPOTrainer(Trainer):
                 label_pad_token_id=label_pad_token_id,
                 padding_value=padding_value,
                 truncation_mode=truncation_mode,
-                is_encoder_decoder=is_encoder_decoder,
+                is_encoder_decoder=self.is_encoder_decoder,
                 max_target_length=max_target_length,
             )
 
@@ -317,6 +317,7 @@ class DPOTrainer(Trainer):
         We do this to avoid doing two forward passes, because it's faster for FSDP.
         """
         concatenated_batch = self.concatenated_inputs(batch)
+        len_chosen = batch["chosen_labels"].shape[0]
 
         model_kwargs = (
             {
@@ -337,11 +338,13 @@ class DPOTrainer(Trainer):
             concatenated_batch["concatenated_labels"],
             average_log_prob=False,
         )
-        chosen_logps = all_logps[: batch["chosen_input_ids"].shape[0]]
-        rejected_logps = all_logps[batch["chosen_input_ids"].shape[0] :]
 
-        chosen_logits = all_logits[: batch["chosen_input_ids"].shape[0]]
-        rejected_logits = all_logits[batch["chosen_input_ids"].shape[0] :]
+        chosen_logps = all_logps[:len_chosen]
+        rejected_logps = all_logps[len_chosen:]
+
+        chosen_logits = all_logits[:len_chosen]
+        rejected_logits = all_logits[len_chosen:]
+
         return (chosen_logps, rejected_logps, chosen_logits, rejected_logits)
 
     def get_batch_metrics(
