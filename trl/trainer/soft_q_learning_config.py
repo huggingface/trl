@@ -27,14 +27,15 @@ class SoftQLearningConfig(object):
     )
 
     loss_implementation: Optional[str] = field(
-        default="v2_v2r_v3_v3r",
+        default="combined-pcl",
         metadata={
-            "help": "Implementation of loss function. Options are 'v0' | 'v1' | 'v2' | 'v3' | 'v2_v2r' | 'v3_v3r' | 'v2_v2r_v3_v3r' "
+            "help": "Implementation of loss function. Options are 'single-step-pcl' | 'single-step-pcl-variant' | 'multistep-pcl' | 'multistep-pcl-variant' | 'combined-pcl'"
         },
     )
 
     mix_strategy: Optional[str] = field(
-        default="mix", metadata={"help": "Strategy for mixing on-policy/off-policy. Options are 'mix' | 'alternate'"}
+        default="mix",
+        metadata={"help": "Strategy for mixing on-policy/off-policy. Options are 'mix' | 'alternate'"},
     )
 
     loss_coefficient: Optional[float] = field(
@@ -42,11 +43,13 @@ class SoftQLearningConfig(object):
     )
 
     loss_margin_constant: Optional[float] = field(
-        default=None, metadata={"help": "Constant used in  large margin classification loss calculation"}
+        default=None,
+        metadata={"help": "Constant used in  large margin classification loss calculation"},
     )
 
     loss_margin_coefficient: Optional[float] = field(
-        default=None, metadata={"help": "Coefficient to multiply with large margin classification loss"}
+        default=None,
+        metadata={"help": "Coefficient to multiply with large margin classification loss"},
     )
 
     top_k: Optional[int] = field(default=None, metadata={"help": "Top k value for top k sampling"})
@@ -132,9 +135,15 @@ class SoftQLearningConfig(object):
     # )
 
     def __post_init__(self):
-        if self.loss_implementation not in ["v0", "v1", "v2", "v3", "v2_v2r", "v3_v3r", "v2_v2r_v3_v3r"]:
+        if self.loss_implementation not in [
+            "single-step-pcl",
+            "single-step-pcl-variant",
+            "multistep-pcl",
+            "multistep-pcl-variant",
+            "combined-pcl",
+        ]:
             raise ValueError(
-                "loss_implementation must be one of 'v0' | 'v1' | 'v2' | 'v3' | 'v2_v2r' | 'v3_v3r' | 'v2_v2r_v3_v3r' "
+                "loss_implementation must be one of 'single-step-pcl' | 'single-step-pcl-variant' | 'multistep-pcl' | 'multistep-pcl-variant' | 'combined-pcl'"
             )
 
         if self.mix_strategy not in ["mix", "alternate"]:

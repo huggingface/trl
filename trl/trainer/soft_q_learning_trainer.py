@@ -2,13 +2,12 @@ import copy
 from functools import partial
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-import numpy as np
 import torch
 import torch.nn.functional as F
 from accelerate import Accelerator
 from accelerate.utils import ProjectConfiguration
 
-from ..core import entropy_from_logits, mask_and_reduce, masked_reverse_cumsum, set_seed
+from ..core import entropy_from_logits, get_masked_mean_min_max, mask_and_reduce, masked_reverse_cumsum, set_seed
 from ..models import PreTrainedModelWrapper
 from . import BaseTrainer, SoftQLearningConfig
 
@@ -18,7 +17,6 @@ LongTensor = Union[torch.LongTensor, torch.cuda.LongTensor]
 FloatTensor = Union[torch.FloatTensor, torch.cuda.FloatTensor]
 
 
-# forget config for now, transfer to config later
 class SoftQLearningTrainer(BaseTrainer):
     r""" """
 
@@ -242,14 +240,14 @@ class SoftQLearningTrainer(BaseTrainer):
             sequence_length: [batch_size]
         """
 
+        print(f"implementation: {implementation}")
+
         if implementation not in [
-            "v0",
-            "v1",
-            "v2",
-            "v3",
-            "v2_v2r",
-            "v3_v3r",
-            "v2_v2r_v3_v3r",
+            "single-step-pcl",
+            "multi-step-pcl",
+            "single-step-pcl-variant",
+            "multi-step-pcl-variant",
+            "combined-pcl",
         ]:
             raise ValueError
 
@@ -259,39 +257,33 @@ class SoftQLearningTrainer(BaseTrainer):
         if rewards.ndim != 1 or logits.shape[0] != rewards.shape[0]:
             raise ValueError
 
-        if implementation == "v0":
-            _sql_loss_func = soft_q_loss_with_sparse_rewards_0
+        if implementation == "single-step-pcl":
+            loss_function = single_step_pcl_loss
 
-        elif implementation == "v1":
-            _sql_loss_func = soft_q_loss_with_sparse_rewards_1
+        elif implementation == "multistep-pcl":
+            loss_function = multistep_pcl_loss
 
-        elif implementation == "v2":
-            _sql_loss_func = soft_q_loss_with_sparse_rewards_2
-
-        elif implementation == "v3":
-            _sql_loss_func = soft_q_loss_with_sparse_rewards_3
-
-        elif implementation == "v2_v2r":
-            _sql_loss_func = partial(
-                soft_q_loss_with_sparse_rewards_2_2_reversed,
+        elif implementation == "single-step-pcl-variant":
+            loss_function = partial(
+                single_step_pcl_variant_loss,
                 coefficient=coefficient,
                 margin_constant=margin_constant,
                 margin_coefficient=margin_coefficient,
             )
 
-        elif implementation == "v3_v3r":
-            _sql_loss_func = partial(soft_q_loss_with_sparse_rewards_3_3_reversed, coefficient=coefficient)
+        elif implementation == "multistep-pcl-variant":
+            loss_function = partial(multistep_pcl_variant_loss, coefficient=coefficient)
 
         else:
-            _sql_loss_func = partial(
-                soft_q_loss_with_sparse_rewards_2_2_reversed_3_3_reversed,
+            loss_function = partial(
+                combined_pcl_loss,
                 coefficient=coefficient,
             )
 
         if logits.shape != logits_.shape:
             raise ValueError(f"`logits.shape` = {logits.shape}, but " f"`logits_.shape` = {logits_.shape}")
 
-        raw_losses, quantities_to_log = _sql_loss_func(
+        raw_losses, quantities_to_log = loss_function(
             logits=logits,
             logits_=logits_,
             actions=actions,
@@ -311,12 +303,11 @@ class SoftQLearningTrainer(BaseTrainer):
             ),
         }
 
-        # for key, value in quantities_to_log.items():
-        #    masked_mean, masked_min, masked_max = get_masked_mean_min_max(
-        #        value, lengths=sequence_length)
-        #    loss_log[f"{key}/min"] = masked_min
-        #    loss_log[f"{key}/max"] = masked_max
-        #    loss_log[f"{key}/mean"] = masked_mean
+        for key, value in quantities_to_log.items():
+            masked_mean, masked_min, masked_max = get_masked_mean_min_max(value, lengths=sequence_length)
+            loss_log[f"{key}/min"] = masked_min
+            loss_log[f"{key}/max"] = masked_max
+            loss_log[f"{key}/mean"] = masked_mean
 
         return loss, loss_log
 
@@ -364,42 +355,12 @@ def add_prefix_to_dict_keys_inplace(
         d[new_key] = d.pop(key)
 
 
-def soft_q_loss_with_sparse_rewards_1(
+def single_step_pcl_loss(
     logits: FloatTensor,
     logits_: FloatTensor,
     actions: LongTensor,
     rewards: FloatTensor,
     sequence_length: LongTensor,
-) -> Tuple[FloatTensor, Dict[str, Any]]:
-    Q = gather_2d_on_last_dim(tensor=logits, index=actions, shape=actions.shape)
-    # use `V` from the target if available
-    V_ = logits_.logsumexp(dim=-1)
-
-    # Build the target `= V_t+1 + r`
-    # where we assume the rewards to be sparse
-    # i.e., only comes at the final step
-    Q_ = torch.zeros_like(Q)
-    Q_[:, :-1] = V_[:, 1:]
-    Q_[torch.arange(sequence_length.shape[0]), sequence_length - 1] = rewards
-
-    raw_losses = F.mse_loss(Q, Q_, reduction="none")
-    quantities_to_log = {
-        "Q": Q,
-        "V": logits.logsumexp(dim=-1),
-        "Q_": Q_,
-        "V_": V_,
-    }
-
-    return raw_losses, quantities_to_log
-
-
-def soft_q_loss_with_sparse_rewards_2(
-    logits: FloatTensor,
-    logits_: FloatTensor,
-    actions: LongTensor,
-    rewards: FloatTensor,
-    sequence_length: LongTensor,
-    _recover_mle: bool = False,
 ) -> Tuple[FloatTensor, Dict[str, Any]]:
     Q = gather_2d_on_last_dim(tensor=logits, index=actions, shape=actions.shape)
     V = logits.logsumexp(dim=-1)
@@ -417,10 +378,6 @@ def soft_q_loss_with_sparse_rewards_2(
     Q_[torch.arange(sequence_length.shape[0]), sequence_length - 1] = rewards
     A_[torch.arange(sequence_length.shape[0]), sequence_length - 1] = rewards - terminal_V_
 
-    # if _recover_mle is True:
-    #    sql_utils.colorful_warning("Recover-MLE Mode", bg="red")
-    #    A_ = A.detach() + 1
-
     raw_losses = F.mse_loss(A, A_, reduction="none")
     quantities_to_log = {
         "Q": Q,
@@ -436,7 +393,7 @@ def soft_q_loss_with_sparse_rewards_2(
     return raw_losses, quantities_to_log
 
 
-def soft_q_loss_with_sparse_rewards_3(
+def multistep_pcl_loss(
     logits: FloatTensor,
     logits_: FloatTensor,
     actions: LongTensor,
@@ -472,7 +429,7 @@ def soft_q_loss_with_sparse_rewards_3(
     return raw_losses, quantities_to_log
 
 
-def soft_q_loss_with_sparse_rewards_2_2_reversed(
+def single_step_pcl_variant_loss(
     logits: FloatTensor,
     logits_: FloatTensor,
     actions: LongTensor,
@@ -482,7 +439,7 @@ def soft_q_loss_with_sparse_rewards_2_2_reversed(
     margin_constant: Optional[float] = None,
     margin_coefficient: Optional[float] = None,
 ) -> Tuple[FloatTensor, Dict[str, Any]]:
-    raw_losses_2, quantities_to_log_2 = soft_q_loss_with_sparse_rewards_2(
+    raw_losses_2, quantities_to_log_2 = single_step_pcl_loss(
         logits=logits,
         logits_=logits_,
         actions=actions,
@@ -493,7 +450,7 @@ def soft_q_loss_with_sparse_rewards_2_2_reversed(
     add_prefix_to_dict_keys_inplace(quantities_to_log_2, prefix="0/")
 
     if coefficient is not None:
-        raw_losses_2_r, quantities_to_log_2_r = soft_q_loss_with_sparse_rewards_2(
+        raw_losses_2_r, quantities_to_log_2_r = single_step_pcl_loss(
             logits=logits_,
             logits_=logits,
             actions=actions,
@@ -533,7 +490,7 @@ def soft_q_loss_with_sparse_rewards_2_2_reversed(
     return raw_losses, quantities_to_log
 
 
-def soft_q_loss_with_sparse_rewards_3_3_reversed(
+def multistep_pcl_variant_loss(
     logits: FloatTensor,
     logits_: FloatTensor,
     actions: LongTensor,
@@ -541,7 +498,7 @@ def soft_q_loss_with_sparse_rewards_3_3_reversed(
     sequence_length: LongTensor,
     coefficient: Optional[float] = None,
 ) -> Tuple[FloatTensor, Dict[str, Any]]:
-    raw_losses_3, quantities_to_log_3 = soft_q_loss_with_sparse_rewards_3(
+    raw_losses_3, quantities_to_log_3 = multistep_pcl_loss(
         logits=logits,
         logits_=logits_,
         actions=actions,
@@ -552,7 +509,7 @@ def soft_q_loss_with_sparse_rewards_3_3_reversed(
     add_prefix_to_dict_keys_inplace(quantities_to_log_3, prefix="0/")
 
     if coefficient is not None:
-        raw_losses_3_r, quantities_to_log_3_r = soft_q_loss_with_sparse_rewards_3(
+        raw_losses_3_r, quantities_to_log_3_r = multistep_pcl_loss(
             logits=logits_,
             logits_=logits,
             actions=actions,
@@ -577,7 +534,7 @@ def soft_q_loss_with_sparse_rewards_3_3_reversed(
     return raw_losses, quantities_to_log
 
 
-def soft_q_loss_with_sparse_rewards_2_2_reversed_3_3_reversed(
+def combined_pcl_loss(
     logits: FloatTensor,
     logits_: FloatTensor,
     actions: LongTensor,
@@ -585,7 +542,7 @@ def soft_q_loss_with_sparse_rewards_2_2_reversed_3_3_reversed(
     sequence_length: LongTensor,
     coefficient: Optional[float] = None,
 ) -> Tuple[FloatTensor, Dict[str, Any]]:
-    raw_losses_2, quantities_to_log_2 = soft_q_loss_with_sparse_rewards_2_2_reversed(
+    raw_losses_2, quantities_to_log_2 = single_step_pcl_variant_loss(
         logits=logits,
         logits_=logits_,
         actions=actions,
@@ -594,7 +551,7 @@ def soft_q_loss_with_sparse_rewards_2_2_reversed_3_3_reversed(
         coefficient=coefficient,
     )
 
-    raw_losses_3, quantities_to_log_3 = soft_q_loss_with_sparse_rewards_3_3_reversed(
+    raw_losses_3, quantities_to_log_3 = multistep_pcl_variant_loss(
         logits=logits,
         logits_=logits_,
         actions=actions,
@@ -605,32 +562,14 @@ def soft_q_loss_with_sparse_rewards_2_2_reversed_3_3_reversed(
 
     raw_losses = (raw_losses_2 + raw_losses_3) / 2
 
-    add_prefix_to_dict_keys_inplace(quantities_to_log_2, prefix="v2/")
-    add_prefix_to_dict_keys_inplace(quantities_to_log_3, prefix="v3/")
+    add_prefix_to_dict_keys_inplace(quantities_to_log_2, prefix="single_step_pcl/")
+    add_prefix_to_dict_keys_inplace(quantities_to_log_3, prefix="multistep_pcl/")
     quantities_to_log = unionize_dicts(
         [
             quantities_to_log_2,
             quantities_to_log_3,
         ]
     )
-    return raw_losses, quantities_to_log
-
-
-def soft_q_loss_with_sparse_rewards_0(
-    logits: FloatTensor,
-    logits_: FloatTensor,
-    actions: LongTensor,
-    rewards: FloatTensor,
-    sequence_length: LongTensor,
-) -> Tuple[FloatTensor, Dict[str, Any]]:
-    V = logits.logsumexp(dim=-1)
-    V_ = logits_.logsumexp(dim=-1)
-    raw_losses = F.mse_loss(V, V_, reduction="none")
-    quantities_to_log = {
-        "V": V,
-        "V_": V_,
-    }
-
     return raw_losses, quantities_to_log
 
 
@@ -668,18 +607,12 @@ def large_margin_classification_loss(
     return raw_losses, quantities_to_log
 
 
-def nested_detach_and_clone(obj: Any, to_cpu: bool = False, to_numpy: bool = False):
-    if to_cpu is False and to_numpy is True:
-        raise ValueError("Numpy has to be on CPU")
-
-    def _operation(X: torch.Tensor) -> Union[torch.Tensor, np.ndarray]:
+def nested_detach_and_clone(obj: Any, to_cpu: bool = False):
+    def _operation(X: torch.Tensor) -> torch.Tensor:
         # https://stackoverflow.com/questions/55266154/pytorch-preferred-way-to-copy-a-tensor
         _X = X.detach().clone()
         if to_cpu is True:
             _X = _X.cpu()
-
-        if to_numpy is True:
-            _X = _X.numpy()
 
         return _X
 

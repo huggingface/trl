@@ -294,7 +294,6 @@ dataloader = DataLoader(dataset, batch_size=5, shuffle=True, collate_fn=collate_
 config = SoftQLearningConfig(
     mix_strategy="mix",
     target_sync_method="polyak",
-    loss_implementation="v1",
     learning_rate=0.001,
     target_learning_rate=0.001,
     log_with="wandb",
