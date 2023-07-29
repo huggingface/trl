@@ -321,7 +321,7 @@ class DPOTrainer(Trainer):
         model_kwargs = (
             {
                 "labels": concatenated_batch["concatenated_labels"],
-                "decoder_input_ids": concatenated_batch.pop(["concatenated_decoder_input_ids"], None),
+                "decoder_input_ids": concatenated_batch.pop("concatenated_decoder_input_ids", None),
             }
             if self.is_encoder_decoder
             else {}
