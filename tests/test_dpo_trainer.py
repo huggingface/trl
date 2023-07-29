@@ -13,10 +13,11 @@
 # limitations under the License.
 import tempfile
 import unittest
+from parameterized import parameterized
 
 import torch
 from datasets import Dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
+from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments, AutoModelForSeq2SeqLM
 
 from trl import DPOTrainer
 
@@ -25,12 +26,24 @@ class DPOTrainerTester(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
-        cls.model = AutoModelForCausalLM.from_pretrained(cls.model_id)
-        cls.ref_model = AutoModelForCausalLM.from_pretrained(cls.model_id)
-        cls.tokenizer = AutoTokenizer.from_pretrained(cls.model_id)
-        cls.tokenizer.pad_token = cls.tokenizer.eos_token
+        cls.gpt2_model = AutoModelForCausalLM.from_pretrained(cls.model_id)
+        cls.gpt2_ref_model = AutoModelForCausalLM.from_pretrained(cls.model_id)
+        cls.gpt2_tokenizer = AutoTokenizer.from_pretrained(cls.model_id)
+        cls.gpt2_tokenizer.pad_token = cls.gpt2_tokenizer.eos_token
 
-    def test_dpo_trainer(self):
+        # get t5 as seq2seq example:
+        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration-correct-vocab"
+        cls.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+        cls.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+        cls.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+    @parameterized.expand(
+        [
+            ["gpt2"],
+            ["t5"],
+        ]
+    )
+    def test_dpo_trainer(self, name):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
                 output_dir=tmp_dir,
@@ -75,12 +88,21 @@ class DPOTrainerTester(unittest.TestCase):
             # fmt: on
             dummy_dataset = Dataset.from_dict(dummy_dataset_dict)
 
+            if name == "gpt2":
+                model = self.gpt2_model
+                ref_model = self.gpt2_ref_model
+                tokenizer = self.gpt2_tokenizer
+            elif name == "t5":
+                model = self.t5_model
+                ref_model = self.t5_ref_model
+                tokenizer = self.t5_tokenizer
+
             trainer = DPOTrainer(
-                model=self.model,
-                ref_model=self.ref_model,
+                model=model,
+                ref_model=ref_model,
                 beta=0.1,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                tokenizer=tokenizer,
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
             )
