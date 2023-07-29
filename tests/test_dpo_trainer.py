@@ -13,11 +13,11 @@
 # limitations under the License.
 import tempfile
 import unittest
-from parameterized import parameterized
 
 import torch
 from datasets import Dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments, AutoModelForSeq2SeqLM
+from parameterized import parameterized
+from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer, TrainingArguments
 
 from trl import DPOTrainer
 
