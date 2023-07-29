@@ -354,11 +354,11 @@ class DPODataCollatorWithPadding:
             if self.is_encoder_decoder:
                 to_pad = [torch.LongTensor(ex[k]) for ex in batch]
             
-                if (k.startswith("prompt")) & (k.endswith("input_ids")):
+                if (k.startswith("prompt")) and (k.endswith("input_ids")):
                     padding_value = self.tokenizer.pad_token_id
                 elif k.endswith("_attention_mask"):
                     padding_value = 0
-                elif (k.startswith("chosen")) | (k.startswith("rejected")):
+                elif (k.startswith("chosen")) or (k.startswith("rejected")):
                     padding_value = self.label_pad_token_id
                 else:
                     raise ValueError(f"Unexpected key in batch '{k}'")

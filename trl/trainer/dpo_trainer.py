@@ -98,8 +98,8 @@ class DPOTrainer(Trainer):
         max_length: Optional[int] = None,
         max_prompt_length: Optional[int] = None,
         max_target_length: Optional[int] = None,
-        is_encoder_decoder: bool = None,
         peft_config: Optional[Dict] = None,
+        is_encoder_decoder: Optional[bool] = None,
     ):
         if not is_peft_available() and peft_config is not None:
             raise ValueError(
@@ -109,6 +109,16 @@ class DPOTrainer(Trainer):
             if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
                 model = prepare_model_for_int8_training(model)
             model = get_peft_model(model, peft_config)
+
+        if model is not None:
+            self.is_encoder_decoder = model.config.is_encoder_decoder
+        elif is_encoder_decoder is None:
+            raise ValueError(
+                "When no model is provided, you need to pass the parameter is_encoder_decoder."
+            )
+        else:
+            self.is_encoder_decoder = is_encoder_decoder
+
 
         if data_collator is None:
             if tokenizer is None:
@@ -130,7 +140,7 @@ class DPOTrainer(Trainer):
                 )
                 max_prompt_length = 128
 
-            if max_target_length is None & is_encoder_decoder:
+            if max_target_length is None and is_encoder_decoder:
                 warnings.warn(
                     "When using DPODataCollatorWithPadding with an encoder decoder architecture, you should set `max_target_length` in the DPOTrainer's init"
                     " it will be set to `128` by default, but you should do it yourself in the future.",
@@ -167,7 +177,6 @@ class DPOTrainer(Trainer):
 
         self.beta = beta
         self.ref_model = ref_model
-        self.is_encoder_decoder = is_encoder_decoder
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
@@ -206,42 +215,30 @@ class DPOTrainer(Trainer):
         
         if self.is_encoder_decoder:
             max_length = max(batch["chosen_labels"].shape[1], batch["rejected_labels"].shape[1])
-            for k in batch:
-                if k.startswith("chosen") and isinstance(batch[k], torch.Tensor):
-                    pad_value = self.label_pad_token_id 
-                    concatenated_key = k.replace("chosen", "concatenated")
-                    concatenated_batch[concatenated_key] = pad_to_length(batch[k], max_length, pad_value=pad_value)
-            for k in batch:
-                if k.startswith("rejected") and isinstance(batch[k], torch.Tensor):
-                    pad_value = self.label_pad_token_id
-                    concatenated_key = k.replace("rejected", "concatenated")
-                    concatenated_batch[concatenated_key] = torch.cat(
-                        (
-                            concatenated_batch[concatenated_key],
-                            pad_to_length(batch[k], max_length, pad_value=pad_value),
-                        ),
-                        dim=0,
-                    ).to(self.accelerator.device)
-            concatenated_batch["concatenated_input_ids"] = batch["prompt_input_ids"].repeat(2,1)
-            concatenated_batch["concatenated_attention_mask"] = batch["prompt_attention_mask"].repeat(2,1)
         else:
             max_length = max(batch["chosen_input_ids"].shape[1], batch["rejected_input_ids"].shape[1])
-            for k in batch:
-                if k.startswith("chosen") and isinstance(batch[k], torch.Tensor):
-                    pad_value = self.label_pad_token_id if "labels" in k else self.padding_value
-                    concatenated_key = k.replace("chosen", "concatenated")
-                    concatenated_batch[concatenated_key] = pad_to_length(batch[k], max_length, pad_value=pad_value)
-            for k in batch:
-                if k.startswith("rejected") and isinstance(batch[k], torch.Tensor):
-                    pad_value = self.label_pad_token_id if "labels" in k else self.padding_value
-                    concatenated_key = k.replace("rejected", "concatenated")
-                    concatenated_batch[concatenated_key] = torch.cat(
-                        (
-                            concatenated_batch[concatenated_key],
-                            pad_to_length(batch[k], max_length, pad_value=pad_value),
-                        ),
-                        dim=0,
-                    ).to(self.accelerator.device)
+
+        for k in batch:
+            if k.startswith("chosen") and isinstance(batch[k], torch.Tensor):
+                pad_value = self.label_pad_token_id if "labels" in k or self.is_encoder_decoder else self.padding_value
+                concatenated_key = k.replace("chosen", "concatenated")
+                concatenated_batch[concatenated_key] = pad_to_length(batch[k], max_length, pad_value=pad_value)
+        for k in batch:
+            if k.startswith("rejected") and isinstance(batch[k], torch.Tensor):
+                pad_value = self.label_pad_token_id if "labels" in k or self.is_encoder_decoder else self.padding_value
+                concatenated_key = k.replace("rejected", "concatenated")
+                concatenated_batch[concatenated_key] = torch.cat(
+                    (
+                        concatenated_batch[concatenated_key],
+                        pad_to_length(batch[k], max_length, pad_value=pad_value),
+                    ),
+                    dim=0,
+                ).to(self.accelerator.device)
+
+        if self.is_encoder_decoder:
+            concatenated_batch["concatenated_input_ids"] = batch["prompt_input_ids"].repeat(2,1)
+            concatenated_batch["concatenated_attention_mask"] = batch["prompt_attention_mask"].repeat(2,1)
+        
         return concatenated_batch
 
     def dpo_loss(
@@ -324,17 +321,12 @@ class DPOTrainer(Trainer):
         """
         concatenated_batch = self.concatenated_inputs(batch)
 
-        if self.is_encoder_decoder:
-            all_logits = model(
-                concatenated_batch["concatenated_input_ids"],
-                attention_mask=concatenated_batch["concatenated_attention_mask"],
-                labels = concatenated_batch["concatenated_labels"]
-            ).logits.to(torch.float32)
-        else:
-            all_logits = model(
-                concatenated_batch["concatenated_input_ids"],
-                attention_mask=concatenated_batch["concatenated_attention_mask"],
-            ).logits.to(torch.float32)
+        model_kwargs = {"labels": concatenated_batch["concatenated_labels"]} if self.is_encoder_decoder else {}
+        all_logits = model(
+            concatenated_batch["concatenated_input_ids"],
+            attention_mask=concatenated_batch["concatenated_attention_mask"],
+            **model_kwargs,
+        ).logits.to(torch.float32)
 
         all_logps = self._get_batch_logps(
             all_logits,
