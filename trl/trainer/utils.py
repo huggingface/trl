@@ -21,7 +21,7 @@ import numpy as np
 import torch
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import IterableDataset
-from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizerBase, TrainerCallback
+from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizerBase, TrainerCallback, PreTrainedModel
 
 
 class AdaptiveKLController:
@@ -229,6 +229,9 @@ class DPODataCollatorWithPadding:
     Args:
         tokenizer (`PreTrainedTokenizerBase`):
             The tokenizer used for encoding the data.
+        model (Optional[`PreTrainedModel`]):
+            The model that is being trained. If set and has the *prepare_decoder_input_ids_from_labels*, use it to
+            prepare the *decoder_input_ids*.
         padding (`Union[bool, str, `PaddingStrategy`]`, `optional`, defaults to `True`):
             padding_strategy to pass to the tokenizer.
         max_length (`Optional[int]`, `optional`, defaults to `None`):
@@ -243,6 +246,7 @@ class DPODataCollatorWithPadding:
             The truncation mode to use when truncating the prompt + chosen/rejected responses.
     """
     tokenizer: PreTrainedTokenizerBase
+    model: Optional[PreTrainedModel] = None
     padding: Union[bool, str] = True
     max_length: Optional[int] = None
     max_prompt_length: Optional[int] = None
@@ -337,7 +341,14 @@ class DPODataCollatorWithPadding:
             batch["rejected_labels"] = rejected_tokens["input_ids"],
             batch["prompt_input_ids"] = prompt_tokens["input_ids"],
             batch["prompt_attention_mask"] = prompt_tokens["attention_mask"]
-        }
+
+            if (
+                self.model is not None
+                and hasattr(self.model, "prepare_decoder_input_ids_from_labels")
+            ):
+                batch["rejected_decoder_input_ids"] = self.model.prepare_decoder_input_ids_from_labels(labels=batch["chosen_labels"])
+                batch["chosen_decoder_input_ids"] = self.model.prepare_decoder_input_ids_from_labels(labels=batch["rejected_labels"])
+
 
         batch["prompt"] = prompt
         batch["chosen"] = prompt + chosen
