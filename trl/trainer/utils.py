@@ -242,8 +242,12 @@ class DPODataCollatorWithPadding:
             The label used for masking.
         padding_value (`int`, defaults to 0):
             The value used for padding.
-        truncation_mode: (`str`, defaults to "keep_end"):
+        truncation_mode (`str`, defaults to "keep_end"):
             The truncation mode to use when truncating the prompt + chosen/rejected responses.
+        is_encoder_decoder (`Optional[bool]`, `optional`, defaults to `None`):
+            Whether or not you model has an encoder_decoder architecture.
+        max_target_length (`Optional[int]`, `optional`, defaults to `None`):
+            The maximum length of the target to be processed. Only useful for encoder-decoder architectures.
     """
     tokenizer: PreTrainedTokenizerBase
     model: Optional[PreTrainedModel] = None

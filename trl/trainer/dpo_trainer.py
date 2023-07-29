@@ -71,8 +71,12 @@ class DPOTrainer(Trainer):
             The maximum length of the sequences in the batch. This argument is required if you want to use the default data collator.
         max_prompt_length (`int`, defaults to `None`):
             The maximum length of the prompt. This argument is required if you want to use the default data collator.
+        max_target_length (`int`, defaults to `None`):
+            The maximum length of the target. This argument is required if you want to use the default data collator and your model is an encoder-decoder.
         peft_config (`Dict`, defaults to `None`):
             The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
+        is_encoder_decoder (`Optional[bool]`, `optional`, defaults to `None`):
+            If no model is provided, we need to know if the model_init returns an encoder-decoder.
     """
 
     def __init__(
