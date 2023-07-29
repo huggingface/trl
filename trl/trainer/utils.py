@@ -269,6 +269,8 @@ class DPODataCollatorWithPadding:
             label_pad_token_id  for the prompt tokens.
         """
         
+        batch = {}
+        
         if not self.is_encoder_decoder:
             chosen_tokens = self.tokenizer(chosen, add_special_tokens=False)
             rejected_tokens = self.tokenizer(rejected, add_special_tokens=False)
@@ -316,14 +318,6 @@ class DPODataCollatorWithPadding:
                 prompt_tokens["input_ids"]
             )
 
-            batch = {}
-
-            batch["prompt"] = prompt
-            batch["chosen"] = prompt + chosen
-            batch["rejected"] = prompt + rejected
-            batch["chosen_response_only"] = chosen
-            batch["rejected_response_only"] = rejected
-
             for k, toks in {
                 "chosen": chosen_sequence_tokens,
                 "rejected": rejected_sequence_tokens,
@@ -339,13 +333,19 @@ class DPODataCollatorWithPadding:
             rejected_tokens = self.tokenizer(rejected, truncation = True, max_length = self.max_target_length, add_special_tokens=True)
             prompt_tokens = self.tokenizer(prompt, truncation = True, max_length = self.max_prompt_length, add_special_tokens=True)
             
-            
-        return {
-            "chosen_labels": chosen_tokens["input_ids"],
-            "rejected_labels": rejected_tokens["input_ids"],
-            "prompt_input_ids": prompt_tokens["input_ids"],
-            "prompt_attention_mask": prompt_tokens["attention_mask"]
+            batch["chosen_labels"] =  chosen_tokens["input_ids"],
+            batch["rejected_labels"] = rejected_tokens["input_ids"],
+            batch["prompt_input_ids"] = prompt_tokens["input_ids"],
+            batch["prompt_attention_mask"] = prompt_tokens["attention_mask"]
         }
+
+        batch["prompt"] = prompt
+        batch["chosen"] = prompt + chosen
+        batch["rejected"] = prompt + rejected
+        batch["chosen_response_only"] = chosen
+        batch["rejected_response_only"] = rejected
+            
+        return batch
 
     def collate(self, batch):
         # first, pad everything to the same length
