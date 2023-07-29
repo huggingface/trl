@@ -337,6 +337,7 @@ class DPODataCollatorWithPadding:
                     batch[f"{k}_{type_key}"] = tokens
 
         else:
+            print("Is encoder decoder")
             chosen_tokens = self.tokenizer(
                 chosen, truncation=True, max_length=self.max_target_length, add_special_tokens=True
             )
@@ -372,21 +373,21 @@ class DPODataCollatorWithPadding:
         # first, pad everything to the same length
         padded_batch = {}
         for k in batch[0].keys():
-            if self.is_encoder_decoder:
-                to_pad = [torch.LongTensor(ex[k]) for ex in batch]
+            if k.endswith("_input_ids") or k.endswith("_attention_mask") or k.endswith("_labels"):
+                if self.is_encoder_decoder:
+                    to_pad = [torch.LongTensor(ex[k]) for ex in batch]
 
-                if (k.startswith("prompt")) and (k.endswith("input_ids")):
-                    padding_value = self.tokenizer.pad_token_id
-                elif k.endswith("_attention_mask"):
-                    padding_value = 0
-                elif (k.startswith("chosen")) or (k.startswith("rejected")):
-                    padding_value = self.label_pad_token_id
+                    if (k.startswith("prompt")) and (k.endswith("input_ids")):
+                        padding_value = self.tokenizer.pad_token_id
+                    elif k.endswith("_attention_mask"):
+                        padding_value = 0
+                    elif (k.startswith("chosen")) or (k.startswith("rejected")):
+                        padding_value = self.label_pad_token_id
+                    else:
+                        raise ValueError(f"Unexpected key in batch '{k}'")
+
+                    padded_batch[k] = pad_sequence(to_pad, batch_first=True, padding_value=padding_value)
                 else:
-                    raise ValueError(f"Unexpected key in batch '{k}'")
-
-                padded_batch[k] = pad_sequence(to_pad, batch_first=True, padding_value=padding_value)
-            else:
-                if k.endswith("_input_ids") or k.endswith("_attention_mask") or k.endswith("_labels"):
                     # adapted from https://stackoverflow.com/questions/73256206
                     if "prompt" in k:
                         to_pad = [torch.LongTensor(ex[k][::-1]) for ex in batch]
@@ -405,8 +406,8 @@ class DPODataCollatorWithPadding:
                     # for the prompt, flip back so padding is on left side
                     if "prompt" in k:
                         padded_batch[k] = padded_batch[k].flip(dims=[1])
-                else:
-                    padded_batch[k] = [ex[k] for ex in batch]
+            else:
+                padded_batch[k] = [ex[k] for ex in batch]
 
         return padded_batch
 
