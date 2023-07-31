@@ -254,15 +254,7 @@ class PPOTrainer(BaseTrainer):
         else:
             self.dataloader = None
 
-        self.config.micro_batch_size = exact_div(
-            self.config.mini_batch_size,
-            self.config.gradient_accumulation_steps,
-            "`mini_batch_size` must be a multiple of `gradient_accumulation_steps`",
-        )
-        assert self.config.batch_size >= self.config.mini_batch_size >= self.config.micro_batch_size, (
-            f"`batch_size` must be same or greater than `mini_batch_size` and `mini_batch_size` must be same or greater than"
-            f"`micro_batch_size` - got batch_size: {self.config.batch_size}, mini_batch_size: {self.config.mini_batch_size},"
-        )
+        self.config.backward_batch_size = self.config.mini_batch_size * self.config.gradient_accumulation_steps
 
         # Step 3: Initialize optimizer and data collator
         self.data_collator = DataCollatorForLanguageModeling(self.tokenizer, mlm=False)
@@ -690,45 +682,45 @@ class PPOTrainer(BaseTrainer):
             if early_stop:
                 break
             b_inds = np.random.permutation(bs)
-            for mini_batch_start in range(0, bs, self.config.mini_batch_size):
-                mini_batch_end = mini_batch_start + self.config.mini_batch_size
-                mini_batch_inds = b_inds[mini_batch_start:mini_batch_end]
+            for backward_batch_start in range(0, bs, self.config.backward_batch_size):
+                backward_batch_end = backward_batch_start + self.config.backward_batch_size
+                backward_batch_inds = b_inds[backward_batch_start:backward_batch_end]
 
                 # set optimizer to zero for gradient accumulation
-                for micro_batch_start in range(0, self.config.mini_batch_size, self.config.micro_batch_size):
-                    micro_batch_end = micro_batch_start + self.config.micro_batch_size
-                    micro_batch_inds = mini_batch_inds[micro_batch_start:micro_batch_end]
-                    micro_batch_dict = {
-                        "logprobs": batch_dict["logprobs"][micro_batch_inds],
-                        "values": batch_dict["values"][micro_batch_inds],
-                        "masks": batch_dict["masks"][micro_batch_inds],
+                for mini_batch_start in range(0, self.config.backward_batch_size, self.config.mini_batch_size):
+                    mini_batch_end = mini_batch_start + self.config.mini_batch_size
+                    mini_batch_inds = backward_batch_inds[mini_batch_start:mini_batch_end]
+                    mini_batch_dict = {
+                        "logprobs": batch_dict["logprobs"][mini_batch_inds],
+                        "values": batch_dict["values"][mini_batch_inds],
+                        "masks": batch_dict["masks"][mini_batch_inds],
                         # hacks: the queries and responses are ragged.
-                        "queries": [batch_dict["queries"][i] for i in micro_batch_inds],
-                        "responses": [batch_dict["responses"][i] for i in micro_batch_inds],
-                        "advantages": batch_dict["advantages"][micro_batch_inds],
-                        "returns": batch_dict["returns"][micro_batch_inds],
+                        "queries": [batch_dict["queries"][i] for i in mini_batch_inds],
+                        "responses": [batch_dict["responses"][i] for i in mini_batch_inds],
+                        "advantages": batch_dict["advantages"][mini_batch_inds],
+                        "returns": batch_dict["returns"][mini_batch_inds],
                     }
                     for k in model_inputs_names:
-                        micro_batch_dict[k] = batch_dict[k][micro_batch_inds]
+                        mini_batch_dict[k] = batch_dict[k][mini_batch_inds]
                     with self.accelerator.accumulate(self.model):
-                        model_inputs = {k: micro_batch_dict[k] for k in model_inputs_names}
+                        model_inputs = {k: mini_batch_dict[k] for k in model_inputs_names}
 
                         logprobs, logits, vpreds, _ = self.batched_forward_pass(
                             self.model,
-                            micro_batch_dict["queries"],
-                            micro_batch_dict["responses"],
+                            mini_batch_dict["queries"],
+                            mini_batch_dict["responses"],
                             model_inputs,
                             return_logits=True,
                         )
                         train_stats = self.train_microbatch(
-                            micro_batch_dict["logprobs"],
-                            micro_batch_dict["values"],
+                            mini_batch_dict["logprobs"],
+                            mini_batch_dict["values"],
                             logprobs,
                             logits,
                             vpreds,
-                            micro_batch_dict["masks"],
-                            micro_batch_dict["advantages"],
-                            micro_batch_dict["returns"],
+                            mini_batch_dict["masks"],
+                            mini_batch_dict["advantages"],
+                            mini_batch_dict["returns"],
                         )
                         all_stats.append(train_stats)
 
@@ -895,7 +887,7 @@ class PPOTrainer(BaseTrainer):
                 - all_values (`torch.FloatTensor`): Values of the responses, shape (`batch_size`, `response_length`)
         """
         bs = len(queries)
-        fbs = self.config.micro_batch_size
+        fbs = self.config.mini_batch_size
         all_logprobs = []
         all_logits = []
         all_masks = []
