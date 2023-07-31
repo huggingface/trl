@@ -54,7 +54,6 @@ from ..core import (
 from ..import_utils import is_torch_greater_2_0
 from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper, create_reference_model
 from . import AdaptiveKLController, BaseTrainer, FixedKLController, PPOConfig
-from .utils import exact_div
 
 
 MODEL_CARD_TEMPLATE = """---
