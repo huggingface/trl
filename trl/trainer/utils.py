@@ -94,7 +94,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
 
                 for idx in np.where(batch["labels"][i] == self.response_token_ids[0])[0]:
                     # `response_token_ids` is `'### Response:\n'`, here we are just making sure that the token IDs match
-                    if self.response_token_ids == examples[i]["input_ids"][idx : idx + len(self.response_token_ids)]:
+                    if self.response_token_ids == batch["labels"][i][idx : idx + len(self.response_token_ids)].tolist():
                         response_token_ids_start_idx = idx
 
                 if response_token_ids_start_idx is None:
@@ -116,7 +116,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                     # find the indexes of the start of a response.
                     if (
                         self.response_token_ids
-                        == examples[i]["input_ids"][assistant_idx : assistant_idx + len(self.response_token_ids)]
+                        == batch["labels"][i][assistant_idx : assistant_idx + len(self.response_token_ids)].tolist()
                     ):
                         response_token_ids_idxs.append(assistant_idx + len(self.response_token_ids))
 
@@ -128,7 +128,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                 human_token_ids = self.tokenizer.encode(self.instruction_template, add_special_tokens=False)
                 for human_idx in np.where(batch["labels"][i] == human_token_ids[0])[0]:
                     # find the indexes of the start of a human answer.
-                    if human_token_ids == examples[i]["input_ids"][human_idx : human_idx + len(human_token_ids)]:
+                    if human_token_ids == batch["labels"][i][human_idx : human_idx + len(human_token_ids)].tolist():
                         human_token_ids_idxs.append(human_idx)
 
                 if len(human_token_ids_idxs) == 0:
