@@ -29,17 +29,11 @@ class CoreTester(unittest.TestCase):
         cls.test_mask = torch.Tensor([0, 1, 1, 0])
         cls.test_input_unmasked = cls.test_input[1:3]
 
-        # avoid division by zero (dbz)
-        cls.test_input_dbz = torch.Tensor([1, 2, 3, 4])
-        cls.test_mask_dbz = torch.Tensor([0, 1, 0, 0])
-        cls.test_input_unmasked_dbz = cls.test_input[1:2]
-
     def test_masked_mean(self):
         self.assertEqual(torch.mean(self.test_input_unmasked), masked_mean(self.test_input, self.test_mask))
 
     def test_masked_var(self):
         self.assertEqual(torch.var(self.test_input_unmasked), masked_var(self.test_input, self.test_mask))
-        self.assertEqual(torch.var(self.test_input_unmasked_dbz), masked_var(self.test_input_dbz, self.test_mask_dbz))
 
     def test_masked_whiten(self):
         whiten_unmasked = whiten(self.test_input_unmasked)

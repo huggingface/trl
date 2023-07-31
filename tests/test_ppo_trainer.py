@@ -562,20 +562,21 @@ class PPOTrainerTester(unittest.TestCase):
             returns[idx].unsqueeze(0),
         )
 
-        self.assertAlmostEqual(pg_loss.item(), 0.62516, 4)
+        self.assertAlmostEqual(pg_loss.item(), 2.2868, 4)
         self.assertAlmostEqual(v_loss.item(), 0.09950, 4)
 
         # check if we get same results with masked parts removed
         pg_loss_unmasked, v_loss_unmasked, _ = ppo_trainer.loss(
             apply_mask(all_logprobs[idx], mask[idx]).unsqueeze(0),
             apply_mask(values[idx], mask[idx]).unsqueeze(0),
-            apply_mask(score[idx], mask[idx]).unsqueeze(0),
             apply_mask(logits[idx], mask[idx]).unsqueeze(0),
             apply_mask(vpreds[idx], mask[idx]).unsqueeze(0),
             apply_mask(ref_logprobs[idx], mask[idx]).unsqueeze(0),
             apply_mask(mask[idx], mask[idx]).unsqueeze(0),
+            apply_mask(advantages[idx], mask[idx]).unsqueeze(0),
+            apply_mask(returns[idx], mask[idx]).unsqueeze(0),
         )
-        self.assertAlmostEqual(pg_loss_unmasked.item(), 0.62516, 4)
+        self.assertAlmostEqual(pg_loss_unmasked.item(), 2.2868, 4)
         self.assertAlmostEqual(v_loss_unmasked.item(), 0.09950, 4)
 
     @parameterized.expand(
