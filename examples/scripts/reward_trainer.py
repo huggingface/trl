@@ -36,15 +36,20 @@ tqdm.pandas()
 @dataclass
 class ScriptArguments:
     """
-    The name of the Casual LM model we wish to fine with SFTTrainer
+    The name of the Casual LM model we wish to fine with RewardTrainer
     """
 
     model_name: Optional[str] = field(default="facebook/opt-350m", metadata={"help": "the model name"})
     dataset_name: Optional[str] = field(default="Anthropic/hh-rlhf", metadata={"help": "the model name"})
     dataset_text_field: Optional[str] = field(default="text", metadata={"help": "the text field of the dataset"})
     log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
+    logging_steps: Optional[int] = field(default=500, metadata={"help": "the number of update steps between two logs"})
+    eval_split: Optional[str] = field(
+        default="none", metadata={"help": "the dataset split to evaluate on; default to 'none' (no evaluation)"}
+    )
     learning_rate: Optional[float] = field(default=1.41e-5, metadata={"help": "the learning rate"})
     batch_size: Optional[int] = field(default=64, metadata={"help": "the batch size"})
+    num_train_epochs: Optional[int] = field(default=1, metadata={"help": "the number of training epochs"})
     seq_length: Optional[int] = field(default=512, metadata={"help": "Input sequence length"})
     gradient_accumulation_steps: Optional[int] = field(
         default=16, metadata={"help": "the number of gradient accumulation steps"}
@@ -77,11 +82,14 @@ model = AutoModelForSequenceClassification.from_pretrained(
     quantization_config=quantization_config,
     device_map=device_map,
     trust_remote_code=script_args.trust_remote_code,
+    num_labels=1,
 )
 
 # Step 2: Load the dataset and pre-process it
 tokenizer = AutoTokenizer.from_pretrained(script_args.model_name)
-dataset = load_dataset(script_args.dataset_name, split="train")
+train_dataset = load_dataset(script_args.dataset_name, split="train")
+
+
 # Turn the dataset into pairs of post + summaries, where text_j is the preferred question + answer and text_k is the other.
 # Then tokenize the dataset.
 # Adapt this section to your needs for custom datasets
@@ -107,8 +115,7 @@ def preprocess_function(examples):
 
 
 # preprocess the dataset and filter out QAs that are longer than script_args.max_length
-original_columns = dataset.column_names
-train_dataset = dataset.map(
+train_dataset = train_dataset.map(
     preprocess_function,
     batched=True,
     num_proc=4,
@@ -118,13 +125,34 @@ train_dataset = train_dataset.filter(
     and len(x["input_ids_rejected"]) <= script_args.seq_length
 )
 
+if script_args.eval_split == "none":
+    eval_dataset = None
+else:
+    eval_dataset = load_dataset(script_args.dataset_name, split=script_args.eval_split)
+
+    eval_dataset = eval_dataset.map(
+        preprocess_function,
+        batched=True,
+        num_proc=4,
+    )
+    eval_dataset = eval_dataset.filter(
+        lambda x: len(x["input_ids_chosen"]) <= script_args.seq_length
+        and len(x["input_ids_rejected"]) <= script_args.seq_length
+    )
+
 
 # Step 3: Define the training arguments
 training_args = TrainingArguments(
     output_dir=script_args.output_dir,
     per_device_train_batch_size=script_args.batch_size,
+    num_train_epochs=script_args.num_train_epochs,
     gradient_accumulation_steps=script_args.gradient_accumulation_steps,
     learning_rate=script_args.learning_rate,
+    report_to="wandb" if script_args.log_with == "wandb" else "tensorboard",
+    remove_unused_columns=False,
+    optim="adamw_torch",
+    logging_steps=script_args.logging_steps,
+    evaluation_strategy="steps" if script_args.eval_split != "none" else "no",
 )
 
 # Step 4: Define the LoraConfig
@@ -139,6 +167,7 @@ trainer = RewardTrainer(
     tokenizer=tokenizer,
     args=training_args,
     train_dataset=train_dataset,
+    eval_dataset=eval_dataset,
     peft_config=peft_config,
     max_length=script_args.seq_length,
 )

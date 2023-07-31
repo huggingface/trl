@@ -89,6 +89,11 @@ class SFTTrainer(Trainer):
         packing (`Optional[bool]`):
             Used only in case `dataset_text_field` is passed. This argument is used by the `ConstantLengthDataset` to pack the sequences
             of the dataset.
+        dataset_num_proc (`Optional[int]`):
+            The number of workers to use to tokenize the data. Only used when `packing=False`. Defaults to None.
+        dataset_batch_size (`int`):
+            The number of examples to tokenize per batch. If batch_size <= 0 or batch_size == None,
+            tokenize the full dataset as a single batch. Defaults to 1000.
     """
 
     def __init__(
@@ -112,6 +117,8 @@ class SFTTrainer(Trainer):
         infinite: Optional[bool] = False,
         num_of_sequences: Optional[int] = 1024,
         chars_per_token: Optional[float] = 3.6,
+        dataset_num_proc: Optional[int] = None,
+        dataset_batch_size: int = 1000,
     ):
         if isinstance(model, str):
             warnings.warn(
@@ -160,6 +167,8 @@ class SFTTrainer(Trainer):
                 f"You didn't pass a `max_seq_length` argument to the SFTTrainer, this will default to {max_seq_length}"
             )
 
+        self.dataset_num_proc = dataset_num_proc
+        self.dataset_batch_size = dataset_batch_size
         if not packing:
             if dataset_text_field is None and formatting_func is None:
                 raise ValueError(
@@ -192,6 +201,12 @@ class SFTTrainer(Trainer):
                 infinite,
                 num_of_sequences,
                 chars_per_token,
+            )
+
+        if tokenizer.padding_side is not None and tokenizer.padding_side != "right":
+            warnings.warn(
+                "You passed a tokenizer with `padding_side` not equal to `right` to the SFTTrainer. This might lead to some unexpected behaviour due to "
+                "overflow issues when training a model in half-precision. You might consider adding `tokenizer.padding_side = 'right'` to your code."
             )
 
         super().__init__(
@@ -289,6 +304,12 @@ class SFTTrainer(Trainer):
 
             return {"input_ids": outputs["input_ids"], "attention_mask": outputs["attention_mask"]}
 
-        tokenized_dataset = dataset.map(tokenize, batched=True, remove_columns=dataset.column_names)
+        tokenized_dataset = dataset.map(
+            tokenize,
+            batched=True,
+            remove_columns=dataset.column_names,
+            num_proc=self.dataset_num_proc,
+            batch_size=self.dataset_batch_size,
+        )
 
         return tokenized_dataset
