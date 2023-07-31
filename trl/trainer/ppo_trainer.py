@@ -730,7 +730,7 @@ class PPOTrainer(BaseTrainer):
                             model_inputs,
                             return_logits=True,
                         )
-                        train_stats = self.train_microbatch(
+                        train_stats = self.train_minibatch(
                             mini_batch_dict["logprobs"],
                             mini_batch_dict["values"],
                             logprobs,
@@ -958,7 +958,7 @@ class PPOTrainer(BaseTrainer):
         )
 
     @PPODecorators.empty_cuda_cache()
-    def train_microbatch(
+    def train_minibatch(
         self,
         old_logprobs: torch.FloatTensor,
         values: torch.FloatTensor,

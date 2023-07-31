@@ -1134,6 +1134,7 @@ class PPOTrainerTester(unittest.TestCase):
 
         model_grad = gpt2_model.v_head.summary.weight
 
+        self.ppo_config.mini_batch_size = 1
         self.ppo_config.gradient_accumulation_steps = 2
 
         ppo_trainer = PPOTrainer(
