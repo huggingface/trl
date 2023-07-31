@@ -1153,6 +1153,11 @@ class PPOTrainerTester(unittest.TestCase):
 
         model_grad_acc = gpt2_model_clone.v_head.summary.weight.grad.clone()
         self.assertTrue(torch.allclose(model_grad_acc, model_grad, rtol=1e-3, atol=1e-3))
+        self.assertTrue(
+            torch.allclose(
+                gpt2_model_clone.v_head.summary.weight, gpt2_model.v_head.summary.weight, rtol=1e-3, atol=1e-3
+            )
+        )
 
     @unittest.skip("Fix by either patching `whomai()` to work in the staging endpoint or use a dummy prod user.")
     def test_push_to_hub_if_best_reward(self):
