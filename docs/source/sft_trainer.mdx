@@ -50,6 +50,67 @@ The above snippets will use the default training arguments from the [`transforme
 
 ## Advanced usage
 
+### Train on completions only 
+
+You can use the `DataCollatorForCompletionOnlyLM` to train your model on the generated prompts only. Note that this works only in the case when `packing=False`.
+To instantiate that collator for instruction data, pass a response template and the tokenizer. Here is an example of how it would work to fine-tune `opt-350m` on completions only on the CodeAlpaca dataset:
+
+```python
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from datasets import load_dataset
+from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
+
+dataset = load_dataset("lucasmccabe-lmi/CodeAlpaca-20k", split="train")
+
+model = AutoModelForCausalLM.from_pretrained("facebook/opt-350m")
+tokenizer = AutoTokenizer.from_pretrained("facebook/opt-350m")
+
+def formatting_prompts_func(example):
+    output_texts = []
+    for i in range(len(example['instruction'])):
+        text = f"### Question: {example['instruction'][i]}\n ### Answer: {example['output'][i]}"
+        output_texts.append(text)
+    return output_texts
+
+response_template = " ### Answer:"
+collator = DataCollatorForCompletionOnlyLM(response_template, tokenizer=tokenizer)
+
+trainer = SFTTrainer(
+    model,
+    train_dataset=dataset,
+    formatting_func=formatting_prompts_func,
+    data_collator=collator,
+)
+
+trainer.train() 
+```
+
+To instantiate that collator for assistant style conversation data, pass a response template, an instruction template and the tokenizer. Here is an example of how it would work to fine-tune `opt-350m` on assistant completions only on the Open Assistant Guanaco dataset:
+
+```python
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from datasets import load_dataset
+from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
+
+dataset = load_dataset("timdettmers/openassistant-guanaco", split="train")
+
+model = AutoModelForCausalLM.from_pretrained("facebook/opt-350m")
+tokenizer = AutoTokenizer.from_pretrained("facebook/opt-350m")
+
+instruction_template = "### Human:"
+response_template = "### Assistant:"
+collator = DataCollatorForCompletionOnlyLM(instruction_template=instruction_template, response_template=response_template, tokenizer=tokenizer, mlm=False)
+
+trainer = SFTTrainer(
+    model,
+    train_dataset=dataset,
+    dataset_text_field="text",
+    data_collator=collator,
+)
+
+trainer.train() 
+```
+
 ### Format your input prompts
 
 For instruction fine-tuning, it is quite common to have two columns inside the dataset: one for the prompt & the other for the response. 

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import inspect
+import math
 import os
 import time
 import typing
@@ -21,6 +22,7 @@ from typing import Callable, List, Optional, Union
 import datasets
 import numpy as np
 import torch
+import torch.nn.functional as F
 from accelerate import Accelerator
 from accelerate.utils import ProjectConfiguration
 from datasets import Dataset
@@ -642,8 +644,12 @@ class PPOTrainer(BaseTrainer):
 
         model_inputs_names = list(model_inputs.keys())
 
+        full_kl_penalty = self.config.kl_penalty == "full"
+
         with torch.no_grad():
-            all_logprobs, _, values, masks = self.batched_forward_pass(self.model, queries, responses, model_inputs)
+            all_logprobs, logits_or_none, values, masks = self.batched_forward_pass(
+                self.model, queries, responses, model_inputs, return_logits=full_kl_penalty
+            )
 
             # for when the model is a peft model
             if self.is_peft_model and hasattr(
@@ -651,20 +657,30 @@ class PPOTrainer(BaseTrainer):
                 "disable_adapter",
             ):
                 with self.accelerator.unwrap_model(self.model).pretrained_model.disable_adapter():
-                    ref_logprobs, _, _, _ = self.batched_forward_pass(self.model, queries, responses, model_inputs)
+                    ref_logprobs, ref_logits_or_none, _, _ = self.batched_forward_pass(
+                        self.model, queries, responses, model_inputs, return_logits=full_kl_penalty
+                    )
             elif self.is_peft_model and not hasattr(self.model.pretrained_model, "disable_adapter"):
                 raise ValueError(
                     "You are using a `peft` version that does not support `disable_adapter`. Please update your `peft` version to the latest version."
                 )
 
             else:
-                ref_logprobs, _, _, _ = self.batched_forward_pass(self.ref_model, queries, responses, model_inputs)
+                ref_logprobs, ref_logits_or_none, _, _ = self.batched_forward_pass(
+                    self.ref_model, queries, responses, model_inputs, return_logits=full_kl_penalty
+                )
 
         timing["time/ppo/forward_pass"] = time.time() - t
 
         with torch.no_grad():
             t = time.time()
-            rewards, non_score_reward = self.compute_rewards(scores, all_logprobs, ref_logprobs, masks)
+            if full_kl_penalty:
+                active_full_logprobs = logprobs_from_logits(logits_or_none, None, gather=False)
+                ref_full_logprobs = logprobs_from_logits(ref_logits_or_none, None, gather=False)
+
+                rewards, non_score_reward = self.compute_rewards(scores, active_full_logprobs, ref_full_logprobs, masks)
+            else:
+                rewards, non_score_reward = self.compute_rewards(scores, all_logprobs, ref_logprobs, masks)
             timing["time/ppo/compute_rewards"] = time.time() - t
 
             t = time.time()
@@ -901,7 +917,7 @@ class PPOTrainer(BaseTrainer):
         all_masks = []
         all_values = []
 
-        for i in range(int(bs / fbs)):
+        for i in range(math.ceil(bs / fbs)):
             input_kwargs = {key: value[i * fbs : (i + 1) * fbs] for key, value in model_inputs.items()}
             query_batch = queries[i * fbs : (i + 1) * fbs]
             response_batch = responses[i * fbs : (i + 1) * fbs]
@@ -918,7 +934,7 @@ class PPOTrainer(BaseTrainer):
             masks = torch.zeros_like(attention_mask)
             masks[:, :-1] = attention_mask[:, 1:]
 
-            for j in range(fbs):
+            for j in range(len(query_batch)):
                 if self.is_encoder_decoder:
                     # Decoder sentence starts always in the index 1 after padding in the Enc-Dec Models
                     start = 1
@@ -1031,6 +1047,10 @@ class PPOTrainer(BaseTrainer):
 
         if self.config.kl_penalty == "mse":
             return 0.5 * (logprob - ref_logprob).square()
+
+        if self.config.kl_penalty == "full":
+            # Flip is required due to this issue? :https://github.com/pytorch/pytorch/issues/57459
+            return F.kl_div(ref_logprob, logprob, log_target=True, reduction="none").sum(-1)
 
         raise NotImplementedError
 

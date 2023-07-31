@@ -80,7 +80,7 @@ class PPOConfig(object):
     kl_penalty: Optional[str] = field(
         default="kl",
         metadata={
-            "help": "kl penalty options: 'kl': model_logp - ref_logp,  'abs': abs(kl) and 'mse': mean squared error mse(kl)."
+            "help": "kl penalty options: 'kl': model_logp - ref_logp,  'abs': abs(kl),  'mse': mean squared error mse(kl) and 'full': the actual kl for all tokens in the distribution"
         },
     )
     target: Optional[float] = field(default=6, metadata={"help": "Target KL value for adaptive KL control"})
@@ -190,7 +190,7 @@ class PPOConfig(object):
                 )
 
         self.total_ppo_epochs = int(np.ceil(self.steps / self.batch_size))
-        assert self.kl_penalty in ["kl", "abs", "mse"]
+        assert self.kl_penalty in ["kl", "abs", "mse", "full"]
 
     def to_dict(self):
         output_dict = {}

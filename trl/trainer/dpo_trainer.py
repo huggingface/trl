@@ -13,7 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import warnings
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from collections import defaultdict
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -131,7 +132,6 @@ class DPOTrainer(Trainer):
                 tokenizer,
                 max_length=max_length,
                 max_prompt_length=max_prompt_length,
-                batch_size=args.train_batch_size,
                 label_pad_token_id=label_pad_token_id,
                 padding_value=padding_value,
                 truncation_mode=truncation_mode,
@@ -155,6 +155,8 @@ class DPOTrainer(Trainer):
 
         self.beta = beta
         self.ref_model = ref_model
+
+        self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
         super().__init__(
             model,
@@ -305,7 +307,7 @@ class DPOTrainer(Trainer):
         self,
         model,
         batch: Dict[str, Union[List, torch.LongTensor]],
-        train_test: str = "train",
+        train_eval: Literal["train", "eval"] = "train",
     ):
         """Compute the DPO loss and other metrics for the given batch of inputs for train or test."""
         metrics = {}
@@ -332,17 +334,15 @@ class DPOTrainer(Trainer):
         )
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
-        metrics[f"rewards_{train_test}/chosen"] = chosen_rewards.cpu().numpy().mean()
-        metrics[f"rewards_{train_test}/rejected"] = rejected_rewards.cpu().numpy().mean()
-        metrics[f"rewards_{train_test}/accuracies"] = reward_accuracies.cpu().numpy().mean()
-        metrics[f"rewards_{train_test}/margins"] = (chosen_rewards - rejected_rewards).cpu().numpy().mean()
-        metrics[f"logps_{train_test}/rejected"] = policy_rejected_logps.detach().cpu().numpy().mean()
-        metrics[f"logps_{train_test}/chosen"] = policy_chosen_logps.detach().cpu().numpy().mean()
-
-        metrics[f"logits_{train_test}/rejected"] = policy_rejected_logits.detach().cpu().numpy().mean()
-        metrics[f"logits_{train_test}/chosen"] = policy_chosen_logits.detach().cpu().numpy().mean()
-
-        metrics[f"loss/{train_test}"] = losses.detach().cpu().numpy().mean()
+        prefix = "eval_" if train_eval == "eval" else ""
+        metrics[f"{prefix}rewards/chosen"] = chosen_rewards.cpu().numpy().mean()
+        metrics[f"{prefix}rewards/rejected"] = rejected_rewards.cpu().numpy().mean()
+        metrics[f"{prefix}rewards/accuracies"] = reward_accuracies.cpu().numpy().mean()
+        metrics[f"{prefix}rewards/margins"] = (chosen_rewards - rejected_rewards).cpu().numpy().mean()
+        metrics[f"{prefix}logps/rejected"] = policy_rejected_logps.detach().cpu().numpy().mean()
+        metrics[f"{prefix}logps/chosen"] = policy_chosen_logps.detach().cpu().numpy().mean()
+        metrics[f"{prefix}logits/rejected"] = policy_rejected_logits.detach().cpu().numpy().mean()
+        metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.detach().cpu().numpy().mean()
 
         return losses.mean(), metrics
 
@@ -357,11 +357,11 @@ class DPOTrainer(Trainer):
                 "compute_loss is only implemented for DPODataCollatorWithPadding, and you passed a datacollator that is different than "
                 "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
             )
-        loss, metrics = self.get_batch_metrics(model, inputs, train_test="train")
+        loss, metrics = self.get_batch_metrics(model, inputs, train_eval="train")
 
         # force log the metrics
         if self.accelerator.is_main_process:
-            self.log_metrics("train", metrics)
+            self.store_metrics(metrics, train_eval="train")
 
         if return_outputs:
             return (loss, metrics)
@@ -413,11 +413,11 @@ class DPOTrainer(Trainer):
                 ignore_keys = []
 
         with torch.no_grad():
-            loss, metrics = self.get_batch_metrics(model, inputs, train_test="test")
+            loss, metrics = self.get_batch_metrics(model, inputs, train_eval="eval")
 
         # force log the metrics
         if self.accelerator.is_main_process:
-            self.log_metrics("test", metrics)
+            self.store_metrics(metrics, train_eval="eval")
 
         if prediction_loss_only:
             return (loss.detach(), None, None)
@@ -432,3 +432,23 @@ class DPOTrainer(Trainer):
         labels = torch.zeros(logits.shape[0])
 
         return (loss.detach(), logits, labels)
+
+    def store_metrics(self, metrics: Dict[str, float], train_eval: Literal["train", "eval"] = "train") -> None:
+        for key, value in metrics.items():
+            self._stored_metrics[train_eval][key].append(value)
+
+    def log(self, logs: Dict[str, float]) -> None:
+        """
+        Log `logs` on the various objects watching training, including stored metrics.
+
+        Args:
+            logs (`Dict[str, float]`):
+                The values to log.
+        """
+        # logs either has 'loss' or 'eval_loss'
+        train_eval = "train" if "loss" in logs else "eval"
+        # Add averaged stored metrics to logs
+        for key, metrics in self._stored_metrics[train_eval].items():
+            logs[key] = torch.tensor(metrics).mean().item()
+        del self._stored_metrics[train_eval]
+        return super().log(logs)
