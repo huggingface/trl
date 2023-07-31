@@ -522,10 +522,3 @@ def pad_to_length(tensor: torch.Tensor, length: int, pad_value: Union[int, float
             ],
             dim=dim,
         )
-
-
-def exact_div(a, b, custom_error_message=""):
-    q = a // b
-    if a != q * b:
-        raise ValueError(f"{custom_error_message}, inexact division: {a} / {b} = {a / b}")
-    return q
