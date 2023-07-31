@@ -982,7 +982,7 @@ class PPOTrainer(BaseTrainer):
         self.accelerator.backward(loss)
 
         if self.config.max_grad_norm is not None:
-            torch.nn.utils.clip_grad_norm_(
+            self.accelerator.clip_grad_norm_(
                 filter(lambda p: p.requires_grad, self.model.parameters()),
                 self.config.max_grad_norm,
             )
