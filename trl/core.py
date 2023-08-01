@@ -88,11 +88,14 @@ def pad_to_size(tensor, size, dim=1, padding=50256):
         return torch.nn.functional.pad(tensor, (0, size - t_size), "constant", padding)
 
 
-def logprobs_from_logits(logits, labels):
+def logprobs_from_logits(logits, labels, gather=True):
     """
     See: https://github.com/pytorch/pytorch/issues/563#issuecomment-330103591
     """
     logp = F.log_softmax(logits, dim=2)
+
+    if not gather:
+        return logp
     logpy = torch.gather(logp, 2, labels.unsqueeze(2)).squeeze(-1)
     return logpy
 
@@ -120,7 +123,15 @@ def masked_var(values, mask, unbiased=True):
     centered_values = values - mean
     variance = masked_mean(centered_values**2, mask)
     if unbiased:
-        bessel_correction = mask.sum() / (mask.sum() - 1)
+        mask_sum = mask.sum()
+        if mask_sum == 0:
+            raise ValueError(
+                "The sum of the mask is zero, which can happen when `mini_batch_size=1`;"
+                "try increase the `mini_batch_size` or `gradient_accumulation_steps`"
+            )
+        # note that if mask_sum == 1, then there is a division by zero issue
+        # to avoid it you just need to use a larger minibatch_size
+        bessel_correction = mask_sum / (mask_sum - 1)
         variance = variance * bessel_correction
     return variance
 

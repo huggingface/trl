@@ -547,33 +547,36 @@ class PPOTrainerTester(unittest.TestCase):
         vpreds = values + 0.1
 
         score, non_score = ppo_trainer.compute_rewards(dummy_scores, all_logprobs, ref_logprobs, mask)
+        values, advantages, returns = ppo_trainer.compute_advantages(values, score, mask)
 
         # just make sure a dummy loss is computed
         idx = 0
         pg_loss, v_loss, _ = ppo_trainer.loss(
             all_logprobs[idx].unsqueeze(0),
             values[idx].unsqueeze(0),
-            score[idx].unsqueeze(0),
             logits[idx].unsqueeze(0),
             vpreds[idx].unsqueeze(0),
             ref_logprobs[idx].unsqueeze(0),
             mask[idx].unsqueeze(0),
+            advantages[idx].unsqueeze(0),
+            returns[idx].unsqueeze(0),
         )
 
-        self.assertAlmostEqual(pg_loss.item(), 0.62516, 4)
+        self.assertAlmostEqual(pg_loss.item(), 2.2868, 4)
         self.assertAlmostEqual(v_loss.item(), 0.09950, 4)
 
         # check if we get same results with masked parts removed
         pg_loss_unmasked, v_loss_unmasked, _ = ppo_trainer.loss(
             apply_mask(all_logprobs[idx], mask[idx]).unsqueeze(0),
             apply_mask(values[idx], mask[idx]).unsqueeze(0),
-            apply_mask(score[idx], mask[idx]).unsqueeze(0),
             apply_mask(logits[idx], mask[idx]).unsqueeze(0),
             apply_mask(vpreds[idx], mask[idx]).unsqueeze(0),
             apply_mask(ref_logprobs[idx], mask[idx]).unsqueeze(0),
             apply_mask(mask[idx], mask[idx]).unsqueeze(0),
+            apply_mask(advantages[idx], mask[idx]).unsqueeze(0),
+            apply_mask(returns[idx], mask[idx]).unsqueeze(0),
         )
-        self.assertAlmostEqual(pg_loss_unmasked.item(), 0.62516, 4)
+        self.assertAlmostEqual(pg_loss_unmasked.item(), 2.2868, 4)
         self.assertAlmostEqual(v_loss_unmasked.item(), 0.09950, 4)
 
     @parameterized.expand(
@@ -678,6 +681,139 @@ class PPOTrainerTester(unittest.TestCase):
                 torch.all(param.grad.abs() <= self.ppo_config.max_grad_norm),
                 f"Parameter {name} has a gradient larger than max_grad_norm",
             )
+
+    def test_ppo_trainer_kl_penalty(self):
+        dummy_dataset = self._init_dummy_dataset()
+
+        log_probs = torch.Tensor([[0.5, 0.2, 0.1], [0.6, 0.2, 0.1]])
+        ref_log_probs = torch.Tensor([[0.4, 0.3, 0.0], [0.7, 0.1, 0.3]])
+
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=self.gpt2_model,
+            ref_model=None,
+            tokenizer=self.gpt2_tokenizer,
+            dataset=dummy_dataset,
+        )
+
+        expected_output = torch.Tensor([[0.1000, -0.1000, 0.1000], [-0.1000, 0.1000, -0.2000]])
+        self.assertTrue(torch.allclose(ppo_trainer._kl_penalty(log_probs, ref_log_probs), expected_output))
+
+        self.ppo_config.kl_penalty = "abs"
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=self.gpt2_model,
+            ref_model=None,
+            tokenizer=self.gpt2_tokenizer,
+            dataset=dummy_dataset,
+        )
+
+        expected_output = torch.Tensor([[0.1000, 0.1000, 0.1000], [0.1000, 0.1000, 0.2000]])
+        self.assertTrue(torch.allclose(ppo_trainer._kl_penalty(log_probs, ref_log_probs), expected_output))
+
+        self.ppo_config.kl_penalty = "mse"
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=self.gpt2_model,
+            ref_model=None,
+            tokenizer=self.gpt2_tokenizer,
+            dataset=dummy_dataset,
+        )
+
+        expected_output = torch.Tensor([[0.0050, 0.0050, 0.0050], [0.0050, 0.0050, 0.0200]])
+        self.assertTrue(torch.allclose(ppo_trainer._kl_penalty(log_probs, ref_log_probs), expected_output))
+
+    def test_ppo_trainer_full_kl_penalty(self):
+        # a few more extensive tests for the full kl option as it is more involved
+        dummy_dataset = self._init_dummy_dataset()
+
+        self.ppo_config.kl_penalty = "full"
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=self.gpt2_model,
+            ref_model=None,
+            tokenizer=self.gpt2_tokenizer,
+            dataset=dummy_dataset,
+        )
+
+        # Test on tensors for size B,S,T = (1,2,3)
+        # test for when the two dists are the same
+        log_probs = torch.Tensor(
+            [
+                [
+                    [0.1, 0.2, 0.7],
+                    [0.3, 0.4, 0.3],
+                ]
+            ]
+        ).exp()
+
+        ref_log_probs = torch.Tensor(
+            [
+                [
+                    [0.1, 0.2, 0.7],
+                    [0.3, 0.4, 0.3],
+                ]
+            ]
+        ).exp()
+
+        expected_output = torch.Tensor(
+            [[0.0, 0.0]],
+        )
+        output = ppo_trainer._kl_penalty(log_probs, ref_log_probs)
+        self.assertTrue(output.shape == (1, 2))
+        self.assertTrue(torch.allclose(output, expected_output))
+
+        # test for when the two dists are almost not overlapping
+        log_probs = torch.Tensor(
+            [
+                [
+                    [0.98, 0.01, 0.01],
+                    [0.01, 0.98, 0.01],
+                ]
+            ]
+        ).log()
+
+        ref_log_probs = torch.Tensor(
+            [
+                [
+                    [0.01, 0.01, 0.98],
+                    [0.01, 0.01, 0.98],
+                ]
+            ]
+        ).log()
+
+        expected_output = torch.Tensor(
+            [[4.4474, 4.4474]],
+        )
+        output = ppo_trainer._kl_penalty(log_probs, ref_log_probs)
+        self.assertTrue(output.shape == (1, 2))
+        self.assertTrue(torch.allclose(output, expected_output))
+
+        # test for when the two dists are almost not overlapping
+        log_probs = torch.Tensor(
+            [
+                [
+                    [0.49, 0.02, 0.49],
+                    [0.49, 0.02, 0.49],
+                ]
+            ]
+        ).log()
+
+        ref_log_probs = torch.Tensor(
+            [
+                [
+                    [0.01, 0.98, 0.01],
+                    [0.49, 0.02, 0.49],
+                ]
+            ]
+        ).log()
+
+        expected_output = torch.Tensor(
+            [[3.7361, 0.0]],
+        )
+        output = ppo_trainer._kl_penalty(log_probs, ref_log_probs)
+        self.assertTrue(output.shape == (1, 2))
+        self.assertTrue(torch.allclose(output, expected_output, atol=1e-4))
 
     @require_peft
     @mark.peft_test
@@ -996,10 +1132,10 @@ class PPOTrainerTester(unittest.TestCase):
             _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
             break
 
-        model_grad = gpt2_model.v_head.summary.weight.grad.clone()
+        model_grad = gpt2_model.v_head.summary.weight
 
-        self.ppo_config.gradient_accumulation_steps = 2
         self.ppo_config.mini_batch_size = 1
+        self.ppo_config.gradient_accumulation_steps = 2
 
         ppo_trainer = PPOTrainer(
             config=self.ppo_config,
@@ -1020,7 +1156,7 @@ class PPOTrainerTester(unittest.TestCase):
             _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
             break
 
-        model_grad_acc = gpt2_model_clone.v_head.summary.weight.grad.clone()
+        model_grad_acc = gpt2_model_clone.v_head.summary.weight
         self.assertTrue(torch.allclose(model_grad_acc, model_grad, rtol=1e-3, atol=1e-3))
 
     @unittest.skip("Fix by either patching `whomai()` to work in the staging endpoint or use a dummy prod user.")

@@ -77,6 +77,12 @@ class PPOConfig(object):
         default=0.2,
         metadata={"help": "Initial KL penalty coefficient (used for adaptive and linear control)"},
     )
+    kl_penalty: Optional[str] = field(
+        default="kl",
+        metadata={
+            "help": "kl penalty options: 'kl': model_logp - ref_logp,  'abs': abs(kl),  'mse': mean squared error mse(kl) and 'full': the actual kl for all tokens in the distribution"
+        },
+    )
     target: Optional[float] = field(default=6, metadata={"help": "Target KL value for adaptive KL control"})
     horizon: Optional[float] = field(default=10000, metadata={"help": "Horizon for adaptive KL control"})
     gamma: Optional[float] = field(default=1, metadata={"help": "Gamma parameter for advantage calculation"})
@@ -94,7 +100,10 @@ class PPOConfig(object):
         metadata={"help": "Number of samples forward passed through model at a time"},
     )
     mini_batch_size: Optional[int] = field(
-        default=1, metadata={"help": "Number of samples optimized inside PPO together"}
+        default=1, metadata={"help": "Number of samples optimized in each mini batch"}
+    )
+    backward_batch_size: Optional[int] = field(
+        default=1, metadata={"help": "Number of samples optimized in an `optimizer.step()` call"}
     )
     gradient_accumulation_steps: Optional[int] = field(
         default=1, metadata={"help": "The number of gradient accumulation steps"}
@@ -150,6 +159,9 @@ class PPOConfig(object):
         default=1,
         metadata={"help": "Number of steps between comparison of the current reward with the best seen so far"},
     )
+    ratio_threshold: Optional[float] = field(
+        default=10.0, metadata={"help": "Skip mini-batches with high PPO ratios that can cause loss spikes"}
+    )
 
     def __post_init__(self):
         if self.forward_batch_size is not None:
@@ -178,6 +190,7 @@ class PPOConfig(object):
                 )
 
         self.total_ppo_epochs = int(np.ceil(self.steps / self.batch_size))
+        assert self.kl_penalty in ["kl", "abs", "mse", "full"]
 
     def to_dict(self):
         output_dict = {}

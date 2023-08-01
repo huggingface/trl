@@ -1,0 +1,82 @@
+# DPO Trainer
+
+TRL supports the DPO Trainer for training language models from preference data, as described in the paper [Direct Preference Optimization: Your Language Model is Secretly a Reward Model](https://arxiv.org/abs/2305.18290) by Rafailov et al., 2023. For a full example have a look at  [`examples/dpo.py`](https://github.com/lvwerra/trl/blob/main/examples/dpo.py).
+
+
+The first step as always is to train your SFT model, to ensure the data we train on is in-distribution for the DPO algorithm.
+
+## Expected dataset format
+
+The DPO trainer expects a very specific format for the dataset. Since the model will be trained to directly optimize the preference of which sentence is the most relevant, given two sentences. We provide an example from the [`Anthropic/hh-rlhf`](https://huggingface.co/datasets/Anthropic/hh-rlhf) dataset below:
+
+<div style="text-align: center">
+<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/rlhf-antropic-example.png", width="50%">
+</div>
+
+Therefore the final dataset object should contain these 3 entries if you use the default `DPODataCollatorWithPadding` data collator. The entries should be named:
+
+- `prompt`
+- `chosen`
+- `rejected`
+
+for example:
+
+```py
+dpo_dataset_dict = {
+    "prompt": [
+        "hello",
+        "how are you",
+        "What is your name?",
+        "What is your name?",
+        "Which is the best programming language?",
+        "Which is the best programming language?",
+        "Which is the best programming language?",
+    ],
+    "chosen": [
+        "hi nice to meet you",
+        "I am fine",
+        "My name is Mary",
+        "My name is Mary",
+        "Python",
+        "Python",
+        "Java",
+    ],
+    "rejected": [
+        "leave me alone",
+        "I am not fine",
+        "Whats it to you?",
+        "I dont have a name",
+        "Javascript",
+        "C++",
+        "C++",
+    ],
+}
+```
+
+where the `prompt` contains the context inputs, `chosen` contains the corresponding chosen responses and `rejected` contains the corresponding negative (rejected) responses. As can be seen a prompt can have multiple responses and this is reflected in the entries being repeated in the dictionary's value arrays.
+
+## Using the `DPOTrainer`
+
+For a detailed example have a look at the `examples/dpo.py` script. At a high level we need to initialize the `DPOTrainer` with a `model` we wish to train, a reference `ref_model` which we will use to calculate the implicit rewards of the preferred and rejected response, the `beta` refers to the hyperparameter of the implicit reward, and the dataset contains the 3 entries listed above:
+
+```py
+ dpo_trainer = DPOTrainer(
+    model,
+    model_ref,
+    args=training_args,
+    beta=0.1,
+    train_dataset=train_dataset,
+    tokenizer=tokenizer,
+)
+```
+After this one can then call:
+
+```py
+dpo_trainer.train()
+```
+
+Note that the `beta` is the temperature parameter for the DPO loss, typically something in the range of `0.1` to `0.5`. We ignore the reference model as `beta` -> 0.
+
+## DPOTrainer
+
+[[autodoc]] DPOTrainer

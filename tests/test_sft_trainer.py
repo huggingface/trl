@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import copy
 import os
 import tempfile
 import unittest
@@ -413,7 +414,6 @@ class SFTTrainerTester(unittest.TestCase):
 
         text = """\n\n### Instructions:\nHello all this should be masked\n\n### Response:\nI have not been masked correctly."""
         encoded_text = self.tokenizer(text)
-        encoded_text["input_ids"] = encoded_text["input_ids"]
 
         examples = [encoded_text]
 
@@ -421,7 +421,83 @@ class SFTTrainerTester(unittest.TestCase):
         labels = batch["labels"]
         last_pad_idx = np.where(labels == -100)[1][-1]
         result_text = self.tokenizer.decode(batch["input_ids"][0, last_pad_idx + 1 :])
-        self.assertTrue(result_text == "I have not been masked correctly.")
+        self.assertEqual(result_text, "I have not been masked correctly.")
+
+    def test_data_collator_completion_lm_with_multiple_text(self):
+        tokenizer = copy.deepcopy(self.tokenizer)
+        tokenizer.padding_side = "left"
+
+        response_template = "### Response:\n"
+        data_collator = DataCollatorForCompletionOnlyLM(response_template, tokenizer=tokenizer, mlm=False)
+
+        text1 = """\n\n### Instructions:\nHello all this should be masked\n\n### Response:\nI have not been masked correctly."""
+        text2 = """\n\n### Instructions:\nThis is another longer text that should also be masked. This text is significantly longer than the previous one.\n\n### Response:\nI have not been masked correctly."""
+
+        encoded_text1 = tokenizer(text1)
+        encoded_text2 = tokenizer(text2)
+
+        examples = [encoded_text1, encoded_text2]
+
+        batch = data_collator(examples)
+
+        for i in range(2):
+            labels = batch["labels"][i]
+            last_pad_idx = np.where(labels == -100)[0][-1]
+            result_text = tokenizer.decode(batch["input_ids"][i, last_pad_idx + 1 :])
+            self.assertEqual(result_text, "I have not been masked correctly.")
+
+    def test_data_collator_chat_completion_lm(self):
+        instruction_template = "### Human:"
+        assistant_template = "### Assistant:"
+        data_collator = DataCollatorForCompletionOnlyLM(
+            response_template=assistant_template,
+            instruction_template=instruction_template,
+            tokenizer=self.tokenizer,
+            mlm=False,
+        )
+
+        text = """### Human: Hello all this should be masked.### Assistant: I should not be masked.### Human: All this should be masked too.### Assistant: I should not be masked too."""
+        encoded_text = self.tokenizer(text)
+
+        examples = [encoded_text]
+
+        batch = data_collator(examples)
+        labels = batch["labels"]
+        non_masked_tokens = batch["input_ids"][labels != -100]
+        result_text = self.tokenizer.decode(non_masked_tokens)
+        self.assertEqual(result_text, " I should not be masked. I should not be masked too.")
+
+    def test_data_collator_chat_completion_lm_with_multiple_text(self):
+        tokenizer = copy.deepcopy(self.tokenizer)
+        tokenizer.padding_side = "left"
+
+        instruction_template = "### Human:"
+        assistant_template = "### Assistant:"
+        data_collator = DataCollatorForCompletionOnlyLM(
+            response_template=assistant_template,
+            instruction_template=instruction_template,
+            tokenizer=tokenizer,
+            mlm=False,
+        )
+
+        text1 = """### Human: Hello all this should be masked.### Assistant: I should not be masked."""
+        text2 = """### Human: Hello all this should be masked.### Assistant: I should not be masked.### Human: All this should be masked too.### Assistant: I should not be masked too."""
+        encoded_text1 = tokenizer(text1)
+        encoded_text2 = tokenizer(text2)
+
+        examples = [encoded_text1, encoded_text2]
+
+        batch = data_collator(examples)
+        labels = batch["labels"]
+        input_ids = batch["input_ids"]
+
+        non_masked_tokens1 = input_ids[0][labels[0] != -100]
+        result_text1 = tokenizer.decode(non_masked_tokens1)
+        self.assertEqual(result_text1, " I should not be masked.")
+
+        non_masked_tokens2 = input_ids[1][labels[1] != -100]
+        result_text2 = tokenizer.decode(non_masked_tokens2)
+        self.assertEqual(result_text2, " I should not be masked. I should not be masked too.")
 
     def test_sft_trainer_infinite_with_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
