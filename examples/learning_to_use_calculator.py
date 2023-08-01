@@ -1,8 +1,11 @@
 import re
-import torch
+
 import numpy as np
+import torch
 from transformers import AutoTokenizer, load_tool
+
 from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, TextEnvironment
+
 
 def generate_data(n):
     """Generate random arithmetic tasks and answers."""
@@ -20,6 +23,7 @@ def generate_data(n):
             answers.append(a * b)
     return tasks, answers
 
+
 def exact_match_reward(responses, answers=None):
     """Reward if generated response contains correct answer."""
     rewards = []
@@ -31,10 +35,11 @@ def exact_match_reward(responses, answers=None):
         if match_pattern:
             predicted_number = float(match_pattern[0])
         if predicted_number is not None:
-            if np.abs(predicted_number-answer)<0.01:
+            if np.abs(predicted_number - answer) < 0.01:
                 reward += 1.0
         rewards.append(torch.tensor(reward))
     return rewards
+
 
 # set up models
 model_id = "gpt2"
@@ -91,9 +96,9 @@ for step in range(100):
     tasks, answers = generate_data(ppo_config.batch_size)
     queries, responses, masks, rewards, histories = text_env.run(tasks, answers=answers)
     train_stats = ppo_trainer.step(queries, responses, rewards, masks)
-    
+
     response_texts = [tokenizer.decode(response) for response in responses]
     query_texts = [tokenizer.decode(query) for query in queries]
     texts = {"query": [qt.split("<submit>")[-1].strip() for qt in query_texts], "response": response_texts}
     ppo_trainer.log_stats(train_stats, texts, rewards)
-ppo_trainer.save_pretrained(model_id+"-calculator")
+ppo_trainer.save_pretrained(model_id + "-calculator")

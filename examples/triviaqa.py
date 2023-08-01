@@ -1,9 +1,10 @@
 import re
+
 import torch
-import numpy as np
-from transformers import AutoTokenizer, load_tool
-from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, TextEnvironment
 from datasets import load_dataset
+from transformers import AutoTokenizer, load_tool
+
+from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, TextEnvironment
 
 
 seed = 1
@@ -11,11 +12,14 @@ dataset = load_dataset("trivia_qa", "rc.wikipedia", split="train")
 dataset = dataset.shuffle(seed)
 
 dataset[0]["question"]
-dataset[0]["answer"]['normalized_aliases']
+dataset[0]["answer"]["normalized_aliases"]
+
 
 def data_generator():
     for i in range(len(dataset)):
         yield dataset[i]["question"], [item for item in dataset[i]["answer"]["normalized_aliases"]]
+
+
 gen = data_generator()
 gen = iter(gen)
 
@@ -27,6 +31,7 @@ def generate_data(n):
         tasks.append(q)
         answers.append(a)
     return tasks, answers
+
 
 # g = data_generator()
 # g = iter(g)
@@ -52,6 +57,7 @@ def exact_match_reward(responses, answers=None):
                     reward += 1.0
         rewards.append(torch.tensor(reward))
     return rewards
+
 
 # system prompt
 prompt = """\
@@ -106,7 +112,12 @@ ppo_trainer = PPOTrainer(ppo_config, model, model_ref, tokenizer)
 
 # text env
 tool = load_tool("vwxyzjn/pyserini-wikipedia-kilt-doc")
-tool_fn = lambda x: tool(x).split("\n")[1]
+
+
+def tool_fn(x):
+    return tool(x).split("\n")[1]
+
+
 text_env = TextEnvironment(
     model,
     tokenizer,
@@ -121,13 +132,13 @@ for step in range(100):
     tasks, answers = generate_data(ppo_config.batch_size)
     queries, responses, masks, rewards, histories = text_env.run(tasks, answers=answers)
     train_stats = ppo_trainer.step(queries, responses, rewards, masks)
-    
+
     response_texts = [tokenizer.decode(response) for response in responses]
     query_texts = [tokenizer.decode(query) for query in queries]
     texts = {
         "query": [qt.split("<submit>")[-1].strip() for qt in query_texts],
         "response": response_texts,
-        "answer": [", ".join(item) for item in answers]
+        "answer": [", ".join(item) for item in answers],
     }
     ppo_trainer.log_stats(train_stats, texts, rewards)
-ppo_trainer.save_pretrained(model_id+"-calculator")
+ppo_trainer.save_pretrained(model_id + "-calculator")

@@ -642,7 +642,12 @@ class PPOTrainer(BaseTrainer):
 
         with torch.no_grad():
             all_logprobs, logits_or_none, values, masks = self.batched_forward_pass(
-                self.model, queries, responses, model_inputs, response_masks=response_masks, return_logits=full_kl_penalty
+                self.model,
+                queries,
+                responses,
+                model_inputs,
+                response_masks=response_masks,
+                return_logits=full_kl_penalty,
             )
             # for when the model is a peft model
             if self.is_peft_model and hasattr(
@@ -1268,8 +1273,12 @@ class PPOTrainer(BaseTrainer):
             elif self.config.log_with == "wandb":
                 import wandb
 
-                table_rows = [list(r) for r in zip(batch["query"], batch["response"], batch["answer"], rewards.cpu().tolist())]
-                logs.update({"game_log": wandb.Table(columns=["query", "response", "answer", "reward"], rows=table_rows)})
+                table_rows = [
+                    list(r) for r in zip(batch["query"], batch["response"], batch["answer"], rewards.cpu().tolist())
+                ]
+                logs.update(
+                    {"game_log": wandb.Table(columns=["query", "response", "answer", "reward"], rows=table_rows)}
+                )
             # All reduce rewards if distributed
             if self.is_distributed:
                 import torch.distributed as dist
