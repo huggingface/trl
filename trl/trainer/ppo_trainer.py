@@ -20,6 +20,7 @@ import warnings
 from typing import Callable, List, Optional, Union
 
 import datasets
+import numpy as np
 import torch
 import torch.nn.functional as F
 from accelerate import Accelerator
@@ -203,6 +204,7 @@ class PPOTrainer(BaseTrainer):
         )
 
         self.model = model
+        self.model_params = filter(lambda p: p.requires_grad, self.model.parameters())
         self.is_encoder_decoder = hasattr(self.model, "is_encoder_decoder")
         self.is_peft_model = getattr(self.model, "is_peft_model", False)
 
@@ -252,6 +254,8 @@ class PPOTrainer(BaseTrainer):
             self.dataloader = None
         else:
             self.dataloader = None
+
+        self.config.backward_batch_size = self.config.mini_batch_size * self.config.gradient_accumulation_steps
 
         # Step 3: Initialize optimizer and data collator
         self.data_collator = DataCollatorForLanguageModeling(self.tokenizer, mlm=False)
@@ -659,45 +663,34 @@ class PPOTrainer(BaseTrainer):
 
         timing["time/ppo/forward_pass"] = time.time() - t
 
-        t = time.time()
+        with torch.no_grad():
+            t = time.time()
+            if full_kl_penalty:
+                active_full_logprobs = logprobs_from_logits(logits_or_none, None, gather=False)
+                ref_full_logprobs = logprobs_from_logits(ref_logits_or_none, None, gather=False)
 
-        if full_kl_penalty:
-            active_full_logprobs = logprobs_from_logits(logits_or_none, None, gather=False)
-            ref_full_logprobs = logprobs_from_logits(ref_logits_or_none, None, gather=False)
+                rewards, non_score_reward = self.compute_rewards(
+                    scores, active_full_logprobs, ref_full_logprobs, masks
+                )
+            else:
+                rewards, non_score_reward = self.compute_rewards(scores, all_logprobs, ref_logprobs, masks)
+            timing["time/ppo/compute_rewards"] = time.time() - t
 
-            rewards, non_score_reward = self.compute_rewards(scores, active_full_logprobs, ref_full_logprobs, masks)
-        else:
-            rewards, non_score_reward = self.compute_rewards(scores, all_logprobs, ref_logprobs, masks)
-        timing["time/ppo/compute_rewards"] = time.time() - t
+            t = time.time()
+            values, advantages, returns = self.compute_advantages(values, rewards, masks)
+            timing["time/ppo/compute_advantages"] = time.time() - t
 
         # upcast to float32 to avoid dataset issues
-        mini_batch_dict = {
+        batch_dict = {
             "queries": queries,
             "responses": responses,
             "logprobs": all_logprobs.to(torch.float32),
             "values": values.to(torch.float32),
-            "rewards": rewards,
             "masks": masks,
+            "advantages": advantages,
+            "returns": returns,
         }
-
-        def collator(data):
-            return_dict = dict()
-            for key in data[0]:
-                if key in ["queries", "responses"]:
-                    return_dict[key] = [d[key] for d in data]
-                else:
-                    return_dict[key] = torch.stack([d[key] for d in data]).to(self.current_device)
-            return return_dict
-
-        mini_batch_dict.update(model_inputs)
-        mini_batch_data = Dataset.from_dict(mini_batch_dict)
-        mini_batch_data.set_format("torch")
-        mini_batch_dataloader = torch.utils.data.DataLoader(
-            mini_batch_data,
-            batch_size=self.config.mini_batch_size,
-            shuffle=True,
-            collate_fn=collator,
-        )
+        batch_dict.update(model_inputs)
 
         t = time.time()
         all_stats = []
@@ -705,37 +698,54 @@ class PPOTrainer(BaseTrainer):
         for _ in range(self.config.ppo_epochs):
             if early_stop:
                 break
+            b_inds = np.random.permutation(bs)
+            for backward_batch_start in range(0, bs, self.config.backward_batch_size):
+                backward_batch_end = backward_batch_start + self.config.backward_batch_size
+                backward_batch_inds = b_inds[backward_batch_start:backward_batch_end]
 
-            for i, batch in enumerate(mini_batch_dataloader):
-                with self.accelerator.accumulate(self.model):
-                    model_inputs = {k: batch[k] for k in model_inputs_names}
-                    logprobs, logits, vpreds, _ = self.batched_forward_pass(
-                        self.model,
-                        batch["queries"],
-                        batch["responses"],
-                        model_inputs,
-                        return_logits=True,
-                    )
-                    if (i % self.config.gradient_accumulation_steps) == 0:
-                        self.optimizer.zero_grad()
+                for mini_batch_start in range(0, self.config.backward_batch_size, self.config.mini_batch_size):
+                    mini_batch_end = mini_batch_start + self.config.mini_batch_size
+                    mini_batch_inds = backward_batch_inds[mini_batch_start:mini_batch_end]
+                    mini_batch_dict = {
+                        "logprobs": batch_dict["logprobs"][mini_batch_inds],
+                        "values": batch_dict["values"][mini_batch_inds],
+                        "masks": batch_dict["masks"][mini_batch_inds],
+                        # hacks: the queries and responses are ragged.
+                        "queries": [batch_dict["queries"][i] for i in mini_batch_inds],
+                        "responses": [batch_dict["responses"][i] for i in mini_batch_inds],
+                        "advantages": batch_dict["advantages"][mini_batch_inds],
+                        "returns": batch_dict["returns"][mini_batch_inds],
+                    }
+                    for k in model_inputs_names:
+                        mini_batch_dict[k] = batch_dict[k][mini_batch_inds]
+                    with self.accelerator.accumulate(self.model):
+                        model_inputs = {k: mini_batch_dict[k] for k in model_inputs_names}
 
-                    train_stats = self.train_minibatch(
-                        batch["logprobs"],
-                        batch["values"],
-                        batch["rewards"],
-                        logprobs,
-                        logits,
-                        vpreds,
-                        batch["masks"],
-                    )
+                        logprobs, logits, vpreds, _ = self.batched_forward_pass(
+                            self.model,
+                            mini_batch_dict["queries"],
+                            mini_batch_dict["responses"],
+                            model_inputs,
+                            return_logits=True,
+                        )
+                        train_stats = self.train_minibatch(
+                            mini_batch_dict["logprobs"],
+                            mini_batch_dict["values"],
+                            logprobs,
+                            logits,
+                            vpreds,
+                            mini_batch_dict["masks"],
+                            mini_batch_dict["advantages"],
+                            mini_batch_dict["returns"],
+                        )
+                        all_stats.append(train_stats)
 
-                    all_stats.append(train_stats)
-
-                    if self.config.early_stopping:
-                        policykl = train_stats["policy/policykl"]
-                        early_stop = self._early_stop(policykl)
-                        if early_stop:
-                            break
+            # typically, early stopping is done at the epoch level
+            if self.config.early_stopping:
+                policykl = train_stats["policy/policykl"]
+                early_stop = self._early_stop(policykl)
+                if early_stop:
+                    break
 
         timing["time/ppo/optimize_step"] = time.time() - t
 
@@ -950,11 +960,12 @@ class PPOTrainer(BaseTrainer):
         self,
         old_logprobs: torch.FloatTensor,
         values: torch.FloatTensor,
-        rewards: torch.FloatTensor,
         logprobs: torch.FloatTensor,
         logits: torch.FloatTensor,
         vpreds: torch.FloatTensor,
         mask: torch.LongTensor,
+        advantages: torch.FloatTensor,
+        returns: torch.FloatTensor,
     ):
         """
         Train one PPO minibatch
@@ -964,8 +975,6 @@ class PPOTrainer(BaseTrainer):
                 Log probabilities of the model, shape [batch_size, response_length]
             values (`torch.FloatTensor`):
                 Values of the value head, shape [batch_size, response_length]
-            rewards (`torch.FloatTensor`):
-                Rewards from the reward model, shape [batch_size, response_length]
             query (`torch.LongTensor`):
                 Encoded queries, shape [batch_size, query_length]
             response (`torch.LongTensor`):
@@ -977,19 +986,18 @@ class PPOTrainer(BaseTrainer):
             train_stats (dict[str, `torch.Tensor`]):
                 Dictionary of training statistics
         """
-        loss_p, loss_v, train_stats = self.loss(old_logprobs, values, rewards, logits, vpreds, logprobs, mask)
+        loss_p, loss_v, train_stats = self.loss(
+            old_logprobs, values, logits, vpreds, logprobs, mask, advantages, returns
+        )
         loss = loss_p + loss_v
         self.accelerator.backward(loss)
-
         if self.config.max_grad_norm is not None:
-            torch.nn.utils.clip_grad_norm_(
-                filter(lambda p: p.requires_grad, self.model.parameters()),
-                self.config.max_grad_norm,
-            )
-
-        t = time.time()
+            if self.accelerator.sync_gradients:
+                self.accelerator.clip_grad_norm_(self.model_params, self.config.max_grad_norm)
         self.optimizer.step()
-        train_stats["time/ppo/optimizer_step"] = torch.Tensor([time.time() - t]).to(self.current_device)
+        # we call optimizer.zero_grad() every time and let `accelerator` handle accumulation
+        # see https://huggingface.co/docs/accelerate/usage_guides/gradient_accumulation#the-finished-code
+        self.optimizer.zero_grad()
         return train_stats
 
     def compute_rewards(
@@ -1040,15 +1048,41 @@ class PPOTrainer(BaseTrainer):
 
         raise NotImplementedError
 
+    def compute_advantages(
+        self: torch.FloatTensor,
+        values: torch.FloatTensor,
+        rewards: torch.FloatTensor,
+        mask: torch.FloatTensor,
+    ):
+        lastgaelam = 0
+        advantages_reversed = []
+        gen_len = rewards.shape[-1]
+
+        values = values * mask
+        rewards = rewards * mask
+
+        for t in reversed(range(gen_len)):
+            nextvalues = values[:, t + 1] if t < gen_len - 1 else 0.0
+            delta = rewards[:, t] + self.config.gamma * nextvalues - values[:, t]
+            lastgaelam = delta + self.config.gamma * self.config.lam * lastgaelam
+            advantages_reversed.append(lastgaelam)
+        advantages = torch.stack(advantages_reversed[::-1]).transpose(0, 1)
+
+        returns = advantages + values
+        advantages = masked_whiten(advantages, mask)
+        advantages = advantages.detach()
+        return values, advantages, returns
+
     def loss(
         self,
         old_logprobs: torch.FloatTensor,
         values: torch.FloatTensor,
-        rewards: torch.FloatTensor,
         logits: torch.FloatTensor,
         vpreds: torch.FloatTensor,
         logprobs: torch.FloatTensor,
         mask: torch.LongTensor,
+        advantages: torch.FloatTensor,
+        returns: torch.FloatTensor,
     ):
         """
         Calculate policy and value losses.
@@ -1067,23 +1101,6 @@ class PPOTrainer(BaseTrainer):
             logprobs (`torch.FloatTensor`):
                 Log probabilities of the model, shape (`batch_size`, `response_length`)
         """
-        lastgaelam = 0
-        advantages_reversed = []
-        gen_len = rewards.shape[-1]
-
-        values = values * mask
-        rewards = rewards * mask
-
-        for t in reversed(range(gen_len)):
-            nextvalues = values[:, t + 1] if t < gen_len - 1 else 0.0
-            delta = rewards[:, t] + self.config.gamma * nextvalues - values[:, t]
-            lastgaelam = delta + self.config.gamma * self.config.lam * lastgaelam
-            advantages_reversed.append(lastgaelam)
-        advantages = torch.stack(advantages_reversed[::-1]).transpose(0, 1)
-
-        returns = advantages + values
-        advantages = masked_whiten(advantages, mask)
-        advantages = advantages.detach()
 
         vpredclipped = clip_by_value(
             vpreds,
