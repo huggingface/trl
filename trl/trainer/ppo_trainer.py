@@ -703,7 +703,6 @@ class PPOTrainer(BaseTrainer):
                 backward_batch_end = backward_batch_start + self.config.backward_batch_size
                 backward_batch_inds = b_inds[backward_batch_start:backward_batch_end]
 
-                # set optimizer to zero for gradient accumulation
                 for mini_batch_start in range(0, self.config.backward_batch_size, self.config.mini_batch_size):
                     mini_batch_end = mini_batch_start + self.config.mini_batch_size
                     mini_batch_inds = backward_batch_inds[mini_batch_start:mini_batch_end]
@@ -996,6 +995,8 @@ class PPOTrainer(BaseTrainer):
             if self.accelerator.sync_gradients:
                 self.accelerator.clip_grad_norm_(self.model_params, self.config.max_grad_norm)
         self.optimizer.step()
+        # we call optimizer.zero_grad() every time and let `accelerator` handle accumulation
+        # see https://huggingface.co/docs/accelerate/usage_guides/gradient_accumulation#the-finished-code
         self.optimizer.zero_grad()
         return train_stats
 
