@@ -120,7 +120,24 @@ class TextHistory:
 
 
 class TextEnvironment:
+    """
+    The TextEnvironment enables interaction of a LLM with an environment using tools. 
+    """
+
     def __init__(self, model, tokenizer, tools, reward_fn, prompt, max_turns=4, max_tool_reponse=100, generation_kwargs=None):
+        """
+        Initialize TextEnvironment.
+
+        Args:
+            model (`PreTrainedModelWrapper`): The model to use for generation.
+            tokenizer (`transformers.PreTrainedTokenizer`): The tokenizer to use for generation.
+            tools (list): A list of tools to use for interaction.
+            reward_fn (function): A function that takes a string and returns a reward.
+            prompt (str): The base prompt to use for generation. Is prepended to the tasks.
+            max_turns (Optional[int]): The maximum number of turns to allow.
+            max_tool_response (Optional[int]): The maximum number of characters to allow in a tool response.
+            generation_kwargs (Optional[dict]): A dictionary of keyword arguments to pass to the model's generate method.
+        """
         self.model = model
         self.tokenizer = tokenizer
         self.prompt = prompt
@@ -146,6 +163,12 @@ class TextEnvironment:
         self.current_device = extract_model_from_parallel(self.model).pretrained_model.device
 
     def run(self, tasks, **rewards_kwargs):
+        """
+        Run the environment on a list of tasks.
+
+        Args:
+            tasks (list[str]): A list of tasks to run the model in the environment on.
+        """
         turns = 0
 
         queries = [self.prompt + task for task in tasks]
@@ -174,6 +197,12 @@ class TextEnvironment:
         return queries, responses, masks, rewards, histories
 
     def step(self, history):
+        """
+        Step the environment forward one turn.
+
+        Args:
+            history (`TextHistory`): The history to step forward.
+        """
         truncated, ended = self.task_end_check(history)
         if ended:
             history.complete(truncated=truncated)
@@ -203,7 +232,9 @@ class TextEnvironment:
         )
 
     def parse_tool_call(self, text):
-        """Parse request string. Expected format: <request><tool_name>query<call>"""
+        """
+        Parse request string. Expected format: <request><tool_name>query<call>
+        """
         result = re.search(f"(?<={self.request_token}).*?(?={self.call_token})", text, re.DOTALL)
         extracted_text = result.group()
 
@@ -213,12 +244,18 @@ class TextEnvironment:
         return tool, query
 
     def compute_reward(self, histories, **reward_kwargs):
+        """
+        Compute the reward for a list of histories.
+        """
         rewards = self.reward_fn([history.last_text_segment for history in histories], **reward_kwargs)
         for history, reward in zip(histories, rewards):
             history.reward = torch.tensor(reward)
         return histories
 
     def generate(self, histories):
+        """
+        Generate responses for a list of histories.
+        """
         active_histories = [i for i, history in enumerate(histories) if not history.completed]
 
         query_tensors = [histories[i].tokens for i in active_histories]
@@ -229,7 +266,9 @@ class TextEnvironment:
             histories[i].append_segment(response_text, response_tensor, system=False)
 
     def task_end_check(self, history):
-        """Check if the current generation sequence has finished."""
+        """
+        Check if the current generation sequence has finished.
+        """
         truncated = False
         ended = False
         if history.completed:
@@ -254,6 +293,14 @@ class TextEnvironment:
         batch_size: int = 16,
         pad_to_multiple_of: int = None,
     ):
+        """
+        Generate responses for a list of query tensors.
+        
+        args:
+            query_tensors (list[torch.Tensor]): A list of query tensors to generate responses for.
+            batch_size (int): The batch size to use for generation.
+            pad_to_multiple_of (int): The padding length to use for generation.
+        """
         outputs = []
         padding_side_default = self.tokenizer.padding_side
         if not self.is_encoder_decoder:

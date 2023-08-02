@@ -1,3 +1,3 @@
 # flake8: noqa
 
-from .base import TextEnvironment, TextHistory
+from .base_environment import TextEnvironment, TextHistory
