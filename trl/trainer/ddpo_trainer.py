@@ -35,6 +35,7 @@ class DDPOTrainer(BaseTrainer):
         **reward_function** (Callable[[torch.Tensor, Tuple[str], Tuple[Any]], torch.Tensor]) -- Reward function to be used
         **prompt_function** (Callable[[], Tuple[str, Any]]) -- Function to generate prompts to guide model
         **sd_pipeline** (`DDPOStableDiffusionPipeline`) -- Stable Diffusion pipeline to be used for training.
+        **image_samples_hook** (Optional[Callable[[Any, Any, Any], Any]]) -- Hook to be called to log images
     """
 
     def __init__(
@@ -217,6 +218,22 @@ class DDPOTrainer(BaseTrainer):
         return rewards
 
     def step(self, epoch: int, global_step: int):
+        """
+        Perform a single step of training.
+
+        Args:
+            epoch (int): The current epoch.
+            global_step (int): The current global step.
+
+        Side Effects:
+            - Model weights are updated
+            - Logs the statistics to the accelerator trackers.
+            - If `self.image_samples_callback` is not None, it will be called with the prompt_image_pairs, global_step, and the accelerator tracker.
+
+        Returns:
+            global_step (int): The updated global step.
+
+        """
         samples, prompt_image_data = self._generate_samples(
             iterations=self.config.sample_num_batches_per_epoch,
             batch_size=self.config.sample_batch_size,
@@ -296,7 +313,7 @@ class DDPOTrainer(BaseTrainer):
             samples_batched = [dict(zip(original_keys, row_values)) for row_values in transposed_values]
 
             self.sd_pipeline.unet.train()
-            global_step = self._train_batched_samples((global_step, epoch, inner_epoch), samples_batched)
+            global_step = self._train_batched_samples(inner_epoch, epoch, global_step, samples_batched)
             # ensure optimization step at the end of the inner epoch
             assert self.accelerator.sync_gradients
 
@@ -306,6 +323,28 @@ class DDPOTrainer(BaseTrainer):
         return global_step
 
     def calculate_loss(self, latents, timesteps, next_latents, log_probs, advantages, embeds):
+        """
+        Calculate the loss for a batch of an unpacked sample
+
+        Args:
+            latents (torch.Tensor):
+                The latents sampled from the diffusion model, shape: [batch_size, num_steps, ...]
+            timesteps (torch.Tensor):
+                The timesteps sampled from the diffusion model, shape: [batch_size]
+            next_latents (torch.Tensor):
+                The next latents sampled from the diffusion model, shape: [batch_size, num_steps, ...]
+            log_probs (torch.Tensor):
+                The log probabilities of the latents, shape: [batch_size]
+            advantages (torch.Tensor):
+                The advantages of the latents, shape: [batch_size]
+            embeds (torch.Tensor):
+                The embeddings of the prompts, shape: [2*batch_size or batch_size, ...]
+                Note: the "or" is because if train_cfg is True, the expectation is that negative prompts are concatenated to the embeds
+
+        Returns:
+            loss (torch.Tensor), approx_kl (torch.Tensor), clipfrac (torch.Tensor)
+            (all of these are of shape (1,))
+        """
         with self.autocast():
             if self.config.train_cfg:
                 noise_pred = self.sd_pipeline.unet(
@@ -417,6 +456,17 @@ class DDPOTrainer(BaseTrainer):
         models.pop()  # ensures that accelerate doesn't try to handle loading of the model
 
     def _generate_samples(self, iterations, batch_size, is_async=False):
+        """
+        Generate samples from the model
+
+        Args:
+            iterations (int): Number of iterations to generate samples for
+            batch_size (int): Batch size to use for sampling
+            is_async (bool): Whether or not to use async reward computation
+
+        Returns:
+            samples (List[Dict[str, torch.Tensor]]), prompt_image_pairs (List[List[Any]])
+        """
         samples = []
         prompt_image_pairs = []
         self.sd_pipeline.unet.eval()
@@ -470,8 +520,23 @@ class DDPOTrainer(BaseTrainer):
 
         return samples, prompt_image_pairs
 
-    def _train_batched_samples(self, step_coordinates, batched_samples):
-        global_step, epoch, inner_epoch = step_coordinates
+    def _train_batched_samples(self, inner_epoch, epoch, global_step, batched_samples):
+        """
+        Train on a batch of samples. Main training segment
+
+        Args:
+            inner_epoch (int): The current inner epoch
+            epoch (int): The current epoch
+            global_step (int): The current global step
+            batched_samples (List[Dict[str, torch.Tensor]]): The batched samples to train on
+
+        Side Effects:
+            - Model weights are updated
+            - Logs the statistics to the accelerator trackers.
+
+        Returns:
+            global_step (int): The updated global step
+        """
         info = defaultdict(list)
         for i, sample in enumerate(batched_samples):
             if self.config.train_cfg:
@@ -545,6 +610,9 @@ class DDPOTrainer(BaseTrainer):
         return True, ""
 
     def train(self, epochs: Optional[int] = None):
+        """
+        Train the model for a given number of epochs
+        """
         global_step = 0
         if epochs is None:
             epochs = self.config.num_epochs

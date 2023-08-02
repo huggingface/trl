@@ -52,4 +52,10 @@ def image_outputs_hook(image_data, global_step, accelerate_logger):
 
 ```
 
-`DDPOConfig` is the config object type. Most of the configuration params have defaults 
+`DDPOConfig` is the config object type. Most of the configuration params have defaults. The following are things to keep in mind (The code checks this for you as well)
+
+- The configurable sample batch size should be greater than or equal to self.config.train_batch_size
+- The configurable sample batch size must be divisible by the configurable train batch size
+- The configurable sample batch size must be divisible by both the configurable gradient accumulation steps and the configurable accelerator processes count
+
+For a working example please refer to `stable_diffusion_tuning.py` in the `examples/scripts` directory.
