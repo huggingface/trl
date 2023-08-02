@@ -127,7 +127,7 @@ if __name__ == "__main__":
     config = DDPOConfig(
         num_epochs=200,
         train_gradient_accumulation_steps=1,
-        sample_num_batches_per_epoch=1,
+        sample_num_batches_per_epoch=2,
         sample_num_steps=30,
         sample_batch_size=1,
         tracker_project_name="stable_diffusion_training",
