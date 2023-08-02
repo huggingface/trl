@@ -114,8 +114,8 @@ class PreTrainedModelWrapper(nn.Module):
             peft_config = kwargs.pop("peft_config", None)
             reward_adapter = kwargs.pop("reward_adapter", None)
             is_trainable = kwargs.pop("is_trainable", False)
-            token = kwargs.pop("token", None)
             trl_model_args, pretrained_kwargs, peft_quantization_kwargs = cls._split_kwargs(kwargs)
+            token = pretrained_kwargs.get("token", None)
         else:
             peft_config = None
             is_trainable = False
