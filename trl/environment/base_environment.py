@@ -121,10 +121,12 @@ class TextHistory:
 
 class TextEnvironment:
     """
-    The TextEnvironment enables interaction of a LLM with an environment using tools. 
+    The TextEnvironment enables interaction of a LLM with an environment using tools.
     """
 
-    def __init__(self, model, tokenizer, tools, reward_fn, prompt, max_turns=4, max_tool_reponse=100, generation_kwargs=None):
+    def __init__(
+        self, model, tokenizer, tools, reward_fn, prompt, max_turns=4, max_tool_reponse=100, generation_kwargs=None
+    ):
         """
         Initialize TextEnvironment.
 
@@ -220,8 +222,8 @@ class TextEnvironment:
         except Exception as error:
             response = f"Invalid tool call: {str(error)}"
 
-        if len(response)>self.max_tool_response:
-            response = response[:(self.max_tool_response-3)] + "..."
+        if len(response) > self.max_tool_response:
+            response = response[: (self.max_tool_response - 3)] + "..."
 
         history.append_segment(
             response + self.response_token,
@@ -295,7 +297,7 @@ class TextEnvironment:
     ):
         """
         Generate responses for a list of query tensors.
-        
+
         args:
             query_tensors (list[torch.Tensor]): A list of query tensors to generate responses for.
             batch_size (int): The batch size to use for generation.
