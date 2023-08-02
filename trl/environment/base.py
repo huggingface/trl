@@ -120,7 +120,7 @@ class TextHistory:
 
 
 class TextEnvironment:
-    def __init__(self, model, tokenizer, tools, reward_fn, prompt, max_turns=4, generation_kwargs=None):
+    def __init__(self, model, tokenizer, tools, reward_fn, prompt, max_turns=4, max_tool_reponse=100, generation_kwargs=None):
         self.model = model
         self.tokenizer = tokenizer
         self.prompt = prompt
@@ -135,6 +135,7 @@ class TextEnvironment:
         self.response_token = "<response>"
         self.submit_token = "<submit>"
         self.max_turns = max_turns
+        self.max_tool_response = max_tool_reponse
 
         if generation_kwargs is None:
             self.generation_kwargs = dict()
@@ -190,6 +191,8 @@ class TextEnvironment:
                 response = self.tools[tool](query)
             except Exception as error:
                 response = str(error)
+        if len(response)>self.max_tool_response:
+            response = response[:(self.max_tool_response-3)] + "..."
 
         history.append_segment(
             response + self.response_token,
