@@ -204,7 +204,7 @@ class TextEnvironment:
 
     def parse_tool_call(self, text):
         """Parse request string. Expected format: <request><tool_name>query<call>"""
-        result = re.search(f"(?<={self.request_token}).*?(?={self.call_token})", text)
+        result = re.search(f"(?<={self.request_token}).*?(?={self.call_token})", text, re.DOTALL)
         extracted_text = result.group()
 
         tool = re.search(r"<(.*?)>", extracted_text).group(1)
