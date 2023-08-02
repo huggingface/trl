@@ -130,3 +130,6 @@ class DDPOConfig(object):
             warnings.warn(
                 ("Accelerator tracking only supports image logging if `log_with` is set to 'wandb' or 'tensorboard'.")
             )
+
+        if self.log_with == "wandb":
+            warnings.warn("Wandb image logging requires torchvision to be installed")

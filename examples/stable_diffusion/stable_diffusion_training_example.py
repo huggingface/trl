@@ -75,32 +75,32 @@ def aesthetic_score():
 # prompt function
 animals = [
     "cat",
-    "dog",
-    "horse",
-    "monkey",
-    "rabbit",
-    "zebra",
-    "spider",
-    "bird",
-    "sheep",
-    "deer",
-    "cow",
-    "goat",
-    "lion",
-    "frog",
-    "chicken",
-    "duck",
-    "goose",
-    "bee",
-    "pig",
-    "turkey",
-    "fly",
-    "llama",
-    "camel",
-    "bat",
-    "gorilla",
-    "hedgehog",
-    "kangaroo",
+    #    "dog",
+    #    "horse",
+    #    "monkey",
+    #    "rabbit",
+    #    "zebra",
+    #    "spider",
+    #    "bird",
+    #    "sheep",
+    #    "deer",
+    #    "cow",
+    #    "goat",
+    #    "lion",
+    #    "frog",
+    #    "chicken",
+    #    "duck",
+    #    "goose",
+    #    "bee",
+    #    "pig",
+    #    "turkey",
+    #    "fly",
+    #    "llama",
+    #    "camel",
+    #    "bat",
+    #    "gorilla",
+    #    "hedgehog",
+    #    "kangaroo",
 ]
 
 
@@ -116,7 +116,7 @@ def image_outputs_logger(image_data, global_step, accelerate_logger):
     for i, image in enumerate(images):
         prompt = prompts[i]
         reward = rewards[i].item()
-        result[f"{prompt:.25} | {reward:.2f}"] = image.cpu().unsqueeze(0)
+        result[f"{prompt:.25} | {reward:.2f}"] = image.unsqueeze(0)
 
     accelerate_logger.log_images(
         result,
@@ -128,11 +128,11 @@ if __name__ == "__main__":
     config = DDPOConfig(
         num_epochs=200,
         train_gradient_accumulation_steps=1,
-        per_prompt_stat_tracking_buffer_size=32,
+        # per_prompt_stat_tracking_buffer_size=32,
         sample_num_batches_per_epoch=2,
-        sample_batch_size=1,
+        sample_batch_size=2,
         tracker_project_name="stable_diffusion_training",
-        log_with="tensorboard",
+        log_with="wandb",
         project_kwargs={
             "logging_dir": "./logs",
             "automatic_checkpoint_naming": True,
@@ -148,6 +148,8 @@ if __name__ == "__main__":
 
     pipeline.scheduler = DefaultDDPOScheduler.from_config(pipeline.scheduler.config)
 
+    # output images pretrained models
+
     trainer = DDPOTrainer(
         config,
         aesthetic_score(),
@@ -156,4 +158,4 @@ if __name__ == "__main__":
         image_samples_hook=image_outputs_logger,
     )
 
-    trainer.run()
+    trainer.train()
