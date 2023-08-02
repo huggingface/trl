@@ -23,6 +23,8 @@
     title: Best of N Sampling
   - local: dpo_trainer
     title: DPO Trainer
+  - local: ddpo_trainer
+    title: Denoising Diffusion Policy Optimization
   title: API
 - sections: 
   - local: sentiment_tuning

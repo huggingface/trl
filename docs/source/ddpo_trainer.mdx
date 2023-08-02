@@ -1,3 +1,7 @@
+# Credits
+
+This work is heavily influenced by the repo [here](https://github.com/kvablack/ddpo-pytorch) and the associated [paper](https://arxiv.org/abs/2305.13301).
+
 # Getting started with Stable Diffusion finetuning with reinforcement learning
 
 The machinery for finetuning of Stable Diffusion models with reinforcement learning makes heavy use of HuggingFace's `diffuser`
@@ -5,9 +9,13 @@ library. A reason for  stating this is that getting started requires a bit of fa
 `Pipeline` and `Scheduler`. 
 Right out of the box (`diffusers` library), there isn't a `Pipeline` nor a `Scheduler` instance that is suitable for finetuning with reinforcement learning. Some adjustments need to made. 
 
-There is an interface that is provided by this library that allows you to easily create a `Pipeline` and a `Scheduler` that are suitable for finetuning with reinforcement learning. There is a default implementation of this interface that you can use out of the box with the limitation that DDIMScheduler is the only supported `Scheduler`. Assuming the default implementation is sufficient and/or to get thing moving, refer to the training example alongside this readme. 
+There is an interface that is provided by this library that are required to be implemented in order to be use the `DDPOTrainer`, which is the main machinery for finetuning. 
+There is a default implementation of this interface that you can use out of the box. Assuming the default implementation is sufficient and/or to get thing moving, refer to the training example alongside this readme. 
 
-For a more detailed look into the interface and the default scheduler and pipeline implement, go [here](https://github.com/lvwerra/trl/models/modelling_sd_base.py)
+While there is an explicit class interface for the pipeline, the scheduler is constrained by a method signature associated with the pipeline class. The trainer will attempt to get the scheduler
+via this pipeline associated method rather than directly. This was the most minimal way forward and the only constraint is that a particular required output type.
+
+For a more detailed look into the interface and the default scheduler and pipeline implementation, go [here](https://github.com/lvwerra/trl/models/modelling_sd_base.py)
 
 Also in addition, there is the expectation of providing a reward function and a prompt function. The reward function is used to evaluate the generated images  and the prompt function is used to generate the prompts that are used to generate the images.
 
@@ -43,9 +51,3 @@ def image_outputs_hook(image_data, global_step, accelerate_logger):
     )
 
 ```
-
-for an example using `tensorboard` see the training example
-
-# Credits
-
-This work is heavily influenced by the repo [here](https://github.com/kvablack/ddpo-pytorch) and the associated paper.
