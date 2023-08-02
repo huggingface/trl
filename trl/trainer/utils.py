@@ -487,7 +487,18 @@ def pad_to_length(tensor: torch.Tensor, length: int, pad_value: Union[int, float
         )
 
 
+# copied from https://github.com/kvablack/ddpo-pytorch/blob/main/ddpo_pytorch/stat_tracking.py#L5
 class PerPromptStatTracker:
+    r"""
+    Class for tracking statistics per prompt. Mainly used to calculate advantage for the DPPO algorithm
+
+    Args:
+        buffer_size (`int`):
+            Size of the buffer to keep for each prompt.
+        min_count (`int`):
+            Minimum number of samples to keep in the buffer before calculating the mean and std.
+    """
+
     def __init__(self, buffer_size, min_count):
         self.buffer_size = buffer_size
         self.min_count = min_count
