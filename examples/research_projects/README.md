@@ -4,3 +4,4 @@ Welcome to the research projects folder! Here you can find the scripts used for 
 
 - [De-detoxifying language models](https://github.com/lvwerra/trl/tree/main/examples/research_projects/toxicity)
 - [Stack-Llama](https://github.com/lvwerra/trl/tree/main/examples/research_projects/stack_llama)
+- [Stack-Llama-2](https://github.com/lvwerra/trl/tree/main/examples/research_projects/stack_llama_2)
