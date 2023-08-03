@@ -162,18 +162,6 @@ reward = [torch.tensor(1.0)]
 train_stats = ppo_trainer.step([query_tensor[0]], [response_tensor[0]], reward)
 ```
 
-### Advanced example: IMDB sentiment
-For a detailed example check out the example python script `examples/scripts/sentiment_tuning.py`, where GPT2 is fine-tuned to generate positive movie reviews. An few examples from the language models before and after optimisation are given below:
-
-<div style="text-align: center">
-<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/table_imdb_preview.png" width="800">
-<p style="text-align: center;"> <b>Figure:</b> A few review continuations before and after optimisation. </p>
-</div>
-
-Have a look at more examples inside [`examples/`](https://github.com/lvwerra/trl/tree/main/examples) folder.
-
-## References
-
 ### Proximal Policy Optimisation
 The PPO implementation largely follows the structure introduced in the paper **"Fine-Tuning Language Models from Human Preferences"** by D. Ziegler et al. \[[paper](https://arxiv.org/pdf/1909.08593.pdf), [code](https://github.com/openai/lm-human-preferences)].
 
