@@ -115,12 +115,14 @@ class PreTrainedModelWrapper(nn.Module):
             reward_adapter = kwargs.pop("reward_adapter", None)
             is_trainable = kwargs.pop("is_trainable", False)
             trl_model_args, pretrained_kwargs, peft_quantization_kwargs = cls._split_kwargs(kwargs)
+            token = pretrained_kwargs.get("token", None)
         else:
             peft_config = None
             is_trainable = False
             trl_model_args = {}
             pretrained_kwargs = {}
             peft_quantization_kwargs = {}
+            token = None
 
         if reward_adapter is not None and not isinstance(reward_adapter, str):
             raise ValueError(
@@ -156,7 +158,11 @@ class PreTrainedModelWrapper(nn.Module):
             if is_peft_available():
                 try:
                     # If there is a trained peft adapter in the hub, load its config.
-                    remote_adapter_config = hf_hub_download(pretrained_model_name_or_path, "adapter_config.json")
+                    remote_adapter_config = hf_hub_download(
+                        pretrained_model_name_or_path,
+                        "adapter_config.json",
+                        token=token,
+                    )
                 except:  # noqa
                     remote_adapter_config = None
             else:
@@ -241,7 +247,11 @@ class PreTrainedModelWrapper(nn.Module):
 
             if not os.path.exists(filename):
                 try:
-                    filename = hf_hub_download(pretrained_model_name_or_path, "pytorch_model.bin")
+                    filename = hf_hub_download(
+                        pretrained_model_name_or_path,
+                        "pytorch_model.bin",
+                        token=token,
+                    )
                 # sharded
                 except:  # noqa
                     if os.path.exists(sharded_index_filename):
@@ -249,7 +259,9 @@ class PreTrainedModelWrapper(nn.Module):
                     else:
                         try:
                             index_file_name = hf_hub_download(
-                                pretrained_model_name_or_path, "pytorch_model.bin.index.json"
+                                pretrained_model_name_or_path,
+                                "pytorch_model.bin.index.json",
+                                token=token,
                             )
                         except ValueError:  # not continue training, do not have v_head weight
                             is_resuming_training = False
@@ -272,7 +284,11 @@ class PreTrainedModelWrapper(nn.Module):
                     # download each file and add it to the state_dict
                     state_dict = {}
                     for shard_file in files_to_download:
-                        filename = hf_hub_download(pretrained_model_name_or_path, shard_file)
+                        filename = hf_hub_download(
+                            pretrained_model_name_or_path,
+                            shard_file,
+                            token=token,
+                        )
                         state_dict.update(torch.load(filename, map_location="cpu"))
                 else:
                     state_dict = torch.load(filename, map_location="cpu")
@@ -290,7 +306,7 @@ class PreTrainedModelWrapper(nn.Module):
         if not is_peft_model and reward_adapter is not None:
             raise ValueError("reward_adapter can only be used with a PeftModel. ")
         elif is_peft_model and reward_adapter is not None:
-            model.add_and_load_reward_modeling_adapter(reward_adapter)
+            model.add_and_load_reward_modeling_adapter(reward_adapter, token=token)
             model.supports_rm_adapter = True
         else:
             model.supports_rm_adapter = False
@@ -400,7 +416,7 @@ class PreTrainedModelWrapper(nn.Module):
         """
         raise NotImplementedError
 
-    def add_and_load_reward_modeling_adapter(self, adapter_model_id, adapter_name="reward_model_adapter"):
+    def add_and_load_reward_modeling_adapter(self, adapter_model_id, adapter_name="reward_model_adapter", token=None):
         r"""
         Add and load a reward modeling adapter. This method can only be used if the
         model is a `PeftModel` and if you have initialized the model with the `reward_modeling_adapter_id`
@@ -410,7 +426,11 @@ class PreTrainedModelWrapper(nn.Module):
         filename = os.path.join(adapter_model_id, "adapter_model.bin")
         if not os.path.exists(filename):
             try:
-                local_filename = hf_hub_download(adapter_model_id, "adapter_model.bin")
+                local_filename = hf_hub_download(
+                    adapter_model_id,
+                    "adapter_model.bin",
+                    token=token,
+                )
             except:  # noqa
                 raise ValueError(
                     "Could not find adapter model in the Hub, make sure you have the correct adapter model id."
