@@ -5,12 +5,12 @@
     title: Quickstart
   - local: installation
     title: Installation
-  - local: customization
-    title: Customize your Training
   - local: how_to_train
     title: PPO Training FAQ
   - local: use_model
     title: Use Trained Models
+  - local: customization
+    title: Customize the Training
   - local: logging
     title: Understanding Logs
   title: Get started
