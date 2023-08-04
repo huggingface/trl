@@ -67,7 +67,7 @@ REQUIRED_PKGS = [
     "datasets",
 ]
 EXTRAS = {
-    "test": ["parameterized", "pytest", "pytest-xdist", "accelerate", "peft"],
+    "test": ["parameterized", "pytest", "pytest-xdist", "accelerate", "peft", "diffusers>=0.18.0"],
     "peft": ["peft>=0.2.0"],
     "dev": ["parameterized", "pytest", "pytest-xdist", "pre-commit", "peft>=0.2.0"],
 }

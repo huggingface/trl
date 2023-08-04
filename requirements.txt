@@ -4,5 +4,3 @@ tqdm
 transformers
 accelerate
 peft>=0.3.0
-diffusers>=0.18.0
-
