@@ -1,26 +1,25 @@
 # Training FAQ
 
-## What metrics should I look at?
+## What Metrics Should I Look at?
 
-When doing classical supervised fine-tuning of language models the loss (especially the validation loss) is a good proxy for how well the training is going. However, in RL the loss doesn't tell us much about the model's performance and it's value can go up and down while the performance continues to increase. 
+When performing classical supervised fine-tuning of language models, the loss (especially the validation loss) serves as a good indicator of the training progress. However, in Reinforcement Learning (RL), the loss becomes less informative about the model's performance, and its value may fluctuate while the actual performance improves.
 
-For example, the value loss measures how good the model is at predicting the value of each token. If the model suddenly gets better at the task the model will likely underestimate the values and the loss increase while the reward continues to climb until learned the new distribution.
+To address this, we recommend focusing on two key metrics:
 
-The two best metrics to look at are **mean reward** and **objective KL divergence**. The main goal is to maximize the reward but at the same time we ideally want to keep the KL divergence between [0, 10] (see below for more info on the KL divergence).
+**Mean Reward**: The primary goal is to maximize the reward achieved by the model during RL training.
+**Objective KL Divergence**: KL divergence (Kullback-Leibler divergence) measures the dissimilarity between two probability distributions. In the context of RL training, we use it to quantify the difference between the current model and a reference model. Ideally, we want to keep the KL divergence between 0 and 10 to ensure the model's generated text remains close to what the reference model produces.
 
-## Why a reference model? And what's the KL divergence for?
+## Why Do We Use a Reference Model, and What's the Purpose of KL Divergence?
 
-RL is very efficient and optimizing a reward sometimes at the cost of exploiting the environment in unexpected ways. When doing RLHF on language mdoels the reward is usually given by a reward model. The reward models are trained predict if a human would rank the models generation high in a comparison with other generations. The langauge model we are optimizing against that reward model can learn patterns that yield high reward but are not great language. In the best case it could learn that the reward model assigns high rewards to texts with lots exclamation marks or emojis rather than good content. In the worst case it can learn patterns that don't resemble natural language at at all but get the reward model to return high rewards (similar to adversarial attacks).
+When training RL models, optimizing solely for reward may lead to unexpected behaviors, where the model exploits the environment in ways that don't align with good language generation. In the case of RLHF, we use a reward model trained to predict whether a generated text is highly ranked by humans.
 
-To counteract this possibility we can penalize the model when it's generation are too different from what it would have generated before the RLHF loop. To quantify the difference between the reference and the model we train we use a quantity called KL divergence. 
+However, the RL model being optimized against the reward model may learn patterns that yield high reward but do not represent good language. This can result in extreme cases where the model generates texts with excessive exclamation marks or emojis to maximize the reward. In some worst-case scenarios, the model may generate patterns completely unrelated to natural language yet receive high rewards, similar to adversarial attacks.
 
-KL-divergence, also known as Kullback-Leibler divergence, is a measure of how one probability distribution diverges from another. It quantifies the information lost when using one distribution to approximate another, providing a non-symmetric measure of dissimilarity between them. In simple terms, it helps us understand how different two probability distributions are from each other.
+To address this issue, we add a penalty to the reward function based on the KL divergence between the current model and the reference model. By doing this, we encourage the model to stay close to what the reference model generates.
 
-To make sure we stay somewhat close to the text the reference model generates we add the KL-divergence between the active and reference model as an additional penalty to the reward: `R = r - beta * KL` (where `r` comes from reward model).
+## What Is the Concern with Negative KL Divergence?
 
-## Why is the KL-divergence negative and why is it a problem?
-
-If you generate text by purely sampling from the model in general things work fine. But when you use the `generate` method there are a few caveats because it does not always purely sample depending on the settings which can cause KL-divergence to go negative. Essentially when the active model achieves `log_p_token_active < log_p_token_ref` we get negative KL-div. This can happen in a several cases:
+If you generate text by purely sampling from the model distribution things work fine in general. But when you use the `generate` method there are a few caveats because it does not always purely sample depending on the settings which can cause KL-divergence to go negative. Essentially when the active model achieves `log_p_token_active < log_p_token_ref` we get negative KL-div. This can happen in a several cases:
 
 - **top-k sampling**: the model can smooth out the probability distribution causing the top-k tokens having a smaller probability than those of the reference model but they still are selected
 - **min_length**: this ignores the EOS token until `min_length` is reached. thus the model can assign a very high log prob to the EOS token and very low prob to all others until min_length is reached
@@ -49,9 +48,9 @@ With these settings we usually don't encounter any issues. You can also experime
 
 ## How can debug your own use-case?
 
-Debugging the full RL pipeline can be difficult since there are many moving pieces. Here are a few tricks and suggestions to make your life easier:
+Debugging the RL pipeline can be challenging due to its complexity. Here are some tips and suggestions to make the process easier:
 
-- **Start from a working example**: There are several working examples in the `trl` repository. Try to start from one of those and get to your use-case step-by-step. For example, you can first just replace the model in the example and once you figure out the best hyperparameters try to switch to your dataset and reward model. If you change everything at once you won't know where a potential problem comes from.
+- **Start from a working example**: Begin with a working example from the trl repository and gradually modify it to fit your specific use-case. Changing everything at once can make it difficult to identify the source of potential issues. For example, you can start by replacing the model in the example and once you figure out the best hyperparameters try to switch to your dataset and reward model. If you change everything at once you won't know where a potential problem comes from.
 - **Start small, scale later**: Training large models can be very slow and take several hours or days until you see any improvement. For debugging this is not a convenient timescale so try to use small model variants during the development phase and scale up once that works. That being said you sometimes have to be careful as small models might not have the capacity to solve a complicated task either.
 - **Start simple**: Try to start with a minimal example and build complexity from there. Your use-case might require for example a complicated reward function consisting of many different rewards - try to use one signal first and see if you can optimize that and then add more complexity after that.
 - **Inspect the generations**: It's always a good idea to inspect what the model is generating. Maybe there is a big in your post-processing or your prompt. Due to bad settings you might cut-off generations too soon. These things are very hard to see on the metrics but very obvious if you look at the generations.
