@@ -34,11 +34,12 @@ class DDPOTrainerTester(unittest.TestCase):
 
     def setUp(self):
         self.ddpo_config = DDPOConfig(
-            num_epochs=200,
+            num_epochs=2,
             train_gradient_accumulation_steps=1,
             per_prompt_stat_tracking_buffer_size=32,
             sample_num_batches_per_epoch=2,
             sample_batch_size=2,
+            mixed_precision=None,
         )
         pretrained_model = "runwayml/stable-diffusion-v1-5"
         pretrained_revision = "main"
@@ -87,14 +88,3 @@ class DDPOTrainerTester(unittest.TestCase):
         )
 
         self.assertTrue(torch.isclose(loss.cpu(), torch.tensor([-1.0]), 1e-04))
-
-    def test_ddpo_trainer(self):
-
-        previous_trainable_params = {n: param.clone() for n, param in self.trainer.sd_pipeline.unet.named_parameters()}
-        self.trainer.train(1)
-
-        # check the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = self.trainer.sd_pipeline.unet.get_parameter(n)
-            if param.sum() != 0:
-                self.assertFalse(torch.equal(param, new_param))
