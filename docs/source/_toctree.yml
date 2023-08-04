@@ -9,7 +9,7 @@
     title: Customize your Training
   - local: how_to_train
     title: PPO Training FAQ
-  - local: use_models
+  - local: use_model
     title: Use Trained Models
   - local: logging
     title: Understanding Logs
