@@ -1,108 +1,54 @@
 # Fine-Tune Llama2-7b on SE paired dataset
+import os
 from dataclasses import dataclass, field
 from typing import Optional
-import os
 
 import torch
+from datasets import load_dataset
+from peft import AutoPeftModelForCausalLM, LoraConfig
 from tqdm import tqdm
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, HfArgumentParser, TrainingArguments
 
-from transformers import (
-    AutoModelForCausalLM,
-    BitsAndBytesConfig,
-    AutoTokenizer,
-    TrainingArguments,
-    HfArgumentParser,
-)
-from peft import LoraConfig, AutoPeftModelForCausalLM
 from trl import SFTTrainer
 from trl.trainer import ConstantLengthDataset
-from datasets import load_dataset
 
 
 @dataclass
 class ScriptArguments:
-    model_name: Optional[str] = field(
-        default="meta-llama/Llama-2-7b-hf", metadata={"help": "the model name"}
-    )
-    log_with: Optional[str] = field(
-        default="wandb", metadata={"help": "use 'wandb' to log with wandb"}
-    )
+    model_name: Optional[str] = field(default="meta-llama/Llama-2-7b-hf", metadata={"help": "the model name"})
+    log_with: Optional[str] = field(default="wandb", metadata={"help": "use 'wandb' to log with wandb"})
 
-    dataset_name: Optional[str] = field(
-        default="lvwerra/stack-exchange-paired", metadata={"help": "the dataset name"}
-    )
-    subset: Optional[str] = field(
-        default="data/finetune", metadata={"help": "the subset to use"}
-    )
+    dataset_name: Optional[str] = field(default="lvwerra/stack-exchange-paired", metadata={"help": "the dataset name"})
+    subset: Optional[str] = field(default="data/finetune", metadata={"help": "the subset to use"})
     split: Optional[str] = field(default="train", metadata={"help": "the split to use"})
-    size_valid_set: Optional[int] = field(
-        default=4000, metadata={"help": "the size of the validation set"}
-    )
-    streaming: Optional[bool] = field(
-        default=True, metadata={"help": "whether to stream the dataset"}
-    )
-    shuffle_buffer: Optional[int] = field(
-        default=5000, metadata={"help": "the shuffle buffer size"}
-    )
-    seq_length: Optional[int] = field(
-        default=1024, metadata={"help": "the sequence length"}
-    )
+    size_valid_set: Optional[int] = field(default=4000, metadata={"help": "the size of the validation set"})
+    streaming: Optional[bool] = field(default=True, metadata={"help": "whether to stream the dataset"})
+    shuffle_buffer: Optional[int] = field(default=5000, metadata={"help": "the shuffle buffer size"})
+    seq_length: Optional[int] = field(default=1024, metadata={"help": "the sequence length"})
 
-    max_steps: Optional[int] = field(
-        default=500, metadata={"help": "the maximum number of sgd steps"}
-    )
-    logging_steps: Optional[int] = field(
-        default=10, metadata={"help": "the logging frequency"}
-    )
-    save_steps: Optional[int] = field(
-        default=10, metadata={"help": "the saving frequency"}
-    )
-    per_device_train_batch_size: Optional[int] = field(
-        default=4, metadata={"help": "the per device train batch size"}
-    )
-    per_device_eval_batch_size: Optional[int] = field(
-        default=1, metadata={"help": "the per device eval batch size"}
-    )
-    gradient_accumulation_steps: Optional[int] = field(
-        default=2, metadata={"help": "the gradient accumulation steps"}
-    )
+    max_steps: Optional[int] = field(default=500, metadata={"help": "the maximum number of sgd steps"})
+    logging_steps: Optional[int] = field(default=10, metadata={"help": "the logging frequency"})
+    save_steps: Optional[int] = field(default=10, metadata={"help": "the saving frequency"})
+    per_device_train_batch_size: Optional[int] = field(default=4, metadata={"help": "the per device train batch size"})
+    per_device_eval_batch_size: Optional[int] = field(default=1, metadata={"help": "the per device eval batch size"})
+    gradient_accumulation_steps: Optional[int] = field(default=2, metadata={"help": "the gradient accumulation steps"})
     gradient_checkpointing: Optional[bool] = field(
         default=True, metadata={"help": "whether to use gradient checkpointing"}
     )
-    group_by_length: Optional[bool] = field(
-        default=True, metadata={"help": "whether to group by length"}
-    )
+    group_by_length: Optional[bool] = field(default=True, metadata={"help": "whether to group by length"})
 
-    lora_alpha: Optional[float] = field(
-        default=16, metadata={"help": "the lora alpha parameter"}
-    )
-    lora_dropout: Optional[float] = field(
-        default=0.05, metadata={"help": "the lora dropout parameter"}
-    )
+    lora_alpha: Optional[float] = field(default=16, metadata={"help": "the lora alpha parameter"})
+    lora_dropout: Optional[float] = field(default=0.05, metadata={"help": "the lora dropout parameter"})
     lora_r: Optional[int] = field(default=8, metadata={"help": "the lora r parameter"})
 
-    learning_rate: Optional[float] = field(
-        default=1e-4, metadata={"help": "the learning rate"}
-    )
-    lr_scheduler_type: Optional[str] = field(
-        default="cosine", metadata={"help": "the lr scheduler type"}
-    )
-    num_warmup_steps: Optional[int] = field(
-        default=100, metadata={"help": "the number of warmup steps"}
-    )
-    weight_decay: Optional[float] = field(
-        default=0.05, metadata={"help": "the weight decay"}
-    )
-    optimizer_type: Optional[str] = field(
-        default="paged_adamw_32bit", metadata={"help": "the optimizer type"}
-    )
+    learning_rate: Optional[float] = field(default=1e-4, metadata={"help": "the learning rate"})
+    lr_scheduler_type: Optional[str] = field(default="cosine", metadata={"help": "the lr scheduler type"})
+    num_warmup_steps: Optional[int] = field(default=100, metadata={"help": "the number of warmup steps"})
+    weight_decay: Optional[float] = field(default=0.05, metadata={"help": "the weight decay"})
+    optimizer_type: Optional[str] = field(default="paged_adamw_32bit", metadata={"help": "the optimizer type"})
 
-    output_dir: Optional[str] = field(
-        default="./results", metadata={"help": "the output directory"}
-    )
-    log_freq: Optional[int] = field(
-        default=1, metadata={"help": "the logging frequency"}
-    )
+    output_dir: Optional[str] = field(default="./results", metadata={"help": "the output directory"})
+    log_freq: Optional[int] = field(default=1, metadata={"help": "the logging frequency"})
 
 
 parser = HfArgumentParser(ScriptArguments)
@@ -164,9 +110,7 @@ def create_datasets(tokenizer, args):
         dataset = dataset.train_test_split(test_size=0.005, seed=None)
         train_data = dataset["train"]
         valid_data = dataset["test"]
-        print(
-            f"Size of the train set: {len(train_data)}. Size of the validation set: {len(valid_data)}"
-        )
+        print(f"Size of the train set: {len(train_data)}. Size of the validation set: {len(valid_data)}")
 
     chars_per_token = chars_token_ratio(train_data, tokenizer)
     print(f"The character to token ratio of the dataset is: {chars_per_token:.2f}")
@@ -214,9 +158,7 @@ peft_config = LoraConfig(
     task_type="CAUSAL_LM",
 )
 
-tokenizer = AutoTokenizer.from_pretrained(
-    script_args.model_name, trust_remote_code=True
-)
+tokenizer = AutoTokenizer.from_pretrained(script_args.model_name, trust_remote_code=True)
 tokenizer.pad_token = tokenizer.eos_token
 tokenizer.padding_side = "right"  # Fix weird overflow issue with fp16 training
 
@@ -255,7 +197,6 @@ trainer = SFTTrainer(
 trainer.train()
 trainer.save_model(script_args.output_dir)
 
-
 output_dir = os.path.join(script_args.output_dir, "final_checkpoint")
 trainer.model.save_pretrained(output_dir)
 
@@ -263,9 +204,7 @@ trainer.model.save_pretrained(output_dir)
 del base_model
 torch.cuda.empty_cache()
 
-model = AutoPeftModelForCausalLM.from_pretrained(
-    output_dir, device_map="auto", torch_dtype=torch.bfloat16
-)
+model = AutoPeftModelForCausalLM.from_pretrained(output_dir, device_map="auto", torch_dtype=torch.bfloat16)
 model = model.merge_and_unload()
 
 output_merged_dir = os.path.join(script_args.output_dir, "final_merged_checkpoint")
