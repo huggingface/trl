@@ -1,9 +1,22 @@
-import os
+# Copyright 2023 metric-space, The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 
 import numpy as np
-import requests
 import torch
 import torch.nn as nn
+from huggingface_hub import hf_hub_download
 from transformers import CLIPModel, CLIPProcessor
 
 from trl import DDPOConfig, DDPOTrainer, DefaultDDPOPipeline, DefaultDDPOScheduler
@@ -29,23 +42,13 @@ class MLP(nn.Module):
 
 
 class AestheticScorer(torch.nn.Module):
-    def __init__(self, dtype, cache=".", weights_fname="sac+logos+ava1-l14-linearMSE.pth"):
+    def __init__(self, dtype, hub_model_id="metric-space/aesthetic"):
         super().__init__()
         self.clip = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
         self.processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
         self.mlp = MLP()
-        self.loadpath = os.path.join(cache, weights_fname)
-        if not os.path.exists(self.loadpath):
-            url = (
-                "https://github.com/christophschuhmann/"
-                f"improved-aesthetic-predictor/blob/main/{weights_fname}?raw=true"
-            )
-            r = requests.get(url)
-
-            with open(self.loadpath, "wb") as f:
-                f.write(r.content)
-
-        state_dict = torch.load(self.loadpath)
+        cached_path = hf_hub_download(hub_model_id, "sac+logos+ava1-l14-linearMSE.pth")
+        state_dict = torch.load(cached_path)
         self.mlp.load_state_dict(state_dict)
         self.dtype = dtype
         self.eval()
@@ -62,7 +65,9 @@ class AestheticScorer(torch.nn.Module):
 
 
 def aesthetic_score():
-    scorer = AestheticScorer(dtype=torch.float32).cuda()
+    scorer = AestheticScorer(
+        dtype=torch.float32,
+    ).cuda()
 
     def _fn(images, prompts, metadata):
         images = (images * 255).round().clamp(0, 255).to(torch.uint8)
