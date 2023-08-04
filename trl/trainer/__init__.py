@@ -20,9 +20,14 @@ from .utils import AdaptiveKLController, FixedKLController, ConstantLengthDatase
 
 # isort: on
 
+from ..import_utils import is_diffusers_available
 from .base import BaseTrainer
 from .ddpo_config import DDPOConfig
-from .ddpo_trainer import DDPOTrainer
+
+
+if is_diffusers_available():
+    from .ddpo_trainer import DDPOTrainer
+
 from .dpo_trainer import DPOTrainer
 from .ppo_config import PPOConfig
 from .ppo_trainer import PPOTrainer

@@ -1,5 +1,19 @@
+# Copyright 2023 DDPO-pytorch authors (Kevin Black), The HuggingFace Team, metric-space. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import numpy as np
 import torch
@@ -10,6 +24,19 @@ from diffusers.utils import randn_tensor
 
 @dataclass
 class DDPOPipelineOutput(object):
+    """
+    Output class for the diffusers pipeline to be finetuned with the DDPO trainer
+
+    Args:
+        images (`torch.Tensor`):
+            The generated images.
+        latents (`List[torch.Tensor]`):
+            The latents used to generate the images.
+        log_probs (`List[torch.Tensor]`):
+            The log probabilities of the latents.
+
+    """
+
     images: torch.Tensor
     latents: torch.Tensor
     log_probs: torch.Tensor
@@ -17,11 +44,25 @@ class DDPOPipelineOutput(object):
 
 @dataclass
 class DDPOSchedulerOutput(object):
+    """
+    Output class for the diffusers scheduler to be finetuned with the DDPO trainer
+
+    Args:
+        latents (`torch.Tensor`):
+            Predicted sample at the previous timestep. Shape: `(batch_size, num_channels, height, width)`
+        log_probs (`torch.Tensor`):
+            Log probability of the above mentioned sample. Shape: `(batch_size)`
+    """
+
     latents: torch.Tensor
     log_probs: torch.Tensor
 
 
 class DDPOStableDiffusionPipeline(StableDiffusionPipeline):
+    """
+    Main class for the diffusers pipeline to be finetuned with the DDPO trainer
+    """
+
     def __call__(self, *args, **kwargs) -> DDPOPipelineOutput:
         raise NotImplementedError
 
@@ -58,7 +99,7 @@ class DefaultDDPOScheduler(DDIMScheduler):
         use_clipped_model_output: bool = False,
         generator=None,
         prev_sample: Optional[torch.FloatTensor] = None,
-    ) -> Tuple[torch.FloatTensor, torch.FloatTensor]:
+    ) -> DDPOSchedulerOutput:
         """
 
         Predict the sample at the previous timestep by reversing the SDE. Core function to propagate the diffusion
@@ -80,8 +121,7 @@ class DefaultDDPOScheduler(DDIMScheduler):
                 CycleDiffusion. (https://arxiv.org/abs/2210.05559)
 
         Returns:
-               TODO
-
+            `DDPOSchedulerOutput`: the predicted sample at the previous timestep and the log probability of the sample
         """
 
         if self.num_inference_steps is None:
@@ -269,11 +309,7 @@ class DefaultDDPOPipeline(DDPOStableDiffusionPipeline):
         Examples:
 
         Returns:
-            [`~pipelines.stable_diffusion.StableDiffusionPipelineOutput`] or `tuple`:
-            [`~pipelines.stable_diffusion.StableDiffusionPipelineOutput`] if `return_dict` is True, otherwise a `tuple.
-            When returning a tuple, the first element is a list with the generated images, and the second element is a
-            list of `bool`s denoting whether the corresponding generated image likely represents "not-safe-for-work"
-            (nsfw) content, according to the `safety_checker`.
+            `DDPOPipelineOutput`: The generated image, the predicted latents used to generate the image and the associated log probabilities
         """
         # 0. Default height and width to unet
         height = height or self.unet.config.sample_size * self.vae_scale_factor

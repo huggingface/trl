@@ -1,14 +1,26 @@
+# Copyright 2023 metric-space, The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 import gc
 import unittest
 
-import numpy as np
 import torch
 
 from trl import DDPOConfig, DDPOTrainer, DefaultDDPOPipeline, DefaultDDPOScheduler
 
 
 def scorer_function(images, prompts, metadata):
-    return np.random.randint(6), {}
+    return torch.randn(1) * 3.0, {}
 
 
 def prompt_function():
@@ -75,3 +87,14 @@ class DDPOTrainerTester(unittest.TestCase):
         )
 
         self.assertTrue(torch.isclose(loss.cpu(), torch.tensor([-1.0]), 1e-04))
+
+    def test_ddpo_trainer(self):
+
+        previous_trainable_params = {n: param.clone() for n, param in self.trainer.sd_pipeline.unet.named_parameters()}
+        self.trainer.train(1)
+
+        # check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = self.trainer.sd_pipeline.unet.get_parameter(n)
+            if param.sum() != 0:
+                self.assertFalse(torch.equal(param, new_param))
