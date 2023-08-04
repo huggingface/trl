@@ -1,6 +1,6 @@
 # Use model after training
 
-After training a model with either the `SFTTrainer`, `PPOTrainer`, or `DPOTrainer` you have a fine-tuned model. In this section we go through loading a fine-tuned model and use to generate text. If you are looking for a solution to run an inference server with a trained model you can look into libraries such as [`text-generation-inference`](https://github.com/huggingface/text-generation-inference).
+Once you have trained a model using either the SFTTrainer, PPOTrainer, or DPOTrainer, you will have a fine-tuned model that can be used for text generation. In this section, we'll walk through the process of loading the fine-tuned model and generating text. If you need to run an inference server with the trained model, you can explore libraries such as [`text-generation-inference`](https://github.com/huggingface/text-generation-inference).
 
 ## Load and Generate
 
