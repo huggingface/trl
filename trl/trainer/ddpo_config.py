@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from ..core import flatten_dict
+from ..import_utils import is_bitsandbytes_available, is_torchvision_available
 
 
 @dataclass
@@ -131,5 +132,11 @@ class DDPOConfig(object):
                 ("Accelerator tracking only supports image logging if `log_with` is set to 'wandb' or 'tensorboard'.")
             )
 
-        if self.log_with == "wandb":
+        if self.log_with == "wandb" and not is_torchvision_available():
             warnings.warn("Wandb image logging requires torchvision to be installed")
+
+        if self.train_use_8bit_adam and not is_bitsandbytes_available():
+            raise ImportError(
+                "You need to install bitsandbytes to use 8bit Adam. "
+                "You can install it with `pip install bitsandbytes`."
+            )

@@ -181,7 +181,7 @@ class DDPOTrainer(BaseTrainer):
         if self.config.allow_tf32:
             torch.backends.cuda.matmul.allow_tf32 = True
 
-        self.optimizer = self._initialize_optimizer(trainable_layers.parameters())
+        self.optimizer = self._setup_optimizer(trainable_layers.parameters())
 
         self.neg_prompt_embed = self.sd_pipeline.text_encoder(
             self.sd_pipeline.tokenizer(
@@ -416,16 +416,11 @@ class DDPOTrainer(BaseTrainer):
         )
         return torch.mean(torch.maximum(unclipped_loss, clipped_loss))
 
-    def _initialize_optimizer(self, trainable_layers_parameters):
+    def _setup_optimizer(self, trainable_layers_parameters):
         if self.config.train_use_8bit_adam:
-            try:
-                import bitsandbytes as bnb
-            except ImportError:
-                raise ImportError(
-                    "Please install bitsandbytes to use 8-bit Adam. You can do so by running `pip install bitsandbytes`"
-                )
+            import bitsandbytes
 
-            optimizer_cls = bnb.optim.AdamW8bit
+            optimizer_cls = bitsandbytes.optim.AdamW8bit
         else:
             optimizer_cls = torch.optim.AdamW
 

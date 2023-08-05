@@ -39,3 +39,11 @@ def is_torch_greater_2_0():
 
 def is_diffusers_available():
     return importlib.util.find_spec("diffusers") is not None
+
+
+def is_bitsandbytes_available():
+    return importlib.util.find_spec("bitsandbytes") is not None
+
+
+def is_torchvision_available():
+    return importlib.util.find_spec("torchvision") is not None
