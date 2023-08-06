@@ -61,6 +61,10 @@ class dummy_unet(torch.nn.Module):
             return B(output)
         return (output,)
 
+    @property
+    def device(self):
+        return next(self.parameters()).device
+
 
 class DDPOTrainerTester(unittest.TestCase):
     """
@@ -84,6 +88,11 @@ class DDPOTrainerTester(unittest.TestCase):
         pipeline = DefaultDDPOPipeline.from_pretrained(pretrained_model, revision=pretrained_revision)
         pipeline.scheduler = DefaultDDPOScheduler.from_config(pipeline.scheduler.config)
         pipeline.unet = dummy_unet()
+
+        print("------------------------------")
+        print(pipeline.config)
+        print("unet device is ", pipeline.unet.device)
+        print("execution device is ", pipeline._execution_device)
 
         self.trainer = DDPOTrainer(self.ddpo_config, scorer_function, prompt_function, pipeline)
 
