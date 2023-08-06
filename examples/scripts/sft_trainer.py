@@ -98,6 +98,7 @@ training_args = TrainingArguments(
     logging_steps=script_args.logging_steps,
     num_train_epochs=script_args.num_train_epochs,
     max_steps=script_args.max_steps,
+    report_to=script_args.log_with,
 )
 
 # Step 4: Define the LoraConfig
