@@ -13,6 +13,7 @@
 # limitations under the License.
 import gc
 import unittest
+from dataclasses import dataclass
 
 import torch
 
@@ -25,6 +26,40 @@ def scorer_function(images, prompts, metadata):
 
 def prompt_function():
     return ("cabbages", {})
+
+
+@dataclass
+class A:
+    sample_size: int = 64
+    in_channels: int = 4
+
+
+@dataclass
+class B:
+    sample: torch.Tensor
+
+
+class dummy_unet(torch.nn.Module):
+    def __init__(self):
+        super(dummy_unet, self).__init__()
+        # Create a dummy parameter so that this module has parameters and can have gradients.
+        self.dummy_param = torch.nn.Parameter(torch.zeros(1), requires_grad=True)
+
+        self.config = A()
+
+    def forward(self, x):
+        # Create a tensor filled with ones (or any other value or randomness you wish) of the desired shape
+        output = torch.ones((x.shape[0], 4, 64, 64), requires_grad=True)
+        output = output.to(x.device)
+
+        # Multiply the output by the dummy parameter to ensure backward passes can flow through this module
+        return output * self.dummy_param
+
+    def __call__(self, x, *args, return_dict=True, **kwargs):
+        output = self.forward(x)
+        if return_dict:
+            return B(output)
+        return (output,)
 
 
 class DDPOTrainerTester(unittest.TestCase):
@@ -40,12 +75,15 @@ class DDPOTrainerTester(unittest.TestCase):
             sample_num_batches_per_epoch=2,
             sample_batch_size=2,
             mixed_precision=None,
+            save_freq=1000000,
+            use_lora=False,
         )
         pretrained_model = "runwayml/stable-diffusion-v1-5"
         pretrained_revision = "main"
 
         pipeline = DefaultDDPOPipeline.from_pretrained(pretrained_model, revision=pretrained_revision)
         pipeline.scheduler = DefaultDDPOScheduler.from_config(pipeline.scheduler.config)
+        pipeline.unet = dummy_unet()
 
         self.trainer = DDPOTrainer(self.ddpo_config, scorer_function, prompt_function, pipeline)
 
