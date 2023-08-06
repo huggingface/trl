@@ -29,23 +29,23 @@ def prompt_function():
 
 
 @dataclass
-class A:
+class DummyConfig(object):
     sample_size: int = 64
     in_channels: int = 4
 
 
 @dataclass
-class B:
+class DummyOutput(object):
     sample: torch.Tensor
 
 
-class dummy_unet(torch.nn.Module):
+class DummyUnet(torch.nn.Module):
     def __init__(self):
-        super(dummy_unet, self).__init__()
+        super(DummyUnet, self).__init__()
         # Create a dummy parameter so that this module has parameters and can have gradients.
         self.dummy_param = torch.nn.Parameter(torch.zeros(1), requires_grad=True)
 
-        self.config = A()
+        self.config = DummyConfig()
 
     def forward(self, x):
         # Create a tensor filled with ones (or any other value or randomness you wish) of the desired shape
@@ -58,7 +58,7 @@ class dummy_unet(torch.nn.Module):
     def __call__(self, x, *args, return_dict=True, **kwargs):
         output = self.forward(x)
         if return_dict:
-            return B(output)
+            return DummyOutput(output)
         return (output,)
 
     @property
@@ -86,7 +86,7 @@ class DDPOTrainerTester(unittest.TestCase):
         pretrained_revision = "main"
 
         pipeline = DefaultDDPOPipeline.from_pretrained(pretrained_model, revision=pretrained_revision)
-        pipeline.unet = dummy_unet()
+        pipeline.unet = DummyUnet()
         pipeline.scheduler = DefaultDDPOScheduler.from_config(pipeline.scheduler.config)
 
         self.trainer = DDPOTrainer(self.ddpo_config, scorer_function, prompt_function, pipeline)
