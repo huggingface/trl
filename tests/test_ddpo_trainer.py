@@ -86,13 +86,8 @@ class DDPOTrainerTester(unittest.TestCase):
         pretrained_revision = "main"
 
         pipeline = DefaultDDPOPipeline.from_pretrained(pretrained_model, revision=pretrained_revision)
-        pipeline.scheduler = DefaultDDPOScheduler.from_config(pipeline.scheduler.config)
         pipeline.unet = dummy_unet()
-
-        print("------------------------------")
-        print(pipeline.config)
-        print("unet device is ", pipeline.unet.device)
-        print("execution device is ", pipeline._execution_device)
+        pipeline.scheduler = DefaultDDPOScheduler.from_config(pipeline.scheduler.config)
 
         self.trainer = DDPOTrainer(self.ddpo_config, scorer_function, prompt_function, pipeline)
 
