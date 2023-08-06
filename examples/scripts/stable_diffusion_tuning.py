@@ -152,7 +152,11 @@ if __name__ == "__main__":
 
     pipeline = DefaultDDPOPipeline.from_pretrained(pretrained_model, revision=pretrained_revision)
 
+    print("--------------------------------")
     pipeline.scheduler = DefaultDDPOScheduler.from_config(pipeline.scheduler.config)
+    print(pipeline.config)
+    print(pipeline._execution_device)
+    print(pipeline.unet.device)
 
     trainer = DDPOTrainer(
         config,
