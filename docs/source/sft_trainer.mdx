@@ -52,8 +52,8 @@ The above snippets will use the default training arguments from the [`transforme
 
 ### Train on completions only 
 
-To instantiate that collator for instruction data, pass a response template and the tokenizer. Here is an example of how it would work to fine-tune `opt-350m` on completions only on the CodeAlpaca dataset:
 You can use the `DataCollatorForCompletionOnlyLM` to train your model on the generated prompts only. Note that this works only in the case when `packing=False`.
+To instantiate that collator for instruction data, pass a response template and the tokenizer. Here is an example of how it would work to fine-tune `opt-350m` on completions only on the CodeAlpaca dataset:
 
 ```python
 from transformers import AutoModelForCausalLM, AutoTokenizer
