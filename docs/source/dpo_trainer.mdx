@@ -77,6 +77,15 @@ dpo_trainer.train()
 
 Note that the `beta` is the temperature parameter for the DPO loss, typically something in the range of `0.1` to `0.5`. We ignore the reference model as `beta` -> 0.
 
+## Logging
+
+While training and evaluating we record the following reward metrics:
+
+* `rewards/chosen`: the mean difference between the log probabilities of the policy model and the reference model for the chosen responses scaled by beta
+* `rewards/rejected`: the mean difference between the log probabilities of the policy model and the reference model for the rejected responses scaled by beta
+* `rewards/accuracies`: mean of how often the chosen rewards are > than the corresponding rejected rewards
+* `rewards/margins`: the mean difference between the chosen and corresponding rejected rewards
+
 ## DPOTrainer
 
 [[autodoc]] DPOTrainer
