@@ -37,18 +37,6 @@ class DataCollatorForCompletionOnlyLMTester(unittest.TestCase):
         self.tokenized_instruction = self.tokenizer.encode(self.instruction, add_special_tokens=False)
 
         # Test the fix for #598
-        # Pass already tokenized (w context) and truncated response_template so token_ids are like in the instruction
+        # Pass already tokenized (w context) and truncated response_template so token_ids are like in the instruction + response
         self.collator = DataCollatorForCompletionOnlyLM(self.tokenized_response_w_context, tokenizer=self.tokenizer)
-
-        # Check with tokenizer (like a regular call from Trained would do)
-        def print_tokenize(txt):
-            for x in list(
-                zip(
-                    self.tokenizer.tokenize(txt, add_special_tokens=False),
-                    self.tokenizer.encode(txt, add_special_tokens=False),
-                )
-            ):
-                print(x)
-
-        # import pdb; pdb.set_trace()
         self.collator.torch_call([self.tokenized_instruction])
