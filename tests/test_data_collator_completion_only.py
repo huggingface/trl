@@ -13,17 +13,16 @@
 # limitations under the License.
 import unittest
 
-import pandas as pd
-import pyarrow
-from datasets import Dataset, DatasetDict
 from transformers import AutoTokenizer
 
-from trl import DataCollatorForCompletionOnlyLM, SFTTrainer
+from trl import DataCollatorForCompletionOnlyLM
 
 
 class DataCollatorForCompletionOnlyLMTester(unittest.TestCase):
     def test_data_collator_finds_response_template_llama2_tokenizer(self):
-        self.tokenizer = AutoTokenizer.from_pretrained("upstage/Llama-2-70b-instruct-v2")  # Not using official one to avoid logging in
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            "upstage/Llama-2-70b-instruct-v2"
+        )  # Not using official one to avoid logging in
         self.instruction = """### System: You are a helpful assistant.
 
 ### User: How much is 2+2?
@@ -31,25 +30,24 @@ class DataCollatorForCompletionOnlyLMTester(unittest.TestCase):
 ### Assistant: 2+2 equals 4"""
         self.response_template = "\n### Assistant:"
         # [29871, 13, 2277, 29937, 4007, 22137, 29901] -> [2277, 29937, 4007, 22137, 29901]
-        self.tokenized_response_w_context = self.tokenizer.encode(
-            self.response_template,
-            add_special_tokens=False
-        )[2:]
+        self.tokenized_response_w_context = self.tokenizer.encode(self.response_template, add_special_tokens=False)[2:]
 
         # Plain check on string
         self.assertIn(self.response_template, self.instruction)
         self.tokenized_instruction = self.tokenizer.encode(self.instruction, add_special_tokens=False)
-        
+
         # Test the fix for #598
         # Pass already tokenized (w context) and truncated response_template so token_ids are like in the instruction
         self.collator = DataCollatorForCompletionOnlyLM(self.tokenized_response_w_context, tokenizer=self.tokenizer)
 
         # Check with tokenizer (like a regular call from Trained would do)
         def print_tokenize(txt):
-            for x in list(zip(
+            for x in list(
+                zip(
                     self.tokenizer.tokenize(txt, add_special_tokens=False),
-                    self.tokenizer.encode(txt, add_special_tokens=False)
-                )):
+                    self.tokenizer.encode(txt, add_special_tokens=False),
+                )
+            ):
                 print(x)
 
         # import pdb; pdb.set_trace()
