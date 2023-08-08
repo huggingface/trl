@@ -4,16 +4,23 @@
 
 When performing classical supervised fine-tuning of language models, the loss (especially the validation loss) serves as a good indicator of the training progress. However, in Reinforcement Learning (RL), the loss becomes less informative about the model's performance, and its value may fluctuate while the actual performance improves.
 
-To address this, we recommend focusing on two key metrics:
+To address this, we recommend focusing on two key metrics first:
 
 **Mean Reward**: The primary goal is to maximize the reward achieved by the model during RL training.
 **Objective KL Divergence**: KL divergence (Kullback-Leibler divergence) measures the dissimilarity between two probability distributions. In the context of RL training, we use it to quantify the difference between the current model and a reference model. Ideally, we want to keep the KL divergence between 0 and 10 to ensure the model's generated text remains close to what the reference model produces.
+
+However, there are more metrics that can be useful for debugging, checkout the [logging section](logging).
 
 ## Why Do We Use a Reference Model, and What's the Purpose of KL Divergence?
 
 When training RL models, optimizing solely for reward may lead to unexpected behaviors, where the model exploits the environment in ways that don't align with good language generation. In the case of RLHF, we use a reward model trained to predict whether a generated text is highly ranked by humans.
 
 However, the RL model being optimized against the reward model may learn patterns that yield high reward but do not represent good language. This can result in extreme cases where the model generates texts with excessive exclamation marks or emojis to maximize the reward. In some worst-case scenarios, the model may generate patterns completely unrelated to natural language yet receive high rewards, similar to adversarial attacks.
+
+<div style="text-align: center">
+<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/kl-example.png">
+<p style="text-align: center;"> <b>Figure:</b> Samples without a KL penalty from [https://arxiv.org/pdf/1909.08593.pdf](https://arxiv.org/pdf/1909.08593.pdf). </p>
+</div>
 
 To address this issue, we add a penalty to the reward function based on the KL divergence between the current model and the reference model. By doing this, we encourage the model to stay close to what the reference model generates.
 
