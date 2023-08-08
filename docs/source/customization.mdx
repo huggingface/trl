@@ -179,19 +179,3 @@ if ds_plugin is not None and ds_plugin.is_zero3_init_enabled():
 else:
     sentiment_pipe = pipeline("sentiment-analysis", model="lvwerra/distilbert-imdb", device=device)
 ```
-
-## Use torch distributed 
-torch.distributed package provides PyTorch natives method to distribute a network over several machines (mostly useful if there are several GPU nodes). It copies the model on each GPU, runs the forward and backward on each and then applies the mean of gradient of all GPUs for each one. If running torch 1.XX, you can call `torch.distributed.launch`, like
-
-`python -m torch.distributed.launch --nproc_per_node=1 reward_summarization.py --bf16`
-
-For torch 2.+ `torch.distributed.launch` is deprecated and one needs to run:
-`torchrun --nproc_per_node=1 reward_summarization.py --bf16`
-or 
-`python -m torch.distributed.run --nproc_per_node=1 reward_summarization.py --bf16`
-
-Note that using `python -m torch.distributed.launch --nproc_per_node=1 reward_summarization.py --bf16` with torch 2.0 ends in
-```
-ValueError: Some specified arguments are not used by the HfArgumentParser: ['--local-rank=0']
-ERROR:torch.distributed.elastic.multiprocessing.api:failed (exitcode: 1) local_rank: 0 (pid: 194889) of binary: /home/ubuntu/miniconda3/envs/trl/bin/python
-```
