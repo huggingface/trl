@@ -61,8 +61,9 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
     Args:
         instruction_template (`Optional[str]`): the template form that indicates the start of the human instruction, typically something like
             '### Human:\n'. Useful for assistant-style conversation datasets
-        response_template (`str`): the template form that indicates the start of the response, typically something like
-            '### Response:\n'
+        response_template (`Union[str, List[int]]`): the template form that indicates the start of the response, typically something like
+            '### Response:\n'. It can also be passed as tokenized ids, which can be useful when using a tokenizer that encodes the response
+            differently if it does not have proper context.
         mlm (`bool`, *optional*, defaults to `False`): Whether or not to use masked language modeling in the underlying
             `DataCollatorForLanguageModeling` class. Note that this option currently has no effect but is present
              for flexibility and backwards-compatibility.
@@ -72,7 +73,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
 
     def __init__(
         self,
-        response_template: str,
+        response_template: Union[str, List[int]],
         instruction_template: Optional[str] = None,
         *args,
         mlm: bool = False,
@@ -83,7 +84,11 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
         self.instruction_template = instruction_template
         self.response_template = response_template
         self.ignore_index = ignore_index
-        self.response_token_ids = self.tokenizer.encode(self.response_template, add_special_tokens=False)
+        if type(response_template) == list:
+            # The user already provides the token ids
+            self.response_token_ids = response_template
+        else:
+            self.response_token_ids = self.tokenizer.encode(self.response_template, add_special_tokens=False)
 
     def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
         batch = super().torch_call(examples)
