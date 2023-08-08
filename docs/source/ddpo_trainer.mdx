@@ -15,7 +15,7 @@ There is a default implementation of this interface that you can use out of the 
 While there is an explicit class interface for the pipeline, the scheduler is constrained by a method signature associated with the pipeline class. The trainer will attempt to get the scheduler
 via this pipeline associated method rather than directly. This was the most minimal way forward and the only constraint is that a particular required output type.
 
-For a more detailed look into the interface and the default scheduler and pipeline implementation, go [here](https://github.com/lvwerra/trl/models/modelling_sd_base.py)
+For a more detailed look into the interface and the default scheduler and pipeline implementation, go [here](https://github.com/lvwerra/trl/tree/main/trl/models/modelling_sd_base.py)
 
 Also in addition, there is the expectation of providing a reward function and a prompt function. The reward function is used to evaluate the generated images  and the prompt function is used to generate the prompts that are used to generate the images.
 

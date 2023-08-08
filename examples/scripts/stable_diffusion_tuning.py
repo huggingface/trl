@@ -42,7 +42,13 @@ class MLP(nn.Module):
 
 
 class AestheticScorer(torch.nn.Module):
-    def __init__(self, dtype, hub_model_id="username/myusername/ddpo-aesthetic-scorer"):
+    """
+    This model attempts to predict the aesthetic score of an image. The aesthetic score
+    is a numerial approximation on how much a specific image is liked by humans on average.
+    This is from https://github.com/christophschuhmann/improved-aesthetic-predictor
+    """
+
+    def __init__(self, dtype, hub_model_id="myusername/ddpo-aesthetic-scorer"):
         super().__init__()
         self.clip = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
         self.processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
@@ -77,6 +83,7 @@ def aesthetic_score():
     return _fn
 
 
+# list of example prompts
 animals = [
     "cat",
     "dog",
