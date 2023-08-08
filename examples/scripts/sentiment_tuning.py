@@ -81,6 +81,8 @@ config = PPOConfig(
     score_clip=script_args.score_clip,
 )
 
+# set seed before initializing value head for deterministic eval
+set_seed(config.seed)
 
 # We then define the arguments to pass to the sentiment analysis pipeline.
 # We set `return_all_scores` to True to get the sentiment score for each token.
@@ -133,9 +135,6 @@ dataset = build_dataset(config)
 def collator(data):
     return dict((key, [d[key] for d in data]) for key in data[0])
 
-
-# set seed before initializing value head for deterministic eval
-set_seed(config.seed)
 
 # Now let's build the model, the reference model, and the tokenizer.
 if not script_args.use_peft:
