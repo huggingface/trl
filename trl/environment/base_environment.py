@@ -44,7 +44,17 @@ class StringStoppingCriteria(StoppingCriteria):
 
 
 class TextHistory:
+    """The TextHistory class keeps track of the history of an interaction between the language model and the environment."""
+
     def __init__(self, text, tokens, system=True):
+        """
+        Initialize TextHistory.
+
+        args:
+            text (`str`): The text of the first segment.
+            tokens (`torch.LongTensor`): The tokens of the first segment.
+            system (`bool`, *optional*): Whether the first segment is a system or user segment.
+        """
         self.system_spans = []
         self.text_spans = []
         self.token_spans = []
@@ -58,6 +68,15 @@ class TextHistory:
         self.append_segment(text, tokens, system=system)
 
     def append_segment(self, text, tokens, system=True):
+        """
+        Append a new segment to the history.
+
+        args:
+            text (`str`): The text of the new segment.
+            tokens (`torch.LongTensor`): The tokens of the new segment.
+            system (`bool`, *optional*): Whether the new segment is a system or user segment.
+        """
+
         if len(text) == 0 or len(tokens) == 0:
             raise ValueError("Can't append empty text or token list to history.")
 
@@ -77,15 +96,24 @@ class TextHistory:
         self.token_spans.append((original_token_length, len(self.tokens)))
 
     def complete(self, truncated=False):
+        """
+        Mark the history as completed.
+        """
         self.completed = True
         self.truncated = truncated
 
     @property
     def last_text_segment(self):
+        """
+        Get the last text segment.
+        """
         start, end = self.text_spans[-1]
         return self.text[start:end]
 
     def split_query_response_tokens(self):
+        """
+        Split the tokens into query and response tokens.
+        """
         split_index = self.token_spans[0][1]
         query = self.tokens[:split_index]
         response = self.tokens[split_index:]
@@ -94,6 +122,9 @@ class TextHistory:
         return query, response, mask
 
     def show_text(self):
+        """
+        Print the text history.
+        """
         if not is_rich_available:
             warnings.warn("install rich to display text")
             return
@@ -112,6 +143,9 @@ class TextHistory:
         print(text)
 
     def show_tokens(self, tokenizer):
+        """
+        Print the history tokens.
+        """
         if not is_rich_available:
             warnings.warn("install rich to display text")
             return
