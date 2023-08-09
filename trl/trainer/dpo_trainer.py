@@ -39,7 +39,7 @@ class DPOTrainer(Trainer):
         model (`transformers.PreTrainedModel`):
             The model to train, preferably an `AutoModelForSequenceClassification`.
         ref_model (`PreTrainedModelWrapper`):
-            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation and loss.
+            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation and loss. If no `ref_model` is provided, `model` without adapters is used as the reference model (only possible if peft_config is provided).
         beta (`float`, defaults to 0.1):
             The beta factor in DPO loss. Higher beta means less divergence from the initial policy.
         args (`transformers.TrainingArguments`):
@@ -78,7 +78,7 @@ class DPOTrainer(Trainer):
     def __init__(
         self,
         model: Union[PreTrainedModel, nn.Module] = None,
-        ref_model: Union[PreTrainedModel, nn.Module] = None,
+        ref_model: Optional[Union[PreTrainedModel, nn.Module]] = None,
         beta: float = 0.1,
         args: TrainingArguments = None,
         data_collator: Optional[DataCollator] = None,
@@ -107,6 +107,9 @@ class DPOTrainer(Trainer):
             if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
                 model = prepare_model_for_int8_training(model)
             model = get_peft_model(model, peft_config)
+
+        if ref_model is None and peft_config is None:
+            raise ValueError("You must provide a reference model or a PEFT config.")
 
         if data_collator is None:
             if tokenizer is None:
@@ -154,7 +157,8 @@ class DPOTrainer(Trainer):
         self.padding_value = padding_value
 
         self.beta = beta
-        self.ref_model = ref_model
+
+        self.ref_model = model.get_base_model() if ref_model is None else ref_model
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
@@ -173,7 +177,7 @@ class DPOTrainer(Trainer):
         )
 
         # Since we inherit from trainer we always have access to an accelerator
-        if hasattr(self, "accelerator"):
+        if hasattr(self, "accelerator") and ref_model is not None:
             self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
         else:
             raise AttributeError(
