@@ -4,12 +4,12 @@ Language models (LMs) are known to sometimes generate toxic outputs. In this exa
 
 Read this section to follow our investigation on how we can reduce toxicity in a wide range of LMs, from 125m parameters to 6B parameters! 
 
-Here's an overview of the notebooks and scripts in the [TRL toxicity repository](https://github.com/lvwerra/trl/tree/main/examples/toxicity/scripts) as well as the link for the interactive demo:
+Here's an overview of the notebooks and scripts in the [TRL toxicity repository](https://github.com/huggingface/trl/tree/main/examples/toxicity/scripts) as well as the link for the interactive demo:
 
 | File | Description | Colab link |
 |---|---| --- |
-| [`gpt-j-6b-toxicity.py`](https://github.com/lvwerra/trl/blob/main/examples/research_projects/toxicity/scripts/gpt-j-6b-toxicity.py) | Detoxify `GPT-J-6B` using PPO | x | 
-| [`evaluate-toxicity.py`](https://github.com/lvwerra/trl/blob/main/examples/research_projects/toxicity/scripts/evaluate-toxicity.py) | Evaluate de-toxified models using `evaluate` | x | 
+| [`gpt-j-6b-toxicity.py`](https://github.com/huggingface/trl/blob/main/examples/research_projects/toxicity/scripts/gpt-j-6b-toxicity.py) | Detoxify `GPT-J-6B` using PPO | x | 
+| [`evaluate-toxicity.py`](https://github.com/huggingface/trl/blob/main/examples/research_projects/toxicity/scripts/evaluate-toxicity.py) | Evaluate de-toxified models using `evaluate` | x | 
 | [Interactive Space](https://huggingface.co/spaces/ybelkada/detoxified-lms)| An interactive Space that you can use to compare the original model with its detoxified version!| x |
 
 ## Context
@@ -174,7 +174,7 @@ Below are few generation examples of `gpt-j-6b-detox` model:
 <img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl-toxicity-examples.png">
 </div>
 
-The evaluation script can be found [here](https://github.com/lvwerra/trl/blob/main/examples/research_projects/toxicity/scripts/evaluate-toxicity.py).
+The evaluation script can be found [here](https://github.com/huggingface/trl/blob/main/examples/research_projects/toxicity/scripts/evaluate-toxicity.py).
 
 ### Discussions
 
