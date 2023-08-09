@@ -2,7 +2,7 @@
 
 Supervised fine-tuning (or SFT for short) is a crucial step in RLHF. In TRL we provide an easy-to-use API to create your SFT models and train them with few lines of code on your dataset.
 
-Check out a complete flexible example inside [`examples/scripts`](https://github.com/lvwerra/trl/tree/main/examples/scripts/sft_trainer.py) folder.
+Check out a complete flexible example inside [`examples/scripts`](https://github.com/huggingface/trl/tree/main/examples/scripts/sft_trainer.py) folder.
 
 ## Quickstart
 
@@ -46,7 +46,7 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
-The above snippets will use the default training arguments from the [`transformers.TrainingArguments`](https://huggingface.co/docs/transformers/main_classes/trainer#transformers.TrainingArguments) class. If you want to modify that, make sure to create your own `TrainingArguments` object and pass it to the [`SFTTrainer`] constructor as it is done on the [`supervised_finetuning.py` script](https://github.com/lvwerra/trl/blob/main/examples/stack_llama/scripts/supervised_finetuning.py) on the stack-llama example.
+The above snippets will use the default training arguments from the [`transformers.TrainingArguments`](https://huggingface.co/docs/transformers/main_classes/trainer#transformers.TrainingArguments) class. If you want to modify that, make sure to create your own `TrainingArguments` object and pass it to the [`SFTTrainer`] constructor as it is done on the [`supervised_finetuning.py` script](https://github.com/huggingface/trl/blob/main/examples/stack_llama/scripts/supervised_finetuning.py) on the stack-llama example.
 
 ## Advanced usage
 
@@ -183,7 +183,7 @@ trainer = SFTTrainer(
 
 trainer.train()
 ```
-To preperly format your input make sure to process all the examples by looping over them and returning a list of processed text. Check out a full example on how to use SFTTrainer on alpaca dataset [here](https://github.com/lvwerra/trl/pull/444#issue-1760952763)
+To preperly format your input make sure to process all the examples by looping over them and returning a list of processed text. Check out a full example on how to use SFTTrainer on alpaca dataset [here](https://github.com/huggingface/trl/pull/444#issue-1760952763)
 
 ### Packing dataset ([`ConstantLengthDataset`])
 
