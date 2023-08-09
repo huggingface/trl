@@ -1,10 +1,17 @@
 import re
+import warnings
 
 import torch
 from accelerate.utils import extract_model_from_parallel
-from rich import print
-from rich.text import Text
 from transformers import StoppingCriteria, StoppingCriteriaList
+
+
+is_rich_available = True
+try:
+    from rich import print
+    from rich.text import Text
+except ImportError:
+    is_rich_available = False
 
 
 class StringStoppingCriteria(StoppingCriteria):
@@ -87,6 +94,10 @@ class TextHistory:
         return query, response, mask
 
     def show_text(self):
+        if not is_rich_available:
+            warnings.warn("install rich to display text")
+            return
+
         text = Text(self.text)
         text.stylize("black on grey85", self.text_spans[0][0], self.text_spans[1][0])
         for i, (start, end) in enumerate(self.text_spans[1:]):
@@ -101,10 +112,12 @@ class TextHistory:
         print(text)
 
     def show_tokens(self, tokenizer):
+        if not is_rich_available:
+            warnings.warn("install rich to display text")
+            return
+
         text = Text()
-
         prompt_end = self.token_spans[0][1]
-
         for i, (token, mask) in enumerate(zip(self.tokens, self.token_masks)):
             if i < prompt_end:
                 text.append(tokenizer.convert_ids_to_tokens(token.item()), style="black on grey85")
