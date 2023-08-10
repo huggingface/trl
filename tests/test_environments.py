@@ -12,12 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from trl import TextEnvironment, TextHistory
+from trl import TextEnvironment, TextHistory, AutoModelForCausalLMWithValueHead
 import torch
 import unittest
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
-def dummy_tool(text):
-    return text
+
+class DummyTool:
+    def __call__(text):
+        return text 
 
 
 class TextHistoryTest(unittest.TestCase):
@@ -79,3 +82,43 @@ class TextHistoryTest(unittest.TestCase):
         self.assertTrue(torch.equal(query, torch.tensor([1, 2, 3])))
         self.assertTrue(torch.equal(response,torch.tensor([4, 5, 6, 7, 8, 9])))
         self.assertTrue(torch.equal(mask, torch.tensor([1, 1, 1, 0, 0, 0])))
+
+
+class TextEnvironmentTester(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # model_id
+        cls.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+
+        # get models and tokenizer
+        cls.gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(cls.model_id)
+        cls.gpt2_tokenizer = AutoTokenizer.from_pretrained(cls.model_id)
+
+    def test_text_environment_setup(self):
+        env = TextEnvironment(self.gpt2_model, self.gpt2_tokenizer, tools=[DummyTool()], reward_fn=lambda x: torch.tensor(1), prompt="I am a prompt!\n")
+        self.assertEqual(env.prompt, "I am a prompt!\n")
+        self.assertEqual(list(env.tools.keys()), ["DummyTool"])
+        self.assertTrue(isinstance(env.tools["DummyTool"], DummyTool))
+        self.assertEqual(env.reward_fn("Hello there!"), 1)
+
+    def test_text_environment_generate(self):
+        pass
+
+    def test_text_environment_run(self):
+        pass
+
+    def test_text_environment_tool_call_parsing(self):
+        pass
+
+    def test_text_environment_tool_truncation(self):
+        pass
+
+    def test_text_environment_max_calls(self):
+        pass
+
+    def test_text_environment_max_length(self):
+        pass
+
+    def test_text_environment_commpute_rewards(self):
+        pass
+   
