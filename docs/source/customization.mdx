@@ -179,3 +179,22 @@ if ds_plugin is not None and ds_plugin.is_zero3_init_enabled():
 else:
     sentiment_pipe = pipeline("sentiment-analysis", model="lvwerra/distilbert-imdb", device=device)
 ```
+
+
+## Use score scaling/normalization/clipping
+As suggested by [Secrets of RLHF in Large Language Models Part I: PPO](https://arxiv.org/abs/2307.04964), we support score (aka reward) scaling/normalization/clipping to improve training stability via `PPOConfig`:
+```python
+from trl import PPOConfig
+
+ppo_config = {
+    use_score_scaling=True,
+    use_score_norm=True,
+    score_clip=0.5,
+}
+config = PPOConfig(**ppo_config)
+```
+
+To run `sentiment_tuning.py`, you can use the following command:
+```
+python examples/scripts/sentiment_tuning.py --log_with wandb --use_score_scaling --use_score_norm --score_clip 0.5
+```
