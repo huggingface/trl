@@ -123,9 +123,10 @@ def prompt_fn():
 
 
 def image_outputs_logger(image_data, global_step, accelerate_logger):
-    # extract the last one
+    # For the sake of this example, we will only log the last batch of images
+    # and associated data
     result = {}
-    images, prompts, _, rewards = image_data[-1]
+    images, prompts, _, rewards, _ = image_data[-1]
 
     for i, image in enumerate(images):
         prompt = prompts[i]

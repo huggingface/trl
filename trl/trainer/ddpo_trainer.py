@@ -57,6 +57,7 @@ class DDPOTrainer(BaseTrainer):
         prompt_function: Callable[[], Tuple[str, Any]],
         sd_pipeline: DDPOStableDiffusionPipeline,
         image_samples_hook: Optional[Callable[[Any, Any, Any], Any]] = None,
+        skip_load_save=False,
     ):
         if image_samples_hook is None:
             warn("No image_samples_hook provided; no images will be logged")
@@ -173,8 +174,9 @@ class DDPOTrainer(BaseTrainer):
         else:
             trainable_layers = self.sd_pipeline.unet
 
-        self.accelerator.register_save_state_pre_hook(self._save_model_hook)
-        self.accelerator.register_load_state_pre_hook(self._load_model_hook)
+        if not skip_load_save:
+            self.accelerator.register_save_state_pre_hook(self._save_model_hook)
+            self.accelerator.register_load_state_pre_hook(self._load_model_hook)
 
         # Enable TF32 for faster training on Ampere GPUs,
         # cf https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices
@@ -220,14 +222,20 @@ class DDPOTrainer(BaseTrainer):
             rewards = []
             for images, prompts, prompt_metadata in prompt_image_pairs:
                 reward, reward_metadata = self.reward_fn(images, prompts, prompt_metadata)
-                rewards.append(torch.as_tensor(reward, device=self.accelerator.device))
+                rewards.append(
+                    (
+                        torch.as_tensor(reward, device=self.accelerator.device),
+                        reward_metadata,
+                    )
+                )
         else:
             rewards = self.executor.map(lambda x: self.reward_fn(*x), prompt_image_pairs)
             rewards = [
-                torch.as_tensor(reward.result(), device=self.accelerator.device) for reward, _ in rewards
-            ]  # ignoring metadata
+                (torch.as_tensor(reward.result(), device=self.accelerator.device), reward_metadata.result())
+                for reward, reward_metadata in rewards
+            ]
 
-        return rewards
+        return zip(*rewards)
 
     def step(self, epoch: int, global_step: int):
         """
@@ -249,15 +257,16 @@ class DDPOTrainer(BaseTrainer):
         samples, prompt_image_data = self._generate_samples(
             iterations=self.config.sample_num_batches_per_epoch,
             batch_size=self.config.sample_batch_size,
-            is_async=self.config.async_reward_computation,
         )
 
         # collate samples into dict where each entry has shape (num_batches_per_epoch * sample.batch_size, ...)
         samples = {k: torch.cat([s[k] for s in samples]) for k in samples[0].keys()}
-        rewards = self.compute_rewards(prompt_image_data, is_async=self.config.async_reward_computation)
+        rewards, rewards_metadata = self.compute_rewards(
+            prompt_image_data, is_async=self.config.async_reward_computation
+        )
 
         for i, image_data in enumerate(prompt_image_data):
-            image_data.extend([rewards[i]])
+            image_data.extend([rewards[i], rewards_metadata[i]])
 
         if self.image_samples_callback is not None:
             self.image_samples_callback(prompt_image_data, global_step, self.accelerator.trackers[0])
@@ -462,14 +471,13 @@ class DDPOTrainer(BaseTrainer):
             raise ValueError(f"Unknown model type {type(models[0])}")
         models.pop()  # ensures that accelerate doesn't try to handle loading of the model
 
-    def _generate_samples(self, iterations, batch_size, is_async=False):
+    def _generate_samples(self, iterations, batch_size):
         """
         Generate samples from the model
 
         Args:
             iterations (int): Number of iterations to generate samples for
             batch_size (int): Batch size to use for sampling
-            is_async (bool): Whether or not to use async reward computation
 
         Returns:
             samples (List[Dict[str, torch.Tensor]]), prompt_image_pairs (List[List[Any]])
