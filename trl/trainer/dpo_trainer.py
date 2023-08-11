@@ -24,6 +24,7 @@ from transformers import DataCollator, PreTrainedModel, PreTrainedTokenizerBase,
 from transformers.trainer_callback import TrainerCallback
 
 from ..import_utils import is_peft_available
+from ..models import create_reference_model
 from .utils import DPODataCollatorWithPadding, pad_to_length
 
 
@@ -108,9 +109,6 @@ class DPOTrainer(Trainer):
                 model = prepare_model_for_int8_training(model)
             model = get_peft_model(model, peft_config)
 
-        if ref_model is None and peft_config is None:
-            raise ValueError("You must provide a reference model or a PEFT config.")
-
         if data_collator is None:
             if tokenizer is None:
                 raise ValueError(
@@ -158,8 +156,6 @@ class DPOTrainer(Trainer):
 
         self.beta = beta
 
-        self.ref_model = model.get_base_model() if ref_model is None else ref_model
-
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
         super().__init__(
@@ -176,8 +172,17 @@ class DPOTrainer(Trainer):
             preprocess_logits_for_metrics,
         )
 
+        if ref_model:
+            self.ref_model = ref_model
+        elif getattr(self.model, "is_peft_model", False):
+            # if we have a peft model, we can use the base model itself as the reference model
+            self.ref_model = model.get_base_model()
+        else:
+            # if we don't have a peft model, we need to create a reference model by copying the `model`
+            self.ref_model = create_reference_model(model)
+
         # Since we inherit from trainer we always have access to an accelerator
-        if hasattr(self, "accelerator") and ref_model is not None:
+        if hasattr(self, "accelerator"):
             self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
         else:
             raise AttributeError(
