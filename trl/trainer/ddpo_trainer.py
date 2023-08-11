@@ -138,11 +138,12 @@ class DDPOTrainer(BaseTrainer):
 
         # For mixed precision training we cast all non-trainable weigths (vae, non-lora text_encoder and non-lora unet) to half-precision
         # as these weights are only used for inference, keeping weights in full precision is not required.
-        inference_dtype = torch.float32
         if self.accelerator.mixed_precision == "fp16":
             inference_dtype = torch.float16
         elif self.accelerator.mixed_precision == "bf16":
             inference_dtype = torch.bfloat16
+        else:
+            inference_dtype = torch.float32
 
         self.sd_pipeline.vae.to(self.accelerator.device, dtype=inference_dtype)
         self.sd_pipeline.text_encoder.to(self.accelerator.device, dtype=inference_dtype)
