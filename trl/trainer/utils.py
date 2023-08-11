@@ -248,7 +248,7 @@ class DPODataCollatorWithPadding:
         padding_value (`int`, defaults to 0):
             The value used for padding.
         truncation_mode: (`str`, defaults to "keep_end"):
-            The truncation mode to use when truncating the prompt + chosen/rejected responses.
+            The truncation mode to use when truncating the prompt.
     """
     tokenizer: PreTrainedTokenizerBase
     padding: Union[bool, str] = True
