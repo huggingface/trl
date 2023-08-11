@@ -57,7 +57,6 @@ class DDPOTrainer(BaseTrainer):
         prompt_function: Callable[[], Tuple[str, Any]],
         sd_pipeline: DDPOStableDiffusionPipeline,
         image_samples_hook: Optional[Callable[[Any, Any, Any], Any]] = None,
-        skip_load_save=False,
     ):
         if image_samples_hook is None:
             warn("No image_samples_hook provided; no images will be logged")
@@ -174,9 +173,8 @@ class DDPOTrainer(BaseTrainer):
         else:
             trainable_layers = self.sd_pipeline.unet
 
-        if not skip_load_save:
-            self.accelerator.register_save_state_pre_hook(self._save_model_hook)
-            self.accelerator.register_load_state_pre_hook(self._load_model_hook)
+        self.accelerator.register_save_state_pre_hook(self._save_model_hook)
+        self.accelerator.register_load_state_pre_hook(self._load_model_hook)
 
         # Enable TF32 for faster training on Ampere GPUs,
         # cf https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices
