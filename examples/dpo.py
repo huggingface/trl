@@ -7,7 +7,7 @@ from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, TrainingArguments
 
 from trl import DPOTrainer
-
+from trl.trainer import disable_dropout
 
 # Define and parse arguments.
 @dataclass
@@ -86,13 +86,13 @@ def get_hh(split: str, sanity_check: bool = False, silent: bool = False, cache_d
 
     return dataset.map(split_prompt_and_responses)
 
-
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
     script_args = parser.parse_args_into_dataclasses()[0]
 
     # 1. load a pretrained model
     model = AutoModelForCausalLM.from_pretrained(script_args.model_name_or_path)
+    disable_dropout(model)
 
     if script_args.ignore_bias_buffers:
         # torch distributed hack
@@ -101,6 +101,8 @@ if __name__ == "__main__":
         ]
 
     model_ref = AutoModelForCausalLM.from_pretrained(script_args.model_name_or_path)
+    disable_dropout(model_ref)
+
     tokenizer = AutoTokenizer.from_pretrained(script_args.model_name_or_path)
     tokenizer.pad_token = tokenizer.eos_token
 

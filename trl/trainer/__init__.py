@@ -22,6 +22,7 @@ from .utils import (
     ConstantLengthDataset,
     DataCollatorForCompletionOnlyLM,
     RunningMoments,
+    disable_dropout
 )
 
 # isort: on
