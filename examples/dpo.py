@@ -9,6 +9,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, 
 from trl import DPOTrainer
 from trl.trainer import disable_dropout
 
+
 # Define and parse arguments.
 @dataclass
 class ScriptArguments:
@@ -85,6 +86,7 @@ def get_hh(split: str, sanity_check: bool = False, silent: bool = False, cache_d
         }
 
     return dataset.map(split_prompt_and_responses)
+
 
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
