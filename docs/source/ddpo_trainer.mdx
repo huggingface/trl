@@ -33,9 +33,8 @@ The script uses a small subset of parameters to configure the trainer. And all o
 It should be noted (in general) that because the trainer uses `accelerate` as a core component, some parameters are those of accelerate's.
 The commandline flags that are associated with the example's scripts parameters are listed below.
 
-|----|----|-----|
-|parameter|description| default |
-|----|----|-----|
+|parameter|description|default|
+| ---- | ---- | ---- |
 |`--hf_hub_aesthetic_model_id`|The HuggingFace model hub id of the aesthetic scorer model|None|
 |`--pretrained_model`|The string id of the pretrained Stable Diffusion model|`"runwayml/stable-diffusion-v1-5"`|
 |`--pretrained_revision`|The revision of the pretrained Stable Diffusion model|`"main"`|
@@ -53,7 +52,6 @@ The commandline flags that are associated with the example's scripts parameters 
 | `--project_dir`|The directory to use for saving the model|`"save"`|
 | `--automatic_checkpoint_naming`|Whether to automatically name model checkpoints|`True`|
 | `--total_limit`| Number of checkpoints to keep before overwriting old ones|`5`|
-|----|----|-----|
 
 The following are things to keep in mind (The code checks this for you as well) in general while configuring the trainer (beyond the use case of using the example script)
 
