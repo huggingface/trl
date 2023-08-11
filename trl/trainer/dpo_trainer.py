@@ -40,7 +40,8 @@ class DPOTrainer(Trainer):
         model (`transformers.PreTrainedModel`):
             The model to train, preferably an `AutoModelForSequenceClassification`.
         ref_model (`PreTrainedModelWrapper`):
-            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation and loss. If no `ref_model` is provided, `model` without adapters is used as the reference model (only possible if peft_config is provided).
+            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation and loss. If no
+            reference model is provided, the trainer will create a reference model with the same architecture as the model to be optimized.
         beta (`float`, defaults to 0.1):
             The beta factor in DPO loss. Higher beta means less divergence from the initial policy.
         args (`transformers.TrainingArguments`):
