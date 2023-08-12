@@ -110,13 +110,14 @@ class DPOTrainer(Trainer):
                 model = prepare_model_for_int8_training(model)
             model = get_peft_model(model, peft_config)
 
+        self.is_peft_model = getattr(model, "is_peft_model", False)
+
         if ref_model:
             self.ref_model = ref_model
-        elif getattr(model, "is_peft_model", False):
-            # if we have a peft model, we can use the base model itself as the reference model
-            self.ref_model = model.get_base_model()
+        elif self.is_peft_model:
+            # The `model` with adapters turned off will be used as the reference model
+            self.ref_model = None
         else:
-            # if we don't have a peft model, we need to create a reference model by copying the `model`
             self.ref_model = create_reference_model(model)
 
         if data_collator is None:
@@ -182,13 +183,22 @@ class DPOTrainer(Trainer):
             preprocess_logits_for_metrics,
         )
 
-        # Since we inherit from trainer we always have access to an accelerator
-        if hasattr(self, "accelerator"):
-            self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
-        else:
+        if not hasattr(self, "accelerator"):
             raise AttributeError(
                 "Your `Trainer` does not have an `accelerator` object. Consider upgrading `transformers`."
             )
+
+        if self.ref_model is None:
+            # If `self.ref_model is None`, we must be able to disable adapters on `model`
+            if not hasattr(
+                self.accelerator.unwrap_model(self.model).pretrained_model,
+                "disable_adapter",
+            ):
+                raise ValueError(
+                    "You are using a `peft` version that does not support `disable_adapter`. Please update your `peft` version to the latest version."
+                )
+        else:
+            self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
     def concatenated_inputs(self, batch: Dict[str, Union[List, torch.LongTensor]]) -> Dict[str, torch.LongTensor]:
         """Concatenate the chosen and rejected inputs into a single tensor.
@@ -329,12 +339,21 @@ class DPOTrainer(Trainer):
             policy_rejected_logits,
         ) = self.concatenated_forward(model, batch)
         with torch.no_grad():
-            (
-                reference_chosen_logps,
-                reference_rejected_logps,
-                _,
-                _,
-            ) = self.concatenated_forward(self.ref_model, batch)
+            if self.ref_model is None:
+                with self.accelerator.unwrap_model(self.model).pretrained_model.disable_adapter():
+                    (
+                        reference_chosen_logps,
+                        reference_rejected_logps,
+                        _,
+                        _,
+                    ) = self.concatenated_forward(self.model, batch)
+            else:
+                (
+                    reference_chosen_logps,
+                    reference_rejected_logps,
+                    _,
+                    _,
+                ) = self.concatenated_forward(self.ref_model, batch)
 
         losses, chosen_rewards, rejected_rewards = self.dpo_loss(
             policy_chosen_logps,
