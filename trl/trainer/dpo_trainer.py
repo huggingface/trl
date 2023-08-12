@@ -189,7 +189,6 @@ class DPOTrainer(Trainer):
             )
 
         if self.ref_model is None:
-            # If `self.ref_model is None`, we must be able to disable adapters on `model`
             if not hasattr(
                 self.accelerator.unwrap_model(self.model).pretrained_model,
                 "disable_adapter",
@@ -407,13 +406,23 @@ class DPOTrainer(Trainer):
             pad_token_id=self.tokenizer.pad_token_id,
         )
 
-        reference_output = self.ref_model.generate(
-            batch["prompt_input_ids"],
-            attention_mask=batch["prompt_attention_mask"],
-            max_length=self.config.max_length,
-            do_sample=True,
-            pad_token_id=self.tokenizer.pad_token_id,
-        )
+        if self.ref_model is None:
+            with self.accelerator.unwrap_model(self.model).pretrained_model.disable_adapter():
+                reference_output = self.model.generate(
+                    batch["prompt_input_ids"],
+                    attention_mask=batch["prompt_attention_mask"],
+                    max_length=self.config.max_length,
+                    do_sample=True,
+                    pad_token_id=self.tokenizer.pad_token_id,
+                )
+        else:
+            reference_output = self.ref_model.generate(
+                batch["prompt_input_ids"],
+                attention_mask=batch["prompt_attention_mask"],
+                max_length=self.config.max_length,
+                do_sample=True,
+                pad_token_id=self.tokenizer.pad_token_id,
+            )
 
         policy_output = pad_to_length(policy_output, self.config.max_length, self.tokenizer.pad_token_id)
         policy_output_decoded = self.tokenizer.batch_decode(policy_output, skip_special_tokens=True)
