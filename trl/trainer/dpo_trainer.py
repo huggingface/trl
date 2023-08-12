@@ -110,6 +110,15 @@ class DPOTrainer(Trainer):
                 model = prepare_model_for_int8_training(model)
             model = get_peft_model(model, peft_config)
 
+        if ref_model:
+            self.ref_model = ref_model
+        elif getattr(model, "is_peft_model", False):
+            # if we have a peft model, we can use the base model itself as the reference model
+            self.ref_model = model.get_base_model()
+        else:
+            # if we don't have a peft model, we need to create a reference model by copying the `model`
+            self.ref_model = create_reference_model(model)
+
         if data_collator is None:
             if tokenizer is None:
                 raise ValueError(
@@ -172,15 +181,6 @@ class DPOTrainer(Trainer):
             optimizers,
             preprocess_logits_for_metrics,
         )
-
-        if ref_model:
-            self.ref_model = ref_model
-        elif getattr(self.model, "is_peft_model", False):
-            # if we have a peft model, we can use the base model itself as the reference model
-            self.ref_model = model.get_base_model()
-        else:
-            # if we don't have a peft model, we need to create a reference model by copying the `model`
-            self.ref_model = create_reference_model(model)
 
         # Since we inherit from trainer we always have access to an accelerator
         if hasattr(self, "accelerator"):
