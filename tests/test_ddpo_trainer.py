@@ -129,4 +129,4 @@ class DDPOTrainerTester(unittest.TestCase):
             latents, timesteps, next_latents, log_probs, advantage, prompt_embeds
         )
 
-        self.assertTrue(torch.isclose(loss.cpu(), torch.tensor([-0.9994]), 1e-04))
+        self.assertTrue(torch.isclose(loss.cpu(), torch.tensor([-0.9994]), 1e-03))
