@@ -193,10 +193,7 @@ if __name__ == "__main__":
         project_kwargs=project_kwargs,
     )
 
-    pretrained_model = args.pretrained_model
-    pretrained_revision = args.pretrained_revision
-
-    pipeline = DefaultDDPOPipeline.from_pretrained(pretrained_model, revision=pretrained_revision)
+    pipeline = DefaultDDPOPipeline.from_pretrained(args.pretrained_model, revision=args.pretrained_revision)
 
     pipeline.scheduler = DefaultDDPOScheduler.from_config(pipeline.scheduler.config)
 

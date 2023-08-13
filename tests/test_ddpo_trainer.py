@@ -103,7 +103,7 @@ class DDPOTrainerTester(unittest.TestCase):
         loss = self.trainer.loss(advantage, clip_range, ratio)
         self.assertEqual(loss.item(), 1.0)
 
-    def test__generate_samples(self):
+    def test_generate_samples(self):
         samples, output_pairs = self.trainer._generate_samples(1, 2)
         self.assertEqual(len(samples), 1)
         self.assertEqual(len(output_pairs), 1)
