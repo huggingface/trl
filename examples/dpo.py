@@ -7,7 +7,6 @@ from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, TrainingArguments
 
 from trl import DPOTrainer
-from trl.trainer import disable_dropout
 
 
 # Define and parse arguments.
