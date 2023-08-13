@@ -24,7 +24,7 @@ from transformers import DataCollator, PreTrainedModel, PreTrainedTokenizerBase,
 from transformers.trainer_callback import TrainerCallback
 
 from ..import_utils import is_peft_available
-from .utils import DPODataCollatorWithPadding, pad_to_length, disable_dropout_in_model
+from .utils import DPODataCollatorWithPadding, disable_dropout_in_model, pad_to_length
 
 
 if is_peft_available():
@@ -156,7 +156,6 @@ class DPOTrainer(Trainer):
         if disable_dropout:
             disable_dropout_in_model(model)
             disable_dropout_in_model(ref_model)
-
 
         self.label_pad_token_id = label_pad_token_id
         self.padding_value = padding_value
