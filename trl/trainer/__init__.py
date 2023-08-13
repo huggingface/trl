@@ -22,7 +22,7 @@ from .utils import (
     ConstantLengthDataset,
     DataCollatorForCompletionOnlyLM,
     RunningMoments,
-    disable_dropout,
+    disable_dropout_in_model,
 )
 
 # isort: on

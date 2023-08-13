@@ -94,7 +94,6 @@ if __name__ == "__main__":
 
     # 1. load a pretrained model
     model = AutoModelForCausalLM.from_pretrained(script_args.model_name_or_path)
-    disable_dropout(model)
 
     if script_args.ignore_bias_buffers:
         # torch distributed hack
@@ -103,7 +102,6 @@ if __name__ == "__main__":
         ]
 
     model_ref = AutoModelForCausalLM.from_pretrained(script_args.model_name_or_path)
-    disable_dropout(model_ref)
 
     tokenizer = AutoTokenizer.from_pretrained(script_args.model_name_or_path)
     tokenizer.pad_token = tokenizer.eos_token
