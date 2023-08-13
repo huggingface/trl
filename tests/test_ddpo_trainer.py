@@ -82,11 +82,11 @@ class DDPOTrainerTester(unittest.TestCase):
             save_freq=1000000,
             use_lora=False,
         )
-        pretrained_model = "runwayml/stable-diffusion-v1-5"
+        pretrained_model = "hf-internal-testing/tiny-stable-diffusion-torch"
         pretrained_revision = "main"
 
         pipeline = DefaultDDPOPipeline.from_pretrained(pretrained_model, revision=pretrained_revision)
-        pipeline.unet = DummyUnet()
+        # pipeline.unet = DummyUnet()
         pipeline.scheduler = DefaultDDPOScheduler.from_config(pipeline.scheduler.config)
 
         self.trainer = DDPOTrainer(self.ddpo_config, scorer_function, prompt_function, pipeline)
@@ -124,9 +124,9 @@ class DDPOTrainerTester(unittest.TestCase):
         self.assertEqual(next_latents.shape, (1, 4, 64, 64))
         self.assertEqual(log_probs.shape, (1,))
         self.assertEqual(timesteps.shape, (1,))
-        self.assertEqual(prompt_embeds.shape, (2, 77, 768))
+        self.assertEqual(prompt_embeds.shape, (2, 77, 32))
         loss, approx_kl, clipfrac = self.trainer.calculate_loss(
             latents, timesteps, next_latents, log_probs, advantage, prompt_embeds
         )
 
-        self.assertTrue(torch.isclose(loss.cpu(), torch.tensor([-1.0]), 1e-04))
+        self.assertTrue(torch.isclose(loss.cpu(), torch.tensor([-0.9994]), 1e-04))
