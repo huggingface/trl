@@ -1,9 +1,5 @@
-# Credits
-
-This work is heavily influenced by the repo [here](https://github.com/kvablack/ddpo-pytorch) and the associated [paper](https://arxiv.org/abs/2305.13301).
-
-# Getting started with Stable Diffusion finetuning with reinforcement learning
-
+# Denoising Diffusion Policy Optimization
+## Getting started with Stable Diffusion finetuning with reinforcement learning
 
 The machinery for finetuning of Stable Diffusion models with reinforcement learning makes heavy use of HuggingFace's `diffusers`
 library. A reason for  stating this is that getting started requires a bit of familiarity with the `diffusers` library concepts, mainly two of them - pipelines and schedulers.
@@ -19,7 +15,7 @@ For a more detailed look into the interface and the default scheduler and pipeli
 
 Also in addition, there is the expectation of providing a reward function and a prompt function. The reward function is used to evaluate the generated images  and the prompt function is used to generate the prompts that are used to generate the images.
 
-# Getting started with `examples/scripts/stable_diffusion_tuning.py`
+## Getting started with `examples/scripts/stable_diffusion_tuning.py`
 
 The `stable_diffusion_tuning.py` script is a working example of using the `DDPO` trainer to finetune a Stable Diffusion model. This example explicitly configures a small subset of the overall parameters associated with the config object (`DDPOConfig`).
 
@@ -61,7 +57,7 @@ The following are things to keep in mind (The code checks this for you as well) 
 - The configurable sample batch size must be divisible by the configurable train batch size
 - The configurable sample batch size must be divisible by both the configurable gradient accumulation steps and the configurable accelerator processes count
 
-# Setting up the image logging hook function
+## Setting up the image logging hook function
 
 Expect the function to be given a list of lists of the form
 ```python
@@ -72,7 +68,7 @@ and `image`, `prompt`, `prompt_metadata`, `rewards`, `reward_metadata` are batch
 The last list in the lists of lists represents the last sample batch. You are likely to want to log this one
 While you are free to log however you want the use of `wandb` or `tensorboard` is recommended.
 
-## Key terms
+### Key terms
 - `rewards` : The rewards/score is a numerical associated with the generated image and is key to steering the RL process
 - `reward_metadata` : The reward metadata is the metadata associated with the reward. Think of this as extra information payload delivered alongside the reward
 - `prompt` : The prompt is the text that is used to generate the image
@@ -101,3 +97,8 @@ def image_outputs_hook(image_data, global_step, accelerate_logger):
     )
 
 ```
+
+## Credits
+
+This work is heavily influenced by the repo [here](https://github.com/kvablack/ddpo-pytorch) and the associated paper [Training Diffusion Models
+with Reinforcement Learning by Kevin Black, Michael Janner, Yilan Du, Ilya Kostrikov, Sergey Levine](https://arxiv.org/abs/2305.13301).
