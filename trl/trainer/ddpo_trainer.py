@@ -426,7 +426,12 @@ class DDPOTrainer(BaseTrainer):
 
     def _setup_optimizer(self, trainable_layers_parameters):
         if self.config.train_use_8bit_adam:
-            import bitsandbytes
+            try:
+                import bitsandbytes
+            except ImportError:
+                raise ImportError(
+                    "bitsandbytes is required to use 8-bit Adam. Install with `pip install bitsandbytes`"
+                )
 
             optimizer_cls = bitsandbytes.optim.AdamW8bit
         else:
