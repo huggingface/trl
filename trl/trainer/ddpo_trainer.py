@@ -137,9 +137,6 @@ class DDPOTrainer(BaseTrainer):
         else:
             inference_dtype = torch.float32
 
-        if not config.use_lora:
-            inference_dtype = torch.float32
-
         self.sd_pipeline.vae.to(self.accelerator.device, dtype=inference_dtype)
         self.sd_pipeline.text_encoder.to(self.accelerator.device, dtype=inference_dtype)
         self.sd_pipeline.unet.to(self.accelerator.device, dtype=inference_dtype)

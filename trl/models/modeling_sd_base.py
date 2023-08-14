@@ -512,6 +512,6 @@ class DefaultDDPOStableDiffusionPipeline(DDPOStableDiffusionPipeline):
     @property
     def text_encoder(self):
         return self.sd_pipeline.text_encoder
-    
+
     def set_progress_bar_config(self, *args, **kwargs):
         self.sd_pipeline.set_progress_bar_config(*args, **kwargs)
