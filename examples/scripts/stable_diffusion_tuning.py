@@ -191,6 +191,7 @@ if __name__ == "__main__":
         tracker_project_name=args.tracker_project_name,
         log_with=args.log_with,
         project_kwargs=project_kwargs,
+        use_lora=False,
     )
 
     pipeline = DefaultDDPOStableDiffusionPipeline(args.pretrained_model, args.pretrained_revision)
