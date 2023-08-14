@@ -248,7 +248,7 @@ class DPODataCollatorWithPadding:
         padding_value (`int`, defaults to 0):
             The value used for padding.
         truncation_mode: (`str`, defaults to "keep_end"):
-            The truncation mode to use when truncating the prompt + chosen/rejected responses.
+            The truncation mode to use when truncating the prompt.
     """
     tokenizer: PreTrainedTokenizerBase
     padding: Union[bool, str] = True
@@ -586,3 +586,9 @@ def pad_to_length(tensor: torch.Tensor, length: int, pad_value: Union[int, float
             ],
             dim=dim,
         )
+
+
+def disable_dropout_in_model(model: torch.nn.Module) -> None:
+    for module in model.modules():
+        if isinstance(module, torch.nn.Dropout):
+            module.p = 0
