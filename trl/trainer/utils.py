@@ -107,10 +107,10 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
 
                 if response_token_ids_start_idx is None:
                     warnings.warn(
-                        f'Could not find response key `{self.response_template}` in the ' \
-                        f'following instance: {self.tokenizer.decode(batch["input_ids"][i])} ' \
-                        f'This instance will be ignored in loss calculation. ' \
-                        f'Note, if this happens often, consider increasing the `max_seq_length`.'
+                        f"Could not find response key `{self.response_template}` in the "
+                        f'following instance: {self.tokenizer.decode(batch["input_ids"][i])} '
+                        f"This instance will be ignored in loss calculation. "
+                        f"Note, if this happens often, consider increasing the `max_seq_length`."
                     )
                     batch["labels"][i, :] = self.ignore_index
                 else:
@@ -134,10 +134,10 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
 
                 if len(self.response_token_ids) == 0:
                     warnings.warn(
-                        f'Could not find response key `{self.response_template}` in the ' \
-                        f'following instance: {self.tokenizer.decode(batch["input_ids"][i])} ' \
-                        f'This instance will be ignored in loss calculation. ' \
-                        f'Note, if this happens often, consider increasing the `max_seq_length`.'
+                        f"Could not find response key `{self.response_template}` in the "
+                        f'following instance: {self.tokenizer.decode(batch["input_ids"][i])} '
+                        f"This instance will be ignored in loss calculation. "
+                        f"Note, if this happens often, consider increasing the `max_seq_length`."
                     )
                     batch["labels"][i, :] = self.ignore_index
 
@@ -149,10 +149,10 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
 
                 if len(human_token_ids_idxs) == 0:
                     warnings.warn(
-                        f'Could not find instruction key `{self.instruction_template}` in the ' \
-                        f'following instance: {self.tokenizer.decode(batch["input_ids"][i])} ' \
-                        f'This instance will be ignored in loss calculation. ' \
-                        f'Note, if this happens often, consider increasing the `max_seq_length`.'
+                        f"Could not find instruction key `{self.instruction_template}` in the "
+                        f'following instance: {self.tokenizer.decode(batch["input_ids"][i])} '
+                        f"This instance will be ignored in loss calculation. "
+                        f"Note, if this happens often, consider increasing the `max_seq_length`."
                     )
                     batch["labels"][i, :] = self.ignore_index
 

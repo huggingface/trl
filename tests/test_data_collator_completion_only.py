@@ -13,6 +13,7 @@
 # limitations under the License.
 import unittest
 
+import torch
 from transformers import AutoTokenizer
 
 from trl import DataCollatorForCompletionOnlyLM
@@ -40,3 +41,29 @@ class DataCollatorForCompletionOnlyLMTester(unittest.TestCase):
         # Pass already tokenized (w context) and truncated response_template so token_ids are like in the instruction + response
         self.collator = DataCollatorForCompletionOnlyLM(self.tokenized_response_w_context, tokenizer=self.tokenizer)
         self.collator.torch_call([self.tokenized_instruction])
+
+    def test_data_collator_handling_of_long_sequences(self):
+        self.tokenizer = AutoTokenizer.from_pretrained("upstage/Llama-2-70b-instruct-v2")
+        self.instruction = """### System: You are a helpful assistant.
+
+### User: How much is 2+2? I'm asking because I'm not sure. And I'm not sure because I'm not good at math.
+"""
+        self.response_template = "\n### Assistant:"
+
+        # check DataCollatorForCompletionOnlyLM with response template only
+        self.tokenized_instruction = self.tokenizer.encode(self.instruction, add_special_tokens=False)
+        self.collator = DataCollatorForCompletionOnlyLM(self.response_template, tokenizer=self.tokenizer)
+        encoded_instance = self.collator.torch_call([self.tokenized_instruction])
+        result = torch.all(encoded_instance["labels"] == -100)
+        self.assertTrue(result, "Not all values in the tensor are -100.")
+
+        # check DataCollatorForCompletionOnlyLM with response template and instruction template
+        self.instruction_template = "\n### User:"
+        self.collator = DataCollatorForCompletionOnlyLM(self.response_template, self.instruction_template, tokenizer=self.tokenizer)
+        encoded_instance = self.collator.torch_call([self.tokenized_instruction])
+        result = torch.all(encoded_instance["labels"] == -100)
+        self.assertTrue(result, "Not all values in the tensor are -100.")
+
+
+    
+        
