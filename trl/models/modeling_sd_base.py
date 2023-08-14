@@ -89,9 +89,6 @@ class DDPOStableDiffusionPipeline(object):
     def text_encoder(self):
         raise NotImplementedError
 
-    def set_progress_bar_config(self, *args, **kwargs):
-        raise NotImplementedError
-
 
 def _left_broadcast(t, shape):
     assert t.ndim <= len(shape)
@@ -404,7 +401,7 @@ class DDPOPipeline(StableDiffusionPipeline):
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
         all_latents = [latents]
         all_log_probs = []
-        with self.progress_bar(total=num_inference_steps) as progress_bar:
+        for _ in range(num_inference_steps):
             for i, t in enumerate(timesteps):
                 # expand the latents if we are doing classifier free guidance
                 latent_model_input = torch.cat([latents] * 2) if do_classifier_free_guidance else latents
@@ -438,7 +435,6 @@ class DDPOPipeline(StableDiffusionPipeline):
 
                 # call the callback, if provided
                 if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
-                    progress_bar.update()
                     if callback is not None and i % callback_steps == 0:
                         callback(i, t, latents)
 
@@ -494,6 +490,3 @@ class DefaultDDPOStableDiffusionPipeline(DDPOStableDiffusionPipeline):
     @property
     def text_encoder(self):
         return self.sd_pipeline.text_encoder
-
-    def set_progress_bar_config(self, *args, **kwargs):
-        self.sd_pipeline.set_progress_bar_config(*args, **kwargs)
