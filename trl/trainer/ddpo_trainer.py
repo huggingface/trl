@@ -14,7 +14,6 @@
 
 import contextlib
 import os
-import uuid
 from collections import defaultdict
 from concurrent import futures
 from typing import Any, Callable, Optional, Tuple
@@ -60,9 +59,6 @@ class DDPOTrainer(BaseTrainer):
     ):
         if image_samples_hook is None:
             warn("No image_samples_hook provided; no images will be logged")
-
-        if not config.run_name:
-            config.run_name = uuid.uuid4().hex
 
         self.prompt_fn = prompt_function
         self.reward_fn = reward_function
@@ -202,7 +198,7 @@ class DDPOTrainer(BaseTrainer):
         self.trainable_layers, self.optimizer = self.accelerator.prepare(trainable_layers, self.optimizer)
 
         if self.config.async_reward_computation:
-            self.executor = futures.ThreadPoolExecutor(max_workers=2)
+            self.executor = futures.ThreadPoolExecutor(max_workers=config.max_workers)
 
         if config.resume_from:
             logger.info(f"Resuming from {config.resume_from}")
@@ -296,8 +292,6 @@ class DDPOTrainer(BaseTrainer):
         del samples["prompt_ids"]
 
         total_batch_size, num_timesteps = samples["timesteps"].shape
-        assert total_batch_size == self.config.sample_batch_size * self.config.sample_num_batches_per_epoch
-        assert num_timesteps == self.config.sample_num_steps
 
         for inner_epoch in range(self.config.train_num_inner_epochs):
             # shuffle samples along batch dimension
@@ -323,14 +317,16 @@ class DDPOTrainer(BaseTrainer):
 
             # Transpose the list of original values
             transposed_values = zip(*reshaped_values)
-
             # Create new dictionaries for each row of transposed values
             samples_batched = [dict(zip(original_keys, row_values)) for row_values in transposed_values]
 
             self.sd_pipeline.unet.train()
             global_step = self._train_batched_samples(inner_epoch, epoch, global_step, samples_batched)
             # ensure optimization step at the end of the inner epoch
-            assert self.accelerator.sync_gradients
+            if not self.accelerator.sync_gradients:
+                raise ValueError(
+                    "Optimization step should have been performed by this point. Please check calculated gradient accumulation settings."
+                )
 
         if epoch != 0 and epoch % self.config.save_freq == 0 and self.accelerator.is_main_process:
             self.accelerator.save_state()
@@ -421,12 +417,7 @@ class DDPOTrainer(BaseTrainer):
 
     def _setup_optimizer(self, trainable_layers_parameters):
         if self.config.train_use_8bit_adam:
-            try:
-                import bitsandbytes
-            except ImportError:
-                raise ImportError(
-                    "bitsandbytes is required to use 8-bit Adam. Install with `pip install bitsandbytes`"
-                )
+            import bitsandbytes
 
             optimizer_cls = bitsandbytes.optim.AdamW8bit
         else:
@@ -515,9 +506,7 @@ class DDPOTrainer(BaseTrainer):
 
             latents = torch.stack(latents, dim=1)  # (batch_size, num_steps + 1, ...)
             log_probs = torch.stack(log_probs, dim=1)  # (batch_size, num_steps, 1)
-            timesteps = self.sd_pipeline.scheduler.timesteps.repeat(
-                self.config.sample_batch_size, 1
-            )  # (batch_size, num_steps)
+            timesteps = self.sd_pipeline.scheduler.timesteps.repeat(batch_size, 1)  # (batch_size, num_steps)
 
             samples.append(
                 {
@@ -584,9 +573,6 @@ class DDPOTrainer(BaseTrainer):
 
                 # Checks if the accelerator has performed an optimization step behind the scenes
                 if self.accelerator.sync_gradients:
-                    assert (j == self.num_train_timesteps - 1) and (
-                        i + 1
-                    ) % self.config.train_gradient_accumulation_steps == 0
                     # log training-related stuff
                     info = {k: torch.mean(torch.stack(v)) for k, v in info.items()}
                     info = self.accelerator.reduce(info, reduction="mean")

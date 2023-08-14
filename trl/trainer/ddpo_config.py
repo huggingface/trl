@@ -115,6 +115,10 @@ class DDPOConfig(object):
         default=False,
         metadata={"help": "Whether to compute rewards asynchronously."},
     )
+    max_workers: Optional[int] = field(
+        default=2,
+        metadata={"help": "The maximum number of workers to use for async reward computation."},
+    )
     negative_prompts: Optional[str] = field(
         default="",
         metadata={"help": "Comma-separated list of prompts to use as negative examples."},
