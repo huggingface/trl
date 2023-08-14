@@ -461,7 +461,10 @@ class PreTrainedModelWrapper(nn.Module):
         num_labels, hidden_dim = score_dict["weight"].shape
         has_bias = any(["bias" in name for name in adapter_state_dict.keys()])
 
-        self.score = nn.Linear(hidden_dim, num_labels, bias=has_bias).to(self._get_current_device())
+        self.score = nn.Linear(hidden_dim, num_labels, bias=has_bias).to(
+            device=self._get_current_device(),
+            dtype=self.pretrained_model.dtype,
+        )
         self.score.load_state_dict(score_dict)
 
         # load the adapter to the model
