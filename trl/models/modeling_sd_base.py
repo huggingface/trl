@@ -71,22 +71,37 @@ class DDPOStableDiffusionPipeline(object):
 
     @property
     def unet(self):
+        """
+        Returns the 2d U-Net model used for diffusion.
+        """
         raise NotImplementedError
 
     @property
     def vae(self):
+        """
+        Returns the Variational Autoencoder model used from mapping images to and from the latent space
+        """
         raise NotImplementedError
 
     @property
     def tokenizer(self):
+        """
+        Returns the tokenizer used for tokenizing text inputs
+        """
         raise NotImplementedError
 
     @property
     def scheduler(self):
+        """
+        Returns the scheduler associated with the pipeline used for the diffusion process
+        """
         raise NotImplementedError
 
     @property
     def text_encoder(self):
+        """
+        Returns the text encoder used for encoding text inputs
+        """
         raise NotImplementedError
 
 

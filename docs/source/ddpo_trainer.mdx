@@ -5,13 +5,12 @@ The machinery for finetuning of Stable Diffusion models with reinforcement learn
 library. A reason for  stating this is that getting started requires a bit of familiarity with the `diffusers` library concepts, mainly two of them - pipelines and schedulers.
 Right out of the box (`diffusers` library), there isn't a `Pipeline` nor a `Scheduler` instance that is suitable for finetuning with reinforcement learning. Some adjustments need to made. 
 
-There is an interface that is provided by this library that is required to be implemented to be used with the `DDPOTrainer`, which is the main machinery for fine-tuning Stable Diffusion with reinforcement learning. 
+There is an pipeline interface that is provided by this library that is required to be implemented to be used with the `DDPOTrainer`, which is the main machinery for fine-tuning Stable Diffusion with reinforcement learning. 
 There is a default implementation of this interface that you can use out of the box. Assuming the default implementation is sufficient and/or to get things moving, refer to the training example alongside this guide. 
 
-While there is an explicit class interface for the pipeline, the scheduler is constrained by a method signature associated with the pipeline class. The trainer will attempt to get the scheduler
-via this pipeline associated method rather than directly. This was the most minimal way forward and the only constraint is that a particular required output type.
+The point of the interface is to fuse the pipeline and the scheduler into one object. This is done to make the trainer more flexible and to allow for the use of different pipelines and schedulers beyond the examples in this repository and elsewhere at this time of writing. Also the scheduler step is a method of this pipeline interface and this may seem redundant given that the raw scheduler is accessible via the interface but this is the only way to constrain the scheduler step output to an output type befitting of the algorithm at hand (DDPO).
 
-For a more detailed look into the interface and the default scheduler and pipeline implementation, go [here](https://github.com/lvwerra/trl/tree/main/trl/models/modelling_sd_base.py)
+For a more detailed look into the interface and the associated default implementation, go [here](https://github.com/lvwerra/trl/tree/main/trl/models/modeling_sd_base.py)
 
 Also in addition, there is the expectation of providing a reward function and a prompt function. The reward function is used to evaluate the generated images  and the prompt function is used to generate the prompts that are used to generate the images.
 
