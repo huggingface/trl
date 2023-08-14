@@ -104,6 +104,12 @@ class DDPOStableDiffusionPipeline(object):
         """
         raise NotImplementedError
 
+    def set_progress_bar_config(self, *args, **kwargs):
+        """
+        Sets the progress bar config for the pipeline
+        """
+        raise NotImplementedError
+
 
 def _left_broadcast(t, shape):
     assert t.ndim <= len(shape)
@@ -506,3 +512,6 @@ class DefaultDDPOStableDiffusionPipeline(DDPOStableDiffusionPipeline):
     @property
     def text_encoder(self):
         return self.sd_pipeline.text_encoder
+    
+    def set_progress_bar_config(self, *args, **kwargs):
+        self.sd_pipeline.set_progress_bar_config(*args, **kwargs)

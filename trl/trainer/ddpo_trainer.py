@@ -120,6 +120,14 @@ class DDPOTrainer(BaseTrainer):
         self.sd_pipeline.text_encoder.requires_grad_(False)
         self.sd_pipeline.unet.requires_grad_(not config.use_lora)
 
+        self.sd_pipeline.set_progress_bar_config(
+            position=1,
+            disable=not self.accelerator.is_local_main_process,
+            leave=False,
+            desc="Timestep",
+            dynamic_ncols=True,
+        )
+
         # For mixed precision training we cast all non-trainable weigths (vae, non-lora text_encoder and non-lora unet) to half-precision
         # as these weights are only used for inference, keeping weights in full precision is not required.
         if self.accelerator.mixed_precision == "fp16":
@@ -131,9 +139,10 @@ class DDPOTrainer(BaseTrainer):
 
         self.sd_pipeline.vae.to(self.accelerator.device, dtype=inference_dtype)
         self.sd_pipeline.text_encoder.to(self.accelerator.device, dtype=inference_dtype)
-        self.sd_pipeline.unet.to(self.accelerator.device, dtype=inference_dtype)
 
         if config.use_lora:
+            self.sd_pipeline.unet.to(self.accelerator.device, dtype=inference_dtype)
+
             # Set correct lora layers
             lora_attn_procs = {}
             for name in self.sd_pipeline.unet.attn_processors.keys():
