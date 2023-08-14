@@ -21,7 +21,7 @@ import torch.nn as nn
 from huggingface_hub import hf_hub_download
 from transformers import CLIPModel, CLIPProcessor
 
-from trl import DDPOConfig, DDPOTrainer, DefaultDDPOPipeline, DefaultDDPOScheduler
+from trl import DDPOConfig, DDPOTrainer, DefaultDDPOStableDiffusionPipeline
 
 
 class MLP(nn.Module):
@@ -193,9 +193,7 @@ if __name__ == "__main__":
         project_kwargs=project_kwargs,
     )
 
-    pipeline = DefaultDDPOPipeline.from_pretrained(args.pretrained_model, revision=args.pretrained_revision)
-
-    pipeline.scheduler = DefaultDDPOScheduler.from_config(pipeline.scheduler.config)
+    pipeline = DefaultDDPOStableDiffusionPipeline(args.pretrained_model, args.pretrained_revision)
 
     trainer = DDPOTrainer(
         config,

@@ -16,7 +16,7 @@ import unittest
 
 import torch
 
-from trl import DDPOConfig, DDPOTrainer, DefaultDDPOPipeline, DefaultDDPOScheduler
+from trl import DDPOConfig, DDPOTrainer, DefaultDDPOStableDiffusionPipeline
 
 
 def scorer_function(images, prompts, metadata):
@@ -46,8 +46,7 @@ class DDPOTrainerTester(unittest.TestCase):
         pretrained_model = "hf-internal-testing/tiny-stable-diffusion-torch"
         pretrained_revision = "main"
 
-        pipeline = DefaultDDPOPipeline.from_pretrained(pretrained_model, revision=pretrained_revision)
-        pipeline.scheduler = DefaultDDPOScheduler.from_config(pipeline.scheduler.config)
+        pipeline = DefaultDDPOStableDiffusionPipeline(pretrained_model, pretrained_revision)
 
         self.trainer = DDPOTrainer(self.ddpo_config, scorer_function, prompt_function, pipeline)
 

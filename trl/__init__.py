@@ -19,7 +19,6 @@ if is_diffusers_available():
         DDPOPipelineOutput,
         DDPOSchedulerOutput,
         DDPOStableDiffusionPipeline,
-        DefaultDDPOPipeline,
-        DefaultDDPOScheduler,
+        DefaultDDPOStableDiffusionPipeline,
     )
     from .trainer import DDPOConfig, DDPOTrainer

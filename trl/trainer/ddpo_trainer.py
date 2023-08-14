@@ -63,8 +63,6 @@ class DDPOTrainer(BaseTrainer):
 
         if not config.run_name:
             config.run_name = uuid.uuid4().hex
-        else:
-            config.run_name += "_" + uuid.uuid4().hex
 
         self.prompt_fn = prompt_function
         self.reward_fn = reward_function
@@ -125,8 +123,6 @@ class DDPOTrainer(BaseTrainer):
         self.sd_pipeline.vae.requires_grad_(False)
         self.sd_pipeline.text_encoder.requires_grad_(False)
         self.sd_pipeline.unet.requires_grad_(not config.use_lora)
-        # disable safety checker
-        self.sd_pipeline.safety_checker = None
 
         self.sd_pipeline.set_progress_bar_config(
             position=1,
@@ -147,8 +143,7 @@ class DDPOTrainer(BaseTrainer):
 
         self.sd_pipeline.vae.to(self.accelerator.device, dtype=inference_dtype)
         self.sd_pipeline.text_encoder.to(self.accelerator.device, dtype=inference_dtype)
-        if config.use_lora:
-            self.sd_pipeline.unet.to(self.accelerator.device, dtype=inference_dtype)
+        self.sd_pipeline.unet.to(self.accelerator.device, dtype=inference_dtype)
 
         if config.use_lora:
             # Set correct lora layers

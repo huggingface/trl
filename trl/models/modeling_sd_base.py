@@ -58,7 +58,7 @@ class DDPOSchedulerOutput(object):
     log_probs: torch.Tensor
 
 
-class DDPOStableDiffusionPipeline(StableDiffusionPipeline):
+class DDPOStableDiffusionPipeline(object):
     """
     Main class for the diffusers pipeline to be finetuned with the DDPO trainer
     """
@@ -69,6 +69,29 @@ class DDPOStableDiffusionPipeline(StableDiffusionPipeline):
     def scheduler_step(self, *args, **kwargs) -> DDPOSchedulerOutput:
         raise NotImplementedError
 
+    @property
+    def unet(self):
+        raise NotImplementedError
+
+    @property
+    def vae(self):
+        raise NotImplementedError
+
+    @property
+    def tokenizer(self):
+        raise NotImplementedError
+
+    @property
+    def scheduler(self):
+        raise NotImplementedError
+
+    @property
+    def text_encoder(self):
+        raise NotImplementedError
+
+    def set_progress_bar_config(self, *args, **kwargs):
+        raise NotImplementedError
+
 
 def _left_broadcast(t, shape):
     assert t.ndim <= len(shape)
@@ -76,10 +99,8 @@ def _left_broadcast(t, shape):
 
 
 # Note: This is a subclass rather than a function because of the following reasons
-# 1. From a uniform API perspective, it is neater to have the and pipeline pulled from the same library/namespace as opposed to two different namespaces
-#    i.e. scheduler initialization via diffusers and pipeline initialization via trl
-# 2. Ties the get variance function to the scheduler, which reflects the DDIMScheduler's code structure
-class DefaultDDPOScheduler(DDIMScheduler):
+# 1. Ties the get variance function to the scheduler, which reflects the DDIMScheduler's code structure
+class DDPOScheduler(DDIMScheduler):
     def _get_variance(self, timestep, prev_timestep):
         alpha_prod_t = torch.gather(self.alphas_cumprod, 0, timestep.cpu()).to(timestep.device)
         alpha_prod_t_prev = torch.where(
@@ -232,7 +253,7 @@ class DefaultDDPOScheduler(DDIMScheduler):
 # Differs from the original implementation in two ways
 # 1. The output type for call is different as the logprobs are now returned
 # 2. An extra method called `scheduler_step` is added which is used to constraint the scheduler output
-class DefaultDDPOPipeline(DDPOStableDiffusionPipeline):
+class DDPOPipeline(StableDiffusionPipeline):
     @torch.no_grad()
     def __call__(
         self,
@@ -379,10 +400,7 @@ class DefaultDDPOPipeline(DDPOStableDiffusionPipeline):
             latents,
         )
 
-        # 6. Prepare extra step kwargs
-        extra_step_kwargs = {"eta": eta}
-
-        # 7. Denoising loop
+        # 6. Denoising loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
         all_latents = [latents]
         all_log_probs = []
@@ -391,7 +409,7 @@ class DefaultDDPOPipeline(DDPOStableDiffusionPipeline):
                 # expand the latents if we are doing classifier free guidance
                 latent_model_input = torch.cat([latents] * 2) if do_classifier_free_guidance else latents
                 latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
-
+                print(f"device of latent_model_input: {latent_model_input.device}")
                 # predict the noise residual
                 noise_pred = self.unet(
                     latent_model_input,
@@ -411,7 +429,7 @@ class DefaultDDPOPipeline(DDPOStableDiffusionPipeline):
                     noise_pred = rescale_noise_cfg(noise_pred, noise_pred_text, guidance_rescale=guidance_rescale)
 
                 # compute the previous noisy sample x_t -> x_t-1
-                scheduler_output = self.scheduler_step(noise_pred, t, latents, **extra_step_kwargs)
+                scheduler_output = self.scheduler.step(noise_pred, t, latents, eta)
                 latents = scheduler_output.latents
                 log_prob = scheduler_output.log_probs
 
@@ -444,5 +462,38 @@ class DefaultDDPOPipeline(DDPOStableDiffusionPipeline):
 
         return DDPOPipelineOutput(image, all_latents, all_log_probs)
 
+
+class DefaultDDPOStableDiffusionPipeline(DDPOStableDiffusionPipeline):
+    def __init__(self, pretrained_model_name: str, pretrained_model_revision: str):
+        self.sd_pipeline = DDPOPipeline.from_pretrained(pretrained_model_name, revision=pretrained_model_revision)
+        self.sd_pipeline.scheduler = DDPOScheduler.from_config(self.sd_pipeline.scheduler.config)
+        self.sd_pipeline.safety_checker = None
+
+    def __call__(self, *args, **kwargs) -> DDPOPipelineOutput:
+        return self.sd_pipeline(*args, **kwargs)
+
     def scheduler_step(self, *args, **kwargs) -> DDPOSchedulerOutput:
-        return self.scheduler.step(*args, **kwargs)
+        return self.sd_pipeline.scheduler.step(*args, **kwargs)
+
+    @property
+    def unet(self):
+        return self.sd_pipeline.unet
+
+    @property
+    def vae(self):
+        return self.sd_pipeline.vae
+
+    @property
+    def tokenizer(self):
+        return self.sd_pipeline.tokenizer
+
+    @property
+    def scheduler(self):
+        return self.sd_pipeline.scheduler
+
+    @property
+    def text_encoder(self):
+        return self.sd_pipeline.text_encoder
+
+    def set_progress_bar_config(self, *args, **kwargs):
+        self.sd_pipeline.set_progress_bar_config(*args, **kwargs)

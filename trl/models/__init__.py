@@ -30,6 +30,5 @@ if is_diffusers_available():
         DDPOPipelineOutput,
         DDPOSchedulerOutput,
         DDPOStableDiffusionPipeline,
-        DefaultDDPOPipeline,
-        DefaultDDPOScheduler,
+        DefaultDDPOStableDiffusionPipeline,
     )
