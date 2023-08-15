@@ -132,7 +132,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                     ):
                         response_token_ids_idxs.append(assistant_idx + len(self.response_token_ids))
 
-                if len(self.response_token_ids) == 0:
+                if len(response_token_ids_idxs) == 0:
                     warnings.warn(
                         f"Could not find response key `{self.response_template}` in the "
                         f'following instance: {self.tokenizer.decode(batch["input_ids"][i])} '
