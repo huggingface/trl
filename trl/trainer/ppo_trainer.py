@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import inspect
+import math
 import os
 import time
 import typing
@@ -19,13 +20,14 @@ import warnings
 from typing import Callable, List, Optional, Union
 
 import datasets
+import numpy as np
 import torch
+import torch.nn.functional as F
 from accelerate import Accelerator
 from accelerate.utils import ProjectConfiguration
 from datasets import Dataset
 from huggingface_hub import whoami
 from packaging import version
-from requests.exceptions import HTTPError
 from torch.optim import Adam
 from transformers import (
     DataCollatorForLanguageModeling,
@@ -51,7 +53,7 @@ from ..core import (
 )
 from ..import_utils import is_torch_greater_2_0
 from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper, create_reference_model
-from . import AdaptiveKLController, BaseTrainer, FixedKLController, PPOConfig
+from . import AdaptiveKLController, BaseTrainer, FixedKLController, PPOConfig, RunningMoments
 
 
 MODEL_CARD_TEMPLATE = """---
@@ -64,7 +66,7 @@ tags:
 
 # {model_name}
 
-This is a [TRL language model](https://github.com/lvwerra/trl) that has been fine-tuned with reinforcement learning to
+This is a [TRL language model](https://github.com/huggingface/trl) that has been fine-tuned with reinforcement learning to
  guide the model outputs according to a value, function, or human feedback. The model can be used for text generation.
 
 ## Usage
@@ -202,6 +204,7 @@ class PPOTrainer(BaseTrainer):
         )
 
         self.model = model
+        self.model_params = filter(lambda p: p.requires_grad, self.model.parameters())
         self.is_encoder_decoder = hasattr(self.model, "is_encoder_decoder")
         self.is_peft_model = getattr(self.model, "is_peft_model", False)
 
@@ -251,6 +254,8 @@ class PPOTrainer(BaseTrainer):
             self.dataloader = None
         else:
             self.dataloader = None
+
+        self.config.backward_batch_size = self.config.mini_batch_size * self.config.gradient_accumulation_steps
 
         # Step 3: Initialize optimizer and data collator
         self.data_collator = DataCollatorForLanguageModeling(self.tokenizer, mlm=False)
@@ -339,6 +344,8 @@ class PPOTrainer(BaseTrainer):
 
         PPODecorators.optimize_cuda_cache = self.config.optimize_cuda_cache
 
+        self.running = RunningMoments(self.accelerator)
+
     def _filter_kwargs(self, kwargs, target_func):
         """
         filter the keyword arguments that are supported by the target function.
@@ -383,7 +390,7 @@ class PPOTrainer(BaseTrainer):
             signature = inspect.signature(self.model.forward)
             self._signature_columns = list(signature.parameters.keys())
             # label => sentiment | we need query and response for logging purpose
-            self._signature_columns += list(set(["label", "query", "response"]))
+            self._signature_columns += ["label", "query", "response"]
 
     # Adapted from transformers.Trainer._remove_unused_columns
     def _remove_unused_columns(self, dataset: "Dataset"):
@@ -583,11 +590,24 @@ class PPOTrainer(BaseTrainer):
         bs = self.config.batch_size
 
         queries, responses, scores = self._step_safety_checker(bs, queries, responses, scores)
+        scores = torch.tensor(scores)
+        if self.config.use_score_scaling:
+            # Score scaling
+            scores_mean, scores_std = self.running.update(scores)
+            if self.config.use_score_norm:
+                scores = (scores - self.running.mean) / self.running.std
+            else:
+                scores /= self.running.std
+
+        if self.config.score_clip is not None:
+            # Score clipping
+            scores_dtype = scores.dtype
+            scores = torch.clip(scores.float(), -self.config.score_clip, self.config.score_clip).to(dtype=scores_dtype)
 
         # if we want to push best model to the hub
         if hasattr(self, "highest_reward"):
             if self.compare_step % self.config.compare_steps == 0:
-                curr_mean_reward = torch.tensor(scores).mean()
+                curr_mean_reward = scores.mean()
                 # if the best reward ever seen
                 if curr_mean_reward > self.highest_reward:
                     self.highest_reward = curr_mean_reward
@@ -630,8 +650,12 @@ class PPOTrainer(BaseTrainer):
 
         model_inputs_names = list(model_inputs.keys())
 
+        full_kl_penalty = self.config.kl_penalty == "full"
+
         with torch.no_grad():
-            all_logprobs, _, values, masks = self.batched_forward_pass(self.model, queries, responses, model_inputs)
+            all_logprobs, logits_or_none, values, masks = self.batched_forward_pass(
+                self.model, queries, responses, model_inputs, return_logits=full_kl_penalty
+            )
 
             # for when the model is a peft model
             if self.is_peft_model and hasattr(
@@ -639,49 +663,49 @@ class PPOTrainer(BaseTrainer):
                 "disable_adapter",
             ):
                 with self.accelerator.unwrap_model(self.model).pretrained_model.disable_adapter():
-                    ref_logprobs, _, _, _ = self.batched_forward_pass(self.model, queries, responses, model_inputs)
+                    ref_logprobs, ref_logits_or_none, _, _ = self.batched_forward_pass(
+                        self.model, queries, responses, model_inputs, return_logits=full_kl_penalty
+                    )
             elif self.is_peft_model and not hasattr(self.model.pretrained_model, "disable_adapter"):
                 raise ValueError(
                     "You are using a `peft` version that does not support `disable_adapter`. Please update your `peft` version to the latest version."
                 )
 
             else:
-                ref_logprobs, _, _, _ = self.batched_forward_pass(self.ref_model, queries, responses, model_inputs)
+                ref_logprobs, ref_logits_or_none, _, _ = self.batched_forward_pass(
+                    self.ref_model, queries, responses, model_inputs, return_logits=full_kl_penalty
+                )
 
         timing["time/ppo/forward_pass"] = time.time() - t
 
-        t = time.time()
-        rewards, non_score_reward = self.compute_rewards(scores, all_logprobs, ref_logprobs, masks)
-        timing["time/ppo/compute_rewards"] = time.time() - t
+        with torch.no_grad():
+            t = time.time()
+            if full_kl_penalty:
+                active_full_logprobs = logprobs_from_logits(logits_or_none, None, gather=False)
+                ref_full_logprobs = logprobs_from_logits(ref_logits_or_none, None, gather=False)
+
+                rewards, non_score_reward = self.compute_rewards(
+                    scores, active_full_logprobs, ref_full_logprobs, masks
+                )
+            else:
+                rewards, non_score_reward = self.compute_rewards(scores, all_logprobs, ref_logprobs, masks)
+            timing["time/ppo/compute_rewards"] = time.time() - t
+
+            t = time.time()
+            values, advantages, returns = self.compute_advantages(values, rewards, masks)
+            timing["time/ppo/compute_advantages"] = time.time() - t
 
         # upcast to float32 to avoid dataset issues
-        mini_batch_dict = {
+        batch_dict = {
             "queries": queries,
             "responses": responses,
             "logprobs": all_logprobs.to(torch.float32),
             "values": values.to(torch.float32),
-            "rewards": rewards,
             "masks": masks,
+            "advantages": advantages,
+            "returns": returns,
         }
-
-        def collator(data):
-            return_dict = dict()
-            for key in data[0]:
-                if key in ["queries", "responses"]:
-                    return_dict[key] = [d[key] for d in data]
-                else:
-                    return_dict[key] = torch.stack([d[key] for d in data]).to(self.current_device)
-            return return_dict
-
-        mini_batch_dict.update(model_inputs)
-        mini_batch_data = Dataset.from_dict(mini_batch_dict)
-        mini_batch_data.set_format("torch")
-        mini_batch_dataloader = torch.utils.data.DataLoader(
-            mini_batch_data,
-            batch_size=self.config.mini_batch_size,
-            shuffle=True,
-            collate_fn=collator,
-        )
+        batch_dict.update(model_inputs)
 
         t = time.time()
         all_stats = []
@@ -689,37 +713,54 @@ class PPOTrainer(BaseTrainer):
         for _ in range(self.config.ppo_epochs):
             if early_stop:
                 break
+            b_inds = np.random.permutation(bs)
+            for backward_batch_start in range(0, bs, self.config.backward_batch_size):
+                backward_batch_end = backward_batch_start + self.config.backward_batch_size
+                backward_batch_inds = b_inds[backward_batch_start:backward_batch_end]
 
-            for i, batch in enumerate(mini_batch_dataloader):
-                with self.accelerator.accumulate(self.model):
-                    model_inputs = {k: batch[k] for k in model_inputs_names}
-                    logprobs, logits, vpreds, _ = self.batched_forward_pass(
-                        self.model,
-                        batch["queries"],
-                        batch["responses"],
-                        model_inputs,
-                        return_logits=True,
-                    )
-                    if (i % self.config.gradient_accumulation_steps) == 0:
-                        self.optimizer.zero_grad()
+                for mini_batch_start in range(0, self.config.backward_batch_size, self.config.mini_batch_size):
+                    mini_batch_end = mini_batch_start + self.config.mini_batch_size
+                    mini_batch_inds = backward_batch_inds[mini_batch_start:mini_batch_end]
+                    mini_batch_dict = {
+                        "logprobs": batch_dict["logprobs"][mini_batch_inds],
+                        "values": batch_dict["values"][mini_batch_inds],
+                        "masks": batch_dict["masks"][mini_batch_inds],
+                        # hacks: the queries and responses are ragged.
+                        "queries": [batch_dict["queries"][i] for i in mini_batch_inds],
+                        "responses": [batch_dict["responses"][i] for i in mini_batch_inds],
+                        "advantages": batch_dict["advantages"][mini_batch_inds],
+                        "returns": batch_dict["returns"][mini_batch_inds],
+                    }
+                    for k in model_inputs_names:
+                        mini_batch_dict[k] = batch_dict[k][mini_batch_inds]
+                    with self.accelerator.accumulate(self.model):
+                        model_inputs = {k: mini_batch_dict[k] for k in model_inputs_names}
 
-                    train_stats = self.train_minibatch(
-                        batch["logprobs"],
-                        batch["values"],
-                        batch["rewards"],
-                        logprobs,
-                        logits,
-                        vpreds,
-                        batch["masks"],
-                    )
+                        logprobs, logits, vpreds, _ = self.batched_forward_pass(
+                            self.model,
+                            mini_batch_dict["queries"],
+                            mini_batch_dict["responses"],
+                            model_inputs,
+                            return_logits=True,
+                        )
+                        train_stats = self.train_minibatch(
+                            mini_batch_dict["logprobs"],
+                            mini_batch_dict["values"],
+                            logprobs,
+                            logits,
+                            vpreds,
+                            mini_batch_dict["masks"],
+                            mini_batch_dict["advantages"],
+                            mini_batch_dict["returns"],
+                        )
+                        all_stats.append(train_stats)
 
-                    all_stats.append(train_stats)
-
-                    if self.config.early_stopping:
-                        policykl = train_stats["policy/policykl"]
-                        early_stop = self._early_stop(policykl)
-                        if early_stop:
-                            break
+            # typically, early stopping is done at the epoch level
+            if self.config.early_stopping:
+                policykl = train_stats["policy/policykl"]
+                early_stop = self._early_stop(policykl)
+                if early_stop:
+                    break
 
         timing["time/ppo/optimize_step"] = time.time() - t
 
@@ -883,7 +924,7 @@ class PPOTrainer(BaseTrainer):
         all_masks = []
         all_values = []
 
-        for i in range(int(bs / fbs)):
+        for i in range(math.ceil(bs / fbs)):
             input_kwargs = {key: value[i * fbs : (i + 1) * fbs] for key, value in model_inputs.items()}
             query_batch = queries[i * fbs : (i + 1) * fbs]
             response_batch = responses[i * fbs : (i + 1) * fbs]
@@ -900,7 +941,7 @@ class PPOTrainer(BaseTrainer):
             masks = torch.zeros_like(attention_mask)
             masks[:, :-1] = attention_mask[:, 1:]
 
-            for j in range(fbs):
+            for j in range(len(query_batch)):
                 if self.is_encoder_decoder:
                     # Decoder sentence starts always in the index 1 after padding in the Enc-Dec Models
                     start = 1
@@ -934,11 +975,12 @@ class PPOTrainer(BaseTrainer):
         self,
         old_logprobs: torch.FloatTensor,
         values: torch.FloatTensor,
-        rewards: torch.FloatTensor,
         logprobs: torch.FloatTensor,
         logits: torch.FloatTensor,
         vpreds: torch.FloatTensor,
         mask: torch.LongTensor,
+        advantages: torch.FloatTensor,
+        returns: torch.FloatTensor,
     ):
         """
         Train one PPO minibatch
@@ -948,8 +990,6 @@ class PPOTrainer(BaseTrainer):
                 Log probabilities of the model, shape [batch_size, response_length]
             values (`torch.FloatTensor`):
                 Values of the value head, shape [batch_size, response_length]
-            rewards (`torch.FloatTensor`):
-                Rewards from the reward model, shape [batch_size, response_length]
             query (`torch.LongTensor`):
                 Encoded queries, shape [batch_size, query_length]
             response (`torch.LongTensor`):
@@ -961,19 +1001,18 @@ class PPOTrainer(BaseTrainer):
             train_stats (dict[str, `torch.Tensor`]):
                 Dictionary of training statistics
         """
-        loss_p, loss_v, train_stats = self.loss(old_logprobs, values, rewards, logits, vpreds, logprobs, mask)
+        loss_p, loss_v, train_stats = self.loss(
+            old_logprobs, values, logits, vpreds, logprobs, mask, advantages, returns
+        )
         loss = loss_p + loss_v
         self.accelerator.backward(loss)
-
         if self.config.max_grad_norm is not None:
-            torch.nn.utils.clip_grad_norm_(
-                filter(lambda p: p.requires_grad, self.model.parameters()),
-                self.config.max_grad_norm,
-            )
-
-        t = time.time()
+            if self.accelerator.sync_gradients:
+                self.accelerator.clip_grad_norm_(self.model_params, self.config.max_grad_norm)
         self.optimizer.step()
-        train_stats["time/ppo/optimizer_step"] = torch.Tensor([time.time() - t]).to(self.current_device)
+        # we call optimizer.zero_grad() every time and let `accelerator` handle accumulation
+        # see https://huggingface.co/docs/accelerate/usage_guides/gradient_accumulation#the-finished-code
+        self.optimizer.zero_grad()
         return train_stats
 
     def compute_reward_score(self, input_ids: torch.FloatTensor, attention_mask: torch.FloatTensor = None, **kwargs):
@@ -1047,17 +1086,47 @@ class PPOTrainer(BaseTrainer):
         if self.config.kl_penalty == "mse":
             return 0.5 * (logprob - ref_logprob).square()
 
+        if self.config.kl_penalty == "full":
+            # Flip is required due to this issue? :https://github.com/pytorch/pytorch/issues/57459
+            return F.kl_div(ref_logprob, logprob, log_target=True, reduction="none").sum(-1)
+
         raise NotImplementedError
+
+    def compute_advantages(
+        self: torch.FloatTensor,
+        values: torch.FloatTensor,
+        rewards: torch.FloatTensor,
+        mask: torch.FloatTensor,
+    ):
+        lastgaelam = 0
+        advantages_reversed = []
+        gen_len = rewards.shape[-1]
+
+        values = values * mask
+        rewards = rewards * mask
+
+        for t in reversed(range(gen_len)):
+            nextvalues = values[:, t + 1] if t < gen_len - 1 else 0.0
+            delta = rewards[:, t] + self.config.gamma * nextvalues - values[:, t]
+            lastgaelam = delta + self.config.gamma * self.config.lam * lastgaelam
+            advantages_reversed.append(lastgaelam)
+        advantages = torch.stack(advantages_reversed[::-1]).transpose(0, 1)
+
+        returns = advantages + values
+        advantages = masked_whiten(advantages, mask)
+        advantages = advantages.detach()
+        return values, advantages, returns
 
     def loss(
         self,
         old_logprobs: torch.FloatTensor,
         values: torch.FloatTensor,
-        rewards: torch.FloatTensor,
         logits: torch.FloatTensor,
         vpreds: torch.FloatTensor,
         logprobs: torch.FloatTensor,
         mask: torch.LongTensor,
+        advantages: torch.FloatTensor,
+        returns: torch.FloatTensor,
     ):
         """
         Calculate policy and value losses.
@@ -1076,23 +1145,6 @@ class PPOTrainer(BaseTrainer):
             logprobs (`torch.FloatTensor`):
                 Log probabilities of the model, shape (`batch_size`, `response_length`)
         """
-        lastgaelam = 0
-        advantages_reversed = []
-        gen_len = rewards.shape[-1]
-
-        values = values * mask
-        rewards = rewards * mask
-
-        for t in reversed(range(gen_len)):
-            nextvalues = values[:, t + 1] if t < gen_len - 1 else 0.0
-            delta = rewards[:, t] + self.config.gamma * nextvalues - values[:, t]
-            lastgaelam = delta + self.config.gamma * self.config.lam * lastgaelam
-            advantages_reversed.append(lastgaelam)
-        advantages = torch.stack(advantages_reversed[::-1]).transpose(0, 1)
-
-        returns = advantages + values
-        advantages = masked_whiten(advantages, mask)
-        advantages = advantages.detach()
 
         vpredclipped = clip_by_value(
             vpreds,
@@ -1178,8 +1230,8 @@ class PPOTrainer(BaseTrainer):
         mean_non_score_reward = masked_mean(
             data["non_score_reward"], mask
         )  # non_score_reward is size `batch_size`, `response_length`
-        mean_scores = torch.stack(data["scores"]).mean()  # scores is size `batch_size`
-        std_scores = torch.stack(data["scores"]).std()
+        mean_scores = data["scores"].mean()  # scores is size `batch_size`
+        std_scores = data["scores"].std()
 
         if mean_kl.item() < -1.0:
             # warn users
@@ -1273,10 +1325,6 @@ class PPOTrainer(BaseTrainer):
             logs["env/reward_std"] = torch.std(rewards).cpu().numpy().item()
             logs["env/reward_dist"] = rewards.cpu().numpy()
 
-            logs["env/reward_mean"] = torch.mean(rewards).cpu().numpy().item()
-            logs["env/reward_std"] = torch.std(rewards).cpu().numpy().item()
-            logs["env/reward_dist"] = rewards.cpu().numpy()
-
             if self.config.log_with == "tensorboard":
                 # update the current step
                 self.current_step += 1
@@ -1306,7 +1354,7 @@ class PPOTrainer(BaseTrainer):
         try:
             user = whoami()["name"]
         # handle the offline case
-        except HTTPError:
+        except:  # noqa
             warnings.warn("Cannot retrieve user information assuming you are running in offline mode.")
             return
 

@@ -13,7 +13,6 @@ jobs:
     with:
       commit_sha: ${{ github.sha }}
       package: trl
-      repo_owner: lvwerra
       version_tag_suffix: ""
     secrets:
       token: ${{ secrets.HUGGINGFACE_PUSH }}

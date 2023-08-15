@@ -15,7 +15,7 @@ import os
 import random
 import warnings
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -55,12 +55,15 @@ class FixedKLController:
 class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
     """
     Data collator used for completion tasks. It ensures that all the tokens of the labels are set to an 'ignore_index'
-     up to the prompt response template tokens ('response_template'). This ensure that the loss is only
-     calculated on the completion of the reponse.
+    when they do not come from the assistant. This ensure that the loss is only
+    calculated on the completion made by the assistant.
 
     Args:
-        response_template (`str`): the template form that indicates the start of the response, typically something like
-            '### Response:\n'
+        instruction_template (`Optional[str]`): the template form that indicates the start of the human instruction, typically something like
+            '### Human:\n'. Useful for assistant-style conversation datasets
+        response_template (`Union[str, List[int]]`): the template form that indicates the start of the response, typically something like
+            '### Response:\n'. It can also be passed as tokenized ids, which can be useful when using a tokenizer that encodes the response
+            differently if it does not have proper context.
         mlm (`bool`, *optional*, defaults to `False`): Whether or not to use masked language modeling in the underlying
             `DataCollatorForLanguageModeling` class. Note that this option currently has no effect but is present
              for flexibility and backwards-compatibility.
@@ -70,44 +73,86 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
 
     def __init__(
         self,
-        response_template: str,
+        response_template: Union[str, List[int]],
+        instruction_template: Optional[str] = None,
         *args,
         mlm: bool = False,
         ignore_index: int = -100,
         **kwargs,
     ):
         super().__init__(*args, mlm=mlm, **kwargs)
+        self.instruction_template = instruction_template
         self.response_template = response_template
         self.ignore_index = ignore_index
+        if type(response_template) == list:
+            # The user already provides the token ids
+            self.response_token_ids = response_template
+        else:
+            self.response_token_ids = self.tokenizer.encode(self.response_template, add_special_tokens=False)
 
     def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
         batch = super().torch_call(examples)
 
-        # The prompt ends with the response key plus a newline.  We encode this and then try to find it in the
-        # sequence of tokens.  This should just be a single token.
-        response_token_ids = self.tokenizer.encode(self.response_template, add_special_tokens=False)
+        if self.instruction_template is None:
+            for i in range(len(examples)):
+                response_token_ids_start_idx = None
 
-        labels = batch["labels"].clone()
+                for idx in np.where(batch["labels"][i] == self.response_token_ids[0])[0]:
+                    # `response_token_ids` is `'### Response:\n'`, here we are just making sure that the token IDs match
+                    if (
+                        self.response_token_ids
+                        == batch["labels"][i][idx : idx + len(self.response_token_ids)].tolist()
+                    ):
+                        response_token_ids_start_idx = idx
 
-        for i in range(len(examples)):
-            response_token_ids_start_idx = None
+                if response_token_ids_start_idx is None:
+                    raise RuntimeError(
+                        f'Could not find response key {self.response_token_ids} in token IDs {batch["labels"][i]}'
+                    )
 
-            for idx in np.where(batch["labels"][i] == response_token_ids[0])[0]:
-                # `response_token_ids` is `'### Response:\n'`, here we are just making sure that the token IDs match
-                if response_token_ids == examples[i]["input_ids"][idx : idx + len(response_token_ids)]:
-                    response_token_ids_start_idx = idx
+                response_token_ids_end_idx = response_token_ids_start_idx + len(self.response_token_ids)
 
-            if response_token_ids_start_idx is None:
-                raise RuntimeError(
-                    f'Could not find response key {response_token_ids} in token IDs {batch["labels"][i]}'
-                )
+                # Make pytorch loss function ignore all tokens up through the end of the response key
+                batch["labels"][i, :response_token_ids_end_idx] = self.ignore_index
 
-            response_token_ids_end_idx = response_token_ids_start_idx + len(response_token_ids)
+        else:
+            for i in range(len(examples)):
+                response_token_ids_idxs = []
+                human_token_ids_idxs = []
 
-            # Make pytorch loss function ignore all tokens up through the end of the response key
-            labels[i, :response_token_ids_end_idx] = self.ignore_index
+                for assistant_idx in np.where(batch["labels"][i] == self.response_token_ids[0])[0]:
+                    # find the indexes of the start of a response.
+                    if (
+                        self.response_token_ids
+                        == batch["labels"][i][assistant_idx : assistant_idx + len(self.response_token_ids)].tolist()
+                    ):
+                        response_token_ids_idxs.append(assistant_idx + len(self.response_token_ids))
 
-        batch["labels"] = labels
+                if len(self.response_token_ids) == 0:
+                    raise RuntimeError(
+                        f'Could not find response key {self.response_token_ids} in token IDs {batch["labels"][i]}'
+                    )
+
+                human_token_ids = self.tokenizer.encode(self.instruction_template, add_special_tokens=False)
+                for human_idx in np.where(batch["labels"][i] == human_token_ids[0])[0]:
+                    # find the indexes of the start of a human answer.
+                    if human_token_ids == batch["labels"][i][human_idx : human_idx + len(human_token_ids)].tolist():
+                        human_token_ids_idxs.append(human_idx)
+
+                if len(human_token_ids_idxs) == 0:
+                    raise RuntimeError(
+                        f'Could not find response key {human_token_ids} in token IDs {batch["labels"][i]}'
+                    )
+
+                for idx, (start, end) in enumerate(zip(human_token_ids_idxs, response_token_ids_idxs)):
+                    # Make pytorch loss function ignore all non response tokens
+                    if idx != 0:
+                        batch["labels"][i, start:end] = self.ignore_index
+                    else:
+                        batch["labels"][i, :end] = self.ignore_index
+
+                if len(response_token_ids_idxs) < len(human_token_ids_idxs):
+                    batch["labels"][i, human_token_ids_idxs[-1] :] = self.ignore_index
 
         return batch
 
@@ -198,19 +243,17 @@ class DPODataCollatorWithPadding:
             The maximum length of the sequence to be processed.
         max_prompt_length (`Optional[int]`, `optional`, defaults to `None`):
             The maximum length of the prompt to be processed.
-        batch_size (`Optional[int]`, `optional`, defaults to `None`):
         label_pad_token_id (`int`, defaults to -100):
             The label used for masking.
         padding_value (`int`, defaults to 0):
             The value used for padding.
         truncation_mode: (`str`, defaults to "keep_end"):
-            The truncation mode to use when truncating the prompt + chosen/rejected responses.
+            The truncation mode to use when truncating the prompt.
     """
     tokenizer: PreTrainedTokenizerBase
     padding: Union[bool, str] = True
     max_length: Optional[int] = None
     max_prompt_length: Optional[int] = None
-    batch_size: Optional[int] = None
     label_pad_token_id: int = -100
     padding_value: int = 0
     truncation_mode: str = "keep_end"
@@ -228,8 +271,8 @@ class DPODataCollatorWithPadding:
             we truncate the prompt; if we're still too long, we truncate the chosen/rejected.
 
         We also create the labels for the chosen/rejected responses, which are of length equal to
-            the sum of the length of the prompt and the chosen/rejected response, with -100 for the
-            prompt tokens.
+            the sum of the length of the prompt and the chosen/rejected response, with
+            label_pad_token_id  for the prompt tokens.
         """
         chosen_tokens = self.tokenizer(chosen, add_special_tokens=False)
         rejected_tokens = self.tokenizer(rejected, add_special_tokens=False)
@@ -326,23 +369,18 @@ class DPODataCollatorWithPadding:
         return padded_batch
 
     def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
-        batch = []
+        tokenized_batch = []
+
         for feature in features:
             prompt = feature["prompt"]
-            responses = feature["responses"]
-            pairs = feature["pairs"]
+            chosen = feature["chosen"]
+            rejected = feature["rejected"]
 
-            done = False
-            for p in pairs:
-                if done:
-                    break
+            batch_element = self.tokenize_batch_element(prompt, chosen, rejected)
+            tokenized_batch.append(batch_element)
 
-                batch_element = self.tokenize_batch_element(prompt, responses[p[0]], responses[p[1]])
-                batch.append(batch_element)
-
-                done = len(batch) == self.batch_size
-
-        return self.collate(batch)
+        # return collated batch
+        return self.collate(tokenized_batch)
 
 
 class ConstantLengthDataset(IterableDataset):
@@ -466,6 +504,65 @@ class PeftSavingCallback(TrainerCallback):
                 os.remove(os.path.join(checkpoint_path, "pytorch_model.bin"))
 
 
+class RunningMoments:
+    def __init__(self, accelerator):
+        """
+        Calculates the running mean and standard deviation of a data stream. Reference:
+        https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/utils.py#L75
+        """
+        self.mean = 0
+        self.std = 1
+        self.var = 1
+        self.count = 1e-24
+        self.accelerator = accelerator
+
+    @torch.no_grad()
+    def update(self, xs: torch.Tensor) -> Tuple[float, float]:
+        """
+        Updates running moments from batch's moments computed across ranks
+        """
+        if self.accelerator.use_distributed:
+            xs_mean, xs_var, xs_count = get_global_statistics(self.accelerator, xs)
+        else:
+            xs_count = xs.numel()
+            xs_var, xs_mean = torch.var_mean(xs, unbiased=False)
+        xs_mean, xs_var = xs_mean.float(), xs_var.float()
+
+        delta = xs_mean - self.mean
+        tot_count = self.count + xs_count
+
+        new_sum = xs_var * xs_count
+        # correct old_sum deviation accounting for the new mean
+        old_sum = self.var * self.count + delta**2 * self.count * xs_count / tot_count
+        tot_sum = old_sum + new_sum
+
+        self.mean += delta * xs_count / tot_count
+        self.var = tot_sum / tot_count
+        self.std = (self.var * tot_count / (tot_count - 1)).float().sqrt()
+        self.count = tot_count
+
+        return xs_mean.item(), (xs_var * xs_count / (xs_count - 1)).float().sqrt().item()
+
+
+@torch.no_grad()
+def get_global_statistics(accelerator, xs: torch.Tensor, mask=None, device="cpu") -> Tuple[float, float, int]:
+    """
+    Computes element-wise mean and variance of the tensor across processes. Reference:
+    https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/utils.py#L57C1-L73C75
+    """
+    xs = xs.to(accelerator.device)
+    sum_and_count = torch.tensor([xs.sum(), (xs.numel() if mask is None else mask.sum())], device=xs.device)
+    sum_and_count = accelerator.reduce(sum_and_count)
+    global_sum, count = sum_and_count
+    global_mean = global_sum / count
+
+    sum_var = torch.sum(((xs - global_mean) ** 2).mul(1 if mask is None else mask))
+    sum_var = accelerator.reduce(sum_var)
+    global_var = sum_var / count
+
+    return global_mean.to(device), global_var.to(device), count.to(device)
+
+
 def compute_accuracy(eval_pred) -> Dict[str, float]:
     predictions, labels = eval_pred
     # Here, predictions is rewards_chosen and rewards_rejected.
@@ -489,3 +586,9 @@ def pad_to_length(tensor: torch.Tensor, length: int, pad_value: Union[int, float
             ],
             dim=dim,
         )
+
+
+def disable_dropout_in_model(model: torch.nn.Module) -> None:
+    for module in model.modules():
+        if isinstance(module, torch.nn.Dropout):
+            module.p = 0

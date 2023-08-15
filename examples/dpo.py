@@ -1,10 +1,8 @@
 # 0. imports
-from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Dict, Optional
 
 import torch
-import tqdm
 from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, TrainingArguments
 
@@ -66,8 +64,8 @@ def get_hh(split: str, sanity_check: bool = False, silent: bool = False, cache_d
     The dataset is converted to a dictionary with the following structure:
     {
         'prompt': List[str],
-        'responses': List[List[str]],
-        'pairs': List[Tuple[int, int]]
+        'chosen': List[str],
+        'rejected': List[str],
     }
 
     Prompts should be structured as follows:
@@ -78,30 +76,15 @@ def get_hh(split: str, sanity_check: bool = False, silent: bool = False, cache_d
     if sanity_check:
         dataset = dataset.select(range(min(len(dataset), 1000)))
 
-    def split_prompt_and_responses(ex):
-        prompt = extract_anthropic_prompt(ex["chosen"])
-        chosen_response = ex["chosen"][len(prompt) :]
-        rejected_response = ex["rejected"][len(prompt) :]
-        return prompt, chosen_response, rejected_response
+    def split_prompt_and_responses(sample) -> Dict[str, str]:
+        prompt = extract_anthropic_prompt(sample["chosen"])
+        return {
+            "prompt": prompt,
+            "chosen": sample["chosen"][len(prompt) :],
+            "rejected": sample["rejected"][len(prompt) :],
+        }
 
-    data = defaultdict(lambda: defaultdict(list))
-    for row in tqdm.tqdm(dataset, desc="Processing HH", disable=silent):
-        prompt, chosen, rejected = split_prompt_and_responses(row)
-        responses = [chosen, rejected]
-        n_responses = len(data[prompt]["responses"])
-        data[prompt]["pairs"].append((n_responses, n_responses + 1))
-        data[prompt]["responses"].extend(responses)
-        data[prompt]["sft_target"] = chosen
-
-    def gen():
-        for prompt, values in data.items():
-            yield {
-                "prompt": prompt,
-                "responses": values["responses"],
-                "pairs": values["pairs"],
-            }
-
-    return Dataset.from_generator(gen)
+    return dataset.map(split_prompt_and_responses)
 
 
 if __name__ == "__main__":
@@ -118,6 +101,7 @@ if __name__ == "__main__":
         ]
 
     model_ref = AutoModelForCausalLM.from_pretrained(script_args.model_name_or_path)
+
     tokenizer = AutoTokenizer.from_pretrained(script_args.model_name_or_path)
     tokenizer.pad_token = tokenizer.eos_token
 

@@ -15,6 +15,7 @@
 from dataclasses import dataclass, field
 from typing import Optional
 
+import torch
 from datasets import load_dataset
 from peft import LoraConfig
 from tqdm import tqdm
@@ -35,7 +36,7 @@ class ScriptArguments:
 
     model_name: Optional[str] = field(default="facebook/opt-350m", metadata={"help": "the model name"})
     dataset_name: Optional[str] = field(
-        default="timdettmers/openassistant-guanaco", metadata={"help": "the model name"}
+        default="timdettmers/openassistant-guanaco", metadata={"help": "the dataset name"}
     )
     dataset_text_field: Optional[str] = field(default="text", metadata={"help": "the text field of the dataset"})
     log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
@@ -50,6 +51,12 @@ class ScriptArguments:
     use_peft: Optional[bool] = field(default=False, metadata={"help": "Wether to use PEFT or not to train adapters"})
     trust_remote_code: Optional[bool] = field(default=True, metadata={"help": "Enable `trust_remote_code`"})
     output_dir: Optional[str] = field(default="output", metadata={"help": "the output directory"})
+    peft_lora_r: Optional[int] = field(default=64, metadata={"help": "the r parameter of the LoRA adapters"})
+    peft_lora_alpha: Optional[int] = field(default=16, metadata={"help": "the alpha parameter of the LoRA adapters"})
+    logging_steps: Optional[int] = field(default=1, metadata={"help": "the number of logging steps"})
+    use_auth_token: Optional[bool] = field(default=True, metadata={"help": "Use HF auth token to access the model"})
+    num_train_epochs: Optional[int] = field(default=3, metadata={"help": "the number of training epochs"})
+    max_steps: Optional[int] = field(default=-1, metadata={"help": "the number of training steps"})
 
 
 parser = HfArgumentParser(ScriptArguments)
@@ -64,15 +71,19 @@ elif script_args.load_in_8bit or script_args.load_in_4bit:
     )
     # This means: fit the entire model on the GPU:0
     device_map = {"": 0}
+    torch_dtype = torch.bfloat16
 else:
     device_map = None
     quantization_config = None
+    torch_dtype = None
 
 model = AutoModelForCausalLM.from_pretrained(
     script_args.model_name,
     quantization_config=quantization_config,
     device_map=device_map,
     trust_remote_code=script_args.trust_remote_code,
+    torch_dtype=torch_dtype,
+    use_auth_token=script_args.use_auth_token,
 )
 
 # Step 2: Load the dataset
@@ -84,13 +95,17 @@ training_args = TrainingArguments(
     per_device_train_batch_size=script_args.batch_size,
     gradient_accumulation_steps=script_args.gradient_accumulation_steps,
     learning_rate=script_args.learning_rate,
+    logging_steps=script_args.logging_steps,
+    num_train_epochs=script_args.num_train_epochs,
+    max_steps=script_args.max_steps,
+    report_to=script_args.log_with,
 )
 
 # Step 4: Define the LoraConfig
 if script_args.use_peft:
     peft_config = LoraConfig(
-        r=16,
-        lora_alpha=16,
+        r=script_args.peft_lora_r,
+        lora_alpha=script_args.peft_lora_alpha,
         bias="none",
         task_type="CAUSAL_LM",
     )
@@ -101,9 +116,13 @@ else:
 trainer = SFTTrainer(
     model=model,
     args=training_args,
+    max_seq_length=script_args.seq_length,
     train_dataset=dataset,
     dataset_text_field=script_args.dataset_text_field,
     peft_config=peft_config,
 )
 
 trainer.train()
+
+# Step 6: Save the model
+trainer.save_model(script_args.output_dir)
