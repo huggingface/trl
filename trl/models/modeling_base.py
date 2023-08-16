@@ -264,7 +264,7 @@ class PreTrainedModelWrapper(nn.Module):
                                 "pytorch_model.bin.index.json",
                                 token=token,
                             )
-                        except ValueError:  # not continue training, do not have v_head weight
+                        except:  # not continue training, do not have v_head weight
                             is_resuming_training = False
                             logging.warning(
                                 f"A {type(pretrained_model)} model is loaded from '{pretrained_model_name_or_path}', "
@@ -280,6 +280,7 @@ class PreTrainedModelWrapper(nn.Module):
                             if any([module in k for module in cls.supported_modules]):
                                 files_to_download.add(v)
                         is_shared = True
+
             if is_resuming_training:
                 if is_shared:
                     # download each file and add it to the state_dict
