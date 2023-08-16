@@ -57,7 +57,7 @@ To create the package for pypi.
 from setuptools import find_packages, setup
 
 
-__version__ = "0.4.8.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
+__version__ = "0.5.1.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
 
 REQUIRED_PKGS = [
     "torch>=1.4.0",
@@ -89,7 +89,7 @@ setup(
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
     ],
-    url="https://github.com/lvwerra/trl",
+    url="https://github.com/huggingface/trl",
     packages=find_packages(),
     include_package_data=True,
     install_requires=REQUIRED_PKGS,

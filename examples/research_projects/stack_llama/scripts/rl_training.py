@@ -92,6 +92,7 @@ config = PPOConfig(
 
 train_dataset = load_dataset("lvwerra/stack-exchange-paired", data_dir="data/rl", split="train")
 train_dataset = train_dataset.select(range(100000))
+
 # We then define the arguments to pass to the sentiment analysis pipeline.
 # We set `return_all_scores` to True to get the sentiment score for each token.
 sent_kwargs = {
@@ -207,9 +208,9 @@ ppo_trainer = PPOTrainer(
     optimizer=optimizer,
 )
 
-# We then build the sentiment analysis pipeline, passing the model name and the
-# sentiment analysis pipeline arguments. Let's also make sure to set the device
-# to the same device as the PPOTrainer.
+# We then build the sentiment analysis pipeline using our reward model, passing the
+# model name and the sentiment analysis pipeline arguments. Let's also make sure to
+# set the device to the same device as the PPOTrainer.
 device = ppo_trainer.accelerator.device
 if ppo_trainer.accelerator.num_processes == 1:
     device = 0 if torch.cuda.is_available() else "cpu"  # to avoid a ` pipeline` bug
@@ -251,7 +252,7 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     )
     batch["response"] = tokenizer.batch_decode(response_tensors, skip_special_tokens=True)
 
-    # Compute sentiment score
+    # Compute reward score (using the sentiment analysis pipeline)
     texts = [q + r for q, r in zip(batch["query"], batch["response"])]
     pipe_outputs = sentiment_pipe(texts, **sent_kwargs)
     rewards = [torch.tensor(output[0]["score"] - script_args.reward_baseline) for output in pipe_outputs]
