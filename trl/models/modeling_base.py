@@ -181,7 +181,8 @@ class PreTrainedModelWrapper(nn.Module):
                 if local_adapter_present:
                     trained_adapter_config = PeftConfig.from_pretrained(pretrained_model_name_or_path)
                 else:
-                    trained_adapter_config = PeftConfig.from_pretrained(remote_adapter_config)
+                    remote_adapter_dir = os.path.dirname(remote_adapter_config)
+                    trained_adapter_config = PeftConfig.from_pretrained(remote_adapter_dir)
 
                 # Load the pretrained base model
                 pretrained_model = cls.transformers_parent_class.from_pretrained(
