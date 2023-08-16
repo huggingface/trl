@@ -1193,3 +1193,24 @@ class PPOTrainerTester(unittest.TestCase):
             # train model
             _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
             break
+
+    def test_batch_size_check(self):
+        dummy_dataset = self._init_dummy_dataset()
+
+        torch.manual_seed(0)
+        gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(self.model_id, summary_dropout_prob=0.0)
+
+        self.ppo_config.mini_batch_size = 2
+        self.ppo_config.batch_size = 2
+        self.ppo_config.gradient_accumulation_steps = 2
+
+        def create_trainer():
+            return PPOTrainer(
+                config=self.ppo_config,
+                model=gpt2_model,
+                ref_model=None,
+                tokenizer=self.gpt2_tokenizer,
+                dataset=dummy_dataset,
+            )
+
+        self.assertRaises(ValueError, create_trainer)
