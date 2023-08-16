@@ -147,7 +147,7 @@ class TextHistory:
         Print the history tokens.
         """
         if not is_rich_available:
-            warnings.warn("install rich to display text")
+            warnings.warn("install rich to display tokens")
             return
 
         text = Text()
@@ -228,15 +228,14 @@ class TextEnvironment:
 
         histories = [TextHistory(q, qt, system=True) for q, qt in zip(queries, queries_tokens)]
 
-        while any([not history.completed for history in histories]):
-            self.generate(histories)
+        while any([not history.completed for history in histories]) and turns < self.max_turns:
+            histories = self.generate(histories)
+            histories = self.tasks_end_check(histories)
             # TODO: make this parallel rather than for-loop
             for i in range(len(histories)):
-                self.step(histories[i])
+                histories[i] = self.step(histories[i])
+            histories = self.tasks_end_check(histories, model_turn=False)
             turns += 1
-            if turns == self.max_turns:
-                break
-
         self.compute_reward(histories, **rewards_kwargs)
 
         # convert a list of (q, r, m) tuples to lists of all qs, rs, and ms respectively
@@ -256,18 +255,18 @@ class TextEnvironment:
         if ended:
             history.complete(truncated=truncated)
         if history.completed:
-            return
+            return history
 
-        try:
-            tool, query = self.parse_tool_call(history.last_text_segment)
+        tool, query = self.parse_tool_call(history.last_text_segment)
+        if tool is None or query is None:
+            response = f"Unknown tool call: {history.last_text_segment}"
+        else:
             if tool not in self.tools:
-                response = f"Uknown tool {tool}."
+                response = f"Unknown tool {tool}."
             try:
                 response = self.tools[tool](query)
             except Exception as error:
                 response = f"Tool error: {str(error)}"
-        except Exception as error:
-            response = f"Invalid tool call: {str(error)}"
 
         if len(response) > self.max_tool_response:
             response = response[: (self.max_tool_response - 3)] + "..."
@@ -280,14 +279,29 @@ class TextEnvironment:
             system=True,
         )
 
+        return history
+
     def parse_tool_call(self, text):
         """
         Parse request string. Expected format: <request><tool_name>query<call>
         """
         result = re.search(f"(?<={self.request_token}).*?(?={self.call_token})", text, re.DOTALL)
-        extracted_text = result.group()
 
-        tool = re.search(r"<(.*?)>", extracted_text).group(1)
+        # if we can't find a <request>/<call> span we return none
+        if result is None:
+            return None, None
+        else:
+            extracted_text = result.group()
+
+        result = re.search(r"<(.*?)>", extracted_text)
+
+        # if we can't find a tool name we return none
+        if result is None:
+            return None, None
+        else:
+            tool = result.group(1)
+
+        # split off the tool name
         query = ">".join(extracted_text.split(">")[1:])
 
         return tool, query
@@ -298,7 +312,7 @@ class TextEnvironment:
         """
         rewards = self.reward_fn([history.last_text_segment for history in histories], **reward_kwargs)
         for history, reward in zip(histories, rewards):
-            history.reward = torch.tensor(reward)
+            history.reward = reward
         return histories
 
     def generate(self, histories):
@@ -314,7 +328,20 @@ class TextEnvironment:
         for i, response_text, response_tensor in zip(active_histories, response_texts, response_tensors):
             histories[i].append_segment(response_text, response_tensor, system=False)
 
-    def task_end_check(self, history):
+        return histories
+
+    def tasks_end_check(self, histories, model_turn=True):
+        """
+        Check if the current generation sequences have finished.
+        """
+        for history in histories:
+            if not history.completed:
+                truncated, ended = self.task_end_check(history, model_turn=model_turn)
+                if ended:
+                    history.complete(truncated=truncated)
+        return histories
+
+    def task_end_check(self, history, model_turn=True):
         """
         Check if the current generation sequence has finished.
         """
@@ -327,7 +354,7 @@ class TextEnvironment:
             ended = True
         elif self.tokenizer.eos_token in history.text:
             ended = True
-        elif not (
+        elif model_turn and not (
             (self.request_token in history.last_text_segment and self.call_token in history.last_text_segment)
             or self.submit_token in history.last_text_segment
         ):
