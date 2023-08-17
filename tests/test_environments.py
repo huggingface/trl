@@ -28,7 +28,7 @@ class DummyTool:
 
 def dummy_generate(histories):
     for i in range(len(histories)):
-        histories[i].append_segment("<request><DummyTool>test<call>", torch.tensor([1, 2, 3]))
+        histories[i].append_segment("<request><DummyTool>test<call>", torch.tensor([1, 2, 3]), system=False)
     return histories
 
 
@@ -244,4 +244,30 @@ class TextEnvironmentTester(unittest.TestCase):
 
     @patch.object(TextEnvironment, "generate", side_effect=dummy_generate)
     def test_text_environment_run(self, mock_generate):
-        pass
+        env = TextEnvironment(
+            self.gpt2_model,
+            self.gpt2_tokenizer,
+            tools={"DummyTool": DummyTool()},
+            reward_fn=lambda x: [torch.tensor(i) for i, _ in enumerate(x)],
+            prompt="I am a prompt!\n",
+            max_turns=2,
+        )
+        task_1 = "Hello there!"
+        task_2 = "Hello there! General Kenobi!"
+
+        query, response, response_mask, reward, histories = env.run([task_1, task_2])
+        self.assertEqual(len(query[0]), 9)
+        self.assertEqual(len(query[1]), 12)
+        self.assertEqual(len(response[0]), 14)
+        self.assertEqual(len(response[1]), 14)
+        self.assertEqual(response_mask[0].sum(), 2 * 3)  # mocked generate always adds 3 toknes
+        self.assertEqual(response_mask[1].sum(), 2 * 3)  # mocked generate always adds 3 toknes
+        self.assertEqual(reward[0], 0)
+        self.assertEqual(reward[1], 1)
+        self.assertEqual(
+            histories[0].text, "I am a prompt!\n" + "Hello there!" + 2 * "<request><DummyTool>test<call>test<response>"
+        )
+        self.assertEqual(
+            histories[1].text,
+            "I am a prompt!\n" + "Hello there! General Kenobi!" + 2 * "<request><DummyTool>test<call>test<response>",
+        )
