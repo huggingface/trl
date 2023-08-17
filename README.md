@@ -106,7 +106,7 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from trl import RewardTrainer
 
 # load model and dataset - dataset needs to be in a specific format
-model = AutoModelForSequenceClassification.from_pretrained("gpt2")
+model = AutoModelForSequenceClassification.from_pretrained("gpt2", num_labels=1)
 tokenizer = AutoTokenizer.from_pretrained("gpt2")
 
 ...
