@@ -347,6 +347,7 @@ class SFTTrainer(Trainer):
             training_contexts.append(
                 torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=False)
             )
+            training_contexts.append(torch.cuda.amp.autocast())
 
         with ContextManagers(training_contexts):
             super().train(*args, **kwargs)
