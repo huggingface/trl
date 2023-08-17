@@ -592,3 +592,10 @@ def disable_dropout_in_model(model: torch.nn.Module) -> None:
     for module in model.modules():
         if isinstance(module, torch.nn.Dropout):
             module.p = 0
+
+
+def exact_div(a, b, a_str, b_str, custom_error_message=""):
+    q = a // b
+    if a != q * b:
+        raise ValueError(f"{custom_error_message}, {a_str}={a}, {b_str}={b}, inexact division: {a} / {b} = {a / b}")
+    return q
