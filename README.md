@@ -106,7 +106,7 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from trl import RewardTrainer
 
 # load model and dataset - dataset needs to be in a specific format
-model = AutoModelForSequenceClassification.from_pretrained("gpt2")
+model = AutoModelForSequenceClassification.from_pretrained("gpt2", num_labels=1)
 tokenizer = AutoTokenizer.from_pretrained("gpt2")
 
 ...
@@ -174,7 +174,7 @@ The language models utilize the `transformers` library by 🤗 Hugging Face.
 
 ```bibtex
 @misc{vonwerra2022trl,
-  author = {Leandro von Werra and Younes Belkada and Lewis Tunstall and Edward Beeching and Tristan Thrush and Nathan Lambert},
+  author = {Leandro von Werra and Younes Belkada and Lewis Tunstall and Edward Beeching and Tristan Thrush and Nathan Lambert and Shengyi Huang},
   title = {TRL: Transformer Reinforcement Learning},
   year = {2020},
   publisher = {GitHub},

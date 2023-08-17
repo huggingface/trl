@@ -24,7 +24,7 @@ from transformers import DataCollator, PreTrainedModel, PreTrainedTokenizerBase,
 from transformers.trainer_callback import TrainerCallback
 
 from ..import_utils import is_peft_available
-from .utils import DPODataCollatorWithPadding, pad_to_length
+from .utils import DPODataCollatorWithPadding, disable_dropout_in_model, pad_to_length
 
 
 if is_peft_available():
@@ -73,6 +73,8 @@ class DPOTrainer(Trainer):
             The maximum length of the prompt. This argument is required if you want to use the default data collator.
         peft_config (`Dict`, defaults to `None`):
             The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
+        disable_dropout (`bool`, defaults to `True`):
+            Whether or not to disable dropouts in `model` and `ref_model`.
     """
 
     def __init__(
@@ -98,6 +100,7 @@ class DPOTrainer(Trainer):
         max_length: Optional[int] = None,
         max_prompt_length: Optional[int] = None,
         peft_config: Optional[Dict] = None,
+        disable_dropout: bool = True,
     ):
         if not is_peft_available() and peft_config is not None:
             raise ValueError(
@@ -149,6 +152,10 @@ class DPOTrainer(Trainer):
             self.use_dpo_data_collator = True
         else:
             self.use_dpo_data_collator = False
+
+        if disable_dropout:
+            disable_dropout_in_model(model)
+            disable_dropout_in_model(ref_model)
 
         self.label_pad_token_id = label_pad_token_id
         self.padding_value = padding_value
