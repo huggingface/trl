@@ -14,7 +14,7 @@ You need to address this approach in three stages that we summarize as follows:
 2- Train a reward model using `peft`. This is required in order to re-use the adapter during the RL optimisation process (step 3 below). We show an example of leveraging the `RewardTrainer` from TRL in [this example](https://github.com/huggingface/trl/tree/main/examples/scripts/reward_trainer.py)
 3- Fine tune new adapters on the base model using PPO and the reward adapter. ("0 abstraction RL")
 
-Make sure to use the same model (i.e. same architecure and same weights) for the stages 2 & 3. 
+Make sure to use the same model (i.e. same architecture and same weights) for the stages 2 & 3. 
 
 ## Quickstart
 

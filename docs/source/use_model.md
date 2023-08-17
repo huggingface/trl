@@ -55,4 +55,4 @@ model = model.merge_and_unload()
 model.save_pretrained("merged_adapters")
 ```
 
-Once you have the model loaded and either merged the adapters or keep them seperately on top you can run generation as with a normal model outlined above.
+Once you have the model loaded and either merged the adapters or keep them separately on top you can run generation as with a normal model outlined above.
