@@ -102,11 +102,12 @@ This is a basic example on how to use the `RewardTrainer` from the library. The 
 
 ```python
 # imports
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
+from transformers import AutoConfig, AutoModelForSequenceClassification, AutoTokenizer
 from trl import RewardTrainer
 
 # load model and dataset - dataset needs to be in a specific format
-model = AutoModelForSequenceClassification.from_pretrained("gpt2")
+config = AutoConfig.from_pretrained("gpt2", num_labels=1)
+model = AutoModelForSequenceClassification.from_pretrained("gpt2", config=config)
 tokenizer = AutoTokenizer.from_pretrained("gpt2")
 
 ...
