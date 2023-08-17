@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import functools
 import warnings
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
@@ -29,6 +30,7 @@ from transformers import (
 )
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
+from transformers.utils import ContextManagers
 
 from ..import_utils import is_peft_available
 from .utils import ConstantLengthDataset, DataCollatorForCompletionOnlyLM, PeftSavingCallback
@@ -119,6 +121,7 @@ class SFTTrainer(Trainer):
         chars_per_token: Optional[float] = 3.6,
         dataset_num_proc: Optional[int] = None,
         dataset_batch_size: int = 1000,
+        use_flash_attn: Optional[bool] = False,
     ):
         if isinstance(model, str):
             warnings.warn(
@@ -130,6 +133,21 @@ class SFTTrainer(Trainer):
             raise ValueError(
                 "You passed a `DataCollatorForCompletionOnlyLM` to the SFTTrainer. This is not compatible with the `packing` argument."
             )
+
+        if (not packing or data_collator is not None) and use_flash_attn:
+            raise ValueError(
+                "You passed `use_flash_attn=True` to the SFTTrainer, but you also passed `packing=False` or a custom data collator. This is not supported."
+                " You need to pass `packing=True` to the SFTTrainer if you want to use the `use_flash_attn` argument because flash attention"
+                " training does not support passing attention masks."
+            )
+
+        if use_flash_attn and not torch.cuda.is_available():
+            raise ValueError(
+                "You passed `use_flash_attn=True` to the SFTTrainer, but you don't have a GPU available. This is not supported."
+            )
+
+        if isinstance(model, PreTrainedModel) and use_flash_attn:
+            model = model.to_bettertransformer()
 
         if is_peft_available() and peft_config is not None:
             if not isinstance(peft_config, PeftConfig):
@@ -148,6 +166,11 @@ class SFTTrainer(Trainer):
                     model = prepare_model_for_int8_training(model)
 
                 model = get_peft_model(model, peft_config)
+            elif use_flash_attn and isinstance(model, PeftModel):
+                raise ValueError(
+                    "You passed a `PeftModel` to the SFTTrainer, but you also passed `use_flash_attn=True`. This is not supported."
+                    " You need to first create a transformers model and pass a peft_config to the SFTTrainer rather than directly passing a PeftModel."
+                )
 
             if callbacks is None:
                 callbacks = [PeftSavingCallback]
@@ -169,6 +192,8 @@ class SFTTrainer(Trainer):
 
         self.dataset_num_proc = dataset_num_proc
         self.dataset_batch_size = dataset_batch_size
+        self.use_flash_attn = use_flash_attn
+
         if not packing:
             if dataset_text_field is None and formatting_func is None:
                 raise ValueError(
@@ -313,3 +338,15 @@ class SFTTrainer(Trainer):
         )
 
         return tokenized_dataset
+
+    @functools.wraps(Trainer.train)
+    def train(self, *args, **kwargs):
+        training_contexts = []
+
+        if self.use_flash_attn:
+            training_contexts.append(
+                torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=False)
+            )
+
+        with ContextManagers(training_contexts):
+            super().train(*args, **kwargs)

@@ -327,12 +327,54 @@ trainer = SFTTrainer(
     model,
     train_dataset=dataset,
     dataset_text_field="text",
-    torch_dtype=torch.bfloat16,
     peft_config=peft_config,
 )
 
 trainer.train()
 ```
+
+### Using Flash attention
+
+You can easliy make the model use flash attention for more memory efficient training. Install the latest `optimum` library and simply add `use_flash_attn=True` when initializing `SFTTrainer`. 
+The implementation is based on the `BetterTransformer` API of optimum that you can read more about it [here](https://huggingface.co/docs/optimum/bettertransformer/overview). That API will convert the supported models to dispatch the attention operation to make them use [`torch.nn.scaled_dot_product_attention`](https://pytorch.org/docs/master/generated/torch.nn.functional.scaled_dot_product_attention.html) method. 
+The [`SFTTrainer`] will force-dispatch this operation to use the Flash attention backend. Note that you can combine this feature with PEFT, as well as quantized models (bitsandbytes 4bit and 8bit):
+
+```python
+...
+
+peft_config = LoraConfig(
+    r=16,
+    lora_alpha=32,
+    lora_dropout=0.05,
+    bias="none",
+    task_type="CAUSAL_LM",
+)
+
+model = AutoModelForCausalLM.from_pretrained(
+    "EleutherAI/gpt-neo-125m",
+    load_in_8bit=True,
+    device_map="auto",
+)
+
+trainer = SFTTrainer(
+    model,
+    train_dataset=dataset,
+    dataset_text_field="text",
+    peft_config=peft_config,
+    use_flash_attn=True,
+    packing=True,
+)
+
+trainer.train()
+```
+
+This feature is currently available on `torch` nightlies, we have tested our experiments on the version `'2.1.0.dev20230802+cu118'` to install the nightlies, follow the instructions on the [official PyTorch website](https://pytorch.org/get-started/locally/), below is the command to install it for CUDA 11.8:
+
+```bash
+pip3 install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu118
+```
+
+Make sure that your model is loaded in half-precision (in case it is not quantized) for this feature to work correctly. Also make sure that you are training under `packing` mode with the default data_collator (just set it to `None) as the current flash attention kernels for SDPA does not support attention masks. Note that Flash attention enables users to train faster, but also with longer context length. 
 
 ## Best practices
 
@@ -342,6 +384,7 @@ Pay attention to the following best practices when training a model with that tr
 - For training adapters in 8bit, you might need to tweak the arguments of the `prepare_model_for_int8_training` method from PEFT, hence we advise users to use `prepare_in_int8_kwargs` field, or create the `PeftModel` outside the [`SFTTrainer`] and pass it.
 - For a more memory-efficient training using adapters, you can load the base model in 8bit, for that simply add `load_in_8bit` argument when creating the [`SFTTrainer`], or create a base model in 8bit outside the trainer and pass it.  
 - If you create a model outside the trainer, make sure to not pass to the trainer any additional keyword arguments that are relative to `from_pretrained()` method.
+- For more memory efficient training (faster and longer context length), you can benefit from flash attention by just adding `use_flash_attn=True` to SFTTrainer. This is also supported for quantized models. 
 
 ## SFTTrainer
 
