@@ -174,7 +174,7 @@ The language models utilize the `transformers` library by 🤗 Hugging Face.
 
 ```bibtex
 @misc{vonwerra2022trl,
-  author = {Leandro von Werra and Younes Belkada and Lewis Tunstall and Edward Beeching and Tristan Thrush and Nathan Lambert},
+  author = {Leandro von Werra and Younes Belkada and Lewis Tunstall and Edward Beeching and Tristan Thrush and Nathan Lambert and Shengyi Huang},
   title = {TRL: Transformer Reinforcement Learning},
   year = {2020},
   publisher = {GitHub},

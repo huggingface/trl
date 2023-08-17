@@ -21,6 +21,8 @@ from typing import Optional
 import numpy as np
 import requests
 
+from trl.trainer.utils import exact_div
+
 from ..core import flatten_dict
 
 
@@ -174,6 +176,15 @@ class PPOConfig(object):
                 "Note that using `forward_batch_size` is deprecated, use `mini_batch_size` instead. By setting it you overwrite `mini_batch_size` which affects both the batch size during forward passes and also the mini batch size for PPO optimization."
             )
             self.mini_batch_size = self.forward_batch_size
+
+        self.backward_batch_size = self.mini_batch_size * self.gradient_accumulation_steps
+        exact_div(
+            self.batch_size,
+            self.backward_batch_size,
+            "`batch_size`",
+            "`mini_batch_size * gradient_accumulation_steps`",
+            "`batch_size` must be a multiple of `mini_batch_size * gradient_accumulation_steps`",
+        )
 
         # check if wandb is installed
         if self.log_with == "wandb":
