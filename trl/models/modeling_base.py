@@ -264,7 +264,8 @@ class PreTrainedModelWrapper(nn.Module):
                                 "pytorch_model.bin.index.json",
                                 token=token,
                             )
-                        except:  # not continue training, do not have v_head weight
+                        except:  # noqa
+                            # not continue training, do not have v_head weight
                             is_resuming_training = False
                             logging.warning(
                                 f"A {type(pretrained_model)} model is loaded from '{pretrained_model_name_or_path}', "
