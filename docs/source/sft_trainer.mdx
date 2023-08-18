@@ -388,7 +388,7 @@ Below is a table that summarizes our experiments with and without flash attentio
 ```
 
 As you can see you can train with longer sequence and faster using the flash attention integration of `SFTTrainer`.
-The command we used to benchmark is the following:
+The command we used to benchmark is the following (in a NVIDIA T4 GPU on GCP):
 
 ```bash
 python sft_trainer.py --packing --seq_length 2048 --batch_size 4 --use_peft --load_in_4bit --bnb_4b
