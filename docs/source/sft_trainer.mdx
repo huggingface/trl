@@ -376,6 +376,26 @@ pip3 install --pre torch torchvision torchaudio --index-url https://download.pyt
 
 Make sure that your model is loaded in half-precision (in case it is not quantized) for this feature to work correctly. Also make sure that you are training under `packing` mode with the default data_collator (just set it to `None) as the current flash attention kernels for SDPA does not support attention masks. Note that Flash attention enables users to train faster, but also with longer context length. 
 
+Below is a table that summarizes our experiments with and without flash attention:
+
+```bash
+| use_flash_attn | model_name        | max_seq_len | batch_size | time per training step |
+|----------------|-------------------|-------------|------------|------------------------|
+| x              | facebook/opt-350m | 2048        | 8          | ~59.1s                 |
+|                | facebook/opt-350m | 2048        | 8          | **OOM**                    |
+| x              | facebook/opt-350m | 2048        | 4          | ~30.3s                 |
+|                | facebook/opt-350m | 2048        | 4          | ~148.9s               |
+```
+
+As you can see you can train with longer sequence and faster using the flash attention integration of `SFTTrainer`.
+The command we used to benchmark is the following:
+
+```bash
+python sft_trainer.py --packing --seq_length 2048 --batch_size 4 --use_peft --load_in_4bit --bnb_4b
+it_compute_dtype float16
+```
+
+
 ## Best practices
 
 Pay attention to the following best practices when training a model with that trainer:

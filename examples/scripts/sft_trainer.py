@@ -48,6 +48,7 @@ class ScriptArguments:
     )
     load_in_8bit: Optional[bool] = field(default=False, metadata={"help": "load the model in 8 bits precision"})
     load_in_4bit: Optional[bool] = field(default=False, metadata={"help": "load the model in 4 bits precision"})
+    bnb_4bit_compute_dtype: Optional[str] = field(default="float32", metadata={"help": "the compute dtype for 4 bits"})
     use_peft: Optional[bool] = field(default=False, metadata={"help": "Wether to use PEFT or not to train adapters"})
     trust_remote_code: Optional[bool] = field(default=True, metadata={"help": "Enable `trust_remote_code`"})
     output_dir: Optional[str] = field(default="output", metadata={"help": "the output directory"})
@@ -57,17 +58,24 @@ class ScriptArguments:
     use_auth_token: Optional[bool] = field(default=True, metadata={"help": "Use HF auth token to access the model"})
     num_train_epochs: Optional[int] = field(default=3, metadata={"help": "the number of training epochs"})
     max_steps: Optional[int] = field(default=-1, metadata={"help": "the number of training steps"})
+    use_flash_attn: Optional[bool] = field(default=False, metadata={"help": "Use Flash Attention"})
+    packing: Optional[bool] = field(default=False, metadata={"help": "Use packing"})
 
 
 parser = HfArgumentParser(ScriptArguments)
 script_args = parser.parse_args_into_dataclasses()[0]
+
+if script_args.use_flash_attn and not script_args.packing:
+    raise ValueError("You can't use Flash Attention without packing")
 
 # Step 1: Load the model
 if script_args.load_in_8bit and script_args.load_in_4bit:
     raise ValueError("You can't load the model in 8 bits and 4 bits at the same time")
 elif script_args.load_in_8bit or script_args.load_in_4bit:
     quantization_config = BitsAndBytesConfig(
-        load_in_8bit=script_args.load_in_8bit, load_in_4bit=script_args.load_in_4bit
+        load_in_8bit=script_args.load_in_8bit,
+        load_in_4bit=script_args.load_in_4bit,
+        bnb_4bit_compute_dtype=getattr(torch, script_args.bnb_4bit_compute_dtype),
     )
     # This means: fit the entire model on the GPU:0
     device_map = {"": 0}
@@ -120,6 +128,8 @@ trainer = SFTTrainer(
     train_dataset=dataset,
     dataset_text_field=script_args.dataset_text_field,
     peft_config=peft_config,
+    packing=script_args.packing,
+    use_flash_attn=script_args.use_flash_attn,
 )
 
 trainer.train()
