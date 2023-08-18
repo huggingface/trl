@@ -167,7 +167,8 @@ class DPOTrainer(Trainer):
 
         if disable_dropout:
             disable_dropout_in_model(model)
-            disable_dropout_in_model(ref_model)
+            if self.ref_model:
+                disable_dropout_in_model(self.ref_model)
 
         self.label_pad_token_id = label_pad_token_id
         self.padding_value = padding_value
