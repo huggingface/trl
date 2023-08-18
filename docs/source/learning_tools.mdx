@@ -168,3 +168,23 @@ Note that the correct rate of the trained model is on the low end, which could b
 
 * **incorrect keywords:** we may have a question like `What is the SI unit of electric current?`, but the model does `<request><Wiki>Coefficient<call>`, which is kind of related but not exactly what the model should be searching for.
 * **bad wiki tool:** When given the question `"What is Bruce Willis' real first name?"` if the model searches for `Bruce Willis`, our wiki tool returns `Patrick Poivey (born 18 February 1948) is a French actor. He is especially known for his voice: he is the French dub voice of Bruce Willis since 1988.` But a correct search should be `Walter Bruce Willis (born March 19, 1955) is an American former actor. He achieved fame with a leading role on the comedy-drama series Moonlighting (1985–1989) and appeared in over a hundred films, gaining recognition as an action hero after his portrayal of John McClane in the Die Hard franchise (1988–2013) and other roles.[1][2]`
+* **java errors:**: Sometimes `pyserini` errors out under the multigpu setting:
+
+```
+# https://gist.github.com/vwxyzjn/d62130961056531ea76b81e03a99d0ac
+#
+# A fatal error has been detected by the Java Runtime Environment:
+#
+#  SIGSEGV (0xb) at pc=0x00007fc5ccfc6ddc, pid=1469108, tid=1471411
+#
+# JRE version: OpenJDK Runtime Environment Corretto-11.0.17.8.1 (11.0.17+8) (build 11.0.17+8-LTS)
+# Java VM: OpenJDK 64-Bit Server VM Corretto-11.0.17.8.1 (11.0.17+8-LTS, mixed mode, tiered, compressed oops, g1 gc, linux-amd64)
+# Problematic frame:
+# C  [libarrow.so.1200+0x1803ddc]  Aws::Http::CleanupHttp()+0x1c
+#
+# Core dump will be written. Default location: Core dumps may be processed with "/usr/share/apport/apport -p%p -s%s -c%c -d%d -P%P -u%u -g%g -- %E" (or dumping to /fsx/costa/trl/core.1469108)
+#
+# If you would like to submit a bug report, please visit:
+#   https://github.com/corretto/corretto-11/issues/
+#
+```
