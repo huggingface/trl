@@ -20,6 +20,7 @@ import torch
 import torch.nn as nn
 from accelerate import Accelerator
 from huggingface_hub import hf_hub_download
+from huggingface_hub.utils import EntryNotFoundError, LocalEntryNotFoundError
 from transformers import PreTrainedModel
 
 from ..import_utils import is_peft_available
@@ -163,7 +164,7 @@ class PreTrainedModelWrapper(nn.Module):
                         "adapter_config.json",
                         token=token,
                     )
-                except:  # noqa
+                except (EntryNotFoundError, LocalEntryNotFoundError):
                     remote_adapter_config = None
             else:
                 remote_adapter_config = None
@@ -254,7 +255,7 @@ class PreTrainedModelWrapper(nn.Module):
                         token=token,
                     )
                 # sharded
-                except:  # noqa
+                except (EntryNotFoundError, LocalEntryNotFoundError):
                     if os.path.exists(sharded_index_filename):
                         index_file_name = sharded_index_filename
                     else:
@@ -264,7 +265,7 @@ class PreTrainedModelWrapper(nn.Module):
                                 "pytorch_model.bin.index.json",
                                 token=token,
                             )
-                        except:  # noqa
+                        except (EntryNotFoundError, LocalEntryNotFoundError):
                             # not continue training, do not have v_head weight
                             is_resuming_training = False
                             logging.warning(
