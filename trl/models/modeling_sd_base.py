@@ -136,13 +136,13 @@ class DDPOStableDiffusionPipeline(object):
 
     def save_checkpoint(self, *args, **kwargs):
         """
-        Light wrapper around accelerate's pre_reg
+        Light wrapper around accelerate's register_save_state_pre_hook which is run before saving state
         """
         raise NotImplementedError
 
     def load_checkpoint(self, *args, **kwargs):
         """
-        Light wrapper around accelerate's pre_reg
+        Light wrapper around accelerate's register_lad_state_pre_hook which is run before loading state
         """
         raise NotImplementedError
 
@@ -539,7 +539,7 @@ class DefaultDDPOStableDiffusionPipeline(DDPOStableDiffusionPipeline):
             if use_lora:
                 warnings.warn(
                     "If you are aware that the pretrained model has no lora weights to it, ignore this message. "
-                    "Otherwise please check the weights exist in the model folder."
+                    "Otherwise please check the if `pytorch_lora_weights.safetensors` exists in the model folder."
                 )
 
         self.sd_pipeline.scheduler = DDIMScheduler.from_config(self.sd_pipeline.scheduler.config)

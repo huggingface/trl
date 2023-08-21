@@ -14,11 +14,13 @@
 
 
 import argparse
+import os
 
 import numpy as np
 import torch
 import torch.nn as nn
 from huggingface_hub import hf_hub_download
+from huggingface_hub.utils import EntryNotFoundError
 from transformers import CLIPModel, CLIPProcessor
 
 from trl import DDPOConfig, DDPOTrainer, DefaultDDPOStableDiffusionPipeline
@@ -50,12 +52,15 @@ class AestheticScorer(torch.nn.Module):
     This is from https://github.com/christophschuhmann/improved-aesthetic-predictor
     """
 
-    def __init__(self, *, dtype, hub_model_id):
+    def __init__(self, *, dtype, model_id, model_filename="aesthetic-model.pth"):
         super().__init__()
         self.clip = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
         self.processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
         self.mlp = MLP()
-        cached_path = hf_hub_download(hub_model_id, "sac+logos+ava1-l14-linearMSE.pth")
+        try:
+            cached_path = hf_hub_download(model_id, model_filename)
+        except EntryNotFoundError:
+            cached_path = os.path.join(model_id, model_filename)
         state_dict = torch.load(cached_path)
         self.mlp.load_state_dict(state_dict)
         self.dtype = dtype
@@ -161,6 +166,12 @@ def parse_arguments():
 
     parser.add_argument("--pretrained_model", default="runwayml/stable-diffusion-v1-5")
     parser.add_argument("--pretrained_revision", default="main")
+    parser.add_argument("--huggingface_auth_token", required=True)
+    parser.add_argument(
+        "--huggingface_repo",
+        help="HuggingFace repo to save model weights to",
+        default="ddpo-finetuned-stable-diffusion",
+    )
 
     parser.add_argument(
         "--hf_hub_aesthetic_model_id", required=True, help="HuggingFace model ID for aesthetic scorer model weights"
@@ -191,9 +202,12 @@ if __name__ == "__main__":
         tracker_project_name=args.tracker_project_name,
         log_with=args.log_with,
         project_kwargs=project_kwargs,
+        resume_from="./save/checkpoints",
     )
 
-    pipeline = DefaultDDPOStableDiffusionPipeline(args.pretrained_model, args.pretrained_revision)
+    pipeline = DefaultDDPOStableDiffusionPipeline(
+        args.pretrained_model, pretrained_model_revision=args.pretrained_revision, use_lora=True
+    )
 
     trainer = DDPOTrainer(
         config,
@@ -204,3 +218,5 @@ if __name__ == "__main__":
     )
 
     trainer.train()
+
+    trainer.push_to_hub(args.huggingface_repo, token=args.huggingface_auth_token)

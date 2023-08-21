@@ -45,7 +45,9 @@ class DDPOTrainerTester(unittest.TestCase):
         pretrained_model = "hf-internal-testing/tiny-stable-diffusion-torch"
         pretrained_revision = "main"
 
-        pipeline = DefaultDDPOStableDiffusionPipeline(pretrained_model, pretrained_model_revision=pretrained_revision, use_lora=False)
+        pipeline = DefaultDDPOStableDiffusionPipeline(
+            pretrained_model, pretrained_model_revision=pretrained_revision, use_lora=False
+        )
 
         self.trainer = DDPOTrainer(self.ddpo_config, scorer_function, prompt_function, pipeline)
 

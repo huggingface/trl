@@ -35,6 +35,7 @@ class DDPOTrainer(BaseTrainer):
     """
     The DDPOTrainer uses Deep Diffusion Policy Optimization to optimise diffusion models.
     Note, this trainer is heavily inspired by the work here: https://github.com/kvablack/ddpo-pytorch
+    As of now only Stable Diffusion based pipelines are supported
 
     Attributes:
         **config** (`DDPOConfig`) -- Configuration object for DDPOTrainer. Check the documentation of `PPOConfig` for more
