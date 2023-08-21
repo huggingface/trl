@@ -866,7 +866,7 @@ class PPOTrainer(BaseTrainer):
 
         for k, v in stats.items():
             if isinstance(v, torch.Tensor):
-                dist.all_reduce(v, dist.ReduceOp.SUM)
+                dist.all_reduce(v.to(self.accelerator.device), dist.ReduceOp.SUM)
                 v /= self.accelerator.num_processes
             stats[k] = v
         return stats
