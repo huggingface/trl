@@ -142,7 +142,7 @@ class PPOConfig:
     """Keyword arguments for pushing model to the hub during training (e.g. repo_id)"""
     compare_steps: int = 1
     """Number of steps between comparison of the current reward with the best seen so far"""
-    ratio_threshold: float = 0
+    ratio_threshold: float = 10.0
     """Skip mini-batches with high PPO ratios that can cause loss spikes"""
     use_score_scaling: bool = False
     """Use score scaling"""
