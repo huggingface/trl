@@ -107,14 +107,18 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                         response_token_ids_start_idx = idx
 
                 if response_token_ids_start_idx is None:
-                    raise RuntimeError(
-                        f'Could not find response key {self.response_token_ids} in token IDs {batch["labels"][i]}'
+                    warnings.warn(
+                        f"Could not find response key `{self.response_template}` in the "
+                        f'following instance: {self.tokenizer.decode(batch["input_ids"][i])} '
+                        f"This instance will be ignored in loss calculation. "
+                        f"Note, if this happens often, consider increasing the `max_seq_length`."
                     )
+                    batch["labels"][i, :] = self.ignore_index
+                else:
+                    response_token_ids_end_idx = response_token_ids_start_idx + len(self.response_token_ids)
 
-                response_token_ids_end_idx = response_token_ids_start_idx + len(self.response_token_ids)
-
-                # Make pytorch loss function ignore all tokens up through the end of the response key
-                batch["labels"][i, :response_token_ids_end_idx] = self.ignore_index
+                    # Make pytorch loss function ignore all tokens up through the end of the response key
+                    batch["labels"][i, :response_token_ids_end_idx] = self.ignore_index
 
         else:
             for i in range(len(examples)):
@@ -129,10 +133,14 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                     ):
                         response_token_ids_idxs.append(assistant_idx + len(self.response_token_ids))
 
-                if len(self.response_token_ids) == 0:
-                    raise RuntimeError(
-                        f'Could not find response key {self.response_token_ids} in token IDs {batch["labels"][i]}'
+                if len(response_token_ids_idxs) == 0:
+                    warnings.warn(
+                        f"Could not find response key `{self.response_template}` in the "
+                        f'following instance: {self.tokenizer.decode(batch["input_ids"][i])} '
+                        f"This instance will be ignored in loss calculation. "
+                        f"Note, if this happens often, consider increasing the `max_seq_length`."
                     )
+                    batch["labels"][i, :] = self.ignore_index
 
                 human_token_ids = self.tokenizer.encode(self.instruction_template, add_special_tokens=False)
                 for human_idx in np.where(batch["labels"][i] == human_token_ids[0])[0]:
@@ -141,9 +149,13 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                         human_token_ids_idxs.append(human_idx)
 
                 if len(human_token_ids_idxs) == 0:
-                    raise RuntimeError(
-                        f'Could not find response key {human_token_ids} in token IDs {batch["labels"][i]}'
+                    warnings.warn(
+                        f"Could not find instruction key `{self.instruction_template}` in the "
+                        f'following instance: {self.tokenizer.decode(batch["input_ids"][i])} '
+                        f"This instance will be ignored in loss calculation. "
+                        f"Note, if this happens often, consider increasing the `max_seq_length`."
                     )
+                    batch["labels"][i, :] = self.ignore_index
 
                 for idx, (start, end) in enumerate(zip(human_token_ids_idxs, response_token_ids_idxs)):
                     # Make pytorch loss function ignore all non response tokens
@@ -593,6 +605,13 @@ def disable_dropout_in_model(model: torch.nn.Module) -> None:
     for module in model.modules():
         if isinstance(module, torch.nn.Dropout):
             module.p = 0
+
+
+def exact_div(a, b, a_str, b_str, custom_error_message=""):
+    q = a // b
+    if a != q * b:
+        raise ValueError(f"{custom_error_message}, {a_str}={a}, {b_str}={b}, inexact division: {a} / {b} = {a / b}")
+    return q
 
 
 # copied from https://github.com/kvablack/ddpo-pytorch/blob/main/ddpo_pytorch/stat_tracking.py#L5

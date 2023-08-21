@@ -226,7 +226,7 @@ You can also customize the [`ConstantLengthDataset`] much more by directly passi
 
 ### Control over the pretrained model
 
-You can directly pass the kwargs of the `from_pretrained()` method to the [`SFTTrainer`]. For example, if you want to load a model in a different precision, analoguous to 
+You can directly pass the kwargs of the `from_pretrained()` method to the [`SFTTrainer`]. For example, if you want to load a model in a different precision, analogous to 
 
 ```python
 model = AutoModelForCausalLM.from_pretrained("facebook/opt-350m", torch_dtype=torch.bfloat16)
