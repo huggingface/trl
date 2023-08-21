@@ -14,6 +14,7 @@
 import logging
 import os
 import subprocess
+import sys
 import warnings
 from dataclasses import dataclass, field
 from typing import Literal, Optional
@@ -64,8 +65,8 @@ class PPOConfig:
     """
     Configuration class for PPOTrainer
     """
-    exp_name: str = os.path.basename(__file__)[:-len(".py")]
-    """the name of this experiment (by default is the file name)"""
+    exp_name: str = os.path.basename(sys.argv[0])[:-len(".py")]
+    """the name of this experiment (by default is the file name without the extension name)"""
     task_name: Optional[str] = None
     """Name of task to use - used only for tracking purposes"""
     model_name: Optional[str] = None
@@ -152,9 +153,9 @@ class PPOConfig:
     """Score clipping"""
     
     ## Model detection
-    is_encoder_decoder: tyro.conf.Suppress[bool] = None
+    is_encoder_decoder: Optional[tyro.conf.Suppress[bool]] = None
     """TO BE FILLED In RUNTIME: Whether the model is an encoder-decoder model"""
-    is_peft_model: tyro.conf.Suppress[bool] = None
+    is_peft_model: Optional[tyro.conf.Suppress[bool]] = None
     """TO BE FILLED In RUNTIME: Whether the model is a PEFT model"""
 
     def __post_init__(self):
