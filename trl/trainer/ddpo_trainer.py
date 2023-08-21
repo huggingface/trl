@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import contextlib
 import os
 from collections import defaultdict
 from concurrent import futures
@@ -23,9 +22,6 @@ import torch
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
-from diffusers import UNet2DConditionModel
-from diffusers.loaders import AttnProcsLayers
-from diffusers.models.attention_processor import LoRAAttnProcessor
 
 from ..models import DDPOStableDiffusionPipeline
 from . import BaseTrainer, DDPOConfig
@@ -65,6 +61,8 @@ class DDPOTrainer(BaseTrainer):
         self.config = config
         self.image_samples_callback = image_samples_hook
 
+        accelerator_project_config = ProjectConfiguration(**self.config.project_kwargs)
+
         if self.config.resume_from:
             self.config.resume_from = os.path.normpath(os.path.expanduser(self.config.resume_from))
             if "checkpoint_" not in os.path.basename(self.config.resume_from):
@@ -77,10 +75,13 @@ class DDPOTrainer(BaseTrainer):
                 )
                 if len(checkpoints) == 0:
                     raise ValueError(f"No checkpoints found in {self.config.resume_from}")
+                checkpoint_numbers = sorted([int(x.split("_")[-1]) for x in checkpoints])
                 self.config.resume_from = os.path.join(
                     self.config.resume_from,
-                    sorted(checkpoints, key=lambda x: int(x.split("_")[-1]))[-1],
+                    f"checkpoint_{checkpoint_numbers[-1]}",
                 )
+
+                accelerator_project_config.iteration = checkpoint_numbers[-1] + 1
 
         # number of timesteps within each trajectory to train on
         self.num_train_timesteps = int(self.config.sample_num_steps * self.config.train_timestep_fraction)
@@ -88,7 +89,7 @@ class DDPOTrainer(BaseTrainer):
         self.accelerator = Accelerator(
             log_with=self.config.log_with,
             mixed_precision=self.config.mixed_precision,
-            project_config=ProjectConfiguration(**self.config.project_kwargs),
+            project_config=accelerator_project_config,
             # we always accumulate gradients across timesteps; we want config.train.gradient_accumulation_steps to be the
             # number of *samples* we accumulate across, so we need to multiply by the number of training timesteps to get
             # the total number of optimizer steps to accumulate across.
@@ -115,11 +116,6 @@ class DDPOTrainer(BaseTrainer):
 
         self.sd_pipeline = sd_pipeline
 
-        # freeze parameters of models to save more memory
-        self.sd_pipeline.vae.requires_grad_(False)
-        self.sd_pipeline.text_encoder.requires_grad_(False)
-        self.sd_pipeline.unet.requires_grad_(not config.use_lora)
-
         self.sd_pipeline.set_progress_bar_config(
             position=1,
             disable=not self.accelerator.is_local_main_process,
@@ -128,7 +124,7 @@ class DDPOTrainer(BaseTrainer):
             dynamic_ncols=True,
         )
 
-        # For mixed precision training we cast all non-trainable weigths (vae, non-lora text_encoder and non-lora unet) to half-precision
+        # For mixed precision training we cast all non-trainable weights (vae, non-lora text_encoder and non-lora unet) to half-precision
         # as these weights are only used for inference, keeping weights in full precision is not required.
         if self.accelerator.mixed_precision == "fp16":
             inference_dtype = torch.float16
@@ -141,29 +137,7 @@ class DDPOTrainer(BaseTrainer):
         self.sd_pipeline.text_encoder.to(self.accelerator.device, dtype=inference_dtype)
         self.sd_pipeline.unet.to(self.accelerator.device, dtype=inference_dtype)
 
-        if config.use_lora:
-            # Set correct lora layers
-            lora_attn_procs = {}
-            for name in self.sd_pipeline.unet.attn_processors.keys():
-                cross_attention_dim = (
-                    None if name.endswith("attn1.processor") else self.sd_pipeline.unet.config.cross_attention_dim
-                )
-                if name.startswith("mid_block"):
-                    hidden_size = self.sd_pipeline.unet.config.block_out_channels[-1]
-                elif name.startswith("up_blocks"):
-                    block_id = int(name[len("up_blocks.")])
-                    hidden_size = list(reversed(self.sd_pipeline.unet.config.block_out_channels))[block_id]
-                elif name.startswith("down_blocks"):
-                    block_id = int(name[len("down_blocks.")])
-                    hidden_size = self.sd_pipeline.unet.config.block_out_channels[block_id]
-
-                lora_attn_procs[name] = LoRAAttnProcessor(
-                    hidden_size=hidden_size, cross_attention_dim=cross_attention_dim
-                )
-            self.sd_pipeline.unet.set_attn_processor(lora_attn_procs)
-            trainable_layers = AttnProcsLayers(self.sd_pipeline.unet.attn_processors)
-        else:
-            trainable_layers = self.sd_pipeline.unet
+        trainable_layers = self.sd_pipeline.get_trainable_layers()
 
         self.accelerator.register_save_state_pre_hook(self._save_model_hook)
         self.accelerator.register_load_state_pre_hook(self._load_model_hook)
@@ -193,7 +167,7 @@ class DDPOTrainer(BaseTrainer):
 
         # NOTE: for some reason, autocast is necessary for non-lora training but for lora training it isn't necessary and it uses
         # more memory
-        self.autocast = contextlib.nullcontext if config.use_lora else self.accelerator.autocast
+        self.autocast = self.sd_pipeline.autocast or self.accelerator.autocast
 
         self.trainable_layers, self.optimizer = self.accelerator.prepare(trainable_layers, self.optimizer)
 
@@ -432,33 +406,11 @@ class DDPOTrainer(BaseTrainer):
         )
 
     def _save_model_hook(self, models, weights, output_dir):
-        assert len(models) == 1
-        if self.config.use_lora and isinstance(models[0], AttnProcsLayers):
-            self.sd_pipeline.unet.save_attn_procs(output_dir)
-        elif not self.config.use_lora and isinstance(models[0], UNet2DConditionModel):
-            models[0].save_pretrained(os.path.join(output_dir, "unet"))
-        else:
-            raise ValueError(f"Unknown model type {type(models[0])}")
+        self.sd_pipeline.save_checkpoint(models, weights, output_dir)
         weights.pop()  # ensures that accelerate doesn't try to handle saving of the model
 
     def _load_model_hook(self, models, input_dir):
-        assert len(models) == 1
-        if self.config.use_lora and isinstance(models[0], AttnProcsLayers):
-            tmp_unet = UNet2DConditionModel.from_pretrained(
-                self.config.pretrained_model,
-                revision=self.config.pretrained_revision,
-                subfolder="unet",
-            )
-            tmp_unet.load_attn_procs(input_dir)
-            models[0].load_state_dict(AttnProcsLayers(tmp_unet.attn_processors).state_dict())
-            del tmp_unet
-        elif not self.config.use_lora and isinstance(models[0], UNet2DConditionModel):
-            load_model = UNet2DConditionModel.from_pretrained(input_dir, subfolder="unet")
-            models[0].register_to_config(**load_model.config)
-            models[0].load_state_dict(load_model.state_dict())
-            del load_model
-        else:
-            raise ValueError(f"Unknown model type {type(models[0])}")
+        self.sd_pipeline.load_checkpoint(models, input_dir)
         models.pop()  # ensures that accelerate doesn't try to handle loading of the model
 
     def _generate_samples(self, iterations, batch_size):
@@ -618,3 +570,6 @@ class DDPOTrainer(BaseTrainer):
             epochs = self.config.num_epochs
         for epoch in range(self.first_epoch, epochs):
             global_step = self.step(epoch, global_step)
+
+    def _save_pretrained(self, save_directory):
+        self.sd_pipeline.save_pretrained(save_directory)

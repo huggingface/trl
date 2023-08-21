@@ -54,12 +54,6 @@ class DDPOConfig(object):
     mixed_precision: Optional[str] = field(default="fp16", metadata={"help": "Mixed precision training."})
     allow_tf32: Optional[bool] = field(default=True, metadata={"help": "Allow tf32 on Ampere GPUs."})
     resume_from: Optional[str] = field(default="", metadata={"help": "Resume training from a checkpoint."})
-    use_lora: Optional[bool] = field(default=True, metadata={"help": "Whether or not to use LoRA."})
-    pretrained_model: Optional[str] = field(
-        default="runwayml/stable-diffusion-v1-5",
-        metadata={"help": "Base model to load."},
-    )
-    pretrained_revision: Optional[str] = field(default="main", metadata={"help": "Revision of the model to load."})
     sample_num_steps: Optional[int] = field(default=50, metadata={"help": "Number of sampler inference steps."})
     sample_eta: Optional[float] = field(default=1.0, metadata={"help": "Eta parameter for the DDIM sampler."})
     sample_guidance_scale: Optional[float] = field(default=5.0, metadata={"help": "Classifier-free guidance weight."})
