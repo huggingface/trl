@@ -52,7 +52,7 @@ class AestheticScorer(torch.nn.Module):
     This is from https://github.com/christophschuhmann/improved-aesthetic-predictor
     """
 
-    def __init__(self, *, dtype, model_id, model_filename="aesthetic-model.pth"):
+    def __init__(self, *, dtype, model_id, model_filename):
         super().__init__()
         self.clip = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
         self.processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
@@ -77,9 +77,10 @@ class AestheticScorer(torch.nn.Module):
         return self.mlp(embed).squeeze(1)
 
 
-def aesthetic_scorer(hub_model_id):
+def aesthetic_scorer(hub_model_id, model_filename):
     scorer = AestheticScorer(
-        hub_model_id=hub_model_id,
+        model_id=hub_model_id,
+        model_filename=model_filename,
         dtype=torch.float32,
     ).cuda()
 
@@ -174,7 +175,15 @@ def parse_arguments():
     )
 
     parser.add_argument(
-        "--hf_hub_aesthetic_model_id", required=True, help="HuggingFace model ID for aesthetic scorer model weights"
+        "--hf_hub_aesthetic_model_id",
+        help="HuggingFace model ID for aesthetic scorer model weights",
+        default="trl-lib/ddpo-aesthetic-predictor",
+    )
+
+    parser.add_argument(
+        "--hf_hub_aesthetic_model_filename",
+        default="aesthetic-model.pth",
+        help="HuggingFace model filename for aesthetic scorer model weights",
     )
 
     return parser.parse_args()
@@ -202,7 +211,6 @@ if __name__ == "__main__":
         tracker_project_name=args.tracker_project_name,
         log_with=args.log_with,
         project_kwargs=project_kwargs,
-        resume_from="./save/checkpoints",
     )
 
     pipeline = DefaultDDPOStableDiffusionPipeline(
@@ -211,7 +219,7 @@ if __name__ == "__main__":
 
     trainer = DDPOTrainer(
         config,
-        aesthetic_scorer(args.hf_hub_aesthetic_model_id),
+        aesthetic_scorer(args.hf_hub_aesthetic_model_id, args.hf_hub_aesthetic_model_filename),
         prompt_fn,
         pipeline,
         image_samples_hook=image_outputs_logger,
