@@ -16,12 +16,11 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import torch
+import tyro
 from datasets import load_dataset
 from peft import LoraConfig
 from tqdm import tqdm
-from transformers import AutoTokenizer, GenerationConfig, pipeline
-import tyro
-from rich.pretty import pprint
+from transformers import AutoTokenizer, pipeline
 
 from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead, PPOConfig, PPOTrainer, set_seed
 from trl.core import LengthSampler
@@ -63,6 +62,7 @@ class ScriptArguments:
         ),
     )
 
+
 args = tyro.cli(ScriptArguments)
 
 
@@ -70,9 +70,7 @@ args = tyro.cli(ScriptArguments)
 # We set `return_all_scores` to True to get the sentiment score for each token.
 sent_kwargs = {"return_all_scores": True, "function_to_apply": "none", "batch_size": 16}
 
-trl_model_class = (
-    AutoModelForCausalLMWithValueHead if not args.use_seq2seq else AutoModelForSeq2SeqLMWithValueHead
-)
+trl_model_class = AutoModelForCausalLMWithValueHead if not args.use_seq2seq else AutoModelForSeq2SeqLMWithValueHead
 
 
 # Below is an example function to build the dataset. In our case, we use the IMDB dataset

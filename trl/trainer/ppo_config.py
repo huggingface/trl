@@ -18,10 +18,10 @@ import sys
 import warnings
 from dataclasses import dataclass, field
 from typing import Literal, Optional
-import tyro
 
 import numpy as np
 import requests
+import tyro
 
 from trl.trainer.utils import exact_div
 
@@ -65,7 +65,8 @@ class PPOConfig:
     """
     Configuration class for PPOTrainer
     """
-    exp_name: str = os.path.basename(sys.argv[0])[:-len(".py")]
+
+    exp_name: str = os.path.basename(sys.argv[0])[: -len(".py")]
     """the name of this experiment (by default is the file name without the extension name)"""
     task_name: Optional[str] = None
     """Name of task to use - used only for tracking purposes"""
@@ -151,8 +152,8 @@ class PPOConfig:
     """Use score normalization. Only applicable if use_score_scaling is True"""
     score_clip: Optional[float] = None
     """Score clipping"""
-    
-    ## Model detection
+
+    # Model detection
     is_encoder_decoder: Optional[tyro.conf.Suppress[bool]] = None
     """TO BE FILLED In RUNTIME: Whether the model is an encoder-decoder model"""
     is_peft_model: Optional[tyro.conf.Suppress[bool]] = None

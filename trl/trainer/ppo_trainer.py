@@ -261,7 +261,6 @@ class PPOTrainer(BaseTrainer):
         else:
             self.dataloader = None
 
-
         # Step 3: Initialize optimizer and data collator
         self.data_collator = DataCollatorForLanguageModeling(self.tokenizer, mlm=False)
         if optimizer is None:
