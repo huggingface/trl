@@ -167,9 +167,9 @@ def parse_arguments():
 
     parser.add_argument("--pretrained_model", default="runwayml/stable-diffusion-v1-5")
     parser.add_argument("--pretrained_revision", default="main")
-    parser.add_argument("--huggingface_auth_token", required=True)
+    parser.add_argument("--hf_user_access_token", required=True)
     parser.add_argument(
-        "--huggingface_repo",
+        "--hf_hub_model_id",
         help="HuggingFace repo to save model weights to",
         default="ddpo-finetuned-stable-diffusion",
     )
@@ -227,4 +227,4 @@ if __name__ == "__main__":
 
     trainer.train()
 
-    trainer.push_to_hub(args.huggingface_repo, token=args.huggingface_auth_token)
+    trainer.push_to_hub(args.hf_hub_model_id, token=args.hf_user_access_token)

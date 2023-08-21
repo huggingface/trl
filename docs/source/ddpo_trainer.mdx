@@ -14,7 +14,7 @@ The machinery for finetuning of Stable Diffusion models with reinforcement learn
 library. A reason for  stating this is that getting started requires a bit of familiarity with the `diffusers` library concepts, mainly two of them - pipelines and schedulers.
 Right out of the box (`diffusers` library), there isn't a `Pipeline` nor a `Scheduler` instance that is suitable for finetuning with reinforcement learning. Some adjustments need to made. 
 
-There is a pipeline interface that is provided by this library that is required to be implemented to be used with the `DDPOTrainer`, which is the main machinery for fine-tuning Stable Diffusion with reinforcement learning. **Note: Only the StableDiffusion architecture is supported at this point**
+There is a pipeline interface that is provided by this library that is required to be implemented to be used with the `DDPOTrainer`, which is the main machinery for fine-tuning Stable Diffusion with reinforcement learning. **Note: Only the StableDiffusion architecture is supported at this point.**
 There is a default implementation of this interface that you can use out of the box. Assuming the default implementation is sufficient and/or to get things moving, refer to the training example alongside this guide. 
 
 The point of the interface is to fuse the pipeline and the scheduler into one object which allows for minimalness in terms of having the constraints all in one place. The interface was designed in hopes of catering to pipelines and schedulers beyond the examples in this repository and elsewhere at this time of writing. Also the scheduler step is a method of this pipeline interface and this may seem redundant given that the raw scheduler is accessible via the interface but this is the only way to constrain the scheduler step output to an output type befitting of the algorithm at hand (DDPO).
@@ -31,10 +31,10 @@ The `stable_diffusion_tuning.py` script is a working example of using the `DDPO`
 
 **Note:** one A100 GPU is recommended to get this running. Anything below a A100 will not be able to run this example script and even if it does via relatively smaller sized parameters, the results will most likely be poor.
 
-Almost every configuration parameter has a default. There is only one commandline flag argument that is required of the user to get things up and running. The user is expected to have the model weights similar or exactly that of the one found here https://github.com/christophschuhmann/improved-aesthetic-predictor uploaded to the HuggingFace model hub. The hub id is then to be used as the `hf_hub_aesthetic_model_id` commandline parameter. The following bash command is to be entered to get things running
+Almost every configuration parameter has a default. There is only one commandline flag argument that is required of the user to get things up and running. The user is expected to have a [huggingface user access token](https://huggingface.co/docs/hub/security-tokens) that will be used to upload the model post finetuning to HuggingFace hub. The following bash command is to be entered to get things running
 
 ```batch
-python stable_diffusion_tuning.py --hf_hub_aesthetic_model_id myusername/ddpo-aesthetic-scorer
+python stable_diffusion_tuning.py --hf_user_access_token <token>
 ```
 
 Again, the script uses a small subset of parameters to configure the trainer. And all of these are configurable via the commandline.
@@ -43,7 +43,8 @@ The commandline flags that are associated with the example script's parameters a
 
 |parameter|description|default|
 | ---- | ---- | ---- |
-|`--hf_hub_aesthetic_model_id`|The HuggingFace model hub id of the aesthetic scorer model|None|
+|`--hf_hub_aesthetic_model_id`|The HuggingFace model hub id of the aesthetic scorer model|`"trl-lib/ddpo-aesthetic-predictor"`|
+|`--hf_hub_aesthetic_model_filename`|The filename of the aesthetic scorer model |`"aesthetic-model.pth"`|
 |`--pretrained_model`|The string id of the pretrained Stable Diffusion model|`"runwayml/stable-diffusion-v1-5"`|
 |`--pretrained_revision`|The revision of the pretrained Stable Diffusion model|`"main"`|
 |`--num_epochs`|The number of epochs to train for|`200`|
@@ -60,6 +61,8 @@ The commandline flags that are associated with the example script's parameters a
 | `--project_dir`|The directory to use for saving the model|`"save"`|
 | `--automatic_checkpoint_naming`|Whether to automatically name model checkpoints|`True`|
 | `--total_limit`| Number of checkpoints to keep before overwriting old ones|`5`|
+| `--hf_hub_model_id`|The HuggingFace model hub id to use for saving the model|`"ddpo-finetuned-sd-model"`|
+| `--hf_user_access_token`| The HuggingFace user access token|`None`|
 
 The following are things to keep in mind (The code checks this for you as well) in general while configuring the trainer (beyond the use case of using the example script)
 
