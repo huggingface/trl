@@ -43,7 +43,7 @@ def autotag() -> str:
         git_branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"]).decode("ascii").strip()
         if git_branch != "main":
             # try finding the pull request number on github
-            prs = requests.get(f"https://api.github.com/search/issues?q=repo:lvwerra/trl+is:pr+{git_commit}")
+            prs = requests.get(f"https://api.github.com/search/issues?q=repo:huggingface/trl+is:pr+{git_commit}")
             if prs.status_code == 200:
                 prs = prs.json()
                 if len(prs["items"]) > 0:
@@ -64,7 +64,8 @@ class PPOConfig:
     """
     Configuration class for PPOTrainer
     """
-
+    exp_name: str = os.path.basename(__file__)[:-len(".py")]
+    """the name of this experiment (by default is the file name)"""
     task_name: Optional[str] = None
     """Name of task to use - used only for tracking purposes"""
     model_name: Optional[str] = None
@@ -149,6 +150,12 @@ class PPOConfig:
     """Use score normalization. Only applicable if use_score_scaling is True"""
     score_clip: Optional[float] = None
     """Score clipping"""
+    
+    ## Model detection
+    is_encoder_decoder: tyro.conf.Suppress[bool] = None
+    """TO BE FILLED In RUNTIME: Whether the model is an encoder-decoder model"""
+    is_peft_model: tyro.conf.Suppress[bool] = None
+    """TO BE FILLED In RUNTIME: Whether the model is a PEFT model"""
 
     def __post_init__(self):
         if self.forward_batch_size is not None:

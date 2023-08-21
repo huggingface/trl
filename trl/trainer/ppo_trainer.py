@@ -109,7 +109,7 @@ class PPOTrainer(BaseTrainer):
 
     Attributes:
         **config** (`PPOConfig`) -- Configuration object for PPOTrainer. Check the documentation of `PPOConfig` for more
-         details.
+            details.
         **model** (`PreTrainedModelWrapper`) -- Model to be optimized, Hugging Face transformer model with a value head.
             Check the documentation of `PreTrainedModelWrapper` for more details.
         **ref_model** (`PreTrainedModelWrapper`, *optional*) -- Reference model to be used for KL penalty, Hugging Face
@@ -195,18 +195,24 @@ class PPOTrainer(BaseTrainer):
             **config.accelerator_kwargs,
         )
 
-        is_using_tensorboard = config.log_with is not None and config.log_with == "tensorboard"
-
-        self.accelerator.init_trackers(
-            config.tracker_project_name,
-            config=dict(trl_ppo_trainer_config=config.to_dict()) if not is_using_tensorboard else config.to_dict(),
-            init_kwargs=config.tracker_kwargs,
-        )
+        # Step 1.1 Runtime variables filled by the accelerator
+        config.world_size = self.accelerator.num_processes
+        config.global_backward_batch_size = config.backward_batch_size * config.world_size
+        config.global_batch_size = config.batch_size * config.world_size
 
         self.model = model
         self.model_params = filter(lambda p: p.requires_grad, self.model.parameters())
         self.is_encoder_decoder = hasattr(self.model, "is_encoder_decoder")
         self.is_peft_model = getattr(self.model, "is_peft_model", False)
+        config.is_encoder_decoder = self.is_encoder_decoder
+        config.is_peft_model = self.is_peft_model
+
+        is_using_tensorboard = config.log_with is not None and config.log_with == "tensorboard"
+        self.accelerator.init_trackers(
+            config.tracker_project_name,
+            config=dict(trl_ppo_trainer_config=config.to_dict()) if not is_using_tensorboard else config.to_dict(),
+            init_kwargs=config.tracker_kwargs,
+        )
 
         if isinstance(ref_model, SUPPORTED_ARCHITECTURES):
             self.ref_model = ref_model
@@ -255,7 +261,6 @@ class PPOTrainer(BaseTrainer):
         else:
             self.dataloader = None
 
-        self.config.backward_batch_size = self.config.mini_batch_size * self.config.gradient_accumulation_steps
 
         # Step 3: Initialize optimizer and data collator
         self.data_collator = DataCollatorForLanguageModeling(self.tokenizer, mlm=False)
