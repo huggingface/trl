@@ -49,3 +49,17 @@ model = AutoPeftModelForCausalLM.from_pretrained(
 
 model.generate(...)
 ```
+
+## for google colab
+
+Make sure we use T5 GPU.
+Unfortunately, the T5 is not an Ampere architecture. So we need to change bf16 to fp16.
+
+```
+!git clone https://github.com/huggingface/trl.git
+!pip install -q -U -r trl/examples/research_projects/stack_llama_2/scripts/requirements.txt
+!find trl/examples/research_projects/stack_llama_2/scripts -name "sft_llama2.py" -exec sed -i "s/bf16/fp16/g" {} \;
+!accelerate config # This machine, No distributed training, NO, NO, NO, all, fp16
+!huggingface-cli login # put access Token
+!accelerate launch trl/examples/research_projects/stack_llama_2/scripts/sft_llama2.py --output_dir="sft"
+```
