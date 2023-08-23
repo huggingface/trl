@@ -25,6 +25,7 @@ class ScriptArguments:
     streaming: Optional[bool] = field(default=True, metadata={"help": "whether to stream the dataset"})
     shuffle_buffer: Optional[int] = field(default=5000, metadata={"help": "the shuffle buffer size"})
     seq_length: Optional[int] = field(default=1024, metadata={"help": "the sequence length"})
+    num_workers: Optional[int] = field(default=4, metadata={"help": "the number of workers"})
 
     max_steps: Optional[int] = field(default=500, metadata={"help": "the maximum number of sgd steps"})
     logging_steps: Optional[int] = field(default=10, metadata={"help": "the logging frequency"})
