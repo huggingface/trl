@@ -93,7 +93,8 @@ model = AutoModelForCausalLM.from_pretrained(
 )
 
 # Step 2: Load the dataset
-dataset = load_dataset(script_args.dataset_name, split="train")
+train_dataset = load_dataset(script_args.dataset_name, split="train")
+eval_dataset = load_dataset(script_args.dataset_name, split="validate")
 
 # Step 3: Define the training arguments
 training_args = TrainingArguments(
@@ -127,7 +128,8 @@ trainer = SFTTrainer(
     model=model,
     args=training_args,
     max_seq_length=script_args.seq_length,
-    train_dataset=dataset,
+    train_dataset=train_dataset,
+    eval_dataset=eval_dataset,
     dataset_text_field=script_args.dataset_text_field,
     peft_config=peft_config,
 )
