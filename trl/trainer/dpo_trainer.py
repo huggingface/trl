@@ -24,6 +24,7 @@ from transformers import DataCollator, PreTrainedModel, PreTrainedTokenizerBase,
 from transformers.trainer_callback import TrainerCallback
 
 from ..import_utils import is_peft_available
+from ..models import create_reference_model
 from .utils import DPODataCollatorWithPadding, disable_dropout_in_model, pad_to_length
 
 
@@ -39,7 +40,8 @@ class DPOTrainer(Trainer):
         model (`transformers.PreTrainedModel`):
             The model to train, preferably an `AutoModelForSequenceClassification`.
         ref_model (`PreTrainedModelWrapper`):
-            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation and loss.
+            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation and loss. If no
+            reference model is provided, the trainer will create a reference model with the same architecture as the model to be optimized.
         beta (`float`, defaults to 0.1):
             The beta factor in DPO loss. Higher beta means less divergence from the initial policy.
         args (`transformers.TrainingArguments`):
@@ -80,7 +82,7 @@ class DPOTrainer(Trainer):
     def __init__(
         self,
         model: Union[PreTrainedModel, nn.Module] = None,
-        ref_model: Union[PreTrainedModel, nn.Module] = None,
+        ref_model: Optional[Union[PreTrainedModel, nn.Module]] = None,
         beta: float = 0.1,
         args: TrainingArguments = None,
         data_collator: Optional[DataCollator] = None,
@@ -110,6 +112,16 @@ class DPOTrainer(Trainer):
             if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
                 model = prepare_model_for_int8_training(model)
             model = get_peft_model(model, peft_config)
+
+        self.is_peft_model = getattr(model, "is_peft_model", False)
+
+        if ref_model:
+            self.ref_model = ref_model
+        elif self.is_peft_model:
+            # The `model` with adapters turned off will be used as the reference model
+            self.ref_model = None
+        else:
+            self.ref_model = create_reference_model(model)
 
         if data_collator is None:
             if tokenizer is None:
@@ -155,13 +167,13 @@ class DPOTrainer(Trainer):
 
         if disable_dropout:
             disable_dropout_in_model(model)
-            disable_dropout_in_model(ref_model)
+            if self.ref_model is not None:
+                disable_dropout_in_model(self.ref_model)
 
         self.label_pad_token_id = label_pad_token_id
         self.padding_value = padding_value
 
         self.beta = beta
-        self.ref_model = ref_model
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
@@ -179,13 +191,21 @@ class DPOTrainer(Trainer):
             preprocess_logits_for_metrics,
         )
 
-        # Since we inherit from trainer we always have access to an accelerator
-        if hasattr(self, "accelerator"):
-            self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
-        else:
+        if not hasattr(self, "accelerator"):
             raise AttributeError(
                 "Your `Trainer` does not have an `accelerator` object. Consider upgrading `transformers`."
             )
+
+        if self.ref_model is None:
+            if not hasattr(
+                self.accelerator.unwrap_model(self.model).pretrained_model,
+                "disable_adapter",
+            ):
+                raise ValueError(
+                    "You are using a `peft` version that does not support `disable_adapter`. Please update your `peft` version to the latest version."
+                )
+        else:
+            self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
     def concatenated_inputs(self, batch: Dict[str, Union[List, torch.LongTensor]]) -> Dict[str, torch.LongTensor]:
         """Concatenate the chosen and rejected inputs into a single tensor.
@@ -326,12 +346,21 @@ class DPOTrainer(Trainer):
             policy_rejected_logits,
         ) = self.concatenated_forward(model, batch)
         with torch.no_grad():
-            (
-                reference_chosen_logps,
-                reference_rejected_logps,
-                _,
-                _,
-            ) = self.concatenated_forward(self.ref_model, batch)
+            if self.ref_model is None:
+                with self.accelerator.unwrap_model(self.model).pretrained_model.disable_adapter():
+                    (
+                        reference_chosen_logps,
+                        reference_rejected_logps,
+                        _,
+                        _,
+                    ) = self.concatenated_forward(self.model, batch)
+            else:
+                (
+                    reference_chosen_logps,
+                    reference_rejected_logps,
+                    _,
+                    _,
+                ) = self.concatenated_forward(self.ref_model, batch)
 
         losses, chosen_rewards, rejected_rewards = self.dpo_loss(
             policy_chosen_logps,
@@ -385,13 +414,23 @@ class DPOTrainer(Trainer):
             pad_token_id=self.tokenizer.pad_token_id,
         )
 
-        reference_output = self.ref_model.generate(
-            batch["prompt_input_ids"],
-            attention_mask=batch["prompt_attention_mask"],
-            max_length=self.config.max_length,
-            do_sample=True,
-            pad_token_id=self.tokenizer.pad_token_id,
-        )
+        if self.ref_model is None:
+            with self.accelerator.unwrap_model(self.model).pretrained_model.disable_adapter():
+                reference_output = self.model.generate(
+                    batch["prompt_input_ids"],
+                    attention_mask=batch["prompt_attention_mask"],
+                    max_length=self.config.max_length,
+                    do_sample=True,
+                    pad_token_id=self.tokenizer.pad_token_id,
+                )
+        else:
+            reference_output = self.ref_model.generate(
+                batch["prompt_input_ids"],
+                attention_mask=batch["prompt_attention_mask"],
+                max_length=self.config.max_length,
+                do_sample=True,
+                pad_token_id=self.tokenizer.pad_token_id,
+            )
 
         policy_output = pad_to_length(policy_output, self.config.max_length, self.tokenizer.pad_token_id)
         policy_output_decoded = self.tokenizer.batch_decode(policy_output, skip_special_tokens=True)

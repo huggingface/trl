@@ -25,6 +25,7 @@ class ScriptArguments:
     streaming: Optional[bool] = field(default=True, metadata={"help": "whether to stream the dataset"})
     shuffle_buffer: Optional[int] = field(default=5000, metadata={"help": "the shuffle buffer size"})
     seq_length: Optional[int] = field(default=1024, metadata={"help": "the sequence length"})
+    num_workers: Optional[int] = field(default=4, metadata={"help": "the number of workers"})
 
     max_steps: Optional[int] = field(default=500, metadata={"help": "the maximum number of sgd steps"})
     logging_steps: Optional[int] = field(default=10, metadata={"help": "the logging frequency"})
@@ -35,7 +36,8 @@ class ScriptArguments:
     gradient_checkpointing: Optional[bool] = field(
         default=True, metadata={"help": "whether to use gradient checkpointing"}
     )
-    group_by_length: Optional[bool] = field(default=True, metadata={"help": "whether to group by length"})
+    group_by_length: Optional[bool] = field(default=False, metadata={"help": "whether to group by length"})
+    packing: Optional[bool] = field(default=True, metadata={"help": "whether to use packing for SFTTrainer"})
 
     lora_alpha: Optional[float] = field(default=16, metadata={"help": "the lora alpha parameter"})
     lora_dropout: Optional[float] = field(default=0.05, metadata={"help": "the lora dropout parameter"})
@@ -53,6 +55,9 @@ class ScriptArguments:
 
 parser = HfArgumentParser(ScriptArguments)
 script_args = parser.parse_args_into_dataclasses()[0]
+
+if script_args.group_by_length and script_args.packing:
+    raise ValueError("Cannot use both packing and group by length")
 
 
 def chars_token_ratio(dataset, tokenizer, nb_examples=400):
@@ -189,7 +194,7 @@ trainer = SFTTrainer(
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
     peft_config=peft_config,
-    packing=True,
+    packing=script_args.packing,
     max_seq_length=None,
     tokenizer=tokenizer,
     args=training_args,

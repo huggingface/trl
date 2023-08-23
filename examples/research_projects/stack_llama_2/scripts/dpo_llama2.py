@@ -164,6 +164,7 @@ if __name__ == "__main__":
     # 4. initialize training arguments:
     training_args = TrainingArguments(
         per_device_train_batch_size=script_args.per_device_train_batch_size,
+        per_device_eval_batch_size=script_args.per_device_eval_batch_size,
         max_steps=script_args.max_steps,
         logging_steps=script_args.logging_steps,
         save_steps=script_args.save_steps,

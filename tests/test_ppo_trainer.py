@@ -18,6 +18,7 @@ import re
 import tempfile
 import unittest
 
+import pytest
 import torch
 from huggingface_hub import HfApi, HfFolder, delete_repo
 from parameterized import parameterized
@@ -1193,3 +1194,7 @@ class PPOTrainerTester(unittest.TestCase):
             # train model
             _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
             break
+
+    def test_batch_size_check(self):
+        with pytest.raises(ValueError):
+            PPOConfig(batch_size=2, mini_batch_size=2, gradient_accumulation_steps=2)
