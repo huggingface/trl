@@ -21,12 +21,20 @@ Benchmark axis:
     - helpfulness vs harmlessness (https://huggingface.co/datasets/Anthropic/hh-rlhf)
 
 
-## w/ different models (gpt2, gpt2-xl, falcon, llama2)
+accelerate launch --num_processes 2 --multi_gpu  examples/scripts/sentiment_tuning.py --ppo_config.log_with wandb
 
-```
+
+accelerate launch --config_file examples/scripts/config.yaml examples/scripts/sentiment_tuning.py  --ppo_config.log_with wandb
+
+
+## base benchmark
+
+
+```bash
+export WANDB_ENTITY=huggingface
 python benchmark/benchmark.py \
-    --command "python examples/scripts/sentiment_tuning.py --log_with wandb" \
-    --num-seeds 10 \
+    --command "python examples/scripts/sentiment_tuning.py --ppo_config.log_with wandb" \
+    --num-seeds 5 \
     --start-seed 1 \
     --workers 10 \
     --slurm-nodes 1 \
@@ -34,25 +42,85 @@ python benchmark/benchmark.py \
     --slurm-ntasks 1 \
     --slurm-total-cpus 12 \
     --slurm-template-path benchmark/trl.slurm_template
-```
-```
-python benchmark/benchmark.py \
-    --command "python examples/scripts/sentiment_tuning.py --model_name gpt2-xl --log_with wandb" \
-    --num-seeds 10 \
-    --start-seed 1 \
-    --workers 10 \
-    --slurm-nodes 1 \
-    --slurm-gpus-per-task 1 \
-    --slurm-ntasks 1 \
-    --slurm-total-cpus 12 \
-    --slurm-template-path benchmark/trl.slurm_template
+python -m openrlbenchmark.rlops_multi_metrics \
+    --filters '?we=huggingface&wpn=trl&xaxis=_step&ceik=trl_ppo_trainer_config.value.reward_model&cen=trl_ppo_trainer_config.value.exp_name&metrics=env/reward_mean&metrics=objective/kl' \
+        'sentiment_tuning?tag=v0.4.7-55-g110e672&tag=pr-662&cl=sentiment RLHF (PR-662)' \
+    --env-ids sentiment-analysis:lvwerra/distilbert-imdb \
+    --no-check-empty-runs \
+    --pc.ncols 2 \
+    --pc.ncols-legend 1 \
+    --output-filename static/0compare \
+    --scan-history
 ```
 
 ## w/ and w/o gradient accumulation
 ```
-WANDB_TAGS="sentiment,grad_accu" python benchmark/benchmark.py \
-    --command "python examples/scripts/sentiment_tuning.py --log_with wandb --mini_batch_size 1 --gradient_accumulation_steps 128" \
-    --num-seeds 10 \
+python benchmark/benchmark.py \
+    --command "python examples/scripts/sentiment_tuning.py --ppo_config.exp_name sentiment_tuning_step_grad_accu --ppo_config.mini_batch_size 1 --ppo_config.gradient_accumulation_steps 128 --ppo_config.log_with wandb" \
+    --num-seeds 5 \
+    --start-seed 1 \
+    --workers 10 \
+    --slurm-nodes 1 \
+    --slurm-gpus-per-task 1 \
+    --slurm-ntasks 1 \
+    --slurm-total-cpus 12 \
+    --slurm-template-path benchmark/trl.slurm_template
+```
+
+## w/ different models (gpt2, gpt2-xl, falcon, llama2)
+
+```bash
+python benchmark/benchmark.py \
+    --command "python examples/scripts/sentiment_tuning.py --ppo_config.exp_name sentiment_tuning_gpt2 --ppo_config.log_with wandb" \
+    --num-seeds 5 \
+    --start-seed 1 \
+    --workers 10 \
+    --slurm-nodes 1 \
+    --slurm-gpus-per-task 1 \
+    --slurm-ntasks 1 \
+    --slurm-total-cpus 12 \
+    --slurm-template-path benchmark/trl.slurm_template
+python benchmark/benchmark.py \
+    --command "python examples/scripts/sentiment_tuning.py --ppo_config.exp_name sentiment_tuning_gpt2xl_grad_accu --ppo_config.model_name gpt2-xl --ppo_config.mini_batch_size 16 --ppo_config.gradient_accumulation_steps 8 --ppo_config.log_with wandb" \
+    --num-seeds 5 \
+    --start-seed 1 \
+    --workers 10 \
+    --slurm-nodes 1 \
+    --slurm-gpus-per-task 1 \
+    --slurm-ntasks 1 \
+    --slurm-total-cpus 12 \
+    --slurm-template-path benchmark/trl.slurm_template
+python benchmark/benchmark.py \
+    --command "python examples/scripts/sentiment_tuning.py --ppo_config.exp_name sentiment_tuning_falcon_rw_1b --ppo_config.model_name tiiuae/falcon-rw-1b --ppo_config.log_with wandb" \
+    --num-seeds 5 \
+    --start-seed 1 \
+    --workers 10 \
+    --slurm-nodes 1 \
+    --slurm-gpus-per-task 1 \
+    --slurm-ntasks 1 \
+    --slurm-total-cpus 12 \
+    --slurm-template-path benchmark/trl.slurm_template
+
+# 7b does works with gradient accumulation
+python benchmark/benchmark.py \
+    --command "accelerate launch --num_processes 1 --mixed_precision bf16 examples/scripts/sentiment_tuning.py --ppo_config.exp_name sentiment_tuning_falcon_7b --ppo_config.model_name tiiuae/falcon-7b --ppo_config.mini_batch_size 1 --ppo_config.gradient_accumulation_steps 4 --ppo_config.optimize_cuda_cache --ppo_config.batch_size 4 --ppo_config.log_with wandb" \
+    --num-seeds 5 \
+    --start-seed 1 \
+    --workers 10 \
+    --slurm-nodes 1 \
+    --slurm-gpus-per-task 1 \
+    --slurm-ntasks 1 \
+    --slurm-total-cpus 12 \
+    --slurm-template-path benchmark/trl.slurm_template
+```
+
+
+
+## w/ and w/o PEFT
+```
+python benchmark/benchmark.py \
+    --command "python examples/scripts/sentiment_tuning.py --ppo_config.exp_name sentiment_tuning_peft --use_peft --ppo_config.log_with wandb" \
+    --num-seeds 5 \
     --start-seed 1 \
     --workers 10 \
     --slurm-nodes 1 \

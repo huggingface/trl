@@ -121,7 +121,7 @@ set_seed(args.ppo_config.seed)
 
 # Now let's build the model, the reference model, and the tokenizer.
 if not args.use_peft:
-    ref_model = trl_model_class.from_pretrained(args.ppo_config.model_name)
+    ref_model = trl_model_class.from_pretrained(args.ppo_config.model_name, trust_remote_code=True)
     device_map = None
     peft_config = None
 else:
@@ -131,6 +131,7 @@ else:
 
 model = trl_model_class.from_pretrained(
     args.ppo_config.model_name,
+    trust_remote_code=True,
     device_map=device_map,
     peft_config=peft_config,
 )
@@ -151,7 +152,12 @@ ppo_trainer = PPOTrainer(args.ppo_config, model, ref_model, tokenizer, dataset=d
 device = ppo_trainer.accelerator.device
 if ppo_trainer.accelerator.num_processes == 1:
     device = 0 if torch.cuda.is_available() else "cpu"  # to avoid a `pipeline` bug
-sentiment_pipe = pipeline("sentiment-analysis", model="lvwerra/distilbert-imdb", device=device)
+ds_plugin = ppo_trainer.accelerator.state.deepspeed_plugin
+if ds_plugin is not None and ds_plugin.is_zero3_init_enabled():
+    with ds_plugin.zero3_init_context_manager(enable=False):
+        sentiment_pipe = pipeline("sentiment-analysis", model="lvwerra/distilbert-imdb", device=device)
+else:
+    sentiment_pipe = pipeline("sentiment-analysis", model="lvwerra/distilbert-imdb", device=device)
 
 # We then define the arguments to pass to the `generate` function. These arguments
 # are passed to the `generate` function of the PPOTrainer, which is a wrapper around
