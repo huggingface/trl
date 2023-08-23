@@ -138,3 +138,6 @@ trainer.train()
 
 # Step 6: Save the model
 trainer.save_model(script_args.output_dir)
+
+if script_args.push_to_hub:
+    trainer.push_to_hub()
