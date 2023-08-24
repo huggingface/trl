@@ -4,20 +4,13 @@ import copy
 import time
 
 import gradio as gr
-import text_generation
 from text_generation import Client
 from transformers import load_tool
-
-
 from share_btn import community_icon_html, loading_icon_html, share_js, share_btn_css
 
 
 HF_TOKEN = os.environ.get("HF_TOKEN", None)
 print(HF_TOKEN)
-
-API_URL = "https://api-inference.huggingface.co/models/vwxyzjn/starcoderbase-triviaqa"
-API_URL_BASE ="https://api-inference.huggingface.co/models/bigcode/starcoderbase"
-API_URL_PLUS = "https://api-inference.huggingface.co/models/bigcode/starcoderplus"
 
 FIM_PREFIX = "<fim_prefix>"
 FIM_MIDDLE = "<fim_middle>"
@@ -79,13 +72,18 @@ theme = gr.themes.Monochrome(
     ],
 )
 
-client = Client(
-    API_URL,
-    headers={"Authorization": f"Bearer {HF_TOKEN}"},
-)
 tool = load_tool("vwxyzjn/pyserini-wikipedia-kilt-doc")
 tool_fn = lambda x: tool(x).split("\n")[1][:600] # limit the amount if tokens
-tools = {"Wiki": tool_fn}
+
+clients = {
+    "StarCoderBase TriviaQA": [
+        Client(
+            "https://api-inference.huggingface.co/models/vwxyzjn/starcoderbase-triviaqa",
+            headers={"Authorization": f"Bearer {HF_TOKEN}"},
+        ),
+        {"Wiki": tool_fn},
+    ],
+}
 
 def parse_tool_call(text, request_token="<request>", call_token="<call>"):
     """
@@ -115,9 +113,9 @@ def parse_tool_call(text, request_token="<request>", call_token="<call>"):
 
 
 def generate(
-    prompt, temperature=0.9, max_new_tokens=256, top_p=0.95, repetition_penalty=1.0, version="StarCoderBase TriviaQA",
+    prompt, version, temperature=0.9, max_new_tokens=256, top_p=0.95, repetition_penalty=1.0,
 ):
-
+    client, tools = clients[version]
     temperature = float(temperature)
     if temperature < 1e-2:
         temperature = 1e-2
@@ -137,8 +135,7 @@ def generate(
     generation_still_running = True
     while generation_still_running:
         try:
-            if version == "StarCoderBase TriviaQA":
-                stream = client.generate_stream(prompt, **generate_kwargs)
+            stream = client.generate_stream(prompt, **generate_kwargs)
 
 
             # call env phase
@@ -178,8 +175,8 @@ def generate(
             return output
         except Exception as e:
             if "loading" in str(e):
-                gr.Warning("waiting for model to load...")
-                time.sleep(3)
+                gr.Warning("waiting for model to load... (this could take up to 20 minutes, after which things are much faster)")
+                time.sleep(7)
                 continue
             else:
                 raise gr.Error(str(e))           
@@ -233,8 +230,8 @@ with gr.Blocks(theme=theme, analytics_enabled=False, css=css) as demo:
         gr.Markdown(description)
         with gr.Row():
             version = gr.Dropdown(
-                        ["StarCoderBase TriviaQA"],
-                        value="StarCoderBase TriviaQA",
+                        list(clients.keys()),
+                        value=list(clients.keys())[0],
                         label="Model",
                         info="Choose a model from the list",
                         )
@@ -310,7 +307,7 @@ with gr.Blocks(theme=theme, analytics_enabled=False, css=css) as demo:
 
     submit.click(
         generate,
-        inputs=[instruction, temperature, max_new_tokens, top_p, repetition_penalty, version],
+        inputs=[instruction, version, temperature, max_new_tokens, top_p, repetition_penalty],
         outputs=[output],
     )
     share_button.click(None, [], [], _js=share_js)
