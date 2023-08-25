@@ -73,7 +73,7 @@ theme = gr.themes.Monochrome(
 )
 
 tool = load_tool("vwxyzjn/pyserini-wikipedia-kilt-doc")
-tool_fn = lambda x: tool(x).split("\n")[1][:600] # limit the amount if tokens
+tool_fn = lambda x: tool(x).split("\n")[1][:600] # limit the amount if token, system_prompts
 
 clients = {
     "StarCoderBase TriviaQA": [
@@ -82,6 +82,19 @@ clients = {
             headers={"Authorization": f"Bearer {HF_TOKEN}"},
         ),
         {"Wiki": tool_fn},
+        """\
+Answer the following question:
+
+Q: In which branch of the arts is Patricia Neary famous?
+A: Ballets
+A2: <request><Wiki>Patricia Neary<call>Patricia Neary (born October 27, 1942) is an American ballerina, choreographer and ballet director, who has been particularly active in Switzerland. She has also been a highly successful ambassador for the Balanchine Trust, bringing George Balanchine's ballets to 60 cities around the globe.<response>
+Result=Ballets<submit>
+
+Q: Who won Super Bowl XX?
+A: Chicago Bears
+A2: <request><Wiki>Super Bowl XX<call>Super Bowl XX was an American football game between the National Football Conference (NFC) champion Chicago Bears and the American Football Conference (AFC) champion New England Patriots to decide the National Football League (NFL) champion for the 1985 season. The Bears defeated the Patriots by the score of 46–10, capturing their first NFL championship (and Chicago's first overall sports victory) since 1963, three years prior to the birth of the Super Bowl. Super Bowl XX was played on January 26, 1986 at the Louisiana Superdome in New Orleans.<response>
+Result=Chicago Bears<submit>
+"""
     ],
 }
 
@@ -113,9 +126,9 @@ def parse_tool_call(text, request_token="<request>", call_token="<call>"):
 
 
 def generate(
-    prompt, version, temperature=0.9, max_new_tokens=256, top_p=0.95, repetition_penalty=1.0,
+    prompt, system_prompt, version, temperature=0.9, max_new_tokens=256, top_p=0.95, repetition_penalty=1.0,
 ):
-    client, tools = clients[version]
+    client, tools, _ = clients[version]
     temperature = float(temperature)
     if temperature < 1e-2:
         temperature = 1e-2
@@ -135,11 +148,11 @@ def generate(
     generation_still_running = True
     while generation_still_running:
         try:
-            stream = client.generate_stream(prompt, **generate_kwargs)
+            stream = client.generate_stream(system_prompt + prompt, **generate_kwargs)
 
 
             # call env phase
-            output = prompt
+            output = system_prompt + prompt
             previous_token = ""
             for response in stream:
                 if response.token.text == "<|endoftext|>":
@@ -148,7 +161,8 @@ def generate(
                     output += response.token.text
                 previous_token = response.token.text
                 # text env logic:
-                tool, query = parse_tool_call(output[len(prompt):])
+                tool, query = parse_tool_call(output[len(system_prompt + prompt):])
+                print("tool", tool, query)
                 if tool is not None and query is not None:
                     if tool not in tools:
                         response = f"Unknown tool {tool}."
@@ -157,7 +171,7 @@ def generate(
                         output += response + "<response>"
                     except Exception as error:
                         response = f"Tool error: {str(error)}"
-                yield output[len(prompt):]
+                yield output[len(system_prompt + prompt):]
 
             call_output = copy.deepcopy(output)
             # response phase
@@ -170,7 +184,7 @@ def generate(
                 else:
                     output += response.token.text
                 previous_token = response.token.text
-                yield output[len(prompt):]
+                yield output[len(system_prompt + prompt):]
 
             return output
         except Exception as e:
@@ -235,10 +249,16 @@ with gr.Blocks(theme=theme, analytics_enabled=False, css=css) as demo:
                         label="Model",
                         info="Choose a model from the list",
                         )
+            system_prompt = gr.Textbox(
+                value=clients[list(clients.keys())[0]][2],
+                label="System prompt",
+            )
+            
         with gr.Row():
             with gr.Column():
                 instruction = gr.Textbox(
-                    placeholder="Enter your code here",
+                    value="Q: In which country is Oberhofen situated?",
+                    # placeholder="Enter your question here. E.g., Q: In which country is Oberhofen situated?",
                     lines=5,
                     label="Input",
                     elem_id="q-input",
@@ -307,7 +327,7 @@ with gr.Blocks(theme=theme, analytics_enabled=False, css=css) as demo:
 
     submit.click(
         generate,
-        inputs=[instruction, version, temperature, max_new_tokens, top_p, repetition_penalty],
+        inputs=[instruction, system_prompt, version, temperature, max_new_tokens, top_p, repetition_penalty],
         outputs=[output],
     )
     share_button.click(None, [], [], _js=share_js)
