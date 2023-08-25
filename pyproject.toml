@@ -1,6 +1,6 @@
 [tool.black]
 line-length = 119
-target-version = ['py37']
+target-version = ['py38']
 
 [tool.ruff]
 ignore = ["C901", "E501", "E741", "W605"]
