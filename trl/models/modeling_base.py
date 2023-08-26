@@ -438,7 +438,7 @@ class PreTrainedModelWrapper(nn.Module):
         pretrained_model,
         adapter_model_id,
         adapter_name="reward_model_adapter",
-        token=token,
+        token=None,
     ):
         r"""
         Add and load a reward modeling adapter. This method can only be used if the
