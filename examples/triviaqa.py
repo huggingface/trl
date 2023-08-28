@@ -36,8 +36,6 @@ def data_generator():
         yield dataset[i]["question"], [item for item in dataset[i]["answer"]["normalized_aliases"]]
 gen = data_generator()
 gen = iter(gen)
-# dataset[0]["question"]
-# dataset[0]["answer"]['normalized_aliases']
 
 def generate_data(n):
     tasks, answers = [], []
