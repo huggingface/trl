@@ -112,7 +112,7 @@ Let's decompose the settings:
 | `prompt`           | Prompt to prepend to every task. Usually a few examples to demonstrate to the model how to use the tools in a few-shot fashion. |
 | `max_turns`        | Maximum number of interactions between model and tools before episode ends.|
 | `max_tool_response`| The tool response is truncated to this number to avoid running out of model context.|
-| `max_lenght`       |  The maximum number of tokens to allow in an episode. |
+| `max_length`       |  The maximum number of tokens to allow in an episode. |
 | `generation_kwargs`| Generation settings used by the language model. |
 
 You can customize the environment to your needs and add custom tools and settings. Let's see how you can use the environment to have the model interact with the available tools!
