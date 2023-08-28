@@ -65,6 +65,11 @@ class TextHistory:
         self.truncated = False
         self.reward = 0.0
 
+        self.prompt_color = "black on grey85"
+        self.system_color = "black on cyan3"
+        self.model_color = "black on deep_sky_blue1"
+        self.reward_color = "black on plum1"
+
         self.append_segment(text, tokens, system=system)
 
     def append_segment(self, text, tokens, system=True):
@@ -121,7 +126,7 @@ class TextHistory:
 
         return query, response, mask
 
-    def show_text(self):
+    def show_text(self, show_legend=False):
         """
         Print the text history.
         """
@@ -130,19 +135,20 @@ class TextHistory:
             return
 
         text = Text(self.text)
-        text.stylize("black on grey85", self.text_spans[0][0], self.text_spans[1][0])
+        text.stylize(self.prompt_color, self.text_spans[0][0], self.text_spans[1][0])
         for i, (start, end) in enumerate(self.text_spans[1:]):
-            if self.system_spans[i]:
-                color = "cyan3"
+            if self.system_spans[i+1]:
+                text.stylize(self.system_color, start, end)
             else:
-                color = "deep_sky_blue1"
-            text.stylize(f"black on {color}", start, end)
-        print(text)
-        text = Text(f"Reward: {self.reward}")
-        text.stylize("black on plum1", self.text_spans[0][0], self.text_spans[0][1])
+                text.stylize(self.model_color, start, end)
+        
+        text.append(f"\n\nReward: {self.reward}", style=self.reward_color)
         print(text)
 
-    def show_tokens(self, tokenizer):
+        if show_legend:
+            self.show_colour_legend()
+
+    def show_tokens(self, tokenizer, show_legend=False):
         """
         Print the history tokens.
         """
@@ -154,17 +160,36 @@ class TextHistory:
         prompt_end = self.token_spans[0][1]
         for i, (token, mask) in enumerate(zip(self.tokens, self.token_masks)):
             if i < prompt_end:
-                text.append(tokenizer.convert_ids_to_tokens(token.item()), style="black on grey85")
+                text.append(tokenizer.convert_ids_to_tokens(token.item()), style=self.prompt_color)
                 text.append(" ")
-            elif mask == 1:
-                text.append(tokenizer.convert_ids_to_tokens(token.item()), style="black on deep_sky_blue1")
+            elif mask == 0:
+                text.append(tokenizer.convert_ids_to_tokens(token.item()), style=self.system_color)
                 text.append(" ")
             else:
-                text.append(tokenizer.convert_ids_to_tokens(token.item()), style="black on cyan3")
+                text.append(tokenizer.convert_ids_to_tokens(token.item()), style=self.model_color)
                 text.append(" ")
-        text.append(f"\n\nReward: {self.reward}", style="black on plum1")
+        text.append(f"\n\nReward: {self.reward}", style=self.reward_color)
         print(text)
+        if show_legend:
+            self.show_colour_legend()
 
+    def show_colour_legend(self):
+        """
+        Print the colour legend.
+        """
+        if not is_rich_available:
+            warnings.warn("install rich to display colour legend")
+            return
+        text = Text("\n\n(Colour Legend: ")
+        text.append("Prompt", style=self.prompt_color)
+        text.append("|")
+        text.append("System", style=self.system_color)
+        text.append("|")
+        text.append("Model", style=self.model_color)
+        text.append("|")
+        text.append("Reward", style=self.reward_color)
+        text.append(")")
+        print(text)
 
 class TextEnvironment:
     """
