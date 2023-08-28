@@ -23,6 +23,8 @@
     title: Best of N Sampling
   - local: dpo_trainer
     title: DPO Trainer
+  - local: text_environment
+    title: Text Environments
   title: API
 - sections: 
   - local: sentiment_tuning
