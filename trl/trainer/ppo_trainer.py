@@ -53,7 +53,7 @@ from ..core import (
 )
 from ..import_utils import is_torch_greater_2_0
 from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper, create_reference_model
-from . import AdaptiveKLController, BaseTrainer, FixedKLController, PPOConfig
+from . import AdaptiveKLController, BaseTrainer, FixedKLController, PPOConfig, RunningMoments
 
 
 MODEL_CARD_TEMPLATE = """---
@@ -66,7 +66,7 @@ tags:
 
 # {model_name}
 
-This is a [TRL language model](https://github.com/lvwerra/trl) that has been fine-tuned with reinforcement learning to
+This is a [TRL language model](https://github.com/huggingface/trl) that has been fine-tuned with reinforcement learning to
  guide the model outputs according to a value, function, or human feedback. The model can be used for text generation.
 
 ## Usage
@@ -345,6 +345,8 @@ class PPOTrainer(BaseTrainer):
 
         PPODecorators.optimize_cuda_cache = self.config.optimize_cuda_cache
 
+        self.running = RunningMoments(self.accelerator)
+
     def _filter_kwargs(self, kwargs, target_func):
         """
         filter the keyword arguments that are supported by the target function.
@@ -389,7 +391,7 @@ class PPOTrainer(BaseTrainer):
             signature = inspect.signature(self.model.forward)
             self._signature_columns = list(signature.parameters.keys())
             # label => sentiment | we need query and response for logging purpose
-            self._signature_columns += list(set(["label", "query", "response"]))
+            self._signature_columns += ["label", "query", "response"]
 
     # Adapted from transformers.Trainer._remove_unused_columns
     def _remove_unused_columns(self, dataset: "Dataset"):
@@ -592,10 +594,24 @@ class PPOTrainer(BaseTrainer):
         """
         bs = self.config.batch_size
         queries, responses, scores = self._step_safety_checker(bs, queries, responses, scores, response_masks)
+        scores = torch.tensor(scores)
+        if self.config.use_score_scaling:
+            # Score scaling
+            scores_mean, scores_std = self.running.update(scores)
+            if self.config.use_score_norm:
+                scores = (scores - self.running.mean) / self.running.std
+            else:
+                scores /= self.running.std
+
+        if self.config.score_clip is not None:
+            # Score clipping
+            scores_dtype = scores.dtype
+            scores = torch.clip(scores.float(), -self.config.score_clip, self.config.score_clip).to(dtype=scores_dtype)
+
         # if we want to push best model to the hub
         if hasattr(self, "highest_reward"):
             if self.compare_step % self.config.compare_steps == 0:
-                curr_mean_reward = torch.tensor(scores).mean()
+                curr_mean_reward = scores.mean()
                 # if the best reward ever seen
                 if curr_mean_reward > self.highest_reward:
                     self.highest_reward = curr_mean_reward
@@ -1200,8 +1216,8 @@ class PPOTrainer(BaseTrainer):
         mean_non_score_reward = masked_mean(
             data["non_score_reward"], mask
         )  # non_score_reward is size `batch_size`, `response_length`
-        mean_scores = torch.stack(data["scores"]).mean()  # scores is size `batch_size`
-        std_scores = torch.stack(data["scores"]).std()
+        mean_scores = data["scores"].mean()  # scores is size `batch_size`
+        std_scores = data["scores"].std()
 
         if mean_kl.item() < -1.0:
             # warn users
@@ -1294,10 +1310,6 @@ class PPOTrainer(BaseTrainer):
             for k, v in logs.items():
                 if isinstance(v, torch.Tensor) and v.dtype == torch.bfloat16:
                     logs[k] = v.float()
-
-            logs["env/reward_mean"] = torch.mean(rewards).cpu().numpy().item()
-            logs["env/reward_std"] = torch.std(rewards).cpu().numpy().item()
-            logs["env/reward_dist"] = rewards.cpu().numpy()
 
             logs["env/reward_mean"] = torch.mean(rewards).cpu().numpy().item()
             logs["env/reward_std"] = torch.std(rewards).cpu().numpy().item()

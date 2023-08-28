@@ -14,8 +14,9 @@
 import os
 import random
 import warnings
+from collections import deque
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -61,8 +62,9 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
     Args:
         instruction_template (`Optional[str]`): the template form that indicates the start of the human instruction, typically something like
             '### Human:\n'. Useful for assistant-style conversation datasets
-        response_template (`str`): the template form that indicates the start of the response, typically something like
-            '### Response:\n'
+        response_template (`Union[str, List[int]]`): the template form that indicates the start of the response, typically something like
+            '### Response:\n'. It can also be passed as tokenized ids, which can be useful when using a tokenizer that encodes the response
+            differently if it does not have proper context.
         mlm (`bool`, *optional*, defaults to `False`): Whether or not to use masked language modeling in the underlying
             `DataCollatorForLanguageModeling` class. Note that this option currently has no effect but is present
              for flexibility and backwards-compatibility.
@@ -72,7 +74,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
 
     def __init__(
         self,
-        response_template: str,
+        response_template: Union[str, List[int]],
         instruction_template: Optional[str] = None,
         *args,
         mlm: bool = False,
@@ -83,7 +85,11 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
         self.instruction_template = instruction_template
         self.response_template = response_template
         self.ignore_index = ignore_index
-        self.response_token_ids = self.tokenizer.encode(self.response_template, add_special_tokens=False)
+        if type(response_template) == list:
+            # The user already provides the token ids
+            self.response_token_ids = response_template
+        else:
+            self.response_token_ids = self.tokenizer.encode(self.response_template, add_special_tokens=False)
 
     def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
         batch = super().torch_call(examples)
@@ -101,14 +107,18 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                         response_token_ids_start_idx = idx
 
                 if response_token_ids_start_idx is None:
-                    raise RuntimeError(
-                        f'Could not find response key {self.response_token_ids} in token IDs {batch["labels"][i]}'
+                    warnings.warn(
+                        f"Could not find response key `{self.response_template}` in the "
+                        f'following instance: {self.tokenizer.decode(batch["input_ids"][i])} '
+                        f"This instance will be ignored in loss calculation. "
+                        f"Note, if this happens often, consider increasing the `max_seq_length`."
                     )
+                    batch["labels"][i, :] = self.ignore_index
+                else:
+                    response_token_ids_end_idx = response_token_ids_start_idx + len(self.response_token_ids)
 
-                response_token_ids_end_idx = response_token_ids_start_idx + len(self.response_token_ids)
-
-                # Make pytorch loss function ignore all tokens up through the end of the response key
-                batch["labels"][i, :response_token_ids_end_idx] = self.ignore_index
+                    # Make pytorch loss function ignore all tokens up through the end of the response key
+                    batch["labels"][i, :response_token_ids_end_idx] = self.ignore_index
 
         else:
             for i in range(len(examples)):
@@ -123,10 +133,14 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                     ):
                         response_token_ids_idxs.append(assistant_idx + len(self.response_token_ids))
 
-                if len(self.response_token_ids) == 0:
-                    raise RuntimeError(
-                        f'Could not find response key {self.response_token_ids} in token IDs {batch["labels"][i]}'
+                if len(response_token_ids_idxs) == 0:
+                    warnings.warn(
+                        f"Could not find response key `{self.response_template}` in the "
+                        f'following instance: {self.tokenizer.decode(batch["input_ids"][i])} '
+                        f"This instance will be ignored in loss calculation. "
+                        f"Note, if this happens often, consider increasing the `max_seq_length`."
                     )
+                    batch["labels"][i, :] = self.ignore_index
 
                 human_token_ids = self.tokenizer.encode(self.instruction_template, add_special_tokens=False)
                 for human_idx in np.where(batch["labels"][i] == human_token_ids[0])[0]:
@@ -135,9 +149,13 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                         human_token_ids_idxs.append(human_idx)
 
                 if len(human_token_ids_idxs) == 0:
-                    raise RuntimeError(
-                        f'Could not find response key {human_token_ids} in token IDs {batch["labels"][i]}'
+                    warnings.warn(
+                        f"Could not find instruction key `{self.instruction_template}` in the "
+                        f'following instance: {self.tokenizer.decode(batch["input_ids"][i])} '
+                        f"This instance will be ignored in loss calculation. "
+                        f"Note, if this happens often, consider increasing the `max_seq_length`."
                     )
+                    batch["labels"][i, :] = self.ignore_index
 
                 for idx, (start, end) in enumerate(zip(human_token_ids_idxs, response_token_ids_idxs)):
                     # Make pytorch loss function ignore all non response tokens
@@ -243,7 +261,7 @@ class DPODataCollatorWithPadding:
         padding_value (`int`, defaults to 0):
             The value used for padding.
         truncation_mode: (`str`, defaults to "keep_end"):
-            The truncation mode to use when truncating the prompt + chosen/rejected responses.
+            The truncation mode to use when truncating the prompt.
     """
     tokenizer: PreTrainedTokenizerBase
     padding: Union[bool, str] = True
@@ -499,6 +517,65 @@ class PeftSavingCallback(TrainerCallback):
                 os.remove(os.path.join(checkpoint_path, "pytorch_model.bin"))
 
 
+class RunningMoments:
+    def __init__(self, accelerator):
+        """
+        Calculates the running mean and standard deviation of a data stream. Reference:
+        https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/utils.py#L75
+        """
+        self.mean = 0
+        self.std = 1
+        self.var = 1
+        self.count = 1e-24
+        self.accelerator = accelerator
+
+    @torch.no_grad()
+    def update(self, xs: torch.Tensor) -> Tuple[float, float]:
+        """
+        Updates running moments from batch's moments computed across ranks
+        """
+        if self.accelerator.use_distributed:
+            xs_mean, xs_var, xs_count = get_global_statistics(self.accelerator, xs)
+        else:
+            xs_count = xs.numel()
+            xs_var, xs_mean = torch.var_mean(xs, unbiased=False)
+        xs_mean, xs_var = xs_mean.float(), xs_var.float()
+
+        delta = xs_mean - self.mean
+        tot_count = self.count + xs_count
+
+        new_sum = xs_var * xs_count
+        # correct old_sum deviation accounting for the new mean
+        old_sum = self.var * self.count + delta**2 * self.count * xs_count / tot_count
+        tot_sum = old_sum + new_sum
+
+        self.mean += delta * xs_count / tot_count
+        self.var = tot_sum / tot_count
+        self.std = (self.var * tot_count / (tot_count - 1)).float().sqrt()
+        self.count = tot_count
+
+        return xs_mean.item(), (xs_var * xs_count / (xs_count - 1)).float().sqrt().item()
+
+
+@torch.no_grad()
+def get_global_statistics(accelerator, xs: torch.Tensor, mask=None, device="cpu") -> Tuple[float, float, int]:
+    """
+    Computes element-wise mean and variance of the tensor across processes. Reference:
+    https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/utils.py#L57C1-L73C75
+    """
+    xs = xs.to(accelerator.device)
+    sum_and_count = torch.tensor([xs.sum(), (xs.numel() if mask is None else mask.sum())], device=xs.device)
+    sum_and_count = accelerator.reduce(sum_and_count)
+    global_sum, count = sum_and_count
+    global_mean = global_sum / count
+
+    sum_var = torch.sum(((xs - global_mean) ** 2).mul(1 if mask is None else mask))
+    sum_var = accelerator.reduce(sum_var)
+    global_var = sum_var / count
+
+    return global_mean.to(device), global_var.to(device), count.to(device)
+
+
 def compute_accuracy(eval_pred) -> Dict[str, float]:
     predictions, labels = eval_pred
     # Here, predictions is rewards_chosen and rewards_rejected.
@@ -522,3 +599,58 @@ def pad_to_length(tensor: torch.Tensor, length: int, pad_value: Union[int, float
             ],
             dim=dim,
         )
+
+
+def disable_dropout_in_model(model: torch.nn.Module) -> None:
+    for module in model.modules():
+        if isinstance(module, torch.nn.Dropout):
+            module.p = 0
+
+
+def exact_div(a, b, a_str, b_str, custom_error_message=""):
+    q = a // b
+    if a != q * b:
+        raise ValueError(f"{custom_error_message}, {a_str}={a}, {b_str}={b}, inexact division: {a} / {b} = {a / b}")
+    return q
+
+
+# copied from https://github.com/kvablack/ddpo-pytorch/blob/main/ddpo_pytorch/stat_tracking.py#L5
+class PerPromptStatTracker:
+    r"""
+    Class for tracking statistics per prompt. Mainly used to calculate advantage for the DPPO algorithm
+
+    Args:
+        buffer_size (`int`):
+            Size of the buffer to keep for each prompt.
+        min_count (`int`):
+            Minimum number of samples to keep in the buffer before calculating the mean and std.
+    """
+
+    def __init__(self, buffer_size, min_count):
+        self.buffer_size = buffer_size
+        self.min_count = min_count
+        self.stats = {}
+
+    def update(self, prompts, rewards):
+        prompts = np.array(prompts)
+        rewards = np.array(rewards)
+        unique = np.unique(prompts)
+        advantages = np.empty_like(rewards)
+        for prompt in unique:
+            prompt_rewards = rewards[prompts == prompt]
+            if prompt not in self.stats:
+                self.stats[prompt] = deque(maxlen=self.buffer_size)
+            self.stats[prompt].extend(prompt_rewards)
+
+            if len(self.stats[prompt]) < self.min_count:
+                mean = np.mean(rewards)
+                std = np.std(rewards) + 1e-6
+            else:
+                mean = np.mean(self.stats[prompt])
+                std = np.std(self.stats[prompt]) + 1e-6
+            advantages[prompts == prompt] = (prompt_rewards - mean) / std
+
+        return advantages
+
+    def get_stats(self):
+        return {k: {"mean": np.mean(v), "std": np.std(v), "count": len(v)} for k, v in self.stats.items()}

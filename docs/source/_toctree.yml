@@ -5,8 +5,12 @@
     title: Quickstart
   - local: installation
     title: Installation
+  - local: how_to_train
+    title: PPO Training FAQ
+  - local: use_model
+    title: Use Trained Models
   - local: customization
-    title: Customize your Training
+    title: Customize the Training
   - local: logging
     title: Understanding Logs
   title: Get started
@@ -23,6 +27,8 @@
     title: Best of N Sampling
   - local: dpo_trainer
     title: DPO Trainer
+  - local: ddpo_trainer
+    title: Denoising Diffusion Policy Optimization
   - local: text_environment
     title: Text Environments
   title: API

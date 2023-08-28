@@ -21,6 +21,8 @@ from typing import Optional
 import numpy as np
 import requests
 
+from trl.trainer.utils import exact_div
+
 from ..core import flatten_dict
 
 
@@ -162,6 +164,11 @@ class PPOConfig(object):
     ratio_threshold: Optional[float] = field(
         default=10.0, metadata={"help": "Skip mini-batches with high PPO ratios that can cause loss spikes"}
     )
+    use_score_scaling: Optional[bool] = field(default=False, metadata={"help": "Use score scaling"})
+    use_score_norm: Optional[bool] = field(
+        default=False, metadata={"help": "Use score normalization. Only applicable if use_score_scaling is True"}
+    )
+    score_clip: Optional[float] = field(default=None, metadata={"help": "Score clipping"})
 
     def __post_init__(self):
         if self.forward_batch_size is not None:
@@ -169,6 +176,15 @@ class PPOConfig(object):
                 "Note that using `forward_batch_size` is deprecated, use `mini_batch_size` instead. By setting it you overwrite `mini_batch_size` which affects both the batch size during forward passes and also the mini batch size for PPO optimization."
             )
             self.mini_batch_size = self.forward_batch_size
+
+        self.backward_batch_size = self.mini_batch_size * self.gradient_accumulation_steps
+        exact_div(
+            self.batch_size,
+            self.backward_batch_size,
+            "`batch_size`",
+            "`mini_batch_size * gradient_accumulation_steps`",
+            "`batch_size` must be a multiple of `mini_batch_size * gradient_accumulation_steps`",
+        )
 
         # check if wandb is installed
         if self.log_with == "wandb":
