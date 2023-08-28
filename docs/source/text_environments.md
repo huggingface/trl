@@ -129,7 +129,7 @@ answers = ["0.5"]
 queries, responses, masks, rewards, histories = text_env.run(queries, answers=answers)
 ```
 
-This will execute the model/tool feedback loop for each query until either no tool is called anymore, the maximum number of turns is reached or to maximum number of tokens in an episode is exceeded.
+This will execute the model/tool feedback loop for each query until either no tool is called anymore, the maximum number of turns is reached or to maximum number of tokens in an episode is exceeded. The extra `kwargs` (e.g. `answers=answers` above) passed to `run` will be passed on to the reward function.
 
 There are five objects that are returned by `run`: 
 
