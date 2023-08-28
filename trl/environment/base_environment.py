@@ -197,7 +197,7 @@ class TextEnvironment:
     """
 
     def __init__(
-        self, model, tokenizer, tools, reward_fn, prompt, max_turns=4, max_tool_reponse=100, generation_kwargs=None
+        self, model, tokenizer, tools, reward_fn, prompt, max_turns=4, max_tool_reponse=100, max_length=None, generation_kwargs=None
     ):
         """
         Initialize TextEnvironment.
@@ -210,6 +210,7 @@ class TextEnvironment:
             prompt (str): The base prompt to use for generation. Is prepended to the tasks.
             max_turns (Optional[int]): The maximum number of turns to allow.
             max_tool_response (Optional[int]): The maximum number of characters to allow in a tool response.
+            max_length (Optional[int]): The maximum number of tokens to allow in an episode.
             generation_kwargs (Optional[dict]): A dictionary of keyword arguments to pass to the model's generate method.
         """
         self.model = model
@@ -220,7 +221,7 @@ class TextEnvironment:
         else:
             self.tools = dict([(tool.__class__.__name__, tool) for tool in tools])
         self.reward_fn = reward_fn
-        self.max_length = None
+        self.max_length = max_length
         self.request_token = "<request>"
         self.call_token = "<call>"
         self.response_token = "<response>"
@@ -374,7 +375,7 @@ class TextEnvironment:
         ended = False
         if history.completed:
             return truncated, ended
-        if self.max_length is not None and len(history.text) > self.max_length:
+        if self.max_length is not None and len(self.tokenizer(history.text).input_ids[0]) > self.max_length:
             truncated = True
             ended = True
         elif self.tokenizer.eos_token in history.text:
