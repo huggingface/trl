@@ -27,7 +27,6 @@ class ScriptArguments:
 parser = HfArgumentParser(ScriptArguments)
 args = parser.parse_args_into_dataclasses()[0]
 
-print("args", args)
 
 dataset = load_dataset("trivia_qa", "rc", split="train")
 dataset = dataset.shuffle(args.seed)
