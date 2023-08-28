@@ -137,11 +137,11 @@ class TextHistory:
         text = Text(self.text)
         text.stylize(self.prompt_color, self.text_spans[0][0], self.text_spans[1][0])
         for i, (start, end) in enumerate(self.text_spans[1:]):
-            if self.system_spans[i+1]:
+            if self.system_spans[i + 1]:
                 text.stylize(self.system_color, start, end)
             else:
                 text.stylize(self.model_color, start, end)
-        
+
         text.append(f"\n\nReward: {self.reward}", style=self.reward_color)
         print(text)
 
@@ -191,13 +191,23 @@ class TextHistory:
         text.append(")")
         print(text)
 
+
 class TextEnvironment:
     """
     The TextEnvironment enables interaction of a LLM with an environment using tools.
     """
 
     def __init__(
-        self, model, tokenizer, tools, reward_fn, prompt, max_turns=4, max_tool_reponse=100, max_length=None, generation_kwargs=None
+        self,
+        model,
+        tokenizer,
+        tools,
+        reward_fn,
+        prompt,
+        max_turns=4,
+        max_tool_reponse=100,
+        max_length=None,
+        generation_kwargs=None,
     ):
         """
         Initialize TextEnvironment.
