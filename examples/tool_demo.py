@@ -10,7 +10,6 @@ from share_btn import community_icon_html, loading_icon_html, share_js, share_bt
 
 
 HF_TOKEN = os.environ.get("HF_TOKEN", None)
-print(HF_TOKEN)
 
 FIM_PREFIX = "<fim_prefix>"
 FIM_MIDDLE = "<fim_middle>"
