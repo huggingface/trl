@@ -127,7 +127,6 @@ text_env = TextEnvironment(
     max_tool_reponse=400,
 )
 
-print(model)
 def print_trainable_parameters(model):
     trainable_params = 0
     all_param = 0
