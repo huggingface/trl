@@ -199,11 +199,11 @@ class TextEnvironment:
 
     def __init__(
         self,
-        model,
-        tokenizer,
-        tools,
-        reward_fn,
-        prompt,
+        model=None,
+        tokenizer=None,
+        tools=None,
+        reward_fn=None,
+        prompt=None,
         max_turns=4,
         max_tool_reponse=100,
         max_length=None,
@@ -247,16 +247,16 @@ class TextEnvironment:
         self.is_encoder_decoder = hasattr(self.model, "is_encoder_decoder")
         self.current_device = extract_model_from_parallel(self.model).pretrained_model.device
 
-    def run(self, tasks, **rewards_kwargs):
+    def run(self, queries, **rewards_kwargs):
         """
-        Run the environment on a list of tasks.
+        Run the environment on a list of queries.
 
         Args:
-            tasks (list[str]): A list of tasks to run the model in the environment on.
+            queries (list[str]): A list of queries to run the model in the environment on.
         """
         turns = 0
 
-        queries = [self.prompt + task for task in tasks]
+        queries = [self.prompt + task for task in queries]
         queries_tokens = [
             self.tokenizer(query, return_tensors="pt").input_ids[0].to(self.model.pretrained_model.device)
             for query in queries
