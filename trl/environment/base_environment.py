@@ -21,6 +21,7 @@ from transformers import StoppingCriteria, StoppingCriteriaList
 
 from ..import_utils import is_rich_available
 
+
 if is_rich_available():
     from rich import print
     from rich.text import Text

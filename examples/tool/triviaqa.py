@@ -1,13 +1,18 @@
+import os
 from dataclasses import dataclass, field
 from typing import Optional
+
 import torch
-from transformers import AutoTokenizer, load_tool, HfArgumentParser
-from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, TextEnvironment
 from datasets import load_dataset
 from peft import LoraConfig
-import os
+from transformers import AutoTokenizer, HfArgumentParser, load_tool
+
+from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, TextEnvironment
+
+
 os.environ["HF_ALLOW_CODE_EVAL"] = "1"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 
 @dataclass
 class ScriptArguments:
@@ -24,17 +29,23 @@ class ScriptArguments:
     iterations: Optional[int] = field(default=1000, metadata={"help": "the number of iterations"})
     seed: Optional[int] = field(default=0, metadata={"help": "the random seed"})
 
+
 parser = HfArgumentParser(ScriptArguments)
 args = parser.parse_args_into_dataclasses()[0]
 
 
 dataset = load_dataset("trivia_qa", "rc", split="train")
 dataset = dataset.shuffle(args.seed)
+
+
 def data_generator():
     for i in range(len(dataset)):
         yield dataset[i]["question"], [item for item in dataset[i]["answer"]["normalized_aliases"]]
+
+
 gen = data_generator()
 gen = iter(gen)
+
 
 def generate_data(n):
     tasks, answers = [], []
@@ -43,6 +54,7 @@ def generate_data(n):
         tasks.append(q)
         answers.append(a)
     return tasks, answers
+
 
 def exact_match_reward(responses, answers=None):
     """Reward if generated response contains correct answer."""
@@ -56,13 +68,14 @@ def exact_match_reward(responses, answers=None):
         rewards.append(torch.tensor(reward))
     return rewards
 
+
 lora_config = LoraConfig(
     r=16,
     lora_alpha=32,
     lora_dropout=0.05,
     bias="none",
     task_type="CAUSAL_LM",
-    target_modules = ["c_proj", "c_attn", "q_attn"]
+    target_modules=["c_proj", "c_attn", "q_attn"],
 )
 
 # set up models
@@ -116,7 +129,8 @@ ppo_trainer = PPOTrainer(config=config, model=model, tokenizer=tokenizer)
 
 # text env
 tool = load_tool("vwxyzjn/pyserini-wikipedia-kilt-doc")
-tool_fn = lambda x: tool(x).split("\n")[1][:600] # limit the amount if tokens
+# limit the amount if tokens
+tool_fn = lambda x: tool(x).split("\n")[1][:600]  # noqa
 text_env = TextEnvironment(
     model,
     tokenizer,
@@ -126,6 +140,7 @@ text_env = TextEnvironment(
     generation_kwargs=generation_kwargs,
     max_tool_reponse=400,
 )
+
 
 def print_trainable_parameters(model):
     trainable_params = 0
@@ -137,6 +152,8 @@ def print_trainable_parameters(model):
     print(
         f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param}"
     )
+
+
 print_trainable_parameters(model)
 # main training loop
 for _ in range(args.iterations):
@@ -148,8 +165,8 @@ for _ in range(args.iterations):
     texts = {
         "query": [qt.split("<submit>")[-1].strip() for qt in query_texts],
         "response": response_texts,
-        "answer": [", ".join(item) for item in answers]
+        "answer": [", ".join(item) for item in answers],
     }
     all_rewards = ppo_trainer.accelerator.gather(torch.tensor(rewards, device=ppo_trainer.accelerator.device))
     ppo_trainer.log_stats(train_stats, texts, [item for item in all_rewards])
-ppo_trainer.save_pretrained(args.model_name+"-triviaqa")
+ppo_trainer.save_pretrained(args.model_name + "-triviaqa")

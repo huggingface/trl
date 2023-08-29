@@ -546,7 +546,7 @@ class PPOTrainer(BaseTrainer):
         Returns:
             `tuple`: The input processed data.
         """
-        for name, tensor_list in zip(["queries", "responses", "scores", "masks"], [queries, responses, scores, masks]):
+        for name, tensor_list in zip(["queries", "responses", "scores"], [queries, responses, scores]):
             if not isinstance(tensor_list, list):
                 raise ValueError(f"{name} must be a list of tensors - got {type(tensor_list)}")
             if not isinstance(tensor_list[0], torch.Tensor):
@@ -596,7 +596,13 @@ class PPOTrainer(BaseTrainer):
             `dict[str, Any]`: A summary of the training statistics
         """
         bs = self.config.batch_size
-        queries, responses, scores, response_masks = self._step_safety_checker(bs, queries, responses, scores, response_masks)
+
+        # if response_masks is None:
+        #    response_masks = [torch.ones_like(response) for response in responses]
+
+        queries, responses, scores, response_masks = self._step_safety_checker(
+            bs, queries, responses, scores, response_masks
+        )
         scores = torch.tensor(scores)
         if self.config.use_score_scaling:
             # Score scaling
