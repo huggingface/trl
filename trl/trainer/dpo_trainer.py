@@ -29,7 +29,7 @@ from .utils import DPODataCollatorWithPadding, disable_dropout_in_model, pad_to_
 
 
 if is_peft_available():
-    from peft import get_peft_model, prepare_model_for_int8_training
+    from peft import PeftModel, get_peft_model, prepare_model_for_int8_training
 
 
 class DPOTrainer(Trainer):
