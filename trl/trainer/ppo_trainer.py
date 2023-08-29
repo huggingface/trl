@@ -590,8 +590,7 @@ class PPOTrainer(BaseTrainer):
         bs = self.config.batch_size
 
         queries, responses, scores = self._step_safety_checker(bs, queries, responses, scores)
-        scores_device = scores[0].device
-        scores = torch.tensor(scores).to(device=scores_device)
+        scores = torch.tensor(scores, device=self.current_device)
         if self.config.use_score_scaling:
             # Score scaling
             scores_mean, scores_std = self.running.update(scores)
