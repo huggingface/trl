@@ -189,3 +189,9 @@ Sometimes there can be tricky tokenization related issues that are hidden when s
 </div>
 
 Note that you can turn on the colour legend by passing `show_legend=True`.
+
+## API Documentation
+
+[[autodoc]] TextEnvironment
+
+[[autodoc]] TextHistory
