@@ -546,7 +546,7 @@ class PPOTrainer(BaseTrainer):
         Returns:
             `tuple`: The input processed data.
         """
-        for name, tensor_list in zip(["queries", "responses", "scores"], [queries, responses, scores]):
+        for name, tensor_list in zip(["queries", "responses", "scores", "masks"], [queries, responses, scores, masks]):
             if not isinstance(tensor_list, list):
                 raise ValueError(f"{name} must be a list of tensors - got {type(tensor_list)}")
             if not isinstance(tensor_list[0], torch.Tensor):
@@ -560,6 +560,7 @@ class PPOTrainer(BaseTrainer):
         queries = [tensor.to(self.current_device) for tensor in queries]
         responses = [tensor.to(self.current_device) for tensor in responses]
         scores = [tensor.to(self.current_device) for tensor in scores]
+        masks = [tensor.to(self.current_device) for tensor in masks] if masks is not None else None
 
         # squeeze scores if needed
         for i, score in enumerate(scores):
@@ -568,7 +569,7 @@ class PPOTrainer(BaseTrainer):
             elif score.dim() == 1:
                 scores[i] = score.squeeze()
 
-        return queries, responses, scores
+        return queries, responses, scores, masks
 
     @PPODecorators.empty_cuda_cache()
     def step(
@@ -588,12 +589,14 @@ class PPOTrainer(BaseTrainer):
                 List of tensors containing the encoded responses of shape (`response_length`)
             scores (List[`torch.FloatTensor`]):
                 List of tensors containing the scores.
+            response_masks (List[`torch.FloatTensor`], *optional*)):
+                List of tensors containing masks of the response tokens.
 
         Returns:
             `dict[str, Any]`: A summary of the training statistics
         """
         bs = self.config.batch_size
-        queries, responses, scores = self._step_safety_checker(bs, queries, responses, scores, response_masks)
+        queries, responses, scores, response_masks = self._step_safety_checker(bs, queries, responses, scores, response_masks)
         scores = torch.tensor(scores)
         if self.config.use_score_scaling:
             # Score scaling
