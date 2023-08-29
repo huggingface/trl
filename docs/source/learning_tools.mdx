@@ -3,11 +3,18 @@
 Using Large Language Models (LLMs) with tools has been a popular topic recently with awesome works such as [ToolFormer](https://arxiv.org/abs/2302.04761) and [ToolBench](https://arxiv.org/pdf/2305.16504.pdf). In TRL, we provide a simple example of how to teach LLM to use tools with reinforcement learning. 
 
 
-Here's an overview of the script(s) in the [trl repository](https://github.com/lvwerra/trl/tree/main/examples):
+Here's an overview of the scripts in the [trl repository](https://github.com/lvwerra/trl/tree/main/examples/research_projects):
 
 | File | Description | 
 |---|---| 
-| [`learning_to_use_calculator.py`](https://github.com/lvwerra/trl/blob/main/examples/learning_to_use_calculator.py) | Script to train LLM to use a calculator with reinforcement learning. |
+| [`calculator.py`](https://github.com/lvwerra/trl/blob/main/examples/research_projects/calculator.py) | Script to train LLM to use a calculator with reinforcement learning. |
+| [`triviaqa.py`](https://github.com/lvwerra/trl/blob/main/examples/research_projects/triviaqa.py) | Script to train LLM to use a wiki tool to answer questions. |
+| [`python_interpreter.py`](https://github.com/lvwerra/trl/blob/main/examples/research_projects/python_interpreter.py) | Script to train LLM to use python interpreter to solve math puzzles. |
+
+<Tip warning={true}>
+
+Note that the scripts above rely heavily on the `TextEnvironment` API which is still under active development. The API may change in the future. Please see [`TextEnvironment`](text_environment) for the related docs.
+</Tip>
 
 
 ## Learning to Use a Calculator
@@ -103,7 +110,13 @@ As we can see, while 1-2 experiments crashed for some reason, most of the runs o
 
 In the [ToolFormer](https://arxiv.org/abs/2302.04761) paper, it shows an interesting use case that utilizes a Wikipedia Search tool to help answer questions. In this section, we attempt to perform similar experiments but uses RL instead to teach the model to use a wiki tool on the [TriviaQA](https://nlp.cs.washington.edu/triviaqa/) dataset.
 
+
+<Tip warning={true}>
+
 **Note that many settings are different so the results are not directly comparable.**
+</Tip>
+
+
 
 
 ### Building a search index
@@ -146,45 +159,71 @@ We use the following settings:
 * used the following prompt that demonstrates the usage of the wiki tool.
 ```python
 prompt = """\
-In which branch of the arts is Patricia Neary famous?
+Answer the following question:
 
-<request><Wiki>Patricia Neary<call>Patricia Neary (born October 27, 1942) is an American ballerina, choreographer and ballet director, who has been particularly active in Switzerland. She has also been a highly successful ambassador for the Balanchine Trust, bringing George Balanchine's ballets to 60 cities around the globe.<response>
-
+Q: In which branch of the arts is Patricia Neary famous?
+A: Ballets
+A2: <request><Wiki>Patricia Neary<call>Patricia Neary (born October 27, 1942) is an American ballerina, choreographer and ballet director, who has been particularly active in Switzerland. She has also been a highly successful ambassador for the Balanchine Trust, bringing George Balanchine's ballets to 60 cities around the globe.<response>
 Result=Ballets<submit>
 
-Who won Super Bowl XX?
+Q: Who won Super Bowl XX?
+A: Chicago Bears
+A2: <request><Wiki>Super Bowl XX<call>Super Bowl XX was an American football game between the National Football Conference (NFC) champion Chicago Bears and the American Football Conference (AFC) champion New England Patriots to decide the National Football League (NFL) champion for the 1985 season. The Bears defeated the Patriots by the score of 46–10, capturing their first NFL championship (and Chicago's first overall sports victory) since 1963, three years prior to the birth of the Super Bowl. Super Bowl XX was played on January 26, 1986 at the Louisiana Superdome in New Orleans.<response>
+Result=Chicago Bears<submit>
 
-<request><Wiki>Super Bowl XX<call>Super Bowl XX was an American football game between the National Football Conference (NFC) champion Chicago Bears and the American Football Conference (AFC) champion New England Patriots to decide the National Football League (NFL) champion for the 1985 season. The Bears defeated the Patriots by the score of 46–10, capturing their first NFL championship (and Chicago's first overall sports victory) since 1963, three years prior to the birth of the Super Bowl. Super Bowl XX was played on January 26, 1986 at the Louisiana Superdome in New Orleans.<response>
-
-Result=Chicago Bears<submit>"""
+Q: """
 ```
 
 
-TODO: Write findingds here.
+### Result and Discussion
 
-### Discussion
+
+Our experiments show that the agent can learn to use the wiki tool to answer questions. The learning curves would go up mostly, but one of the experiment did crash.
+
+![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/triviaqa_learning_curves.png)
+
+Wandb report is [here](https://wandb.ai/costa-huang/cleanRL/reports/TriviaQA-Final-Experiments--Vmlldzo1MjY0ODk5) for further inspection.
+
 
 Note that the correct rate of the trained model is on the low end, which could be due to the following reasons:
 
-* **incorrect keywords:** we may have a question like `What is the SI unit of electric current?`, but the model does `<request><Wiki>Coefficient<call>`, which is kind of related but not exactly what the model should be searching for.
-* **bad wiki tool:** When given the question `"What is Bruce Willis' real first name?"` if the model searches for `Bruce Willis`, our wiki tool returns `Patrick Poivey (born 18 February 1948) is a French actor. He is especially known for his voice: he is the French dub voice of Bruce Willis since 1988.` But a correct search should be `Walter Bruce Willis (born March 19, 1955) is an American former actor. He achieved fame with a leading role on the comedy-drama series Moonlighting (1985–1989) and appeared in over a hundred films, gaining recognition as an action hero after his portrayal of John McClane in the Die Hard franchise (1988–2013) and other roles.[1][2]`
-* **java errors:**: Sometimes `pyserini` errors out under the multigpu setting:
+* **incorrect searches:** When given the question `"What is Bruce Willis' real first name?"` if the model searches for `Bruce Willis`, our wiki tool returns `Patrick Poivey (born 18 February 1948) is a French actor. He is especially known for his voice: he is the French dub voice of Bruce Willis since 1988.` But a correct search should be `Walter Bruce Willis (born March 19, 1955) is an American former actor. He achieved fame with a leading role on the comedy-drama series Moonlighting (1985–1989) and appeared in over a hundred films, gaining recognition as an action hero after his portrayal of John McClane in the Die Hard franchise (1988–2013) and other roles.[1][2]`
 
-```
-# https://gist.github.com/vwxyzjn/d62130961056531ea76b81e03a99d0ac
-#
-# A fatal error has been detected by the Java Runtime Environment:
-#
-#  SIGSEGV (0xb) at pc=0x00007fc5ccfc6ddc, pid=1469108, tid=1471411
-#
-# JRE version: OpenJDK Runtime Environment Corretto-11.0.17.8.1 (11.0.17+8) (build 11.0.17+8-LTS)
-# Java VM: OpenJDK 64-Bit Server VM Corretto-11.0.17.8.1 (11.0.17+8-LTS, mixed mode, tiered, compressed oops, g1 gc, linux-amd64)
-# Problematic frame:
-# C  [libarrow.so.1200+0x1803ddc]  Aws::Http::CleanupHttp()+0x1c
-#
-# Core dump will be written. Default location: Core dumps may be processed with "/usr/share/apport/apport -p%p -s%s -c%c -d%d -P%P -u%u -g%g -- %E" (or dumping to /fsx/costa/trl/core.1469108)
-#
-# If you would like to submit a bug report, please visit:
-#   https://github.com/corretto/corretto-11/issues/
-#
-```
+
+    ![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/real_first_name.png)
+
+* **unnecessarily long response**: The wiki tool by default sometimes output very long sequences. E.g., when the wiki tool searches for "Brown Act"
+    * Our wiki tool returns `The Ralph M. Brown Act, located at California Government Code 54950 "et seq.", is an act of the California State Legislature, authored by Assemblymember Ralph M. Brown and passed in 1953, that guarantees the public's right to attend and participate in meetings of local legislative bodies.`
+    * [ToolFormer](https://arxiv.org/abs/2302.04761)'s wiki tool returns "The Ralph M. Brown Act is an act of the California State Legislature that guarantees the public's right to attend and participate in meetings of local legislative bodies." which is more succinct.
+
+    ![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/brown_act.png)
+
+
+## (Early Experiments 🧪): solving math puzzles with python interpreter
+
+In this section, we attempt to teach the model to use a python interpreter to solve math puzzles. The rough idea is to give the agent a prompt like the following:
+
+```python
+prompt = """\
+Example of using a Python API to solve math questions.
+
+Q: Olivia has $23. She bought five bagels for $3 each. How much money does she have left?
+
+<request><PythonInterpreter>
+def solution():
+    money_initial = 23
+    bagels = 5
+    bagel_cost = 3
+    money_spent = bagels * bagel_cost
+    money_left = money_initial - money_spent
+    result = money_left
+    return result
+print(solution())
+<call>72<response>
+
+Result = 72 <submit>
+
+Q: """
+
+
+Training results TBD.
