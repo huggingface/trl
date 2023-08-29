@@ -113,7 +113,7 @@ class DPOTrainer(Trainer):
                 model = prepare_model_for_int8_training(model)
             model = get_peft_model(model, peft_config)
 
-        self.is_peft_model = getattr(model, "active_adapter", False)
+        self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
 
         if ref_model:
             self.ref_model = ref_model
