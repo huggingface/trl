@@ -5,13 +5,11 @@ import torch
 from accelerate.utils import extract_model_from_parallel
 from transformers import StoppingCriteria, StoppingCriteriaList
 
+from ..import_utils import is_rich_available
 
-is_rich_available = True
-try:
+if is_rich_available():
     from rich import print
     from rich.text import Text
-except ImportError:
-    is_rich_available = False
 
 
 class StringStoppingCriteria(StoppingCriteria):
@@ -130,7 +128,7 @@ class TextHistory:
         """
         Print the text history.
         """
-        if not is_rich_available:
+        if not is_rich_available():
             warnings.warn("install rich to display text")
             return
 
@@ -152,7 +150,7 @@ class TextHistory:
         """
         Print the history tokens.
         """
-        if not is_rich_available:
+        if not is_rich_available():
             warnings.warn("install rich to display tokens")
             return
 
@@ -177,7 +175,7 @@ class TextHistory:
         """
         Print the colour legend.
         """
-        if not is_rich_available:
+        if not is_rich_available():
             warnings.warn("install rich to display colour legend")
             return
         text = Text("\n\n(Colour Legend: ")
