@@ -29,6 +29,8 @@
     title: DPO Trainer
   - local: ddpo_trainer
     title: Denoising Diffusion Policy Optimization
+  - local rest_trainer
+    title: ReST Trainer
   title: API
 - sections: 
   - local: sentiment_tuning
