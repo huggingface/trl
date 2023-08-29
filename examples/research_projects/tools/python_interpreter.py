@@ -1,18 +1,20 @@
+import os
 import re
-import torch
-import numpy as np
 from dataclasses import dataclass, field
 from typing import Optional
 
-from transformers import AutoTokenizer, load_tool, HfArgumentParser
-from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, TextEnvironment
+import numpy as np
+import torch
 from datasets import load_dataset
 from peft import LoraConfig
-import os
-from collections import Counter
+from transformers import AutoTokenizer, HfArgumentParser, load_tool
+
+from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, TextEnvironment
+
 
 os.environ["HF_ALLOW_CODE_EVAL"] = "1"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 
 @dataclass
 class ScriptArguments:
@@ -20,7 +22,9 @@ class ScriptArguments:
     learning_rate: Optional[float] = field(default=1e-5, metadata={"help": "the learning rate"})
     mini_batch_size: Optional[int] = field(default=1, metadata={"help": "the PPO minibatch size"})
     batch_size: Optional[int] = field(default=32, metadata={"help": "the batch size"})
-    gradient_accumulation_steps: Optional[int] = field(default=16, metadata={"help": "the number of gradient accumulation steps"})
+    gradient_accumulation_steps: Optional[int] = field(
+        default=16, metadata={"help": "the number of gradient accumulation steps"}
+    )
     max_new_tokens: Optional[int] = field(default=256, metadata={"help": "max number of generated tokens per turn"})
     ppo_epochs: Optional[int] = field(default=1, metadata={"help": "max number of ppo epochs"})
     n_epochs: Optional[int] = field(default=32, metadata={"help": "max number of ppo epochs"})
@@ -42,27 +46,32 @@ def exact_match_reward(responses, answers=None):
             if match_pattern:
                 predicted_number = float(match_pattern[0])
             if predicted_number is not None:
-                if np.abs((predicted_number-float(answer)))<0.1:
+                if np.abs((predicted_number - float(answer))) < 0.1:
                     reward += 1.0
-        except: pass
+        except:  # noqa
+            pass
         rewards.append(torch.tensor(reward))
     return rewards
+
 
 def evaluate(test_dataloader, text_env, ppo_trainer):
     test_rewards = []
     for test_batch in test_dataloader:
         _, _, _, rewards, _ = text_env.run(test_batch["query"], answers=test_batch["answer"])
         test_rewards.extend(rewards)
-    test_rewards = ppo_trainer.accelerator.gather_for_metrics(torch.stack(test_rewards).to(ppo_trainer.accelerator.device))
+    test_rewards = ppo_trainer.accelerator.gather_for_metrics(
+        torch.stack(test_rewards).to(ppo_trainer.accelerator.device)
+    )
     return test_rewards.mean()
-    
+
+
 lora_config = LoraConfig(
     r=16,
     lora_alpha=32,
     lora_dropout=0.05,
     bias="none",
     task_type="CAUSAL_LM",
-    target_modules = ["c_proj", "c_attn", "q_attn"]
+    target_modules=["c_proj", "c_attn", "q_attn"],
 )
 
 # set up models
@@ -70,14 +79,15 @@ model = AutoModelForCausalLMWithValueHead.from_pretrained(
     args.model_name,
     use_auth_token=True,
     load_in_4bit=True,
-    peft_config=lora_config,)
+    peft_config=lora_config,
+)
 tokenizer = AutoTokenizer.from_pretrained(args.model_name, use_auth_token=True)
 tokenizer.pad_token = tokenizer.eos_token
 
 ds = load_dataset("gsm8k", "main", split="train")
 ds = ds.rename_columns({"question": "query"})
 ds = ds.map(lambda x: {"answer": x["answer"].split("#### ")[1]})
-ds = ds.select(range(1, len(ds))) # skip the first sample which is used in prompt
+ds = ds.select(range(1, len(ds)))  # skip the first sample which is used in prompt
 
 ds_test = load_dataset("gsm8k", "main", split="test")
 ds_test = ds_test.rename_columns({"question": "query"})
@@ -87,7 +97,7 @@ test_dataloader = torch.utils.data.DataLoader(ds_test, batch_size=args.batch_siz
 
 # prompt
 prompt = """\
-Example of using a Python API to solve math questions. 
+Example of using a Python API to solve math questions.
 
 Q: Olivia has $23. She bought five bagels for $3 each. How much money does she have left?
 
@@ -147,18 +157,22 @@ text_env = TextEnvironment(
 # main training loop
 for epoch in range(args.n_epochs):
     for step, batch in enumerate(ppo_trainer.dataloader):
-        if (step==0) and (epoch%4==0): # evaluate every 4 epochs
+        if (step == 0) and (epoch % 4 == 0):  # evaluate every 4 epochs
             reward_mean_test = evaluate(test_dataloader, text_env, ppo_trainer)
         else:
             reward_mean_test = None
-        
+
         queries, responses, masks, rewards, histories = text_env.run(batch["query"], answers=batch["answer"])
         train_stats = ppo_trainer.step(queries, responses, rewards, masks)
-        
-        #logging
+
+        # logging
         if reward_mean_test is not None:
             train_stats["env/reward_mean_test"] = reward_mean_test
-        texts = {"query": batch["query"], "response": [tokenizer.decode(response) for response in responses], "answer": batch["answer"]}
+        texts = {
+            "query": batch["query"],
+            "response": [tokenizer.decode(response) for response in responses],
+            "answer": batch["answer"],
+        }
         ppo_trainer.log_stats(train_stats, texts, rewards)
 
 reward_mean_test = evaluate(test_dataloader, text_env, ppo_trainer)
