@@ -33,9 +33,68 @@ class ScriptArguments:
 parser = HfArgumentParser(ScriptArguments)
 args = parser.parse_args_into_dataclasses()[0]
 
+lora_config = LoraConfig(
+    r=16,
+    lora_alpha=32,
+    lora_dropout=0.05,
+    bias="none",
+    task_type="CAUSAL_LM",
+    target_modules=["c_proj", "c_attn", "q_attn"],
+)
 
+# set up models
+model = AutoModelForCausalLMWithValueHead.from_pretrained(
+    args.model_name,
+    use_auth_token=True,
+    trust_remote_code=True,
+    load_in_4bit=True,
+    peft_config=lora_config,
+)
+tokenizer = AutoTokenizer.from_pretrained(args.model_name, use_auth_token=True)
+tokenizer.pad_token = tokenizer.eos_token
+
+# system prompt
+prompt = """\
+Answer the following question:
+
+Q: In which branch of the arts is Patricia Neary famous?
+A: Ballets
+A2: <request><Wiki>Patricia Neary<call>Patricia Neary (born October 27, 1942) is an American ballerina, choreographer and ballet director, who has been particularly active in Switzerland. She has also been a highly successful ambassador for the Balanchine Trust, bringing George Balanchine's ballets to 60 cities around the globe.<response>
+Result=Ballets<submit>
+
+Q: Who won Super Bowl XX?
+A: Chicago Bears
+A2: <request><Wiki>Super Bowl XX<call>Super Bowl XX was an American football game between the National Football Conference (NFC) champion Chicago Bears and the American Football Conference (AFC) champion New England Patriots to decide the National Football League (NFL) champion for the 1985 season. The Bears defeated the Patriots by the score of 46–10, capturing their first NFL championship (and Chicago's first overall sports victory) since 1963, three years prior to the birth of the Super Bowl. Super Bowl XX was played on January 26, 1986 at the Louisiana Superdome in New Orleans.<response>
+Result=Chicago Bears<submit>
+
+Q: """
+
+generation_kwargs = {
+    "min_length": -1,
+    "top_k": 0.0,
+    "top_p": 1.0,
+    "do_sample": True,
+    "pad_token_id": tokenizer.eos_token_id,
+    "eos_token_id": -1,
+    "max_new_tokens": args.max_new_tokens,
+}
+
+# trainer
+config = PPOConfig(
+    batch_size=args.batch_size,
+    model_name=args.model_name,
+    learning_rate=args.learning_rate,
+    log_with=args.log_with,
+    mini_batch_size=args.mini_batch_size,
+    ppo_epochs=args.ppo_epochs,
+    gradient_accumulation_steps=args.gradient_accumulation_steps,
+    seed=args.seed,
+    optimize_cuda_cache=True,
+)
+ppo_trainer = PPOTrainer(config=config, model=model, tokenizer=tokenizer)
 dataset = load_dataset("trivia_qa", "rc", split="train")
-dataset = dataset.shuffle(args.seed)
+local_seed = args.seed + ppo_trainer.accelerator.process_index * 100003  # Prime
+dataset = dataset.shuffle(local_seed)
 
 
 def data_generator():
@@ -69,64 +128,6 @@ def exact_match_reward(responses, answers=None):
     return rewards
 
 
-lora_config = LoraConfig(
-    r=16,
-    lora_alpha=32,
-    lora_dropout=0.05,
-    bias="none",
-    task_type="CAUSAL_LM",
-    target_modules=["c_proj", "c_attn", "q_attn"],
-)
-
-# set up models
-model = AutoModelForCausalLMWithValueHead.from_pretrained(
-    args.model_name,
-    use_auth_token=True,
-    trust_remote_code=True,
-    load_in_4bit=True,
-    peft_config=lora_config,
-)
-tokenizer = AutoTokenizer.from_pretrained(args.model_name, use_auth_token=True)
-tokenizer.pad_token = tokenizer.eos_token
-
-# system prompt
-prompt = """\
-In which branch of the arts is Patricia Neary famous?
-
-<request><Wiki>Patricia Neary<call>Patricia Neary (born October 27, 1942) is an American ballerina, choreographer and ballet director, who has been particularly active in Switzerland. She has also been a highly successful ambassador for the Balanchine Trust, bringing George Balanchine's ballets to 60 cities around the globe.<response>
-
-Result=Ballets<submit>
-
-Who won Super Bowl XX?
-
-<request><Wiki>Super Bowl XX<call>Super Bowl XX was an American football game between the National Football Conference (NFC) champion Chicago Bears and the American Football Conference (AFC) champion New England Patriots to decide the National Football League (NFL) champion for the 1985 season. The Bears defeated the Patriots by the score of 46–10, capturing their first NFL championship (and Chicago's first overall sports victory) since 1963, three years prior to the birth of the Super Bowl. Super Bowl XX was played on January 26, 1986 at the Louisiana Superdome in New Orleans.<response>
-
-Result=Chicago Bears<submit>"""
-
-generation_kwargs = {
-    "min_length": -1,
-    "top_k": 0.0,
-    "top_p": 1.0,
-    "do_sample": True,
-    "pad_token_id": tokenizer.eos_token_id,
-    "eos_token_id": -1,
-    "max_new_tokens": args.max_new_tokens,
-}
-
-# trainer
-config = PPOConfig(
-    batch_size=args.batch_size,
-    model_name=args.model_name,
-    learning_rate=args.learning_rate,
-    log_with=args.log_with,
-    mini_batch_size=args.mini_batch_size,
-    ppo_epochs=args.ppo_epochs,
-    gradient_accumulation_steps=args.gradient_accumulation_steps,
-    seed=args.seed,
-    optimize_cuda_cache=True,
-)
-ppo_trainer = PPOTrainer(config=config, model=model, tokenizer=tokenizer)
-
 # text env
 tool = load_tool("vwxyzjn/pyserini-wikipedia-kilt-doc")
 # limit the amount if tokens
@@ -156,7 +157,7 @@ def print_trainable_parameters(model):
 
 print_trainable_parameters(model)
 # main training loop
-for _ in range(args.iterations):
+for i in range(args.iterations):
     tasks, answers = generate_data(config.batch_size)
     queries, responses, masks, rewards, histories = text_env.run(tasks, answers=answers)
     train_stats = ppo_trainer.step(queries, responses, rewards, masks)
@@ -169,4 +170,5 @@ for _ in range(args.iterations):
     }
     all_rewards = ppo_trainer.accelerator.gather(torch.tensor(rewards, device=ppo_trainer.accelerator.device))
     ppo_trainer.log_stats(train_stats, texts, [item for item in all_rewards])
-ppo_trainer.save_pretrained(args.model_name + "-triviaqa")
+    if i % 100 == 0:
+        ppo_trainer.save_pretrained(f"models/{args.model_name}_{args.seed}_{i}_triviaqa")
