@@ -47,3 +47,7 @@ def is_bitsandbytes_available():
 
 def is_torchvision_available():
     return importlib.util.find_spec("torchvision") is not None
+
+
+def is_rich_available():
+    return importlib.util.find_spec("rich") is not None
