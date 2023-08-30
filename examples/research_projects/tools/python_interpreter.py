@@ -188,7 +188,7 @@ for epoch in range(args.n_epochs):
             "response": [tokenizer.decode(response) for response in responses],
             "answer": batch["answer"],
         }
-        ppo_trainer.log_stats(train_stats, texts, rewards)
+        ppo_trainer.log_stats(train_stats, texts, rewards, columns_to_log=["query", "response", "answer"])
 
 reward_mean_test = evaluate(test_dataloader, text_env, ppo_trainer)
 ppo_trainer.save_pretrained(f"model/{args.model_name}-gsm8k")
