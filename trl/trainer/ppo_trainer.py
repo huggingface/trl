@@ -597,8 +597,6 @@ class PPOTrainer(BaseTrainer):
         """
         bs = self.config.batch_size
 
-        # if response_masks is None:
-        #    response_masks = [torch.ones_like(response) for response in responses]
 
         queries, responses, scores, response_masks = self._step_safety_checker(
             bs, queries, responses, scores, response_masks
