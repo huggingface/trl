@@ -35,7 +35,7 @@ from .utils import ConstantLengthDataset, DataCollatorForCompletionOnlyLM, PeftS
 
 
 if is_peft_available():
-    from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_int8_training
+    from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
 
 
 class SFTTrainer(Trainer):
@@ -145,7 +145,9 @@ class SFTTrainer(Trainer):
                     )
 
                 if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
-                    model = prepare_model_for_int8_training(model)
+                    model = prepare_model_for_kbit_training(
+                        model, use_gradient_checkpointing=args.gradient_checkpointing
+                    )
 
                 model = get_peft_model(model, peft_config)
 
