@@ -597,7 +597,6 @@ class PPOTrainer(BaseTrainer):
         """
         bs = self.config.batch_size
 
-
         queries, responses, scores, response_masks = self._step_safety_checker(
             bs, queries, responses, scores, response_masks
         )
