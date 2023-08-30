@@ -115,5 +115,5 @@ for step in range(100):
     response_texts = [tokenizer.decode(response) for response in responses]
     query_texts = [tokenizer.decode(query) for query in queries]
     texts = {"query": [qt.split("<submit>")[-1].strip() for qt in query_texts], "response": response_texts}
-    ppo_trainer.log_stats(train_stats, texts, rewards)
+    ppo_trainer.log_stats(train_stats, texts, rewards, columns_to_log=["query", "response", "answer"])
 ppo_trainer.save_pretrained(model_id + "-calculator")

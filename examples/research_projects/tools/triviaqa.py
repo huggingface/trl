@@ -184,6 +184,8 @@ for i in range(args.iterations):
         "answer": [", ".join(item) for item in answers],
     }
     all_rewards = ppo_trainer.accelerator.gather(torch.tensor(rewards, device=ppo_trainer.accelerator.device))
-    ppo_trainer.log_stats(train_stats, texts, [item for item in all_rewards])
+    ppo_trainer.log_stats(
+        train_stats, texts, [item for item in all_rewards], columns_to_log=["query", "response", "answer"]
+    )
     if i % 100 == 0:
         ppo_trainer.save_pretrained(f"models/{args.model_name}_{args.seed}_{i}_triviaqa")
