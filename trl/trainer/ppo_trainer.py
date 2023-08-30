@@ -1266,6 +1266,7 @@ class PPOTrainer(BaseTrainer):
         stats: dict,
         batch: dict,
         rewards: List[torch.FloatTensor],
+        columns_to_log: List[str] = ["query", "response"],
     ):
         """
         A function that logs all the training stats. Call it at the end of each epoch.
@@ -1295,12 +1296,13 @@ class PPOTrainer(BaseTrainer):
             elif self.config.log_with == "wandb":
                 import wandb
 
-                table_rows = [
-                    list(r) for r in zip(batch["query"], batch["response"], batch["answer"], rewards.cpu().tolist())
-                ]
-                logs.update(
-                    {"game_log": wandb.Table(columns=["query", "response", "answer", "reward"], rows=table_rows)}
-                )
+                if any([column_to_log not in batch.keys() for column_to_log in columns_to_log]):
+                    raise ValueError(f"Columns to log {columns_to_log} are not present in the batch {batch.keys()}.")
+
+                batch_list = [batch[column_to_log] for column_to_log in columns_to_log]
+
+                table_rows = [list(r) for r in zip(*batch_list, rewards.cpu().tolist())]
+                logs.update({"game_log": wandb.Table(columns=[*columns_to_log, "reward"], rows=table_rows)})
             # All reduce rewards if distributed
             if self.is_distributed:
                 import torch.distributed as dist
