@@ -5,8 +5,12 @@
     title: Quickstart
   - local: installation
     title: Installation
+  - local: how_to_train
+    title: PPO Training FAQ
+  - local: use_model
+    title: Use Trained Models
   - local: customization
-    title: Customize your Training
+    title: Customize the Training
   - local: logging
     title: Understanding Logs
   title: Get started
@@ -23,6 +27,10 @@
     title: Best of N Sampling
   - local: dpo_trainer
     title: DPO Trainer
+  - local: ddpo_trainer
+    title: Denoising Diffusion Policy Optimization
+  - local: text_environments
+    title: Text Environments
   title: API
 - sections: 
   - local: sentiment_tuning
@@ -33,6 +41,8 @@
     title: Detoxifying a Language Model
   - local: using_llama_models
     title: Training StackLlama
+  - local: learning_tools
+    title: Learning to Use Tools
   - local: multi_adapter_rl
     title: Multi Adapter RLHF
   title: Examples

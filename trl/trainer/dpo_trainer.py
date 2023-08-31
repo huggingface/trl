@@ -13,7 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import warnings
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from collections import defaultdict
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -23,11 +24,12 @@ from transformers import DataCollator, PreTrainedModel, PreTrainedTokenizerBase,
 from transformers.trainer_callback import TrainerCallback
 
 from ..import_utils import is_peft_available
-from .utils import DPODataCollatorWithPadding, pad_to_length
+from ..models import create_reference_model
+from .utils import DPODataCollatorWithPadding, disable_dropout_in_model, pad_to_length
 
 
 if is_peft_available():
-    from peft import get_peft_model, prepare_model_for_int8_training
+    from peft import PeftModel, get_peft_model, prepare_model_for_int8_training
 
 
 class DPOTrainer(Trainer):
@@ -38,7 +40,8 @@ class DPOTrainer(Trainer):
         model (`transformers.PreTrainedModel`):
             The model to train, preferably an `AutoModelForSequenceClassification`.
         ref_model (`PreTrainedModelWrapper`):
-            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation and loss.
+            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation and loss. If no
+            reference model is provided, the trainer will create a reference model with the same architecture as the model to be optimized.
         beta (`float`, defaults to 0.1):
             The beta factor in DPO loss. Higher beta means less divergence from the initial policy.
         args (`transformers.TrainingArguments`):
@@ -72,12 +75,14 @@ class DPOTrainer(Trainer):
             The maximum length of the prompt. This argument is required if you want to use the default data collator.
         peft_config (`Dict`, defaults to `None`):
             The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
+        disable_dropout (`bool`, defaults to `True`):
+            Whether or not to disable dropouts in `model` and `ref_model`.
     """
 
     def __init__(
         self,
         model: Union[PreTrainedModel, nn.Module] = None,
-        ref_model: Union[PreTrainedModel, nn.Module] = None,
+        ref_model: Optional[Union[PreTrainedModel, nn.Module]] = None,
         beta: float = 0.1,
         args: TrainingArguments = None,
         data_collator: Optional[DataCollator] = None,
@@ -97,6 +102,7 @@ class DPOTrainer(Trainer):
         max_length: Optional[int] = None,
         max_prompt_length: Optional[int] = None,
         peft_config: Optional[Dict] = None,
+        disable_dropout: bool = True,
     ):
         if not is_peft_available() and peft_config is not None:
             raise ValueError(
@@ -106,6 +112,16 @@ class DPOTrainer(Trainer):
             if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
                 model = prepare_model_for_int8_training(model)
             model = get_peft_model(model, peft_config)
+
+        self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
+
+        if ref_model:
+            self.ref_model = ref_model
+        elif self.is_peft_model:
+            # The `model` with adapters turned off will be used as the reference model
+            self.ref_model = None
+        else:
+            self.ref_model = create_reference_model(model)
 
         if data_collator is None:
             if tokenizer is None:
@@ -131,7 +147,6 @@ class DPOTrainer(Trainer):
                 tokenizer,
                 max_length=max_length,
                 max_prompt_length=max_prompt_length,
-                batch_size=args.train_batch_size,
                 label_pad_token_id=label_pad_token_id,
                 padding_value=padding_value,
                 truncation_mode=truncation_mode,
@@ -150,11 +165,17 @@ class DPOTrainer(Trainer):
         else:
             self.use_dpo_data_collator = False
 
+        if disable_dropout:
+            disable_dropout_in_model(model)
+            if self.ref_model is not None:
+                disable_dropout_in_model(self.ref_model)
+
         self.label_pad_token_id = label_pad_token_id
         self.padding_value = padding_value
 
         self.beta = beta
-        self.ref_model = ref_model
+
+        self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
         super().__init__(
             model,
@@ -170,13 +191,18 @@ class DPOTrainer(Trainer):
             preprocess_logits_for_metrics,
         )
 
-        # Since we inherit from trainer we always have access to an accelerator
-        if hasattr(self, "accelerator"):
-            self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
-        else:
+        if not hasattr(self, "accelerator"):
             raise AttributeError(
                 "Your `Trainer` does not have an `accelerator` object. Consider upgrading `transformers`."
             )
+
+        if self.ref_model is None:
+            if not hasattr(self.accelerator.unwrap_model(self.model), "disable_adapter"):
+                raise ValueError(
+                    "You are using a `peft` version that does not support `disable_adapter`. Please update your `peft` version to the latest version."
+                )
+        else:
+            self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
     def concatenated_inputs(self, batch: Dict[str, Union[List, torch.LongTensor]]) -> Dict[str, torch.LongTensor]:
         """Concatenate the chosen and rejected inputs into a single tensor.
@@ -305,7 +331,7 @@ class DPOTrainer(Trainer):
         self,
         model,
         batch: Dict[str, Union[List, torch.LongTensor]],
-        train_test: str = "train",
+        train_eval: Literal["train", "eval"] = "train",
     ):
         """Compute the DPO loss and other metrics for the given batch of inputs for train or test."""
         metrics = {}
@@ -317,12 +343,21 @@ class DPOTrainer(Trainer):
             policy_rejected_logits,
         ) = self.concatenated_forward(model, batch)
         with torch.no_grad():
-            (
-                reference_chosen_logps,
-                reference_rejected_logps,
-                _,
-                _,
-            ) = self.concatenated_forward(self.ref_model, batch)
+            if self.ref_model is None:
+                with self.accelerator.unwrap_model(self.model).disable_adapter():
+                    (
+                        reference_chosen_logps,
+                        reference_rejected_logps,
+                        _,
+                        _,
+                    ) = self.concatenated_forward(self.model, batch)
+            else:
+                (
+                    reference_chosen_logps,
+                    reference_rejected_logps,
+                    _,
+                    _,
+                ) = self.concatenated_forward(self.ref_model, batch)
 
         losses, chosen_rewards, rejected_rewards = self.dpo_loss(
             policy_chosen_logps,
@@ -332,17 +367,15 @@ class DPOTrainer(Trainer):
         )
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
-        metrics[f"rewards_{train_test}/chosen"] = chosen_rewards.cpu().numpy().mean()
-        metrics[f"rewards_{train_test}/rejected"] = rejected_rewards.cpu().numpy().mean()
-        metrics[f"rewards_{train_test}/accuracies"] = reward_accuracies.cpu().numpy().mean()
-        metrics[f"rewards_{train_test}/margins"] = (chosen_rewards - rejected_rewards).cpu().numpy().mean()
-        metrics[f"logps_{train_test}/rejected"] = policy_rejected_logps.detach().cpu().numpy().mean()
-        metrics[f"logps_{train_test}/chosen"] = policy_chosen_logps.detach().cpu().numpy().mean()
-
-        metrics[f"logits_{train_test}/rejected"] = policy_rejected_logits.detach().cpu().numpy().mean()
-        metrics[f"logits_{train_test}/chosen"] = policy_chosen_logits.detach().cpu().numpy().mean()
-
-        metrics[f"loss/{train_test}"] = losses.detach().cpu().numpy().mean()
+        prefix = "eval_" if train_eval == "eval" else ""
+        metrics[f"{prefix}rewards/chosen"] = chosen_rewards.cpu().numpy().mean()
+        metrics[f"{prefix}rewards/rejected"] = rejected_rewards.cpu().numpy().mean()
+        metrics[f"{prefix}rewards/accuracies"] = reward_accuracies.cpu().numpy().mean()
+        metrics[f"{prefix}rewards/margins"] = (chosen_rewards - rejected_rewards).cpu().numpy().mean()
+        metrics[f"{prefix}logps/rejected"] = policy_rejected_logps.detach().cpu().numpy().mean()
+        metrics[f"{prefix}logps/chosen"] = policy_chosen_logps.detach().cpu().numpy().mean()
+        metrics[f"{prefix}logits/rejected"] = policy_rejected_logits.detach().cpu().numpy().mean()
+        metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.detach().cpu().numpy().mean()
 
         return losses.mean(), metrics
 
@@ -357,11 +390,11 @@ class DPOTrainer(Trainer):
                 "compute_loss is only implemented for DPODataCollatorWithPadding, and you passed a datacollator that is different than "
                 "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
             )
-        loss, metrics = self.get_batch_metrics(model, inputs, train_test="train")
+        loss, metrics = self.get_batch_metrics(model, inputs, train_eval="train")
 
         # force log the metrics
         if self.accelerator.is_main_process:
-            self.log_metrics("train", metrics)
+            self.store_metrics(metrics, train_eval="train")
 
         if return_outputs:
             return (loss, metrics)
@@ -378,13 +411,23 @@ class DPOTrainer(Trainer):
             pad_token_id=self.tokenizer.pad_token_id,
         )
 
-        reference_output = self.ref_model.generate(
-            batch["prompt_input_ids"],
-            attention_mask=batch["prompt_attention_mask"],
-            max_length=self.config.max_length,
-            do_sample=True,
-            pad_token_id=self.tokenizer.pad_token_id,
-        )
+        if self.ref_model is None:
+            with self.accelerator.unwrap_model(self.model).disable_adapter():
+                reference_output = self.model.generate(
+                    batch["prompt_input_ids"],
+                    attention_mask=batch["prompt_attention_mask"],
+                    max_length=self.config.max_length,
+                    do_sample=True,
+                    pad_token_id=self.tokenizer.pad_token_id,
+                )
+        else:
+            reference_output = self.ref_model.generate(
+                batch["prompt_input_ids"],
+                attention_mask=batch["prompt_attention_mask"],
+                max_length=self.config.max_length,
+                do_sample=True,
+                pad_token_id=self.tokenizer.pad_token_id,
+            )
 
         policy_output = pad_to_length(policy_output, self.config.max_length, self.tokenizer.pad_token_id)
         policy_output_decoded = self.tokenizer.batch_decode(policy_output, skip_special_tokens=True)
@@ -413,11 +456,11 @@ class DPOTrainer(Trainer):
                 ignore_keys = []
 
         with torch.no_grad():
-            loss, metrics = self.get_batch_metrics(model, inputs, train_test="test")
+            loss, metrics = self.get_batch_metrics(model, inputs, train_eval="eval")
 
         # force log the metrics
         if self.accelerator.is_main_process:
-            self.log_metrics("test", metrics)
+            self.store_metrics(metrics, train_eval="eval")
 
         if prediction_loss_only:
             return (loss.detach(), None, None)
@@ -432,3 +475,23 @@ class DPOTrainer(Trainer):
         labels = torch.zeros(logits.shape[0])
 
         return (loss.detach(), logits, labels)
+
+    def store_metrics(self, metrics: Dict[str, float], train_eval: Literal["train", "eval"] = "train") -> None:
+        for key, value in metrics.items():
+            self._stored_metrics[train_eval][key].append(value)
+
+    def log(self, logs: Dict[str, float]) -> None:
+        """
+        Log `logs` on the various objects watching training, including stored metrics.
+
+        Args:
+            logs (`Dict[str, float]`):
+                The values to log.
+        """
+        # logs either has 'loss' or 'eval_loss'
+        train_eval = "train" if "loss" in logs else "eval"
+        # Add averaged stored metrics to logs
+        for key, metrics in self._stored_metrics[train_eval].items():
+            logs[key] = torch.tensor(metrics).mean().item()
+        del self._stored_metrics[train_eval]
+        return super().log(logs)

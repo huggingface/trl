@@ -35,3 +35,19 @@ def is_torch_greater_2_0():
 
         torch_version = pkg_resources.get_distribution("torch").version
     return torch_version >= "2.0"
+
+
+def is_diffusers_available():
+    return importlib.util.find_spec("diffusers") is not None
+
+
+def is_bitsandbytes_available():
+    return importlib.util.find_spec("bitsandbytes") is not None
+
+
+def is_torchvision_available():
+    return importlib.util.find_spec("torchvision") is not None
+
+
+def is_rich_available():
+    return importlib.util.find_spec("rich") is not None

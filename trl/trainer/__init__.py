@@ -16,11 +16,25 @@
 
 # There is a circular import in the PPOTrainer if we let isort sort these
 # isort: off
-from .utils import AdaptiveKLController, FixedKLController, ConstantLengthDataset, DataCollatorForCompletionOnlyLM
+from .utils import (
+    AdaptiveKLController,
+    FixedKLController,
+    ConstantLengthDataset,
+    DataCollatorForCompletionOnlyLM,
+    RunningMoments,
+    disable_dropout_in_model,
+)
 
 # isort: on
 
+from ..import_utils import is_diffusers_available
 from .base import BaseTrainer
+from .ddpo_config import DDPOConfig
+
+
+if is_diffusers_available():
+    from .ddpo_trainer import DDPOTrainer
+
 from .dpo_trainer import DPOTrainer
 from .ppo_config import PPOConfig
 from .ppo_trainer import PPOTrainer
