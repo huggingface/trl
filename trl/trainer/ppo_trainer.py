@@ -600,7 +600,7 @@ class PPOTrainer(BaseTrainer):
         queries, responses, scores, response_masks = self._step_safety_checker(
             bs, queries, responses, scores, response_masks
         )
-        scores = torch.tensor(scores)
+        scores = torch.tensor(scores, device=self.current_device)
         if self.config.use_score_scaling:
             # Score scaling
             scores_mean, scores_std = self.running.update(scores)
