@@ -170,6 +170,7 @@ class RewardTrainer(Trainer):
                 " if you are using a custom data collator make sure you know what you are doing or"
                 " implement your own compute_loss method."
             )
+        margin = input["margin"]
         rewards_chosen = model(
             input_ids=inputs["input_ids_chosen"],
             attention_mask=inputs["attention_mask_chosen"],
@@ -178,7 +179,7 @@ class RewardTrainer(Trainer):
             input_ids=inputs["input_ids_rejected"],
             attention_mask=inputs["attention_mask_rejected"],
         )[0]
-        loss = -nn.functional.logsigmoid(rewards_chosen - rewards_rejected).mean()
+        loss = -nn.functional.logsigmoid(rewards_chosen - rewards_rejected - margin).mean()
         if return_outputs:
             return loss, {
                 "rewards_chosen": rewards_chosen,
