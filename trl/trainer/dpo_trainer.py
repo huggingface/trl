@@ -205,7 +205,7 @@ class DPOTrainer(Trainer):
                     "You are using a `peft` version that does not support `disable_adapter`. Please update your `peft` version to the latest version."
                 )
         else:
-            if self.args.deepspeed != "":
+            if self.is_deepspeed_enabled:
                 (self.ref_model,) = self.accelerator._prepare_deepspeed(self.ref_model)
                 self.ref_model.eval()
             else:
