@@ -18,14 +18,19 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 from datasets import Dataset
-from transformers import DataCollator, PreTrainedModel, PreTrainedTokenizerBase, Trainer, TrainingArguments
+from transformers import (
+    DataCollator,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+    Trainer,
+    TrainingArguments,
+)
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_pt_utils import nested_detach
 from transformers.trainer_utils import EvalPrediction
 
 from ..import_utils import is_peft_available
 from .utils import PeftSavingCallback, RewardDataCollatorWithPadding, compute_accuracy
-
 
 if is_peft_available():
     from peft import PeftModel, get_peft_model, prepare_model_for_int8_training
@@ -173,7 +178,6 @@ class RewardTrainer(Trainer):
                 " if you are using a custom data collator make sure you know what you are doing or"
                 " implement your own compute_loss method."
             )
-        margin = inputs["margin"]
         rewards_chosen = model(
             input_ids=inputs["input_ids_chosen"],
             attention_mask=inputs["attention_mask_chosen"],
@@ -182,7 +186,12 @@ class RewardTrainer(Trainer):
             input_ids=inputs["input_ids_rejected"],
             attention_mask=inputs["attention_mask_rejected"],
         )[0]
-        loss = -nn.functional.logsigmoid(rewards_chosen - rewards_rejected - margin).mean()
+        # calculate loss, optionally modulate with margin
+        if "margin" in inputs:
+            loss = -nn.functional.logsigmoid(rewards_chosen - rewards_rejected - inputs["margin"]).mean()
+        else:
+            loss = -nn.functional.logsigmoid(rewards_chosen - rewards_rejected).mean()
+
         if return_outputs:
             return loss, {
                 "rewards_chosen": rewards_chosen,

@@ -22,7 +22,11 @@ import numpy as np
 import torch
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import IterableDataset
-from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizerBase, TrainerCallback
+from transformers import (
+    DataCollatorForLanguageModeling,
+    PreTrainedTokenizerBase,
+    TrainerCallback,
+)
 
 
 class AdaptiveKLController:
@@ -100,10 +104,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
 
                 for idx in np.where(batch["labels"][i] == self.response_token_ids[0])[0]:
                     # `response_token_ids` is `'### Response:\n'`, here we are just making sure that the token IDs match
-                    if (
-                        self.response_token_ids
-                        == batch["labels"][i][idx : idx + len(self.response_token_ids)].tolist()
-                    ):
+                    if self.response_token_ids == batch["labels"][i][idx : idx + len(self.response_token_ids)].tolist():
                         response_token_ids_start_idx = idx
 
                 if response_token_ids_start_idx is None:
@@ -196,6 +197,8 @@ class RewardDataCollatorWithPadding:
         features_chosen = []
         features_rejected = []
         margin = []
+        # check if we have a margin. If we do, we need to batch it as well
+        has_margin = "margin" in features[0]
         for feature in features:
             # check if the keys are named as expected
             if (
@@ -220,7 +223,8 @@ class RewardDataCollatorWithPadding:
                     "attention_mask": feature["attention_mask_rejected"],
                 }
             )
-            margin.append(feature["margin"])
+            if has_margin:
+                margin.append(feature["margin"])
         batch_chosen = self.tokenizer.pad(
             features_chosen,
             padding=self.padding,
@@ -235,15 +239,16 @@ class RewardDataCollatorWithPadding:
             pad_to_multiple_of=self.pad_to_multiple_of,
             return_tensors=self.return_tensors,
         )
-        margin = torch.tensor(margin, dtype=torch.float)
         batch = {
             "input_ids_chosen": batch_chosen["input_ids"],
             "attention_mask_chosen": batch_chosen["attention_mask"],
             "input_ids_rejected": batch_rejected["input_ids"],
             "attention_mask_rejected": batch_rejected["attention_mask"],
-            "margin": margin,
             "return_loss": True,
         }
+        if has_margin:
+            margin = torch.tensor(margin, dtype=torch.float)
+            batch["margin"] = margin
         return batch
 
 
