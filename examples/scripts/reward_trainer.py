@@ -15,18 +15,13 @@
 from dataclasses import dataclass, field
 from typing import Optional
 
+from accelerate import Accelerator
 from datasets import load_dataset
 from peft import LoraConfig
 from tqdm import tqdm
-from transformers import (
-    AutoModelForSequenceClassification,
-    AutoTokenizer,
-    BitsAndBytesConfig,
-    HfArgumentParser,
-    TrainingArguments,
-)
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, BitsAndBytesConfig, HfArgumentParser
 
-from trl import RewardTrainer
+from trl import RewardTrainer, RewardTrainingArguments
 
 
 tqdm.pandas()
@@ -72,7 +67,7 @@ elif script_args.load_in_8bit or script_args.load_in_4bit:
         load_in_8bit=script_args.load_in_8bit, load_in_4bit=script_args.load_in_4bit
     )
     # This means: fit the entire model on the GPU:0
-    device_map = {"": 0}
+    device_map = {"": Accelerator().local_process_index}
 else:
     device_map = None
     quantization_config = None
@@ -142,7 +137,7 @@ else:
 
 
 # Step 3: Define the training arguments
-training_args = TrainingArguments(
+training_args = RewardTrainingArguments(
     output_dir=script_args.output_dir,
     per_device_train_batch_size=script_args.batch_size,
     num_train_epochs=script_args.num_train_epochs,
@@ -153,6 +148,7 @@ training_args = TrainingArguments(
     optim="adamw_torch",
     logging_steps=script_args.logging_steps,
     evaluation_strategy="steps" if script_args.eval_split != "none" else "no",
+    max_length=script_args.seq_length,
 )
 
 # Step 4: Define the LoraConfig
@@ -169,7 +165,6 @@ trainer = RewardTrainer(
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
     peft_config=peft_config,
-    max_length=script_args.seq_length,
 )
 
 trainer.train()
