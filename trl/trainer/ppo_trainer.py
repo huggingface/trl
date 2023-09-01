@@ -24,6 +24,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from accelerate import Accelerator
+from accelerate.state import AcceleratorState
 from accelerate.utils import ProjectConfiguration
 from datasets import Dataset
 from huggingface_hub import whoami
@@ -54,7 +55,7 @@ from ..core import (
 from ..import_utils import is_torch_greater_2_0
 from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper, create_reference_model
 from . import AdaptiveKLController, BaseTrainer, FixedKLController, PPOConfig, RunningMoments
-
+import deepspeed
 
 MODEL_CARD_TEMPLATE = """---
 license: apache-2.0
@@ -99,6 +100,29 @@ inputs = tokenizer("Hello, my llama is cute", return_tensors="pt")
 outputs = model(**inputs, labels=inputs["input_ids"])
 ```
 """
+
+def get_eval_ds_config(offload=None, stage=3):
+    deepspeed_states = AcceleratorState().deepspeed_plugin
+
+    device = "cpu" if offload else "none"
+    zero_opt_dict = {
+        "stage": stage,
+        "stage3_param_persistence_threshold": 1e4,
+        "offload_param": {
+            "device": device
+        }
+    }
+    return {
+        "train_micro_batch_size_per_gpu": deepspeed_states.deepspeed_config['train_micro_batch_size_per_gpu'],
+        "steps_per_print": 10,
+        "zero_optimization": zero_opt_dict,
+        "bf16": {
+            "enabled": False
+        },
+        # "gradient_clipping": 1.0,
+        "prescale_gradients": False,
+        "wall_clock_breakdown": False
+    }
 
 
 class PPOTrainer(BaseTrainer):
@@ -310,16 +334,15 @@ class PPOTrainer(BaseTrainer):
                 getattr(self.ref_model.pretrained_model, "is_loaded_in_8bit", False)
                 or getattr(self.ref_model.pretrained_model, "is_loaded_in_4bit", False)
             ):
-                # DS integration only allows for single model and as `ref_model` is only used for
-                # `KL divergence loss`,i.e, in eval model, just have it be on the respective device and
-                # there is no need to pass it to the `accelerator.prepare` call
-                self.ref_model = self.ref_model.to(self.accelerator.device)
+                eval_ds_config = get_eval_ds_config(offload=False)
+                self.ref_model, *_ = deepspeed.initialize(model=self.ref_model, config=eval_ds_config)
+                self.ref_model.train() # .eval()?
 
             # this hack seems to be needed for DS stage 3 to work
             if self.accelerator.state.deepspeed_plugin.zero_stage == 3:
                 self.model.train()
         else:
-            self.ref_model = self.accelerator.prepare(self.ref_model)
+            self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
         # In a distributed setup, only logging needs to be performed on the main process
         # check: https://pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html
