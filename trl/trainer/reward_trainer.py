@@ -124,13 +124,15 @@ class RewardTrainer(Trainer):
                 raise ValueError(
                     "max_length or a tokenizer must be specified when using the default RewardDataCollatorWithPadding"
                 )
-            if max_length is None:
+            if args.max_length is None:
                 warnings.warn(
-                    "When using RewardDataCollatorWithPadding, you should set `max_length` in the RewardTrainer's init"
-                    " it will be set to `512` by default, but you should do it yourself in the future.",
+                    "When using RewardDataCollatorWithPadding, you should set `max_length` in RewardTrainingArguments."
+                    " It will be set to `512` by default, but you should do it yourself in the future.",
                     UserWarning,
                 )
                 max_length = 512
+            else:
+                max_length = args.max_length
             data_collator = RewardDataCollatorWithPadding(tokenizer, max_length=max_length)
 
             if args.remove_unused_columns:
@@ -140,7 +142,7 @@ class RewardTrainer(Trainer):
                     args = replace(args, remove_unused_columns=False)
                 # warn users
                 warnings.warn(
-                    "When using RewardDataCollatorWithPadding, you should set `remove_unused_columns=False` in your TrainingArguments"
+                    "When using RewardDataCollatorWithPadding, you should set `remove_unused_columns=False` in your RewardTrainingArguments"
                     " we have set it for you, but you should do it yourself in the future.",
                     UserWarning,
                 )
