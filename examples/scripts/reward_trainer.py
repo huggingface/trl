@@ -36,7 +36,7 @@ tqdm.pandas()
 @dataclass
 class ScriptArguments:
     """
-    Hyperparameters to fine-tune a reward model on a given dataset.
+    Hyperparameters to fine-tune a reward model on a given dataset with the `RewardTrainer`.
     """
 
     model_name: Optional[str] = field(default="facebook/opt-350m", metadata={"help": "the model name"})
