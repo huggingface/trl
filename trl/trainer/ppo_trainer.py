@@ -101,7 +101,7 @@ outputs = model(**inputs, labels=inputs["input_ids"])
 ```
 """
 
-def get_eval_ds_config(offload=None, stage=3):
+def get_deepspeed_config(offload=None, stage=3):
     deepspeed_states = AcceleratorState().deepspeed_plugin
 
     device = "cpu" if offload else "none"
@@ -119,7 +119,7 @@ def get_eval_ds_config(offload=None, stage=3):
         "bf16": {
             "enabled": False
         },
-        # "gradient_clipping": 1.0,
+        "gradient_clipping": 1.0,
         "prescale_gradients": False,
         "wall_clock_breakdown": False
     }
@@ -334,7 +334,7 @@ class PPOTrainer(BaseTrainer):
                 getattr(self.ref_model.pretrained_model, "is_loaded_in_8bit", False)
                 or getattr(self.ref_model.pretrained_model, "is_loaded_in_4bit", False)
             ):
-                eval_ds_config = get_eval_ds_config(offload=False)
+                eval_ds_config = get_deepspeed_config(offload=False)
                 self.ref_model, *_ = deepspeed.initialize(model=self.ref_model, config=eval_ds_config)
                 self.ref_model.train() # .eval()?
 
