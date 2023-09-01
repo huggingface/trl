@@ -17,8 +17,8 @@ from .trainer import (
     DPOTrainer,
     PPOConfig,
     PPOTrainer,
+    RewardConfig,
     RewardTrainer,
-    RewardTrainingArguments,
     SFTTrainer,
 )
 

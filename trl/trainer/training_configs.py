@@ -20,9 +20,9 @@ from transformers import TrainingArguments
 
 
 @dataclass
-class RewardTrainingArguments(TrainingArguments):
+class RewardConfig(TrainingArguments):
     """
-    RewardTrainingArguments is the subset of the arguments we use in our example scripts **which relate to the training loop
+    RewardConfig is the subset of the arguments we use in our example scripts **which relate to the training loop
     itself**.
 
     Using [`HfArgumentParser`] we can turn this class into

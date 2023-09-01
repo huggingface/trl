@@ -24,7 +24,7 @@ from transformers.trainer_pt_utils import nested_detach
 from transformers.trainer_utils import EvalPrediction
 
 from ..import_utils import is_peft_available
-from .training_args import RewardTrainingArguments
+from .training_configs import RewardConfig
 from .utils import PeftSavingCallback, RewardDataCollatorWithPadding, compute_accuracy
 
 
@@ -52,7 +52,7 @@ class RewardTrainer(Trainer):
     def __init__(
         self,
         model: Union[PreTrainedModel, nn.Module] = None,
-        args: RewardTrainingArguments = None,
+        args: RewardConfig = None,
         data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
@@ -74,7 +74,7 @@ class RewardTrainer(Trainer):
         Args:
             model (`transformers.PreTrainedModel`):
                 The model to train, preferably an `AutoModelForSequenceClassification`.
-            args (`RewardTrainingArguments`):
+            args (`RewardConfig`):
                 The arguments to use for training.
             data_collator (`transformers.DataCollator`):
                 The data collator to use for training. If None is specified, the default data collator (`RewardDataCollatorWithPadding`) will be used
@@ -100,7 +100,7 @@ class RewardTrainer(Trainer):
         """
         if max_length is not None:
             warnings.warn(
-                "The `max_length` argument is deprecated and will be removed in a future version. Please use the `RewardTrainingArguments` to set `max_length` instead.",
+                "The `max_length` argument is deprecated and will be removed in a future version. Please use the `RewardConfig` to set `max_length` instead.",
                 FutureWarning,
             )
         if not is_peft_available() and peft_config is not None:
@@ -126,14 +126,14 @@ class RewardTrainer(Trainer):
                 )
             if max_length is None:
                 warnings.warn(
-                    "When using RewardDataCollatorWithPadding, you should set `max_length` in RewardTrainingArguments."
+                    "When using RewardDataCollatorWithPadding, you should set `max_length` in RewardConfig."
                     " It will be set to `512` by default, but you should do it yourself in the future.",
                     UserWarning,
                 )
                 max_length = 512
             elif args.max_length is None:
                 warnings.warn(
-                    "When using RewardDataCollatorWithPadding, you should set `max_length` in RewardTrainingArguments."
+                    "When using RewardDataCollatorWithPadding, you should set `max_length` in RewardConfig."
                     " It will be set to `512` by default, but you should do it yourself in the future.",
                     UserWarning,
                 )
@@ -149,7 +149,7 @@ class RewardTrainer(Trainer):
                     args = replace(args, remove_unused_columns=False)
                 # warn users
                 warnings.warn(
-                    "When using RewardDataCollatorWithPadding, you should set `remove_unused_columns=False` in your RewardTrainingArguments"
+                    "When using RewardDataCollatorWithPadding, you should set `remove_unused_columns=False` in your RewardConfig"
                     " we have set it for you, but you should do it yourself in the future.",
                     UserWarning,
                 )

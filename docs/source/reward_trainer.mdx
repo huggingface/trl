@@ -33,7 +33,7 @@ Just pass a `peft_config` in the key word arguments of `RewardTrainer`, and the 
 ```python
 from peft import LoraConfig, task_type
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
-from trl import RewardTrainer, RewardTrainingArguments
+from trl import RewardTrainer, RewardConfig
 
 model = AutoModelForSequenceClassification.from_pretrained("gpt2")
 peft_config = LoraConfig(
@@ -58,9 +58,9 @@ trainer.train()
 
 ```
 
-## RewardTrainingArguments
+## RewardConfig
 
-[[autodoc]] RewardTrainingArguments
+[[autodoc]] RewardConfig
 
 ## RewardTrainer
 

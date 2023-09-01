@@ -20,7 +20,7 @@ from peft import LoraConfig
 from tqdm import tqdm
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, BitsAndBytesConfig, HfArgumentParser
 
-from trl import RewardTrainer, RewardTrainingArguments
+from trl import RewardConfig, RewardTrainer
 
 
 tqdm.pandas()
@@ -136,7 +136,7 @@ else:
 
 
 # Step 3: Define the training arguments
-training_args = RewardTrainingArguments(
+training_args = RewardConfig(
     output_dir=script_args.output_dir,
     per_device_train_batch_size=script_args.batch_size,
     num_train_epochs=script_args.num_train_epochs,
