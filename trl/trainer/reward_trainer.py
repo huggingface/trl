@@ -124,7 +124,14 @@ class RewardTrainer(Trainer):
                 raise ValueError(
                     "max_length or a tokenizer must be specified when using the default RewardDataCollatorWithPadding"
                 )
-            if args.max_length is None:
+            if max_length is None:
+                warnings.warn(
+                    "When using RewardDataCollatorWithPadding, you should set `max_length` in RewardTrainingArguments."
+                    " It will be set to `512` by default, but you should do it yourself in the future.",
+                    UserWarning,
+                )
+                max_length = 512
+            elif args.max_length is None:
                 warnings.warn(
                     "When using RewardDataCollatorWithPadding, you should set `max_length` in RewardTrainingArguments."
                     " It will be set to `512` by default, but you should do it yourself in the future.",
