@@ -934,6 +934,7 @@ class PPOTrainer(BaseTrainer):
         all_logits = []
         all_masks = []
         all_values = []
+
         model.eval()
 
         for i in range(math.ceil(bs / fbs)):
@@ -983,8 +984,6 @@ class PPOTrainer(BaseTrainer):
             all_logprobs.append(logprobs)
             all_masks.append(masks)
 
-        model.train()
-
         return (
             torch.cat(all_logprobs),
             torch.cat(all_logits)[:, :-1] if return_logits else None,
@@ -1023,6 +1022,7 @@ class PPOTrainer(BaseTrainer):
             train_stats (dict[str, `torch.Tensor`]):
                 Dictionary of training statistics
         """
+        self.model.train() # Make this DeepSpeed specific?
         loss_p, loss_v, train_stats = self.loss(
             old_logprobs, values, logits, vpreds, logprobs, mask, advantages, returns
         )
@@ -1390,6 +1390,7 @@ class PPOTrainer(BaseTrainer):
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
         device = "cpu" if offload is True else "none"
         batch_size_per_device = deepspeed_plugin.deepspeed_config['train_micro_batch_size_per_gpu']
+        # See DeepSpeed docs for definition of these parameters: https://deepspeed.readthedocs.io/en/latest/zero3.html
         config_kwargs = {
             "train_micro_batch_size_per_gpu": batch_size_per_device,
             "train_batch_size": batch_size_per_device
