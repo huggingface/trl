@@ -101,30 +101,6 @@ outputs = model(**inputs, labels=inputs["input_ids"])
 ```
 """
 
-def get_deepspeed_config(offload=None, stage=3):
-    deepspeed_states = AcceleratorState().deepspeed_plugin
-
-    device = "cpu" if offload else "none"
-    zero_opt_dict = {
-        "stage": stage,
-        "stage3_param_persistence_threshold": 1e4,
-        "offload_param": {
-            "device": device
-        }
-    }
-    return {
-        "train_micro_batch_size_per_gpu": deepspeed_states.deepspeed_config['train_micro_batch_size_per_gpu'],
-        "steps_per_print": 10,
-        "zero_optimization": zero_opt_dict,
-        "bf16": {
-            "enabled": False
-        },
-        "gradient_clipping": 1.0,
-        "prescale_gradients": False,
-        "wall_clock_breakdown": False
-    }
-
-
 class PPOTrainer(BaseTrainer):
     """
     The PPOTrainer uses Proximal Policy Optimization to optimise language models.
@@ -334,11 +310,10 @@ class PPOTrainer(BaseTrainer):
                 getattr(self.ref_model.pretrained_model, "is_loaded_in_8bit", False)
                 or getattr(self.ref_model.pretrained_model, "is_loaded_in_4bit", False)
             ):
-                eval_ds_config = get_deepspeed_config(offload=False)
-                self.ref_model, *_ = deepspeed.initialize(model=self.ref_model, config=eval_ds_config)
-                self.ref_model.train() # .eval()?
+                self.ref_model = self._prepare_deepspeed_zero3(self.ref_model)
 
-            # this hack seems to be needed for DS stage 3 to work
+            # This is needed to avoid DeepSpeed throwing an error during the backward pass:
+            # AssertionError: backward pass is invalid for module in evaluation mode
             if self.accelerator.state.deepspeed_plugin.zero_stage == 3:
                 self.model.train()
         else:
@@ -959,6 +934,7 @@ class PPOTrainer(BaseTrainer):
         all_logits = []
         all_masks = []
         all_values = []
+        model.eval()
 
         for i in range(math.ceil(bs / fbs)):
             input_kwargs = {key: value[i * fbs : (i + 1) * fbs] for key, value in model_inputs.items()}
@@ -1006,6 +982,8 @@ class PPOTrainer(BaseTrainer):
             all_values.append(values)
             all_logprobs.append(logprobs)
             all_masks.append(masks)
+
+        model.train()
 
         return (
             torch.cat(all_logprobs),
@@ -1405,3 +1383,35 @@ class PPOTrainer(BaseTrainer):
                 text.append(self.tokenizer.decode(token.item()), style="black on cyan3")
                 text.append(" ")
         print(text)
+
+    def _prepare_deepspeed_zero3(self, model, offload=False):
+        # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
+        # TODO: figure out if any other parameters are needed for inference
+        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
+        device = "cpu" if offload is True else "none"
+        batch_size_per_device = deepspeed_plugin.deepspeed_config['train_micro_batch_size_per_gpu']
+        config_kwargs = {
+            "train_micro_batch_size_per_gpu": batch_size_per_device,
+            "train_batch_size": batch_size_per_device
+            * deepspeed_plugin.deepspeed_config["gradient_accumulation_steps"]
+            * self.accelerator.num_processes,
+            "zero_optimization": {"stage": 3, "offload_param": {"device": device}},
+        }
+        if model is not None:
+            if hasattr(model, "config"):
+                hidden_size = (
+                    max(model.config.hidden_sizes)
+                    if getattr(model.config, "hidden_sizes", None)
+                    else getattr(model.config, "hidden_size", None)
+                )
+                if hidden_size is not None:
+                    config_kwargs.update(
+                        {
+                            "zero_optimization.reduce_bucket_size": hidden_size * hidden_size,
+                            "zero_optimization.stage3_prefetch_bucket_size": 0.9 * hidden_size * hidden_size,
+                            "zero_optimization.stage3_param_persistence_threshold": 10 * hidden_size,
+                        }
+                    )
+        model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
+        model.eval()
+        return model

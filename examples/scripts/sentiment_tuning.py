@@ -188,7 +188,6 @@ generation_kwargs = {
 }
 
 for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
-    print(f"Epoch {epoch}")
     query_tensors = batch["input_ids"]
 
     # Get response from gpt2
