@@ -20,11 +20,11 @@ import warnings
 from typing import Callable, List, Optional, Union
 
 import datasets
+import deepspeed
 import numpy as np
 import torch
 import torch.nn.functional as F
 from accelerate import Accelerator
-from accelerate.state import AcceleratorState
 from accelerate.utils import ProjectConfiguration
 from datasets import Dataset
 from huggingface_hub import whoami
@@ -55,7 +55,7 @@ from ..core import (
 from ..import_utils import is_torch_greater_2_0
 from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper, create_reference_model
 from . import AdaptiveKLController, BaseTrainer, FixedKLController, PPOConfig, RunningMoments
-import deepspeed
+
 
 MODEL_CARD_TEMPLATE = """---
 license: apache-2.0
@@ -100,6 +100,7 @@ inputs = tokenizer("Hello, my llama is cute", return_tensors="pt")
 outputs = model(**inputs, labels=inputs["input_ids"])
 ```
 """
+
 
 class PPOTrainer(BaseTrainer):
     """
@@ -305,17 +306,17 @@ class PPOTrainer(BaseTrainer):
             self.lr_scheduler,
         )
         if is_deepspeed_used:
-            # 8 bit models are already set on the correct device
+            # Quantized models are already set on the correct device
             if not self.is_peft_model and not (
                 getattr(self.ref_model.pretrained_model, "is_loaded_in_8bit", False)
                 or getattr(self.ref_model.pretrained_model, "is_loaded_in_4bit", False)
             ):
-                self.ref_model = self._prepare_deepspeed_zero3(self.ref_model)
-
-            # This is needed to avoid DeepSpeed throwing an error during the backward pass:
-            # AssertionError: backward pass is invalid for module in evaluation mode
-            if self.accelerator.state.deepspeed_plugin.zero_stage == 3:
-                self.model.train()
+                # If ZeRO-3 is used, we shard both the active and reference model.
+                # Otherwise, we assume the reference model fits in memory and is copied to each device.
+                if self.accelerator.state.deepspeed_plugin.zero_stage == 3:
+                    self.ref_model = self._prepare_deepspeed_zero3(self.ref_model)
+                else:
+                    self.ref_model = self.ref_model.to(self.accelerator.device)
         else:
             self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
@@ -1022,7 +1023,10 @@ class PPOTrainer(BaseTrainer):
             train_stats (dict[str, `torch.Tensor`]):
                 Dictionary of training statistics
         """
-        self.model.train() # Make this DeepSpeed specific?
+        # This is needed to avoid DeepSpeed throwing `backward pass is invalid for module in evaluation mode`
+        if self.accelerator.state.deepspeed_plugin.zero_stage == 3:
+            self.model.train()
+
         loss_p, loss_v, train_stats = self.loss(
             old_logprobs, values, logits, vpreds, logprobs, mask, advantages, returns
         )
@@ -1384,19 +1388,18 @@ class PPOTrainer(BaseTrainer):
                 text.append(" ")
         print(text)
 
-    def _prepare_deepspeed_zero3(self, model, offload=False):
+    def _prepare_deepspeed_zero3(self, model):
         # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
         # TODO: figure out if any other parameters are needed for inference
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-        device = "cpu" if offload is True else "none"
-        batch_size_per_device = deepspeed_plugin.deepspeed_config['train_micro_batch_size_per_gpu']
+        batch_size_per_device = deepspeed_plugin.deepspeed_config["train_micro_batch_size_per_gpu"]
         # See DeepSpeed docs for definition of these parameters: https://deepspeed.readthedocs.io/en/latest/zero3.html
         config_kwargs = {
             "train_micro_batch_size_per_gpu": batch_size_per_device,
             "train_batch_size": batch_size_per_device
             * deepspeed_plugin.deepspeed_config["gradient_accumulation_steps"]
             * self.accelerator.num_processes,
-            "zero_optimization": {"stage": 3, "offload_param": {"device": device}},
+            "zero_optimization": {"stage": 3, "offload_param": {"device": deepspeed_plugin.offload_param_device}},
         }
         if model is not None:
             if hasattr(model, "config"):
