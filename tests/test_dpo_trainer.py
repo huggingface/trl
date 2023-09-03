@@ -16,11 +16,9 @@ import unittest
 
 import torch
 from datasets import Dataset
-
 from parameterized import parameterized
-from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer, TrainingArguments
 from pytest import mark
-
+from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer, TrainingArguments
 
 from trl import DPOTrainer
 
@@ -41,13 +39,6 @@ class DPOTrainerTester(unittest.TestCase):
         cls.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         cls.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         cls.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
-
-    @parameterized.expand(
-        [
-            ["gpt2"],
-            ["t5"],
-        ]
-    )
 
     def _init_dummy_dataset(self):
         # fmt: off
@@ -83,7 +74,13 @@ class DPOTrainerTester(unittest.TestCase):
         # fmt: on
         return Dataset.from_dict(dummy_dataset_dict)
 
-    def test_dpo_trainer(self):
+    @parameterized.expand(
+        [
+            ["gpt2"],
+            ["t5"],
+        ]
+    )
+    def test_dpo_trainer(self, name):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
                 output_dir=tmp_dir,

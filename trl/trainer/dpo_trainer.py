@@ -125,7 +125,7 @@ class DPOTrainer(Trainer):
             raise ValueError("When no model is provided, you need to pass the parameter is_encoder_decoder.")
         else:
             self.is_encoder_decoder = is_encoder_decoder
-            
+
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
 
         if ref_model:
@@ -135,7 +135,6 @@ class DPOTrainer(Trainer):
             self.ref_model = None
         else:
             self.ref_model = create_reference_model(model)
-
 
         if data_collator is None:
             if tokenizer is None:
