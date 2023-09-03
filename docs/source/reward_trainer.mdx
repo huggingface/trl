@@ -2,7 +2,7 @@
 
 TRL supports custom reward modeling for anyone to perform reward modeling on their dataset and model. 
 
-Check out a complete flexible example inside [`examples/scripts`](https://github.com/lvwerra/trl/tree/main/examples/scripts/reward_trainer.py) folder.
+Check out a complete flexible example inside [`examples/scripts`](https://github.com/huggingface/trl/tree/main/examples/scripts/reward_trainer.py) folder.
 
 ## Expected dataset format
 
@@ -23,7 +23,7 @@ The `j` and `k` suffixes are used to denote the two sentences in the paired data
 
 ## Using the `RewardTrainer`
 
-After standardizing your dataset, you can use the `RewardTrainer` as a classic HugingFace Trainer. 
+After standardizing your dataset, you can use the `RewardTrainer` as a classic Hugging Face Trainer. 
 You should pass an `AutoModelForSequenceClassification` model to the `RewardTrainer`.
 
 ### Leveraging the `peft` library to train a reward model

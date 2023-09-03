@@ -104,6 +104,7 @@ if __name__ == "__main__":
         ]
 
     model_ref = AutoModelForCausalLM.from_pretrained(script_args.model_name_or_path)
+
     tokenizer = AutoTokenizer.from_pretrained(script_args.model_name_or_path)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token

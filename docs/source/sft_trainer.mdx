@@ -2,7 +2,7 @@
 
 Supervised fine-tuning (or SFT for short) is a crucial step in RLHF. In TRL we provide an easy-to-use API to create your SFT models and train them with few lines of code on your dataset.
 
-Check out a complete flexible example inside [`examples/scripts`](https://github.com/lvwerra/trl/tree/main/examples/scripts/sft_trainer.py) folder.
+Check out a complete flexible example inside [`examples/scripts`](https://github.com/huggingface/trl/tree/main/examples/scripts/sft_trainer.py) folder.
 
 ## Quickstart
 
@@ -46,7 +46,7 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
-The above snippets will use the default training arguments from the [`transformers.TrainingArguments`](https://huggingface.co/docs/transformers/main_classes/trainer#transformers.TrainingArguments) class. If you want to modify that, make sure to create your own `TrainingArguments` object and pass it to the [`SFTTrainer`] constructor as it is done on the [`supervised_finetuning.py` script](https://github.com/lvwerra/trl/blob/main/examples/stack_llama/scripts/supervised_finetuning.py) on the stack-llama example.
+The above snippets will use the default training arguments from the [`transformers.TrainingArguments`](https://huggingface.co/docs/transformers/main_classes/trainer#transformers.TrainingArguments) class. If you want to modify that, make sure to create your own `TrainingArguments` object and pass it to the [`SFTTrainer`] constructor as it is done on the [`supervised_finetuning.py` script](https://github.com/huggingface/trl/blob/main/examples/stack_llama/scripts/supervised_finetuning.py) on the stack-llama example.
 
 ## Advanced usage
 
@@ -111,6 +111,47 @@ trainer = SFTTrainer(
 trainer.train() 
 ```
 
+#### Using token_ids directly for `response_template`
+
+Some tokenizers like Llama 2 (`meta-llama/Llama-2-XXb-hf`) tokenize sequences differently depending whether they have context or not. For example:
+    
+```python
+from transformers import AutoTokenizer
+tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf")
+
+def print_tokens_with_ids(txt):
+    tokens = tokenizer.tokenize(txt, add_special_tokens=False)
+    token_ids = tokenizer.encode(txt, add_special_tokens=False)
+    print(list(zip(tokens, token_ids)))
+
+prompt = """### User: Hello\n\n### Assistant: Hi, how can I help you?"""
+print_tokens_with_ids(prompt)  # [..., ('▁Hello', 15043), ('<0x0A>', 13), ('<0x0A>', 13), ('##', 2277), ('#', 29937), ('▁Ass', 4007), ('istant', 22137), (':', 29901), ...]
+
+response_template = "### Assistant:"
+print_tokens_with_ids(response_template)  # [('▁###', 835), ('▁Ass', 4007), ('istant', 22137), (':', 29901)]
+```
+
+In this case, and due to lack of context in `response_template`, the same string ("### Assistant:") is tokenized differently:
+    
+    - Text (with context): `[2277, 29937, 4007, 22137, 29901]`
+    - `response_template` (without context): `[835, 4007, 22137, 29901]`
+
+This will lead to an error when the `DataCollatorForCompletionOnlyLM` does not find the `response_template` in the dataset example text:
+
+```
+RuntimeError: Could not find response key [835, 4007, 22137, 29901] in token IDs tensor([    1,   835,  ...])   
+```
+
+
+To solve this, you can tokenize the `response_template` with the same context than in the dataset, truncate it as needed and pass the `token_ids` directly to the `response_template` argument of the `DataCollatorForCompletionOnlyLM` class. For example:
+
+```python
+response_template_with_context = "\n### Assistant:"  # We added context here: "\n". This is enough for this tokenizer
+response_template_ids = tokenizer.encode(response_template_with_context, add_special_tokens=False)[2:]  # Now we have it like in the dataset texts: `[2277, 29937, 4007, 22137, 29901]`
+
+data_collator = DataCollatorForCompletionOnlyLM(response_template_ids, tokenizer=tokenizer)
+```
+
 ### Format your input prompts
 
 For instruction fine-tuning, it is quite common to have two columns inside the dataset: one for the prompt & the other for the response. 
@@ -142,7 +183,7 @@ trainer = SFTTrainer(
 
 trainer.train()
 ```
-To preperly format your input make sure to process all the examples by looping over them and returning a list of processed text. Check out a full example on how to use SFTTrainer on alpaca dataset [here](https://github.com/lvwerra/trl/pull/444#issue-1760952763)
+To preperly format your input make sure to process all the examples by looping over them and returning a list of processed text. Check out a full example on how to use SFTTrainer on alpaca dataset [here](https://github.com/huggingface/trl/pull/444#issue-1760952763)
 
 ### Packing dataset ([`ConstantLengthDataset`])
 
@@ -185,7 +226,7 @@ You can also customize the [`ConstantLengthDataset`] much more by directly passi
 
 ### Control over the pretrained model
 
-You can directly pass the kwargs of the `from_pretrained()` method to the [`SFTTrainer`]. For example, if you want to load a model in a different precision, analoguous to 
+You can directly pass the kwargs of the `from_pretrained()` method to the [`SFTTrainer`]. For example, if you want to load a model in a different precision, analogous to 
 
 ```python
 model = AutoModelForCausalLM.from_pretrained("facebook/opt-350m", torch_dtype=torch.bfloat16)
@@ -197,7 +238,6 @@ trainer = SFTTrainer(
     "facebook/opt-350m",
     train_dataset=dataset,
     dataset_text_field="text",
-    torch_dtype=torch.bfloat16,
 )
 
 trainer.train()
@@ -253,7 +293,6 @@ trainer = SFTTrainer(
     "EleutherAI/gpt-neo-125m",
     train_dataset=dataset,
     dataset_text_field="text",
-    torch_dtype=torch.bfloat16,
     peft_config=peft_config,
     callbacks=callbacks
 )
@@ -286,7 +325,6 @@ trainer = SFTTrainer(
     model,
     train_dataset=dataset,
     dataset_text_field="text",
-    torch_dtype=torch.bfloat16,
     peft_config=peft_config,
 )
 

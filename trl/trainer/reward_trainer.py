@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import warnings
+from dataclasses import FrozenInstanceError, replace
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
@@ -129,7 +130,10 @@ class RewardTrainer(Trainer):
             data_collator = RewardDataCollatorWithPadding(tokenizer, max_length=max_length)
 
             if args.remove_unused_columns:
-                args.remove_unused_columns = False
+                try:  # for bc before https://github.com/huggingface/transformers/pull/25435
+                    args.remove_unused_columns = False
+                except FrozenInstanceError:
+                    args = replace(args, remove_unused_columns=False)
                 # warn users
                 warnings.warn(
                     "When using RewardDataCollatorWithPadding, you should set `remove_unused_columns=False` in your TrainingArguments"

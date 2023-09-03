@@ -18,6 +18,7 @@ import re
 import tempfile
 import unittest
 
+import pytest
 import torch
 from huggingface_hub import HfApi, HfFolder, delete_repo
 from parameterized import parameterized
@@ -200,6 +201,38 @@ class PPOTrainerTester(unittest.TestCase):
             reward = [torch.tensor(1.0), torch.tensor(0.0)]
             # train model
             train_stats = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+            break
+
+        for param in ppo_trainer.model.parameters():
+            assert param.grad is not None
+
+        for stat in EXPECTED_STATS:
+            assert stat in train_stats.keys()
+
+    def test_ppo_step_with_masks(self):
+        # initialize dataset
+        dummy_dataset = self._init_dummy_dataset()
+
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=self.gpt2_model,
+            ref_model=self.gpt2_model_ref,
+            tokenizer=self.gpt2_tokenizer,
+            dataset=dummy_dataset,
+        )
+        dummy_dataloader = ppo_trainer.dataloader
+        # train model with ppo
+        for query_tensor, response_tensor in dummy_dataloader:
+            # define a reward for response
+            # (this could be any reward such as human feedback or output from another model)
+            reward = [torch.tensor(1.0), torch.tensor(0.0)]
+
+            response_mask = [torch.ones_like(r) for r in response_tensor]
+
+            # train model
+            train_stats = ppo_trainer.step(
+                [q for q in query_tensor], [r for r in response_tensor], reward, response_mask
+            )
             break
 
         for param in ppo_trainer.model.parameters():
@@ -465,7 +498,7 @@ class PPOTrainerTester(unittest.TestCase):
             # train model - this should raise an error
             bs = ppo_trainer.config.batch_size
 
-            queries, responses, _ = ppo_trainer._step_safety_checker(
+            queries, responses, _, _ = ppo_trainer._step_safety_checker(
                 bs, [q for q in query_tensor], [r for r in response_tensor], reward
             )
 
@@ -547,33 +580,36 @@ class PPOTrainerTester(unittest.TestCase):
         vpreds = values + 0.1
 
         score, non_score = ppo_trainer.compute_rewards(dummy_scores, all_logprobs, ref_logprobs, mask)
+        values, advantages, returns = ppo_trainer.compute_advantages(values, score, mask)
 
         # just make sure a dummy loss is computed
         idx = 0
         pg_loss, v_loss, _ = ppo_trainer.loss(
             all_logprobs[idx].unsqueeze(0),
             values[idx].unsqueeze(0),
-            score[idx].unsqueeze(0),
             logits[idx].unsqueeze(0),
             vpreds[idx].unsqueeze(0),
             ref_logprobs[idx].unsqueeze(0),
             mask[idx].unsqueeze(0),
+            advantages[idx].unsqueeze(0),
+            returns[idx].unsqueeze(0),
         )
 
-        self.assertAlmostEqual(pg_loss.item(), 0.62516, 4)
+        self.assertAlmostEqual(pg_loss.item(), 2.2868, 4)
         self.assertAlmostEqual(v_loss.item(), 0.09950, 4)
 
         # check if we get same results with masked parts removed
         pg_loss_unmasked, v_loss_unmasked, _ = ppo_trainer.loss(
             apply_mask(all_logprobs[idx], mask[idx]).unsqueeze(0),
             apply_mask(values[idx], mask[idx]).unsqueeze(0),
-            apply_mask(score[idx], mask[idx]).unsqueeze(0),
             apply_mask(logits[idx], mask[idx]).unsqueeze(0),
             apply_mask(vpreds[idx], mask[idx]).unsqueeze(0),
             apply_mask(ref_logprobs[idx], mask[idx]).unsqueeze(0),
             apply_mask(mask[idx], mask[idx]).unsqueeze(0),
+            apply_mask(advantages[idx], mask[idx]).unsqueeze(0),
+            apply_mask(returns[idx], mask[idx]).unsqueeze(0),
         )
-        self.assertAlmostEqual(pg_loss_unmasked.item(), 0.62516, 4)
+        self.assertAlmostEqual(pg_loss_unmasked.item(), 2.2868, 4)
         self.assertAlmostEqual(v_loss_unmasked.item(), 0.09950, 4)
 
     @parameterized.expand(
@@ -1129,10 +1165,10 @@ class PPOTrainerTester(unittest.TestCase):
             _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
             break
 
-        model_grad = gpt2_model.v_head.summary.weight.grad.clone()
+        model_grad = gpt2_model.v_head.summary.weight
 
-        self.ppo_config.gradient_accumulation_steps = 2
         self.ppo_config.mini_batch_size = 1
+        self.ppo_config.gradient_accumulation_steps = 2
 
         ppo_trainer = PPOTrainer(
             config=self.ppo_config,
@@ -1153,7 +1189,7 @@ class PPOTrainerTester(unittest.TestCase):
             _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
             break
 
-        model_grad_acc = gpt2_model_clone.v_head.summary.weight.grad.clone()
+        model_grad_acc = gpt2_model_clone.v_head.summary.weight
         self.assertTrue(torch.allclose(model_grad_acc, model_grad, rtol=1e-3, atol=1e-3))
 
     @unittest.skip("Fix by either patching `whomai()` to work in the staging endpoint or use a dummy prod user.")
@@ -1190,3 +1226,7 @@ class PPOTrainerTester(unittest.TestCase):
             # train model
             _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
             break
+
+    def test_batch_size_check(self):
+        with pytest.raises(ValueError):
+            PPOConfig(batch_size=2, mini_batch_size=2, gradient_accumulation_steps=2)
