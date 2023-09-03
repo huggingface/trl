@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import dataclasses
 import warnings
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
@@ -148,6 +149,8 @@ class SFTTrainer(Trainer):
                     model = prepare_model_for_kbit_training(
                         model, use_gradient_checkpointing=args.gradient_checkpointing
                     )
+
+                    args = dataclasses.replace(args, gradient_checkpointing=False)
 
                 model = get_peft_model(model, peft_config)
 
