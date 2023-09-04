@@ -317,6 +317,8 @@ class PPOTrainer(BaseTrainer):
                 # Otherwise, we assume the reference model fits in memory and is copied to each device.
                 if self.accelerator.state.deepspeed_plugin.zero_stage == 3:
                     self.ref_model = self._prepare_deepspeed_zero3(self.ref_model)
+                    # # This is needed to avoid DeepSpeed throwing `backward pass is invalid for module in evaluation mode`
+                    # self.model.train()
                 else:
                     self.ref_model = self.ref_model.to(self.accelerator.device)
         else:
@@ -1025,10 +1027,7 @@ class PPOTrainer(BaseTrainer):
             train_stats (dict[str, `torch.Tensor`]):
                 Dictionary of training statistics
         """
-        # This is needed to avoid DeepSpeed throwing `backward pass is invalid for module in evaluation mode`
-        if self.accelerator.state.deepspeed_plugin.zero_stage == 3:
-            self.model.train()
-
+        self.model.train()
         loss_p, loss_v, train_stats = self.loss(
             old_logprobs, values, logits, vpreds, logprobs, mask, advantages, returns
         )
