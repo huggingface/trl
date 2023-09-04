@@ -29,10 +29,10 @@ class DPOTrainerTester(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
-        cls.gpt2_model = AutoModelForCausalLM.from_pretrained(cls.model_id)
-        cls.gpt2_ref_model = AutoModelForCausalLM.from_pretrained(cls.model_id)
-        cls.gpt2_tokenizer = AutoTokenizer.from_pretrained(cls.model_id)
-        cls.gpt2_tokenizer.pad_token = cls.gpt2_tokenizer.eos_token
+        cls.model = AutoModelForCausalLM.from_pretrained(cls.model_id)
+        cls.ref_model = AutoModelForCausalLM.from_pretrained(cls.model_id)
+        cls.tokenizer = AutoTokenizer.from_pretrained(cls.model_id)
+        cls.tokenizer.pad_token = cls.tokenizer.eos_token
 
         # get t5 as seq2seq example:
         model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration-correct-vocab"
@@ -95,9 +95,9 @@ class DPOTrainerTester(unittest.TestCase):
             dummy_dataset = self._init_dummy_dataset()
 
             if name == "gpt2":
-                model = self.gpt2_model
-                ref_model = self.gpt2_ref_model
-                tokenizer = self.gpt2_tokenizer
+                model = self.model
+                ref_model = self.ref_model
+                tokenizer = self.tokenizer
             elif name == "t5":
                 model = self.t5_model
                 ref_model = self.t5_ref_model
