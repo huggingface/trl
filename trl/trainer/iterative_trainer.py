@@ -19,38 +19,44 @@ from accelerate.utils import ProjectConfiguration
 from datasets import Dataset
 from torch.optim import Adam
 from torch.utils.data import DataLoader
-from transformers import (
-    PreTrainedModel,
-    PreTrainedTokenizer,
-    PreTrainedTokenizerBase,
-    PreTrainedTokenizerFast,
-    Trainer,
-)
+from transformers import PreTrainedModel, PreTrainedTokenizer, PreTrainedTokenizerBase, PreTrainedTokenizerFast
 
 from ..core import PPODecorators, set_seed
-from . import PPOConfig, RunningMoments
+from . import IterativeConfig, RunningMoments
 
 
-class IterativeTrainer(Trainer):
+class IterativeTrainer:
     """
-    TO DO
+    The IterativeTrainer can be used to finetune models with methods that requires some steps between optimization.
+
+    Attributes:
+        **config** (`IterativeConfig`) -- Configuration object for IterativeTrainer.
+        **model** (`PreTrainedModel`) -- Model to be optimized, Hugging Face transformer model with a causal language modeling head.
+            Check the documentation of `PreTrainedModelWrapper` for more details.
+        **tokenizer** (`PreTrainedTokenizerBase`) -- Tokenizer to be used for encoding the
+            data. Check the documentation of `transformers.PreTrainedTokenizer` and
+            `transformers.PreTrainedTokenizerFast` for more details.
+        **optimizer** (`torch.optim.Optimizer`, *optional*) -- Optimizer to be used for training. If no optimizer is
+            provided, the trainer will create an Adam optimizer with the learning rate specified in the configuration
+            object.
+        **data_collator** (DataCollatorForLanguageModeling, *optional*) -- Data collator to be used for training and
+            passed along the dataloader.
     """
 
     def __init__(
         self,
-        config: PPOConfig = None,
+        config: IterativeConfig = None,
         model: PreTrainedModel = None,
         tokenizer: PreTrainedTokenizerBase = None,
         optimizer: Optional[torch.optim.Optimizer] = None,
         data_collator: Optional[Callable] = None,
-        max_length: Optional[int] = None,
     ):
         """
         Initialize IterativeTrainer.
 
         Args:
-            config (`PPOConfig`):
-                Configuration object for PPOTrainer. Check the documentation of `PPOConfig` for more details.
+            config (`IterativeConfig`):
+                Configuration object for IterativeTrainer.
             model (`PreTrainedModel`):
                 Hugging Face transformer model.
             tokenizer (`transformers.PreTrainedTokenizerBase`):
@@ -67,8 +73,8 @@ class IterativeTrainer(Trainer):
         set_seed(config.seed)
 
         # Step 0: check positional arguments validity
-        if not isinstance(config, PPOConfig):
-            raise ValueError(f"config must be a PPOConfig, got {type(config)}")
+        if not isinstance(config, IterativeConfig):
+            raise ValueError(f"config must be a IterativeConfig, got {type(config)}")
         if not isinstance(tokenizer, (PreTrainedTokenizerBase)):
             raise ValueError(
                 f"tokenizer must be a PreTrainedTokenizerBase like a PreTrainedTokenizer or a PreTrainedTokenizerFast, got {type(tokenizer)}"
@@ -194,7 +200,7 @@ class IterativeTrainer(Trainer):
 
         step_dataloader = DataLoader(
             batch_data,
-            batch_size=self.args.step_batch_size,
+            batch_size=self.config.step_batch_size,
             shuffle=True,
             collate_fn=collator,
         )
@@ -204,7 +210,7 @@ class IterativeTrainer(Trainer):
         for _, batch in enumerate(step_dataloader):
             with self.accelerator.accumulate(self.model):
                 model_inputs = {k: batch[k] for k in model_inputs_names}
-                loss = self.model(**model_inputs)
+                loss = self.compute_loss(self.model, model_inputs)
 
                 self.accelerator.backward(loss)
 
