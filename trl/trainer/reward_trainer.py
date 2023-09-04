@@ -98,7 +98,6 @@ class RewardTrainer(Trainer):
             peft_config (`Dict`, defaults to `None`):
                 The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
         """
-        print(args)
         if max_length is not None and args.max_length is not None:
             raise ValueError(
                 "You cannot specify both `max_length` and `args.max_length`. Please use the `RewardConfig` to set `max_length` once."
