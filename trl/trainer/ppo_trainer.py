@@ -317,12 +317,10 @@ class PPOTrainer(BaseTrainer):
                 # Otherwise, we assume the reference model fits in memory and is copied to each device.
                 if self.accelerator.state.deepspeed_plugin.zero_stage == 3:
                     self.ref_model = self._prepare_deepspeed_zero3(self.ref_model)
-                    # # This is needed to avoid DeepSpeed throwing `backward pass is invalid for module in evaluation mode`
-                    # self.model.train()
                 else:
                     self.ref_model = self.ref_model.to(self.accelerator.device)
         else:
-            self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
+            self.ref_model = self.accelerator.prepare_model(self.ref_model)
 
         # In a distributed setup, only logging needs to be performed on the main process
         # check: https://pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html
