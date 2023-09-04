@@ -65,8 +65,6 @@ def main():
 
     train_dataloader = DataLoader(train_dataset, batch_size=script_args.gen_bs, shuffle=False)
 
-    eval_dataloader = DataLoader(eval_dataset, batch_size=script_args.gen_bs, shuffle=False)
-
     reward_trainer = RewardTrainer(reward_model)
     trainer = Trainer(model)
 
