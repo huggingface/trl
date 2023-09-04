@@ -1,5 +1,5 @@
 compute_environment: LOCAL_MACHINE
-debug: true
+debug: false
 deepspeed_config:
   gradient_accumulation_steps: 1
   offload_optimizer_device: none
