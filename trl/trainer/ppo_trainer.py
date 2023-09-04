@@ -320,7 +320,7 @@ class PPOTrainer(BaseTrainer):
                 else:
                     self.ref_model = self.ref_model.to(self.accelerator.device)
         else:
-            self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
+            self.ref_model = self.accelerator.prepare(self.ref_model)
 
         # In a distributed setup, only logging needs to be performed on the main process
         # check: https://pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html
