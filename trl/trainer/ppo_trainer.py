@@ -20,12 +20,11 @@ import warnings
 from typing import Callable, List, Optional, Union
 
 import datasets
-import deepspeed
 import numpy as np
 import torch
 import torch.nn.functional as F
 from accelerate import Accelerator
-from accelerate.utils import ProjectConfiguration
+from accelerate.utils import ProjectConfiguration, is_deepspeed_available
 from datasets import Dataset
 from huggingface_hub import whoami
 from packaging import version
@@ -55,6 +54,10 @@ from ..core import (
 from ..import_utils import is_torch_greater_2_0
 from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper, create_reference_model
 from . import AdaptiveKLController, BaseTrainer, FixedKLController, PPOConfig, RunningMoments
+
+
+if is_deepspeed_available():
+    import deepspeed
 
 
 MODEL_CARD_TEMPLATE = """---
