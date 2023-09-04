@@ -11,20 +11,16 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import tempfile
 import unittest
 
 import torch
 from datasets import Dataset
-from pytest import mark
-from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from trl import IterativeTrainer
-
-from .testing_utils import require_peft
+from trl import IterativeConfig, IterativeTrainer
 
 
-class DPOTrainerTester(unittest.TestCase):
+class IterativeTrainerTester(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
@@ -34,44 +30,25 @@ class DPOTrainerTester(unittest.TestCase):
 
     def _init_dummy_dataset(self):
         dummy_dataset_dict = {
-            "prompt": [
-                "hi nice",
-                "I am",
-                "My name is",
-                "Python"
-            ]
+            "input_ids": [torch.tensor([5303, 3621]), torch.tensor([3666, 1438, 318]), torch.tensor([5303, 3621])],
+            "attention_mask": [torch.tensor([1, 1]), torch.tensor([1, 1, 1]), torch.tensor([1, 1])],
         }
 
         return Dataset.from_dict(dummy_dataset_dict)
 
-    def test_iterative_trainer(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                remove_unused_columns=False,
-                gradient_accumulation_steps=4,
-                learning_rate=9e-1,
-                evaluation_strategy="steps",
-            )
+    def setUp(self):
+        # initialize trainer
+        self.iterative_config = IterativeConfig(step_batch_size=2, log_with=None)
+        self.model.train()
+        return super().setUp()
 
-            dummy_dataset = self._init_dummy_dataset()
+    def test_iterative_step(self):
+        # initialize dataset
+        dummy_dataset = self._init_dummy_dataset()
 
-            trainer = IterativeTrainer(
-                model=self.model,
-                tokenizer=self.tokenizer,
-            )
+        iterative_trainer = IterativeTrainer(config=self.iterative_config, model=self.model, tokenizer=self.tokenizer)
 
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        iterative_trainer.step(dummy_dataset["input_ids"], dummy_dataset["attention_mask"], dummy_dataset["labels"])
 
-            trainer.train()
-
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-
-            # check the params have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                # check the params have changed - ignore 0 biases
-                if param.sum() != 0:
-                    self.assertFalse(torch.equal(param, new_param))
+        for param in iterative_trainer.model.parameters():
+            assert param.grad is not None
