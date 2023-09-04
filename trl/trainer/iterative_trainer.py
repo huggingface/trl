@@ -27,7 +27,7 @@ from . import IterativeConfig, RunningMoments
 
 class IterativeTrainer:
     """
-    The IterativeTrainer can be used to finetune models with methods that requires some steps between optimization.
+    The IterativeTrainer can be used to finetune models with methods that require some steps between optimization.
 
     Attributes:
         **config** (`IterativeConfig`) -- Configuration object for IterativeTrainer.
@@ -134,15 +134,25 @@ class IterativeTrainer:
         PPODecorators.optimize_cuda_cache = self.config.optimize_cuda_cache
 
         self.running = RunningMoments(self.accelerator)
+        self.is_encoder_decoder = hasattr(self.model, "is_encoder_decoder")
 
     def prepare_model_inputs(self, input_ids: torch.Tensor, attention_mask: torch.Tensor, labels: torch.Tensor):
-        input_data = self.data_collator(
-            [{"input_ids": ids, "attention_mask": torch.ones_like(ids)} for ids in labels]
-        ).to(self.model.device)
+        if self.is_encoder_decoder:
+            input_data = self.data_collator(
+                [
+                    {"input_ids": i, "attention_mask": a, "labels": l}
+                    for i, a, l in zip(input_ids, attention_mask, labels)
+                ]
+            ).to(self.model.device)
 
-        input_data.pop("decoder_input_ids", None)  # This is directly computed inside the model
+        else:
+            input_data = self.data_collator(
+                [{"input_ids": ids, "attention_mask": torch.ones_like(ids)} for ids in labels]
+            ).to(self.model.device)
 
-        return input_data
+            input_data.pop("decoder_input_ids", None)  # This is directly computed inside the model
+
+            return input_data
 
     def compute_loss(self, model, inputs, return_outputs=False):
         """
