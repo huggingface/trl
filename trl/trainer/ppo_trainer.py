@@ -1389,7 +1389,7 @@ class PPOTrainer(BaseTrainer):
                 text.append(" ")
         print(text)
 
-    def _prepare_deepspeed_zero3(self, model: PreTrainedModelWrapper) -> deepspeed.InferenceEngine:
+    def _prepare_deepspeed_zero3(self, model: PreTrainedModelWrapper):
         # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
         # TODO: figure out if any other parameters are needed to optimize inference
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
