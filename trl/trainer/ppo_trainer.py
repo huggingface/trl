@@ -59,7 +59,6 @@ from . import AdaptiveKLController, BaseTrainer, FixedKLController, PPOConfig, R
 if is_deepspeed_available():
     import deepspeed
 
-
 MODEL_CARD_TEMPLATE = """---
 license: apache-2.0
 tags:
@@ -1391,9 +1390,9 @@ class PPOTrainer(BaseTrainer):
                 text.append(" ")
         print(text)
 
-    def _prepare_deepspeed_zero3(self, model):
+    def _prepare_deepspeed_zero3(self, model: PreTrainedModelWrapper) -> deepspeed.InferenceEngine:
         # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
-        # TODO: figure out if any other parameters are needed for inference
+        # TODO: figure out if any other parameters are needed to optimize inference
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
         batch_size_per_device = deepspeed_plugin.deepspeed_config["train_micro_batch_size_per_gpu"]
         # See DeepSpeed docs for definition of these parameters: https://deepspeed.readthedocs.io/en/latest/zero3.html
@@ -1412,11 +1411,13 @@ class PPOTrainer(BaseTrainer):
                     else getattr(model.config, "hidden_size", None)
                 )
                 if hidden_size is not None:
+                    # Note that `stage3_prefetch_bucket_size` can produce DeepSpeed messages like: `Invalidate trace cache @ step 0: expected module 1, but got module 0`
+                    # This is expected and is not an error, see: https://github.com/microsoft/DeepSpeed/discussions/4081
                     config_kwargs.update(
                         {
                             "zero_optimization.reduce_bucket_size": hidden_size * hidden_size,
-                            "zero_optimization.stage3_prefetch_bucket_size": 0.9 * hidden_size * hidden_size,
                             "zero_optimization.stage3_param_persistence_threshold": 10 * hidden_size,
+                            "zero_optimization.stage3_prefetch_bucket_size": 0.9 * hidden_size * hidden_size,
                         }
                     )
         model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
