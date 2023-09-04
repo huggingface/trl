@@ -22,8 +22,7 @@ from transformers import TrainingArguments
 @dataclass
 class RewardConfig(TrainingArguments):
     """
-    RewardConfig is the subset of the arguments we use in our example scripts **which relate to the training loop
-    itself**.
+    RewardConfig collects all training arguments related to the [`RewardTrainer`] class.
 
     Using [`HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the

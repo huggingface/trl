@@ -52,7 +52,7 @@ class RewardTrainer(Trainer):
     def __init__(
         self,
         model: Union[PreTrainedModel, nn.Module] = None,
-        args: RewardConfig = None,
+        args: Optional[RewardConfig] = None,
         data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
@@ -98,7 +98,12 @@ class RewardTrainer(Trainer):
             peft_config (`Dict`, defaults to `None`):
                 The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
         """
-        if max_length is not None:
+        print(args)
+        if max_length is not None and args.max_length is not None:
+            raise ValueError(
+                "You cannot specify both `max_length` and `args.max_length`. Please use the `RewardConfig` to set `max_length` once."
+            )
+        if max_length is not None and args.max_length is None:
             warnings.warn(
                 "The `max_length` argument is deprecated and will be removed in a future version. Please use the `RewardConfig` to set `max_length` instead.",
                 FutureWarning,
@@ -124,22 +129,16 @@ class RewardTrainer(Trainer):
                 raise ValueError(
                     "max_length or a tokenizer must be specified when using the default RewardDataCollatorWithPadding"
                 )
-            if max_length is None:
+            if max_length is None and args.max_length is None:
                 warnings.warn(
                     "When using RewardDataCollatorWithPadding, you should set `max_length` in RewardConfig."
                     " It will be set to `512` by default, but you should do it yourself in the future.",
                     UserWarning,
                 )
                 max_length = 512
-            elif args.max_length is None:
-                warnings.warn(
-                    "When using RewardDataCollatorWithPadding, you should set `max_length` in RewardConfig."
-                    " It will be set to `512` by default, but you should do it yourself in the future.",
-                    UserWarning,
-                )
-                max_length = 512
-            else:
+            if max_length is None and args.max_length is not None:
                 max_length = args.max_length
+
             data_collator = RewardDataCollatorWithPadding(tokenizer, max_length=max_length)
 
             if args.remove_unused_columns:
