@@ -21,9 +21,8 @@ from torch.optim import Adam
 from torch.utils.data import DataLoader
 from transformers import PreTrainedModel, PreTrainedTokenizer, PreTrainedTokenizerBase, PreTrainedTokenizerFast
 
-from trl import IterativeConfig
-
 from ..core import PPODecorators, set_seed
+from . import IterativeConfig
 
 
 class IterativeTrainer:
