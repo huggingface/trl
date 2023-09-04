@@ -21,13 +21,14 @@ from torch.optim import Adam
 from torch.utils.data import DataLoader
 from transformers import PreTrainedModel, PreTrainedTokenizer, PreTrainedTokenizerBase, PreTrainedTokenizerFast
 
+from trl import IterativeConfig
+
 from ..core import PPODecorators, set_seed
-from . import IterativeConfig, RunningMoments
 
 
 class IterativeTrainer:
     """
-    The IterativeTrainer can be used to finetune models with methods that require some steps between optimization.
+    The IterativeTrainer can be used to finetune models with methods that requires some steps between optimization.
 
     Attributes:
         **config** (`IterativeConfig`) -- Configuration object for IterativeTrainer.
@@ -49,7 +50,7 @@ class IterativeTrainer:
         model: PreTrainedModel = None,
         tokenizer: PreTrainedTokenizerBase = None,
         optimizer: Optional[torch.optim.Optimizer] = None,
-        data_collator: Optional[Callable] = None,
+        data_collator: Callable = None,
     ):
         """
         Initialize IterativeTrainer.
@@ -67,7 +68,7 @@ class IterativeTrainer:
                 Data collator function.
         """
 
-        super().__init__(config)
+        self.config = config
 
         # initial seed for reproducible experiments
         set_seed(config.seed)
@@ -133,7 +134,6 @@ class IterativeTrainer:
 
         PPODecorators.optimize_cuda_cache = self.config.optimize_cuda_cache
 
-        self.running = RunningMoments(self.accelerator)
         self.is_encoder_decoder = hasattr(self.model, "is_encoder_decoder")
 
     def prepare_model_inputs(self, input_ids: torch.Tensor, attention_mask: torch.Tensor, labels: torch.Tensor):

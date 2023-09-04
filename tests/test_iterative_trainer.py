@@ -15,7 +15,7 @@ import unittest
 
 import torch
 from datasets import Dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, DataCollatorForLanguageModeling
 
 from trl import IterativeConfig, IterativeTrainer
 
@@ -32,21 +32,27 @@ class IterativeTrainerTester(unittest.TestCase):
         dummy_dataset_dict = {
             "input_ids": [torch.tensor([5303, 3621]), torch.tensor([3666, 1438, 318]), torch.tensor([5303, 3621])],
             "attention_mask": [torch.tensor([1, 1]), torch.tensor([1, 1, 1]), torch.tensor([1, 1])],
+            "labels": [torch.tensor([5303, 3621]), torch.tensor([3666, 1438, 318]), torch.tensor([5303, 3621])],
         }
 
-        return Dataset.from_dict(dummy_dataset_dict)
+        dummy_dataset = Dataset.from_dict(dummy_dataset_dict)
+        dummy_dataset.set_format("torch")
+        return dummy_dataset
 
     def setUp(self):
         # initialize trainer
         self.iterative_config = IterativeConfig(step_batch_size=2, log_with=None)
         self.model.train()
+        self.data_collator = DataCollatorForLanguageModeling(self.tokenizer, mlm=False)
         return super().setUp()
 
     def test_iterative_step(self):
         # initialize dataset
         dummy_dataset = self._init_dummy_dataset()
 
-        iterative_trainer = IterativeTrainer(config=self.iterative_config, model=self.model, tokenizer=self.tokenizer)
+        iterative_trainer = IterativeTrainer(
+            config=self.iterative_config, model=self.model, tokenizer=self.tokenizer, data_collator=self.data_collator
+        )
 
         iterative_trainer.step(dummy_dataset["input_ids"], dummy_dataset["attention_mask"], dummy_dataset["labels"])
 
