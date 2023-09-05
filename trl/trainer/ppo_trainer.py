@@ -24,7 +24,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from accelerate import Accelerator
-from accelerate.utils import ProjectConfiguration
+from accelerate.utils import ProjectConfiguration, is_deepspeed_available
 from datasets import Dataset
 from huggingface_hub import whoami
 from packaging import version
@@ -55,6 +55,9 @@ from ..import_utils import is_torch_greater_2_0
 from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper, create_reference_model
 from . import AdaptiveKLController, BaseTrainer, FixedKLController, PPOConfig, RunningMoments
 
+
+if is_deepspeed_available():
+    import deepspeed
 
 MODEL_CARD_TEMPLATE = """---
 license: apache-2.0
@@ -305,19 +308,17 @@ class PPOTrainer(BaseTrainer):
             self.lr_scheduler,
         )
         if is_deepspeed_used:
-            # 8 bit models are already set on the correct device
+            # Quantized models are already set on the correct device
             if not self.is_peft_model and not (
                 getattr(self.ref_model.pretrained_model, "is_loaded_in_8bit", False)
                 or getattr(self.ref_model.pretrained_model, "is_loaded_in_4bit", False)
             ):
-                # DS integration only allows for single model and as `ref_model` is only used for
-                # `KL divergence loss`,i.e, in eval model, just have it be on the respective device and
-                # there is no need to pass it to the `accelerator.prepare` call
-                self.ref_model = self.ref_model.to(self.accelerator.device)
-
-            # this hack seems to be needed for DS stage 3 to work
-            if self.accelerator.state.deepspeed_plugin.zero_stage == 3:
-                self.model.train()
+                # If ZeRO-3 is used, we shard both the active and reference model.
+                # Otherwise, we assume the reference model fits in memory and is copied to each device.
+                if self.accelerator.state.deepspeed_plugin.zero_stage == 3:
+                    self.ref_model = self._prepare_deepspeed_zero3(self.ref_model)
+                else:
+                    self.ref_model = self.ref_model.to(self.accelerator.device)
         else:
             self.ref_model = self.accelerator.prepare(self.ref_model)
 
@@ -937,6 +938,8 @@ class PPOTrainer(BaseTrainer):
         all_masks = []
         all_values = []
 
+        model.eval()
+
         for i in range(math.ceil(bs / fbs)):
             input_kwargs = {key: value[i * fbs : (i + 1) * fbs] for key, value in model_inputs.items()}
             query_batch = queries[i * fbs : (i + 1) * fbs]
@@ -1022,6 +1025,7 @@ class PPOTrainer(BaseTrainer):
             train_stats (dict[str, `torch.Tensor`]):
                 Dictionary of training statistics
         """
+        self.model.train()
         loss_p, loss_v, train_stats = self.loss(
             old_logprobs, values, logits, vpreds, logprobs, mask, advantages, returns
         )
@@ -1382,3 +1386,37 @@ class PPOTrainer(BaseTrainer):
                 text.append(self.tokenizer.decode(token.item()), style="black on cyan3")
                 text.append(" ")
         print(text)
+
+    def _prepare_deepspeed_zero3(self, model: PreTrainedModelWrapper):
+        # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
+        # TODO: figure out if any other parameters are needed to optimize inference
+        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
+        batch_size_per_device = deepspeed_plugin.deepspeed_config["train_micro_batch_size_per_gpu"]
+        # See DeepSpeed docs for definition of these parameters: https://deepspeed.readthedocs.io/en/latest/zero3.html
+        config_kwargs = {
+            "train_micro_batch_size_per_gpu": batch_size_per_device,
+            "train_batch_size": batch_size_per_device
+            * deepspeed_plugin.deepspeed_config["gradient_accumulation_steps"]
+            * self.accelerator.num_processes,
+            "zero_optimization": {"stage": 3, "offload_param": {"device": deepspeed_plugin.offload_param_device}},
+        }
+        if model is not None:
+            if hasattr(model, "config"):
+                hidden_size = (
+                    max(model.config.hidden_sizes)
+                    if getattr(model.config, "hidden_sizes", None)
+                    else getattr(model.config, "hidden_size", None)
+                )
+                if hidden_size is not None:
+                    # Note that `stage3_prefetch_bucket_size` can produce DeepSpeed messages like: `Invalidate trace cache @ step 0: expected module 1, but got module 0`
+                    # This is expected and is not an error, see: https://github.com/microsoft/DeepSpeed/discussions/4081
+                    config_kwargs.update(
+                        {
+                            "zero_optimization.reduce_bucket_size": hidden_size * hidden_size,
+                            "zero_optimization.stage3_param_persistence_threshold": 10 * hidden_size,
+                            "zero_optimization.stage3_prefetch_bucket_size": 0.9 * hidden_size * hidden_size,
+                        }
+                    )
+        model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
+        model.eval()
+        return model
