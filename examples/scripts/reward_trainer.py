@@ -114,7 +114,7 @@ train_dataset = train_dataset.map(
 )
 train_dataset = train_dataset.filter(
     lambda x: len(x["input_ids_chosen"]) <= script_args.seq_length
-    and len(x["input_ids_rejected"]) <= script_args.seq_length,
+    and len(x["input_ids_rejected"]) <= script_args.seq_length
 )
 
 if script_args.eval_split == "none":
@@ -129,7 +129,7 @@ else:
     )
     eval_dataset = eval_dataset.filter(
         lambda x: len(x["input_ids_chosen"]) <= script_args.seq_length
-        and len(x["input_ids_rejected"]) <= script_args.seq_length,
+        and len(x["input_ids_rejected"]) <= script_args.seq_length
     )
 
 
