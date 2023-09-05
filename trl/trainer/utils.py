@@ -295,16 +295,16 @@ class DPODataCollatorWithPadding:
         # Get indices in list prompt_tokens["input_ids"] that equals the EOS token (often 0)
         eos_indices_prompt = [i for i, x in enumerate(prompt_tokens["input_ids"]) if x == eos_token_id]
         # attention mask these indices to eos_token_id
-        new_attention_mask = [eos_token_id if i in eos_indices_prompt else p for i,p in enumerate(prompt_tokens["attention_mask"])]
+        new_attention_mask = [0 if i in eos_indices_prompt else p for i,p in enumerate(prompt_tokens["attention_mask"])]
         prompt_tokens["attention_mask"] = new_attention_mask
 
         # do the same for chosen and rejected
         eos_indices_chosen = [i for i, x in enumerate(chosen_tokens["input_ids"]) if x == eos_token_id]
-        new_attention_mask_c = [eos_token_id if i in eos_indices_chosen else p for i,p in enumerate(chosen_tokens["attention_mask"])]
+        new_attention_mask_c = [0 if i in eos_indices_chosen else p for i,p in enumerate(chosen_tokens["attention_mask"])]
         chosen_tokens["attention_mask"] = new_attention_mask_c
 
         eos_indices_rejected = [i for i, x in enumerate(rejected_tokens["input_ids"]) if x == eos_token_id]
-        new_attention_mask_r = [eos_token_id if i in eos_indices_rejected else p for i,p in enumerate(rejected_tokens["attention_mask"])]
+        new_attention_mask_r = [0 if i in eos_indices_rejected else p for i,p in enumerate(rejected_tokens["attention_mask"])]
         rejected_tokens["attention_mask"] = new_attention_mask_r
 
         # add EOS token to end of prompt
