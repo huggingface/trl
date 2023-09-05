@@ -34,7 +34,7 @@ class ScriptArguments:
     """
 
     model_name: Optional[str] = field(default="facebook/opt-350m", metadata={"help": "the model name"})
-    dataset_name: Optional[str] = field(default="Anthropic/hh-rlhf", metadata={"help": "the model name"})
+    dataset_name: Optional[str] = field(default="Anthropic/hh-rlhf", metadata={"help": "the dataset name"})
     dataset_text_field: Optional[str] = field(default="text", metadata={"help": "the text field of the dataset"})
     log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
     logging_steps: Optional[int] = field(default=500, metadata={"help": "the number of update steps between two logs"})
@@ -115,7 +115,6 @@ train_dataset = train_dataset.map(
 train_dataset = train_dataset.filter(
     lambda x: len(x["input_ids_chosen"]) <= script_args.seq_length
     and len(x["input_ids_rejected"]) <= script_args.seq_length,
-    num_proc=4,
 )
 
 if script_args.eval_split == "none":
@@ -131,7 +130,6 @@ else:
     eval_dataset = eval_dataset.filter(
         lambda x: len(x["input_ids_chosen"]) <= script_args.seq_length
         and len(x["input_ids_rejected"]) <= script_args.seq_length,
-        num_proc=4,
     )
 
 
