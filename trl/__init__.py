@@ -12,7 +12,16 @@ from .models import (
     PreTrainedModelWrapper,
     create_reference_model,
 )
-from .trainer import DataCollatorForCompletionOnlyLM, DPOTrainer, PPOConfig, PPOTrainer, RewardTrainer, SFTTrainer
+from .trainer import (
+    DataCollatorForCompletionOnlyLM,
+    DPOTrainer,
+    IterativeConfig,
+    IterativeTrainer,
+    PPOConfig,
+    PPOTrainer,
+    RewardTrainer,
+    SFTTrainer,
+)
 
 
 if is_diffusers_available():
