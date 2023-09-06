@@ -1,18 +1,21 @@
 # TRL Benchmark
 
+This is a benchmark for TRL. Here we show the command to run it in a slurm cluster, but it can be easily adapted to run locally.
 
-Benchmark axis:
+There are several benchmark axes we want to explore:
 
 - w/ different models (gpt2, gpt2-xl, falcon, llama2)
     - key research engineering questions
         - how do different model sizes scale?
         - **given that the preference labels come from a source model `M_s` (e.g., gpt2), how does that affect the performance of a target model `M_t` (e.g., falcon, gptj, llama2)?**
             - This is actually an important assumption we have been operating.
-- w/ and w/o gradient accumulation
+- w/ and w/o gradient accumulation / multi-GPU
     - key research engineering question: do we need to whiten advantage across the entire batch?
 - w/ and w/o peft
     - key research engineering question: how well does PEFT work with RL
-- w/ and w/o FSDP
+- w/ and w/o quantization or 4 bits
+    - key research engineering question: how well does quantization work with RL training
+- w/ and w/o deepspeed
     - sanity check to make sure it works.
 - w/ different datasets
     - TRL’s typical imdb sentiment
@@ -21,13 +24,7 @@ Benchmark axis:
     - helpfulness vs harmlessness (https://huggingface.co/datasets/Anthropic/hh-rlhf)
 
 
-accelerate launch --num_processes 2 --multi_gpu  examples/scripts/sentiment_tuning.py --ppo_config.log_with wandb
-
-
-accelerate launch --config_file examples/scripts/config.yaml examples/scripts/sentiment_tuning.py  --ppo_config.log_with wandb
-
-
-## base benchmark
+## Benchmark commands
 
 
 ```bash
@@ -42,15 +39,6 @@ python benchmark/benchmark.py \
     --slurm-ntasks 1 \
     --slurm-total-cpus 12 \
     --slurm-template-path benchmark/trl.slurm_template
-python -m openrlbenchmark.rlops_multi_metrics \
-    --filters '?we=huggingface&wpn=trl&xaxis=_step&ceik=trl_ppo_trainer_config.value.reward_model&cen=trl_ppo_trainer_config.value.exp_name&metrics=env/reward_mean&metrics=objective/kl' \
-        'sentiment_tuning?tag=v0.4.7-55-g110e672&tag=pr-662&cl=sentiment RLHF (PR-662)' \
-    --env-ids sentiment-analysis:lvwerra/distilbert-imdb \
-    --no-check-empty-runs \
-    --pc.ncols 2 \
-    --pc.ncols-legend 1 \
-    --output-filename static/0compare \
-    --scan-history
 ```
 
 ## w/ and w/o gradient accumulation
