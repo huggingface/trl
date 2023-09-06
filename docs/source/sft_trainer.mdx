@@ -238,7 +238,6 @@ trainer = SFTTrainer(
     "facebook/opt-350m",
     train_dataset=dataset,
     dataset_text_field="text",
-    torch_dtype=torch.bfloat16,
 )
 
 trainer.train()
@@ -294,7 +293,6 @@ trainer = SFTTrainer(
     "EleutherAI/gpt-neo-125m",
     train_dataset=dataset,
     dataset_text_field="text",
-    torch_dtype=torch.bfloat16,
     peft_config=peft_config,
     callbacks=callbacks
 )
@@ -327,7 +325,6 @@ trainer = SFTTrainer(
     model,
     train_dataset=dataset,
     dataset_text_field="text",
-    torch_dtype=torch.bfloat16,
     peft_config=peft_config,
 )
 

@@ -17,6 +17,7 @@ from typing import Optional
 
 import torch
 import tyro
+from accelerate import Accelerator
 from datasets import load_dataset
 from peft import LoraConfig
 from tqdm import tqdm
@@ -127,7 +128,8 @@ if not args.use_peft:
 else:
     peft_config = args.peft_config
     ref_model = None
-    device_map = {"": 0}
+    # Copy the model to each device
+    device_map = {"": Accelerator().local_process_index}
 
 model = trl_model_class.from_pretrained(
     args.ppo_config.model_name,

@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import torch
+from accelerate import Accelerator
 from datasets import load_dataset
 from peft import LoraConfig
 from tqdm import tqdm
@@ -75,8 +76,8 @@ elif script_args.load_in_8bit or script_args.load_in_4bit:
     quantization_config = BitsAndBytesConfig(
         load_in_8bit=script_args.load_in_8bit, load_in_4bit=script_args.load_in_4bit
     )
-    # This means: fit the entire model on the GPU:0
-    device_map = {"": 0}
+    # Copy the model to each device
+    device_map = {"": Accelerator().local_process_index}
     torch_dtype = torch.bfloat16
 else:
     device_map = None
