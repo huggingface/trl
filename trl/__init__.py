@@ -19,6 +19,7 @@ from .trainer import (
     IterativeTrainer,
     PPOConfig,
     PPOTrainer,
+    RewardConfig,
     RewardTrainer,
     SFTTrainer,
 )

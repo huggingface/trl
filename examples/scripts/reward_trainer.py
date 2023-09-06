@@ -18,15 +18,9 @@ from typing import Optional
 from datasets import load_dataset
 from peft import LoraConfig
 from tqdm import tqdm
-from transformers import (
-    AutoModelForSequenceClassification,
-    AutoTokenizer,
-    BitsAndBytesConfig,
-    HfArgumentParser,
-    TrainingArguments,
-)
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, BitsAndBytesConfig, HfArgumentParser
 
-from trl import RewardTrainer
+from trl import RewardConfig, RewardTrainer
 
 
 tqdm.pandas()
@@ -142,7 +136,7 @@ else:
 
 
 # Step 3: Define the training arguments
-training_args = TrainingArguments(
+training_args = RewardConfig(
     output_dir=script_args.output_dir,
     per_device_train_batch_size=script_args.batch_size,
     num_train_epochs=script_args.num_train_epochs,
@@ -153,6 +147,7 @@ training_args = TrainingArguments(
     optim="adamw_torch",
     logging_steps=script_args.logging_steps,
     evaluation_strategy="steps" if script_args.eval_split != "none" else "no",
+    max_length=script_args.seq_length,
 )
 
 # Step 4: Define the LoraConfig
@@ -169,7 +164,6 @@ trainer = RewardTrainer(
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
     peft_config=peft_config,
-    max_length=script_args.seq_length,
 )
 
 trainer.train()

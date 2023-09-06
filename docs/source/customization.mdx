@@ -1,22 +1,50 @@
 # Training customization
 
-At `trl` we provide the possibility to give enough modularity to users to be able to efficiently customize the training loop for their needs. Below are some examples on how you can apply and test different techniques.
+TRL is designed with modularity in mind so that users to be able to efficiently customize the training loop for their needs. Below are some examples on how you can apply and test different techniques.
 
-## Run on multiple GPUs / nodes
+## Train on multiple GPUs / nodes
 
-We leverage `accelerate` to enable users to run their training on multiple GPUs or nodes. You should first create your accelerate config by simply running:
+The trainers in TRL use 🤗 Accelerate to enable distributed training across multiple GPUs or nodes. To do so, first create an 🤗 Accelerate config file by running
 
 ```bash
 accelerate config
 ```
 
-Then make sure you have selected multi-gpu / multi-node setup. You can then run your training by simply running:
+and answering the questions according to your multi-gpu / multi-node setup. You can then launch distributed training by running:
 
 ```bash
 accelerate launch your_script.py
 ```
 
-Refer to the [examples page](https://github.com/huggingface/trl/tree/main/examples) for more details
+We also provide config files in the [examples folder](https://github.com/huggingface/trl/tree/main/examples/accelerate_configs) that can be used as templates. To use these templates, simply pass the path to the config file when launching a job, e.g.:
+
+```shell
+accelerate launch --config_file=examples/accelerate_configs/multi_gpu.yaml --num_processes {NUM_GPUS} path_to_script.py --all_arguments_of_the_script
+```
+
+Refer to the [examples page](https://github.com/huggingface/trl/tree/main/examples) for more details.
+
+### Distributed training with DeepSpeed
+
+All of the trainers in TRL can be run on multiple GPUs together with DeepSpeed ZeRO-{1,2,3} for efficient sharding of the optimizer states, gradients, and model weights. To do so, run:
+
+```shell
+accelerate launch --config_file=examples/accelerate_configs/deepspeed_zero{1,2,3}.yaml --num_processes {NUM_GPUS} path_to_your_script.py --all_arguments_of_the_script
+```
+
+Note that for ZeRO-3, a small tweak is needed to initialize your reward model on the correct device via the `zero3_init_context_manager` context manager. Here is an example adapted for the [`sentiment_tuning`](https://github.com/huggingface/trl/blob/main/examples/scripts/sentiment_tuning.py):
+
+```python
+ds_plugin = ppo_trainer.accelerator.state.deepspeed_plugin
+if ds_plugin is not None and ds_plugin.is_zero3_init_enabled():
+    with ds_plugin.zero3_init_context_manager(enable=False):
+        sentiment_pipe = pipeline("sentiment-analysis", model="lvwerra/distilbert-imdb", device=device)
+else:
+    sentiment_pipe = pipeline("sentiment-analysis", model="lvwerra/distilbert-imdb", device=device)
+```
+
+Consult the 🤗 Accelerate [documentation](https://huggingface.co/docs/accelerate/usage_guides/deepspeed) for more information about the DeepSpeed plugin.
+
 
 ## Use different optimizers
 
@@ -167,18 +195,6 @@ When training large models, you should better handle the CUDA cache by iterative
 config = PPOConfig(..., optimize_cuda_cache=True)
 ```
 
-## Use correctly DeepSpeed stage 3:
-
-A small tweak need to be added to your training script to use DeepSpeed stage 3 correctly. You need to properly initialize your reward model on the correct device using the `zero3_init_context_manager` context manager. Here is an example adapted for the `gpt2-sentiment` script:
-
-```python
-ds_plugin = ppo_trainer.accelerator.state.deepspeed_plugin
-if ds_plugin is not None and ds_plugin.is_zero3_init_enabled():
-    with ds_plugin.zero3_init_context_manager(enable=False):
-        sentiment_pipe = pipeline("sentiment-analysis", model="lvwerra/distilbert-imdb", device=device)
-else:
-    sentiment_pipe = pipeline("sentiment-analysis", model="lvwerra/distilbert-imdb", device=device)
-```
 
 
 ## Use score scaling/normalization/clipping
