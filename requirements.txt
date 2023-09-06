@@ -4,4 +4,4 @@ tqdm
 transformers
 accelerate
 peft>=0.3.0
-tryo>=0.5
+tyro>=0.5.7
