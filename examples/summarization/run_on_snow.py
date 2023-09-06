@@ -43,6 +43,8 @@ def accelerate_launch(training_file, training_args_dict, num_gpus=1):
         training_cmd_args.append(f"--{key}")
         if not (isinstance(val, bool) and val is True):
             training_cmd_args.append(str(val))
+
+    print(" ".join(training_cmd_args))
     args = parser.parse_args(training_cmd_args)
     launch.launch_command(args)
 

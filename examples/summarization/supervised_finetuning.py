@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import torch
+from accelerate import Accelerator
 from datasets import load_dataset
 from peft import AutoPeftModelForCausalLM, LoraConfig
 from tqdm import tqdm
@@ -30,22 +31,25 @@ class ScriptArguments:
     The name of the Casual LM model we wish to fine with SFTTrainer
     """
 
-    model_name: Optional[str] = field(default="EleutherAI/pythia-410m-deduped", metadata={"help": "the model name"})
+    model_name: Optional[str] = field(default="EleutherAI/pythia-6.9b-deduped", metadata={"help": "the model name"})
     dataset_name: Optional[str] = field(
         default="CarperAI/openai_summarize_tldr", metadata={"help": "the dataset name"}
     )
     log_with: Optional[str] = field(default="wandb", metadata={"help": "use 'wandb' to log with wandb"})
-    streaming: Optional[bool] = field(default=True, metadata={"help": "whether to stream the dataset"})
+    streaming: Optional[bool] = field(default=False, metadata={"help": "whether to stream the dataset"})
     shuffle_buffer: Optional[int] = field(default=5000, metadata={"help": "the shuffle buffer size"})
 
-    learning_rate: Optional[float] = field(default=1.41e-5, metadata={"help": "the learning rate"})
-    lr_scheduler_type: Optional[str] = field(default=None)
+    learning_rate: Optional[float] = field(default=1e-5, metadata={"help": "the learning rate"})
+    lr_scheduler_type: Optional[str] = field(default="cosine")
     num_warmup_steps: Optional[int] = field(default=100)
     weight_decay: Optional[float] = field(default=0.05)
     optimizer_type: Optional[str] = field(default="paged_adamw_32bit", metadata={"help": "the optimizer type"})
 
+    max_steps: Optional[int] = field(default=-1, metadata={"help": "the number of training steps"})
     num_train_epochs: Optional[int] = field(default=1, metadata={"help": "the number of training epochs"})
-    per_device_train_batch_size: Optional[int] = field(default=4, metadata={"help": "the per device train batch size"})
+    per_device_train_batch_size: Optional[int] = field(
+        default=16, metadata={"help": "the per device train batch size"}
+    )
     per_device_eval_batch_size: Optional[int] = field(default=1, metadata={"help": "the per device eval batch size"})
     seq_length: Optional[int] = field(default=512, metadata={"help": "Input sequence length"})
     gradient_accumulation_steps: Optional[int] = field(
@@ -63,11 +67,12 @@ class ScriptArguments:
     lora_dropout: Optional[float] = field(default=0.05, metadata={"help": "the lora dropout parameter"})
     lora_r: Optional[int] = field(default=8, metadata={"help": "the lora r parameter"})
     trust_remote_code: Optional[bool] = field(default=True, metadata={"help": "Enable `trust_remote_code`"})
-    use_auth_token: Optional[bool] = field(default=True, metadata={"help": "Use HF auth token to access the model"})
+    # use_auth_token: Optional[bool] = field(default=True, metadata={"help": "Use HF auth token to access the model"})
     bf16: Optional[bool] = field(default=True)
 
-    output_dir: Optional[str] = field(default="output", metadata={"help": "the output directory"})
-    logging_steps: Optional[int] = field(default=1, metadata={"help": "the number of logging steps"})
+    output_dir: Optional[str] = field(default="./results", metadata={"help": "the output directory"})
+    log_freq: Optional[int] = field(default=1, metadata={"help": "the logging frequency"})
+    logging_steps: Optional[int] = field(default=10, metadata={"help": "the number of logging steps"})
     eval_steps: Optional[int] = field(default=1000, metadata={"help": "the number of logging steps"})
     save_steps: Optional[int] = field(default=10000, metadata={"help": "the number of logging steps"})
     seed: Optional[int] = field(default=0)
@@ -141,15 +146,12 @@ if __name__ == "__main__":
     set_seed(args.seed)
     os.makedirs(args.output_dir, exist_ok=True)
 
-    logging.set_verbosity_error()
-
     print("Loading the model")
     if args.load_in_8bit and args.load_in_4bit:
         raise ValueError("You can't load the model in 8 bits and 4 bits at the same time")
     elif args.load_in_8bit or args.load_in_4bit:
         quantization_config = BitsAndBytesConfig(load_in_8bit=args.load_in_8bit, load_in_4bit=args.load_in_4bit)
-        # This means: fit the entire model on the GPU:0
-        device_map = {"": 0}
+        device_map = {"": Accelerator().local_process_index}
     else:
         device_map = None
         quantization_config = None
@@ -165,23 +167,44 @@ if __name__ == "__main__":
         device_map=device_map,
         trust_remote_code=args.trust_remote_code,
         torch_dtype=torch_dtype,
-        use_auth_token=args.use_auth_token,
+        token=True,
     )
+    model.config.use_cache = False
 
     print("Loading dataset")
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     train_dataset, eval_dataset = create_datasets(tokenizer, args)
 
+    # training_args = TrainingArguments(
+    #     output_dir=args.output_dir,
+    #     per_device_train_batch_size=args.per_device_train_batch_size,
+    #     gradient_accumulation_steps=args.gradient_accumulation_steps,
+    #     per_device_eval_batch_size=args.per_device_eval_batch_size,
+    #     learning_rate=args.learning_rate,
+    #     logging_steps=args.logging_steps,
+    #     max_steps=args.max_steps,
+    #     report_to=args.log_with,
+    #     eval_steps=args.eval_steps,
+    #     save_steps=args.save_steps,
+    #     lr_scheduler_type=args.lr_scheduler_type,
+    #     warmup_steps=args.num_warmup_steps,
+    #     optim=args.optimizer_type,
+    #     bf16=True,
+    #     remove_unused_columns=False,
+    #     run_name="sft_llama2",
+    # )
+
     training_args = TrainingArguments(
         output_dir=args.output_dir,
+        per_device_train_batch_size=args.per_device_train_batch_size,
+        per_device_eval_batch_size=args.per_device_eval_batch_size,
         dataloader_drop_last=True,
         evaluation_strategy="steps",
-        num_train_epochs=args.num_train_epochs,
+        max_steps=args.max_steps,
+        # num_train_epochs=args.num_train_epochs,
         eval_steps=args.eval_steps,
         save_steps=args.save_steps,
         logging_steps=args.logging_steps,
-        per_device_train_batch_size=args.per_device_train_batch_size,
-        per_device_eval_batch_size=args.per_device_eval_batch_size,
         learning_rate=args.learning_rate,
         lr_scheduler_type=args.lr_scheduler_type,
         warmup_steps=args.num_warmup_steps,
@@ -189,10 +212,12 @@ if __name__ == "__main__":
         gradient_checkpointing=args.gradient_checkpointing,
         bf16=args.bf16,
         weight_decay=args.weight_decay,
-        run_name="summ_ft",
         report_to=args.log_with,
         optim=args.optimizer_type,
-        # ddp_find_unused_parameters=False,
+        remove_unused_columns=False,
+        disable_tqdm=False,
+        # find_unused_params is necessary for grad checkpointing
+        ddp_find_unused_parameters=(not args.gradient_checkpointing),
     )
 
     if args.use_peft:
@@ -200,6 +225,7 @@ if __name__ == "__main__":
             r=args.lora_r,
             lora_alpha=args.lora_alpha,
             lora_dropout=args.lora_dropout,
+            target_modules=["query_key_value"],
             bias="none",
             task_type="CAUSAL_LM",
         )
@@ -234,7 +260,7 @@ if __name__ == "__main__":
     trainer.model.save_pretrained(output_dir)
 
     # Free memory for merging weights
-    del base_model
+    del model
     torch.cuda.empty_cache()
 
     model = AutoPeftModelForCausalLM.from_pretrained(output_dir, device_map="auto", torch_dtype=torch.bfloat16)
