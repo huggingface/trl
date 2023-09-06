@@ -59,7 +59,14 @@ from setuptools import find_packages, setup
 
 __version__ = "0.7.2.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
 
-REQUIRED_PKGS = ["torch>=1.4.0", "transformers>=4.18.0", "numpy>=1.18.2", "accelerate", "datasets", "tryo>=0.5.7"]
+REQUIRED_PKGS = [
+    "torch>=1.4.0",
+    "transformers>=4.18.0",
+    "numpy>=1.18.2",
+    "accelerate",
+    "datasets",
+    "tryo>=0.5.7",
+]
 EXTRAS = {
     "test": ["parameterized", "pytest", "pytest-xdist", "accelerate", "peft>=0.4.0", "diffusers>=0.18.0"],
     "peft": ["peft>=0.4.0"],
