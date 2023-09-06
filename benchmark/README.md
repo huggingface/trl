@@ -41,6 +41,10 @@ python benchmark/benchmark.py \
     --slurm-template-path benchmark/trl.slurm_template
 ```
 
+![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/benchmark/sentiment.png)
+
+
+
 ## w/ and w/o gradient accumulation
 ```
 python benchmark/benchmark.py \
@@ -54,6 +58,9 @@ python benchmark/benchmark.py \
     --slurm-total-cpus 12 \
     --slurm-template-path benchmark/trl.slurm_template
 ```
+
+![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/benchmark/gradient_accu.png)
+
 
 ## w/ different models (gpt2, gpt2-xl, falcon, llama2)
 
@@ -88,21 +95,9 @@ python benchmark/benchmark.py \
     --slurm-ntasks 1 \
     --slurm-total-cpus 12 \
     --slurm-template-path benchmark/trl.slurm_template
-
-# 7b does works with gradient accumulation
-python benchmark/benchmark.py \
-    --command "accelerate launch --num_processes 1 --mixed_precision bf16 examples/scripts/sentiment_tuning.py --ppo_config.exp_name sentiment_tuning_falcon_7b --ppo_config.model_name tiiuae/falcon-7b --ppo_config.mini_batch_size 1 --ppo_config.gradient_accumulation_steps 4 --ppo_config.optimize_cuda_cache --ppo_config.batch_size 4 --ppo_config.log_with wandb" \
-    --num-seeds 5 \
-    --start-seed 1 \
-    --workers 10 \
-    --slurm-nodes 1 \
-    --slurm-gpus-per-task 1 \
-    --slurm-ntasks 1 \
-    --slurm-total-cpus 12 \
-    --slurm-template-path benchmark/trl.slurm_template
 ```
 
-
+![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/benchmark/different_models.png)
 
 ## w/ and w/o PEFT
 ```
@@ -118,17 +113,4 @@ python benchmark/benchmark.py \
     --slurm-template-path benchmark/trl.slurm_template
 ```
 
-## w/ and w/o deepspeed 
-zero2
-```
-python benchmark/benchmark.py \
-    --command "python examples/scripts/sentiment_tuning.py --ppo_config.exp_name sentiment_tuning_step_grad_accu --ppo_config.mini_batch_size 1 --ppo_config.gradient_accumulation_steps 128 --ppo_config.log_with wandb" \
-    --num-seeds 5 \
-    --start-seed 1 \
-    --workers 10 \
-    --slurm-nodes 1 \
-    --slurm-gpus-per-task 1 \
-    --slurm-ntasks 1 \
-    --slurm-total-cpus 12 \
-    --slurm-template-path benchmark/trl.slurm_template
-```
+![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/benchmark/peft.png)
