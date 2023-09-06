@@ -15,6 +15,7 @@
 from dataclasses import dataclass, field
 from typing import Optional
 
+from accelerate import Accelerator
 from datasets import load_dataset
 from peft import LoraConfig
 from tqdm import tqdm
@@ -26,15 +27,14 @@ from trl import RewardConfig, RewardTrainer
 tqdm.pandas()
 
 
-# Define and parse arguments.
 @dataclass
 class ScriptArguments:
     """
-    The name of the Casual LM model we wish to fine with RewardTrainer
+    Hyperparameters to fine-tune a reward model on a given dataset with the `RewardTrainer`.
     """
 
     model_name: Optional[str] = field(default="facebook/opt-350m", metadata={"help": "the model name"})
-    dataset_name: Optional[str] = field(default="Anthropic/hh-rlhf", metadata={"help": "the model name"})
+    dataset_name: Optional[str] = field(default="Anthropic/hh-rlhf", metadata={"help": "the dataset name"})
     dataset_text_field: Optional[str] = field(default="text", metadata={"help": "the text field of the dataset"})
     log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
     logging_steps: Optional[int] = field(default=500, metadata={"help": "the number of update steps between two logs"})
@@ -48,6 +48,7 @@ class ScriptArguments:
     gradient_accumulation_steps: Optional[int] = field(
         default=16, metadata={"help": "the number of gradient accumulation steps"}
     )
+    gradient_checkpointing: Optional[bool] = field(default=True, metadata={"help": "Enable gradient checkpointing"})
     load_in_8bit: Optional[bool] = field(default=False, metadata={"help": "load the model in 8 bits precision"})
     load_in_4bit: Optional[bool] = field(default=False, metadata={"help": "load the model in 4 bits precision"})
     use_peft: Optional[bool] = field(default=False, metadata={"help": "Wether to use PEFT or not to train adapters"})
@@ -65,8 +66,8 @@ elif script_args.load_in_8bit or script_args.load_in_4bit:
     quantization_config = BitsAndBytesConfig(
         load_in_8bit=script_args.load_in_8bit, load_in_4bit=script_args.load_in_4bit
     )
-    # This means: fit the entire model on the GPU:0
-    device_map = {"": 0}
+    # Copy the model to each device
+    device_map = {"": Accelerator().local_process_index}
 else:
     device_map = None
     quantization_config = None
@@ -84,11 +85,8 @@ tokenizer = AutoTokenizer.from_pretrained(script_args.model_name)
 train_dataset = load_dataset(script_args.dataset_name, split="train")
 
 
-# Turn the dataset into pairs of post + summaries, where text_j is the preferred question + answer and text_k is the other.
-# Then tokenize the dataset.
+# Tokenize chosen/rejected pairs of inputs
 # Adapt this section to your needs for custom datasets
-
-
 def preprocess_function(examples):
     new_examples = {
         "input_ids_chosen": [],
@@ -97,18 +95,18 @@ def preprocess_function(examples):
         "attention_mask_rejected": [],
     }
     for chosen, rejected in zip(examples["chosen"], examples["rejected"]):
-        tokenized_j = tokenizer(chosen, truncation=True)
-        tokenized_k = tokenizer(rejected, truncation=True)
+        tokenized_chosen = tokenizer(chosen, truncation=True)
+        tokenized_rejected = tokenizer(rejected, truncation=True)
 
-        new_examples["input_ids_chosen"].append(tokenized_j["input_ids"])
-        new_examples["attention_mask_chosen"].append(tokenized_j["attention_mask"])
-        new_examples["input_ids_rejected"].append(tokenized_k["input_ids"])
-        new_examples["attention_mask_rejected"].append(tokenized_k["attention_mask"])
+        new_examples["input_ids_chosen"].append(tokenized_chosen["input_ids"])
+        new_examples["attention_mask_chosen"].append(tokenized_chosen["attention_mask"])
+        new_examples["input_ids_rejected"].append(tokenized_rejected["input_ids"])
+        new_examples["attention_mask_rejected"].append(tokenized_rejected["attention_mask"])
 
     return new_examples
 
 
-# preprocess the dataset and filter out QAs that are longer than script_args.max_length
+# Preprocess the dataset and filter out examples that are longer than script_args.max_length
 train_dataset = train_dataset.map(
     preprocess_function,
     batched=True,
@@ -141,6 +139,7 @@ training_args = RewardConfig(
     per_device_train_batch_size=script_args.batch_size,
     num_train_epochs=script_args.num_train_epochs,
     gradient_accumulation_steps=script_args.gradient_accumulation_steps,
+    gradient_checkpointing=script_args.gradient_checkpointing,
     learning_rate=script_args.learning_rate,
     report_to="wandb" if script_args.log_with == "wandb" else "tensorboard",
     remove_unused_columns=False,
