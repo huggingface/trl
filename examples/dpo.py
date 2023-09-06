@@ -134,6 +134,9 @@ if __name__ == "__main__":
         gradient_accumulation_steps=script_args.gradient_accumulation_steps,
         learning_rate=script_args.learning_rate,
         evaluation_strategy="steps",
+        logging_first_step=True,
+        logging_steps=10,  # match results in blog post
+        eval_steps=500,
         output_dir="./test",
         report_to=script_args.report_to,
     )
