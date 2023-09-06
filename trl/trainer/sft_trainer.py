@@ -131,6 +131,8 @@ class SFTTrainer(Trainer):
                 "You passed a `DataCollatorForCompletionOnlyLM` to the SFTTrainer. This is not compatible with the `packing` argument."
             )
 
+        supported_classes = (PreTrainedModel,) if not is_peft_available() else (PreTrainedModel, PeftModel)
+
         if is_peft_available() and peft_config is not None:
             if not isinstance(peft_config, PeftConfig):
                 raise ValueError(
@@ -151,7 +153,7 @@ class SFTTrainer(Trainer):
 
             if callbacks is None:
                 callbacks = [PeftSavingCallback]
-        elif not isinstance(model, (PreTrainedModel, PeftModel)):
+        elif not isinstance(model, supported_classes):
             model = AutoModelForCausalLM.from_pretrained(model)
 
         if tokenizer is None:
