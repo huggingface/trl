@@ -472,8 +472,8 @@ class DPOTrainer(Trainer):
 
         # logits for the chosen and rejected samples from model
         logits_dict = {
-            "logits_test/chosen": metrics["logits_test/chosen"],
-            "logits_test/rejected": metrics["logits_test/rejected"],
+            "eval_logits/chosen": metrics["eval_logits/chosen"],
+            "eval_logits/rejected": metrics["eval_logits/rejected"],
         }
         logits = tuple(v for k, v in logits_dict.items() if k not in ignore_keys)
         logits = torch.stack(logits).mean(axis=1)
