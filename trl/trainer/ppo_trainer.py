@@ -605,10 +605,12 @@ class PPOTrainer(BaseTrainer):
         if self.config.use_score_scaling:
             # Score scaling
             scores_mean, scores_std = self.running.update(scores)
+            tensor_to_kwargs = dict(dtype=scores.dtype, device=scores.device)
+            score_scaling_factor = self.running.std.to(**tensor_to_kwargs) + torch.finfo(scores.dtype).eps
             if self.config.use_score_norm:
-                scores = (scores - self.running.mean) / self.running.std
+                scores = (scores - self.running.mean.to(**tensor_to_kwargs)) / score_scaling_factor
             else:
-                scores /= self.running.std
+                scores /= score_scaling_factor
 
         if self.config.score_clip is not None:
             # Score clipping
