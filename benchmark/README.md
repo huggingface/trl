@@ -46,7 +46,7 @@ python benchmark/benchmark.py \
 
 
 ## w/ and w/o gradient accumulation
-```
+```bash
 python benchmark/benchmark.py \
     --command "python examples/scripts/sentiment_tuning.py --ppo_config.exp_name sentiment_tuning_step_grad_accu --ppo_config.mini_batch_size 1 --ppo_config.gradient_accumulation_steps 128 --ppo_config.log_with wandb" \
     --num-seeds 5 \
