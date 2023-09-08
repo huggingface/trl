@@ -1,4 +1,5 @@
 # pip install openrlbenchmark==0.2.1a5
+# see https://github.com/openrlbenchmark/openrlbenchmark#get-started for documentation
 PR_TAG=v0.4.7-55-g110e672
 PR_NAME=PR-662
 
