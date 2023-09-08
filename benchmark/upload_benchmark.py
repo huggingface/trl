@@ -1,5 +1,4 @@
-from dataclasses import dataclass, field
-from typing import List
+from dataclasses import dataclass
 
 import tyro
 from huggingface_hub import HfApi
