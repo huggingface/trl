@@ -41,7 +41,7 @@ python benchmark/benchmark.py \
     --slurm-template-path benchmark/trl.slurm_template
 ```
 
-![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/benchmark/sentiment.png)
+![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/benchmark/v0.4.7-55-g110e672/sentiment.png)
 
 
 
@@ -59,7 +59,7 @@ python benchmark/benchmark.py \
     --slurm-template-path benchmark/trl.slurm_template
 ```
 
-![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/benchmark/gradient_accu.png)
+![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/benchmark/v0.4.7-55-g110e672/gradient_accu.png)
 
 
 ## w/ different models (gpt2, gpt2-xl, falcon, llama2)
@@ -97,7 +97,7 @@ python benchmark/benchmark.py \
     --slurm-template-path benchmark/trl.slurm_template
 ```
 
-![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/benchmark/different_models.png)
+![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/benchmark/v0.4.7-55-g110e672/different_models.png)
 
 ## w/ and w/o PEFT
 ```
@@ -113,4 +113,4 @@ python benchmark/benchmark.py \
     --slurm-template-path benchmark/trl.slurm_template
 ```
 
-![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/benchmark/peft.png)
+![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/benchmark/v0.4.7-55-g110e672/peft.png)

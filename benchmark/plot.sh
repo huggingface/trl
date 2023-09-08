@@ -9,7 +9,7 @@ python -m openrlbenchmark.rlops_multi_metrics \
     --no-check-empty-runs \
     --pc.ncols 2 \
     --pc.ncols-legend 1 \
-    --output-filename benchmark/trl/sentiment \
+    --output-filename benchmark/trl/$PR_TAG/sentiment \
     --scan-history
 
 python -m openrlbenchmark.rlops_multi_metrics \
@@ -20,7 +20,7 @@ python -m openrlbenchmark.rlops_multi_metrics \
     --no-check-empty-runs \
     --pc.ncols 2 \
     --pc.ncols-legend 1 \
-    --output-filename benchmark/trl/gradient_accu \
+    --output-filename benchmark/trl/$PR_TAG/gradient_accu \
     --scan-history
 
 python -m openrlbenchmark.rlops_multi_metrics \
@@ -33,7 +33,7 @@ python -m openrlbenchmark.rlops_multi_metrics \
     --no-check-empty-runs \
     --pc.ncols 2 \
     --pc.ncols-legend 1 \
-    --output-filename benchmark/trl/different_models \
+    --output-filename benchmark/trl/$PR_TAG/different_models \
     --scan-history
 
 python -m openrlbenchmark.rlops_multi_metrics \
@@ -44,7 +44,12 @@ python -m openrlbenchmark.rlops_multi_metrics \
     --no-check-empty-runs \
     --pc.ncols 2 \
     --pc.ncols-legend 1 \
-    --output-filename benchmark/trl/peft \
+    --output-filename benchmark/trl/$PR_TAG/peft \
     --scan-history
 
-python benchmark/upload_benchmark.py
+
+python benchmark/upload_benchmark.py \
+    --folder_path="benchmark/trl/$PR_TAG" \
+    --path_in_repo="images/benchmark/$PR_TAG" \
+    --repo_id="trl-internal-testing/example-images" \
+    --repo_type="dataset"
