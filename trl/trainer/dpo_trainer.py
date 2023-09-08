@@ -227,7 +227,7 @@ class DPOTrainer(Trainer):
         else:
             if self.is_deepspeed_enabled:
                 # Read more about the issue in https://github.com/huggingface/trl/pull/687
-                self.ref_model = self.accelerator._prepare_deepspeed(self.ref_model)
+                self.ref_model = self.accelerator._prepare_deepspeed(self.ref_model)[0]
                 self.ref_model.eval()
             else:
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
