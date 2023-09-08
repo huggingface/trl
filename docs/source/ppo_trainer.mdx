@@ -1,16 +1,16 @@
 # PPO Trainer
 
-TRL supports the PPO Trainer for training language models from preference data using a Reward Model, as described in the paper [Proximal Policy Optimization Algorithms](https://arxiv.org/abs/1707.06347) by Schulman et al., 2017. For a full example have a look at [`examples/notebooks/gpt2-sentiment.ipynb`](https://github.com/lvwerra/trl/blob/main/examples/notebooks/gpt2-sentiment.ipynb). It is also fair to mention that this trainer is heavily inspired by the original [OpenAI learning to summarize work](https://github.com/openai/summarize-from-feedback).
+TRL supports the [PPO](https://arxiv.org/abs/1707.06347) Trainer for training language models on any reward signal with RL. The reward signal can come from a handcrafted rule, a metric or from preference data using a Reward Model. For a full example have a look at [`examples/notebooks/gpt2-sentiment.ipynb`](https://github.com/lvwerra/trl/blob/main/examples/notebooks/gpt2-sentiment.ipynb). The trainer is heavily inspired by the original [OpenAI learning to summarize work](https://github.com/openai/summarize-from-feedback).
 
-The first step as always is to [train your SFT model](https://huggingface.co/docs/trl/main/en/sft_trainer), to ensure the data we train on is in-distribution for the PPO algorithm. We then need to [train a Reward model](https://huggingface.co/docs/trl/main/en/reward_trainer) which will be used to optimize the SFT model using the PPO algorithm.
+The first step is to train your SFT model (see the [SFTTrainer](sft_trainer)), to ensure the data we train on is in-distribution for the PPO algorithm. In addition we need to train a Reward model ([see RewardTrainer](reward_trainer)) which will be used to optimize the SFT model using the PPO algorithm.
 
 ## Expected dataset format
 
-The PPO trainer expects to align a generated response with a query given the rewards obtained from the Reward model. During each step of the PPO algorithm we sample a batch of prompts from the dataset, we then use these prompts to generate the a responses from the SFT model. Next, the Reward model is used to calculate the rewards for the generated response. Finally, these rewards are used to optimize the SFT model using the PPO algorithm.
+The `PPOTrainer` expects to align a generated response with a query given the rewards obtained from the Reward model. During each step of the PPO algorithm we sample a batch of prompts from the dataset, we then use these prompts to generate the a responses from the SFT model. Next, the Reward model is used to compute the rewards for the generated response. Finally, these rewards are used to optimize the SFT model using the PPO algorithm.
 
-Therefore the dataset object should contain `query`. Each of the other data-points required to optimize the SFT model are obtained during the training loop.
+Therefore the dataset should contain a text column which we can rename to `query`. Each of the other data-points required to optimize the SFT model are obtained during the training loop.
 
-We provide an example from the [HuggingFaceH4/cherry_picked_prompts](https://huggingface.co/datasets/HuggingFaceH4/cherry_picked_prompts) dataset below:
+Here is an example with the [HuggingFaceH4/cherry_picked_prompts](https://huggingface.co/datasets/HuggingFaceH4/cherry_picked_prompts) dataset:
 
 ```py
 from datasets import load_dataset
@@ -36,11 +36,11 @@ ppo_dataset_dict = {
 
 ## Using the `PPOTrainer`
 
-For a detailed example have a look at the [`examples/notebooks/gpt2-sentiment.ipynb`](https://github.com/lvwerra/trl/blob/main/examples/notebooks/gpt2-sentiment.ipynb) script. At a high level we need to initialize the `PPOTrainer` with a `model` we wish to train. Additionally, we require a reference `reward_model` which we will use to calculate the implicit rewards of the generated response:
+For a detailed example have a look at the [`examples/notebooks/gpt2-sentiment.ipynb`](https://github.com/lvwerra/trl/blob/main/examples/notebooks/gpt2-sentiment.ipynb) notebook. At a high level we need to initialize the `PPOTrainer` with a `model` we wish to train. Additionally, we require a reference `reward_model` which we will use to rate the generated response:
 
 ### Initializing the `PPOTrainer`
 
-The `PPOConfig`, which is a dataclass, contains all the hyperparameters for the PPO algorithm and trainer.
+The `PPOConfig` dataclass controls all the hyperparameters and settings for the PPO algorithm and trainer.
 
 ```py
 from trl import PPOConfig
@@ -65,7 +65,7 @@ tokenizer = AutoTokenizer.from_pretrained(config.model_name)
 tokenizer.pad_token = tokenizer.eos_token
 ```
 
-The Reward model can be initialized as using `transformers.pipeline`:
+As mentioned above, the reward can be generated using any function that returns a single value for a string, be it a simple rule (e.g. length of string), a metric (e.g. BLEU), or a reward model based on human preferences. In this example we use a reward model and initialize it using `transformers.pipeline` for ease of use:
 
 ```py
 from transformers import pipeline
@@ -73,7 +73,7 @@ from transformers import pipeline
 reward_model = pipeline("text-classification", model="lvwerra/distilbert-imdb")
 ```
 
-Lastly, we want to pretokenize our dataset using the `tokenizer` to ensure we can efficiently generate responses during the training loop:
+Lastly, we pretokenize our dataset using the `tokenizer` to ensure we can efficiently generate responses during the training loop:
 
 ```py
 def tokenize(sample):
@@ -83,7 +83,7 @@ def tokenize(sample):
 dataset = dataset.map(tokenize, batched=False)
 ```
 
-Next, we can initialize the `PPOTrainer` using the defined config and models:
+Now we are ready to initialize the `PPOTrainer` using the defined config, datasets, and model:
 
 ```py
 from trl import PPOConfig, PPOTrainer,
