@@ -7,7 +7,6 @@ from huggingface_hub import HfApi
 
 @dataclass
 class Args:
-    tags: List[str] = field(default_factory=lambda: ["no-tag-1-gb906f3d"])
     folder_path: str = "benchmark/trl"
     path_in_repo: str = "images/benchmark"
     repo_id: str = "trl-internal-testing/example-images"
