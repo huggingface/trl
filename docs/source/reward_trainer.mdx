@@ -1,6 +1,6 @@
 # Reward Modeling
 
-TRL supports custom reward modeling for anyone to perform reward modeling on their dataset and model. 
+TRL supports custom reward modeling for anyone to perform reward modeling on their dataset and model.
 
 Check out a complete flexible example inside [`examples/scripts`](https://github.com/huggingface/trl/tree/main/examples/scripts/reward_trainer.py) folder.
 
@@ -14,16 +14,16 @@ The reward trainer expects a very specific format for the dataset. Since the mod
 
 Therefore the final dataset object should contain two 4 entries at least if you use the default `RewardDataCollatorWithPadding` data collator. The entries should be named:
 
-- `input_ids_chosen`
-- `attention_mask_chosen`
-- `input_ids_rejected`
-- `attention_mask_rejected`
+-   `input_ids_chosen`
+-   `attention_mask_chosen`
+-   `input_ids_rejected`
+-   `attention_mask_rejected`
 
 The `j` and `k` suffixes are used to denote the two sentences in the paired dataset.
 
 ## Using the `RewardTrainer`
 
-After standardizing your dataset, you can use the `RewardTrainer` as a classic Hugging Face Trainer. 
+After standardizing your dataset, you can use the `RewardTrainer` as a classic Hugging Face Trainer.
 You should pass an `AutoModelForSequenceClassification` model to the `RewardTrainer`.
 
 ### Leveraging the `peft` library to train a reward model
@@ -56,6 +56,18 @@ trainer = RewardTrainer(
 
 trainer.train()
 
+```
+
+### Adding a margin to the loss
+
+As in the LLAMA-2 paper, you can add a margin to the loss by adding a `margin` entry to the dataset. The reward collator will automatically pass it through and the loss will be computed accordingly.
+
+```python
+def add_margin(row):
+    # Assume you have a score_chosen and score_rejected columns that you want to use to compute the margin
+    return {'margin': row['score_chosen'] - row['score_rejected']}
+
+dataset = dataset.map(add_margin)
 ```
 
 ## RewardTrainer
