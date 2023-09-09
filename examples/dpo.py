@@ -28,6 +28,9 @@ class ScriptArguments:
     )
     max_length: Optional[int] = field(default=512, metadata={"help": "max length of each sample"})
     max_prompt_length: Optional[int] = field(default=128, metadata={"help": "max length of each sample's prompt"})
+    max_target_length: Optional[int] = field(
+        default=128, metadata={"help": "Only used for encoder decoder model. Max target of each sample's prompt"}
+    )
     label_pad_token_id: Optional[int] = field(default=-100, metadata={"help": "label for non response tokens"})
     max_steps: Optional[int] = field(default=1000, metadata={"help": "max number of training steps"})
     # instrumentation
@@ -103,7 +106,8 @@ if __name__ == "__main__":
     model_ref = AutoModelForCausalLM.from_pretrained(script_args.model_name_or_path)
 
     tokenizer = AutoTokenizer.from_pretrained(script_args.model_name_or_path)
-    tokenizer.pad_token = tokenizer.eos_token
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
 
     # 2. Load the Anthropic Helpful-Harmless dataset
     train_dataset = get_hh("train", sanity_check=script_args.sanity_check)
@@ -132,6 +136,9 @@ if __name__ == "__main__":
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         tokenizer=tokenizer,
+        max_length=script_args.max_length,
+        max_target_length=script_args.max_target_length,
+        max_prompt_length=script_args.max_prompt_length,
     )
 
     # 6. train

@@ -16,9 +16,13 @@ import unittest
 
 import torch
 from datasets import Dataset
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, EvalPrediction, TrainingArguments
+from transformers import (
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+    EvalPrediction,
+)
 
-from trl import RewardTrainer
+from trl import RewardConfig, RewardTrainer
 from trl.trainer import compute_accuracy
 
 from .testing_utils import require_peft
@@ -39,7 +43,7 @@ class RewardTrainerTester(unittest.TestCase):
 
     def test_reward_trainer(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = RewardConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -119,7 +123,7 @@ class RewardTrainerTester(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = RewardConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=6,
@@ -199,7 +203,7 @@ class RewardTrainerTester(unittest.TestCase):
 
     def test_reward_trainer_assert_value_error(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = RewardConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=1,
@@ -246,7 +250,7 @@ class RewardTrainerTester(unittest.TestCase):
             with self.assertRaises(ValueError):
                 trainer.train()
 
-            training_args = TrainingArguments(
+            training_args = RewardConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=1,
@@ -263,7 +267,7 @@ class RewardTrainerTester(unittest.TestCase):
 
     def test_reward_trainer_margin(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = RewardConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
