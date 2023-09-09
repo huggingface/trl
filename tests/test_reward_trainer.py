@@ -16,11 +16,7 @@ import unittest
 
 import torch
 from datasets import Dataset
-from transformers import (
-    AutoModelForSequenceClassification,
-    AutoTokenizer,
-    EvalPrediction,
-)
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, EvalPrediction
 
 from trl import RewardConfig, RewardTrainer
 from trl.trainer import compute_accuracy
