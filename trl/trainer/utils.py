@@ -85,11 +85,17 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
         self.instruction_template = instruction_template
         self.response_template = response_template
         self.ignore_index = ignore_index
+        if type(instruction_template) == list:
+            # The user already provides the token ids
+            self.instruction_template = response_template
+        else:
+            self.instruction_template = self.tokenizer.encode(self.instruction_template, add_special_tokens=False)
         if type(response_template) == list:
             # The user already provides the token ids
             self.response_token_ids = response_template
         else:
             self.response_token_ids = self.tokenizer.encode(self.response_template, add_special_tokens=False)
+        
 
     def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
         batch = super().torch_call(examples)
