@@ -32,6 +32,7 @@ class ScriptArguments:
     """
 
     model_name: Optional[str] = field(default="EleutherAI/pythia-6.9b-deduped", metadata={"help": "the model name"})
+    tokenizer_name: Optional[str] = field(default=None, metadata={"help": "the model name"})
     dataset_name: Optional[str] = field(
         default="CarperAI/openai_summarize_tldr", metadata={"help": "the dataset name"}
     )
@@ -76,6 +77,7 @@ class ScriptArguments:
     eval_steps: Optional[int] = field(default=1000, metadata={"help": "the number of logging steps"})
     save_steps: Optional[int] = field(default=10000, metadata={"help": "the number of logging steps"})
     seed: Optional[int] = field(default=0)
+    just_eval: Optional[bool] = field(default=False, metadata={"help": "whether to use gradient checkpointing"})
 
 
 def chars_token_ratio(dataset, tokenizer, nb_examples=400):
@@ -172,7 +174,10 @@ if __name__ == "__main__":
     model.config.use_cache = False
 
     print("Loading dataset")
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
+    print(args.tokenizer_name)
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name if args.tokenizer_name is None else args.tokenizer_name)
+    if getattr(tokenizer, "pad_token", None) is None:
+        tokenizer.pad_token = tokenizer.eos_token
     train_dataset, eval_dataset = create_datasets(tokenizer, args)
 
     # training_args = TrainingArguments(
@@ -239,6 +244,7 @@ if __name__ == "__main__":
     # TODO maybe switch to DataCollatorForCompletionOnlyLM
     trainer = SFTTrainer(
         model=model,
+        tokenizer=tokenizer,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
@@ -250,21 +256,24 @@ if __name__ == "__main__":
     if args.use_peft:
         trainer.model.print_trainable_parameters()
 
-    print("Training...")
-    trainer.train()
+    if args.just_eval:
+        trainer.evaluate()
+    else:
+        print("Training...")
+        trainer.train()
 
-    print("Saving last checkpoint of the model")
-    trainer.save_model(args.output_dir)
+        print("Saving last checkpoint of the model")
+        trainer.save_model(args.output_dir)
 
-    output_dir = os.path.join(args.output_dir, "final_checkpoint")
-    trainer.model.save_pretrained(output_dir)
+        output_dir = os.path.join(args.output_dir, "final_checkpoint")
+        trainer.model.save_pretrained(output_dir)
 
-    # Free memory for merging weights
-    del model
-    torch.cuda.empty_cache()
+        # Free memory for merging weights
+        del model
+        torch.cuda.empty_cache()
 
-    model = AutoPeftModelForCausalLM.from_pretrained(output_dir, device_map="auto", torch_dtype=torch.bfloat16)
-    model = model.merge_and_unload()
+        model = AutoPeftModelForCausalLM.from_pretrained(output_dir, device_map="auto", torch_dtype=torch.bfloat16)
+        model = model.merge_and_unload()
 
-    output_merged_dir = os.path.join(args.output_dir, "final_merged_checkpoint")
-    model.save_pretrained(output_merged_dir, safe_serialization=True)
+        output_merged_dir = os.path.join(args.output_dir, "final_merged_checkpoint")
+        model.save_pretrained(output_merged_dir, safe_serialization=True)
