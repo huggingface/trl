@@ -27,6 +27,8 @@ def run_exp(exp_dict, savedir, args):
         accelerate_launch("reward_modeling.py", exp_dict, args.gpus)
     elif exp_name.startswith("sft"):
         accelerate_launch("supervised_finetuning.py", exp_dict, args.gpus)
+    elif exp_name.startswith("rouge"):
+        accelerate_launch("evaluate_rouge.py", exp_dict, args.gpus)
     else:
         raise Exception(f"Config file {exp_name} does not start with one of the correct prefixes")
 
@@ -127,7 +129,7 @@ if __name__ == "__main__":
             "restartable": True,
             "resources": {
                 "cpu": 2 * args.gpus,
-                "mem": 32 * args.gpus,
+                "mem": 64 * args.gpus,
                 "gpu_mem": args.gpu_mem,
                 "gpu": args.gpus,
             },
