@@ -297,7 +297,6 @@ class DPODataCollatorWithPadding:
             the sum of the length of the prompt and the chosen/rejected response, with
             label_pad_token_id  for the prompt tokens.
         """
-
         batch = {}
 
         if not self.is_encoder_decoder:
@@ -305,16 +304,29 @@ class DPODataCollatorWithPadding:
             rejected_tokens = self.tokenizer(rejected, add_special_tokens=False)
             prompt_tokens = self.tokenizer(prompt, add_special_tokens=False)
 
-            assert (
-                self.tokenizer.eos_token_id not in prompt_tokens["input_ids"]
-            ), f"Prompt contains EOS token: {prompt}"
-            assert (
-                self.tokenizer.eos_token_id not in chosen_tokens["input_ids"]
-            ), f"Chosen response contains EOS token: {chosen}"
-            assert (
-                self.tokenizer.eos_token_id not in rejected_tokens["input_ids"]
-            ), f"Rejected response contains EOS token: {rejected}"
+            eos_token_id = self.tokenizer.eos_token_id
+            # Get indices in list prompt_tokens["input_ids"] that equals the EOS token (often 0)
+            eos_indices_prompt = [i for i, x in enumerate(prompt_tokens["input_ids"]) if x == eos_token_id]
+            # attention mask these indices to eos_token_id
+            new_attention_mask = [
+                0 if i in eos_indices_prompt else p for i, p in enumerate(prompt_tokens["attention_mask"])
+            ]
+            prompt_tokens["attention_mask"] = new_attention_mask
 
+            # do the same for chosen and rejected
+            eos_indices_chosen = [i for i, x in enumerate(chosen_tokens["input_ids"]) if x == eos_token_id]
+            new_attention_mask_c = [
+                0 if i in eos_indices_chosen else p for i, p in enumerate(chosen_tokens["attention_mask"])
+            ]
+            chosen_tokens["attention_mask"] = new_attention_mask_c
+
+            eos_indices_rejected = [i for i, x in enumerate(rejected_tokens["input_ids"]) if x == eos_token_id]
+            new_attention_mask_r = [
+                0 if i in eos_indices_rejected else p for i, p in enumerate(rejected_tokens["attention_mask"])
+            ]
+            rejected_tokens["attention_mask"] = new_attention_mask_r
+
+            # add EOS token to end of prompt
             chosen_tokens["input_ids"].append(self.tokenizer.eos_token_id)
             chosen_tokens["attention_mask"].append(1)
 
