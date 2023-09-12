@@ -61,13 +61,14 @@ def autotag() -> str:
         print(f"identified git tag: {git_tag}")
     except subprocess.CalledProcessError as e:
         print(e)
-    try:
-        count = int(subprocess.check_output(["git", "rev-list", "--count", "HEAD"]).decode("ascii").strip())
-        hash = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).decode("ascii").strip()
-        git_tag = f"no-tag-{count}-g{hash}"
-        print(f"identified git tag: {git_tag}")
-    except subprocess.CalledProcessError as e:
-        print(e)
+    if len(git_tag) == 0:
+        try:
+            count = int(subprocess.check_output(["git", "rev-list", "--count", "HEAD"]).decode("ascii").strip())
+            hash = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).decode("ascii").strip()
+            git_tag = f"no-tag-{count}-g{hash}"
+            print(f"identified git tag: {git_tag}")
+        except subprocess.CalledProcessError as e:
+            print(e)
     wandb_tag = f"{git_tag}"
 
     git_commit = subprocess.check_output(["git", "rev-parse", "--verify", "HEAD"]).decode("ascii").strip()
