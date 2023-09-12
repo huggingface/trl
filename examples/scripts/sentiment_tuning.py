@@ -38,7 +38,9 @@ class ScriptArguments:
     # NOTE: gpt2 models use Conv1D instead of Linear layers which are not yet supported in 8 bit mode
     # models like gpt-neo* models are more suitable.
     model_name: Optional[str] = field(default="lvwerra/gpt2-imdb", metadata={"help": "the model name"})
-    reward_model_name: Optional[str] = field(default="lvwerra/distilbert-imdb", metadata={"help": "the reward model name"})
+    reward_model_name: Optional[str] = field(
+        default="lvwerra/distilbert-imdb", metadata={"help": "the reward model name"}
+    )
     log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
     learning_rate: Optional[float] = field(default=1.41e-5, metadata={"help": "the learning rate"})
     mini_batch_size: Optional[int] = field(default=128, metadata={"help": "the PPO minibatch size"})
@@ -163,9 +165,8 @@ model = trl_model_class.from_pretrained(
 
 tokenizer = AutoTokenizer.from_pretrained(config.model_name)
 
-# GPT-2 tokenizer has a pad token, but it is not eos_token by default. We need to set it to eos_token.
-# only for this model.
-tokenizer.pad_token = tokenizer.eos_token
+# Some tokenizers like GPT-2's don't have a padding token by default, so we set one here.
+tokenizer.pad_token_id = tokenizer.eos_token_id
 
 # We then build the PPOTrainer, passing the model, the reference model, the tokenizer
 ppo_trainer = PPOTrainer(config, model, ref_model, tokenizer, dataset=dataset, data_collator=collator)
@@ -178,6 +179,12 @@ if ppo_trainer.accelerator.num_processes == 1:
     device = 0 if torch.cuda.is_available() else "cpu"  # to avoid a `pipeline` bug
 sentiment_pipe = pipeline("sentiment-analysis", model=script_args.reward_model_name, device=device)
 
+# Some tokenizers like GPT-2's don't have a padding token by default, so we set one here.
+if sentiment_pipe.tokenizer.pad_token_id is None:
+    sentiment_pipe.tokenizer.pad_token_id = tokenizer.pad_token_id
+
+if sentiment_pipe.model.config.pad_token_id is None:
+    sentiment_pipe.model.config.pad_token_id = tokenizer.pad_token_id
 
 # We then define the arguments to pass to the `generate` function. These arguments
 # are passed to the `generate` function of the PPOTrainer, which is a wrapper around

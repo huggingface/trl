@@ -1407,7 +1407,7 @@ class PPOTrainer(BaseTrainer):
                     )
 
         # If ZeRO-3 is used, we shard both the active and reference model.
-        # Otherwise, we assume the reference model fits in memory and is copied to each device with ZeRO-0
+        # Otherwise, we assume the reference model fits in memory and is initialized on each device with ZeRO-0
         if config_kwargs["zero_optimization"]["stage"] != 3:
             config_kwargs["zero_optimization"]["stage"] = 0
         model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
