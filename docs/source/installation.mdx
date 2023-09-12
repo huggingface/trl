@@ -1,14 +1,29 @@
 # Installation
-You can install TRL either from pypi or from source:
+You can install TRL either from PyPI or from source:
 
-## pypi
+## PyPI
+
 Install the library with pip:
 
 ```bash
 pip install trl
 ```
 
-### Source
+If you want to train models with 🤗 PEFT, 🤗 Diffusers, or DeepSpeed, install the additional dependencies as follows:
+
+```shell
+# Install PEFT dependencies
+pip install trl[peft]
+
+# Install diffusers dependencies
+pip install trl[diffusers]
+
+# Install DeepSpeed dependencies
+pip install trl[deepspeed]
+```
+
+## Source
+
 You can also install the latest version from source. First clone the repo and then run the installation with `pip`:
 
 ```bash
