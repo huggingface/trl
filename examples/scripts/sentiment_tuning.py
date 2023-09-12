@@ -177,7 +177,13 @@ ppo_trainer = PPOTrainer(config, model, ref_model, tokenizer, dataset=dataset, d
 device = ppo_trainer.accelerator.device
 if ppo_trainer.accelerator.num_processes == 1:
     device = 0 if torch.cuda.is_available() else "cpu"  # to avoid a `pipeline` bug
-sentiment_pipe = pipeline("sentiment-analysis", model=script_args.reward_model_name, device=device)
+ds_plugin = ppo_trainer.accelerator.state.deepspeed_plugin
+if ds_plugin is not None and ds_plugin.is_zero3_init_enabled():
+    with ds_plugin.zero3_init_context_manager(enable=False):
+        print("pipe with ds")
+        sentiment_pipe = pipeline("sentiment-analysis", model=script_args.reward_model_name, device=device)
+else:
+    sentiment_pipe = pipeline("sentiment-analysis", model=script_args.reward_model_name, device=device)
 
 # Some tokenizers like GPT-2's don't have a padding token by default, so we set one here.
 if sentiment_pipe.tokenizer.pad_token_id is None:
