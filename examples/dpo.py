@@ -1,3 +1,18 @@
+# coding=utf-8
+# Copyright 2023 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # 0. imports
 from dataclasses import dataclass, field
 from typing import Dict, Optional
@@ -123,6 +138,9 @@ if __name__ == "__main__":
         gradient_accumulation_steps=script_args.gradient_accumulation_steps,
         learning_rate=script_args.learning_rate,
         evaluation_strategy="steps",
+        logging_first_step=True,
+        logging_steps=10,  # match results in blog post
+        eval_steps=500,
         output_dir="./test",
         report_to=script_args.report_to,
     )
