@@ -315,10 +315,7 @@ class PPOTrainer(BaseTrainer):
             ):
                 # If ZeRO-3 is used, we shard both the active and reference model.
                 # Otherwise, we assume the reference model fits in memory and is copied to each device.
-                if self.accelerator.state.deepspeed_plugin.zero_stage == 3:
-                    self.ref_model = self._prepare_deepspeed_zero3(self.ref_model)
-                else:
-                    self.ref_model = self.ref_model.to(self.accelerator.device)
+                self.ref_model = self._prepare_deepspeed(self.ref_model)
         else:
             self.ref_model = self.accelerator.prepare(self.ref_model)
 
@@ -1389,7 +1386,7 @@ class PPOTrainer(BaseTrainer):
                 text.append(" ")
         print(text)
 
-    def _prepare_deepspeed_zero3(self, model: PreTrainedModelWrapper):
+    def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
         # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
         # TODO: figure out if any other parameters are needed to optimize inference
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
