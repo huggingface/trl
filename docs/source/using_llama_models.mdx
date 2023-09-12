@@ -52,7 +52,7 @@ model = AutoModelForCausalLM.from_pretrained(
         load_in_8bit=True,
         device_map={"": Accelerator().local_process_index}
     )
-model = prepare_model_for_int8_training(model)
+model = prepare_model_for_kbit_training(model)
 
 # add LoRA to model
 lora_config = LoraConfig(
