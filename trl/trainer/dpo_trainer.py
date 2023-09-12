@@ -29,7 +29,7 @@ from .utils import DPODataCollatorWithPadding, disable_dropout_in_model, pad_to_
 
 
 if is_peft_available():
-    from peft import PeftModel, get_peft_model, prepare_model_for_int8_training
+    from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
 
 
 class DPOTrainer(Trainer):
@@ -116,7 +116,7 @@ class DPOTrainer(Trainer):
             )
         elif is_peft_available() and peft_config is not None:
             if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
-                model = prepare_model_for_int8_training(model)
+                model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=args.gradient_checkpointing)
             model = get_peft_model(model, peft_config)
 
         if model is not None:
