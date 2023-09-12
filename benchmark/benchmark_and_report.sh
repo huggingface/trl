@@ -1,3 +1,7 @@
+echo PATH is $PATH
+echo PYTHONPATH is $PYTHONPATH
+echo whcih python is $(which python)
+
 bash benchmark/benchmark_core.sh > output.txt
 
 # Extract Job IDs into an array
