@@ -17,7 +17,7 @@ host_url = f"https://huggingface.co/datasets/trl-internal-testing/example-images
 # Create a GitHub API instance
 github_context = json.loads(os.environ['GITHUB_CONTEXT'])
 token = os.environ["PERSONAL_ACCESS_TOKEN_GITHUB"] # this needs to refreshed every 12 months
-status_message = f"**[COSTA BENCHMARK BOT]**: Here are the benchmark results"
+status_message = f"**[COSTA BENCHMARK BOT]**: Here are the results"
 body = status_message 
 repo = github_context["repository"]
 owner, repo = repo.split("/")
