@@ -180,7 +180,6 @@ if ppo_trainer.accelerator.num_processes == 1:
 ds_plugin = ppo_trainer.accelerator.state.deepspeed_plugin
 if ds_plugin is not None and ds_plugin.is_zero3_init_enabled():
     with ds_plugin.zero3_init_context_manager(enable=False):
-        print("pipe with ds")
         sentiment_pipe = pipeline("sentiment-analysis", model=script_args.reward_model_name, device=device)
 else:
     sentiment_pipe = pipeline("sentiment-analysis", model=script_args.reward_model_name, device=device)
