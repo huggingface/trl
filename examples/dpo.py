@@ -145,6 +145,13 @@ if __name__ == "__main__":
         report_to=script_args.report_to,
     )
 
+    # Trainer to match original paper
+    warmup_steps = 150
+    optimizer = torch.optim.RMSprop(model.parameters(), lr=training_args.learning_rate)
+    scheduler = torch.optim.lr_scheduler.LambdaLR(
+        optimizer, lr_lambda=lambda step: min(1.0, (step + 1) / (warmup_steps + 1))
+    )
+
     # 5. initialize the DPO trainer
     dpo_trainer = DPOTrainer(
         model,
@@ -157,6 +164,7 @@ if __name__ == "__main__":
         max_length=script_args.max_length,
         max_target_length=script_args.max_target_length,
         max_prompt_length=script_args.max_prompt_length,
+        optimizers=(optimizer, scheduler),
     )
 
     # 6. train
