@@ -554,9 +554,11 @@ class ConstantLengthDataset(IterableDataset):
                 random.shuffle(examples)
             for example in examples:
                 self.current_size += 1
+                input_example = example[:-1]
+                label_example = example[1:]
                 yield {
-                    "input_ids": torch.LongTensor(example),
-                    "labels": torch.LongTensor(example),
+                    "input_ids": torch.LongTensor(input_example),
+                    "labels": torch.LongTensor(label_example),
                 }
 
 
