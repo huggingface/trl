@@ -68,7 +68,7 @@ REQUIRED_PKGS = [
     "tyro>=0.5.7",
 ]
 EXTRAS = {
-    "test": ["parameterized", "pytest", "pytest-xdist", "accelerate", "peft>=0.4.0", "diffusers>=0.18.0", "wandb", "sqlalchemy<2.0.20", "ghapi"],
+    "test": ["parameterized", "pytest", "pytest-xdist", "accelerate", "peft>=0.4.0", "diffusers>=0.18.0", "wandb", "sqlalchemy<2", "ghapi"],
     "peft": ["peft>=0.4.0"],
     "diffusers": ["diffusers>=0.18.0"],
     "dev": ["parameterized", "pytest", "pytest-xdist", "pre-commit", "peft>=0.4.0", "diffusers>=0.18.0"],
