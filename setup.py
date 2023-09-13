@@ -68,21 +68,12 @@ REQUIRED_PKGS = [
     "tyro>=0.5.7",
 ]
 EXTRAS = {
-    "test": [
-        "parameterized",
-        "pytest",
-        "pytest-xdist",
-        "accelerate",
-        "peft>=0.4.0",
-        "diffusers>=0.18.0",
-        "wandb",
-        "ghapi",
-        "openrlbenchmark==0.2.1a5",
-    ],
+    "test": ["parameterized", "pytest", "pytest-xdist", "accelerate", "peft>=0.4.0", "diffusers>=0.18.0"],
     "peft": ["peft>=0.4.0"],
     "diffusers": ["diffusers>=0.18.0"],
     "deepspeed": ["deepspeed>=0.9.5"],
     "dev": ["parameterized", "pytest", "pytest-xdist", "pre-commit", "peft>=0.4.0", "diffusers>=0.18.0"],
+    "benchmark": ["wandb", "ghapi", "openrlbenchmark==0.2.1a5"],
 }
 
 setup(
