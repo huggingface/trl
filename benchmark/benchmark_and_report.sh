@@ -1,9 +1,20 @@
+#### Step 1: create a work directory:
+# this is necessary because another github action job will remove
+# the entire directory, which slurm depends on.
+# https://stackoverflow.com/questions/4632028/how-to-create-a-temporary-directory
+MY_SLURM_TMP_DIR=/fsx/costa/slurm_tmpdir
+mkdir -p $MY_SLURM_TMP_DIR
+WORK_DIR=`mktemp -d -p "$MY_SLURM_TMP_DIR"`
+cp -r "$PWD" "$WORK_DIR"
+cd "$WORK_DIR/$(basename "$PWD")"
+echo WORK_DIR: $WORK_DIR
+
+#### Step 2: actual work starts:
 echo PATH is $PATH
 echo PYTHONPATH is $PYTHONPATH
 echo whcih python is $(which python)
 
 export WANDB_ENTITY=huggingface
-
 bash benchmark/benchmark_core.sh > output.txt
 
 # Extract Job IDs into an array
@@ -27,4 +38,4 @@ done
 echo "TAGS_STRING: $TAGS_STRING"
 echo "FOLDER_STRING: $FOLDER_STRING"
 
-TAGS_STRING=$TAGS_STRING FOLDER_STRING=$FOLDER_STRING sbatch --dependency=afterany:$job_ids benchmark/post_github_comment.sbatch
+TAGS_STRING=$TAGS_STRING FOLDER_STRING=$FOLDER_STRING WORK_DIR=$WORK_DIR sbatch --dependency=afterany:$job_ids benchmark/post_github_comment.sbatch
