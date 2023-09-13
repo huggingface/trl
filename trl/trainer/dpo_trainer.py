@@ -19,9 +19,11 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.data import DataLoader
 from datasets import Dataset
 from transformers import DataCollator, PreTrainedModel, PreTrainedTokenizerBase, Trainer, TrainingArguments
 from transformers.trainer_callback import TrainerCallback
+from transformers.trainer_utils import EvalLoopOutput,
 
 from ..import_utils import is_peft_available
 from ..models import create_reference_model
@@ -81,6 +83,8 @@ class DPOTrainer(Trainer):
             If no model is provided, we need to know if the model_init returns an encoder-decoder.
         disable_dropout (`bool`, defaults to `True`):
             Whether or not to disable dropouts in `model` and `ref_model`.
+        sample_during_eval (`bool`, defaults to `False`):
+            Whether to sample and log generations during evaluation step.
     """
 
     def __init__(
@@ -109,6 +113,7 @@ class DPOTrainer(Trainer):
         peft_config: Optional[Dict] = None,
         is_encoder_decoder: Optional[bool] = None,
         disable_dropout: bool = True,
+        sample_during_eval: bool = False,
     ):
         if not is_peft_available() and peft_config is not None:
             raise ValueError(
@@ -193,6 +198,7 @@ class DPOTrainer(Trainer):
             if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
 
+        self.sample_during_eval = sample_during_eval
         self.label_pad_token_id = label_pad_token_id
         self.padding_value = padding_value
 
@@ -453,7 +459,7 @@ class DPOTrainer(Trainer):
             return (loss, metrics)
         return loss
 
-    def get_batch_samples(self, model, batch: Dict[str, torch.LongTensor]) -> Tuple[str, str]:
+    def get_batch_samples(self, model, batch: Dict[str, torch.LongTensor], return_text=False) -> Tuple[str, str]:
         """Generate samples from the model and reference model for the given batch of inputs."""
 
         policy_output = model.generate(
@@ -488,7 +494,10 @@ class DPOTrainer(Trainer):
         reference_output = pad_to_length(reference_output, self.config.max_length, self.tokenizer.pad_token_id)
         reference_output_decoded = self.tokenizer.batch_decode(reference_output, skip_special_tokens=True)
 
-        return policy_output_decoded, reference_output_decoded
+        if return_text:
+            return policy_output_decoded, reference_output_decoded, policy_output, reference_output
+        else:
+            return policy_output_decoded, reference_output_decoded
 
     def prediction_step(
         self,
@@ -532,6 +541,27 @@ class DPOTrainer(Trainer):
     def store_metrics(self, metrics: Dict[str, float], train_eval: Literal["train", "eval"] = "train") -> None:
         for key, value in metrics.items():
             self._stored_metrics[train_eval][key].append(value)
+
+    def evaluation_loop(self,
+                        dataloader: DataLoader,
+                        description: str,
+                        prediction_loss_only: Optional[bool] = None,
+                        ignore_keys: Optional[List[str]] = None,
+                        metric_key_prefix: str = "eval",
+                        ) -> EvalLoopOutput:
+        """
+        Overriding built-in evaluation loop to store metrics for each batch.
+        Prediction/evaluation loop, shared by `Trainer.evaluate()` and `Trainer.predict()`.
+
+        Works both with or without labels.
+        """
+        initial_output = super().evaluation_loop(dataloader, description, prediction_loss_only, ignore_keys, metric_key_prefix)
+
+        # Sample and save to game log if requested
+        if self.sample_during_eval:
+            for step, inputs in enumerate(dataloader):
+                policy_output_decoded, reference_output_decoded, policy_output, reference_output = self.get_batch_samples(self.model, inputs, return_text=True)
+
 
     def log(self, logs: Dict[str, float]) -> None:
         """
