@@ -40,16 +40,16 @@ def parse_args():
 def run_experiment(command: str):
     command_list = shlex.split(command)
     print(f"running {command}")
-    
+
     # Use subprocess.PIPE to capture the output
     fd = subprocess.Popen(command_list, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     output, errors = fd.communicate()
-    
+
     return_code = fd.returncode
     assert return_code == 0, f"Command failed with error: {errors.decode('utf-8')}"
-    
+
     # Convert bytes to string and strip leading/trailing whitespaces
-    return output.decode('utf-8').strip()
+    return output.decode("utf-8").strip()
 
 
 def autotag() -> str:
@@ -74,9 +74,7 @@ def autotag() -> str:
     git_commit = subprocess.check_output(["git", "rev-parse", "--verify", "HEAD"]).decode("ascii").strip()
     try:
         # try finding the pull request number on github
-        prs = requests.get(
-            f"https://api.github.com/search/issues?q=repo:huggingface/trl+is:pr+{git_commit}"
-        )
+        prs = requests.get(f"https://api.github.com/search/issues?q=repo:huggingface/trl+is:pr+{git_commit}")
         if prs.status_code == 200:
             prs = prs.json()
             if len(prs["items"]) > 0:
