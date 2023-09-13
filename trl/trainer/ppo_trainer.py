@@ -216,11 +216,6 @@ class PPOTrainer(BaseTrainer):
             config=dict(trl_ppo_trainer_config=config.to_dict()) if not is_using_tensorboard else config.to_dict(),
             init_kwargs=config.tracker_kwargs,
         )
-
-        self.model = model
-        self.model_params = filter(lambda p: p.requires_grad, self.model.parameters())
-        self.is_encoder_decoder = hasattr(self.model, "is_encoder_decoder")
-        self.is_peft_model = getattr(self.model, "is_peft_model", False)
         self.is_using_text_environment = getattr(config, "use_text_environment", False)
 
         if isinstance(ref_model, SUPPORTED_ARCHITECTURES):
