@@ -67,6 +67,13 @@ class ScriptArguments:
         },
     )
 
+    # optimizer settings
+    warmup_steps: Optional[int] = field(default=150, metadata={"help": "Number of warmup steps for optimizer"})
+    optim: Optional[str] = field(
+        default="RMSprop",
+        metadata={"help": "Optimizer to use. Default is RMSprop, if none" "passed defaults to Transformers trainer."},
+    )
+
 
 def extract_anthropic_prompt(prompt_and_response):
     """Extract the anthropic prompt from a prompt and response pair."""
@@ -131,6 +138,19 @@ if __name__ == "__main__":
     eval_dataset = get_hh("test", sanity_check=script_args.sanity_check)
 
     # 4. initialize training arguments:
+
+    warmup_steps = script_args.warmup_steps
+    if script_args.optim == "RMSprop":  # Trainer to match original paper
+        optimizer = torch.optim.RMSprop(model.parameters(), lr=script_args.learning_rate)
+        scheduler = torch.optim.lr_scheduler.LambdaLR(
+            optimizer, lr_lambda=lambda step: min(1.0, (step + 1) / (warmup_steps + 1))
+        )
+        optim = None
+    else:
+        optimizer = None
+        scheduler = None
+        optim = script_args.optim
+
     training_args = TrainingArguments(
         per_device_train_batch_size=script_args.per_device_train_batch_size,
         max_steps=script_args.max_steps,
@@ -143,13 +163,8 @@ if __name__ == "__main__":
         eval_steps=500,
         output_dir="./test",
         report_to=script_args.report_to,
-    )
-
-    # Trainer to match original paper
-    warmup_steps = 150
-    optimizer = torch.optim.RMSprop(model.parameters(), lr=training_args.learning_rate)
-    scheduler = torch.optim.lr_scheduler.LambdaLR(
-        optimizer, lr_lambda=lambda step: min(1.0, (step + 1) / (warmup_steps + 1))
+        optim=optim,
+        warmup_steps=warmup_steps,
     )
 
     # 5. initialize the DPO trainer
