@@ -140,7 +140,7 @@ if __name__ == "__main__":
         evaluation_strategy="steps",
         logging_first_step=True,
         logging_steps=10,  # match results in blog post
-        eval_steps=500,
+        eval_steps=1,  # TODO do not merge, for testing
         output_dir="./test",
         report_to=script_args.report_to,
     )
@@ -157,6 +157,7 @@ if __name__ == "__main__":
         max_length=script_args.max_length,
         max_target_length=script_args.max_target_length,
         max_prompt_length=script_args.max_prompt_length,
+        sample_during_eval=True,
     )
 
     # 6. train

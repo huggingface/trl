@@ -12,6 +12,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import itertools
+import random
 import warnings
 from collections import defaultdict
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
@@ -19,11 +21,12 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
+import wandb
 from datasets import Dataset
+from torch.utils.data import DataLoader
 from transformers import DataCollator, PreTrainedModel, PreTrainedTokenizerBase, Trainer, TrainingArguments
 from transformers.trainer_callback import TrainerCallback
-from transformers.trainer_utils import EvalLoopOutput,
+from transformers.trainer_utils import EvalLoopOutput
 
 from ..import_utils import is_peft_available
 from ..models import create_reference_model
@@ -169,6 +172,7 @@ class DPOTrainer(Trainer):
                 )
                 max_target_length = 128
 
+            self.max_length = max_length
             data_collator = DPODataCollatorWithPadding(
                 tokenizer,
                 max_length=max_length,
@@ -459,13 +463,13 @@ class DPOTrainer(Trainer):
             return (loss, metrics)
         return loss
 
-    def get_batch_samples(self, model, batch: Dict[str, torch.LongTensor], return_text=False) -> Tuple[str, str]:
+    def get_batch_samples(self, model, batch: Dict[str, torch.LongTensor], return_tokens=False) -> Tuple[str, str]:
         """Generate samples from the model and reference model for the given batch of inputs."""
 
         policy_output = model.generate(
             batch["prompt_input_ids"],
             attention_mask=batch["prompt_attention_mask"],
-            max_length=self.config.max_length,
+            max_length=self.max_length,
             do_sample=True,
             pad_token_id=self.tokenizer.pad_token_id,
         )
@@ -475,7 +479,7 @@ class DPOTrainer(Trainer):
                 reference_output = self.model.generate(
                     batch["prompt_input_ids"],
                     attention_mask=batch["prompt_attention_mask"],
-                    max_length=self.config.max_length,
+                    max_length=self.max_length,
                     do_sample=True,
                     pad_token_id=self.tokenizer.pad_token_id,
                 )
@@ -483,18 +487,18 @@ class DPOTrainer(Trainer):
             reference_output = self.ref_model.generate(
                 batch["prompt_input_ids"],
                 attention_mask=batch["prompt_attention_mask"],
-                max_length=self.config.max_length,
+                max_length=self.max_length,
                 do_sample=True,
                 pad_token_id=self.tokenizer.pad_token_id,
             )
 
-        policy_output = pad_to_length(policy_output, self.config.max_length, self.tokenizer.pad_token_id)
+        policy_output = pad_to_length(policy_output, self.max_length, self.tokenizer.pad_token_id)
         policy_output_decoded = self.tokenizer.batch_decode(policy_output, skip_special_tokens=True)
 
-        reference_output = pad_to_length(reference_output, self.config.max_length, self.tokenizer.pad_token_id)
+        reference_output = pad_to_length(reference_output, self.max_length, self.tokenizer.pad_token_id)
         reference_output_decoded = self.tokenizer.batch_decode(reference_output, skip_special_tokens=True)
 
-        if return_text:
+        if return_tokens:
             return policy_output_decoded, reference_output_decoded, policy_output, reference_output
         else:
             return policy_output_decoded, reference_output_decoded
@@ -542,26 +546,53 @@ class DPOTrainer(Trainer):
         for key, value in metrics.items():
             self._stored_metrics[train_eval][key].append(value)
 
-    def evaluation_loop(self,
-                        dataloader: DataLoader,
-                        description: str,
-                        prediction_loss_only: Optional[bool] = None,
-                        ignore_keys: Optional[List[str]] = None,
-                        metric_key_prefix: str = "eval",
-                        ) -> EvalLoopOutput:
+    def evaluation_loop(
+        self,
+        dataloader: DataLoader,
+        description: str,
+        prediction_loss_only: Optional[bool] = None,
+        ignore_keys: Optional[List[str]] = None,
+        metric_key_prefix: str = "eval",
+    ) -> EvalLoopOutput:
         """
         Overriding built-in evaluation loop to store metrics for each batch.
         Prediction/evaluation loop, shared by `Trainer.evaluate()` and `Trainer.predict()`.
 
         Works both with or without labels.
         """
-        initial_output = super().evaluation_loop(dataloader, description, prediction_loss_only, ignore_keys, metric_key_prefix)
 
-        # Sample and save to game log if requested
+        # Sample and save to game log if requested (for one batch to save time)
         if self.sample_during_eval:
-            for step, inputs in enumerate(dataloader):
-                policy_output_decoded, reference_output_decoded, policy_output, reference_output = self.get_batch_samples(self.model, inputs, return_text=True)
+            logs = {}
 
+            # Generate a random index within the range of the total number of batches
+            num_batches = len(dataloader)
+            random_index = random.randint(0, num_batches - 1)
+            # Use itertools.islice to get the random batch without iterating over the DataLoader
+            random_batch = next(itertools.islice(dataloader, random_index, None))
+
+            policy_output_decoded, ref_output_decoded, policy_output, reference_output = self.get_batch_samples(
+                self.model, random_batch, return_tokens=True
+            )
+
+            logs.update(
+                {
+                    "game_log": wandb.Table(
+                        columns=["Policy", "Ref Model"],
+                        rows=[[pol, ref] for pol, ref in zip(policy_output_decoded, ref_output_decoded)],
+                    )
+                }
+            )
+
+            # log game log
+            self.log(logs)
+
+        # Base evaluation
+        initial_output = super().evaluation_loop(
+            dataloader, description, prediction_loss_only, ignore_keys, metric_key_prefix
+        )
+
+        return initial_output
 
     def log(self, logs: Dict[str, float]) -> None:
         """
