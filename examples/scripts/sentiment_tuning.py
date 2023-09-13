@@ -141,9 +141,8 @@ model = trl_model_class.from_pretrained(
 
 tokenizer = AutoTokenizer.from_pretrained(args.ppo_config.model_name)
 
-# GPT-2 tokenizer has a pad token, but it is not eos_token by default. We need to set it to eos_token.
-# only for this model.
-tokenizer.pad_token = tokenizer.eos_token
+# Some tokenizers like GPT-2's don't have a padding token by default, so we set one here.
+tokenizer.pad_token_id = tokenizer.eos_token_id
 
 # We then build the PPOTrainer, passing the model, the reference model, the tokenizer
 ppo_trainer = PPOTrainer(args.ppo_config, model, ref_model, tokenizer, dataset=dataset, data_collator=collator)
@@ -155,11 +154,19 @@ device = ppo_trainer.accelerator.device
 if ppo_trainer.accelerator.num_processes == 1:
     device = 0 if torch.cuda.is_available() else "cpu"  # to avoid a `pipeline` bug
 ds_plugin = ppo_trainer.accelerator.state.deepspeed_plugin
+task, model_name = args.ppo_config.reward_model.split(":")
 if ds_plugin is not None and ds_plugin.is_zero3_init_enabled():
     with ds_plugin.zero3_init_context_manager(enable=False):
-        sentiment_pipe = pipeline("sentiment-analysis", model="lvwerra/distilbert-imdb", device=device)
+        sentiment_pipe = pipeline(task, model=model_name, device=device)
 else:
-    sentiment_pipe = pipeline("sentiment-analysis", model="lvwerra/distilbert-imdb", device=device)
+    sentiment_pipe = pipeline(task, model=model_name, device=device)
+
+# Some tokenizers like GPT-2's don't have a padding token by default, so we set one here.
+if sentiment_pipe.tokenizer.pad_token_id is None:
+    sentiment_pipe.tokenizer.pad_token_id = tokenizer.pad_token_id
+
+if sentiment_pipe.model.config.pad_token_id is None:
+    sentiment_pipe.model.config.pad_token_id = tokenizer.pad_token_id
 
 # We then define the arguments to pass to the `generate` function. These arguments
 # are passed to the `generate` function of the PPOTrainer, which is a wrapper around

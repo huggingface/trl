@@ -1,3 +1,18 @@
+# coding=utf-8
+# Copyright 2023 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # 0. imports
 from dataclasses import dataclass, field
 from typing import Dict, Optional
@@ -28,6 +43,9 @@ class ScriptArguments:
     )
     max_length: Optional[int] = field(default=512, metadata={"help": "max length of each sample"})
     max_prompt_length: Optional[int] = field(default=128, metadata={"help": "max length of each sample's prompt"})
+    max_target_length: Optional[int] = field(
+        default=128, metadata={"help": "Only used for encoder decoder model. Max target of each sample's prompt"}
+    )
     label_pad_token_id: Optional[int] = field(default=-100, metadata={"help": "label for non response tokens"})
     max_steps: Optional[int] = field(default=1000, metadata={"help": "max number of training steps"})
     # instrumentation
@@ -103,7 +121,8 @@ if __name__ == "__main__":
     model_ref = AutoModelForCausalLM.from_pretrained(script_args.model_name_or_path)
 
     tokenizer = AutoTokenizer.from_pretrained(script_args.model_name_or_path)
-    tokenizer.pad_token = tokenizer.eos_token
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
 
     # 2. Load the Anthropic Helpful-Harmless dataset
     train_dataset = get_hh("train", sanity_check=script_args.sanity_check)
@@ -119,6 +138,9 @@ if __name__ == "__main__":
         gradient_accumulation_steps=script_args.gradient_accumulation_steps,
         learning_rate=script_args.learning_rate,
         evaluation_strategy="steps",
+        logging_first_step=True,
+        logging_steps=10,  # match results in blog post
+        eval_steps=500,
         output_dir="./test",
         report_to=script_args.report_to,
     )
@@ -132,6 +154,9 @@ if __name__ == "__main__":
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         tokenizer=tokenizer,
+        max_length=script_args.max_length,
+        max_target_length=script_args.max_target_length,
+        max_prompt_length=script_args.max_prompt_length,
     )
 
     # 6. train
