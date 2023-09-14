@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import dataclasses
 import warnings
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
@@ -35,7 +36,7 @@ from .utils import ConstantLengthDataset, DataCollatorForCompletionOnlyLM, PeftS
 
 
 if is_peft_available():
-    from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_int8_training
+    from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
 
 
 class SFTTrainer(Trainer):
@@ -131,6 +132,8 @@ class SFTTrainer(Trainer):
                 "You passed a `DataCollatorForCompletionOnlyLM` to the SFTTrainer. This is not compatible with the `packing` argument."
             )
 
+        supported_classes = (PreTrainedModel,) if not is_peft_available() else (PreTrainedModel, PeftModel)
+
         if is_peft_available() and peft_config is not None:
             if not isinstance(peft_config, PeftConfig):
                 raise ValueError(
@@ -145,13 +148,17 @@ class SFTTrainer(Trainer):
                     )
 
                 if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
-                    model = prepare_model_for_int8_training(model)
+                    model = prepare_model_for_kbit_training(
+                        model, use_gradient_checkpointing=args.gradient_checkpointing
+                    )
+
+                    args = dataclasses.replace(args, gradient_checkpointing=False)
 
                 model = get_peft_model(model, peft_config)
 
             if callbacks is None:
                 callbacks = [PeftSavingCallback]
-        elif not isinstance(model, (PreTrainedModel, PeftModel)):
+        elif not isinstance(model, supported_classes):
             model = AutoModelForCausalLM.from_pretrained(model)
 
         if tokenizer is None:

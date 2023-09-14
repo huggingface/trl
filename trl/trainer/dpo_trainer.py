@@ -29,7 +29,7 @@ from .utils import DPODataCollatorWithPadding, disable_dropout_in_model, pad_to_
 
 
 if is_peft_available():
-    from peft import PeftModel, get_peft_model, prepare_model_for_int8_training
+    from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
 
 
 class DPOTrainer(Trainer):
@@ -73,8 +73,12 @@ class DPOTrainer(Trainer):
             The maximum length of the sequences in the batch. This argument is required if you want to use the default data collator.
         max_prompt_length (`int`, defaults to `None`):
             The maximum length of the prompt. This argument is required if you want to use the default data collator.
+        max_target_length (`int`, defaults to `None`):
+            The maximum length of the target. This argument is required if you want to use the default data collator and your model is an encoder-decoder.
         peft_config (`Dict`, defaults to `None`):
             The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
+        is_encoder_decoder (`Optional[bool]`, `optional`, defaults to `None`):
+            If no model is provided, we need to know if the model_init returns an encoder-decoder.
         disable_dropout (`bool`, defaults to `True`):
             Whether or not to disable dropouts in `model` and `ref_model`.
     """
@@ -101,7 +105,9 @@ class DPOTrainer(Trainer):
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         max_length: Optional[int] = None,
         max_prompt_length: Optional[int] = None,
+        max_target_length: Optional[int] = None,
         peft_config: Optional[Dict] = None,
+        is_encoder_decoder: Optional[bool] = None,
         disable_dropout: bool = True,
     ):
         if not is_peft_available() and peft_config is not None:
@@ -110,8 +116,15 @@ class DPOTrainer(Trainer):
             )
         elif is_peft_available() and peft_config is not None:
             if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
-                model = prepare_model_for_int8_training(model)
+                model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=args.gradient_checkpointing)
             model = get_peft_model(model, peft_config)
+
+        if model is not None:
+            self.is_encoder_decoder = model.config.is_encoder_decoder
+        elif is_encoder_decoder is None:
+            raise ValueError("When no model is provided, you need to pass the parameter is_encoder_decoder.")
+        else:
+            self.is_encoder_decoder = is_encoder_decoder
 
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
 
@@ -143,6 +156,14 @@ class DPOTrainer(Trainer):
                 )
                 max_prompt_length = 128
 
+            if max_target_length is None and self.is_encoder_decoder:
+                warnings.warn(
+                    "When using DPODataCollatorWithPadding with an encoder decoder architecture, you should set `max_target_length` in the DPOTrainer's init"
+                    " it will be set to `128` by default, but you should do it yourself in the future.",
+                    UserWarning,
+                )
+                max_target_length = 128
+
             data_collator = DPODataCollatorWithPadding(
                 tokenizer,
                 max_length=max_length,
@@ -150,6 +171,8 @@ class DPOTrainer(Trainer):
                 label_pad_token_id=label_pad_token_id,
                 padding_value=padding_value,
                 truncation_mode=truncation_mode,
+                is_encoder_decoder=self.is_encoder_decoder,
+                max_target_length=max_target_length,
             )
 
             if args.remove_unused_columns:
@@ -202,7 +225,12 @@ class DPOTrainer(Trainer):
                     "You are using a `peft` version that does not support `disable_adapter`. Please update your `peft` version to the latest version."
                 )
         else:
-            self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
+            if self.is_deepspeed_enabled:
+                # Read more about the issue in https://github.com/huggingface/trl/pull/687
+                self.ref_model = self.accelerator._prepare_deepspeed(self.ref_model)[0]
+                self.ref_model.eval()
+            else:
+                self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
     def concatenated_inputs(self, batch: Dict[str, Union[List, torch.LongTensor]]) -> Dict[str, torch.LongTensor]:
         """Concatenate the chosen and rejected inputs into a single tensor.
@@ -213,16 +241,21 @@ class DPOTrainer(Trainer):
         Returns:
             A dictionary containing the concatenated inputs under the key 'concatenated_input_ids'.
         """
-        max_length = max(batch["chosen_input_ids"].shape[1], batch["rejected_input_ids"].shape[1])
         concatenated_batch = {}
+
+        if self.is_encoder_decoder:
+            max_length = max(batch["chosen_labels"].shape[1], batch["rejected_labels"].shape[1])
+        else:
+            max_length = max(batch["chosen_input_ids"].shape[1], batch["rejected_input_ids"].shape[1])
+
         for k in batch:
             if k.startswith("chosen") and isinstance(batch[k], torch.Tensor):
-                pad_value = self.label_pad_token_id if "labels" in k else self.padding_value
+                pad_value = self.label_pad_token_id if "labels" in k or self.is_encoder_decoder else self.padding_value
                 concatenated_key = k.replace("chosen", "concatenated")
                 concatenated_batch[concatenated_key] = pad_to_length(batch[k], max_length, pad_value=pad_value)
         for k in batch:
             if k.startswith("rejected") and isinstance(batch[k], torch.Tensor):
-                pad_value = self.label_pad_token_id if "labels" in k else self.padding_value
+                pad_value = self.label_pad_token_id if "labels" in k or self.is_encoder_decoder else self.padding_value
                 concatenated_key = k.replace("rejected", "concatenated")
                 concatenated_batch[concatenated_key] = torch.cat(
                     (
@@ -231,6 +264,11 @@ class DPOTrainer(Trainer):
                     ),
                     dim=0,
                 ).to(self.accelerator.device)
+
+        if self.is_encoder_decoder:
+            concatenated_batch["concatenated_input_ids"] = batch["prompt_input_ids"].repeat(2, 1)
+            concatenated_batch["concatenated_attention_mask"] = batch["prompt_attention_mask"].repeat(2, 1)
+
         return concatenated_batch
 
     def dpo_loss(
@@ -289,8 +327,9 @@ class DPOTrainer(Trainer):
         if logits.shape[:-1] != labels.shape:
             raise ValueError("Logits (batch and sequence length dim) and labels must have the same shape.")
 
-        labels = labels[:, 1:].clone()
-        logits = logits[:, :-1, :]
+        if not self.is_encoder_decoder:
+            labels = labels[:, 1:].clone()
+            logits = logits[:, :-1, :]
         loss_mask = labels != self.label_pad_token_id
 
         # dummy token; we'll ignore the losses on these tokens later
@@ -311,20 +350,34 @@ class DPOTrainer(Trainer):
         We do this to avoid doing two forward passes, because it's faster for FSDP.
         """
         concatenated_batch = self.concatenated_inputs(batch)
+        len_chosen = batch["chosen_labels"].shape[0]
+
+        model_kwargs = (
+            {
+                "labels": concatenated_batch["concatenated_labels"],
+                "decoder_input_ids": concatenated_batch.pop("concatenated_decoder_input_ids", None),
+            }
+            if self.is_encoder_decoder
+            else {}
+        )
         all_logits = model(
             concatenated_batch["concatenated_input_ids"],
             attention_mask=concatenated_batch["concatenated_attention_mask"],
+            **model_kwargs,
         ).logits.to(torch.float32)
+
         all_logps = self._get_batch_logps(
             all_logits,
             concatenated_batch["concatenated_labels"],
             average_log_prob=False,
         )
-        chosen_logps = all_logps[: batch["chosen_input_ids"].shape[0]]
-        rejected_logps = all_logps[batch["chosen_input_ids"].shape[0] :]
 
-        chosen_logits = all_logits[: batch["chosen_input_ids"].shape[0]]
-        rejected_logits = all_logits[batch["chosen_input_ids"].shape[0] :]
+        chosen_logps = all_logps[:len_chosen]
+        rejected_logps = all_logps[len_chosen:]
+
+        chosen_logits = all_logits[:len_chosen]
+        rejected_logits = all_logits[len_chosen:]
+
         return (chosen_logps, rejected_logps, chosen_logits, rejected_logits)
 
     def get_batch_metrics(
@@ -467,8 +520,8 @@ class DPOTrainer(Trainer):
 
         # logits for the chosen and rejected samples from model
         logits_dict = {
-            "logits_test/chosen": metrics["logits_test/chosen"],
-            "logits_test/rejected": metrics["logits_test/rejected"],
+            "eval_logits/chosen": metrics["eval_logits/chosen"],
+            "eval_logits/rejected": metrics["eval_logits/rejected"],
         }
         logits = tuple(v for k, v in logits_dict.items() if k not in ignore_keys)
         logits = torch.stack(logits).mean(axis=1)

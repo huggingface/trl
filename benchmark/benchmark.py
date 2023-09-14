@@ -6,6 +6,8 @@ import subprocess
 import uuid
 from distutils.util import strtobool
 
+import requests
+
 
 def parse_args():
     # fmt: off
@@ -38,14 +40,65 @@ def parse_args():
 def run_experiment(command: str):
     command_list = shlex.split(command)
     print(f"running {command}")
-    fd = subprocess.Popen(command_list)
-    return_code = fd.wait()
-    assert return_code == 0
+
+    # Use subprocess.PIPE to capture the output
+    fd = subprocess.Popen(command_list, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    output, errors = fd.communicate()
+
+    return_code = fd.returncode
+    assert return_code == 0, f"Command failed with error: {errors.decode('utf-8')}"
+
+    # Convert bytes to string and strip leading/trailing whitespaces
+    return output.decode("utf-8").strip()
+
+
+def autotag() -> str:
+    wandb_tag = ""
+    print("autotag feature is enabled")
+    git_tag = ""
+    try:
+        git_tag = subprocess.check_output(["git", "describe", "--tags"]).decode("ascii").strip()
+        print(f"identified git tag: {git_tag}")
+    except subprocess.CalledProcessError as e:
+        print(e)
+    if len(git_tag) == 0:
+        try:
+            count = int(subprocess.check_output(["git", "rev-list", "--count", "HEAD"]).decode("ascii").strip())
+            hash = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).decode("ascii").strip()
+            git_tag = f"no-tag-{count}-g{hash}"
+            print(f"identified git tag: {git_tag}")
+        except subprocess.CalledProcessError as e:
+            print(e)
+    wandb_tag = f"{git_tag}"
+
+    git_commit = subprocess.check_output(["git", "rev-parse", "--verify", "HEAD"]).decode("ascii").strip()
+    try:
+        # try finding the pull request number on github
+        prs = requests.get(f"https://api.github.com/search/issues?q=repo:huggingface/trl+is:pr+{git_commit}")
+        if prs.status_code == 200:
+            prs = prs.json()
+            if len(prs["items"]) > 0:
+                pr = prs["items"][0]
+                pr_number = pr["number"]
+                wandb_tag += f",pr-{pr_number}"
+        print(f"identified github pull request: {pr_number}")
+    except Exception as e:
+        print(e)
+
+    return wandb_tag
 
 
 if __name__ == "__main__":
     args = parse_args()
-
+    if args.auto_tag:
+        existing_wandb_tag = os.environ.get("WANDB_TAGS", "")
+        wandb_tag = autotag()
+        if len(wandb_tag) > 0:
+            if len(existing_wandb_tag) > 0:
+                os.environ["WANDB_TAGS"] = ",".join([existing_wandb_tag, wandb_tag])
+            else:
+                os.environ["WANDB_TAGS"] = wandb_tag
+    print("WANDB_TAGS: ", os.environ.get("WANDB_TAGS", ""))
     commands = []
     for seed in range(0, args.num_seeds):
         commands += [" ".join([args.command, "--seed", str(args.start_seed + seed)])]
@@ -93,4 +146,5 @@ if __name__ == "__main__":
         slurm_path = os.path.join("slurm", f"{filename}.slurm")
         print(f"saving command in {slurm_path}")
         if args.workers > 0:
-            run_experiment(f"sbatch {slurm_path}")
+            job_id = run_experiment(f"sbatch --parsable {slurm_path}")
+            print(f"Job ID: {job_id}")
