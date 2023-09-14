@@ -1,4 +1,4 @@
-- sections: 
+- sections:
   - local: index
     title: TRL
   - local: quickstart
@@ -23,6 +23,8 @@
     title: Reward Model Training
   - local: sft_trainer
     title: Supervised Fine-Tuning
+  - local: ppo_trainer
+    title: PPO Trainer
   - local: best_of_n
     title: Best of N Sampling
   - local: dpo_trainer
@@ -32,7 +34,7 @@
   - local: text_environments
     title: Text Environments
   title: API
-- sections: 
+- sections:
   - local: sentiment_tuning
     title: Sentiment Tuning
   - local: lora_tuning_peft
