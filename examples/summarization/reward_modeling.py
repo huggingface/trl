@@ -60,7 +60,11 @@ class ScriptArguments:
     eval_split: Optional[str] = field(
         default="test", metadata={"help": "the dataset split to evaluate on; default to 'none' (no evaluation)"}
     )
-    learning_rate: Optional[float] = field(default=1e-4, metadata={"help": "the learning rate"})
+    learning_rate: Optional[float] = field(default=1e-5, metadata={"help": "the learning rate"})
+    weight_decay: Optional[float] = field(default=0.001)
+    num_warmup_steps: Optional[int] = field(default=100)
+    lr_scheduler_type: Optional[str] = field(default="cosine")
+    optimizer_type: Optional[str] = field(default="adamw_torch", metadata={"help": "the optimizer type"})
     per_device_train_batch_size: Optional[int] = field(default=2, metadata={"help": "the per device train batch size"})
     per_device_eval_batch_size: Optional[int] = field(default=1, metadata={"help": "the per device eval batch size"})
     num_train_epochs: Optional[int] = field(default=1, metadata={"help": "the number of training epochs"})
@@ -203,10 +207,12 @@ training_args = TrainingArguments(
     learning_rate=script_args.learning_rate,
     report_to=script_args.log_with,
     remove_unused_columns=False,
-    optim="paged_adamw_32bit",
+    lr_scheduler_type=script_args.lr_scheduler_type,
+    weight_decay=script_args.weight_decay,
+    optim=script_args.optimizer_type,
+    warmup_steps=script_args.num_warmup_steps,
     logging_steps=script_args.logging_steps,
-    evaluation_strategy="steps" if script_args.eval_split != "none" else "no",
-    eval_steps=500,
+    evaluation_strategy="epoch" if script_args.eval_split != "none" else "no",
     gradient_checkpointing=script_args.gradient_checkpointing,
     # local_rank=script_args.local_rank,
 )
@@ -220,8 +226,9 @@ trainer = RewardTrainer(
     max_length=script_args.seq_length,
 )
 
-
 trainer.train()
+trainer.evaluate()
+
 print("Saving last checkpoint of the model")
 trainer.save_model(script_args.output_dir)
 
