@@ -86,7 +86,7 @@ class DPOTrainer(Trainer):
             If no model is provided, we need to know if the model_init returns an encoder-decoder.
         disable_dropout (`bool`, defaults to `True`):
             Whether or not to disable dropouts in `model` and `ref_model`.
-        sample_during_eval (`bool`, defaults to `False`):
+        generate_during_eval (`bool`, defaults to `False`):
             Whether to sample and log generations during evaluation step.
     """
 
@@ -116,7 +116,7 @@ class DPOTrainer(Trainer):
         peft_config: Optional[Dict] = None,
         is_encoder_decoder: Optional[bool] = None,
         disable_dropout: bool = True,
-        sample_during_eval: bool = False,
+        generate_during_eval: bool = False,
     ):
         if not is_peft_available() and peft_config is not None:
             raise ValueError(
@@ -202,7 +202,7 @@ class DPOTrainer(Trainer):
             if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
 
-        self.sample_during_eval = sample_during_eval
+        self.generate_during_eval = generate_during_eval
         self.label_pad_token_id = label_pad_token_id
         self.padding_value = padding_value
 
@@ -562,7 +562,7 @@ class DPOTrainer(Trainer):
         """
 
         # Sample and save to game log if requested (for one batch to save time)
-        if self.sample_during_eval:
+        if self.generate_during_eval:
             logs = {}
 
             # Generate a random index within the range of the total number of batches
