@@ -568,8 +568,6 @@ class DPOTrainer(Trainer):
 
         # Sample and save to game log if requested (for one batch to save time)
         if self.generate_during_eval:
-            logs = {}
-
             # Generate random indices within the range of the total number of samples
             num_samples = len(dataloader.dataset)
             random_indices = random.sample(range(num_samples), k=self.args.eval_batch_size)
@@ -581,7 +579,7 @@ class DPOTrainer(Trainer):
 
             policy_output_decoded, ref_output_decoded = self.get_batch_samples(self.model, random_batch)
 
-            logs.update(
+            self.log(
                 {
                     "game_log": wandb.Table(
                         columns=["Prompt", "Policy", "Ref Model"],
@@ -594,9 +592,6 @@ class DPOTrainer(Trainer):
                     )
                 }
             )
-
-            # log game log
-            self.log(logs)
 
         # Base evaluation
         initial_output = super().evaluation_loop(
