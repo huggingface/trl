@@ -140,7 +140,7 @@ if __name__ == "__main__":
         evaluation_strategy="steps",
         logging_first_step=True,
         logging_steps=10,  # match results in blog post
-        eval_steps=1,  # TODO do not merge, for testing
+        eval_steps=500,
         output_dir="./test",
         report_to=script_args.report_to,
     )
