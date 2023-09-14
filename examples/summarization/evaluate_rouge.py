@@ -24,6 +24,7 @@ shutil.disk_usage = lambda x: shutil._ntuple_diskusage(1, 1, 1)
 @dataclass
 class ScriptArguments:
     model_name: Optional[str] = field(default="EleutherAI/pythia-6.9b-deduped", metadata={"help": "the model name"})
+    tokenizer_name: Optional[str] = field(default=None, metadata={"help": "the tokenizer name"})
     dataset_name: Optional[str] = field(
         default="CarperAI/openai_summarize_tldr", metadata={"help": "the dataset name"}
     )
@@ -59,7 +60,9 @@ model = AutoModelForCausalLM.from_pretrained(
 )
 
 print("Loading dataset")
-tokenizer = AutoTokenizer.from_pretrained(args.model_name, padding_side="left")
+tokenizer = AutoTokenizer.from_pretrained(
+    args.model_name if args.tokenizer_name is None else args.tokenizer_name, padding_side="left"
+)
 if getattr(tokenizer, "pad_token", None) is None:
     tokenizer.pad_token = tokenizer.eos_token
 
