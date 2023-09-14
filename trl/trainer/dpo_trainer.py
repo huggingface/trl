@@ -12,7 +12,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import itertools
 import random
 import warnings
 from collections import defaultdict
@@ -21,20 +20,23 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import wandb
 from datasets import Dataset
 from torch.utils.data import DataLoader
 from transformers import DataCollator, PreTrainedModel, PreTrainedTokenizerBase, Trainer, TrainingArguments
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
 
-from ..import_utils import is_peft_available
+from ..import_utils import is_peft_available, is_wandb_available
 from ..models import create_reference_model
 from .utils import DPODataCollatorWithPadding, disable_dropout_in_model, pad_to_length
 
 
 if is_peft_available():
     from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
+
+
+if is_wandb_available():
+    import wandb
 
 
 class DPOTrainer(Trainer):
@@ -86,7 +88,7 @@ class DPOTrainer(Trainer):
             If no model is provided, we need to know if the model_init returns an encoder-decoder.
         disable_dropout (`bool`, defaults to `True`):
             Whether or not to disable dropouts in `model` and `ref_model`.
-        sample_during_eval (`bool`, defaults to `False`):
+        generate_during_eval (`bool`, defaults to `False`):
             Whether to sample and log generations during evaluation step.
     """
 
@@ -116,7 +118,7 @@ class DPOTrainer(Trainer):
         peft_config: Optional[Dict] = None,
         is_encoder_decoder: Optional[bool] = None,
         disable_dropout: bool = True,
-        sample_during_eval: bool = False,
+        generate_during_eval: bool = False,
     ):
         if not is_peft_available() and peft_config is not None:
             raise ValueError(
@@ -126,6 +128,12 @@ class DPOTrainer(Trainer):
             if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
                 model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=args.gradient_checkpointing)
             model = get_peft_model(model, peft_config)
+
+        if generate_during_eval and not is_wandb_available():
+            raise ValueError(
+                "`generate_during_eval=True` requires Weights and Biases to be installed."
+                " Please install `wandb` to resolve."
+            )
 
         if model is not None:
             self.is_encoder_decoder = model.config.is_encoder_decoder
@@ -202,7 +210,7 @@ class DPOTrainer(Trainer):
             if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
 
-        self.sample_during_eval = sample_during_eval
+        self.generate_during_eval = generate_during_eval
         self.label_pad_token_id = label_pad_token_id
         self.padding_value = padding_value
 
@@ -463,7 +471,7 @@ class DPOTrainer(Trainer):
             return (loss, metrics)
         return loss
 
-    def get_batch_samples(self, model, batch: Dict[str, torch.LongTensor], return_tokens=False) -> Tuple[str, str]:
+    def get_batch_samples(self, model, batch: Dict[str, torch.LongTensor]) -> Tuple[str, str]:
         """Generate samples from the model and reference model for the given batch of inputs."""
 
         policy_output = model.generate(
@@ -498,10 +506,7 @@ class DPOTrainer(Trainer):
         reference_output = pad_to_length(reference_output, self.max_length, self.tokenizer.pad_token_id)
         reference_output_decoded = self.tokenizer.batch_decode(reference_output, skip_special_tokens=True)
 
-        if return_tokens:
-            return policy_output_decoded, reference_output_decoded, policy_output, reference_output
-        else:
-            return policy_output_decoded, reference_output_decoded
+        return policy_output_decoded, reference_output_decoded
 
     def prediction_step(
         self,
@@ -562,30 +567,31 @@ class DPOTrainer(Trainer):
         """
 
         # Sample and save to game log if requested (for one batch to save time)
-        if self.sample_during_eval:
-            logs = {}
+        if self.generate_during_eval:
+            # Generate random indices within the range of the total number of samples
+            num_samples = len(dataloader.dataset)
+            random_indices = random.sample(range(num_samples), k=self.args.eval_batch_size)
 
-            # Generate a random index within the range of the total number of batches
-            num_batches = len(dataloader)
-            random_index = random.randint(0, num_batches - 1)
-            # Use itertools.islice to get the random batch without iterating over the DataLoader
-            random_batch = next(itertools.islice(dataloader, random_index, None))
+            # Use dataloader.dataset.select to get the random batch without iterating over the DataLoader
+            random_batch_dataset = dataloader.dataset.select(random_indices)
+            random_batch = self.data_collator(random_batch_dataset)
+            random_batch = self._prepare_inputs(random_batch)
 
-            policy_output_decoded, ref_output_decoded, policy_output, reference_output = self.get_batch_samples(
-                self.model, random_batch, return_tokens=True
-            )
+            policy_output_decoded, ref_output_decoded = self.get_batch_samples(self.model, random_batch)
 
-            logs.update(
+            self.log(
                 {
                     "game_log": wandb.Table(
-                        columns=["Policy", "Ref Model"],
-                        rows=[[pol, ref] for pol, ref in zip(policy_output_decoded, ref_output_decoded)],
+                        columns=["Prompt", "Policy", "Ref Model"],
+                        rows=[
+                            [prompt, pol[len(prompt) :], ref[len(prompt) :]]
+                            for prompt, pol, ref in zip(
+                                random_batch["prompt"], policy_output_decoded, ref_output_decoded
+                            )
+                        ],
                     )
                 }
             )
-
-            # log game log
-            self.log(logs)
 
         # Base evaluation
         initial_output = super().evaluation_loop(
