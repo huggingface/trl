@@ -75,26 +75,31 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
     def __init__(
         self,
         response_template: Union[str, List[int]],
-        instruction_template: Optional[str] = None,
+        instruction_template: Union[str, List[int]] = None,
         *args,
         mlm: bool = False,
         ignore_index: int = -100,
         **kwargs,
     ):
         super().__init__(*args, mlm=mlm, **kwargs)
-        self.ignore_index = ignore_index
+        
         self.instruction_template = instruction_template
-        self.response_template = response_template
-        if type(instruction_template) == list:
-            # The user already provides the token ids
-            self.instruction_token_ids = instruction_template
-        else:
+        if isinstance(instruction_template, str):
+            # The user provides a string, must tokenize
             self.instruction_token_ids = self.tokenizer.encode(self.instruction_template, add_special_tokens=False)
-        if type(response_template) == list:
+        else:
+            # The user already provides the token ids
+            self.instruction_token_ids = instruction_template            
+
+        self.response_template = response_template
+        if isinstance(response_template, str):
+            # The user provides a string, must tokenize
+            self.response_token_ids = self.tokenizer.encode(self.response_template, add_special_tokens=False)
+        else:
             # The user already provides the token ids
             self.response_token_ids = response_template
-        else:
-            self.response_token_ids = self.tokenizer.encode(self.response_template, add_special_tokens=False)
+        
+        self.ignore_index = ignore_index
 
     def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
         batch = super().torch_call(examples)
