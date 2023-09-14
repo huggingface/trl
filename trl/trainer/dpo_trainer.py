@@ -584,8 +584,13 @@ class DPOTrainer(Trainer):
             logs.update(
                 {
                     "game_log": wandb.Table(
-                        columns=["Policy", "Ref Model"],
-                        rows=[[pol, ref] for pol, ref in zip(policy_output_decoded, ref_output_decoded)],
+                        columns=["Prompt", "Policy", "Ref Model"],
+                        rows=[
+                            [prompt, pol[len(prompt) :], ref[len(prompt) :]]
+                            for prompt, pol, ref in zip(
+                                random_batch["prompt"], policy_output_decoded, ref_output_decoded
+                            )
+                        ],
                     )
                 }
             )
