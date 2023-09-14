@@ -128,7 +128,7 @@ if __name__ == "__main__":
             ],
             "restartable": True,
             "resources": {
-                "cpu": 2 * args.gpus,
+                "cpu": 4 * args.gpus,
                 "mem": 64 * args.gpus,
                 "gpu_mem": args.gpu_mem,
                 "gpu": args.gpus,

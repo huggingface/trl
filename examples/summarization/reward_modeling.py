@@ -12,12 +12,16 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from dataclasses import dataclass, field
+import os
+from dataclasses import dataclass, field, replace
 from typing import Optional
 
 import torch
-from datasets import load_dataset
+from accelerate import Accelerator
+from datasets import builder, load_dataset
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+from peft.tuners.lora import LoraLayer
+from tqdm import tqdm
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
@@ -29,112 +33,129 @@ from transformers import (
 from trl import RewardTrainer
 
 
-########################################################################
-# This is a fully working simple example to use trl's RewardTrainer.
-#
-# This example fine-tunes any causal language model (GPT-2, GPT-Neo, etc.)
-# by using the RewardTrainer from trl, we will leverage PEFT library to finetune
-# adapters on the model.
-#
-########################################################################
+tqdm.pandas()
+builder.has_sufficient_disk_space = lambda needed_bytes, directory=".": True
+# torch.autograd.set_detect_anomaly(True)
 
 
 # Define and parse arguments.
 @dataclass
 class ScriptArguments:
     """
-    These arguments vary depending on how many GPUs you have, what their capacity and features are, and what size model you want to train.
+    The name of the Casual LM model we wish to fine with RewardTrainer
     """
+
+    model_name: Optional[str] = field(
+        default="/home/toolkit/huggingface/tldr_sft_pythia7b", metadata={"help": "the model name"}
+    )
+    dataset_name: Optional[str] = field(
+        default="CarperAI/openai_summarize_comparisons", metadata={"help": "the dataset name"}
+    )
+    dataset_text_field: Optional[str] = field(default="prompt", metadata={"help": "the text field of the dataset"})
+    log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
+    logging_steps: Optional[int] = field(default=100, metadata={"help": "the number of update steps between two logs"})
+    train_split: Optional[str] = field(
+        default="train", metadata={"help": "the dataset split to evaluate on; default to 'none' (no evaluation)"}
+    )
+    eval_split: Optional[str] = field(
+        default="test", metadata={"help": "the dataset split to evaluate on; default to 'none' (no evaluation)"}
+    )
+    learning_rate: Optional[float] = field(default=1e-4, metadata={"help": "the learning rate"})
+    per_device_train_batch_size: Optional[int] = field(default=2, metadata={"help": "the per device train batch size"})
+    per_device_eval_batch_size: Optional[int] = field(default=1, metadata={"help": "the per device eval batch size"})
+    num_train_epochs: Optional[int] = field(default=1, metadata={"help": "the number of training epochs"})
+    seq_length: Optional[int] = field(default=512, metadata={"help": "Input sequence length"})
+    gradient_accumulation_steps: Optional[int] = field(
+        default=16, metadata={"help": "the number of gradient accumulation steps"}
+    )
+    bf16: Optional[bool] = field(
+        default=True,
+        metadata={
+            "help": "This essentially cuts the training time in half if you want to sacrifice a little precision and have a supported GPU."
+        },
+    )
+    load_in_8bit: Optional[bool] = field(default=False, metadata={"help": "load the model in 8 bits precision"})
+    load_in_4bit: Optional[bool] = field(default=False, metadata={"help": "load the model in 4 bits precision"})
+    lora_alpha: Optional[float] = field(default=16, metadata={"help": "the lora alpha parameter"})
+    lora_dropout: Optional[float] = field(default=0.05, metadata={"help": "the lora dropout parameter"})
+    lora_r: Optional[int] = field(default=8, metadata={"help": "the lora r parameter"})
+    trust_remote_code: Optional[bool] = field(default=True, metadata={"help": "Enable `trust_remote_code`"})
+    output_dir: Optional[str] = field(default="results", metadata={"help": "the output directory"})
+    gradient_checkpointing: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Enables gradient checkpointing."},
+    )
 
     local_rank: Optional[int] = field(default=-1, metadata={"help": "Used for multi-gpu"})
 
-    per_device_train_batch_size: Optional[int] = field(default=4)
-    per_device_eval_batch_size: Optional[int] = field(default=1)
-    gradient_accumulation_steps: Optional[int] = field(default=1)
-    learning_rate: Optional[float] = field(default=2e-5)
-    weight_decay: Optional[int] = field(default=0.001)
-    max_seq_length: Optional[int] = field(default=512)
-    model_name: Optional[str] = field(
-        default="huggyllama/llama-7b",
-        metadata={
-            "help": "The model that you want to train from the Hugging Face hub. E.g. gpt2, gpt2-xl, bert, etc."
-        },
-    )
-    dataset_name: Optional[str] = field(
-        default="Anthropic/hh-rlhf",
-        metadata={"help": "The preference dataset to use."},
-    )
-    use_4bit: Optional[bool] = field(
-        default=True,
-        metadata={"help": "Activate 4bit precision base model loading"},
-    )
-    use_nested_quant: Optional[bool] = field(
-        default=False,
-        metadata={"help": "Activate nested quantization for 4bit base models"},
-    )
-    bnb_4bit_compute_dtype: Optional[str] = field(
-        default="bfloat16",
-        metadata={"help": "Compute dtype for 4bit base models"},
-    )
-    bnb_4bit_quant_type: Optional[str] = field(
-        default="nf4",
-        metadata={"help": "Quantization type fp4 or nf4"},
-    )
-    num_train_epochs: Optional[int] = field(
-        default=1,
-        metadata={"help": "The number of training epochs for the reward model."},
-    )
-
-    gradient_checkpointing: Optional[bool] = field(
-        default=True,
-        metadata={"help": "Enables gradient checkpointing."},
-    )
-    optim: Optional[str] = field(
-        default="adamw_hf",
-        metadata={"help": "The optimizer to use."},
-    )
-    lr_scheduler_type: Optional[str] = field(
-        default="linear",
-        metadata={"help": "The lr scheduler"},
-    )
-
-
-parser = HfArgumentParser(ScriptArguments)
-script_args = parser.parse_args_into_dataclasses()[0]
-
 
 def create_and_prepare_model(args):
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=args.use_4bit,
-        bnb_4bit_quant_type=args.bnb_4bit_quant_type,
-        bnb_4bit_compute_dtype=getattr(torch, args.bnb_4bit_compute_dtype),
-        bnb_4bit_use_double_quant=args.use_nested_quant,
-    )
-
-    # TODO: make it more userfriendly
-    device_map = {"": 0}
+    if args.load_in_8bit and args.load_in_4bit:
+        raise ValueError("You can't load the model in 8 bits and 4 bits at the same time")
+    elif args.load_in_8bit or args.load_in_4bit:
+        quantization_config = BitsAndBytesConfig(load_in_8bit=args.load_in_8bit, load_in_4bit=args.load_in_4bit)
+        device_map = {"": Accelerator().local_process_index}
+    else:
+        device_map = None
+        quantization_config = None
 
     model = AutoModelForSequenceClassification.from_pretrained(
-        args.model_name, quantization_config=bnb_config, device_map=device_map
+        args.model_name,
+        quantization_config=quantization_config,
+        device_map=device_map,
+        num_labels=1,
+        torch_dtype=torch.bfloat16 if script_args.bf16 else torch.float32,
     )
-    model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=args.gradient_checkpointing)
+
+    model.config.use_cache = not args.gradient_checkpointing
+    # if script_args.ignore_bias_buffers:
+    # torch distributed hack
+    if quantization_config is not None:
+        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=args.gradient_checkpointing)
+        args = replace(args, gradient_checkpointing=False)
 
     # we add `score` to the list of modules to save to
     # correctly save the score head.
+    # set target modules to be query_key_value for Pythia
     peft_config = LoraConfig(
-        lora_alpha=32, lora_dropout=0.05, bias="none", task_type="SEQ_CLS", modules_to_save=["score"]
+        r=args.lora_r,
+        lora_alpha=args.lora_alpha,
+        lora_dropout=args.lora_dropout,
+        bias="none",
+        task_type="SEQ_CLS",
+        modules_to_save=["score"],
     )
 
     model = get_peft_model(model, peft_config)
 
-    tokenizer = AutoTokenizer.from_pretrained(script_args.model_name, use_auth_token=True)
-    tokenizer.pad_token = tokenizer.eos_token
+    modules_to_save = ["score"]
+    for key, _ in model.named_modules():
+        target_module_found = any(key.endswith(target_key) for target_key in modules_to_save)
+        if target_module_found:
+            model.get_submodule(key + ".original_module").requires_grad_(False)
+
+    if args.bf16:
+        for name, module in model.named_modules():
+            if isinstance(module, LoraLayer):
+                module = module.to(torch.bfloat16)
+            if "norm" in name:
+                module = module.to(torch.float32)
+            if "score" in name or "embed_tokens" in name:
+                if hasattr(module, "weight") and module.weight.dtype == torch.float32:
+                    module = module.to(torch.bfloat16)
+
+    tokenizer = AutoTokenizer.from_pretrained(script_args.model_name)
+    if getattr(tokenizer, "pad_token", None) is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    if getattr(model.config, "pad_token_id", None) is None:
+        model.config.pad_token_id = model.config.eos_token_id
 
     return model, tokenizer
 
 
-def create_and_prepare_dataset(args, tokenizer, num_proc=12):
-    dataset = load_dataset(args.dataset_name, split="train[:1%]")
+def create_and_prepare_dataset(args, tokenizer, split, num_proc=2):
+    dataset = load_dataset(args.dataset_name, split=split)
     original_columns = dataset.column_names
 
     def preprocess_function(examples):
@@ -144,51 +165,65 @@ def create_and_prepare_dataset(args, tokenizer, num_proc=12):
             "input_ids_rejected": [],
             "attention_mask_rejected": [],
         }
-        for chosen, rejected in zip(examples["chosen"], examples["rejected"]):
+        for prompt, chosen, rejected in zip(examples["prompt"], examples["chosen"], examples["rejected"]):
             tokenized_chosen = tokenizer(
-                chosen, truncation=True, padding="max_length", max_length=script_args.max_seq_length
+                prompt + "\n" + chosen, padding="max_length", truncation=True, max_length=script_args.seq_length
             )
             tokenized_rejected = tokenizer(
-                rejected, truncation=True, padding="max_length", max_length=script_args.max_seq_length
+                prompt + "\n" + rejected, padding="max_length", truncation=True, max_length=script_args.seq_length
             )
 
             new_examples["input_ids_chosen"].append(tokenized_chosen["input_ids"])
-            new_examples["attention_mask_chosen"].append(tokenized_rejected["attention_mask"])
-            new_examples["input_ids_rejected"].append(tokenized_chosen["input_ids"])
+            new_examples["attention_mask_chosen"].append(tokenized_chosen["attention_mask"])
+            new_examples["input_ids_rejected"].append(tokenized_rejected["input_ids"])
             new_examples["attention_mask_rejected"].append(tokenized_rejected["attention_mask"])
 
         return new_examples
 
     dataset = dataset.map(preprocess_function, batched=True, num_proc=num_proc, remove_columns=original_columns)
+
     return dataset
 
 
-def main():
-    model, tokenizer = create_and_prepare_model(script_args)
-    dataset = create_and_prepare_dataset(script_args, tokenizer)
+parser = HfArgumentParser(ScriptArguments)
+script_args = parser.parse_args_into_dataclasses()[0]
 
-    training_args = TrainingArguments(
-        output_dir="./output",
-        per_device_train_batch_size=script_args.per_device_train_batch_size,
-        learning_rate=script_args.learning_rate,
-        optim=script_args.optim,
-        max_steps=1,
-        lr_scheduler_type=script_args.lr_scheduler_type,
-        gradient_accumulation_steps=script_args.gradient_accumulation_steps,
-        save_steps=1,
-        gradient_checkpointing=script_args.gradient_checkpointing,
-    )
+model, tokenizer = create_and_prepare_model(script_args)
+train_dataset = create_and_prepare_dataset(script_args, tokenizer, script_args.train_split)
+eval_dataset = create_and_prepare_dataset(script_args, tokenizer, script_args.eval_split)
 
-    trainer = RewardTrainer(
-        model=model,
-        args=training_args,
-        tokenizer=tokenizer,
-        train_dataset=dataset,
-        max_length=script_args.max_seq_length,
-    )
+# don't include gradient_checkpointing here, see trl#728
+training_args = TrainingArguments(
+    output_dir=script_args.output_dir,
+    per_device_train_batch_size=script_args.per_device_train_batch_size,
+    per_device_eval_batch_size=script_args.per_device_eval_batch_size,
+    bf16=script_args.bf16,
+    num_train_epochs=script_args.num_train_epochs,
+    gradient_accumulation_steps=script_args.gradient_accumulation_steps,
+    learning_rate=script_args.learning_rate,
+    report_to=script_args.log_with,
+    remove_unused_columns=False,
+    optim="paged_adamw_32bit",
+    logging_steps=script_args.logging_steps,
+    evaluation_strategy="steps" if script_args.eval_split != "none" else "no",
+    eval_steps=500,
+    gradient_checkpointing=script_args.gradient_checkpointing,
+    # local_rank=script_args.local_rank,
+)
 
-    trainer.train()
+trainer = RewardTrainer(
+    model=model,
+    tokenizer=tokenizer,
+    args=training_args,
+    train_dataset=train_dataset,
+    eval_dataset=eval_dataset,
+    max_length=script_args.seq_length,
+)
 
 
-if __name__ == "__main__":
-    main()
+trainer.train()
+print("Saving last checkpoint of the model")
+trainer.save_model(script_args.output_dir)
+
+output_dir = os.path.join(script_args.output_dir, "final_checkpoint")
+trainer.model.save_pretrained(output_dir)
