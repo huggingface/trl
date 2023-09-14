@@ -21,11 +21,11 @@ else:
     _is_python_greater_3_8 = True
 
 
-def is_peft_available():
+def is_peft_available() -> bool:
     return importlib.util.find_spec("peft") is not None
 
 
-def is_torch_greater_2_0():
+def is_torch_greater_2_0() -> bool:
     if _is_python_greater_3_8:
         from importlib.metadata import version
 
@@ -37,17 +37,21 @@ def is_torch_greater_2_0():
     return torch_version >= "2.0"
 
 
-def is_diffusers_available():
+def is_diffusers_available() -> bool:
     return importlib.util.find_spec("diffusers") is not None
 
 
-def is_bitsandbytes_available():
+def is_bitsandbytes_available() -> bool:
     return importlib.util.find_spec("bitsandbytes") is not None
 
 
-def is_torchvision_available():
+def is_torchvision_available() -> bool:
     return importlib.util.find_spec("torchvision") is not None
 
 
-def is_rich_available():
+def is_rich_available() -> bool:
     return importlib.util.find_spec("rich") is not None
+
+
+def is_wandb_available() -> bool:
+    return importlib.util.find_spec("wandb") is not None

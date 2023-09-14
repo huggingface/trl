@@ -26,6 +26,7 @@ import tyro
 from trl.trainer.utils import exact_div
 
 from ..core import flatten_dict
+from ..import_utils import is_wandb_available
 
 
 def autotag() -> str:
@@ -178,21 +179,19 @@ class PPOConfig:
         # check if wandb is installed
         if self.log_with == "wandb":
             # raise error if wandb is not installed
-            try:
-                import wandb  # noqa: F401
-
-                existing_wandb_tag = os.environ.get("WANDB_TAGS", "")
-                wandb_tag = autotag()
-                if len(wandb_tag) > 0:
-                    if len(existing_wandb_tag) > 0:
-                        os.environ["WANDB_TAGS"] = ",".join([existing_wandb_tag, wandb_tag])
-                    else:
-                        os.environ["WANDB_TAGS"] = wandb_tag
-                    logging.info(f"the following tags will be used for wandb logging: {os.environ['WANDB_TAGS']}")
-            except ImportError:
+            if not is_wandb_available():
                 raise ImportError(
                     "Please install wandb to use wandb logging. You can do this by running `pip install wandb`."
                 )
+
+            existing_wandb_tag = os.environ.get("WANDB_TAGS", "")
+            wandb_tag = autotag()
+            if len(wandb_tag) > 0:
+                if len(existing_wandb_tag) > 0:
+                    os.environ["WANDB_TAGS"] = ",".join([existing_wandb_tag, wandb_tag])
+                else:
+                    os.environ["WANDB_TAGS"] = wandb_tag
+                logging.info(f"the following tags will be used for wandb logging: {os.environ['WANDB_TAGS']}")
 
         self.total_ppo_epochs = int(np.ceil(self.steps / self.batch_size))
         assert self.kl_penalty in ["kl", "abs", "mse", "full"]

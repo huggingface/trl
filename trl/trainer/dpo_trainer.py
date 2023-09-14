@@ -21,20 +21,23 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import wandb
 from datasets import Dataset
 from torch.utils.data import DataLoader
 from transformers import DataCollator, PreTrainedModel, PreTrainedTokenizerBase, Trainer, TrainingArguments
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
 
-from ..import_utils import is_peft_available
+from ..import_utils import is_peft_available, is_wandb_available
 from ..models import create_reference_model
 from .utils import DPODataCollatorWithPadding, disable_dropout_in_model, pad_to_length
 
 
 if is_peft_available():
     from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
+
+
+if is_wandb_available():
+    import wandb
 
 
 class DPOTrainer(Trainer):
@@ -126,6 +129,12 @@ class DPOTrainer(Trainer):
             if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
                 model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=args.gradient_checkpointing)
             model = get_peft_model(model, peft_config)
+
+        if generate_during_eval and not is_wandb_available():
+            raise ValueError(
+                "`generate_during_eval=True` requires Weights and Biases to be installed."
+                " Please install `wandb` to resolve."
+            )
 
         if model is not None:
             self.is_encoder_decoder = model.config.is_encoder_decoder
