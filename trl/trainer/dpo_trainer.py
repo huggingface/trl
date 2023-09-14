@@ -463,7 +463,7 @@ class DPOTrainer(Trainer):
             return (loss, metrics)
         return loss
 
-    def get_batch_samples(self, model, batch: Dict[str, torch.LongTensor], return_tokens=False) -> Tuple[str, str]:
+    def get_batch_samples(self, model, batch: Dict[str, torch.LongTensor]) -> Tuple[str, str]:
         """Generate samples from the model and reference model for the given batch of inputs."""
 
         policy_output = model.generate(
@@ -498,10 +498,7 @@ class DPOTrainer(Trainer):
         reference_output = pad_to_length(reference_output, self.max_length, self.tokenizer.pad_token_id)
         reference_output_decoded = self.tokenizer.batch_decode(reference_output, skip_special_tokens=True)
 
-        if return_tokens:
-            return policy_output_decoded, reference_output_decoded, policy_output, reference_output
-        else:
-            return policy_output_decoded, reference_output_decoded
+        return policy_output_decoded, reference_output_decoded
 
     def prediction_step(
         self,
@@ -571,9 +568,7 @@ class DPOTrainer(Trainer):
             # Use itertools.islice to get the random batch without iterating over the DataLoader
             random_batch = next(itertools.islice(dataloader, random_index, None))
 
-            policy_output_decoded, ref_output_decoded, policy_output, reference_output = self.get_batch_samples(
-                self.model, random_batch, return_tokens=True
-            )
+            policy_output_decoded, ref_output_decoded = self.get_batch_samples(self.model, random_batch)
 
             logs.update(
                 {
