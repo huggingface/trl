@@ -158,11 +158,14 @@ class IterativeTrainer:
         PPODecorators.optimize_cuda_cache = self.config.optimize_cuda_cache
 
     def prepare_model_inputs(self, input_ids: torch.Tensor, attention_mask: torch.Tensor, labels: torch.Tensor):
+        if attention_mask is None:
+            attention_mask = [torch.ones_like(ids) for ids in input_ids]
+
         if self.is_encoder_decoder:
             input_data = self.data_collator(
                 [
-                    {"input_ids": i, "attention_mask": a, "labels": l}
-                    for i, a, l in zip(input_ids, attention_mask, labels)
+                    {"input_ids": ids, "attention_mask": att, "labels": lab}
+                    for ids, att, lab in zip(input_ids, attention_mask, labels)
                 ]
             ).to(self.model.device)
 
@@ -170,7 +173,7 @@ class IterativeTrainer:
 
         else:
             input_data = self.data_collator(
-                [{"input_ids": ids, "attention_mask": torch.ones_like(ids)} for ids in labels]
+                [{"input_ids": ids, "attention_mask": att} for ids, att in zip(input_ids, attention_mask)]
             ).to(self.model.device)
 
         return input_data
@@ -211,26 +214,38 @@ class IterativeTrainer:
         Returns:
             `tuple`: The input processed data.
         """
-        for name, tensor_list in zip(["input_ids", "attention_mask", "labels"], [input_ids, attention_mask, labels]):
-            if not isinstance(tensor_list, list):
-                raise ValueError(f"{name} must be a list of tensors - got {type(tensor_list)}")
-            if not isinstance(tensor_list[0], torch.Tensor):
-                raise ValueError(f"Elements in {name} must be tensors - got {type(tensor_list[0])}")
+        if attention_mask is None:
+            for name, tensor_list in zip(["input_ids", "labels"], [input_ids, labels]):
+                if not isinstance(tensor_list, list):
+                    raise ValueError(f"{name} must be a list of tensors - got {type(tensor_list)}")
+                if not isinstance(tensor_list[0], torch.Tensor):
+                    raise ValueError(f"Elements in {name} must be tensors - got {type(tensor_list[0])}")
+        else:
+            for name, tensor_list in zip(
+                ["input_ids", "attention_mask", "labels"], [input_ids, attention_mask, labels]
+            ):
+                if not isinstance(tensor_list, list):
+                    raise ValueError(f"{name} must be a list of tensors - got {type(tensor_list)}")
+                if not isinstance(tensor_list[0], torch.Tensor):
+                    raise ValueError(f"Elements in {name} must be tensors - got {type(tensor_list[0])}")
 
         return input_ids, attention_mask, labels
 
     @PPODecorators.empty_cuda_cache()
     def step(
-        self, input_ids: List[torch.LongTensor], attention_mask: List[torch.LongTensor], labels: List[torch.LongTensor]
+        self,
+        input_ids: List[torch.LongTensor],
+        attention_mask: Optional[List[torch.LongTensor]],
+        labels: Optional[List[torch.LongTensor]],
     ):
         """
         Run an optimisation step given a list of input_ids, attention_mask, and labels.
         Args:
             input_ids (List[`torch.LongTensor`]):
                 List of tensors containing the input_ids
-            attention_mask (List[`torch.LongTensor`]):
+            attention_mask (List[`torch.LongTensor`], , *optional*):
                 List of tensors containing the attention_mask
-            labels (List[`torch.FloatTensor`]):
+            labels (List[`torch.FloatTensor`], *optional*):
                 List of tensors containing the labels (if set to None, will default to input_ids)
         Returns:
             `dict[str, Any]`: A summary of the training statistics
@@ -238,8 +253,13 @@ class IterativeTrainer:
 
         self.model.train()
         if labels is None:
-            warnings.warn("No labels are provided. Setting labels to input_ids")
-            labels = input_ids
+            if self.is_encoder_decoder:
+                raise ValueError(
+                    "No labels are provided. When using an encoder-decoder architecture," "labels must be passed."
+                )
+            else:
+                warnings.warn("No labels are provided. Setting labels to input_ids")
+                labels = input_ids
 
         input_ids, attention_mask, labels = self._step_safety_checker(input_ids, attention_mask, labels)
 

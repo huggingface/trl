@@ -32,7 +32,7 @@ class IterativeConfig(object):
         metadata={"help": "Name of model to use - used only for tracking purposes"},
     )
     step_batch_size: Optional[int] = field(
-        default=256, metadata={"help": "Number of samples per optimisation step inside the step function"}
+        default=32, metadata={"help": "Number of samples per optimisation step inside the step function"}
     )
     learning_rate: Optional[float] = field(default=1e-5, metadata={"help": "Adam learning rate"})
     gradient_accumulation_steps: Optional[int] = field(
