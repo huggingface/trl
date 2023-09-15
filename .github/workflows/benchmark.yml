@@ -41,7 +41,10 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Cleanup pip packages (specific to self-hosted runners)
         run: |
-          pip freeze | xargs pip uninstall -y
+          pip_list=$(pip freeze)
+          if [ ! -z "$pip_list" ]; then
+              echo "$pip_list" | xargs pip uninstall -y
+          fi
       - name: Print python depdenencies
         run: pip freeze
       - name: Install dependencies
