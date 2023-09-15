@@ -82,14 +82,14 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
         **kwargs,
     ):
         super().__init__(*args, mlm=mlm, **kwargs)
-        
+
         self.instruction_template = instruction_template
         if isinstance(instruction_template, str):
             # The user provides a string, must tokenize
             self.instruction_token_ids = self.tokenizer.encode(self.instruction_template, add_special_tokens=False)
         else:
             # The user already provides the token ids
-            self.instruction_token_ids = instruction_template            
+            self.instruction_token_ids = instruction_template
 
         self.response_template = response_template
         if isinstance(response_template, str):
@@ -98,7 +98,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
         else:
             # The user already provides the token ids
             self.response_token_ids = response_template
-        
+
         self.ignore_index = ignore_index
 
     def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
