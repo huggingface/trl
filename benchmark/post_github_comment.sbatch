@@ -11,5 +11,5 @@ cleanup () {
 trap cleanup EXIT
 
 sleep 2m
-bash benchmark/plot_core.sh
+bash $BENCHMARK_PLOT_SCRIPT
 srun python benchmark/post_github_comment.py

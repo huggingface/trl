@@ -1,4 +1,3 @@
-
 # hello world experiment
 python benchmark/benchmark.py \
     --command "python examples/scripts/sentiment_tuning.py --ppo_config.log_with wandb" \

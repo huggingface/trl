@@ -15,7 +15,7 @@ echo PYTHONPATH is $PYTHONPATH
 echo whcih python is $(which python)
 
 export WANDB_ENTITY=huggingface
-bash benchmark/benchmark_core.sh > output.txt
+bash $BENCHMARK_SCRIPT > output.txt
 
 # Extract Job IDs into an array
 job_ids=($(grep "Job ID:" output.txt | awk '{print $3}'))
@@ -38,4 +38,4 @@ done
 echo "TAGS_STRING: $TAGS_STRING"
 echo "FOLDER_STRING: $FOLDER_STRING"
 
-TAGS_STRING=$TAGS_STRING FOLDER_STRING=$FOLDER_STRING WORK_DIR=$WORK_DIR sbatch --dependency=afterany:$job_ids benchmark/post_github_comment.sbatch
+TAGS_STRING=$TAGS_STRING FOLDER_STRING=$FOLDER_STRING BENCHMARK_PLOT_SCRIPT=$BENCHMARK_PLOT_SCRIPT sbatch --dependency=afterany:$job_ids benchmark/post_github_comment.sbatch
