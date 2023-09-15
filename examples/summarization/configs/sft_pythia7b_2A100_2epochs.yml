@@ -1,5 +1,6 @@
 model_name: "EleutherAI/pythia-6.9b-deduped"
 log_with: "wandb"
+learning_rate: 1e-5
 lr_scheduler_type: cosine
 num_warmup_steps: 100
 weight_decay: 0.05

@@ -45,7 +45,7 @@ class ScriptArguments:
     streaming: Optional[bool] = field(default=False, metadata={"help": "whether to stream the dataset"})
     shuffle_buffer: Optional[int] = field(default=5000, metadata={"help": "the shuffle buffer size"})
 
-    learning_rate: Optional[float] = field(default=2e-5, metadata={"help": "the learning rate"})
+    learning_rate: Optional[float] = field(default=1e-5, metadata={"help": "the learning rate"})
     lr_scheduler_type: Optional[str] = field(default="cosine")
     num_warmup_steps: Optional[int] = field(default=100)
     weight_decay: Optional[float] = field(default=0.05)
@@ -226,14 +226,15 @@ if __name__ == "__main__":
         trainer.evaluate()
     else:
         print("Training...")
-        trainer.train()
+        trainer.train(resume_from_checkpoint=args.output_dir)
 
         trainer.evaluate()
 
         print("Saving last checkpoint of the model")
-        trainer.save_model(args.output_dir)
+        output_dir = os.path.join(args.output_dir, "final_model")
+        trainer.save_model(output_dir)
 
-        output_dir = os.path.join(args.output_dir, "final_checkpoint")
+        output_dir = os.path.join(args.output_dir, "final_adapter_checkpoint")
         trainer.model.save_pretrained(output_dir)
 
         # Free memory for merging weights
