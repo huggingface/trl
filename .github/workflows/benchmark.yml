@@ -39,19 +39,19 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Cleanup pip packages (specific to self-hosted runners)
-        run: |
-          echo PATH is $PATH
-          echo PYTHONPATH is $PYTHONPATH
-          echo which python is $(which python)
-          echo which pip is $(which pip)
+      # - name: Cleanup pip packages (specific to self-hosted runners)
+      #   run: |
+      #     echo PATH is $PATH
+      #     echo PYTHONPATH is $PYTHONPATH
+      #     echo which python is $(which python)
+      #     echo which pip is $(which pip)
 
-          pip_list=$(pip list --format=freeze | grep -v "^pip==" | grep -v "^setuptools==")
-          if [ ! -z "$pip_list" ]; then
-              echo "$pip_list" | xargs pip uninstall -y
-          fi
+      #     pip_list=$(pip list --format=freeze | grep -v "^pip==" | grep -v "^setuptools==")
+      #     if [ ! -z "$pip_list" ]; then
+      #         echo "$pip_list" | xargs pip uninstall -y
+      #     fi
       - name: Print python depdenencies
-        run: pip freeze
+        run: pip list --format=freeze
       - name: Install dependencies
         run: |
           pip install .[test,benchmark]
