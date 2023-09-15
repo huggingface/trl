@@ -11,7 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import Callable, List, Optional
+import warnings
+from typing import List, Optional
 
 import torch
 from accelerate import Accelerator
@@ -19,7 +20,13 @@ from accelerate.utils import ProjectConfiguration
 from datasets import Dataset
 from torch.optim import Adam
 from torch.utils.data import DataLoader
-from transformers import PreTrainedModel, PreTrainedTokenizer, PreTrainedTokenizerBase, PreTrainedTokenizerFast
+from transformers import (
+    DataCollator,
+    DataCollatorForLanguageModeling,
+    DataCollatorForSeq2Seq,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+)
 
 from ..core import PPODecorators, set_seed
 from . import IterativeConfig
@@ -31,15 +38,15 @@ class IterativeTrainer:
 
     Attributes:
         **config** (`IterativeConfig`) -- Configuration object for IterativeTrainer.
-        **model** (`PreTrainedModel`) -- Model to be optimized, Hugging Face transformer model with a causal language modeling head.
-            Check the documentation of `PreTrainedModelWrapper` for more details.
+        **model** (`PreTrainedModel`) -- Model to be optimized, either an 'AutoModelForCausalLM' or an 'AutoModelForSeq2SeqLM'.
+            Check the documentation of `PreTrainedModel` for more details.
         **tokenizer** (`PreTrainedTokenizerBase`) -- Tokenizer to be used for encoding the
             data. Check the documentation of `transformers.PreTrainedTokenizer` and
             `transformers.PreTrainedTokenizerFast` for more details.
         **optimizer** (`torch.optim.Optimizer`, *optional*) -- Optimizer to be used for training. If no optimizer is
             provided, the trainer will create an Adam optimizer with the learning rate specified in the configuration
             object.
-        **data_collator** (DataCollatorForLanguageModeling, *optional*) -- Data collator to be used for training and
+        **data_collator** (Union[DataCollatorForLanguageModeling, DataCollatorForSeq2Seq], *optional*) -- Data collator to be used for training and
             passed along the dataloader.
     """
 
@@ -49,7 +56,7 @@ class IterativeTrainer:
         model: PreTrainedModel = None,
         tokenizer: PreTrainedTokenizerBase = None,
         optimizer: Optional[torch.optim.Optimizer] = None,
-        data_collator: Callable = None,
+        data_collator: Optional[DataCollator] = None,
     ):
         """
         Initialize IterativeTrainer.
@@ -60,10 +67,10 @@ class IterativeTrainer:
             model (`PreTrainedModel`):
                 Hugging Face transformer model.
             tokenizer (`transformers.PreTrainedTokenizerBase`):
-                Hugging Face tokenizer
+                Hugging Face tokenizer.
             optimizer (Optional[`torch.optim.Optimizer`]):
-                Optimizer used for training. If `None`, the `Adam` is used as default.
-            data_collator (Optional[function]):
+                Optimizer used for training. If `None`, `Adam` is used as default.
+            data_collator (Optional['DataCollator']):
                 Data collator function.
         """
 
@@ -78,6 +85,13 @@ class IterativeTrainer:
         if not isinstance(tokenizer, (PreTrainedTokenizerBase)):
             raise ValueError(
                 f"tokenizer must be a PreTrainedTokenizerBase like a PreTrainedTokenizer or a PreTrainedTokenizerFast, got {type(tokenizer)}"
+            )
+        if not isinstance(model, (PreTrainedModel)):
+            raise ValueError(f"model must be a PreTrainedModel, got {type(model)}")
+        if not model.can_generate():
+            warnings.warn(
+                f"The current model class {type(model)} is not compatible with `.generate()`"
+                "Please make sure that this is intended."
             )
 
         # Step 1: Initialize Accelerator
@@ -101,13 +115,22 @@ class IterativeTrainer:
         self.is_encoder_decoder = hasattr(self.model, "is_encoder_decoder")
         self.is_peft_model = getattr(self.model, "is_peft_model", False)
 
-        if not (isinstance(tokenizer, PreTrainedTokenizer) or isinstance(tokenizer, PreTrainedTokenizerFast)):
-            raise ValueError(
-                "tokenizer must be a transformers.PreTrainedTokenizer or transformers.PreTrainedTokenizerFast"
-            )
         self.tokenizer = tokenizer
 
-        self.data_collator = data_collator
+        if data_collator is None:
+            if self.is_encoder_decoder:
+                warnings.warn(
+                    "No data collator is provided. Using 'DataCollatorForSeq2Seq' with"
+                    "'labels_pad_token_id' set to '-100' and 'pad_to_multiple_of' set to 8."
+                )
+                self.data_collator = DataCollatorForSeq2Seq(
+                    tokenizer, model=self.model, label_pad_token_id=-100, pad_to_multiple_of=8
+                )
+            else:
+                warnings.warn("No data collator is provided. Using 'DataCollatorForLanguageModeling'")
+                self.data_collator = DataCollatorForLanguageModeling(self.tokenizer, mlm=False)
+        else:
+            self.data_collator = data_collator
 
         if optimizer is None:
             self.optimizer = Adam(
@@ -117,10 +140,8 @@ class IterativeTrainer:
         else:
             self.optimizer = optimizer
 
-        (self.model, self.optimizer, self.data_collator,) = self.accelerator.prepare(
-            self.model,
-            self.optimizer,
-            self.data_collator,
+        (self.model, self.optimizer, self.data_collator) = self.accelerator.prepare(
+            self.model, self.optimizer, self.data_collator
         )
 
         self.is_distributed = self.accelerator.distributed_type == "MULTI_GPU"
@@ -131,9 +152,10 @@ class IterativeTrainer:
         else:
             self.current_device = torch.device("cuda:0")
 
-        PPODecorators.optimize_cuda_cache = self.config.optimize_cuda_cache
+        # init the current step
+        self.current_step = 0
 
-        self.is_encoder_decoder = hasattr(self.model, "is_encoder_decoder")
+        PPODecorators.optimize_cuda_cache = self.config.optimize_cuda_cache
 
     def prepare_model_inputs(self, input_ids: torch.Tensor, attention_mask: torch.Tensor, labels: torch.Tensor):
         if self.is_encoder_decoder:
@@ -144,14 +166,14 @@ class IterativeTrainer:
                 ]
             ).to(self.model.device)
 
+            input_data.pop("decoder_input_ids", None)  # This is directly computed inside the model
+
         else:
             input_data = self.data_collator(
                 [{"input_ids": ids, "attention_mask": torch.ones_like(ids)} for ids in labels]
             ).to(self.model.device)
 
-            input_data.pop("decoder_input_ids", None)  # This is directly computed inside the model
-
-            return input_data
+        return input_data
 
     def compute_loss(self, model, inputs, return_outputs=False):
         """
@@ -172,6 +194,31 @@ class IterativeTrainer:
 
         return (loss, outputs) if return_outputs else loss
 
+    @staticmethod
+    def _step_safety_checker(
+        input_ids: List[torch.LongTensor], attention_mask: List[torch.LongTensor], labels: List[torch.LongTensor]
+    ):
+        """
+        Check if the input data is valid for training.
+
+        Args:
+            input_ids (List[`torch.LongTensor`]):
+                List of tensors containing the input_ids
+            attention_mask (List[`torch.LongTensor`]):
+                List of tensors containing the attention_mask
+            labels (List[`torch.FloatTensor`]):
+                List of tensors containing the labels
+        Returns:
+            `tuple`: The input processed data.
+        """
+        for name, tensor_list in zip(["input_ids", "attention_mask", "labels"], [input_ids, attention_mask, labels]):
+            if not isinstance(tensor_list, list):
+                raise ValueError(f"{name} must be a list of tensors - got {type(tensor_list)}")
+            if not isinstance(tensor_list[0], torch.Tensor):
+                raise ValueError(f"Elements in {name} must be tensors - got {type(tensor_list[0])}")
+
+        return input_ids, attention_mask, labels
+
     @PPODecorators.empty_cuda_cache()
     def step(
         self, input_ids: List[torch.LongTensor], attention_mask: List[torch.LongTensor], labels: List[torch.LongTensor]
@@ -182,7 +229,7 @@ class IterativeTrainer:
             input_ids (List[`torch.LongTensor`]):
                 List of tensors containing the input_ids
             attention_mask (List[`torch.LongTensor`]):
-                List of tensors containing the attenton_mask
+                List of tensors containing the attention_mask
             labels (List[`torch.FloatTensor`]):
                 List of tensors containing the labels (if set to None, will default to input_ids)
         Returns:
@@ -190,6 +237,12 @@ class IterativeTrainer:
         """
 
         self.model.train()
+        if labels is None:
+            warnings.warn("No labels are provided. Setting labels to input_ids")
+            labels = input_ids
+
+        input_ids, attention_mask, labels = self._step_safety_checker(input_ids, attention_mask, labels)
+
         model_inputs = self.prepare_model_inputs(input_ids, attention_mask, labels)
 
         model_inputs_names = list(model_inputs.keys())
@@ -230,3 +283,31 @@ class IterativeTrainer:
                 all_stats.append(dict(loss=dict(total=loss.detach())))
 
         return all_stats
+
+    def log_stats(
+        self,
+        stats: dict,
+    ):
+        """
+        A function that logs all the training stats.
+
+        Args:
+            stats (dict[str, Any]):
+                A dictionary of training stats.
+        """
+        # Log only if we are in the main process
+        if self.accelerator.is_main_process:
+            logs = {}
+
+            logs.update(stats)
+
+            # manually cast in fp32 for bf16 torch tensors
+            for k, v in logs.items():
+                if isinstance(v, torch.Tensor) and v.dtype == torch.bfloat16:
+                    logs[k] = v.float()
+
+            if self.config.log_with == "tensorboard":
+                # update the current step
+                self.current_step += 1
+
+            self.accelerator.log(logs, step=self.current_step if self.config.log_with == "tensorboard" else None)
