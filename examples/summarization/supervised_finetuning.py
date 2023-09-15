@@ -13,12 +13,10 @@ from transformers import (
     BitsAndBytesConfig,
     HfArgumentParser,
     TrainingArguments,
-    logging,
     set_seed,
 )
 
-from trl import SFTTrainer
-from trl.trainer import ConstantLengthDataset
+from trl import DataCollatorForCompletionOnlyLM, SFTTrainer
 
 
 tqdm.pandas()
@@ -36,11 +34,18 @@ class ScriptArguments:
     dataset_name: Optional[str] = field(
         default="CarperAI/openai_summarize_tldr", metadata={"help": "the dataset name"}
     )
+    train_split: Optional[str] = field(
+        default="train", metadata={"help": "the dataset split to evaluate on; default to 'none' (no evaluation)"}
+    )
+    eval_split: Optional[str] = field(
+        default="valid[:2000]",
+        metadata={"help": "the dataset split to evaluate on; default to 'none' (no evaluation)"},
+    )
     log_with: Optional[str] = field(default="wandb", metadata={"help": "use 'wandb' to log with wandb"})
     streaming: Optional[bool] = field(default=False, metadata={"help": "whether to stream the dataset"})
     shuffle_buffer: Optional[int] = field(default=5000, metadata={"help": "the shuffle buffer size"})
 
-    learning_rate: Optional[float] = field(default=1e-5, metadata={"help": "the learning rate"})
+    learning_rate: Optional[float] = field(default=2e-5, metadata={"help": "the learning rate"})
     lr_scheduler_type: Optional[str] = field(default="cosine")
     num_warmup_steps: Optional[int] = field(default=100)
     weight_decay: Optional[float] = field(default=0.05)
@@ -52,7 +57,6 @@ class ScriptArguments:
         default=16, metadata={"help": "the per device train batch size"}
     )
     per_device_eval_batch_size: Optional[int] = field(default=1, metadata={"help": "the per device eval batch size"})
-    seq_length: Optional[int] = field(default=512, metadata={"help": "Input sequence length"})
     gradient_accumulation_steps: Optional[int] = field(
         default=16, metadata={"help": "the number of gradient accumulation steps"}
     )
@@ -68,16 +72,16 @@ class ScriptArguments:
     lora_dropout: Optional[float] = field(default=0.05, metadata={"help": "the lora dropout parameter"})
     lora_r: Optional[int] = field(default=8, metadata={"help": "the lora r parameter"})
     trust_remote_code: Optional[bool] = field(default=True, metadata={"help": "Enable `trust_remote_code`"})
-    # use_auth_token: Optional[bool] = field(default=True, metadata={"help": "Use HF auth token to access the model"})
     bf16: Optional[bool] = field(default=True)
+    train_completions: Optional[bool] = field(default=False)
 
     output_dir: Optional[str] = field(default="./results", metadata={"help": "the output directory"})
     log_freq: Optional[int] = field(default=1, metadata={"help": "the logging frequency"})
     logging_steps: Optional[int] = field(default=10, metadata={"help": "the number of logging steps"})
-    eval_steps: Optional[int] = field(default=1000, metadata={"help": "the number of logging steps"})
-    save_steps: Optional[int] = field(default=10000, metadata={"help": "the number of logging steps"})
+    eval_steps: Optional[int] = field(default=1000, metadata={"help": "the number of steps to eval at"})
+    save_steps: Optional[int] = field(default=1000, metadata={"help": "the number of steps to save at"})
     seed: Optional[int] = field(default=0)
-    just_eval: Optional[bool] = field(default=False, metadata={"help": "whether to use gradient checkpointing"})
+    just_eval: Optional[bool] = field(default=False)
 
 
 def chars_token_ratio(dataset, tokenizer, nb_examples=400):
@@ -103,42 +107,18 @@ def prepare_sample_text(example):
 def create_datasets(tokenizer, args):
     train_data = load_dataset(
         args.dataset_name,
-        split="train",
+        split=args.train_split,
         streaming=args.streaming,
     )
 
     if args.streaming:
         train_data = train_data.shuffle(buffer_size=args.shuffle_buffer, seed=args.seed)
 
-    chars_per_token = chars_token_ratio(train_data, tokenizer)
-    print(f"The character to token ratio of the train dataset is: {chars_per_token:.2f}")
-
-    train_dataset = ConstantLengthDataset(
-        tokenizer,
-        train_data,
-        formatting_func=prepare_sample_text,
-        infinite=True,
-        seq_length=args.seq_length,
-        chars_per_token=chars_per_token,
-    )
-
-    # trlx does this, taking only 2000
     valid_data = load_dataset(
         args.dataset_name,
-        split="valid[:2000]",
+        split=args.eval_split,
     )
-
-    chars_per_token = chars_token_ratio(valid_data, tokenizer)
-
-    valid_dataset = ConstantLengthDataset(
-        tokenizer,
-        valid_data,
-        formatting_func=prepare_sample_text,
-        infinite=False,
-        seq_length=args.seq_length,
-        chars_per_token=chars_per_token,
-    )
-    return train_dataset, valid_dataset
+    return train_data, valid_data
 
 
 if __name__ == "__main__":
@@ -180,24 +160,8 @@ if __name__ == "__main__":
         tokenizer.pad_token = tokenizer.eos_token
     train_dataset, eval_dataset = create_datasets(tokenizer, args)
 
-    # training_args = TrainingArguments(
-    #     output_dir=args.output_dir,
-    #     per_device_train_batch_size=args.per_device_train_batch_size,
-    #     gradient_accumulation_steps=args.gradient_accumulation_steps,
-    #     per_device_eval_batch_size=args.per_device_eval_batch_size,
-    #     learning_rate=args.learning_rate,
-    #     logging_steps=args.logging_steps,
-    #     max_steps=args.max_steps,
-    #     report_to=args.log_with,
-    #     eval_steps=args.eval_steps,
-    #     save_steps=args.save_steps,
-    #     lr_scheduler_type=args.lr_scheduler_type,
-    #     warmup_steps=args.num_warmup_steps,
-    #     optim=args.optimizer_type,
-    #     bf16=True,
-    #     remove_unused_columns=False,
-    #     run_name="sft_llama2",
-    # )
+    if args.train_completions:
+        data_collator = DataCollatorForCompletionOnlyLM(tokenizer=tokenizer, response_template="TLDR;")
 
     training_args = TrainingArguments(
         output_dir=args.output_dir,
@@ -237,11 +201,11 @@ if __name__ == "__main__":
     else:
         peft_config = None
 
-    train_dataset.start_iteration = 0
+    chars_per_token = chars_token_ratio(train_dataset, tokenizer)
+    print(f"The character to token ratio of the train dataset is: {chars_per_token:.2f}")
 
     print("Starting main loop")
 
-    # TODO maybe switch to DataCollatorForCompletionOnlyLM
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
@@ -250,7 +214,9 @@ if __name__ == "__main__":
         eval_dataset=eval_dataset,
         peft_config=peft_config,
         max_seq_length=args.seq_length,
-        packing=True,
+        formatting_func=prepare_sample_text,
+        packing=(not args.train_completions),
+        chars_per_token=chars_per_token,
     )
 
     if args.use_peft:
@@ -261,6 +227,8 @@ if __name__ == "__main__":
     else:
         print("Training...")
         trainer.train()
+
+        trainer.evaluate()
 
         print("Saving last checkpoint of the model")
         trainer.save_model(args.output_dir)

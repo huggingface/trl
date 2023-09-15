@@ -7,3 +7,4 @@ bf16: False
 streaming: False
 per_device_eval_batch_size: 1
 just_eval: True
+train_completions: True
