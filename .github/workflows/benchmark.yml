@@ -46,7 +46,7 @@ jobs:
           echo which python is $(which python)
           echo which pip is $(which pip)
 
-          pip_list=$(pip list --format=freeze)
+          pip_list=$(pip list --format=freeze | grep -v "^pip==" | grep -v "^setuptools==")
           if [ ! -z "$pip_list" ]; then
               echo "$pip_list" | xargs pip uninstall -y
           fi
