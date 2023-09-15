@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        python-version: [3.8]
+        python-version: [3.9]
         os: [self-hosted]
 
     name: Benchmark
@@ -39,6 +39,11 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Cleanup pip packages (specific to self-hosted runners)
+        run: |
+          pip freeze | xargs pip uninstall -y
+      - name: Print python depdenencies
+        run: pip freeze
       - name: Install dependencies
         run: |
           pip install .[test,benchmark]
