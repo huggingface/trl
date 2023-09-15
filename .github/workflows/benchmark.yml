@@ -41,7 +41,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Cleanup pip packages (specific to self-hosted runners)
         run: |
-          pip_list=$(pip freeze)
+          pip_list=$(pip list --format=freeze)
           if [ ! -z "$pip_list" ]; then
               echo "$pip_list" | xargs pip uninstall -y
           fi
