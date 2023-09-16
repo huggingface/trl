@@ -15,6 +15,7 @@ from transformers import (
     TrainingArguments,
     set_seed,
 )
+from transformers.trainer_utils import get_last_checkpoint
 
 from trl import DataCollatorForCompletionOnlyLM, SFTTrainer
 
@@ -82,6 +83,7 @@ class ScriptArguments:
     save_steps: Optional[int] = field(default=1000, metadata={"help": "the number of steps to save at"})
     seed: Optional[int] = field(default=0)
     just_eval: Optional[bool] = field(default=False)
+    resume_from_checkpoint: Optional[str] = field(default=None)
 
 
 def chars_token_ratio(dataset, tokenizer, nb_examples=400):
@@ -143,18 +145,22 @@ if __name__ == "__main__":
     else:
         torch_dtype = None
 
+    n_gpus = torch.cuda.device_count()
+    max_memory = "32000MB"
+    max_memory = {i: max_memory for i in range(n_gpus)}
+
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name,
         quantization_config=quantization_config,
         device_map=device_map,
         trust_remote_code=args.trust_remote_code,
         torch_dtype=torch_dtype,
+        max_memory=max_memory,
         token=True,
     )
     model.config.use_cache = False
 
     print("Loading dataset")
-    print(args.tokenizer_name)
     tokenizer = AutoTokenizer.from_pretrained(args.model_name if args.tokenizer_name is None else args.tokenizer_name)
     if getattr(tokenizer, "pad_token", None) is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -170,7 +176,7 @@ if __name__ == "__main__":
         dataloader_drop_last=True,
         evaluation_strategy="steps",
         max_steps=args.max_steps,
-        # num_train_epochs=args.num_train_epochs,
+        num_train_epochs=args.num_train_epochs,
         eval_steps=args.eval_steps,
         save_steps=args.save_steps,
         logging_steps=args.logging_steps,
@@ -186,7 +192,7 @@ if __name__ == "__main__":
         remove_unused_columns=False,
         disable_tqdm=False,
         # find_unused_params is necessary for grad checkpointing
-        ddp_find_unused_parameters=(not args.gradient_checkpointing),
+        ddp_find_unused_parameters=(args.gradient_checkpointing),
     )
 
     if args.use_peft:
@@ -222,11 +228,15 @@ if __name__ == "__main__":
     if args.use_peft:
         trainer.model.print_trainable_parameters()
 
-    if args.just_eval:
-        trainer.evaluate()
-    else:
+    if not args.just_eval:
+        if args.resume_from_checkpoint is not None:
+            last_checkpoint = args.resume_from_checkpoint
+        else:
+            # when job is interrupted and restarted
+            last_checkpoint = get_last_checkpoint(args.output_dir)
+
         print("Training...")
-        trainer.train(resume_from_checkpoint=args.output_dir)
+        trainer.train(resume_from_checkpoint=last_checkpoint)
 
         trainer.evaluate()
 
@@ -246,3 +256,5 @@ if __name__ == "__main__":
 
         output_merged_dir = os.path.join(args.output_dir, "final_merged_checkpoint")
         model.save_pretrained(output_merged_dir, safe_serialization=True)
+    else:
+        trainer.evaluate()
