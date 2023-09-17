@@ -1,5 +1,7 @@
+import argparse
 import os
 from collections import defaultdict
+from functools import partial
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -98,7 +100,7 @@ def compute_perplexities(
 
 class GPT2TopicReward(object):
     WORDLISTS_BASE_DIR = "./demo_data/wordlists"
-    PPLM_INPUTS_FILE_NAME = "./demo_data/pplm-inputs.txt"
+    PPLM_INPUTS_FILE_NAME = "./demo_data/pplm-inputs.txt"  # completions file
     TOPICS = ["legal", "politics", "computers", "space", "religion", "science", "military"]
 
     def __init__(
@@ -112,7 +114,6 @@ class GPT2TopicReward(object):
     ) -> None:
 
         if topic_scores_aggregator is None:
-            # Use the average by default
             topic_scores_aggregator = np.mean
 
         # if include_perplexity is True:
@@ -148,9 +149,6 @@ class GPT2TopicReward(object):
             file_name = os.path.join(self.WORDLISTS_BASE_DIR, f"{topic}.txt")
 
             with open(file_name) as f:
-                # There is one file that capitalized all words
-                # hence it's likely better to lower case all of
-                # them -- with the risk of hurting some words
                 topic_to_candidate_labels_map[topic] = [d.strip().lower() for d in f.readlines()]
 
         with open(self.PPLM_INPUTS_FILE_NAME) as f:
@@ -186,8 +184,8 @@ class GPT2TopicReward(object):
             if len(output["scores"]) != len(candidate_labels):
                 raise ValueError
 
-    def forward(
-        self, topics: List[str], prompts: List[str], to_tensor: bool, mode: str
+    def __call__(
+        self, *, topics: List[str], prompts: List[str], to_tensor: bool, mode: str
     ) -> Tuple[Union[List[float], FloatTensor], Dict[str, Any]]:
         if mode not in ["train", "infer"]:
             raise ValueError
@@ -267,50 +265,78 @@ class GPT2TopicReward(object):
         else:
             return rewards_tensor.tolist(), rewards_log
 
-    def __call__(
-        self,
-        sources: List[str],
-        targets: List[str],
-        predictions: List[str],
-        to_tensor: bool,
-        mode: str,
-    ) -> Tuple[Union[List[float], FloatTensor], Dict[str, Any]]:
-        return self.forward(topics=sources, prompts=predictions, to_tensor=to_tensor, mode=mode)
+
+def reward_function(
+    *,
+    gpt: GPT2TopicReward,
+    sources: List[str],
+    targets: List[str],
+    predictions: List[str],
+    to_tensor: bool,
+    mode: str,
+) -> Tuple[Union[List[float], FloatTensor], Dict[str, Any]]:
+    return gpt(topics=sources, prompts=predictions, to_tensor=to_tensor, mode=mode)
 
 
-source_file_name = "./demo_data/train.sources.20210424"
-labels_file_name = "./demo_data/train.targets.20210424"
+def parse_args():
+    parser = argparse.ArgumentParser()
+    # parser.add_argument("--model_name_or_path", type=str, default="bert-base-uncased")
+    # parser.add_argument("--classifier_name_or_path", type=str, default="bert-base-uncased")
+    # parser.add_argument("--num_return_sequences_train", type=int, default=1)
+    # parser.add_argument("--num_return_sequences_infer", type=int, default=1)
+    # parser.add_argument("--max_length", type=int, default=20)
+    # parser.add_argument("--include_perplexity", action="store_true")
+    # parser.add_argument("--return_intermediate_outputs", action="store_true")
+    # parser.add_argument("--topic_scores_aggregator", type=str, default="mean")
+    # parser.add_argument("--device", type=str, default="cpu")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--batch_size", type=int, default=5)
+    parser.add_argument("--learning_rate", type=float, default=1e-3)
+    parser.add_argument("--target_learning_rate", type=float, default=1e-3)
+    parser.add_argument("--target_sync_method", type=str, choices=["polyak", "copy"], default="polyak")
+    parser.add_argument("--num_train_epochs", type=int, default=1)
+    parser.add_argument("--source_file_name", type=str, default="./demo_data/train.sources.20210424")
+    parser.add_argument("--labels_file_name", type=str, default="./demo_data/train.targets.20210424")
+    parser.add_argument("--mix_strategy", type=str, choices=["mix", "alternate"], default="mix")
 
-config_decoder, config_encoder = BertConfig(), BertConfig()
-config = EncoderDecoderConfig.from_encoder_decoder_configs(config_encoder, config_decoder)
-model = EncoderDecoderModel(config=config)
+    return parser.parse_args()
 
-model.config.decoder_start_token_id = tokenizer.cls_token_id
-model.config.pad_token_id = tokenizer.pad_token_id
 
-dataset = CustomTextDataset(source_file_name, labels_file_name)
-dataloader = DataLoader(dataset, batch_size=5, shuffle=True, collate_fn=collate_fn)
+if __name__ == "__main__":
+    args = parse_args()
+    source_file_name = args.source_file_name
+    labels_file_name = args.labels_file_name
 
-config = SoftQLearningConfig(
-    mix_strategy="mix",
-    target_sync_method="polyak",
-    learning_rate=0.001,
-    target_learning_rate=0.001,
-    log_with="wandb",
-    tracker_kwargs={"wandb_project": "soft-q-learning"},
-    gradient_accumulation_steps=1,
-)
+    config_decoder, config_encoder = BertConfig(), BertConfig()
+    config = EncoderDecoderConfig.from_encoder_decoder_configs(config_encoder, config_decoder)
+    model = EncoderDecoderModel(config=config)
 
-qtrainer = SoftQLearningTrainer(
-    model=model,
-    tokenizer=tokenizer,
-    reward_function=GPT2TopicReward(),
-    target_model=None,
-    device=device,
-    config=config,
-)
-#
-for i, batch in enumerate(dataloader):
-    # qtrainer._forward_SQL(ForwardMode.SQL_OFF, batch)
-    logs = qtrainer.step(batch, i)
-    print(logs)
+    model.config.decoder_start_token_id = tokenizer.cls_token_id
+    model.config.pad_token_id = tokenizer.pad_token_id
+
+    dataset = CustomTextDataset(source_file_name, labels_file_name)
+    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn)
+
+    config = SoftQLearningConfig(
+        mix_strategy=args.mix_strategy,
+        target_sync_method=args.target_sync_method,
+        learning_rate=args.learning_rate,
+        target_learning_rate=args.target_learning_rate,
+        log_with="wandb",
+        tracker_kwargs={"wandb_project": "soft-q-learning"},
+        gradient_accumulation_steps=1,
+    )
+
+    qtrainer = SoftQLearningTrainer(
+        model=model,
+        tokenizer=tokenizer,
+        reward_function=partial(reward_function, gpt=GPT2TopicReward()),
+        target_model=None,
+        device=device,
+        config=config,
+    )
+
+    for epoch in range(args.num_train_epochs):
+        for i, batch in enumerate(dataloader):
+            # qtrainer._forward_SQL(ForwardMode.SQL_OFF, batch)
+            logs = qtrainer.step(batch, i)
