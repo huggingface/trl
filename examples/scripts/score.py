@@ -31,7 +31,7 @@ class ScriptArguments:
     fp16: Optional[bool] = field(default=True if not torch.cuda.get_device_capability()[0] == 8 else False, metadata={"help": "whether to use fp16."})
 
 
-def score(script_args, reward_dataset = None):
+def score(script_args, reward_dataset = None, save_dataset_path = None):
     
     accelerator = Accelerator(
         mixed_precision= "bf16" if script_args.bf16 else "fp16" if script_args.fp16 else "no"
@@ -95,7 +95,10 @@ def score(script_args, reward_dataset = None):
     reward_dataset = reward_dataset.map(postprocess_function, batched=True, remove_columns=list(reward_dataset.features))
     
     if accelerator.is_local_main_process:
-        reward_dataset.save_to_disk(script_args.save_dataset_path)
+        if save_dataset_path is None:
+            reward_dataset.save_to_disk(script_args.save_dataset_path)
+        else:
+            reward_dataset.save_to_disk(save_dataset_path)
     
     return reward_dataset
     

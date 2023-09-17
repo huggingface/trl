@@ -37,7 +37,7 @@ def extract_anthropic_prompt(prompt_and_response):
     assert search_term_idx != -1, f"Prompt and response does not contain '{search_term}'"
     return prompt_and_response[: search_term_idx + len(search_term)]
     
-def generate(script_args):
+def generate(script_args, save_dataset_path = None):
     
     accelerator = Accelerator(
         mixed_precision= "bf16" if script_args.bf16 else "fp16" if script_args.fp16 else "no"
@@ -86,40 +86,62 @@ def generate(script_args):
     accelerator.wait_for_everyone()
     
     all_predictions = []
+    all_prompts = []
     pbar = tqdm(total=len(dataloader), disable=not accelerator.is_local_main_process)
     # to be verified
     for batch in dataloader:
         with torch.no_grad():
             
-            generated_tokens = accelerator.unwrap_model(model).generate(
+            sequence_length = batch["input_ids"].shape[1]
+            
+            all_tokens = accelerator.unwrap_model(model).generate(
                 batch["input_ids"],
                 attention_mask=batch["attention_mask"],
-                pad_token_id=tokenizer.eos_token_id,
+                pad_token_id=tokenizer.pad_token_id,
                 **gen_kwargs,
             )
 
+            generated_tokens = torch.tensor([tokens[sequence_length:].tolist() for tokens in all_tokens], device=accelerator.device)
+            prompt_tokens = torch.tensor([tokens[:sequence_length].tolist() for tokens in all_tokens], device=accelerator.device)
+            
             generated_tokens = accelerator.pad_across_processes(
                 generated_tokens, dim=1, pad_index=tokenizer.pad_token_id
+            )
+            
+            prompt_tokens = accelerator.pad_across_processes(
+                prompt_tokens, dim=1, pad_index=tokenizer.pad_token_id
             )
 
             generated_tokens = accelerator.gather(generated_tokens)
             generated_tokens = generated_tokens.cpu()
+            prompt_tokens = accelerator.gather(prompt_tokens)
+            prompt_tokens = prompt_tokens.cpu()
 
             if isinstance(generated_tokens, tuple):
                 generated_tokens = generated_tokens[0]
+                prompt_tokens = prompt_tokens[0]
 
             all_predictions.extend(generated_tokens)
+            all_prompts.extend(prompt_tokens)
             pbar.update(1)
 
     accelerator.wait_for_everyone()
     
     all_predictions = tokenizer.batch_decode(all_predictions, skip_special_tokens=True)[:len(dataset)]
     
+    # postprocessing
+    all_predictions = [preds.split("Human:")[0].strip() for preds in all_predictions]
+    all_prompts = tokenizer.batch_decode(all_prompts, skip_special_tokens=True)[:len(dataset)]
+    
+    generated = [prompt + " " + preds for prompt, preds in zip(all_prompts, all_predictions)]
+    
     generated_dataset = Dataset.from_dict(
         {
-            script_args.generation_column_name: all_predictions
+            script_args.generation_column_name: generated
         }
     )
+    
+    accelerator.print(generated_dataset[0])
     
     # Concatenate the two datasets
     dataset = load_dataset(script_args.dataset_name, split="train")
@@ -132,7 +154,10 @@ def generate(script_args):
     d_g = concatenate_datasets([dataset, generated_dataset])
     
     if accelerator.is_local_main_process:
-        d_g.save_to_disk(script_args.save_dataset_path)
+        if save_dataset_path is None:
+            d_g.save_to_disk(script_args.save_dataset_path)
+        else:
+            d_g.save_to_disk(save_dataset_path)
     
     return d_g
     

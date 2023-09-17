@@ -86,8 +86,14 @@ def main():
     for grow_step in range(script_args.num_grow_steps):
 
         if script_args.train_dataset_path is not None or grow_step != 0:
-            generated_dataset = generate.generate(script_args)
-            dataset = score.score(script_args, reward_dataset=generated_dataset)
+            generated_dataset = generate.generate(
+                script_args, save_dataset_path=script_args.save_dataset_path + f"_{grow_step}"
+            )
+            dataset = score.score(
+                script_args,
+                reward_dataset=generated_dataset,
+                save_dataset_path=script_args.save_dataset_path + f"_{grow_step}",
+            )
         else:
             dataset = load_from_disk(script_args.save_dataset_path)
             if script_args.sanity_check:
