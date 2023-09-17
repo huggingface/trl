@@ -11,6 +11,7 @@ import numpy as np
 import score
 import torch
 from datasets import load_from_disk
+from torch.optim import AdamW
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
 from trl import IterativeConfig, IterativeTrainer
@@ -19,6 +20,7 @@ from trl import IterativeConfig, IterativeTrainer
 @dataclass
 class ScriptArguments:
 
+    learning_rate: Optional[float] = field(default=2e-5)
     num_grow_steps: Optional[int] = field(default=1)
     num_improve_steps: Optional[int] = field(default=1)
     evaluation_step: Optional[str] = field(
@@ -26,6 +28,9 @@ class ScriptArguments:
     )
     save_model_step: Optional[str] = field(
         default="no", metadata={"help": "Choose between 'grow_step', 'improve_step', 'no'."}
+    )
+    train_dataset_path: Optional[str] = field(
+        default=None, metadata={"help": "Path to the grow dataset, if generation and scoring were already run"}
     )
 
     model_name_or_path: Optional[str] = field(default=None, metadata={"help": "the model name"})
@@ -80,11 +85,23 @@ def main():
 
     for grow_step in range(script_args.num_grow_steps):
 
-        generate.generate(script_args)
-        score.score(script_args)
+        if script_args.train_dataset_path is not None or grow_step != 0:
+            generated_dataset = generate.generate(script_args)
+            dataset = score.score(script_args, reward_dataset=generated_dataset)
+        else:
+            dataset = load_from_disk(script_args.save_dataset_path)
+            if script_args.sanity_check:
+                dataset = dataset.select(range(min(len(dataset), 500)))
 
         if grow_step != 0:
             model = AutoModelForCausalLM.from_pretrained(script_args.save_model_path)
+            optimizer = AdamW(
+                filter(lambda p: p.requires_grad, model.parameters()),
+                lr=script_args.learning_rate,
+            )
+            model, optimizer, data_collator = trainer.accelerator.prepare(model, optimizer, trainer.data_collator)
+            trainer.model, trainer.optimizer, trainer.data_collator = model, optimizer, data_collator
+
         else:
             model = AutoModelForCausalLM.from_pretrained(script_args.model_name_or_path)
 
@@ -96,17 +113,16 @@ def main():
                 step_batch_size=script_args.step_bs,
                 log_with=script_args.log_with,
                 project_kwargs={"logging_dir": script_args.logging_dir},
+                learning_rate=script_args.learning_rate,
             )
 
             trainer = IterativeTrainer(config, model, tokenizer)
-
-        dataset = load_from_disk(script_args.save_dataset_path)
 
         def preprocess_function(samples):
             model_inputs = tokenizer(samples, max_length=script_args.max_length, truncation=True)
             return model_inputs
 
-        dataset = dataset.map(preprocess_function, batched=True)
+        dataset = dataset.map(preprocess_function, batched=True, remove_columns=list(dataset.features))
 
         rewards = dataset["rewards"]
 
@@ -118,7 +134,7 @@ def main():
             np.percentile(rewards, 99),
         ]
 
-        for improve_step in script_args.num_improve_steps:
+        for improve_step in range(script_args.num_improve_steps):
             dataset = dataset.filter(lambda example: example["rewards"] > thresholds[improve_step])
             dataset.set_format("torch")
 
@@ -142,8 +158,8 @@ def main():
         trainer.log_stats(stats)
 
         # free memory to keep the number of models up during training to 1.
-        del model
-        torch.cuda.empty_cache()
+        trainer.accelerator.free_memory()
+        del model, trainer.optimizer, dataset, generated_dataset
 
 
 if __name__ == "__main__":

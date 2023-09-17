@@ -6,14 +6,14 @@ from accelerate import Accelerator
 from datasets import Dataset, load_dataset, concatenate_datasets
 from torch.utils.data import DataLoader
 import torch
-import os
+from tqdm import tqdm
 
 @dataclass
 class ScriptArguments:
     model_name_or_path: Optional[str] = field(default="gpt2", metadata={"help": "the model name"})
     dataset_name: Optional[str] = field(default="Anthropic/hh-rlhf", metadata={"help": "the HF data path"})
     
-    save_dataset_path: Optional[str] = field(default="test", metadata={"help": "the save dataset path"})
+    save_dataset_path: Optional[str] = field(default=None, metadata={"help": "the save dataset path"})
     generation_column_name: Optional[str] = field(default="generated")
     
     gen_bs: Optional[int] = field(default=4, metadata={"help": "the generation batch size"})
@@ -22,7 +22,6 @@ class ScriptArguments:
     bf16: Optional[bool] = field(default=True if torch.cuda.get_device_capability()[0] == 8 else False, metadata={"help": "whether to use bf16."})
     fp16: Optional[bool] = field(default=True if not torch.cuda.get_device_capability()[0] == 8 else False, metadata={"help": "whether to use fp16."})
     
-    truncation_side: Optional[str] = field(default="right", metadata={"help": "the side to truncate the prompt if the prompt is longer than max_prompt_length"})
     max_new_tokens: Optional[int] = field(default=256, metadata={"help": "the maximum number of tokens generated per sample"})
     temperature: Optional[float] = field(default=1.)
     top_p: Optional[float] = field(default=1.)
@@ -65,7 +64,7 @@ def generate(script_args):
     dataset = load_dataset(script_args.dataset_name, split=script_args.split)
     
     if script_args.sanity_check:
-        dataset = dataset.select(range(min(len(dataset), 20)))
+        dataset = dataset.select(range(min(len(dataset), 500)))
 
     def preprocess_function(sample):
         prompts = []
@@ -87,7 +86,7 @@ def generate(script_args):
     accelerator.wait_for_everyone()
     
     all_predictions = []
-    
+    pbar = tqdm(total=len(dataloader), disable=not accelerator.is_local_main_process)
     # to be verified
     for batch in dataloader:
         with torch.no_grad():
@@ -95,6 +94,7 @@ def generate(script_args):
             generated_tokens = accelerator.unwrap_model(model).generate(
                 batch["input_ids"],
                 attention_mask=batch["attention_mask"],
+                pad_token_id=tokenizer.eos_token_id,
                 **gen_kwargs,
             )
 
@@ -109,7 +109,10 @@ def generate(script_args):
                 generated_tokens = generated_tokens[0]
 
             all_predictions.extend(generated_tokens)
+            pbar.update(1)
 
+    accelerator.wait_for_everyone()
+    
     all_predictions = tokenizer.batch_decode(all_predictions, skip_special_tokens=True)[:len(dataset)]
     
     generated_dataset = Dataset.from_dict(
@@ -128,8 +131,10 @@ def generate(script_args):
     
     d_g = concatenate_datasets([dataset, generated_dataset])
     
-    d_g.save_to_disk(script_args.save_dataset_path)
+    if accelerator.is_local_main_process:
+        d_g.save_to_disk(script_args.save_dataset_path)
     
+    return d_g
     
 def main():
     
