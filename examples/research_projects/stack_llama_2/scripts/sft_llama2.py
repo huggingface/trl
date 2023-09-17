@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import torch
+from accelerate import Accelerator
 from datasets import load_dataset
 from peft import AutoPeftModelForCausalLM, LoraConfig
 from tqdm import tqdm
@@ -148,7 +149,7 @@ bnb_config = BitsAndBytesConfig(
 base_model = AutoModelForCausalLM.from_pretrained(
     script_args.model_name,
     quantization_config=bnb_config,
-    device_map={"": 0},
+    device_map={"": Accelerator().local_process_index},
     trust_remote_code=True,
     use_auth_token=True,
 )

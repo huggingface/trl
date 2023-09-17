@@ -17,6 +17,7 @@ from .trainer import (
     DPOTrainer,
     PPOConfig,
     PPOTrainer,
+    RewardConfig,
     RewardTrainer,
     SFTTrainer,
     SoftQLearningConfig,
