@@ -15,7 +15,8 @@ import unittest
 
 import torch
 from datasets import Dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, DataCollatorForLanguageModeling
+from parameterized import parameterized
+from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
 from trl import IterativeConfig, IterativeTrainer
 
@@ -27,6 +28,11 @@ class IterativeTrainerTester(unittest.TestCase):
         cls.model = AutoModelForCausalLM.from_pretrained(cls.model_id)
         cls.tokenizer = AutoTokenizer.from_pretrained(cls.model_id)
         cls.tokenizer.pad_token = cls.tokenizer.eos_token
+
+        # get t5 as seq2seq example:
+        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration-correct-vocab"
+        cls.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+        cls.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
     def _init_dummy_dataset(self):
         dummy_dataset_dict = {
@@ -43,16 +49,26 @@ class IterativeTrainerTester(unittest.TestCase):
         # initialize trainer
         self.iterative_config = IterativeConfig(step_batch_size=2, log_with=None)
         self.model.train()
-        self.data_collator = DataCollatorForLanguageModeling(self.tokenizer, mlm=False)
         return super().setUp()
 
-    def test_iterative_step(self):
+    @parameterized.expand(
+        [
+            ["gpt2"],
+            ["t5"],
+        ]
+    )
+    def test_iterative_step(self, name):
         # initialize dataset
         dummy_dataset = self._init_dummy_dataset()
 
-        iterative_trainer = IterativeTrainer(
-            config=self.iterative_config, model=self.model, tokenizer=self.tokenizer, data_collator=self.data_collator
-        )
+        if name == "gpt2":
+            model = self.model
+            tokenizer = self.tokenizer
+        else:
+            model = self.t5_model
+            tokenizer = self.t5_tokenizer
+
+        iterative_trainer = IterativeTrainer(config=self.iterative_config, model=model, tokenizer=tokenizer)
 
         iterative_trainer.step(dummy_dataset["input_ids"], dummy_dataset["attention_mask"], dummy_dataset["labels"])
 
