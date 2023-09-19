@@ -64,7 +64,7 @@ trainer.train()
 
 ### Adding a margin to the loss
 
-As in the LLAMA-2 paper, you can add a margin to the loss by adding a `margin` entry to the dataset. The reward collator will automatically pass it through and the loss will be computed accordingly.
+As in the [Llama 2 paper](https://huggingface.co/papers/2307.09288), you can add a margin to the loss by adding a `margin` column to the dataset. The reward collator will automatically pass it through and the loss will be computed accordingly.
 
 ```python
 def add_margin(row):
