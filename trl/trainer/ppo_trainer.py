@@ -112,7 +112,7 @@ class PPOTrainer(BaseTrainer):
 
     Attributes:
         **config** (`PPOConfig`) -- Configuration object for PPOTrainer. Check the documentation of `PPOConfig` for more
-         details.
+            details.
         **model** (`PreTrainedModelWrapper`) -- Model to be optimized, Hugging Face transformer model with a value head.
             Check the documentation of `PreTrainedModelWrapper` for more details.
         **ref_model** (`PreTrainedModelWrapper`, *optional*) -- Reference model to be used for KL penalty, Hugging Face
@@ -198,18 +198,24 @@ class PPOTrainer(BaseTrainer):
             **config.accelerator_kwargs,
         )
 
-        is_using_tensorboard = config.log_with is not None and config.log_with == "tensorboard"
-
-        self.accelerator.init_trackers(
-            config.tracker_project_name,
-            config=dict(trl_ppo_trainer_config=config.to_dict()) if not is_using_tensorboard else config.to_dict(),
-            init_kwargs=config.tracker_kwargs,
-        )
+        # Step 1.1 Runtime variables filled by the accelerator
+        config.world_size = self.accelerator.num_processes
+        config.global_backward_batch_size = config.backward_batch_size * config.world_size
+        config.global_batch_size = config.batch_size * config.world_size
 
         self.model = model
         self.model_params = filter(lambda p: p.requires_grad, self.model.parameters())
         self.is_encoder_decoder = hasattr(self.model, "is_encoder_decoder")
         self.is_peft_model = getattr(self.model, "is_peft_model", False)
+        config.is_encoder_decoder = self.is_encoder_decoder
+        config.is_peft_model = self.is_peft_model
+
+        is_using_tensorboard = config.log_with is not None and config.log_with == "tensorboard"
+        self.accelerator.init_trackers(
+            config.tracker_project_name,
+            config=dict(trl_ppo_trainer_config=config.to_dict()) if not is_using_tensorboard else config.to_dict(),
+            init_kwargs=config.tracker_kwargs,
+        )
         self.is_using_text_environment = getattr(config, "use_text_environment", False)
 
         if isinstance(ref_model, SUPPORTED_ARCHITECTURES):
@@ -258,8 +264,6 @@ class PPOTrainer(BaseTrainer):
             self.dataloader = None
         else:
             self.dataloader = None
-
-        self.config.backward_batch_size = self.config.mini_batch_size * self.config.gradient_accumulation_steps
 
         # Step 3: Initialize optimizer and data collator
         self.data_collator = DataCollatorForLanguageModeling(self.tokenizer, mlm=False)
@@ -313,12 +317,7 @@ class PPOTrainer(BaseTrainer):
                 getattr(self.ref_model.pretrained_model, "is_loaded_in_8bit", False)
                 or getattr(self.ref_model.pretrained_model, "is_loaded_in_4bit", False)
             ):
-                # If ZeRO-3 is used, we shard both the active and reference model.
-                # Otherwise, we assume the reference model fits in memory and is copied to each device.
-                if self.accelerator.state.deepspeed_plugin.zero_stage == 3:
-                    self.ref_model = self._prepare_deepspeed_zero3(self.ref_model)
-                else:
-                    self.ref_model = self.ref_model.to(self.accelerator.device)
+                self.ref_model = self._prepare_deepspeed(self.ref_model)
         else:
             self.ref_model = self.accelerator.prepare(self.ref_model)
 
@@ -879,7 +878,7 @@ class PPOTrainer(BaseTrainer):
 
         for k, v in stats.items():
             if isinstance(v, torch.Tensor):
-                dist.all_reduce(v, dist.ReduceOp.SUM)
+                dist.all_reduce(v.to(self.accelerator.device), dist.ReduceOp.SUM)
                 v /= self.accelerator.num_processes
             stats[k] = v
         return stats
@@ -967,7 +966,7 @@ class PPOTrainer(BaseTrainer):
                     start = 1
                     end = attention_mask[j, :].sum() - 1
                 else:
-                    start = len(query_batch[j]) - 1
+                    start = len(query_batch[j]) - 1  # logprobs starts from the second query token
                     if attention_mask[j, 0] == 0:  # offset left padding
                         start += attention_mask[j, :].nonzero()[0]
                     end = start + len(response_batch[j])
@@ -1389,19 +1388,10 @@ class PPOTrainer(BaseTrainer):
                 text.append(" ")
         print(text)
 
-    def _prepare_deepspeed_zero3(self, model: PreTrainedModelWrapper):
+    def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
         # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
-        # TODO: figure out if any other parameters are needed to optimize inference
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-        batch_size_per_device = deepspeed_plugin.deepspeed_config["train_micro_batch_size_per_gpu"]
-        # See DeepSpeed docs for definition of these parameters: https://deepspeed.readthedocs.io/en/latest/zero3.html
-        config_kwargs = {
-            "train_micro_batch_size_per_gpu": batch_size_per_device,
-            "train_batch_size": batch_size_per_device
-            * deepspeed_plugin.deepspeed_config["gradient_accumulation_steps"]
-            * self.accelerator.num_processes,
-            "zero_optimization": {"stage": 3, "offload_param": {"device": deepspeed_plugin.offload_param_device}},
-        }
+        config_kwargs = deepspeed_plugin.deepspeed_config
         if model is not None:
             if hasattr(model, "config"):
                 hidden_size = (
@@ -1409,7 +1399,7 @@ class PPOTrainer(BaseTrainer):
                     if getattr(model.config, "hidden_sizes", None)
                     else getattr(model.config, "hidden_size", None)
                 )
-                if hidden_size is not None:
+                if hidden_size is not None and config_kwargs["zero_optimization"]["stage"] == 3:
                     # Note that `stage3_prefetch_bucket_size` can produce DeepSpeed messages like: `Invalidate trace cache @ step 0: expected module 1, but got module 0`
                     # This is expected and is not an error, see: https://github.com/microsoft/DeepSpeed/discussions/4081
                     config_kwargs.update(
@@ -1419,6 +1409,11 @@ class PPOTrainer(BaseTrainer):
                             "zero_optimization.stage3_prefetch_bucket_size": 0.9 * hidden_size * hidden_size,
                         }
                     )
+
+        # If ZeRO-3 is used, we shard both the active and reference model.
+        # Otherwise, we assume the reference model fits in memory and is initialized on each device with ZeRO disabled (stage 0)
+        if config_kwargs["zero_optimization"]["stage"] != 3:
+            config_kwargs["zero_optimization"]["stage"] = 0
         model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
         model.eval()
         return model

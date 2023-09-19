@@ -1,3 +1,18 @@
+# coding=utf-8
+# Copyright 2023 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # 0. imports
 from dataclasses import dataclass, field
 from typing import Dict, Optional
@@ -50,6 +65,13 @@ class ScriptArguments:
             "help": "fix for DDP issues with LM bias/mask buffers - invalid scalar type,`inplace operation. See"
             "https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992"
         },
+    )
+
+    # optimizer settings
+    warmup_steps: Optional[int] = field(default=150, metadata={"help": "Number of warmup steps for optimizer"})
+    optim: Optional[str] = field(
+        default="RMSprop",
+        metadata={"help": "Optimizer to use. Default is RMSprop, if none" "passed defaults to Transformers trainer."},
     )
 
 
@@ -116,6 +138,19 @@ if __name__ == "__main__":
     eval_dataset = get_hh("test", sanity_check=script_args.sanity_check)
 
     # 4. initialize training arguments:
+
+    warmup_steps = script_args.warmup_steps
+    if script_args.optim == "RMSprop":  # Trainer to match original paper
+        optimizer = torch.optim.RMSprop(model.parameters(), lr=script_args.learning_rate)
+        scheduler = torch.optim.lr_scheduler.LambdaLR(
+            optimizer, lr_lambda=lambda step: min(1.0, (step + 1) / (warmup_steps + 1))
+        )
+        optim = None
+    else:
+        optimizer = None
+        scheduler = None
+        optim = script_args.optim
+
     training_args = TrainingArguments(
         per_device_train_batch_size=script_args.per_device_train_batch_size,
         max_steps=script_args.max_steps,
@@ -123,8 +158,13 @@ if __name__ == "__main__":
         gradient_accumulation_steps=script_args.gradient_accumulation_steps,
         learning_rate=script_args.learning_rate,
         evaluation_strategy="steps",
+        logging_first_step=True,
+        logging_steps=10,  # match results in blog post
+        eval_steps=500,
         output_dir="./test",
         report_to=script_args.report_to,
+        optim=optim,
+        warmup_steps=warmup_steps,
     )
 
     # 5. initialize the DPO trainer
@@ -139,6 +179,7 @@ if __name__ == "__main__":
         max_length=script_args.max_length,
         max_target_length=script_args.max_target_length,
         max_prompt_length=script_args.max_prompt_length,
+        optimizers=(optimizer, scheduler),
     )
 
     # 6. train
