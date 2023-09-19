@@ -513,6 +513,7 @@ class ConstantLengthDataset(IterableDataset):
             )
 
         self.concat_token_id = tokenizer.eos_token_id if tokenizer.eos_token_id else eos_token_id
+        self.pad_token_id = tokenizer.pad_token_id if tokenizer.pad_token_id else self.concat_token_id
         self.dataset = dataset
         self.seq_length = seq_length
         self.infinite = infinite
@@ -556,7 +557,10 @@ class ConstantLengthDataset(IterableDataset):
             tokenized_inputs = self.tokenizer(buffer, truncation=False)["input_ids"]
             all_token_ids = []
             for tokenized_input in tokenized_inputs:
-                all_token_ids.extend(tokenized_input + [self.concat_token_id])
+                _tokenized_input = tokenized_input \
+                                   + [self.pad_token_id] * (self.seq_length - len(tokenized_input) - 1) \
+                                   + [self.concat_token_id]
+                all_token_ids.extend(_tokenized_input)
             examples = []
             for i in range(0, len(all_token_ids), self.seq_length):
                 input_ids = all_token_ids[i : i + self.seq_length]
