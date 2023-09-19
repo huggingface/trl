@@ -19,23 +19,28 @@ def run_exp(exp_dict, savedir, args):
 
     if exp_name.startswith("marlhf"):
         print("MARLHF")
-        accelerate_launch("rl_training_with_ma_value.py", exp_dict, args.gpus)
+        accelerate_launch("rl_training_with_ma_value.py", exp_dict, args.gpus, args.accelerate_config)
     elif exp_name.startswith("rlhf"):
         print("RLHF")
-        accelerate_launch("rl_training.py", exp_dict, args.gpus)
+        accelerate_launch("rl_training.py", exp_dict, args.gpus, args.accelerate_config)
     elif exp_name.startswith("rm"):
-        accelerate_launch("reward_modeling.py", exp_dict, args.gpus)
+        accelerate_launch("reward_modeling.py", exp_dict, args.gpus, args.accelerate_config)
+    elif exp_name.startswith("gptrm"):
+        accelerate_launch("gpt_reward_modeling.py", exp_dict, args.gpus, args.accelerate_config)
     elif exp_name.startswith("sft"):
-        accelerate_launch("supervised_finetuning.py", exp_dict, args.gpus)
+        accelerate_launch("supervised_finetuning.py", exp_dict, args.gpus, args.accelerate_config)
     elif exp_name.startswith("rouge"):
-        accelerate_launch("evaluate_rouge.py", exp_dict, args.gpus)
+        accelerate_launch("evaluate_rouge.py", exp_dict, args.gpus, args.accelerate_config)
     else:
         raise Exception(f"Config file {exp_name} does not start with one of the correct prefixes")
 
 
-def accelerate_launch(training_file, training_args_dict, num_gpus=1):
+def accelerate_launch(training_file, training_args_dict, num_gpus=1, config_file=None):
     parser = launch.launch_command_parser()
     training_cmd_args = []
+    # if config_file is not None:
+    #     training_cmd_args.extend(["--config_file", config_file])
+
     if num_gpus > 1:
         training_cmd_args.append("--multi_gpu")
         training_cmd_args.extend(["--num_machines", "1"])
@@ -86,7 +91,8 @@ if __name__ == "__main__":
         help="path to your python executable",
     )
     parser.add_argument("-n", "--gpus", default=1, type=int, help="number of gpus to use for experiment")
-    parser.add_argument("--gpu-mem", default=40, type=int, help="mem of gpus to use for experiment")
+    parser.add_argument("-a", "--accelerate_config", default=None, help="accelerate config")
+    parser.add_argument("--gpu-mem", default=32, type=int, help="mem of gpus to use for experiment")
     parser.add_argument("--no-wandb", action="store_true", help="disable wandb", default=False)
     # parser.add_argument(
     #     "--exp-id", default=None, help="id used to resume an experiment"

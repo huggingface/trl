@@ -257,4 +257,5 @@ if __name__ == "__main__":
         output_merged_dir = os.path.join(args.output_dir, "final_merged_checkpoint")
         model.save_pretrained(output_merged_dir, safe_serialization=True)
     else:
-        trainer.evaluate()
+        results = trainer.evaluate()
+        print(results)
