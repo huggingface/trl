@@ -96,7 +96,7 @@ class ScriptArguments:
     )
 
     just_eval: Optional[bool] = field(default=False)
-    # carperckpt: Optional[str] = field(default=None)
+    carper_ckpt: Optional[str] = field(default=None)
 
 
 def find_all_linear_names(args, model):
@@ -133,6 +133,12 @@ def create_and_prepare_model(args):
         num_labels=1,
         torch_dtype=torch.bfloat16 if script_args.bf16 else torch.float32,
     )
+
+    if args.carper_ckpt is not None:
+        state_dict = torch.load(args.carper_ckpt)
+        state_dict["score.weight"] = state_dict.pop("v_head.weight")
+        # the state dict contains some old unused params, so strict=False
+        model.load_state_dict(state_dict, strict=False)
 
     model.config.use_cache = not args.gradient_checkpointing
     # if script_args.ignore_bias_buffers:
@@ -257,7 +263,8 @@ trainer = RewardTrainer(
 )
 
 if script_args.just_eval:
-    trainer.evaluate()
+    results = trainer.evaluate()
+    print(results)
 else:
     last_checkpoint = get_last_checkpoint(script_args.output_dir)
     trainer.train(resume_from_checkpoint=last_checkpoint)

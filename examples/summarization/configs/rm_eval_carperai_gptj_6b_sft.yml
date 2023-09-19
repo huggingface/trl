@@ -1,0 +1,10 @@
+model_name: "CarperAI/openai_summarize_tldr_sft"
+carper_ckpt: /home/toolkit/huggingface/carperai-openai_summarize_tldr_rm_snapshot/pytorch_model.bin
+tokenizer_name: "EleutherAI/gpt-j-6b"
+train_split: train
+eval_split: test
+use_peft: False
+load_in_8bit: False
+bf16: False
+per_device_eval_batch_size: 4
+just_eval: True
