@@ -21,14 +21,8 @@ Therefore the final dataset object should contain two 4 entries at least if you 
 
 ## Using the `RewardTrainer`
 
-<<<<<<< HEAD
-After standardizing your dataset, you can use the `RewardTrainer` as a classic Hugging Face Trainer.
-You should pass an `AutoModelForSequenceClassification` model to the `RewardTrainer`.
-=======
 After preparing your dataset, you can use the [`RewardTrainer`] in the same way as the `Trainer` class from 🤗 Transformers.
 You should pass an `AutoModelForSequenceClassification` model to the [`RewardTrainer`], along with a [`RewardConfig`] which configures the hyperparameters of the training.
-
-> > > > > > > origin/main
 
 ### Leveraging 🤗 PEFT to train a reward model
 
