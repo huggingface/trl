@@ -9,7 +9,7 @@ python -m openrlbenchmark.rlops_multi_metrics \
     --no-check-empty-runs \
     --pc.ncols 2 \
     --pc.ncols-legend 1 \
-    --output-filename benchmark/trl/$FOLDER_STRING/different_models \
+    --output-filename benchmark/trl/$FOLDER_STRING/hello_world \
     --scan-history
 
 python benchmark/upload_benchmark.py \
