@@ -300,6 +300,8 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
+You can also continue training your `PeftModel`. For that, first load a `PeftModel` outside `SFTTrainer` and pass it directly to the trainer without the `peft_config` argument being passed.
+
 ### Training adapters with base 8 bit models 
 
 For that you need to first load your 8bit model outside the Trainer and pass a `PeftConfig` to the trainer. For example:
