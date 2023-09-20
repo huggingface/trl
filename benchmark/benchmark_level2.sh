@@ -1,4 +1,4 @@
-# compound: gpt2xl + grad_accu
+# compound experiments: gpt2xl + grad_accu
 python benchmark/benchmark.py \
     --command "python examples/scripts/sentiment_tuning.py --ppo_config.exp_name sentiment_tuning_gpt2xl_grad_accu --ppo_config.model_name gpt2-xl --ppo_config.mini_batch_size 16 --ppo_config.gradient_accumulation_steps 8 --ppo_config.log_with wandb" \
     --num-seeds 3 \
@@ -10,7 +10,7 @@ python benchmark/benchmark.py \
     --slurm-total-cpus 12 \
     --slurm-template-path benchmark/trl.slurm_template
 
-# compound: Cerebras-GPT-6.7B + deepspeed zero2 + grad_accu
+# compound experiments: Cerebras-GPT-6.7B + deepspeed zero2 + grad_accu
 python benchmark/benchmark.py \
     --command "accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml examples/scripts/sentiment_tuning.py --ppo_config.exp_name sentiment_tuning_Cerebras-GPT-6.7B_grad_accu_deepspeed_stage2  --ppo_config.batch_size 32  --ppo_config.mini_batch_size 32 --ppo_config.log_with wandb --ppo_config.model_name cerebras/Cerebras-GPT-6.7B --ppo_config.reward_model sentiment-analysis:cerebras/Cerebras-GPT-6.7B" \
     --num-seeds 3 \
