@@ -8,6 +8,7 @@ Working
         "roberta-base",
         "camembert-base",
         "microsoft/layoutlm-base-uncased",
+        "allenai/longformer-base-4096", # extremely slow
     ]
 
 Supported but bugged
@@ -15,7 +16,6 @@ Supported but bugged
     [
         "xlm-roberta-base",
         "facebook/mbart-large-cc25",
-        "allenai/longformer-base-4096"
     ]
 
 Not supported
