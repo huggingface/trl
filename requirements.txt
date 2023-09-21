@@ -1,5 +1,6 @@
 datasets>=1.17.0
-torch>=1.4.0
+diffusers>=0.21.2
+torch==1.13.1
 tqdm
 transformers
 accelerate

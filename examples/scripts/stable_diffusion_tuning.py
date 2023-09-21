@@ -158,7 +158,7 @@ def parse_arguments():
     parser.add_argument("--per_prompt_stat_tracking", action="store_true", default=True)
     parser.add_argument("--per_prompt_stat_tracking_buffer_size", type=int, default=32)
     parser.add_argument("--tracker_project_name", default="stable_diffusion_training")
-    parser.add_argument("--log_with", default="wandb")
+    parser.add_argument("--log_with", default="none")
 
     parser.add_argument("--logging_dir", default="./logs")
     parser.add_argument("--automatic_checkpoint_naming", action="store_true", default=True)
@@ -167,7 +167,7 @@ def parse_arguments():
 
     parser.add_argument("--pretrained_model", default="runwayml/stable-diffusion-v1-5")
     parser.add_argument("--pretrained_revision", default="main")
-    parser.add_argument("--hf_user_access_token", required=True)
+    parser.add_argument("--hf_user_access_token", required=False)
     parser.add_argument(
         "--hf_hub_model_id",
         help="HuggingFace repo to save model weights to",
