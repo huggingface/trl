@@ -33,7 +33,7 @@ class ScriptArguments:
     Hyperparameters to fine-tune a reward model on a given dataset with the `RewardTrainer`.
     """
 
-    model_name: Optional[str] = field(default="facebook/opt-350m", metadata={"help": "the model name"})
+    model_name: Optional[str] = field(default="transfo-xl-wt103", metadata={"help": "the model name"})
     dataset_name: Optional[str] = field(default="Anthropic/hh-rlhf", metadata={"help": "the dataset name"})
     dataset_text_field: Optional[str] = field(default="text", metadata={"help": "the text field of the dataset"})
     log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
