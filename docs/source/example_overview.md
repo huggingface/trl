@@ -31,13 +31,6 @@ accelerate config # will prompt you to define the training configuration
 
 Then, it is encouraged to launch jobs with `accelerate launch`!
 
-<!-- ## Categories
-The examples are currently split into the following categories:
-
-1. **[ppo_trainer](https://github.com/huggingface/trl/tree/main/examples/scripts/sentiment_tuning.py)**: Learn about different ways of using PPOTrainer
-1. **[sft_trainer](https://github.com/huggingface/trl/tree/main/examples/scripts/sft_trainer.py)**: Learn about how to leverage `SFTTrainer` for supervised fine-tuning your pretrained language models easily.
-1. **[reward_modeling](https://github.com/huggingface/trl/tree/main/examples/scripts/reward_trainer.py)**: Learn about how to use `RewardTrainer` to easily train your own reward model to use it for your RLHF pipeline.
- -->
 
 # Maintained Examples
 
