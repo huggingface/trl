@@ -10,12 +10,12 @@ def run_exp(exp_dict, savedir, args):
     exp_name = exp_dict.pop("name")
     print(args)
 
-    if args.no_wandb:
-        os.environ["WANDB_MODE"] = "disabled"
-    else:
+    if args.wandb:
         os.environ["WANDB_MODE"] = "online"
         os.environ["WANDB_RUN_ID"] = os.path.basename(savedir)
         os.environ["WANDB_NAME"] = exp_name
+    else:
+        os.environ["WANDB_MODE"] = "disabled"
 
     if exp_name.startswith("marlhf"):
         print("MARLHF")
@@ -93,7 +93,7 @@ if __name__ == "__main__":
     parser.add_argument("-n", "--gpus", default=1, type=int, help="number of gpus to use for experiment")
     parser.add_argument("-a", "--accelerate_config", default=None, help="accelerate config")
     parser.add_argument("--gpu-mem", default=32, type=int, help="mem of gpus to use for experiment")
-    parser.add_argument("--no-wandb", action="store_true", help="disable wandb", default=False)
+    parser.add_argument("--wandb", action="store_true", help="force enable wandb", default=False)
     # parser.add_argument(
     #     "--exp-id", default=None, help="id used to resume an experiment"
     # )
@@ -143,6 +143,7 @@ if __name__ == "__main__":
             "bid": 9999,
         }
         job_scheduler = "toolkit"
+        args.wandb = True
     else:
         job_config = None
         job_scheduler = None

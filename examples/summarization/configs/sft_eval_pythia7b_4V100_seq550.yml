@@ -1,0 +1,11 @@
+model_name: /home/toolkit/huggingface/tldr_sft_pythia7b_4V100_seq500
+log_with: "wandb"
+load_in_8bit: False
+use_peft: False
+bf16: False
+fp16: True
+streaming: False
+per_device_eval_batch_size: 8
+just_eval: True
+train_completions: True
+seq_length: 550

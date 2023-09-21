@@ -74,6 +74,12 @@ class ScriptArguments:
     lora_r: Optional[int] = field(default=8, metadata={"help": "the lora r parameter"})
     trust_remote_code: Optional[bool] = field(default=True, metadata={"help": "Enable `trust_remote_code`"})
     bf16: Optional[bool] = field(default=True)
+    fp16: Optional[bool] = field(
+        default=False,
+        metadata={
+            "help": "This essentially cuts the training time in half if you want to sacrifice a little precision and have a supported GPU."
+        },
+    )
     train_completions: Optional[bool] = field(default=False)
 
     output_dir: Optional[str] = field(default="./results", metadata={"help": "the output directory"})
@@ -142,12 +148,14 @@ if __name__ == "__main__":
 
     if args.bf16:
         torch_dtype = torch.bfloat16
+    elif args.bf16:
+        torch_dtype = torch.float16
     else:
         torch_dtype = None
 
-    n_gpus = torch.cuda.device_count()
-    max_memory = "32000MB"
-    max_memory = {i: max_memory for i in range(n_gpus)}
+    # n_gpus = torch.cuda.device_count()
+    # max_memory = "32000MB"
+    # max_memory = {i: max_memory for i in range(n_gpus)}
 
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name,
@@ -155,9 +163,10 @@ if __name__ == "__main__":
         device_map=device_map,
         trust_remote_code=args.trust_remote_code,
         torch_dtype=torch_dtype,
-        max_memory=max_memory,
+        # max_memory=max_memory,
         token=True,
     )
+    model.config.torch_dtype = torch_dtype
     model.config.use_cache = False
 
     print("Loading dataset")
