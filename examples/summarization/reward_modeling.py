@@ -61,7 +61,7 @@ class ScriptArguments:
         default="train", metadata={"help": "the dataset split to evaluate on; default to 'none' (no evaluation)"}
     )
     eval_split: Optional[str] = field(
-        default="test", metadata={"help": "the dataset split to evaluate on; default to 'none' (no evaluation)"}
+        default="test[:5000]", metadata={"help": "the dataset split to evaluate on; default to 'none' (no evaluation)"}
     )
     learning_rate: Optional[float] = field(default=1e-5, metadata={"help": "the learning rate"})
     weight_decay: Optional[float] = field(default=0.001)
@@ -71,12 +71,18 @@ class ScriptArguments:
     per_device_train_batch_size: Optional[int] = field(default=2, metadata={"help": "the per device train batch size"})
     per_device_eval_batch_size: Optional[int] = field(default=1, metadata={"help": "the per device eval batch size"})
     num_train_epochs: Optional[int] = field(default=1, metadata={"help": "the number of training epochs"})
-    seq_length: Optional[int] = field(default=512, metadata={"help": "Input sequence length"})
+    seq_length: Optional[int] = field(default=550, metadata={"help": "Input sequence length"})
     gradient_accumulation_steps: Optional[int] = field(
         default=16, metadata={"help": "the number of gradient accumulation steps"}
     )
     bf16: Optional[bool] = field(
         default=True,
+        metadata={
+            "help": "This essentially cuts the training time in half if you want to sacrifice a little precision and have a supported GPU."
+        },
+    )
+    fp16: Optional[bool] = field(
+        default=False,
         metadata={
             "help": "This essentially cuts the training time in half if you want to sacrifice a little precision and have a supported GPU."
         },
@@ -126,13 +132,22 @@ def create_and_prepare_model(args):
         device_map = None
         quantization_config = None
 
+    if args.bf16:
+        dtype = torch.bfloat16
+    elif args.fp16:
+        dtype = torch.float16
+    else:
+        dtype = torch.float32
+
     model = AutoModelForSequenceClassification.from_pretrained(
         args.model_name,
         quantization_config=quantization_config,
         device_map=device_map,
         num_labels=1,
-        torch_dtype=torch.bfloat16 if script_args.bf16 else torch.float32,
+        torch_dtype=dtype,
     )
+
+    model.config.torch_dtype = dtype
 
     if args.carper_ckpt is not None:
         state_dict = torch.load(args.carper_ckpt)
@@ -186,6 +201,7 @@ def create_and_prepare_model(args):
 
     tokenizer_name = script_args.model_name if script_args.tokenizer_name is None else script_args.tokenizer_name
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+    tokenizer.truncation_side = "left"
     if getattr(tokenizer, "pad_token", None) is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -197,6 +213,16 @@ def create_and_prepare_model(args):
 
 def create_and_prepare_dataset(args, tokenizer, split, num_proc=2):
     dataset = load_dataset(args.dataset_name, split=split)
+
+    def summary_filter(example):
+        return (example["chosen"] != example["rejected"]) and (
+            len(example["chosen"].split()) >= 5 or len(example["rejected"].split()) >= 5
+        )
+
+    pre_filter = len(dataset)
+    dataset = dataset.filter(summary_filter)
+    print(f"filtered {pre_filter - len(dataset)} samples from {split}")
+
     original_columns = dataset.column_names
 
     def preprocess_function(examples):
@@ -263,6 +289,7 @@ trainer = RewardTrainer(
 )
 
 if script_args.just_eval:
+    print("Evaluating")
     results = trainer.evaluate()
     print(results)
 else:
