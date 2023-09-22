@@ -356,7 +356,7 @@ pip install -U optimum
 Once you have loaded your model, wrap the `trainer.train()` call under the `with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=False):` context manager:
 
 ```diff
-# ...
+...
 
 + with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=False):
     trainer.train()
