@@ -333,6 +333,69 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
+## Using Flash Attention and Flash Attention 2
+
+You can benefit from Flash Attention 1 & 2 using SFTTrainer out of the box with minimal changes of code. 
+First, to make sure you have all the latest features from transformers, install transformers from source
+
+```bash
+pip install -U git+https://github.com/huggingface/transformers.git
+```
+
+Note that Flash Attention only works on GPU now and under half-precision regime (when using adapters, base model loaded in half-precision)
+Note also both features are perfectly compatible with other tools such as quantization.
+
+### Using Flash-Attention 1
+
+For Flash Attention 1 you can use the `BetterTransformer` API and force-dispatch the API to use Flash Attention kernel. First, install the latest optimum package:
+
+```bash
+pip install -U optimum
+```
+
+Once you have loaded your model, wrap the `trainer.train()` call under the `with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=False):` context manager:
+
+```diff
+# ...
+
++ with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=False):
+    trainer.train()
+```
+
+Note that you cannot train your model using Flash Attention 1 on an arbitrary dataset as `torch.scaled_dot_product_attention` does not support training with padding tokens if you use Flash Attention kernels. Therefore you can only use that feature with `packing=True`. If your dataset contains padding tokens, consider switching to Flash Attention 2 integration.
+
+Below are some numbers you can get in terms of speedup and memory efficiency, using Flash Attention 1, on a single NVIDIA-T4 16GB.
+
+| use_flash_attn_1 | model_name        | max_seq_len | batch_size | time per training step |
+|----------------|-------------------|-------------|------------|------------------------|
+| x              | facebook/opt-350m | 2048        | 8          | ~59.1s                 |
+|                | facebook/opt-350m | 2048        | 8          | **OOM**                |
+| x              | facebook/opt-350m | 2048        | 4          | ~30.3s                 |
+|                | facebook/opt-350m | 2048        | 4          | ~148.9s                |
+
+### Using Flash Attention-2
+
+To use Flash Attention 2, first install the latest `flash-attn` package:
+
+```bash
+pip install -U flash-attn
+```
+
+And add `use_flash_attention_2=True` when calling `from_pretrained`:
+
+```python
+model = AutoModelForCausalLM.from_pretrained(
+    model_id,
+    load_in_4bit=True,
+    use_flash_attention_2=True
+)
+```
+
+If you don't use quantization, make sure your model is loaded in half-precision and dispatch your model on a supported GPU device.
+After loading your model, you can either train it as it is, or attach adapters and train adapters on it in case your model is quantized.
+
+In contrary to Flash Attention 1, the integration makes it possible to train your model on an arbitrary dataset that also includes padding tokens.
+
 ## Best practices
 
 Pay attention to the following best practices when training a model with that trainer:
