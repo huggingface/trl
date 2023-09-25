@@ -39,4 +39,3 @@ class RewardConfig(TrainingArguments):
     """The maximum length of the sequences in the batch. This argument is required if you want to use the default data collator."""
     gradient_checkpointing: Optional[bool] = True
     """If True, use gradient checkpointing to save memory at the expense of slower backward pass."""
-
