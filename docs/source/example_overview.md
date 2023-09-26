@@ -12,12 +12,10 @@ The examples should work in any of the following settings (with the same script)
 To run it in each of these various modes, first initialize the accelerate
 configuration with `accelerate config`
 
-**NOTE for to train with a 8-bit model a more recent version of**
-transformers is required, for example:
+**NOTE for to train with a 4-bit or 8-bit model**, please run
 
 ```bash
-pip install --upgrade bitsandbytes datasets accelerate loralib
-pip install git+https://github.com/huggingface/peft.git
+pip install --upgrade trl[quantization]
 ```
 
 

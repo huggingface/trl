@@ -74,6 +74,7 @@ EXTRAS = {
     "deepspeed": ["deepspeed>=0.9.5"],
     "dev": ["parameterized", "pytest", "pytest-xdist", "pre-commit", "peft>=0.4.0", "diffusers>=0.18.0"],
     "benchmark": ["wandb", "ghapi", "openrlbenchmark==0.2.1a5", "requests", "deepspeed"],
+    "quantization": ["bitsandbytes>=0.41.0"],
 }
 
 setup(
