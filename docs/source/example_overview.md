@@ -12,7 +12,7 @@ The examples should work in any of the following settings (with the same script)
 To run it in each of these various modes, first initialize the accelerate
 configuration with `accelerate config`
 
-**NOTE for to train with a 4-bit or 8-bit model**, please run
+**NOTE to train with a 4-bit or 8-bit model**, please run
 
 ```bash
 pip install --upgrade trl[quantization]
