@@ -23,6 +23,7 @@ import tyro
 from trl.trainer.utils import exact_div
 
 from ..core import flatten_dict
+from ..import_utils import is_wandb_available
 
 
 @dataclass
@@ -143,10 +144,7 @@ class PPOConfig:
         # check if wandb is installed
         if self.log_with == "wandb":
             # raise error if wandb is not installed
-            try:
-                import wandb  # noqa: F401
-
-            except ImportError:
+            if not is_wandb_available():
                 raise ImportError(
                     "Please install wandb to use wandb logging. You can do this by running `pip install wandb`."
                 )

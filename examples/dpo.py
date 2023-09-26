@@ -157,6 +157,7 @@ if __name__ == "__main__":
         max_length=script_args.max_length,
         max_target_length=script_args.max_target_length,
         max_prompt_length=script_args.max_prompt_length,
+        generate_during_eval=True,
     )
 
     # 6. train
