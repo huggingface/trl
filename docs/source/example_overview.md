@@ -20,7 +20,7 @@ pip install --upgrade trl[quantization]
 
 
 ## Accelerate Config
-For all the examples, you'll need to generate an `Accelerate` config with:
+For all the examples, you'll need to generate a 🤗 Accelerate config file with:
 
 ```shell
 accelerate config # will prompt you to define the training configuration
