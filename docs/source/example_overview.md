@@ -1,6 +1,5 @@
 # Examples
 
-_The best place to learn about examples in TRL is our [docs page](https://huggingface.co/docs/trl/index)!_
 
 ## Introduction
 
