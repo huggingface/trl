@@ -36,7 +36,7 @@ Note: if you don't want to log with `wandb` remove `log_with="wandb"` in the scr
 To run in multi-GPU setup with DDP (distributed Data Parallel) change the `device_map` value to `device_map={"": Accelerator().process_index}` and make sure to run your script with `accelerate launch yourscript.py`. If you want to apply naive pipeline parallelism you can use `device_map="auto"`.
 
 
-## Benchmark
+## Benchmarks
 
 Below are some benchmark results for `examples/scripts/sentiment_tuning.py`. To reproduce locally, please check out the `--command` arguments below.
 
