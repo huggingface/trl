@@ -195,6 +195,9 @@ class RewardDataCollatorWithPadding:
     def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
         features_chosen = []
         features_rejected = []
+        margin = []
+        # check if we have a margin. If we do, we need to batch it as well
+        has_margin = "margin" in features[0]
         for feature in features:
             # check if the keys are named as expected
             if (
@@ -219,6 +222,8 @@ class RewardDataCollatorWithPadding:
                     "attention_mask": feature["attention_mask_rejected"],
                 }
             )
+            if has_margin:
+                margin.append(feature["margin"])
         batch_chosen = self.tokenizer.pad(
             features_chosen,
             padding=self.padding,
@@ -240,6 +245,9 @@ class RewardDataCollatorWithPadding:
             "attention_mask_rejected": batch_rejected["attention_mask"],
             "return_loss": True,
         }
+        if has_margin:
+            margin = torch.tensor(margin, dtype=torch.float)
+            batch["margin"] = margin
         return batch
 
 

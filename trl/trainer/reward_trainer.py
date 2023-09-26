@@ -47,6 +47,9 @@ class RewardTrainer(Trainer):
     - `input_ids_rejected`
     - `attention_mask_rejected`
 
+    Optionally, you can also pass a `margin` entry to the dataset. This entry should contain the margin used to modulate the
+    loss of the reward model as outlined in https://ai.meta.com/research/publications/llama-2-open-foundation-and-fine-tuned-chat-models/.
+    If you don't pass a margin, no margin will be used.
     """
 
     def __init__(
@@ -209,7 +212,12 @@ class RewardTrainer(Trainer):
             input_ids=inputs["input_ids_rejected"],
             attention_mask=inputs["attention_mask_rejected"],
         )[0]
-        loss = -nn.functional.logsigmoid(rewards_chosen - rewards_rejected).mean()
+        # calculate loss, optionally modulate with margin
+        if "margin" in inputs:
+            loss = -nn.functional.logsigmoid(rewards_chosen - rewards_rejected - inputs["margin"]).mean()
+        else:
+            loss = -nn.functional.logsigmoid(rewards_chosen - rewards_rejected).mean()
+
         if return_outputs:
             return loss, {
                 "rewards_chosen": rewards_chosen,

@@ -67,13 +67,6 @@ class ScriptArguments:
         },
     )
 
-    # optimizer settings
-    warmup_steps: Optional[int] = field(default=150, metadata={"help": "Number of warmup steps for optimizer"})
-    optim: Optional[str] = field(
-        default="RMSprop",
-        metadata={"help": "Optimizer to use. Default is RMSprop, if none" "passed defaults to Transformers trainer."},
-    )
-
 
 def extract_anthropic_prompt(prompt_and_response):
     """Extract the anthropic prompt from a prompt and response pair."""
