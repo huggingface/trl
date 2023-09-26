@@ -13,6 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Note: you need to install transformers from main to run this script. See https://huggingface.co/docs/transformers/installation#install-from-source
+# TODO: bump transformers version in requirements at next release.
+
 # 0. imports
 from dataclasses import dataclass, field
 from typing import Dict, Optional
