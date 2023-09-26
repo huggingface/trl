@@ -1,4 +1,4 @@
-# Sentiment Examples
+# Sentiment Tuning Examples
 
 The notebooks and scripts in this examples show how to fine-tune a model with a sentiment classifier (such as `lvwerra/distilbert-imdb`).
 
