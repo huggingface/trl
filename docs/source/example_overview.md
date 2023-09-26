@@ -7,7 +7,7 @@ The examples should work in any of the following settings (with the same script)
    - single CPU or single GPU
    - multi GPUS (using PyTorch distributed mode)
    - multi GPUS (using DeepSpeed ZeRO-Offload stages 1 & 2)
-   - fp16 (mixed-precision) or fp32 (normal precision)
+   - fp16 (mixed-precision), fp32 (normal precision), or bf16 (bfloat16 precision)
 
 To run it in each of these various modes, first initialize the accelerate
 configuration with `accelerate config`
@@ -58,7 +58,7 @@ We also have some other examples that are less maintained but can be used as a r
 
 ## Distributed training
 
-All of the scripts can be run on multiple GPUs by providing the path of an 🤗 Accelerate config file when calling `accelerate launch`. To launch one of them on $N$ GPUs, use:
+All of the scripts can be run on multiple GPUs by providing the path of an 🤗 Accelerate config file when calling `accelerate launch`. To launch one of them on one or multiple GPUs, run the following command (swapping `{NUM_GPUS}` with the number of GPUs in your machine and `--all_arguments_of_the_script` with your arguments.)
 
 ```shell
 accelerate launch --config_file=examples/accelerate_configs/multi_gpu.yaml --num_processes {NUM_GPUS} path_to_script.py --all_arguments_of_the_script
@@ -68,7 +68,7 @@ You can also adjust the parameters of the 🤗 Accelerate config file to suit yo
 
 ### Distributed training with DeepSpeed
 
-Most of the scripts can be run on multiple GPUs together with DeepSpeed ZeRO-{1,2,3} for efficient sharding of the optimizer states, gradients, and model weights. To do so, run:
+Most of the scripts can be run on multiple GPUs together with DeepSpeed ZeRO-{1,2,3} for efficient sharding of the optimizer states, gradients, and model weights. To do so, run following command (swapping `{NUM_GPUS}` with the number of GPUs in your machine, `--all_arguments_of_the_script` with your arguments, and `--deepspeed_config` with the path to the DeepSpeed config file such as `examples/deepspeed_configs/deepspeed_zero1.yaml`):
 
 ```shell
 accelerate launch --config_file=examples/accelerate_configs/deepspeed_zero{1,2,3}.yaml --num_processes {NUM_GPUS} path_to_script.py --all_arguments_of_the_script

@@ -1,0 +1,128 @@
+# Sentiment Examples
+
+The notebooks and scripts in this examples show how to fine-tune a model with a sentiment classifier (such as `lvwerra/distilbert-imdb`).
+
+Here's an overview of the notebooks and scripts in the [trl repository](https://github.com/huggingface/trl/tree/main/examples):
+
+
+
+| File                                                                                           | Description                                                                                                              |
+|------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------|
+| [`examples/scripts/sentiment_tuning.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/sentiment_tuning.py)  [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/sentiment/notebooks/gpt2-sentiment.ipynb) | This script shows how to use the `PPOTrainer` to fine-tune a sentiment analysis model using IMDB dataset                 |
+| [`examples/notebooks/gpt2-sentiment.ipynb`](https://github.com/huggingface/trl/tree/main/examples/notebooks/gpt2-sentiment.ipynb)              | This notebook demonstrates how to reproduce the GPT2 imdb sentiment tuning example on a jupyter notebook.                |
+| [`examples/notebooks/gpt2-control.ipynb`](https://github.com/huggingface/trl/tree/main/examples/notebooks/gpt2-control.ipynb)   [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/sentiment/notebooks/gpt2-sentiment-control.ipynb)                | This notebook demonstrates how to reproduce the GPT2 sentiment control example on a jupyter notebook.    
+
+
+
+## Usage
+
+```bash
+# 1. run directly
+python examples/scripts/sentiment_tuning.py
+# 2. run via `accelerate` (recommended), enabling more features (e.g., multiple GPUs, deepspeed)
+accelerate config # will prompt you to define the training configuration
+accelerate launch examples/scripts/sentiment_tuning.py # launches training
+# 3. get help text and documentation
+python examples/scripts/sentiment_tuning.py --help
+# 4. configure logging with wandb and, say, mini_batch_size=1 and gradient_accumulation_steps=16
+python examples/scripts/sentiment_tuning.py --ppo_config.log_with wandb --ppo_config.mini_batch_size 1 --ppo_config.gradient_accumulation_steps 16
+```
+
+Note: if you don't want to log with `wandb` remove `log_with="wandb"` in the scripts/notebooks. You can also replace it with your favourite experiment tracker that's [supported by `accelerate`](https://huggingface.co/docs/accelerate/usage_guides/tracking).
+
+
+## Few notes on multi-GPU 
+
+To run in multi-GPU setup with DDP (distributed Data Parallel) change the `device_map` value to `device_map={"": Accelerator().process_index}` and make sure to run your script with `accelerate launch yourscript.py`. If you want to apply naive pipeline parallelism you can use `device_map="auto"`.
+
+
+## Benchmark
+
+Below are some benchmark results for `examples/scripts/sentiment_tuning.py`. To reproduce locally, please check out the `--command` arguments below.
+
+```bash
+python benchmark/benchmark.py \
+    --command "python examples/scripts/sentiment_tuning.py --ppo_config.log_with wandb" \
+    --num-seeds 5 \
+    --start-seed 1 \
+    --workers 10 \
+    --slurm-nodes 1 \
+    --slurm-gpus-per-task 1 \
+    --slurm-ntasks 1 \
+    --slurm-total-cpus 12 \
+    --slurm-template-path benchmark/trl.slurm_template
+```
+
+![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/benchmark/v0.4.7-55-g110e672/sentiment.png)
+
+
+
+## w/ and w/o gradient accumulation
+```bash
+python benchmark/benchmark.py \
+    --command "python examples/scripts/sentiment_tuning.py --ppo_config.exp_name sentiment_tuning_step_grad_accu --ppo_config.mini_batch_size 1 --ppo_config.gradient_accumulation_steps 128 --ppo_config.log_with wandb" \
+    --num-seeds 5 \
+    --start-seed 1 \
+    --workers 10 \
+    --slurm-nodes 1 \
+    --slurm-gpus-per-task 1 \
+    --slurm-ntasks 1 \
+    --slurm-total-cpus 12 \
+    --slurm-template-path benchmark/trl.slurm_template
+```
+
+![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/benchmark/v0.4.7-55-g110e672/gradient_accu.png)
+
+
+## w/ different models (gpt2, gpt2-xl, falcon, llama2)
+
+```bash
+python benchmark/benchmark.py \
+    --command "python examples/scripts/sentiment_tuning.py --ppo_config.exp_name sentiment_tuning_gpt2 --ppo_config.log_with wandb" \
+    --num-seeds 5 \
+    --start-seed 1 \
+    --workers 10 \
+    --slurm-nodes 1 \
+    --slurm-gpus-per-task 1 \
+    --slurm-ntasks 1 \
+    --slurm-total-cpus 12 \
+    --slurm-template-path benchmark/trl.slurm_template
+python benchmark/benchmark.py \
+    --command "python examples/scripts/sentiment_tuning.py --ppo_config.exp_name sentiment_tuning_gpt2xl_grad_accu --ppo_config.model_name gpt2-xl --ppo_config.mini_batch_size 16 --ppo_config.gradient_accumulation_steps 8 --ppo_config.log_with wandb" \
+    --num-seeds 5 \
+    --start-seed 1 \
+    --workers 10 \
+    --slurm-nodes 1 \
+    --slurm-gpus-per-task 1 \
+    --slurm-ntasks 1 \
+    --slurm-total-cpus 12 \
+    --slurm-template-path benchmark/trl.slurm_template
+python benchmark/benchmark.py \
+    --command "python examples/scripts/sentiment_tuning.py --ppo_config.exp_name sentiment_tuning_falcon_rw_1b --ppo_config.model_name tiiuae/falcon-rw-1b --ppo_config.log_with wandb" \
+    --num-seeds 5 \
+    --start-seed 1 \
+    --workers 10 \
+    --slurm-nodes 1 \
+    --slurm-gpus-per-task 1 \
+    --slurm-ntasks 1 \
+    --slurm-total-cpus 12 \
+    --slurm-template-path benchmark/trl.slurm_template
+```
+
+![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/benchmark/v0.4.7-55-g110e672/different_models.png)
+
+## w/ and w/o PEFT
+```
+python benchmark/benchmark.py \
+    --command "python examples/scripts/sentiment_tuning.py --ppo_config.exp_name sentiment_tuning_peft --use_peft --ppo_config.log_with wandb" \
+    --num-seeds 5 \
+    --start-seed 1 \
+    --workers 10 \
+    --slurm-nodes 1 \
+    --slurm-gpus-per-task 1 \
+    --slurm-ntasks 1 \
+    --slurm-total-cpus 12 \
+    --slurm-template-path benchmark/trl.slurm_template
+```
+
+![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/benchmark/v0.4.7-55-g110e672/peft.png)
