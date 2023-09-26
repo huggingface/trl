@@ -13,6 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Note: you need to install transformers from main to run this script. See https://huggingface.co/docs/transformers/installation#install-from-source
+# TODO: bump transformers version in requirements at next release.
+
 # 0. imports
 from dataclasses import dataclass, field
 from typing import Dict, Optional
@@ -142,6 +145,8 @@ if __name__ == "__main__":
         logging_steps=10,  # match results in blog post
         eval_steps=500,
         output_dir="./test",
+        optim="rmsprop",
+        warmup_steps=150,
         report_to=script_args.report_to,
     )
 
