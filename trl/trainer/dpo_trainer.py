@@ -180,7 +180,6 @@ class DPOTrainer(Trainer):
                 )
                 max_target_length = 128
 
-            self.max_length = max_length
             data_collator = DPODataCollatorWithPadding(
                 tokenizer,
                 max_length=max_length,
@@ -477,7 +476,7 @@ class DPOTrainer(Trainer):
         policy_output = model.generate(
             batch["prompt_input_ids"],
             attention_mask=batch["prompt_attention_mask"],
-            max_length=self.max_length,
+            max_length=self.args.max_length,
             do_sample=True,
             pad_token_id=self.tokenizer.pad_token_id,
         )
@@ -487,7 +486,7 @@ class DPOTrainer(Trainer):
                 reference_output = self.model.generate(
                     batch["prompt_input_ids"],
                     attention_mask=batch["prompt_attention_mask"],
-                    max_length=self.max_length,
+                    max_length=self.args.max_length,
                     do_sample=True,
                     pad_token_id=self.tokenizer.pad_token_id,
                 )
@@ -495,15 +494,15 @@ class DPOTrainer(Trainer):
             reference_output = self.ref_model.generate(
                 batch["prompt_input_ids"],
                 attention_mask=batch["prompt_attention_mask"],
-                max_length=self.max_length,
+                max_length=self.args.max_length,
                 do_sample=True,
                 pad_token_id=self.tokenizer.pad_token_id,
             )
 
-        policy_output = pad_to_length(policy_output, self.max_length, self.tokenizer.pad_token_id)
+        policy_output = pad_to_length(policy_output, self.args.max_length, self.tokenizer.pad_token_id)
         policy_output_decoded = self.tokenizer.batch_decode(policy_output, skip_special_tokens=True)
 
-        reference_output = pad_to_length(reference_output, self.max_length, self.tokenizer.pad_token_id)
+        reference_output = pad_to_length(reference_output, self.args.max_length, self.tokenizer.pad_token_id)
         reference_output_decoded = self.tokenizer.batch_decode(reference_output, skip_special_tokens=True)
 
         return policy_output_decoded, reference_output_decoded
