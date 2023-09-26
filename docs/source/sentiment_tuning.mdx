@@ -1,4 +1,4 @@
-# Sentiment Examples
+# Sentiment Tuning Examples
 
 The notebooks and scripts in this examples show how to fine-tune a model with a sentiment classifier (such as `lvwerra/distilbert-imdb`).
 
@@ -12,8 +12,6 @@ Here's an overview of the notebooks and scripts in the [trl repository](https://
 | [`examples/notebooks/gpt2-sentiment.ipynb`](https://github.com/huggingface/trl/tree/main/examples/notebooks/gpt2-sentiment.ipynb)              | This notebook demonstrates how to reproduce the GPT2 imdb sentiment tuning example on a jupyter notebook.                |
 | [`examples/notebooks/gpt2-control.ipynb`](https://github.com/huggingface/trl/tree/main/examples/notebooks/gpt2-control.ipynb)   [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/sentiment/notebooks/gpt2-sentiment-control.ipynb)                | This notebook demonstrates how to reproduce the GPT2 sentiment control example on a jupyter notebook.    
 
-
-Here are also some easier-to-run colab notebooks that you can use to get started with TRL:
 
 
 ## Usage
@@ -38,7 +36,7 @@ Note: if you don't want to log with `wandb` remove `log_with="wandb"` in the scr
 To run in multi-GPU setup with DDP (distributed Data Parallel) change the `device_map` value to `device_map={"": Accelerator().process_index}` and make sure to run your script with `accelerate launch yourscript.py`. If you want to apply naive pipeline parallelism you can use `device_map="auto"`.
 
 
-## Benchmark
+## Benchmarks
 
 Below are some benchmark results for `examples/scripts/sentiment_tuning.py`. To reproduce locally, please check out the `--command` arguments below.
 
