@@ -17,11 +17,13 @@ from typing import Optional
 
 from accelerate import Accelerator
 from datasets import load_dataset
+import mlflow
 from peft import LoraConfig
 from tqdm import tqdm
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, BitsAndBytesConfig, HfArgumentParser
 
 from trl import RewardConfig, RewardTrainer
+from trl.trainer.moreh_utils import TBTrainerCallback, get_num_parameters
 
 
 tqdm.pandas()
@@ -79,6 +81,10 @@ model = AutoModelForSequenceClassification.from_pretrained(
     trust_remote_code=script_args.trust_remote_code,
     num_labels=1,
 )
+
+num_params = get_num_parameters(model)
+mlflow.log_param('num_params', num_params)
+
 
 # Step 2: Load the dataset and pre-process it
 tokenizer = AutoTokenizer.from_pretrained(script_args.model_name_or_path)
@@ -165,4 +171,12 @@ trainer = RewardTrainer(
     peft_config=peft_config,
 )
 
-trainer.train()
+trainer.add_callback(TBTrainerCallback())
+
+train_result = trainer.train()
+
+trainer.save_model()
+trainer.log_metrics("train", train_result.metrics)
+trainer.save_metrics("train", train_result.metrics)
+
+mlflow.end_run()
