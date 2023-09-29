@@ -267,14 +267,14 @@ def create_and_prepare_model(args):
 def create_and_prepare_dataset(args, tokenizer, split, num_proc=2):
     dataset = load_dataset(args.dataset_name, split=split)
 
-    def summary_filter(example):
-        return (example["chosen"] != example["rejected"]) and (
-            len(example["chosen"].split()) >= 5 or len(example["rejected"].split()) >= 5
-        )
-
-    pre_filter = len(dataset)
-    dataset = dataset.filter(summary_filter)
-    print(f"filtered {pre_filter - len(dataset)} samples from {split}")
+    # def summary_filter(example):
+    #     return (example["chosen"] != example["rejected"]) and (
+    #         len(example["chosen"].split()) >= 5 or len(example["rejected"].split()) >= 5
+    #     )
+    #
+    # pre_filter = len(dataset)
+    # dataset = dataset.filter(summary_filter)
+    # print(f"filtered {pre_filter - len(dataset)} samples from {split}")
     original_columns = dataset.column_names
 
     def preprocess_function(examples):
@@ -291,7 +291,6 @@ def create_and_prepare_dataset(args, tokenizer, split, num_proc=2):
             tokenized_rejected = tokenizer(
                 prompt + "\n" + rejected, padding="max_length", truncation=True, max_length=script_args.seq_length
             )
-
             new_examples["input_ids_chosen"].append(tokenized_chosen["input_ids"])
             new_examples["attention_mask_chosen"].append(tokenized_chosen["attention_mask"])
             new_examples["input_ids_rejected"].append(tokenized_rejected["input_ids"])
@@ -328,6 +327,7 @@ training_args = TrainingArguments(
     warmup_steps=script_args.num_warmup_steps,
     logging_steps=script_args.logging_steps,
     evaluation_strategy="epoch" if script_args.eval_split != "none" else "no",
+    save_strategy="epoch",
     gradient_checkpointing=script_args.gradient_checkpointing,
     ddp_find_unused_parameters=False,
 )
