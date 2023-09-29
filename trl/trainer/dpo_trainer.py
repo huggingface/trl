@@ -90,6 +90,9 @@ class DPOTrainer(Trainer):
             Whether or not to disable dropouts in `model` and `ref_model`.
         generate_during_eval (`bool`, defaults to `False`):
             Whether to sample and log generations during evaluation step.
+        compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
+            The function to use to compute the metrics. Must take a `EvalPrediction` and return
+            a dictionary string to metric values.
     """
 
     def __init__(
@@ -119,6 +122,7 @@ class DPOTrainer(Trainer):
         is_encoder_decoder: Optional[bool] = None,
         disable_dropout: bool = True,
         generate_during_eval: bool = False,
+        compute_metrics: Optional[Callable[[EvalLoopOutput], Dict]] = None,
     ):
         if not is_peft_available() and peft_config is not None:
             raise ValueError(
@@ -219,17 +223,17 @@ class DPOTrainer(Trainer):
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
         super().__init__(
-            model,
-            args,
-            data_collator,
-            train_dataset,
-            eval_dataset,
-            tokenizer,
-            model_init,
-            None,
-            callbacks,
-            optimizers,
-            preprocess_logits_for_metrics,
+            model=model,
+            args=args,
+            data_collator=data_collator,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            tokenizer=tokenizer,
+            model_init=model_init,
+            compute_metrics=compute_metrics,
+            callbacks=callbacks,
+            optimizers=optimizers,
+            preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
         if not hasattr(self, "accelerator"):
@@ -439,14 +443,14 @@ class DPOTrainer(Trainer):
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
         prefix = "eval_" if train_eval == "eval" else ""
-        metrics[f"{prefix}rewards/chosen"] = chosen_rewards.cpu().numpy().mean()
-        metrics[f"{prefix}rewards/rejected"] = rejected_rewards.cpu().numpy().mean()
-        metrics[f"{prefix}rewards/accuracies"] = reward_accuracies.cpu().numpy().mean()
-        metrics[f"{prefix}rewards/margins"] = (chosen_rewards - rejected_rewards).cpu().numpy().mean()
-        metrics[f"{prefix}logps/rejected"] = policy_rejected_logps.detach().cpu().numpy().mean()
-        metrics[f"{prefix}logps/chosen"] = policy_chosen_logps.detach().cpu().numpy().mean()
-        metrics[f"{prefix}logits/rejected"] = policy_rejected_logits.detach().cpu().numpy().mean()
-        metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.detach().cpu().numpy().mean()
+        metrics[f"{prefix}rewards/chosen"] = chosen_rewards.cpu().mean()
+        metrics[f"{prefix}rewards/rejected"] = rejected_rewards.cpu().mean()
+        metrics[f"{prefix}rewards/accuracies"] = reward_accuracies.cpu().mean()
+        metrics[f"{prefix}rewards/margins"] = (chosen_rewards - rejected_rewards).cpu().mean()
+        metrics[f"{prefix}logps/rejected"] = policy_rejected_logps.detach().cpu().mean()
+        metrics[f"{prefix}logps/chosen"] = policy_chosen_logps.detach().cpu().mean()
+        metrics[f"{prefix}logits/rejected"] = policy_rejected_logits.detach().cpu().mean()
+        metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.detach().cpu().mean()
 
         return losses.mean(), metrics
 
@@ -541,9 +545,9 @@ class DPOTrainer(Trainer):
             "eval_logits/chosen": metrics["eval_logits/chosen"],
             "eval_logits/rejected": metrics["eval_logits/rejected"],
         }
-        logits = tuple(v for k, v in logits_dict.items() if k not in ignore_keys)
-        logits = torch.stack(logits).mean(axis=1)
-        labels = torch.zeros(logits.shape[0])
+        logits = tuple(v.unsqueeze(dim=0) for k, v in logits_dict.items() if k not in ignore_keys)
+        logits = torch.stack(logits).mean(axis=1).to(self.accelerator.device)
+        labels = torch.zeros(logits.shape[0], device=self.accelerator.device)
 
         return (loss.detach(), logits, labels)
 
