@@ -1318,9 +1318,10 @@ class PPOTrainer(BaseTrainer):
                 import torch.distributed as dist
 
                 dist.barrier()
-
-                dist.all_reduce(rewards, op=torch.distributed.ReduceOp.SUM)
-                rewards /= self.accelerator.num_processes
+                world_size = dist.get_world_size()
+                tensors = [torch.zeros_like(rewards) for _ in range(world_size)]
+                dist.all_gather(tensors, rewards)
+                rewards = torch.cat(rewards)
 
             logs.update(stats)
 
@@ -1350,7 +1351,11 @@ class PPOTrainer(BaseTrainer):
                     rewards = torch.tensor(rewards).to(self.current_device)
 
                 dist.barrier()
-                dist.all_reduce(rewards, op=torch.distributed.ReduceOp.SUM)
+                dist.barrier()
+                world_size = dist.get_world_size()
+                tensors = [torch.zeros_like(rewards) for _ in range(world_size)]
+                dist.all_gather(tensors, rewards)
+                rewards = torch.cat(rewards)
 
     def create_model_card(self, path: str, model_name: Optional[str] = "TRL Model") -> None:
         """Creates and saves a model card for a TRL model.
