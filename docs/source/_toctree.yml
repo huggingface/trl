@@ -29,8 +29,6 @@
     title: DPO Trainer
   - local: ddpo_trainer
     title: Denoising Diffusion Policy Optimization
-  - local: rest_trainer
-    title: ReST Trainer
   - local: text_environments
     title: Text Environments
   title: API
@@ -47,4 +45,8 @@
     title: Learning to Use Tools
   - local: multi_adapter_rl
     title: Multi Adapter RLHF
+  - local: rest_training
+    title: ReST Training
+  - local: raft_training
+    title: RAFT Training
   title: Examples
