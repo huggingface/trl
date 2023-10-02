@@ -1,172 +1,339 @@
-# [WIP]
-# TO DO:
-# * Save datasets after each grow step and load the right one
-# * Load and save the right model at each grow step
-# * reformat
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Tuple, List
 
-import generate
 import numpy as np
-import score
 import torch
-from datasets import load_from_disk
-from torch.optim import AdamW
-from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
+from transformers import (
+    HfArgumentParser,
+    AutoTokenizer,
+    TrainingArguments,
+    AutoModelForCausalLM,
+    AutoModelForSequenceClassification,
+    Trainer,
+    DataCollatorForSeq2Seq,
+    PreTrainedTokenizerBase,
+    PreTrainedModel,
+    DataCollatorWithPadding
+)
+from tqdm import tqdm
+from accelerate import Accelerator
+import warnings
 
-from trl import IterativeConfig, IterativeTrainer
+from datasets import Dataset, load_dataset, concatenate_datasets
+from torch.utils.data import DataLoader
+import os
 
 
 @dataclass
-class ScriptArguments:
-
-    learning_rate: Optional[float] = field(default=2e-5)
-    num_grow_steps: Optional[int] = field(default=1)
-    num_improve_steps: Optional[int] = field(default=1)
-    evaluation_step: Optional[str] = field(
-        default="no", metadata={"help": "Choose between 'grow_step', 'improve_step', 'no'."}
-    )
-    save_model_step: Optional[str] = field(
-        default="no", metadata={"help": "Choose between 'grow_step', 'improve_step', 'no'."}
-    )
-    train_dataset_path: Optional[str] = field(
-        default=None, metadata={"help": "Path to the grow dataset, if generation and scoring were already run"}
-    )
-
+class ScoreArguments:
+    reward_model_name_or_path: Optional[str] = field(default = None, metadata={"help": "flan t5 or a finetuned teacher."})
+    scorer_bs: Optional[int] = field(default=8)
+    num_grow_steps: Optional[int] = field(default=2)
+    num_improve_steps: Optional[int] = field(default=4)
+    save_dataset_path: Optional[str] = field(default=None)
+    concat_init_dataset: Optional[bool] = field(default=True)
+    
+@dataclass
+class GenArguments:
     model_name_or_path: Optional[str] = field(default=None, metadata={"help": "the model name"})
-    reward_model_name_or_path: Optional[str] = field(default=None, metadata={"help": "the reward model name"})
-    save_model_path: Optional[str] = field(
-        default=None, metadata={"help": "where to save your model after each improve step"}
-    )
-    dataset_name: Optional[str] = field(default="Anthropic/hh-rlhf", metadata={"help": "the HF data path"})
+    dataset_name: Optional[str] = field(default="Dahoas/full-hh-rlhf", metadata={"help": "the HF data path"})
 
-    save_dataset_path: Optional[str] = field(default=None, metadata={"help": "the save dataset path"})
-    generation_column_name: Optional[str] = field(default="generated")
-
-    eval_bs: Optional[int] = field(default=16, metadata={"help": "the generation batch size"})
-    gen_bs: Optional[int] = field(default=16, metadata={"help": "the generation batch size"})
-    step_bs: Optional[int] = field(default=8, metadata={"help": "the generation batch size"})
-    bf16: Optional[bool] = field(
-        default=True if torch.cuda.get_device_capability()[0] == 8 else False,
-        metadata={"help": "whether to use bf16."},
-    )
-    fp16: Optional[bool] = field(
-        default=True if not torch.cuda.get_device_capability()[0] == 8 else False,
-        metadata={"help": "whether to use fp16."},
-    )
-    log_with: Optional[str] = field(default="tensorboard")
-    logging_dir: Optional[str] = field(default=None)
+    gen_bs: Optional[int] = field(default=8, metadata={"help": "the generation batch size"})
     max_prompt_length: Optional[int] = field(default=256, metadata={"help": "The maximum prompt length"})
-    max_length: Optional[int] = field(
-        default=512, metadata={"help": "The maximum number of tokens for training and reward scoring"}
-    )
+    
+    max_new_tokens: Optional[int] = field(default=256, metadata={"help": "the maximum number of tokens generated per sample"})
+    temperature: Optional[float] = field(default=1.)
+    top_p: Optional[float] = field(default=1.)
+    top_k: Optional[float] = field(default=0)
+    num_return_sequences: Optional[int] = field(default=8)
+    
+    sanity_check: Optional[bool] = field(default=False)
+    
+    
+@torch.no_grad()
+def generate(model: PreTrainedModel, dataloader: DataLoader, tokenizer: PreTrainedTokenizerBase, accelerator: Accelerator, **generation_kwargs) -> Dataset:
+    all_predictions = []
+    all_prompts = []
+    pbar = tqdm(total=len(dataloader), disable=not accelerator.is_local_main_process)
+    
+    for batch in dataloader:
+        sequence_length = batch["input_ids"].shape[1]
+            
+        all_tokens = accelerator.unwrap_model(model).generate(
+            batch["input_ids"],
+            attention_mask=batch["attention_mask"],
+            **generation_kwargs,
+        )
 
-    truncation_side: Optional[str] = field(
-        default="right",
-        metadata={"help": "the side to truncate the prompt if the prompt is longer than max_prompt_length"},
-    )
-    max_new_tokens: Optional[int] = field(
-        default=256, metadata={"help": "the maximum number of tokens generated per sample"}
-    )
-    temperature: Optional[float] = field(default=1.0)
-    top_p: Optional[float] = field(default=1.0)
-    top_k: Optional[float] = field(default=50)
-    num_return_sequences: Optional[int] = field(default=1)
+        generated_tokens = all_tokens[:, sequence_length:]
+        
+        generated_tokens = accelerator.pad_across_processes(
+            generated_tokens, dim=1, pad_index=tokenizer.pad_token_id
+        )
+        input_ids = torch.repeat_interleave(batch["input_ids"], generation_kwargs["num_return_sequences"], dim=0)
+        
+        prompt_tokens = accelerator.pad_across_processes(
+            input_ids, dim=1, pad_index=tokenizer.pad_token_id
+        )
 
-    sanity_check: Optional[bool] = field(
-        default=False, metadata={"help": "Percentage of the dataset you want to make generation on."}
+        generated_tokens = accelerator.gather(generated_tokens)
+        generated_tokens = generated_tokens.cpu()
+        prompt_tokens = accelerator.gather(prompt_tokens)
+        prompt_tokens = prompt_tokens.cpu()
+
+        if isinstance(generated_tokens, tuple):
+            generated_tokens = generated_tokens[0]
+            prompt_tokens = prompt_tokens[0]
+
+        all_predictions.extend(generated_tokens)
+        all_prompts.extend(prompt_tokens)
+        pbar.update(1)
+
+    accelerator.wait_for_everyone()
+    
+    all_predictions = tokenizer.batch_decode(all_predictions, skip_special_tokens=True)
+    
+    def filter_text(text):
+        return text.split("Human:")[0].strip()
+    
+    # postprocessing
+    all_predictions = [filter_text(generated_text) for generated_text in all_predictions]
+    all_prompts = tokenizer.batch_decode(all_prompts, skip_special_tokens=True)
+    
+    text = [prompt + " " + preds for prompt, preds in zip(all_prompts, all_predictions)]
+    
+    generated_dataset = Dataset.from_dict(
+        {
+            "text":text,
+            "prompt": all_prompts,
+            "gen": all_predictions
+        }
     )
+    
+    return generated_dataset
+    
+@torch.no_grad()
+def score(
+    args: ScoreArguments, 
+    dataset: Dataset, 
+    max_length: int, 
+    accelerator: Accelerator, 
+    ) -> Tuple[Dataset, List[float]]:
+    
+    model = AutoModelForSequenceClassification.from_pretrained(args.reward_model_name_or_path)
+    tokenizer = AutoTokenizer.from_pretrained(args.reward_model_name_or_path)
+    
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+    # Avoid truncating the model response
+    tokenizer.padding_side = "left"
+    
+    reward_data_collator = DataCollatorWithPadding(tokenizer)
+    
+    def tokenize_fn(samples):
+        return {
+            **tokenizer(samples["text"], truncation=True, padding=False, max_length=max_length)
+        }
+        
+    
+    reward_dataset = dataset.map(tokenize_fn, batched=True, remove_columns=list(dataset.features))
+    dataloader = DataLoader(reward_dataset, shuffle=False, collate_fn=reward_data_collator)
+    
+    model, dataloader = accelerator.prepare(model, dataloader)
+    rewards = []
+    pbar = tqdm(total=len(dataloader), disable=not accelerator.is_local_main_process)
+    
+    for batch in dataloader:
+        scores = model(**batch).logits.squeeze(1)
+        scores = accelerator.gather(scores)
+        rewards.extend(scores)
+        pbar.update(1)
+        
+    rewards = rewards[:len(dataset)]
+    rewards = [reward.item() for reward in rewards]
+
+    dataset = dataset.add_column("rewards", rewards)
+    
+    return dataset, rewards
 
 
 def main():
 
-    parser = HfArgumentParser(ScriptArguments)
-    script_args = parser.parse_args_into_dataclasses()[0]
+    parser = HfArgumentParser(
+        (
+            ScoreArguments,
+            GenArguments,
+            TrainingArguments
+        )
+    )
+    score_args, gen_args, train_args = parser.parse_args_into_dataclasses()
+    
+    if score_args.num_improve_steps>4:
+        warnings.warn(
+            "Overiding the number of improve steps from {score_args.improve_steps} to 4 as the filtering strategy used in this script do not work for more than 4 improve_steps"
+        )
+    
+    # load policy and reward model
+    tokenizer = AutoTokenizer.from_pretrained(gen_args.model_name_or_path)
 
-    for grow_step in range(script_args.num_grow_steps):
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+        
+    # for generation
+    tokenizer.padding_side = "left"
 
-        if script_args.train_dataset_path is not None or grow_step != 0:
-            generated_dataset = generate.generate(
-                script_args, save_dataset_path=script_args.save_dataset_path + f"_{grow_step}"
-            )
-            dataset = score.score(
-                script_args,
-                reward_dataset=generated_dataset,
-                save_dataset_path=script_args.save_dataset_path + f"_{grow_step}",
-            )
-        else:
-            dataset = load_from_disk(script_args.save_dataset_path)
-            if script_args.sanity_check:
-                dataset = dataset.select(range(min(len(dataset), 500)))
+    model = AutoModelForCausalLM.from_pretrained(gen_args.model_name_or_path)
+        
+        # define gen_kwargs
+    generation_kwargs = {
+            "top_k": gen_args.top_k,
+            "top_p": gen_args.top_p,
+            "do_sample": True,
+            "pad_token_id": tokenizer.pad_token_id,
+            "temperature":gen_args.temperature,
+            "max_new_tokens":gen_args.max_new_tokens,
+            "num_return_sequences": gen_args.num_return_sequences
+        }
+    
+    # load and preprocess the dataset
+    dataset = load_dataset(gen_args.dataset_name)
 
-        if grow_step != 0:
-            model = AutoModelForCausalLM.from_pretrained(script_args.save_model_path)
-            optimizer = AdamW(
-                filter(lambda p: p.requires_grad, model.parameters()),
-                lr=script_args.learning_rate,
-            )
-            model, optimizer, data_collator = trainer.accelerator.prepare(model, optimizer, trainer.data_collator)
-            trainer.model, trainer.optimizer, trainer.data_collator = model, optimizer, data_collator
+    init_train_dataset = dataset["train"]
+    eval_dataset = dataset["test"]
+    
+    if gen_args.sanity_check:
+        init_train_dataset = init_train_dataset.select(range(min(len(init_train_dataset), 100)))
+        eval_dataset = eval_dataset.select(range(min(len(eval_dataset), 100)))
+    
+    def tokenize_fn(samples):
+        model_inputs = tokenizer(samples["prompt"])
+        
+        return {
+            **model_inputs,
+        }
+    
+    train_dataset = init_train_dataset.map(tokenize_fn, batched=True, remove_columns=list(init_train_dataset.features))
+    train_dataset = train_dataset.filter(lambda x: len(x["input_ids"])<=gen_args.max_prompt_length)
 
-        else:
-            model = AutoModelForCausalLM.from_pretrained(script_args.model_name_or_path)
-
-        tokenizer = AutoTokenizer.from_pretrained(script_args.model_name_or_path)
-
-        if grow_step == 0:
-            config = IterativeConfig(
-                model_name=script_args.model_name_or_path,
-                step_batch_size=script_args.step_bs,
-                log_with=script_args.log_with,
-                project_kwargs={"logging_dir": script_args.logging_dir},
-                learning_rate=script_args.learning_rate,
-            )
-
-            trainer = IterativeTrainer(config, model, tokenizer)
-
-        def preprocess_function(samples):
-            model_inputs = tokenizer(samples, max_length=script_args.max_length, truncation=True)
-            return model_inputs
-
-        dataset = dataset.map(preprocess_function, batched=True, remove_columns=list(dataset.features))
-
-        rewards = dataset["rewards"]
-
-        # Filtering step. You should implement your own based on your dataset and needs.
-        thresholds = [
-            np.percentile(rewards, 75),
-            np.percentile(rewards, 90),
-            np.percentile(rewards, 95),
-            np.percentile(rewards, 99),
-        ]
-
-        for improve_step in range(script_args.num_improve_steps):
-            dataset = dataset.filter(lambda example: example["rewards"] > thresholds[improve_step])
-            dataset.set_format("torch")
-
-            stats = trainer.step(input_ids=dataset["input_ids"], attention_mask=dataset["attention_mask"])
-
-            if script_args.evaluation_step == "improve_step":
-                # Do the evaluation step. Just need to call the generate & score function then use the iterative trainer to log the results.
-                pass
-
-            if script_args.save_model_step == "improve_step":
-                model.save_pretrained(script_args.save_model_path)
-
-        if script_args.evaluation_step == "grow_step":
-            # Do the evaluation step. Just need to call the generate & score function then use the iterative trainer to log the results.
-            pass
-
-        if script_args.save_model_step == "grow_step":
-            model.save_pretrained(script_args.save_model_path)
-
-        # Add the mean reward of the dataset to the stats.
-        trainer.log_stats(stats)
-
-        # free memory to keep the number of models up during training to 1.
-        trainer.accelerator.free_memory()
-        del model, trainer.optimizer, dataset, generated_dataset
-
-
-if __name__ == "__main__":
+    eval_dataset = eval_dataset.map(tokenize_fn, batched=True, remove_columns=list(eval_dataset.features))
+    eval_dataset = eval_dataset.filter(lambda x: len(x["input_ids"])<=gen_args.max_prompt_length)
+        
+    max_length = gen_args.max_prompt_length + gen_args.max_new_tokens
+    data_collator = DataCollatorForSeq2Seq(
+        tokenizer, 
+        max_length=max_length,
+        pad_to_multiple_of=8
+    )
+    
+    trainer = Trainer(
+        model=model,
+        args=train_args,
+        data_collator=data_collator, 
+        train_dataset=None,
+        eval_dataset=eval_dataset,
+        tokenizer=tokenizer,
+        compute_metrics=None,
+        preprocess_logits_for_metrics=None,
+    )
+    
+    accelerator = trainer.accelerator
+    
+    gen_dataloader = DataLoader(
+        train_dataset,
+        batch_size=gen_args.gen_bs,
+        shuffle=True,
+        collate_fn=data_collator
+    )
+    
+    model, gen_dataloader = accelerator.prepare(model, gen_dataloader)
+    max_length = gen_args.max_prompt_length + gen_args.max_new_tokens
+    
+    if score_args.concat_init_dataset:
+        init_train_dataset = init_train_dataset.map(lambda x: {'text': x['prompt']+ " "+ x["chosen"]})
+        init_train_dataset= init_train_dataset.rename_column("chosen", "gen")
+        
+    for grow_step in range(score_args.num_grow_steps):
+        accelerator.print(f"*** Grow step number: {grow_step} ***")
+        
+        accelerator.print(f"Starting Grow phase")
+        generated_dataset = generate(model, gen_dataloader, tokenizer, accelerator, **generation_kwargs)
+        
+        if score_args.concat_init_dataset:
+            generated_dataset = concatenate_datasets([init_train_dataset, generated_dataset])
+        
+        accelerator.print(f"Starting Improve phase")
+        reward_dataset, rewards = score(score_args, generated_dataset, max_length, accelerator)
+        print(reward_dataset.features)
+        # save the dataset
+        save_dataset_path = os.path.join(score_args.save_dataset_path, f"grow_{grow_step}")
+        accelerator.print(f"Saving dataset to {save_dataset_path}")
+        reward_dataset.save_to_disk(save_dataset_path)
+        
+        reward_stats = {
+                    "train/mean_reward": np.mean(rewards).item(),
+                    "train/max_reward": np.max(rewards).item(),
+                    "train/min_reward": np.min(rewards).item()
+                }
+        
+        accelerator.print(f"Reward Statistics: ", reward_stats)
+        trainer.state.log_history = []
+        trainer.state.global_step=grow_step
+        trainer.log(reward_stats)
+        
+        def preprocess_fn(samples):
+            
+            prompt_ids = tokenizer(samples["prompt"], truncation=False, padding=False)["input_ids"]
+            responses = tokenizer(samples["gen"], truncation=False, padding=False)["input_ids"]
+            
+            input_ids = [prompt+response for prompt, response in zip(prompt_ids, responses)]
+            attention_mask = [[1 for _ in range(len(inp))] for inp in input_ids]
+            labels = [[-100 for _ in range(len(prompt))]+response for prompt, response in zip(prompt_ids, responses)]
+            
+            return {
+                "input_ids": input_ids,
+                "attention_mask":attention_mask,
+                "labels":labels,
+                "rewards": samples["rewards"]
+            }
+                
+        accelerator.print("Preprocessing")
+        reward_dataset = reward_dataset.map(preprocess_fn, batched=True, remove_columns=list(reward_dataset.features))
+        
+        def filter_dataset(dataset: Dataset, step: int) -> Dataset:
+            rewards = dataset["rewards"]
+            
+            # Filtering step. You should implement your own based on your dataset and needs.
+            thresholds = [
+                np.percentile(rewards, 75),
+                np.percentile(rewards, 90),
+                np.percentile(rewards, 95),
+                np.percentile(rewards, 99),
+            ]
+            if step>=len(thresholds):
+                step = len(thresholds)-1
+                
+            dataset = dataset.filter(lambda example: example["rewards"] > thresholds[step])
+                
+            dataset = dataset.remove_columns(["rewards"])
+            
+            return dataset
+    
+        accelerator.print("Starting Improve steps")
+        for improve_step in range(score_args.num_improve_steps):
+        
+            accelerator.print(f"Improve steps number {improve_step}")
+            
+            temp_dataset = filter_dataset(reward_dataset, improve_step)
+            
+            trainer.train_dataset = temp_dataset
+            
+            _ = trainer.train(resume_from_checkpoint=False)
+        
+            if train_args.output_dir is not None:
+                save_model_path = os.path.join(train_args.output_dir, f"rest_grow_{grow_step}_improve_{improve_step}")
+                accelerator.print(f"*** Saving the model to {save_model_path}***")
+                trainer.save_model(save_model_path)
+            
+            
+if __name__=="__main__":
     main()
