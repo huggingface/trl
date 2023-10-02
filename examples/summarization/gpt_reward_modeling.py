@@ -16,6 +16,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Optional, Union
 
+import bitsandbytes as bnb
 import torch
 from accelerate import Accelerator
 from datasets import builder, load_dataset
@@ -180,15 +181,37 @@ class ScriptArguments:
     )
     load_in_8bit: Optional[bool] = field(default=False, metadata={"help": "load the model in 8 bits precision"})
     load_in_4bit: Optional[bool] = field(default=False, metadata={"help": "load the model in 4 bits precision"})
+    use_lora: Optional[bool] = field(
+        default=True,
+    )
     lora_alpha: Optional[float] = field(default=16, metadata={"help": "the lora alpha parameter"})
     lora_dropout: Optional[float] = field(default=0.05, metadata={"help": "the lora dropout parameter"})
     lora_r: Optional[int] = field(default=8, metadata={"help": "the lora r parameter"})
+    lora_all_linear: Optional[bool] = field(default=False, metadata={"help": "lora adapter on all linear layers"})
     trust_remote_code: Optional[bool] = field(default=True, metadata={"help": "Enable `trust_remote_code`"})
     output_dir: Optional[str] = field(default="results", metadata={"help": "the output directory"})
     gradient_checkpointing: Optional[bool] = field(
         default=False,
         metadata={"help": "Enables gradient checkpointing."},
     )
+    just_eval: Optional[bool] = field(default=False)
+
+
+def find_all_linear_names(args, model):
+    cls = bnb.nn.Linear4bit if args.load_in_4bit else (bnb.nn.Linear8bitLt if args.load_in_8bit else torch.nn.Linear)
+    lora_module_names = set()
+    for name, module in model.named_modules():
+        if isinstance(module, cls):
+            names = name.split(".")
+            lora_module_names.add(names[0] if len(names) == 1 else names[-1])
+
+    if "lm_head" in lora_module_names:  # needed for 16-bit
+        lora_module_names.remove("lm_head")
+
+    if "score" in lora_module_names:  # needed for 16-bit
+        lora_module_names.remove("score")
+
+    return list(lora_module_names)
 
 
 def create_and_prepare_model(args):
@@ -218,41 +241,48 @@ def create_and_prepare_model(args):
 
     model.config.torch_dtype = torch_dtype
     model.config.use_cache = not args.gradient_checkpointing
+
     # if script_args.ignore_bias_buffers:
     # torch distributed hack
     if quantization_config is not None:
         model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=args.gradient_checkpointing)
         args.gradient_checkpointing = False
 
-    # we add `score` to the list of modules to save to
-    # correctly save the score head.
-    # set target modules to be query_key_value for Pythia
-    peft_config = LoraConfig(
-        r=args.lora_r,
-        lora_alpha=args.lora_alpha,
-        lora_dropout=args.lora_dropout,
-        bias="none",
-        task_type="SEQ_CLS",
-        modules_to_save=["score"],
-    )
+    if args.use_lora:
+        # we add `score` to the list of modules to save to
+        # correctly save the score head.
+        if args.lora_all_linear:
+            target_modules = find_all_linear_names(args, model)
+        else:
+            target_modules = None
 
-    model = get_peft_model(model, peft_config)
+        peft_config = LoraConfig(
+            r=args.lora_r,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=args.lora_dropout,
+            bias="none",
+            task_type="SEQ_CLS",
+            target_modules=target_modules,
+            modules_to_save=["score"],
+        )
 
-    modules_to_save = ["score"]
-    for key, _ in model.named_modules():
-        target_module_found = any(key.endswith(target_key) for target_key in modules_to_save)
-        if target_module_found:
-            model.get_submodule(key + ".original_module").requires_grad_(False)
+        model = get_peft_model(model, peft_config)
 
-    if args.bf16:
-        for name, module in model.named_modules():
-            if isinstance(module, LoraLayer):
-                module = module.to(torch.bfloat16)
-            if "norm" in name:
-                module = module.to(torch.float32)
-            if "score" in name or "embed_tokens" in name:
-                if hasattr(module, "weight") and module.weight.dtype == torch.float32:
+        modules_to_save = ["score"]
+        for key, _ in model.named_modules():
+            target_module_found = any(key.endswith(target_key) for target_key in modules_to_save)
+            if target_module_found:
+                model.get_submodule(key + ".original_module").requires_grad_(False)
+
+        if args.bf16:
+            for name, module in model.named_modules():
+                if isinstance(module, LoraLayer):
                     module = module.to(torch.bfloat16)
+                if "norm" in name:
+                    module = module.to(torch.float32)
+                if "score" in name or "embed_tokens" in name:
+                    if hasattr(module, "weight") and module.weight.dtype == torch.float32:
+                        module = module.to(torch.bfloat16)
 
     tokenizer = AutoTokenizer.from_pretrained(script_args.model_name)
     if getattr(tokenizer, "pad_token", None) is None:
@@ -344,11 +374,17 @@ trainer = GPTRewardTrainer(
     data_collator=data_collator,
 )
 
-trainer.train()
-trainer.evaluate()
+if script_args.just_eval:
+    print("Evaluating")
+    results = trainer.evaluate()
+    print(results)
+else:
+    print("Training")
+    trainer.train()
+    trainer.evaluate()
 
-print("Saving last checkpoint of the model")
-trainer.save_model(script_args.output_dir)
+    print("Saving last checkpoint of the model")
+    trainer.save_model(script_args.output_dir)
 
-output_dir = os.path.join(script_args.output_dir, "final_checkpoint")
-trainer.model.save_pretrained(output_dir)
+    output_dir = os.path.join(script_args.output_dir, "final_checkpoint")
+    trainer.model.save_pretrained(output_dir)

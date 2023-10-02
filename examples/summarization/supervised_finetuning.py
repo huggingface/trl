@@ -64,7 +64,7 @@ class ScriptArguments:
     gradient_checkpointing: Optional[bool] = field(
         default=True, metadata={"help": "whether to use gradient checkpointing"}
     )
-    seq_length: Optional[int] = field(default=550, metadata={"help": "Input sequence length"})
+    seq_length: Optional[int] = field(default=560, metadata={"help": "Input sequence length"})
 
     load_in_8bit: Optional[bool] = field(default=True, metadata={"help": "load the model in 8 bits precision"})
     load_in_4bit: Optional[bool] = field(default=False, metadata={"help": "load the model in 4 bits precision"})
