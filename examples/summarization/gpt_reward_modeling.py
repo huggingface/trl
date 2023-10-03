@@ -20,7 +20,7 @@ import bitsandbytes as bnb
 import torch
 from accelerate import Accelerator
 from datasets import builder, load_dataset
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+from peft import LoraConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
 from peft.tuners.lora import LoraLayer
 from torch import nn
 from tqdm import tqdm
@@ -195,6 +195,7 @@ class ScriptArguments:
         metadata={"help": "Enables gradient checkpointing."},
     )
     just_eval: Optional[bool] = field(default=False)
+    pretrained_adapter: Optional[str] = field(default=None)
 
 
 def find_all_linear_names(args, model):
@@ -251,22 +252,25 @@ def create_and_prepare_model(args):
     if args.use_lora:
         # we add `score` to the list of modules to save to
         # correctly save the score head.
-        if args.lora_all_linear:
-            target_modules = find_all_linear_names(args, model)
+        if args.pretrained_adapter is not None:
+            model = PeftModel.from_pretrained(model, args.pretrained_adapter)
         else:
-            target_modules = None
+            if args.lora_all_linear:
+                target_modules = find_all_linear_names(args, model)
+            else:
+                target_modules = None
 
-        peft_config = LoraConfig(
-            r=args.lora_r,
-            lora_alpha=args.lora_alpha,
-            lora_dropout=args.lora_dropout,
-            bias="none",
-            task_type="SEQ_CLS",
-            target_modules=target_modules,
-            modules_to_save=["score"],
-        )
+            peft_config = LoraConfig(
+                r=args.lora_r,
+                lora_alpha=args.lora_alpha,
+                lora_dropout=args.lora_dropout,
+                bias="none",
+                task_type="SEQ_CLS",
+                target_modules=target_modules,
+                modules_to_save=["score"],
+            )
 
-        model = get_peft_model(model, peft_config)
+            model = get_peft_model(model, peft_config)
 
         modules_to_save = ["score"]
         for key, _ in model.named_modules():
