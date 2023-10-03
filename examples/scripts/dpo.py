@@ -148,6 +148,7 @@ if __name__ == "__main__":
         optim="rmsprop",
         warmup_steps=150,
         report_to=script_args.report_to,
+        bf16=True,
     )
 
     # 5. initialize the DPO trainer
