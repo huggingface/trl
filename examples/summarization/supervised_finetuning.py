@@ -2,6 +2,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Optional
 
+import bitsandbytes as bnb
 import torch
 from accelerate import Accelerator
 from datasets import load_dataset
@@ -69,6 +70,7 @@ class ScriptArguments:
     load_in_8bit: Optional[bool] = field(default=True, metadata={"help": "load the model in 8 bits precision"})
     load_in_4bit: Optional[bool] = field(default=False, metadata={"help": "load the model in 4 bits precision"})
     use_peft: Optional[bool] = field(default=True, metadata={"help": "Wether to use PEFT or not to train adapters"})
+    lora_all_linear: Optional[bool] = field(default=False, metadata={"help": "lora adapter on all linear layers"})
     lora_alpha: Optional[float] = field(default=16, metadata={"help": "the lora alpha parameter"})
     lora_dropout: Optional[float] = field(default=0.05, metadata={"help": "the lora dropout parameter"})
     lora_r: Optional[int] = field(default=8, metadata={"help": "the lora r parameter"})
@@ -90,6 +92,23 @@ class ScriptArguments:
     seed: Optional[int] = field(default=0)
     just_eval: Optional[bool] = field(default=False)
     resume_from_checkpoint: Optional[str] = field(default=None)
+
+
+def find_all_linear_names(args, model):
+    cls = bnb.nn.Linear4bit if args.load_in_4bit else (bnb.nn.Linear8bitLt if args.load_in_8bit else torch.nn.Linear)
+    lora_module_names = set()
+    for name, module in model.named_modules():
+        if isinstance(module, cls):
+            names = name.split(".")
+            lora_module_names.add(names[0] if len(names) == 1 else names[-1])
+
+    if "lm_head" in lora_module_names:  # needed for 16-bit
+        lora_module_names.remove("lm_head")
+
+    if "score" in lora_module_names:  # needed for 16-bit
+        lora_module_names.remove("score")
+
+    return list(lora_module_names)
 
 
 def chars_token_ratio(dataset, tokenizer, nb_examples=400):
@@ -148,7 +167,7 @@ if __name__ == "__main__":
 
     if args.bf16:
         torch_dtype = torch.bfloat16
-    elif args.bf16:
+    elif args.fp16:
         torch_dtype = torch.float16
     else:
         torch_dtype = None
@@ -205,11 +224,16 @@ if __name__ == "__main__":
     )
 
     if args.use_peft:
+        if args.lora_all_linear:
+            target_modules = find_all_linear_names(args, model)
+        else:
+            target_modules = None
+
         peft_config = LoraConfig(
             r=args.lora_r,
             lora_alpha=args.lora_alpha,
             lora_dropout=args.lora_dropout,
-            target_modules=["query_key_value"],
+            target_modules=target_modules,
             bias="none",
             task_type="CAUSAL_LM",
         )
@@ -253,18 +277,19 @@ if __name__ == "__main__":
         output_dir = os.path.join(args.output_dir, "final_model")
         trainer.save_model(output_dir)
 
-        output_dir = os.path.join(args.output_dir, "final_adapter_checkpoint")
-        trainer.model.save_pretrained(output_dir)
+        if args.use_peft:
+            output_dir = os.path.join(args.output_dir, "final_adapter_checkpoint")
+            trainer.model.save_pretrained(output_dir)
 
-        # Free memory for merging weights
-        del model
-        torch.cuda.empty_cache()
+            # Free memory for merging weights
+            del model
+            torch.cuda.empty_cache()
 
-        model = AutoPeftModelForCausalLM.from_pretrained(output_dir, device_map="auto", torch_dtype=torch.bfloat16)
-        model = model.merge_and_unload()
+            model = AutoPeftModelForCausalLM.from_pretrained(output_dir, device_map="auto", torch_dtype=torch_dtype)
+            model = model.merge_and_unload()
 
-        output_merged_dir = os.path.join(args.output_dir, "final_merged_checkpoint")
-        model.save_pretrained(output_merged_dir, safe_serialization=True)
+            output_merged_dir = os.path.join(args.output_dir, "final_merged_checkpoint")
+            model.save_pretrained(output_merged_dir, safe_serialization=True)
     else:
         results = trainer.evaluate()
         print(results)
