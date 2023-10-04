@@ -31,13 +31,11 @@ class TBTrainerCallback(TrainerCallback):
             if 'loss' in state.log_history[-1]:
                 state.log_history[-1]["throughput"] = throughput
                 state.log_history[-1]["step"] = state.global_step
-
-                mlflow.log_metric("lr", state.log_history[-1]["learning_rate"] , step=state.global_step)
-                mlflow.log_metric("throughput", throughput , step=state.global_step)
                 state.log_history[-1]["step"] = state.global_step
 
                 mlflow.log_metric("lr", state.log_history[-1]["learning_rate"] , step=state.global_step)
                 mlflow.log_metric("throughput", throughput , step=state.global_step)
+                mlflow.log_metric("loss", state.log_history[-1]["loss"] , step=state.global_step)
                 print(f'loss: {state.log_history[-1]["loss"]}, lr: {state.log_history[-1]["learning_rate"]}, throughput: {throughput}, step: {state.global_step}')       
 
 # Log number of parameters function
