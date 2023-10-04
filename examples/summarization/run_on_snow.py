@@ -31,6 +31,8 @@ def run_exp(exp_dict, savedir, args):
         accelerate_launch("supervised_finetuning.py", exp_dict, args.gpus, args.accelerate_config)
     elif exp_name.startswith("rouge"):
         accelerate_launch("evaluate_rouge.py", exp_dict, args.gpus, args.accelerate_config)
+    elif exp_name.startswith("pseudo"):
+        accelerate_launch("inference_pseudolabel.py", exp_dict, args.gpus, args.accelerate_config)
     else:
         raise Exception(f"Config file {exp_name} does not start with one of the correct prefixes")
 
