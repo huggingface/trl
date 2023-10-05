@@ -1,5 +1,6 @@
 import argparse
 import os
+from copy import deepcopy
 
 import yaml
 from accelerate.commands import launch
@@ -19,34 +20,47 @@ def run_exp(exp_dict, savedir, args):
 
     if exp_name.startswith("marlhf"):
         print("MARLHF")
-        accelerate_launch("rl_training_with_ma_value.py", exp_dict, args.gpus, args.accelerate_config)
+        accelerate_launch("rl_training_with_ma_value.py", exp_dict, args)
     elif exp_name.startswith("rlhf"):
         print("RLHF")
-        accelerate_launch("rl_training.py", exp_dict, args.gpus, args.accelerate_config)
+        accelerate_launch("rl_training.py", exp_dict, args)
     elif exp_name.startswith("rm"):
-        accelerate_launch("reward_modeling.py", exp_dict, args.gpus, args.accelerate_config)
+        accelerate_launch("reward_modeling.py", exp_dict, args)
     elif exp_name.startswith("gptrm"):
-        accelerate_launch("gpt_reward_modeling.py", exp_dict, args.gpus, args.accelerate_config)
+        accelerate_launch("gpt_reward_modeling.py", exp_dict, args)
     elif exp_name.startswith("sft"):
-        accelerate_launch("supervised_finetuning.py", exp_dict, args.gpus, args.accelerate_config)
+        accelerate_launch("supervised_finetuning.py", exp_dict, args)
     elif exp_name.startswith("rouge"):
-        accelerate_launch("evaluate_rouge.py", exp_dict, args.gpus, args.accelerate_config)
+        accelerate_launch("evaluate_rouge.py", exp_dict, args)
     elif exp_name.startswith("pseudo"):
-        accelerate_launch("inference_pseudolabel.py", exp_dict, args.gpus, args.accelerate_config)
+        accelerate_launch("inference_pseudolabel.py", exp_dict, args)
     else:
         raise Exception(f"Config file {exp_name} does not start with one of the correct prefixes")
 
 
-def accelerate_launch(training_file, training_args_dict, num_gpus=1, config_file=None):
+def accelerate_launch(training_file, training_args_dict, args):
     parser = launch.launch_command_parser()
     training_cmd_args = []
-    # if config_file is not None:
-    #     training_cmd_args.extend(["--config_file", config_file])
+    # if args.accelerate_config is not None:
+    #     training_cmd_args.extend(["--num_processes", str(args.gpus)])
+    #     training_cmd_args.extend(["--config_file", args.accelerate_config])
+    #
+    # if args.deepspeed is not None:
+    #     assert (
+    #         "gradient_accumulation_steps" in training_args_dict
+    #     ), "Must include gradient_accumulation_steps in config"
+    #     training_cmd_args.append("--use_deepspeed")
+    #     training_cmd_args.extend(["--zero_stage", str(args.deepspeed)])
+    #     training_cmd_args.extend(
+    #         ["--gradient_accumulation_steps", str(training_args_dict["gradient_accumulation_steps"])]
+    #     )
 
-    if num_gpus > 1:
+    if args.gpus > 1:
+        # if not args.deepspeed:
         training_cmd_args.append("--multi_gpu")
         training_cmd_args.extend(["--num_machines", "1"])
-        training_cmd_args.extend(["--num_processes", str(num_gpus)])
+        training_cmd_args.extend(["--num_processes", str(args.gpus)])
+
     training_cmd_args.append(training_file)
     for key, val in training_args_dict.items():
         training_cmd_args.append(f"--{key}")
@@ -93,9 +107,11 @@ if __name__ == "__main__":
         help="path to your python executable",
     )
     parser.add_argument("-n", "--gpus", default=1, type=int, help="number of gpus to use for experiment")
-    parser.add_argument("-a", "--accelerate_config", default=None, help="accelerate config")
+    # parser.add_argument("-a", "--accelerate_config", default=None, help="accelerate config")
+    # parser.add_argument("-d", "--deepspeed", default=None, help="ds stage")
     parser.add_argument("--gpu-mem", default=32, type=int, help="mem of gpus to use for experiment")
     parser.add_argument("--wandb", action="store_true", help="force enable wandb", default=False)
+    parser.add_argument("--search", default=None)
     # parser.add_argument(
     #     "--exp-id", default=None, help="id used to resume an experiment"
     # )
@@ -107,10 +123,20 @@ if __name__ == "__main__":
 
     exp_dict["name"] = os.path.basename(args.exp_group)
 
-    # for key, val in vars(extra_args).items():
-    #     exp_dict[key] = val
-
-    exp_list = [exp_dict]
+    if args.search is not None:
+        search_key, search_val_str = args.search.split("=")
+        search_vals = search_val_str.split(",")
+        exp_list = []
+        for val in search_vals:
+            exp_dict_copy = deepcopy(exp_dict)
+            exp_dict_copy[search_key] = val
+            exp_dict_copy["name"] = exp_dict_copy["name"] + f"/{search_key}={val}"
+            exp_list.append(exp_dict_copy)
+        # for key, val in vars(extra_args).items():
+        #     exp_dict[key] = val
+        print(exp_list)
+    else:
+        exp_list = [exp_dict]
 
     if args.job_scheduler == "toolkit":
         with open("/home/toolkit/wandb_api_key", "r") as f:
