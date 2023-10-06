@@ -23,7 +23,14 @@ from peft import LoraConfig
 from tqdm import tqdm
 from transformers import AutoTokenizer, pipeline
 
-from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead, PPOConfig, PPOTrainer, set_seed
+from trl import (
+    AutoModelForCausalLMWithValueHead,
+    AutoModelForSeq2SeqLMWithValueHead,
+    PPOConfig,
+    PPOTrainer,
+    create_reference_model,
+    set_seed,
+)
 from trl.core import LengthSampler
 
 
@@ -122,22 +129,29 @@ def collator(data):
 set_seed(args.ppo_config.seed)
 
 # Now let's build the model, the reference model, and the tokenizer.
-if not args.use_peft:
-    ref_model = trl_model_class.from_pretrained(args.ppo_config.model_name, trust_remote_code=args.trust_remote_code)
-    device_map = None
-    peft_config = None
-else:
-    peft_config = args.peft_config
-    ref_model = None
-    # Copy the model to each device
+if args.use_peft is True:
+    peft_config = LoraConfig(
+        r=16,
+        lora_alpha=16,
+        bias="none",
+        task_type="CAUSAL_LM",
+    )
     device_map = {"": Accelerator().local_process_index}
+else:
+    peft_config = None
+    device_map = None
 
 model = trl_model_class.from_pretrained(
     args.ppo_config.model_name,
-    trust_remote_code=args.trust_remote_code,
     device_map=device_map,
     peft_config=peft_config,
 )
+
+# With LoRA, we use the same base model for the active / reference adapters
+if args.use_peft is True:
+    ref_model = None
+else:
+    ref_model = create_reference_model(model, num_shared_layers=None)
 
 
 tokenizer = AutoTokenizer.from_pretrained(args.ppo_config.model_name)

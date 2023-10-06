@@ -82,7 +82,7 @@ model = AutoModelForSequenceClassification.from_pretrained(
 
 # Step 2: Load the dataset and pre-process it
 tokenizer = AutoTokenizer.from_pretrained(script_args.model_name)
-train_dataset = load_dataset(script_args.dataset_name, split="train")
+train_dataset = load_dataset(script_args.dataset_name, split="train[:2000]")
 
 
 # Tokenize chosen/rejected pairs of inputs
@@ -110,11 +110,12 @@ def preprocess_function(examples):
 train_dataset = train_dataset.map(
     preprocess_function,
     batched=True,
-    num_proc=4,
+    num_proc=8,
 )
 train_dataset = train_dataset.filter(
     lambda x: len(x["input_ids_chosen"]) <= script_args.seq_length
-    and len(x["input_ids_rejected"]) <= script_args.seq_length
+    and len(x["input_ids_rejected"]) <= script_args.seq_length,
+    num_proc=4,
 )
 
 if script_args.eval_split == "none":
@@ -125,11 +126,12 @@ else:
     eval_dataset = eval_dataset.map(
         preprocess_function,
         batched=True,
-        num_proc=4,
+        num_proc=8,
     )
     eval_dataset = eval_dataset.filter(
         lambda x: len(x["input_ids_chosen"]) <= script_args.seq_length
-        and len(x["input_ids_rejected"]) <= script_args.seq_length
+        and len(x["input_ids_rejected"]) <= script_args.seq_length,
+        num_proc=8,
     )
 
 
@@ -147,6 +149,7 @@ training_args = RewardConfig(
     logging_steps=script_args.logging_steps,
     evaluation_strategy="steps" if script_args.eval_split != "none" else "no",
     max_length=script_args.seq_length,
+    bf16=True,
 )
 
 # Step 4: Define the LoraConfig
