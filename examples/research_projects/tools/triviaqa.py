@@ -104,7 +104,7 @@ config = PPOConfig(
     ppo_epochs=args.ppo_epochs,
     gradient_accumulation_steps=args.gradient_accumulation_steps,
     seed=args.seed,
-    optimize_cuda_cache=True,
+    optimize_device_cache=True,
 )
 ppo_trainer = PPOTrainer(config=config, model=model, tokenizer=tokenizer)
 dataset = load_dataset("trivia_qa", "rc", split="train")

@@ -24,7 +24,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from accelerate import Accelerator
-from accelerate.utils import ProjectConfiguration, is_deepspeed_available
+from accelerate.utils import ProjectConfiguration, is_deepspeed_available, is_xpu_available
 from datasets import Dataset
 from huggingface_hub import whoami
 from packaging import version
@@ -341,9 +341,12 @@ class PPOTrainer(BaseTrainer):
         if not getattr(self.model, "is_sequential_parallel", False):
             self.current_device = self.accelerator.device
         else:
-            self.current_device = torch.device("cuda:0")
+            if is_xpu_available():
+                self.current_device = torch.device("xpu:0")
+            else:
+                self.current_device = torch.device("cuda:0")
 
-        PPODecorators.optimize_cuda_cache = self.config.optimize_cuda_cache
+        PPODecorators.optimize_device_cache = self.config.optimize_device_cache
 
         self.running = RunningMoments(self.accelerator)
 
@@ -576,7 +579,7 @@ class PPOTrainer(BaseTrainer):
 
         return queries, responses, scores, masks
 
-    @PPODecorators.empty_cuda_cache()
+    @PPODecorators.empty_device_cache()
     def step(
         self,
         queries: List[torch.LongTensor],
@@ -909,7 +912,7 @@ class PPOTrainer(BaseTrainer):
         input_data.pop("labels", None)  # we don't want to compute LM losses
         return input_data
 
-    @PPODecorators.empty_cuda_cache()
+    @PPODecorators.empty_device_cache()
     def batched_forward_pass(
         self,
         model: PreTrainedModelWrapper,
@@ -1000,7 +1003,7 @@ class PPOTrainer(BaseTrainer):
             torch.cat(all_masks)[:, :-1],
         )
 
-    @PPODecorators.empty_cuda_cache()
+    @PPODecorators.empty_device_cache()
     def train_minibatch(
         self,
         old_logprobs: torch.FloatTensor,

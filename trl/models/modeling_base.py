@@ -19,6 +19,7 @@ from copy import deepcopy
 import torch
 import torch.nn as nn
 from accelerate import Accelerator
+from accelerator.utils import is_xpu_available
 from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError, HFValidationError, LocalEntryNotFoundError
 from transformers import PreTrainedModel
@@ -328,7 +329,7 @@ class PreTrainedModelWrapper(nn.Module):
                 The current device.
         """
         dummy_accelerator = Accelerator()
-        return dummy_accelerator.local_process_index if torch.cuda.is_available() else "cpu"
+        return dummy_accelerator.local_process_index if (torch.cuda.is_available() or is_xpu_available()) else "cpu"
 
     @classmethod
     def _split_kwargs(cls, kwargs):

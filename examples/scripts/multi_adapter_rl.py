@@ -76,7 +76,7 @@ config = PPOConfig(
     batch_size=8,
     mini_batch_size=2,
     gradient_accumulation_steps=2,
-    optimize_cuda_cache=True,
+    optimize_device_cache=True,
 )
 
 ppo_trainer = PPOTrainer(

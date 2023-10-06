@@ -100,7 +100,7 @@ class PPOConfig:
     """Maximum gradient norm for gradient clipping"""
     seed: int = 0
     """Seed value for random generations"""
-    optimize_cuda_cache: bool = False
+    optimize_device_cache: bool = False
     """Optimize CUDA cache for slightly more memory-efficient training"""
     early_stopping: bool = False
     """Whether to stop the PPO optimization loop early is the KL too high"""

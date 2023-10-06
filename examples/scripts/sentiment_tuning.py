@@ -18,6 +18,7 @@ from typing import Optional
 import torch
 import tyro
 from accelerate import Accelerator
+from accelerate.utils import is_xpu_available
 from datasets import load_dataset
 from peft import LoraConfig
 from tqdm import tqdm
@@ -153,7 +154,10 @@ ppo_trainer = PPOTrainer(args.ppo_config, model, ref_model, tokenizer, dataset=d
 # to the same device as the PPOTrainer.
 device = ppo_trainer.accelerator.device
 if ppo_trainer.accelerator.num_processes == 1:
-    device = 0 if torch.cuda.is_available() else "cpu"  # to avoid a `pipeline` bug
+    if is_xpu_available():
+        device = "xpu:0"
+    else:
+        device = 0 if torch.cuda.is_available() else "cpu"  # to avoid a `pipeline` bug
 ds_plugin = ppo_trainer.accelerator.state.deepspeed_plugin
 task, model_name = args.ppo_config.reward_model.split(":")
 if ds_plugin is not None and ds_plugin.is_zero3_init_enabled():

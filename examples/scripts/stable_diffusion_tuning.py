@@ -22,6 +22,7 @@ import torch.nn as nn
 from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError
 from transformers import CLIPModel, CLIPProcessor
+from accelerate.utils import is_xpu_available
 
 from trl import DDPOConfig, DDPOTrainer, DefaultDDPOStableDiffusionPipeline
 
@@ -82,7 +83,8 @@ def aesthetic_scorer(hub_model_id, model_filename):
         model_id=hub_model_id,
         model_filename=model_filename,
         dtype=torch.float32,
-    ).cuda()
+    )
+    scorer = scorer.xpu() if is_xpu_available() or scorer.cuda() 
 
     def _fn(images, prompts, metadata):
         images = (images * 255).round().clamp(0, 255).to(torch.uint8)
