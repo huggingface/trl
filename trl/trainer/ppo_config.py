@@ -24,7 +24,7 @@ from trl.trainer.utils import exact_div
 
 from ..core import flatten_dict
 from ..import_utils import is_wandb_available
-
+import warnings
 
 @dataclass
 class PPOConfig:
@@ -100,7 +100,7 @@ class PPOConfig:
     """Maximum gradient norm for gradient clipping"""
     seed: int = 0
     """Seed value for random generations"""
-    optimize_device_cache: bool = False
+    optimize_cuda_cache: bool = False
     """Optimize CUDA cache for slightly more memory-efficient training"""
     early_stopping: bool = False
     """Whether to stop the PPO optimization loop early is the KL too high"""
@@ -124,7 +124,13 @@ class PPOConfig:
     """TO BE FILLED In RUNTIME: Whether the model is an encoder-decoder model"""
     is_peft_model: Optional[tyro.conf.Suppress[bool]] = None
     """TO BE FILLED In RUNTIME: Whether the model is a PEFT model"""
-
+    
+    if optimize_cuda_cache is not None:
+        warnings.warn("The `optimize_cuda_cache` arguement will be deprecated soon, please use `optimize_device_cache` instead.")
+        optimize_device_cache = optimize_cuda_cache
+    else:
+        optimize_device_cache = False
+    
     def __post_init__(self):
         if self.forward_batch_size is not None:
             warnings.warn(

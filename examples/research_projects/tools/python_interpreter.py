@@ -152,7 +152,7 @@ ppo_config = PPOConfig(
     log_with="wandb",
     tracker_project_name="trl-gsm8k",
     remove_unused_columns=False,
-    optimize_device_cache=True,
+    optimize_cuda_cache=True,
 )
 
 ppo_trainer = PPOTrainer(config=ppo_config, model=model, tokenizer=tokenizer, dataset=ds)
