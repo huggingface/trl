@@ -22,6 +22,7 @@ from datasets import load_dataset
 from peft import LoraConfig
 from tqdm import tqdm
 from transformers import AutoTokenizer, pipeline
+from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 
 from trl import (
     AutoModelForCausalLMWithValueHead,
@@ -147,11 +148,17 @@ model = trl_model_class.from_pretrained(
     peft_config=peft_config,
 )
 
-# With LoRA, we use the same base model for the active / reference adapters
+# With LoRA, we use the same base model for the active / reference adapters, so `ref_model` is None.
 if args.use_peft is True:
     ref_model = None
+elif is_deepspeed_zero3_enabled():
+    ref_model = trl_model_class.from_pretrained(
+        args.ppo_config.model_name,
+        device_map=device_map,
+        peft_config=peft_config,
+    )
 else:
-    ref_model = create_reference_model(model, num_shared_layers=None)
+    ref_model = create_reference_model(model)
 
 
 tokenizer = AutoTokenizer.from_pretrained(args.ppo_config.model_name)
