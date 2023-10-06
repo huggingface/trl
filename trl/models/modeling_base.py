@@ -19,7 +19,7 @@ from copy import deepcopy
 import torch
 import torch.nn as nn
 from accelerate import Accelerator
-from accelerator.utils import is_xpu_available
+from accelerate.utils import is_xpu_available
 from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError, HFValidationError, LocalEntryNotFoundError
 from transformers import PreTrainedModel
