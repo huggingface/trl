@@ -22,16 +22,8 @@ from datasets import load_dataset
 from peft import LoraConfig
 from tqdm import tqdm
 from transformers import AutoTokenizer, pipeline
-from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 
-from trl import (
-    AutoModelForCausalLMWithValueHead,
-    AutoModelForSeq2SeqLMWithValueHead,
-    PPOConfig,
-    PPOTrainer,
-    create_reference_model,
-    set_seed,
-)
+from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead, PPOConfig, PPOTrainer, set_seed
 from trl.core import LengthSampler
 
 
@@ -151,14 +143,12 @@ model = trl_model_class.from_pretrained(
 # With LoRA, we use the same base model for the active / reference adapters, so `ref_model` is None.
 if args.use_peft is True:
     ref_model = None
-elif is_deepspeed_zero3_enabled():
+else:
     ref_model = trl_model_class.from_pretrained(
         args.ppo_config.model_name,
         device_map=device_map,
         peft_config=peft_config,
     )
-else:
-    ref_model = create_reference_model(model)
 
 
 tokenizer = AutoTokenizer.from_pretrained(args.ppo_config.model_name)

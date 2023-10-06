@@ -520,13 +520,13 @@ def create_reference_model(
     Returns
         `PreTrainedModelWrapper`
     """
-    parameter_names = [n for n, _ in model.named_parameters()]
-    ref_model = deepcopy(model)
-
     if is_deepspeed_zero3_enabled():
         raise ValueError(
             "DeepSpeed ZeRO-3 is enabled and is not compatible with `create_reference_model()`. Please instantiate your reference model directly with `AutoCausalLM.from_pretrained()`."
         )
+
+    parameter_names = [n for n, _ in model.named_parameters()]
+    ref_model = deepcopy(model)
 
     # if no layers are shared, return copy of model
     if num_shared_layers is None:
