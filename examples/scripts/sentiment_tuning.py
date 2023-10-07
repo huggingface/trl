@@ -136,6 +136,7 @@ else:
 
 model = trl_model_class.from_pretrained(
     args.ppo_config.model_name,
+    trust_remote_code=args.trust_remote_code,
     device_map=device_map,
     peft_config=peft_config,
 )
@@ -146,6 +147,7 @@ if args.use_peft is True:
 else:
     ref_model = trl_model_class.from_pretrained(
         args.ppo_config.model_name,
+        trust_remote_code=args.trust_remote_code,
         device_map=device_map,
         peft_config=peft_config,
     )
