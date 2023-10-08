@@ -304,8 +304,8 @@ class IterativeSFTTrainer:
         
         if labels is None and texts_labels is None and self.is_encoder_decoder:
             raise ValueError(
-                    "No 'labels' or 'text_labels' are provided. When using an encoder-decoder architecture, 'labels' or 'text_labels' must be passed."
-                )
+                "No 'labels' or 'text_labels' are provided. When using an encoder-decoder architecture, 'labels' or 'text_labels' must be passed."
+            )
         
         input_ids, attention_mask, labels, texts, texts_labels = self._step_safety_checker(
             input_ids, attention_mask, labels, texts, texts_labels
