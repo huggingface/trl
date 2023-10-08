@@ -85,7 +85,7 @@ class IterativeSFTTrainer:
         set_seed(config.seed)
 
         # Step 0: check positional arguments validity
-        if not isinstance(config, IterativeConfig):
+        if not isinstance(config, IterativeSFTConfig):
             raise ValueError(f"config must be a IterativeConfig, got {type(config)}")
         if not isinstance(tokenizer, (PreTrainedTokenizerBase)):
             raise ValueError(
@@ -217,7 +217,11 @@ class IterativeSFTTrainer:
 
     @staticmethod
     def _step_safety_checker(
-        input_ids: List[torch.LongTensor], attention_mask: List[torch.LongTensor], labels: List[torch.LongTensor], texts: List[str], texts_labels: List[str]
+        input_ids: List[torch.LongTensor], 
+        attention_mask: List[torch.LongTensor], 
+        labels: List[torch.LongTensor], 
+        texts: List[str], 
+        texts_labels: List[str]
     ):
         """
         Check if the input data is valid for training.
@@ -292,24 +296,20 @@ class IterativeSFTTrainer:
         texts_labels = kwargs.get("texts_labels", None)
         
         if input_ids is None and texts is None:
-            raise ValueError(
-                "Step should include `input_ids` or `texts` as keyword arguments."
-            )
+            raise ValueError("Step should include `input_ids` or `texts` as keyword arguments.")
         elif input_ids is not None and texts is not None:
             warnings.warn(
                 "Both 'input_ids' and 'texts' are provided. 'input_ids' will be overwritten using inputs provided by the 'texts' keyword argument."
             )
         
-        if (
-            labels is None 
-            and texts_labels is None 
-            and self.is_encoder_decoder
-        ):
+        if labels is None and texts_labels is None and self.is_encoder_decoder:
             raise ValueError(
                     "No 'labels' or 'text_labels' are provided. When using an encoder-decoder architecture, 'labels' or 'text_labels' must be passed."
                 )
         
-        input_ids, attention_mask, labels, texts, texts_labels = self._step_safety_checker(input_ids, attention_mask, labels, texts, texts_labels)
+        input_ids, attention_mask, labels, texts, texts_labels = self._step_safety_checker(
+            input_ids, attention_mask, labels, texts, texts_labels
+            )
         
         if texts is not None:
             input_ids = [self.tokenizer(text, return_tensors="pt")["input_ids"] for text in texts]
