@@ -313,9 +313,9 @@ class IterativeSFTTrainer:
         )
 
         if texts is not None:
-            input_ids = [self.tokenizer(text, return_tensors="pt")["input_ids"] for text in texts]
+            input_ids = [self.tokenizer(text, return_tensors="pt")["input_ids"][0] for text in texts]
         if texts_labels is not None:
-            labels = [self.tokenizer(text_labels, return_tensors="pt")["input_ids"] for text_labels in texts_labels]
+            labels = [self.tokenizer(text_labels, return_tensors="pt")["input_ids"][0] for text_labels in texts_labels]
 
         if labels is None:
             warnings.warn("No labels are provided. Setting labels to input_ids")
