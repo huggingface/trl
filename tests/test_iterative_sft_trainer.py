@@ -18,7 +18,7 @@ from datasets import Dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
-from trl import IterativeConfig, IterativeTrainer
+from trl import IterativeSFTConfig, IterativeSFTTrainer
 
 
 class IterativeTrainerTester(unittest.TestCase):
@@ -34,7 +34,7 @@ class IterativeTrainerTester(unittest.TestCase):
         cls.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         cls.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
-    def _init_dummy_dataset(self):
+    def _init_tensor_dummy_dataset(self):
         dummy_dataset_dict = {
             "input_ids": [torch.tensor([5303, 3621]), torch.tensor([3666, 1438, 318]), torch.tensor([5303, 3621])],
             "attention_mask": [torch.tensor([1, 1]), torch.tensor([1, 1, 1]), torch.tensor([1, 1])],
@@ -45,32 +45,56 @@ class IterativeTrainerTester(unittest.TestCase):
         dummy_dataset.set_format("torch")
         return dummy_dataset
 
+    def _init_textual_dummy_dataset(self):
+        dummy_dataset_dict = {
+            "texts": ["Testing the IterativeSFTTrainer.", "This is a test of the IterativeSFTTrainer"],
+            "texts_labels": ["Testing the IterativeSFTTrainer.", "This is a test of the IterativeSFTTrainer"],
+        }
+
+        dummy_dataset = Dataset.from_dict(dummy_dataset_dict)
+        dummy_dataset.set_format("torch")
+        return dummy_dataset
+
     def setUp(self):
         # initialize trainer
-        self.iterative_config = IterativeConfig(step_batch_size=2, log_with=None)
+        self.iterative_config = IterativeSFTConfig(step_batch_size=2, log_with=None)
         self.model.train()
         return super().setUp()
 
     @parameterized.expand(
         [
-            ["gpt2"],
-            ["t5"],
+            ["gpt2", "tensor"],
+            ["gpt2", "text"],
+            ["t5", "tensor"],
+            ["t5", "text"],
         ]
     )
-    def test_iterative_step(self, name):
+    def test_iterative_step_from_tensor(self, model_name, input_name):
         # initialize dataset
-        dummy_dataset = self._init_dummy_dataset()
+        if input_name == "tensor":
+            dummy_dataset = self._init_tensor_dummy_dataset()
+            inputs = {
+                "input_ids": dummy_dataset["input_ids"],
+                "attention_mask": dummy_dataset["attention_mask"],
+                "labels": dummy_dataset["labels"],
+            }
+        else:
+            dummy_dataset = self._init_textual_dummy_dataset()
+            inputs = {
+                "texts": dummy_dataset["texts"],
+                "texts_labels": dummy_dataset["texts_labels"],
+            }
 
-        if name == "gpt2":
+        if model_name == "gpt2":
             model = self.model
             tokenizer = self.tokenizer
         else:
             model = self.t5_model
             tokenizer = self.t5_tokenizer
 
-        iterative_trainer = IterativeTrainer(config=self.iterative_config, model=model, tokenizer=tokenizer)
+        iterative_trainer = IterativeSFTTrainer(config=self.iterative_config, model=model, tokenizer=tokenizer)
 
-        iterative_trainer.step(dummy_dataset["input_ids"], dummy_dataset["attention_mask"], dummy_dataset["labels"])
+        iterative_trainer.step(**inputs)
 
         for param in iterative_trainer.model.parameters():
             assert param.grad is not None

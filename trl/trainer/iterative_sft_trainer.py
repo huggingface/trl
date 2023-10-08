@@ -29,12 +29,13 @@ from transformers import (
 )
 
 from ..core import PPODecorators, set_seed
-from . import IterativeConfig
+from ..import_utils import is_torch_greater_2_0
+from . import IterativeSFTConfig
 
 
-class IterativeTrainer:
+class IterativeSFTTrainer:
     """
-    The IterativeTrainer can be used to finetune models with methods that requires some steps between optimization.
+    The IterativeSFTTrainer can be used to finetune models with methods that requires some steps between optimization.
 
     Attributes:
         **config** (`IterativeConfig`) -- Configuration object for IterativeTrainer.
@@ -48,18 +49,20 @@ class IterativeTrainer:
             object.
         **data_collator** (Union[DataCollatorForLanguageModeling, DataCollatorForSeq2Seq], *optional*) -- Data collator to be used for training and
             passed along the dataloader.
+        **lr_scheduler** (`torch.optim.lr_scheduler`, *optional*) -- Learning rate scheduler to be used for training.
     """
 
     def __init__(
         self,
-        config: IterativeConfig = None,
+        config: IterativeSFTConfig = None,
         model: PreTrainedModel = None,
         tokenizer: PreTrainedTokenizerBase = None,
         optimizer: Optional[torch.optim.Optimizer] = None,
         data_collator: Optional[DataCollator] = None,
+        lr_scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
     ):
         """
-        Initialize IterativeTrainer.
+        Initialize IterativeSFTTrainer.
 
         Args:
             config (`IterativeConfig`):
@@ -72,6 +75,8 @@ class IterativeTrainer:
                 Optimizer used for training. If `None`, `Adam` is used as default.
             data_collator (Optional['DataCollator']):
                 Data collator function.
+            lr_scheduler (Optional[`torch.optim.lr_scheduler`]):
+                Learning rate scheduler used for training.
         """
 
         self.config = config
@@ -86,7 +91,7 @@ class IterativeTrainer:
             raise ValueError(
                 f"tokenizer must be a PreTrainedTokenizerBase like a PreTrainedTokenizer or a PreTrainedTokenizerFast, got {type(tokenizer)}"
             )
-        if not isinstance(model, (PreTrainedModel)):
+        if not isinstance(model, PreTrainedModel):
             raise ValueError(f"model must be a PreTrainedModel, got {type(model)}")
         if not model.can_generate():
             warnings.warn(
@@ -140,8 +145,21 @@ class IterativeTrainer:
         else:
             self.optimizer = optimizer
 
-        (self.model, self.optimizer, self.data_collator) = self.accelerator.prepare(
-            self.model, self.optimizer, self.data_collator
+        self.lr_scheduler = lr_scheduler
+        if self.lr_scheduler is not None:
+            lr_scheduler_class = (
+                torch.optim.lr_scheduler._LRScheduler
+                if not is_torch_greater_2_0()
+                else torch.optim.lr_scheduler.LRScheduler
+            )
+
+            if not isinstance(self.lr_scheduler, lr_scheduler_class):
+                raise ValueError(
+                    "lr_scheduler must be a torch.optim.lr_scheduler._LRScheduler or torch.optim.lr_scheduler.LRScheduler (for torch >= 2.0)"
+                )
+                
+        (self.model, self.optimizer, self.data_collator, self.lr_scheduler) = self.accelerator.prepare(
+            self.model, self.optimizer, self.data_collator, self.lr_scheduler
         )
 
         self.is_distributed = self.accelerator.distributed_type == "MULTI_GPU"
@@ -199,7 +217,7 @@ class IterativeTrainer:
 
     @staticmethod
     def _step_safety_checker(
-        input_ids: List[torch.LongTensor], attention_mask: List[torch.LongTensor], labels: List[torch.LongTensor]
+        input_ids: List[torch.LongTensor], attention_mask: List[torch.LongTensor], labels: List[torch.LongTensor], texts: List[str], texts_labels: List[str]
     ):
         """
         Check if the input data is valid for training.
@@ -211,58 +229,97 @@ class IterativeTrainer:
                 List of tensors containing the attention_mask
             labels (List[`torch.FloatTensor`]):
                 List of tensors containing the labels
+            texts (List[`str`]):
+                List of string containing the text input.
+            texts_labels (List[`str`]):
+                List of string containing the text labels.
         Returns:
-            `tuple`: The input processed data.
+            `tuple`: The input data.
         """
-        if attention_mask is None:
-            for name, tensor_list in zip(["input_ids", "labels"], [input_ids, labels]):
-                if not isinstance(tensor_list, list):
-                    raise ValueError(f"{name} must be a list of tensors - got {type(tensor_list)}")
-                if not isinstance(tensor_list[0], torch.Tensor):
-                    raise ValueError(f"Elements in {name} must be tensors - got {type(tensor_list[0])}")
+        if texts is None:
+            if attention_mask is None:
+                for name, tensor_list in zip(["input_ids", "labels"], [input_ids, labels]):
+                    if not isinstance(tensor_list, list):
+                        raise ValueError(f"{name} must be a list of tensors - got {type(tensor_list)}")
+                    if not isinstance(tensor_list[0], torch.Tensor):
+                        raise ValueError(f"Elements in {name} must be tensors - got {type(tensor_list[0])}")
+            else:
+                for name, tensor_list in zip(
+                    ["input_ids", "attention_mask", "labels"], [input_ids, attention_mask, labels]
+                ):
+                    if not isinstance(tensor_list, list):
+                        raise ValueError(f"{name} must be a list of tensors - got {type(tensor_list)}")
+                    if not isinstance(tensor_list[0], torch.Tensor):
+                        raise ValueError(f"Elements in {name} must be tensors - got {type(tensor_list[0])}")
         else:
-            for name, tensor_list in zip(
-                ["input_ids", "attention_mask", "labels"], [input_ids, attention_mask, labels]
-            ):
-                if not isinstance(tensor_list, list):
-                    raise ValueError(f"{name} must be a list of tensors - got {type(tensor_list)}")
-                if not isinstance(tensor_list[0], torch.Tensor):
-                    raise ValueError(f"Elements in {name} must be tensors - got {type(tensor_list[0])}")
+            if not isinstance(texts, list):
+                raise ValueError(f"'text' must be a list of strings - got {type(texts)}")
+            if not isinstance(texts[0], torch.Tensor):
+                raise ValueError(f"Elements in 'text' must be strings - got {type(texts[0])}")
+            if texts_labels is not None:
+                if not isinstance(texts_labels, list):
+                    raise ValueError(f"'text_labels' must be a list of strings - got {type(texts_labels)}")
+                if not isinstance(texts_labels[0], torch.Tensor):
+                    raise ValueError(f"Elements in 'text_labels' must be strings - got {type(texts_labels[0])}")
 
-        return input_ids, attention_mask, labels
+        return input_ids, attention_mask, labels, texts, texts_labels
 
     @PPODecorators.empty_cuda_cache()
-    def step(
-        self,
-        input_ids: List[torch.LongTensor],
-        attention_mask: Optional[List[torch.LongTensor]],
-        labels: Optional[List[torch.LongTensor]],
-    ):
+    def step(self, **kwargs):
         """
-        Run an optimisation step given a list of input_ids, attention_mask, and labels.
-        Args:
+        Run an optimisation step given a list of input_ids, attention_mask, and labels or a list of text and text_labels.
+        Keyword Args:
             input_ids (List[`torch.LongTensor`]):
-                List of tensors containing the input_ids
+                List of tensors containing the input_ids (if not provided, text will be used)
             attention_mask (List[`torch.LongTensor`], , *optional*):
                 List of tensors containing the attention_mask
             labels (List[`torch.FloatTensor`], *optional*):
                 List of tensors containing the labels (if set to None, will default to input_ids)
+            texts (List[`torch.FloatTensor`], *optional*):
+                List of strings containing the text input (if not provided, input_ids will directly be used)
+            texts_labels (List[`torch.FloatTensor`], *optional*):
+                List of strings containing the text labels (if set to None, will default to text)
         Returns:
             `dict[str, Any]`: A summary of the training statistics
         """
 
         self.model.train()
-        if labels is None:
-            if self.is_encoder_decoder:
-                raise ValueError(
-                    "No labels are provided. When using an encoder-decoder architecture," "labels must be passed."
+        
+        input_ids = kwargs.get("input_ids", None)
+        attention_mask = kwargs.get("attention_mask", None)
+        labels = kwargs.get("labels", None)
+        texts = kwargs.get("texts", None)
+        texts_labels = kwargs.get("texts_labels", None)
+        
+        if input_ids is None and texts is None:
+            raise ValueError(
+                "Step should include `input_ids` or `texts` as keyword arguments."
+            )
+        elif input_ids is not None and texts is not None:
+            warnings.warn(
+                "Both 'input_ids' and 'texts' are provided. 'input_ids' will be overwritten using inputs provided by the 'texts' keyword argument."
+            )
+        
+        if (
+            labels is None 
+            and texts_labels is None 
+            and self.is_encoder_decoder
+        ):
+            raise ValueError(
+                    "No 'labels' or 'text_labels' are provided. When using an encoder-decoder architecture, 'labels' or 'text_labels' must be passed."
                 )
-            else:
-                warnings.warn("No labels are provided. Setting labels to input_ids")
-                labels = input_ids
-
-        input_ids, attention_mask, labels = self._step_safety_checker(input_ids, attention_mask, labels)
-
+        
+        input_ids, attention_mask, labels, texts, texts_labels = self._step_safety_checker(input_ids, attention_mask, labels, texts, texts_labels)
+        
+        if texts is not None:
+            input_ids = [self.tokenizer(text, return_tensors="pt")["input_ids"] for text in texts]
+        if texts_labels is not None:
+            labels = [self.tokenizer(text_labels, return_tensors="pt")["input_ids"] for text_labels in texts_labels]
+        
+        if labels is None:
+            warnings.warn("No labels are provided. Setting labels to input_ids")
+            labels = input_ids
+            
         model_inputs = self.prepare_model_inputs(input_ids, attention_mask, labels)
 
         model_inputs_names = list(model_inputs.keys())
@@ -298,6 +355,8 @@ class IterativeTrainer:
 
                 self.optimizer.step()
                 self.optimizer.zero_grad()
+                if self.lr_scheduler is not None:
+                    self.lr_scheduler.step()
 
                 # update stats etc
                 all_stats.append(dict(loss=dict(total=loss.detach())))

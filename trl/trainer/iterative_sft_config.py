@@ -18,9 +18,9 @@ from ..core import flatten_dict
 
 
 @dataclass
-class IterativeConfig(object):
+class IterativeSFTConfig(object):
     """
-    Configuration class for PPOTrainer
+    Configuration class for IterativeSFTTrainer
     """
 
     task_name: Optional[str] = field(
