@@ -157,7 +157,7 @@ class IterativeSFTTrainer:
                 raise ValueError(
                     "lr_scheduler must be a torch.optim.lr_scheduler._LRScheduler or torch.optim.lr_scheduler.LRScheduler (for torch >= 2.0)"
                 )
-                
+
         (self.model, self.optimizer, self.data_collator, self.lr_scheduler) = self.accelerator.prepare(
             self.model, self.optimizer, self.data_collator, self.lr_scheduler
         )
@@ -217,12 +217,13 @@ class IterativeSFTTrainer:
 
     @staticmethod
     def _step_safety_checker(
-        input_ids: List[torch.LongTensor], 
-        attention_mask: List[torch.LongTensor], 
-        labels: List[torch.LongTensor], 
-        texts: List[str], 
-        texts_labels: List[str]
+        input_ids: List[torch.LongTensor],
+        attention_mask: List[torch.LongTensor],
+        labels: List[torch.LongTensor],
+        texts: List[str],
+        texts_labels: List[str],
     ):
+
         """
         Check if the input data is valid for training.
 
@@ -288,38 +289,38 @@ class IterativeSFTTrainer:
         """
 
         self.model.train()
-        
+
         input_ids = kwargs.get("input_ids", None)
         attention_mask = kwargs.get("attention_mask", None)
         labels = kwargs.get("labels", None)
         texts = kwargs.get("texts", None)
         texts_labels = kwargs.get("texts_labels", None)
-        
+
         if input_ids is None and texts is None:
             raise ValueError("Step should include `input_ids` or `texts` as keyword arguments.")
         elif input_ids is not None and texts is not None:
             warnings.warn(
                 "Both 'input_ids' and 'texts' are provided. 'input_ids' will be overwritten using inputs provided by the 'texts' keyword argument."
             )
-        
+
         if labels is None and texts_labels is None and self.is_encoder_decoder:
             raise ValueError(
                 "No 'labels' or 'text_labels' are provided. When using an encoder-decoder architecture, 'labels' or 'text_labels' must be passed."
             )
-        
+
         input_ids, attention_mask, labels, texts, texts_labels = self._step_safety_checker(
             input_ids, attention_mask, labels, texts, texts_labels
-            )
-        
+        )
+
         if texts is not None:
             input_ids = [self.tokenizer(text, return_tensors="pt")["input_ids"] for text in texts]
         if texts_labels is not None:
             labels = [self.tokenizer(text_labels, return_tensors="pt")["input_ids"] for text_labels in texts_labels]
-        
+
         if labels is None:
             warnings.warn("No labels are provided. Setting labels to input_ids")
             labels = input_ids
-            
+
         model_inputs = self.prepare_model_inputs(input_ids, attention_mask, labels)
 
         model_inputs_names = list(model_inputs.keys())
