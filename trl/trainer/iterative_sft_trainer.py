@@ -259,12 +259,12 @@ class IterativeSFTTrainer:
         else:
             if not isinstance(texts, list):
                 raise ValueError(f"'text' must be a list of strings - got {type(texts)}")
-            if not isinstance(texts[0], torch.Tensor):
+            if not isinstance(texts[0], str):
                 raise ValueError(f"Elements in 'text' must be strings - got {type(texts[0])}")
             if texts_labels is not None:
                 if not isinstance(texts_labels, list):
                     raise ValueError(f"'text_labels' must be a list of strings - got {type(texts_labels)}")
-                if not isinstance(texts_labels[0], torch.Tensor):
+                if not isinstance(texts_labels[0], str):
                     raise ValueError(f"Elements in 'text_labels' must be strings - got {type(texts_labels[0])}")
 
         return input_ids, attention_mask, labels, texts, texts_labels
@@ -280,9 +280,9 @@ class IterativeSFTTrainer:
                 List of tensors containing the attention_mask
             labels (List[`torch.FloatTensor`], *optional*):
                 List of tensors containing the labels (if set to None, will default to input_ids)
-            texts (List[`torch.FloatTensor`], *optional*):
+            texts (List[`str`], *optional*):
                 List of strings containing the text input (if not provided, input_ids will directly be used)
-            texts_labels (List[`torch.FloatTensor`], *optional*):
+            texts_labels (List[`str`], *optional*):
                 List of strings containing the text labels (if set to None, will default to text)
         Returns:
             `dict[str, Any]`: A summary of the training statistics
