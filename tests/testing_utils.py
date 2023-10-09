@@ -14,6 +14,7 @@
 import unittest
 
 import torch
+from accelerate.utils import is_xpu_available
 
 from trl import is_peft_available, is_wandb_available, is_xpu_available
 
