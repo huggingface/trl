@@ -25,6 +25,18 @@ def is_peft_available() -> bool:
     return importlib.util.find_spec("peft") is not None
 
 
+def is_accelerate_greater_20_0() -> bool:
+    if _is_python_greater_3_8:
+        from importlib.metadata import version
+
+        accelerate_version = version("accelerate")
+    else:
+        import pkg_resources
+
+        accelerate_version = pkg_resources.get_distribution("accelerate").version
+    return accelerate_version >= "0.20.0"
+
+
 def is_torch_greater_2_0() -> bool:
     if _is_python_greater_3_8:
         from importlib.metadata import version
@@ -55,3 +67,19 @@ def is_rich_available() -> bool:
 
 def is_wandb_available() -> bool:
     return importlib.util.find_spec("wandb") is not None
+
+
+def is_xpu_available() -> bool:
+    if is_accelerate_greater_20_0:
+        import accelerate
+
+        return accelerate.utils.is_xpu_available()
+    else:
+        if importlib.util.find_spec("intel_extension_for_pytorch") is None:
+            return False
+        try:
+            import torch
+
+            return hasattr(torch, "xpu") and torch.xpu.is_available()
+        except RuntimeError:
+            return False

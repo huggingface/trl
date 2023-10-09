@@ -5,13 +5,13 @@ from typing import Optional
 
 import torch
 from accelerate import Accelerator
-from accelerate.utils import is_xpu_available
 from datasets import load_dataset
 from peft import AutoPeftModelForCausalLM, LoraConfig
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, HfArgumentParser, TrainingArguments
 
 from trl import SFTTrainer
+from trl.import_utils import is_xpu_available
 from trl.trainer import ConstantLengthDataset
 
 

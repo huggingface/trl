@@ -4,10 +4,11 @@ import csv
 import evaluate
 import numpy as np
 import torch
-from accelerate.utils import is_xpu_available
 from datasets import load_dataset
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
+
+from trl.import_utils import is_xpu_available
 
 
 toxicity = evaluate.load("ybelkada/toxicity", "DaNLP/da-electra-hatespeech-detection", module_type="measurement")

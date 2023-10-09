@@ -18,7 +18,6 @@ from typing import Optional
 import torch
 import tyro
 from accelerate import Accelerator
-from accelerate.utils import is_xpu_available
 from datasets import load_dataset
 from peft import LoraConfig
 from tqdm import tqdm
@@ -26,6 +25,7 @@ from transformers import AutoTokenizer, pipeline
 
 from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead, PPOConfig, PPOTrainer, set_seed
 from trl.core import LengthSampler
+from trl.import_utils import is_xpu_available
 
 
 tqdm.pandas()
