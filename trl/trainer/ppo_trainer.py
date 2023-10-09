@@ -484,7 +484,7 @@ class PPOTrainer(BaseTrainer):
                 response = response[:, query_tensor.shape[0] :]
                 if generate_ref_response:
                     ref_response = ref_response[:, query_tensor.shape[0] :]
-        
+
         if generate_ref_response:
             return response, ref_response
         return response
