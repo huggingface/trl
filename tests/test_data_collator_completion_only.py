@@ -21,13 +21,21 @@ from trl import DataCollatorForCompletionOnlyLM
 
 class DataCollatorForCompletionOnlyLMTester(unittest.TestCase):
     def test_data_collator_finds_response_template_llama2_tokenizer(self):
+        # this should ideally be tested with meta-llama/Llama-2-7b-hf
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/dummy-GPT2-correct-vocab")
         self.instruction = """### System: You are a helpful assistant.
 
 ### User: How much is 2+2?
 
 ### Assistant: 2+2 equals 4"""
+        self.instruction_template = "\n### User:"
         self.response_template = "\n### Assistant:"
+
+        # GPT2Tokenizer: [198, 21017, 11787, 25] -> [11787, 25]
+        # Llama2Tokenizer: [29871, 13, 2277, 29937, 4911, 29901] -> [2277, 29937, 4911, 29901]
+        self.tokenized_instruction_w_context = self.tokenizer.encode(
+            self.instruction_template, add_special_tokens=False
+        )[2:]
 
         # GPT2Tokenizer: [198, 21017, 15286, 25] -> [15286, 25]
         # Llama2Tokenizer: [29871, 13, 2277, 29937, 4007, 22137, 29901] -> [2277, 29937, 4007, 22137, 29901]
@@ -40,6 +48,13 @@ class DataCollatorForCompletionOnlyLMTester(unittest.TestCase):
         # Test the fix for #598
         # Pass already tokenized (w context) and truncated response_template so token_ids are like in the instruction + response
         self.collator = DataCollatorForCompletionOnlyLM(self.tokenized_response_w_context, tokenizer=self.tokenizer)
+        self.collator.torch_call([self.tokenized_instruction])
+
+        # Test for PR #749
+        # Pass already tokenized (w context) instruction and response both so token_ids are like in the instruction + response
+        self.collator = DataCollatorForCompletionOnlyLM(
+            self.tokenized_response_w_context, self.tokenized_instruction_w_context, tokenizer=self.tokenizer
+        )
         self.collator.torch_call([self.tokenized_instruction])
 
     def test_data_collator_handling_of_long_sequences(self):

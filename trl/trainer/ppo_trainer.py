@@ -428,7 +428,7 @@ class PPOTrainer(BaseTrainer):
 
         Args:
             query_tensor (`torch.LongTensor`):
-                A tensor of shape (`batch_size`, `seq_len`) containing query tokens.
+                A tensor of shape (`seq_len`) containing query tokens or a list of tensors of shape (`seq_len`).
             generation_kwargs (dict[str, Any]):
                 Keyword arguments for generation.
             length_sampler (`Callable`, *optional*):
@@ -452,6 +452,11 @@ class PPOTrainer(BaseTrainer):
             )
 
         else:
+            if len(query_tensor.shape) == 2:
+                raise ValueError(
+                    "query_tensor must be a tensor of shape (`seq_len`) or a list of tensors of shape (`seq_len`)"
+                )
+
             if length_sampler is not None:
                 generation_kwargs["max_new_tokens"] = length_sampler()
             response = self.accelerator.unwrap_model(self.model).generate(

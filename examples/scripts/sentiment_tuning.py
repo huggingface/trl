@@ -63,6 +63,7 @@ class ScriptArguments:
             task_type="CAUSAL_LM",
         ),
     )
+    trust_remote_code: bool = field(default=False, metadata={"help": "Enable `trust_remote_code`"})
 
 
 args = tyro.cli(ScriptArguments)
@@ -123,7 +124,7 @@ set_seed(args.ppo_config.seed)
 
 # Now let's build the model, the reference model, and the tokenizer.
 if not args.use_peft:
-    ref_model = trl_model_class.from_pretrained(args.ppo_config.model_name, trust_remote_code=True)
+    ref_model = trl_model_class.from_pretrained(args.ppo_config.model_name, trust_remote_code=args.trust_remote_code)
     device_map = None
     peft_config = None
 else:
@@ -134,7 +135,7 @@ else:
 
 model = trl_model_class.from_pretrained(
     args.ppo_config.model_name,
-    trust_remote_code=True,
+    trust_remote_code=args.trust_remote_code,
     device_map=device_map,
     peft_config=peft_config,
 )

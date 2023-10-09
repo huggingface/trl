@@ -72,6 +72,10 @@ class ScriptArguments:
             modules_to_save=["scores"],
         ),
     )
+    load_in_8bit: bool = False
+    """load the model in 8 bits precision"""
+    load_in_4bit: bool = False
+    """load the model in 4 bits precision"""
 
 
 args = tyro.cli(ScriptArguments)
