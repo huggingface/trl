@@ -17,6 +17,7 @@ import os
 import time
 import typing
 import warnings
+from contextlib import nullcontext
 from typing import Callable, List, Optional, Union
 
 import datasets
@@ -229,12 +230,17 @@ class PPOTrainer(BaseTrainer):
         elif ref_model is None and not self.is_peft_model:
             self.ref_model = create_reference_model(self.model, num_shared_layers=num_shared_layers)
         elif self.is_peft_model:
-            self.ref_model = None
+            self.ref_model = self.model
         else:
             raise ValueError(
                 f"ref_model must be a PreTrainedModelWrapper or `None`, got {type(ref_model)} - supported "
                 f"architectures are: {SUPPORTED_ARCHITECTURES} "
             )
+        self.optional_peft_ctx = (
+            self.accelerator.unwrap_model(self.model).pretrained_model.disable_adapter
+            if self.is_peft_model
+            else nullcontext
+        )
 
         if not (isinstance(tokenizer, PreTrainedTokenizer) or isinstance(tokenizer, PreTrainedTokenizerFast)):
             raise ValueError(
@@ -455,14 +461,15 @@ class PPOTrainer(BaseTrainer):
                 **generation_kwargs,
             )
             if generate_ref_response:
-                ref_response = self._generate_batched(
-                    self.accelerator.unwrap_model(self.ref_model),
-                    query_tensor,
-                    length_sampler=length_sampler,
-                    batch_size=batch_size,
-                    return_prompt=return_prompt,
-                    **generation_kwargs,
-                )
+                with self.optional_peft_ctx():
+                    ref_response = self._generate_batched(
+                        self.accelerator.unwrap_model(self.ref_model),
+                        query_tensor,
+                        length_sampler=length_sampler,
+                        batch_size=batch_size,
+                        return_prompt=return_prompt,
+                        **generation_kwargs,
+                    )
 
         else:
             if len(query_tensor.shape) == 2:
@@ -476,9 +483,10 @@ class PPOTrainer(BaseTrainer):
                 input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs
             )
             if generate_ref_response:
-                ref_response = self.accelerator.unwrap_model(self.ref_model).generate(
-                    input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs
-                )
+                with self.optional_peft_ctx():
+                    ref_response = self.accelerator.unwrap_model(self.ref_model).generate(
+                        input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs
+                    )
 
             if not return_prompt and not self.is_encoder_decoder:
                 response = response[:, query_tensor.shape[0] :]
@@ -701,21 +709,7 @@ class PPOTrainer(BaseTrainer):
                 response_masks=response_masks,
                 return_logits=full_kl_penalty,
             )
-            # for when the model is a peft model
-            if self.is_peft_model and hasattr(
-                self.accelerator.unwrap_model(self.model).pretrained_model,
-                "disable_adapter",
-            ):
-                with self.accelerator.unwrap_model(self.model).pretrained_model.disable_adapter():
-                    ref_logprobs, ref_logits_or_none, _, _ = self.batched_forward_pass(
-                        self.model, queries, responses, model_inputs, return_logits=full_kl_penalty
-                    )
-            elif self.is_peft_model and not hasattr(self.model.pretrained_model, "disable_adapter"):
-                raise ValueError(
-                    "You are using a `peft` version that does not support `disable_adapter`. Please update your `peft` version to the latest version."
-                )
-
-            else:
+            with self.optional_peft_ctx():
                 ref_logprobs, ref_logits_or_none, _, _ = self.batched_forward_pass(
                     self.ref_model, queries, responses, model_inputs, return_logits=full_kl_penalty
                 )
