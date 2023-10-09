@@ -1,3 +1,6 @@
+output*
+mlruns*
+
 benchmark/trl
 *.bak
 .gitattributes

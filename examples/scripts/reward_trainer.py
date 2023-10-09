@@ -38,28 +38,18 @@ class ScriptArguments:
     model_name_or_path: Optional[str] = field(default="camembert-base", metadata={"help": "the model name"})
     dataset_name_or_path: Optional[str] = field(default="Anthropic/hh-rlhf", metadata={"help": "the dataset name"})
     dataset_text_field: Optional[str] = field(default="text", metadata={"help": "the text field of the dataset"})
-    log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
-    logging_steps: Optional[int] = field(default=500, metadata={"help": "the number of update steps between two logs"})
     eval_split: Optional[str] = field(
         default="none", metadata={"help": "the dataset split to evaluate on; default to 'none' (no evaluation)"}
     )
-    learning_rate: Optional[float] = field(default=1.41e-5, metadata={"help": "the learning rate"})
-    batch_size: Optional[int] = field(default=64, metadata={"help": "the batch size"})
-    num_train_epochs: Optional[int] = field(default=1, metadata={"help": "the number of training epochs"})
     seq_length: Optional[int] = field(default=512, metadata={"help": "Input sequence length"})
-    gradient_accumulation_steps: Optional[int] = field(
-        default=16, metadata={"help": "the number of gradient accumulation steps"}
-    )
-    gradient_checkpointing: Optional[bool] = field(default=True, metadata={"help": "Enable gradient checkpointing"})
     load_in_8bit: Optional[bool] = field(default=False, metadata={"help": "load the model in 8 bits precision"})
     load_in_4bit: Optional[bool] = field(default=False, metadata={"help": "load the model in 4 bits precision"})
     use_peft: Optional[bool] = field(default=False, metadata={"help": "Wether to use PEFT or not to train adapters"})
     trust_remote_code: Optional[bool] = field(default=True, metadata={"help": "Enable `trust_remote_code`"})
-    output_dir: Optional[str] = field(default="output", metadata={"help": "the output directory"})
 
 
-parser = HfArgumentParser(ScriptArguments)
-script_args = parser.parse_args_into_dataclasses()[0]
+parser = HfArgumentParser((ScriptArguments, RewardConfig))
+script_args, training_args = parser.parse_args_into_dataclasses()
 
 # Step 1: Load the model
 if script_args.load_in_8bit and script_args.load_in_4bit:
@@ -137,23 +127,6 @@ else:
         lambda x: len(x["input_ids_chosen"]) <= script_args.seq_length
         and len(x["input_ids_rejected"]) <= script_args.seq_length
     )
-
-
-# Step 3: Define the training arguments
-training_args = RewardConfig(
-    output_dir=script_args.output_dir,
-    per_device_train_batch_size=script_args.batch_size,
-    num_train_epochs=script_args.num_train_epochs,
-    gradient_accumulation_steps=script_args.gradient_accumulation_steps,
-    gradient_checkpointing=script_args.gradient_checkpointing,
-    learning_rate=script_args.learning_rate,
-    report_to="wandb" if script_args.log_with == "wandb" else "tensorboard",
-    remove_unused_columns=False,
-    optim="adamw_torch",
-    logging_steps=script_args.logging_steps,
-    evaluation_strategy="steps" if script_args.eval_split != "none" else "no",
-    max_length=script_args.seq_length,
-)
 
 # Step 4: Define the LoraConfig
 if script_args.use_peft:
