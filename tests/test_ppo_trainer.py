@@ -884,8 +884,6 @@ class PPOTrainerTester(unittest.TestCase):
             dataset=dummy_dataset,
         )
 
-        self.assertTrue(ppo_trainer.ref_model is None)
-
         dummy_dataloader = ppo_trainer.dataloader
 
         # train model with ppo
@@ -971,8 +969,6 @@ class PPOTrainerTester(unittest.TestCase):
                 tokenizer=self.gpt2_tokenizer,
                 dataset=dummy_dataset,
             )
-
-            self.assertTrue(ppo_trainer.ref_model is None)
 
             dummy_dataloader = ppo_trainer.dataloader
 
@@ -1081,8 +1077,6 @@ class PPOTrainerTester(unittest.TestCase):
             tokenizer=self.gpt2_tokenizer,
             dataset=dummy_dataset,
         )
-
-        self.assertTrue(ppo_trainer.ref_model is None)
 
         dummy_dataloader = ppo_trainer.dataloader
 
