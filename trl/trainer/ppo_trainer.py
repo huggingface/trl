@@ -420,6 +420,7 @@ class PPOTrainer(BaseTrainer):
         length_sampler: Callable = None,
         batch_size: int = 4,
         return_prompt: bool = True,
+        generate_ref_response: bool = False,
         **generation_kwargs,
     ):
         """
@@ -437,19 +438,31 @@ class PPOTrainer(BaseTrainer):
                 Batch size used for generation, defaults to `4`.
             return_prompt (`bool`, *optional*):
                 If set to `False` the prompt is not returned but only the newly generated tokens, defaults to `True`.
+            generate_ref_response (`bool`, *optional*):
+                If set to `True` the reference response is also generated, defaults to `False`.
 
         Returns:
             `torch.LongTensor`: A tensor of shape (`batch_size`, `gen_len`) containing response tokens.
         """
 
         if isinstance(query_tensor, List):
-            return self._generate_batched(
+            response = self._generate_batched(
+                self.accelerator.unwrap_model(self.model),
                 query_tensor,
                 length_sampler=length_sampler,
                 batch_size=batch_size,
                 return_prompt=return_prompt,
                 **generation_kwargs,
             )
+            if generate_ref_response:
+                ref_response = self._generate_batched(
+                    self.accelerator.unwrap_model(self.ref_model),
+                    query_tensor,
+                    length_sampler=length_sampler,
+                    batch_size=batch_size,
+                    return_prompt=return_prompt,
+                    **generation_kwargs,
+                )
 
         else:
             if len(query_tensor.shape) == 2:
@@ -462,13 +475,23 @@ class PPOTrainer(BaseTrainer):
             response = self.accelerator.unwrap_model(self.model).generate(
                 input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs
             )
+            if generate_ref_response:
+                ref_response = self.accelerator.unwrap_model(self.ref_model).generate(
+                    input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs
+                )
 
             if not return_prompt and not self.is_encoder_decoder:
-                return response[:, query_tensor.shape[0] :]
-            return response
+                response = response[:, query_tensor.shape[0] :]
+                if generate_ref_response:
+                    ref_response = ref_response[:, query_tensor.shape[0] :]
+        
+        if generate_ref_response:
+            return response, ref_response
+        return response
 
     def _generate_batched(
         self,
+        model: PreTrainedModelWrapper,
         query_tensors: List[torch.Tensor],
         length_sampler: Callable = None,
         batch_size: int = 4,
@@ -505,7 +528,7 @@ class PPOTrainer(BaseTrainer):
                 return_tensors="pt",
             ).to(self.current_device)
 
-            generations = self.accelerator.unwrap_model(self.model).generate(**padded_inputs, **generation_kwargs)
+            generations = model.generate(**padded_inputs, **generation_kwargs)
 
             for generation, mask in zip(generations, padded_inputs["attention_mask"]):
                 if not self.is_encoder_decoder:

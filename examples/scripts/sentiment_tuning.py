@@ -186,8 +186,9 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     query_tensors = batch["input_ids"]
 
     # Get response from gpt2
-    response_tensors = ppo_trainer.generate(query_tensors, return_prompt=False, **generation_kwargs)
+    response_tensors, ref_response_tensors = ppo_trainer.generate(query_tensors, return_prompt=False, generate_ref_response=True, **generation_kwargs)
     batch["response"] = tokenizer.batch_decode(response_tensors)
+    batch["ref_response"] = tokenizer.batch_decode(ref_response_tensors)
 
     # Compute sentiment score
     texts = [q + r for q, r in zip(batch["query"], batch["response"])]
@@ -196,4 +197,4 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
 
     # Run PPO step
     stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
-    ppo_trainer.log_stats(stats, batch, rewards)
+    ppo_trainer.log_stats(stats, batch, rewards, columns_to_log=["query", "response", "ref_response"])
