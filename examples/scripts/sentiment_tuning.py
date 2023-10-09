@@ -51,9 +51,10 @@ class ScriptArguments:
             score_clip=None,
         )
     )
-    query_dataset: str = field(default="imdb", metadata={"help": "the dataset to query"})
-    use_seq2seq: bool = field(default=False, metadata={"help": "whether to use seq2seq models"})
-    use_peft: bool = field(default=False, metadata={"help": "whether to use peft"})
+    use_seq2seq: bool = False
+    """whether to use seq2seq models"""
+    use_peft: bool = False
+    """whether to use peft"""
     peft_config: Optional[LoraConfig] = field(
         default_factory=lambda: LoraConfig(
             r=16,
@@ -111,7 +112,7 @@ def build_dataset(config, query_dataset, input_min_text_length=2, input_max_text
 
 
 # We retrieve the dataloader by calling the `build_dataset` function.
-dataset = build_dataset(args.ppo_config, args.query_dataset)
+dataset = build_dataset(args.ppo_config, args.ppo_config.query_dataset)
 
 
 def collator(data):
