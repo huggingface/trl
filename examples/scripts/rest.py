@@ -120,7 +120,6 @@ def score(
     max_length: int,
     accelerator: Accelerator,
 ) -> Tuple[Dataset, List[float]]:
-
     model = AutoModelForSequenceClassification.from_pretrained(args.reward_model_name_or_path)
     tokenizer = AutoTokenizer.from_pretrained(args.reward_model_name_or_path)
 
@@ -156,7 +155,6 @@ def score(
 
 
 def main():
-
     parser = HfArgumentParser((ScoreArguments, GenArguments, TrainingArguments))
     score_args, gen_args, train_args = parser.parse_args_into_dataclasses()
 
@@ -238,13 +236,13 @@ def main():
     for grow_step in range(score_args.num_grow_steps):
         accelerator.print(f"*** Grow step number: {grow_step} ***")
 
-        accelerator.print(f"Starting Grow phase")
+        accelerator.print("Starting Grow phase")
         generated_dataset = generate(model, gen_dataloader, tokenizer, accelerator, **generation_kwargs)
 
         if score_args.concat_init_dataset:
             generated_dataset = concatenate_datasets([init_train_dataset, generated_dataset])
 
-        accelerator.print(f"Starting Improve phase")
+        accelerator.print("Starting Improve phase")
         reward_dataset, rewards = score(score_args, generated_dataset, max_length, accelerator)
         print(reward_dataset.features)
         # save the dataset
@@ -258,13 +256,12 @@ def main():
             "train/min_reward": np.min(rewards).item(),
         }
 
-        accelerator.print(f"Reward Statistics: ", reward_stats)
+        accelerator.print(f"Reward Statistics: {reward_stats}")
         trainer.state.log_history = []
         trainer.state.global_step = grow_step
         trainer.log(reward_stats)
 
         def preprocess_fn(samples):
-
             prompt_ids = tokenizer(samples["prompt"], truncation=False, padding=False)["input_ids"]
             responses = tokenizer(samples["gen"], truncation=False, padding=False)["input_ids"]
 
@@ -303,7 +300,6 @@ def main():
 
         accelerator.print("Starting Improve steps")
         for improve_step in range(score_args.num_improve_steps):
-
             accelerator.print(f"Improve steps number {improve_step}")
 
             temp_dataset = filter_dataset(reward_dataset, improve_step)

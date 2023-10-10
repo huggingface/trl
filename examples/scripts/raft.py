@@ -131,7 +131,6 @@ def score_and_filter(
 
 
 def main():
-
     parser = HfArgumentParser((ScoreArguments, GenArguments, TrainingArguments))
     score_args, gen_args, train_args = parser.parse_args_into_dataclasses()
 
@@ -217,9 +216,7 @@ def main():
     max_length = gen_args.max_prompt_length + gen_args.max_new_tokens
 
     for iteration in range(score_args.num_raft_iterations):
-
         for batch in gen_dataloader:
-
             reward_dataset = generate(model, batch, tokenizer, accelerator, **generation_kwargs)
 
             accelerator.wait_for_everyone()
@@ -247,7 +244,7 @@ def main():
                     "train/max_reward": np.max(all_rewards).item(),
                     "train/min_reward": np.min(all_rewards).item(),
                 }
-                accelerator.print(f"Reward Statistics: ", reward_stats)
+                accelerator.print(f"Reward Statistics: {reward_stats}")
 
                 trainer.state.log_history = []
                 trainer.state.global_step = steps
@@ -273,7 +270,7 @@ def main():
 
             trainer.train_dataset = reward_dataset
 
-            train_results = trainer.train(resume_from_checkpoint=False)
+            trainer.train(resume_from_checkpoint=False)
 
             progress_bar.update(1)
             steps += 1
