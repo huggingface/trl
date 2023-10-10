@@ -14,6 +14,7 @@
 # limitations under the License.
 from dataclasses import dataclass, field
 from typing import Optional
+import mlflow
 
 import torch
 from accelerate import Accelerator
@@ -23,6 +24,7 @@ from tqdm import tqdm
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig, HfArgumentParser, TrainingArguments
 
 from trl import SFTTrainer
+from trl.trainer.moreh_utils import TBTrainerCallback, get_num_parameters
 
 
 tqdm.pandas()
@@ -74,6 +76,10 @@ model = AutoModelForCausalLM.from_pretrained(
     torch_dtype=torch_dtype,
 )
 
+
+num_params = get_num_parameters(model)
+mlflow.log_param('num_params', num_params)
+
 # Step 2: Load the dataset
 dataset = load_dataset(script_args.dataset_name_or_path, split="train")
 
@@ -97,6 +103,8 @@ trainer = SFTTrainer(
     dataset_text_field=script_args.dataset_text_field,
     peft_config=peft_config,
 )
+
+trainer.add_callback(TBTrainerCallback())
 
 trainer.train()
 
