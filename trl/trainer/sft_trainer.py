@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import copy
 import dataclasses
 import warnings
 from typing import Callable, Dict, List, Optional, Tuple, Union
@@ -208,6 +209,15 @@ class SFTTrainer(Trainer):
                 infinite,
                 num_of_sequences,
                 chars_per_token,
+            )
+            # create a `sample_dataset` in which we give half of the
+            # token in the dataset to predict the rest
+            self.sample_dataset = copy.deepcopy(eval_dataset)
+            self.sample_dataset = self.sample_dataset.map(
+                lambda x: {"remaining_input_ids": x["input_ids"][len(x["input_ids"]) // 2 :]}
+            )
+            self.sample_dataset = self.sample_dataset.map(
+                lambda x: {key: x[key][: len(x[key]) // 2] for key in x.keys()}
             )
 
         if tokenizer.padding_side is not None and tokenizer.padding_side != "right":
