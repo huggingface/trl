@@ -106,7 +106,13 @@ trainer = SFTTrainer(
 
 trainer.add_callback(TBTrainerCallback())
 
-trainer.train()
+train_result = trainer.train()
 
 # Step 6: Save the model
-trainer.save_model(script_args.output_dir)
+trainer.save_model()
+
+trainer.log_metrics("train", train_result.metrics)
+trainer.save_metrics("train", train_result.metrics)
+
+mlflow.end_run()
+
