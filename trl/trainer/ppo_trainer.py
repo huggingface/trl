@@ -1296,7 +1296,7 @@ class PPOTrainer(BaseTrainer):
             # Log stats
             if not isinstance(rewards, torch.Tensor):
                 rewards = torch.tensor(rewards).to(self.current_device)
-            
+
             # Gather rewards if distributed
             if self.is_distributed:
                 import torch.distributed as dist
@@ -1306,7 +1306,7 @@ class PPOTrainer(BaseTrainer):
                 tensors = [torch.zeros_like(rewards) for _ in range(world_size)]
                 dist.all_gather(tensors, rewards)
                 rewards = torch.cat(tensors)
-                
+
             if "query" not in batch.keys() and "response" not in batch.keys():
                 # warn the user that the game logs will not be logged
                 warnings.warn(
@@ -1322,6 +1322,7 @@ class PPOTrainer(BaseTrainer):
                 batch_list = [batch[column_to_log] for column_to_log in columns_to_log]
                 if self.is_distributed:
                     import torch.distributed as dist
+
                     dist.barrier()
                     gathered_batch_list = []
                     for b in batch_list:
@@ -1329,12 +1330,11 @@ class PPOTrainer(BaseTrainer):
                         dist.all_gather_object(gather, b)
                         flattened = [msg for sublist in gather for msg in sublist]
                         gathered_batch_list.append(flattened)
-                    
+
                     batch_list = gathered_batch_list
 
                 table_rows = [list(r) for r in zip(*batch_list, rewards.cpu().tolist())]
                 logs.update({"game_log": wandb.Table(columns=[*columns_to_log, "reward"], rows=table_rows)})
-
 
             logs.update(stats)
 
@@ -1359,6 +1359,7 @@ class PPOTrainer(BaseTrainer):
         else:
             if self.is_distributed:
                 import torch.distributed as dist
+
                 if not isinstance(rewards, torch.Tensor):
                     rewards = torch.tensor(rewards).to(self.current_device)
 
@@ -1367,22 +1368,19 @@ class PPOTrainer(BaseTrainer):
                 tensors = [torch.zeros_like(rewards) for _ in range(world_size)]
                 dist.all_gather(tensors, rewards)
                 rewards = torch.cat(tensors)
-                
+
                 if self.config.log_with == "wandb":
                     if any([column_to_log not in batch.keys() for column_to_log in columns_to_log]):
-                        raise ValueError(f"Columns to log {columns_to_log} are not present in the batch {batch.keys()}.")
+                        raise ValueError(
+                            f"Columns to log {columns_to_log} are not present in the batch {batch.keys()}."
+                        )
 
                     batch_list = [batch[column_to_log] for column_to_log in columns_to_log]
-                    
+
                     dist.barrier()
                     for b in batch_list:
                         gather = [None for _ in range(dist.get_world_size())]
                         dist.all_gather_object(gather, b)
-                
-
-
-                
-                
 
     def create_model_card(self, path: str, model_name: Optional[str] = "TRL Model") -> None:
         """Creates and saves a model card for a TRL model.
