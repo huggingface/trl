@@ -160,7 +160,7 @@ def main():
 
     if score_args.num_improve_steps > 4:
         warnings.warn(
-            "Overiding the number of improve steps from {score_args.improve_steps} to 4 as the filtering strategy used in this script do not work for more than 4 improve_steps"
+            "Overriding the number of improve steps from {score_args.improve_steps} to 4 as the filtering strategy used in this script does not work for more than 4 improve_steps"
         )
 
     # load policy and reward model
