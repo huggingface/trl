@@ -24,11 +24,12 @@ from transformers.trainer_pt_utils import nested_detach
 from transformers.trainer_utils import EvalPrediction
 
 from ..import_utils import is_peft_available
+from .training_configs import RewardConfig
 from .utils import PeftSavingCallback, RewardDataCollatorWithPadding, compute_accuracy
 
 
 if is_peft_available():
-    from peft import PeftModel, get_peft_model, prepare_model_for_int8_training
+    from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
 
 
 class RewardTrainer(Trainer):
@@ -46,12 +47,15 @@ class RewardTrainer(Trainer):
     - `input_ids_rejected`
     - `attention_mask_rejected`
 
+    Optionally, you can also pass a `margin` entry to the dataset. This entry should contain the margin used to modulate the
+    loss of the reward model as outlined in https://ai.meta.com/research/publications/llama-2-open-foundation-and-fine-tuned-chat-models/.
+    If you don't pass a margin, no margin will be used.
     """
 
     def __init__(
         self,
         model: Union[PreTrainedModel, nn.Module] = None,
-        args: TrainingArguments = None,
+        args: Optional[RewardConfig] = None,
         data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
@@ -73,7 +77,7 @@ class RewardTrainer(Trainer):
         Args:
             model (`transformers.PreTrainedModel`):
                 The model to train, preferably an `AutoModelForSequenceClassification`.
-            args (`transformers.TrainingArguments`):
+            args (`RewardConfig`):
                 The arguments to use for training.
             data_collator (`transformers.DataCollator`):
                 The data collator to use for training. If None is specified, the default data collator (`RewardDataCollatorWithPadding`) will be used
@@ -94,18 +98,36 @@ class RewardTrainer(Trainer):
                 The optimizer and scheduler to use for training.
             preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
                 The function to use to preprocess the logits before computing the metrics.
-            max_length (`int`, defaults to `None`):
-                The maximum length of the sequences in the batch. This argument is required if you want to use the default data collator.
             peft_config (`Dict`, defaults to `None`):
                 The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
         """
+        if type(args) == TrainingArguments:
+            warnings.warn(
+                "Using `transformers.TrainingArguments` for `args` is deprecated and will be removed in a future version. Please use `RewardConfig` instead.",
+                FutureWarning,
+            )
+            if max_length is not None:
+                warnings.warn(
+                    "The `max_length` argument is deprecated and will be removed in a future version. Please use the `RewardConfig` to set `max_length` instead.",
+                    FutureWarning,
+                )
+        else:
+            if max_length is not None and args.max_length is not None:
+                raise ValueError(
+                    "You cannot specify both `max_length` and `args.max_length`. Please use the `RewardConfig` to set `max_length` once."
+                )
+            if max_length is not None and args.max_length is None:
+                warnings.warn(
+                    "The `max_length` argument is deprecated and will be removed in a future version. Please use the `RewardConfig` to set `max_length` instead.",
+                    FutureWarning,
+                )
         if not is_peft_available() and peft_config is not None:
             raise ValueError(
                 "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
             )
         elif is_peft_available() and peft_config is not None:
             if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_quantized", False):
-                model = prepare_model_for_int8_training(model)
+                model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=args.gradient_checkpointing)
 
             model = get_peft_model(model, peft_config)
 
@@ -120,13 +142,25 @@ class RewardTrainer(Trainer):
                 raise ValueError(
                     "max_length or a tokenizer must be specified when using the default RewardDataCollatorWithPadding"
                 )
-            if max_length is None:
-                warnings.warn(
-                    "When using RewardDataCollatorWithPadding, you should set `max_length` in the RewardTrainer's init"
-                    " it will be set to `512` by default, but you should do it yourself in the future.",
-                    UserWarning,
-                )
-                max_length = 512
+            if type(args) == TrainingArguments:
+                if max_length is None:
+                    warnings.warn(
+                        "When using RewardDataCollatorWithPadding, you should set `max_length` in RewardConfig."
+                        " It will be set to `512` by default, but you should do it yourself in the future.",
+                        UserWarning,
+                    )
+                    max_length = 512
+            else:
+                if max_length is None and args.max_length is None:
+                    warnings.warn(
+                        "When using RewardDataCollatorWithPadding, you should set `max_length` in RewardConfig."
+                        " It will be set to `512` by default, but you should do it yourself in the future.",
+                        UserWarning,
+                    )
+                    max_length = 512
+                if max_length is None and args.max_length is not None:
+                    max_length = args.max_length
+
             data_collator = RewardDataCollatorWithPadding(tokenizer, max_length=max_length)
 
             if args.remove_unused_columns:
@@ -136,7 +170,7 @@ class RewardTrainer(Trainer):
                     args = replace(args, remove_unused_columns=False)
                 # warn users
                 warnings.warn(
-                    "When using RewardDataCollatorWithPadding, you should set `remove_unused_columns=False` in your TrainingArguments"
+                    "When using RewardDataCollatorWithPadding, you should set `remove_unused_columns=False` in your RewardConfig"
                     " we have set it for you, but you should do it yourself in the future.",
                     UserWarning,
                 )
@@ -178,7 +212,12 @@ class RewardTrainer(Trainer):
             input_ids=inputs["input_ids_rejected"],
             attention_mask=inputs["attention_mask_rejected"],
         )[0]
-        loss = -nn.functional.logsigmoid(rewards_chosen - rewards_rejected).mean()
+        # calculate loss, optionally modulate with margin
+        if "margin" in inputs:
+            loss = -nn.functional.logsigmoid(rewards_chosen - rewards_rejected - inputs["margin"]).mean()
+        else:
+            loss = -nn.functional.logsigmoid(rewards_chosen - rewards_rejected).mean()
+
         if return_outputs:
             return loss, {
                 "rewards_chosen": rewards_chosen,

@@ -15,7 +15,7 @@ import unittest
 
 import torch
 
-from trl import is_peft_available
+from trl import is_peft_available, is_wandb_available
 
 
 def require_peft(test_case):
@@ -25,6 +25,25 @@ def require_peft(test_case):
     if not is_peft_available():
         test_case = unittest.skip("test requires peft")(test_case)
     return test_case
+
+
+def require_wandb(test_case, required: bool = True):
+    """
+    Decorator marking a test that requires wandb. Skips the test if wandb is not available.
+    """
+    # XOR, i.e.:
+    # skip if available and required = False and
+    # skip if not available and required = True
+    if is_wandb_available() ^ required:
+        test_case = unittest.skip("test requires wandb")(test_case)
+    return test_case
+
+
+def require_no_wandb(test_case):
+    """
+    Decorator marking a test that requires no wandb. Skips the test if wandb is available.
+    """
+    return require_wandb(test_case, required=False)
 
 
 def require_bitsandbytes(test_case):

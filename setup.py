@@ -65,13 +65,19 @@ REQUIRED_PKGS = [
     "numpy>=1.18.2",
     "accelerate",
     "datasets",
+    "tyro>=0.5.7",
 ]
 EXTRAS = {
-    "test": ["parameterized", "pytest", "pytest-xdist", "accelerate", "peft", "diffusers>=0.18.0"],
-    "peft": ["peft>=0.2.0"],
+    "test": ["parameterized", "pytest", "pytest-xdist", "accelerate", "peft>=0.4.0", "diffusers>=0.18.0"],
+    "peft": ["peft>=0.4.0"],
     "diffusers": ["diffusers>=0.18.0"],
-    "dev": ["parameterized", "pytest", "pytest-xdist", "pre-commit", "peft>=0.2.0", "diffusers>=0.18.0"],
+    "deepspeed": ["deepspeed>=0.9.5"],
+    "benchmark": ["wandb", "ghapi", "openrlbenchmark==0.2.1a5", "requests", "deepspeed"],
+    "quantization": ["bitsandbytes>=0.41.0"],
 }
+EXTRAS["dev"] = []
+for reqs in EXTRAS.values():
+    EXTRAS["dev"].extend(reqs)
 
 setup(
     name="trl",

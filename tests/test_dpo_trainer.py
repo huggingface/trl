@@ -16,12 +16,13 @@ import unittest
 
 import torch
 from datasets import Dataset
+from parameterized import parameterized
 from pytest import mark
-from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
+from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer, TrainingArguments
 
 from trl import DPOTrainer
 
-from .testing_utils import require_peft
+from .testing_utils import require_no_wandb, require_peft
 
 
 class DPOTrainerTester(unittest.TestCase):
@@ -32,6 +33,12 @@ class DPOTrainerTester(unittest.TestCase):
         cls.ref_model = AutoModelForCausalLM.from_pretrained(cls.model_id)
         cls.tokenizer = AutoTokenizer.from_pretrained(cls.model_id)
         cls.tokenizer.pad_token = cls.tokenizer.eos_token
+
+        # get t5 as seq2seq example:
+        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration-correct-vocab"
+        cls.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+        cls.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+        cls.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
     def _init_dummy_dataset(self):
         # fmt: off
@@ -67,26 +74,41 @@ class DPOTrainerTester(unittest.TestCase):
         # fmt: on
         return Dataset.from_dict(dummy_dataset_dict)
 
-    def test_dpo_trainer(self):
+    @parameterized.expand(
+        [
+            ["gpt2"],
+            ["t5"],
+        ]
+    )
+    def test_dpo_trainer(self, name):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 remove_unused_columns=False,
-                gradient_accumulation_steps=4,
+                gradient_accumulation_steps=1,
                 learning_rate=9e-1,
                 evaluation_strategy="steps",
             )
 
             dummy_dataset = self._init_dummy_dataset()
 
+            if name == "gpt2":
+                model = self.model
+                ref_model = self.ref_model
+                tokenizer = self.tokenizer
+            elif name == "t5":
+                model = self.t5_model
+                ref_model = self.t5_ref_model
+                tokenizer = self.t5_tokenizer
+
             trainer = DPOTrainer(
-                model=self.model,
-                ref_model=self.ref_model,
+                model=model,
+                ref_model=ref_model,
                 beta=0.1,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                tokenizer=tokenizer,
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
             )
@@ -191,3 +213,34 @@ class DPOTrainerTester(unittest.TestCase):
                     # check the params have changed - ignore 0 biases
                     if param.sum() != 0:
                         self.assertFalse(torch.equal(param, new_param))
+
+    @require_no_wandb
+    def test_dpo_trainer_generate_during_eval_no_wandb(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=1,
+                learning_rate=9e-1,
+                evaluation_strategy="steps",
+            )
+
+            dummy_dataset = self._init_dummy_dataset()
+
+            with self.assertRaisesRegex(
+                ValueError,
+                expected_regex="`generate_during_eval=True` requires Weights and Biases to be installed."
+                " Please install `wandb` to resolve.",
+            ):
+                DPOTrainer(
+                    model=self.model,
+                    ref_model=None,
+                    beta=0.1,
+                    args=training_args,
+                    tokenizer=self.tokenizer,
+                    train_dataset=dummy_dataset,
+                    eval_dataset=dummy_dataset,
+                    generate_during_eval=True,
+                )

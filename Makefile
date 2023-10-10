@@ -1,4 +1,4 @@
-.PHONY: test precommit
+.PHONY: test precommit benchmark_core benchmark_aux
 
 check_dirs := examples tests trl
 
@@ -7,3 +7,9 @@ test:
 
 precommit:
 	pre-commit run --all-files
+
+benchmark_core:
+	bash ./benchmark/benchmark_core.sh
+
+benchmark_aux:
+	bash ./benchmark/benchmark_aux.sh

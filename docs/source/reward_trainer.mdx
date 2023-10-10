@@ -1,39 +1,37 @@
 # Reward Modeling
 
-TRL supports custom reward modeling for anyone to perform reward modeling on their dataset and model. 
+TRL supports custom reward modeling for anyone to perform reward modeling on their dataset and model.
 
 Check out a complete flexible example inside [`examples/scripts`](https://github.com/huggingface/trl/tree/main/examples/scripts/reward_trainer.py) folder.
 
 ## Expected dataset format
 
-The reward trainer expects a very specific format for the dataset. Since the model will be trained to predict which sentence is the most relevant, given two sentences. We provide an example from the [`Anthropic/hh-rlhf`](https://huggingface.co/datasets/Anthropic/hh-rlhf) dataset below:
+The [`RewardTrainer`] expects a very specific format for the dataset since the model will be trained on pairs of examples to predict which of the two is preferred. We provide an example from the [`Anthropic/hh-rlhf`](https://huggingface.co/datasets/Anthropic/hh-rlhf) dataset below:
 
 <div style="text-align: center">
 <img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/rlhf-antropic-example.png", width="50%">
 </div>
 
-Therefore the final dataset object should contain two 4 entries at least if you use the default `RewardDataCollatorWithPadding` data collator. The entries should be named:
+Therefore the final dataset object should contain two 4 entries at least if you use the default [`RewardDataCollatorWithPadding`] data collator. The entries should be named:
 
-- `input_ids_chosen`
-- `attention_mask_chosen`
-- `input_ids_rejected`
-- `attention_mask_rejected`
-
-The `j` and `k` suffixes are used to denote the two sentences in the paired dataset.
+-   `input_ids_chosen`
+-   `attention_mask_chosen`
+-   `input_ids_rejected`
+-   `attention_mask_rejected`
 
 ## Using the `RewardTrainer`
 
-After standardizing your dataset, you can use the `RewardTrainer` as a classic Hugging Face Trainer. 
-You should pass an `AutoModelForSequenceClassification` model to the `RewardTrainer`.
+After preparing your dataset, you can use the [`RewardTrainer`] in the same way as the `Trainer` class from 🤗 Transformers.
+You should pass an `AutoModelForSequenceClassification` model to the [`RewardTrainer`], along with a [`RewardConfig`] which configures the hyperparameters of the training.
 
-### Leveraging the `peft` library to train a reward model
+### Leveraging 🤗 PEFT to train a reward model
 
-Just pass a `peft_config` in the key word arguments of `RewardTrainer`, and the trainer should automatically take care of converting the model into a PEFT model!
+Just pass a `peft_config` in the keyword arguments of [`RewardTrainer`], and the trainer should automatically take care of converting the model into a PEFT model!
 
 ```python
 from peft import LoraConfig, task_type
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, TrainingArguments
-from trl import RewardTrainer
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
+from trl import RewardTrainer, RewardConfig
 
 model = AutoModelForSequenceClassification.from_pretrained("gpt2")
 peft_config = LoraConfig(
@@ -57,6 +55,22 @@ trainer = RewardTrainer(
 trainer.train()
 
 ```
+
+### Adding a margin to the loss
+
+As in the [Llama 2 paper](https://huggingface.co/papers/2307.09288), you can add a margin to the loss by adding a `margin` column to the dataset. The reward collator will automatically pass it through and the loss will be computed accordingly.
+
+```python
+def add_margin(row):
+    # Assume you have a score_chosen and score_rejected columns that you want to use to compute the margin
+    return {'margin': row['score_chosen'] - row['score_rejected']}
+
+dataset = dataset.map(add_margin)
+```
+
+## RewardConfig
+
+[[autodoc]] RewardConfig
 
 ## RewardTrainer
 
