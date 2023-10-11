@@ -18,7 +18,6 @@ import warnings
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Union
 
-import diffusers
 import numpy as np
 import torch
 from diffusers import DDIMScheduler, StableDiffusionPipeline, UNet2DConditionModel
@@ -26,9 +25,10 @@ from diffusers.loaders import AttnProcsLayers
 from diffusers.models.attention_processor import LoRAAttnProcessor
 from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import rescale_noise_cfg
 
+from ..import_utils import is_diffusers_greater_than
 
-_diffusers_greater_21_4 = hasattr(diffusers.utils, "randn_tensor")
-if _diffusers_greater_21_4:
+
+if is_diffusers_greater_than("0.20.2"):
     from diffusers.utils import randn_tensor
 else:
     from diffusers.utils.torch_utils import randn_tensor
