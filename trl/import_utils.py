@@ -25,6 +25,11 @@ def is_peft_available() -> bool:
     return importlib.util.find_spec("peft") is not None
 
 
+def is_transformers_greater_than(version: str) -> bool:
+    _transformers_version = importlib.metadata.version("transformers")
+    return _transformers_version > version
+
+
 def is_torch_greater_2_0() -> bool:
     if _is_python_greater_3_8:
         from importlib.metadata import version
