@@ -8,7 +8,7 @@ Here's an overview of the notebooks and scripts in the [trl repository](https://
 
 | File                                                                                           | Description                                                                                                              |
 |------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------|
-| [`examples/scripts/sentiment_tuning.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/sentiment_tuning.py)  [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/sentiment/notebooks/gpt2-sentiment.ipynb) | This script shows how to use the `PPOTrainer` to fine-tune a sentiment analysis model using IMDB dataset                 |
+| [`examples/scripts/ppo.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/ppo.py)  [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/sentiment/notebooks/gpt2-sentiment.ipynb) | This script shows how to use the `PPOTrainer` to fine-tune a sentiment analysis model using IMDB dataset                 |
 | [`examples/notebooks/gpt2-sentiment.ipynb`](https://github.com/huggingface/trl/tree/main/examples/notebooks/gpt2-sentiment.ipynb)              | This notebook demonstrates how to reproduce the GPT2 imdb sentiment tuning example on a jupyter notebook.                |
 | [`examples/notebooks/gpt2-control.ipynb`](https://github.com/huggingface/trl/tree/main/examples/notebooks/gpt2-control.ipynb)   [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/sentiment/notebooks/gpt2-sentiment-control.ipynb)                | This notebook demonstrates how to reproduce the GPT2 sentiment control example on a jupyter notebook.    
 
@@ -18,14 +18,14 @@ Here's an overview of the notebooks and scripts in the [trl repository](https://
 
 ```bash
 # 1. run directly
-python examples/scripts/sentiment_tuning.py
+python examples/scripts/ppo.py
 # 2. run via `accelerate` (recommended), enabling more features (e.g., multiple GPUs, deepspeed)
 accelerate config # will prompt you to define the training configuration
-accelerate launch examples/scripts/sentiment_tuning.py # launches training
+accelerate launch examples/scripts/ppo.py # launches training
 # 3. get help text and documentation
-python examples/scripts/sentiment_tuning.py --help
+python examples/scripts/ppo.py --help
 # 4. configure logging with wandb and, say, mini_batch_size=1 and gradient_accumulation_steps=16
-python examples/scripts/sentiment_tuning.py --ppo_config.log_with wandb --ppo_config.mini_batch_size 1 --ppo_config.gradient_accumulation_steps 16
+python examples/scripts/ppo.py --ppo_config.log_with wandb --ppo_config.mini_batch_size 1 --ppo_config.gradient_accumulation_steps 16
 ```
 
 Note: if you don't want to log with `wandb` remove `log_with="wandb"` in the scripts/notebooks. You can also replace it with your favourite experiment tracker that's [supported by `accelerate`](https://huggingface.co/docs/accelerate/usage_guides/tracking).
@@ -38,11 +38,11 @@ To run in multi-GPU setup with DDP (distributed Data Parallel) change the `devic
 
 ## Benchmarks
 
-Below are some benchmark results for `examples/scripts/sentiment_tuning.py`. To reproduce locally, please check out the `--command` arguments below.
+Below are some benchmark results for `examples/scripts/ppo.py`. To reproduce locally, please check out the `--command` arguments below.
 
 ```bash
 python benchmark/benchmark.py \
-    --command "python examples/scripts/sentiment_tuning.py --ppo_config.log_with wandb" \
+    --command "python examples/scripts/ppopy --ppo_config.log_with wandb" \
     --num-seeds 5 \
     --start-seed 1 \
     --workers 10 \
@@ -61,7 +61,7 @@ python benchmark/benchmark.py \
 
 ```bash
 python benchmark/benchmark.py \
-    --command "python examples/scripts/sentiment_tuning.py --ppo_config.exp_name sentiment_tuning_step_grad_accu --ppo_config.mini_batch_size 1 --ppo_config.gradient_accumulation_steps 128 --ppo_config.log_with wandb" \
+    --command "python examples/scripts/ppo.py --ppo_config.exp_name sentiment_tuning_step_grad_accu --ppo_config.mini_batch_size 1 --ppo_config.gradient_accumulation_steps 128 --ppo_config.log_with wandb" \
     --num-seeds 5 \
     --start-seed 1 \
     --workers 10 \
@@ -79,7 +79,7 @@ python benchmark/benchmark.py \
 
 ```bash
 python benchmark/benchmark.py \
-    --command "python examples/scripts/sentiment_tuning.py --ppo_config.exp_name sentiment_tuning_gpt2 --ppo_config.log_with wandb" \
+    --command "python examples/scripts/ppo.py --ppo_config.exp_name sentiment_tuning_gpt2 --ppo_config.log_with wandb" \
     --num-seeds 5 \
     --start-seed 1 \
     --workers 10 \
@@ -89,7 +89,7 @@ python benchmark/benchmark.py \
     --slurm-total-cpus 12 \
     --slurm-template-path benchmark/trl.slurm_template
 python benchmark/benchmark.py \
-    --command "python examples/scripts/sentiment_tuning.py --ppo_config.exp_name sentiment_tuning_gpt2xl_grad_accu --ppo_config.model_name gpt2-xl --ppo_config.mini_batch_size 16 --ppo_config.gradient_accumulation_steps 8 --ppo_config.log_with wandb" \
+    --command "python examples/scripts/ppo.py --ppo_config.exp_name sentiment_tuning_gpt2xl_grad_accu --ppo_config.model_name gpt2-xl --ppo_config.mini_batch_size 16 --ppo_config.gradient_accumulation_steps 8 --ppo_config.log_with wandb" \
     --num-seeds 5 \
     --start-seed 1 \
     --workers 10 \
@@ -99,7 +99,7 @@ python benchmark/benchmark.py \
     --slurm-total-cpus 12 \
     --slurm-template-path benchmark/trl.slurm_template
 python benchmark/benchmark.py \
-    --command "python examples/scripts/sentiment_tuning.py --ppo_config.exp_name sentiment_tuning_falcon_rw_1b --ppo_config.model_name tiiuae/falcon-rw-1b --ppo_config.log_with wandb" \
+    --command "python examples/scripts/ppo.py --ppo_config.exp_name sentiment_tuning_falcon_rw_1b --ppo_config.model_name tiiuae/falcon-rw-1b --ppo_config.log_with wandb" \
     --num-seeds 5 \
     --start-seed 1 \
     --workers 10 \
@@ -116,7 +116,7 @@ python benchmark/benchmark.py \
 
 ```
 python benchmark/benchmark.py \
-    --command "python examples/scripts/sentiment_tuning.py --ppo_config.exp_name sentiment_tuning_peft --use_peft --ppo_config.log_with wandb" \
+    --command "python examples/scripts/ppo.py --ppo_config.exp_name sentiment_tuning_peft --use_peft --ppo_config.log_with wandb" \
     --num-seeds 5 \
     --start-seed 1 \
     --workers 10 \
