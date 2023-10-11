@@ -227,8 +227,8 @@ def create_and_prepare_model(args):
 
     if args.bf16:
         torch_dtype = torch.bfloat16
-    elif args.fp16:
-        torch_dtype = torch.float16
+    # elif args.fp16:
+    #     torch_dtype = torch.float16
     else:
         torch_dtype = torch.float32
 
@@ -278,15 +278,15 @@ def create_and_prepare_model(args):
             if target_module_found:
                 model.get_submodule(key + ".original_module").requires_grad_(False)
 
-        if args.bf16:
+        if torch_dtype == torch.bfloat16:
             for name, module in model.named_modules():
                 if isinstance(module, LoraLayer):
-                    module = module.to(torch.bfloat16)
+                    module = module.to(torch_dtype)
                 if "norm" in name:
                     module = module.to(torch.float32)
                 if "score" in name or "embed_tokens" in name:
                     if hasattr(module, "weight") and module.weight.dtype == torch.float32:
-                        module = module.to(torch.bfloat16)
+                        module = module.to(torch_dtype)
 
     tokenizer = AutoTokenizer.from_pretrained(script_args.model_name)
     if getattr(tokenizer, "pad_token", None) is None:
@@ -350,6 +350,7 @@ training_args = TrainingArguments(
     per_device_train_batch_size=script_args.per_device_train_batch_size,
     per_device_eval_batch_size=script_args.per_device_eval_batch_size,
     bf16=script_args.bf16,
+    fp16=script_args.fp16,
     num_train_epochs=script_args.num_train_epochs,
     gradient_accumulation_steps=script_args.gradient_accumulation_steps,
     learning_rate=script_args.learning_rate,
@@ -366,7 +367,7 @@ training_args = TrainingArguments(
     ddp_find_unused_parameters=False,
 )
 
-data_collator = GPTRewardDataCollatorWithPadding(tokenizer, max_length=script_args.seq_length)
+data_collator = GPTRewardDataCollatorWithPadding(tokenizer, max_length=script_args.seq_length, pad_to_multiple_of=8)
 
 trainer = GPTRewardTrainer(
     model=model,

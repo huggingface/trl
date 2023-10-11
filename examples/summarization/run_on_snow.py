@@ -123,7 +123,7 @@ if __name__ == "__main__":
 
     exp_dict["name"] = os.path.basename(args.exp_group)
 
-    if args.search is not None:
+    if args.search is not None and args.search != "None":
         search_key, search_val_str = args.search.split("=")
         search_vals = search_val_str.split(",")
         exp_list = []
