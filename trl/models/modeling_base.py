@@ -18,11 +18,17 @@ from copy import deepcopy
 
 import torch
 import torch.nn as nn
+import transformers
 from accelerate import Accelerator
 from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError, HFValidationError, LocalEntryNotFoundError
 from transformers import PreTrainedModel
-from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
+
+
+if hasattr(transformers.integrations, "deepspeed"):
+    from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
+else:
+    from transformers.deepspeed import is_deepspeed_zero3_enabled
 
 from ..import_utils import is_peft_available
 
