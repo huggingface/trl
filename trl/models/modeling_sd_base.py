@@ -29,9 +29,9 @@ from ..import_utils import is_diffusers_greater_than
 
 
 if is_diffusers_greater_than("0.20.2"):
-    from diffusers.utils import randn_tensor
-else:
     from diffusers.utils.torch_utils import randn_tensor
+else:
+    from diffusers.utils import randn_tensor
 
 
 @dataclass
