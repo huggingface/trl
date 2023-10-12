@@ -101,7 +101,7 @@ class PPOConfig:
     """Maximum gradient norm for gradient clipping"""
     optimize_cuda_cache: bool = False
     """DEPRECATED: use `optimize_device_cache` instead, which does the same thing."""
-    optimize_device_cache: bool = False
+    optimize_device_cache: Optional[bool] = False
     """Optimize device cache for slightly more memory-efficient training"""
     early_stopping: bool = False
     """Whether to stop the PPO optimization loop early is the KL too high"""
