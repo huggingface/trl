@@ -22,7 +22,8 @@ from accelerate import Accelerator
 from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError, HFValidationError, LocalEntryNotFoundError
 from transformers import PreTrainedModel
-from ..import_utils import is_peft_available, is_transformers_greater_than, is_xpu_available
+from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
+from ..import_utils import is_peft_available, is_xpu_available, is_transformers_greater_than
 
 
 if is_peft_available():
