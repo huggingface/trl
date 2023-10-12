@@ -41,14 +41,6 @@ def is_diffusers_available() -> bool:
     return importlib.util.find_spec("diffusers") is not None
 
 
-def is_diffusers_greater_than(version: str) -> bool:
-    if not is_diffusers_available():
-        return False
-
-    _diffusers_version = importlib.metadata.version("diffusers")
-    return _diffusers_version > version
-
-
 def is_bitsandbytes_available() -> bool:
     return importlib.util.find_spec("bitsandbytes") is not None
 
