@@ -15,7 +15,7 @@ import importlib
 import sys
 
 
-if sys.version_info[0] < 3.8:
+if sys.version_info < (3, 8):
     _is_python_greater_3_8 = False
 else:
     _is_python_greater_3_8 = True
@@ -35,6 +35,11 @@ def is_accelerate_greater_20_0() -> bool:
 
         accelerate_version = pkg_resources.get_distribution("accelerate").version
     return accelerate_version >= "0.20.0"
+
+
+def is_transformers_greater_than(version: str) -> bool:
+    _transformers_version = importlib.metadata.version("transformers")
+    return _transformers_version > version
 
 
 def is_torch_greater_2_0() -> bool:

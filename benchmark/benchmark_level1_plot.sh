@@ -4,7 +4,7 @@ echo "we deal with $TAGS_STRING"
 
 python -m openrlbenchmark.rlops_multi_metrics \
     --filters '?we=huggingface&wpn=trl&xaxis=_step&ceik=trl_ppo_trainer_config.value.reward_model&cen=trl_ppo_trainer_config.value.exp_name&metrics=env/reward_mean&metrics=objective/kl' \
-        "sentiment_tuning$TAGS_STRING" \
+        "ppo$TAGS_STRING" \
     --env-ids sentiment-analysis:lvwerra/distilbert-imdb \
     --no-check-empty-runs \
     --pc.ncols 2 \

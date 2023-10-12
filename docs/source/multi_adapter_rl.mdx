@@ -11,7 +11,7 @@ You just need to install `peft` and optionally install `bitsandbytes` as well if
 You need to address this approach in three stages that we summarize as follows:
 
 1- Train a base model on the target domain (e.g. `imdb` dataset) - this is the Supervised Fine Tuning stage - it can leverage the `SFTTrainer` from TRL.
-2- Train a reward model using `peft`. This is required in order to re-use the adapter during the RL optimisation process (step 3 below). We show an example of leveraging the `RewardTrainer` from TRL in [this example](https://github.com/huggingface/trl/tree/main/examples/scripts/reward_trainer.py)
+2- Train a reward model using `peft`. This is required in order to re-use the adapter during the RL optimisation process (step 3 below). We show an example of leveraging the `RewardTrainer` from TRL in [this example](https://github.com/huggingface/trl/tree/main/examples/scripts/reward_modeling.py)
 3- Fine tune new adapters on the base model using PPO and the reward adapter. ("0 abstraction RL")
 
 Make sure to use the same model (i.e. same architecture and same weights) for the stages 2 & 3. 
