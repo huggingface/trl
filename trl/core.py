@@ -262,20 +262,19 @@ class LengthSampler:
 
 
 class PPODecorators(object):
-    optimize_cuda_cache = False
-    optimize_xpu_cache = False
+    optimize_device_cache = False
 
     @classmethod
     @contextmanager
     def empty_device_cache(cls):
         yield
         if is_xpu_available():
-            if cls.optimize_xpu_cache and torch.xpu.is_available():
+            if cls.optimize_device_cache and torch.xpu.is_available():
                 gc.collect()
                 torch.xpu.empty_cache()
                 gc.collect()
         else:
-            if cls.optimize_cuda_cache and torch.cuda.is_available():
+            if cls.optimize_device_cache and torch.cuda.is_available():
                 gc.collect()
                 torch.cuda.empty_cache()
                 gc.collect()
