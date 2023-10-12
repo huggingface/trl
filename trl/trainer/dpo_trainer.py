@@ -55,8 +55,8 @@ class DPOTrainer(Trainer):
             reference model is provided, the trainer will create a reference model with the same architecture as the model to be optimized.
         beta (`float`, defaults to 0.1):
             The beta factor in DPO loss. Higher beta means less divergence from the initial policy.
-        loss_type (`str`, defaults to `sigmoid`):
-            The type of DPO loss to use. Either `sigmoid` the default DPO loss or `hinge` loss from SLiC paper.
+        loss_type (`str`, defaults to `"sigmoid"`):
+            The type of DPO loss to use. Either `"sigmoid"` the default DPO loss or `"hinge"` loss from SLiC paper.
         args (`transformers.TrainingArguments`):
             The arguments to use for training.
         data_collator (`transformers.DataCollator`):
