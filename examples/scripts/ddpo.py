@@ -27,6 +27,7 @@ from transformers import CLIPModel, CLIPProcessor
 from trl import DDPOConfig, DDPOTrainer, DefaultDDPOStableDiffusionPipeline
 from trl.import_utils import is_xpu_available
 
+
 @dataclass
 class ScriptArguments:
     hf_user_access_token: str
@@ -61,6 +62,7 @@ class ScriptArguments:
             },
         )
     )
+
 
 class MLP(nn.Module):
     def __init__(self):

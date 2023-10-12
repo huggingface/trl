@@ -36,9 +36,11 @@ def is_accelerate_greater_20_0() -> bool:
         accelerate_version = pkg_resources.get_distribution("accelerate").version
     return accelerate_version >= "0.20.0"
 
+
 def is_transformers_greater_than(version: str) -> bool:
     _transformers_version = importlib.metadata.version("transformers")
     return _transformers_version > version
+
 
 def is_torch_greater_2_0() -> bool:
     if _is_python_greater_3_8:
