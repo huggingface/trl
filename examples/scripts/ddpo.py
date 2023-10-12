@@ -19,13 +19,17 @@ from dataclasses import dataclass, field
 import numpy as np
 import torch
 import torch.nn as nn
+<<<<<<< HEAD:examples/scripts/ddpo.py
 import tyro
+=======
+>>>>>>> e72d3c2 (refactor review commit):examples/scripts/stable_diffusion_tuning.py
 from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError
 from transformers import CLIPModel, CLIPProcessor
 
 from trl import DDPOConfig, DDPOTrainer, DefaultDDPOStableDiffusionPipeline
 from trl.import_utils import is_xpu_available
+<<<<<<< HEAD:examples/scripts/ddpo.py
 
 
 @dataclass
@@ -62,6 +66,8 @@ class ScriptArguments:
             },
         )
     )
+=======
+>>>>>>> e72d3c2 (refactor review commit):examples/scripts/stable_diffusion_tuning.py
 
 
 class MLP(nn.Module):
