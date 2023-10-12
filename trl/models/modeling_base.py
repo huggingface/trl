@@ -24,7 +24,7 @@ from huggingface_hub.utils import EntryNotFoundError, HFValidationError, LocalEn
 from transformers import PreTrainedModel
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 
-from ..import_utils import is_peft_available, is_xpu_available
+from ..import_utils import is_peft_available, is_xpu_available, is_transformers_greater_than
 
 
 if is_peft_available():
@@ -39,6 +39,11 @@ if is_peft_available():
         prepare_model_for_kbit_training,
     )
     from peft.peft_model import set_peft_model_state_dict
+
+if is_transformers_greater_than("4.33.0"):
+    from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
+else:
+    from transformers.deepspeed import is_deepspeed_zero3_enabled
 
 LAYER_PATTERNS = [
     "transformer.h.{layer}",
