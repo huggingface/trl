@@ -742,7 +742,8 @@ class PerPromptStatTracker:
 def neftune_forward(self, input: torch.Tensor):
     """
     Implements the NEFTune forward pass for the model. Note this works only for
-    torch.nn.Embedding layers
+    torch.nn.Embedding layers. This method is slightly adapted from the original source code
+    that can be found here: https://github.com/neelsjain/NEFTune
 
     Args:
         input (`torch.Tensor`):
