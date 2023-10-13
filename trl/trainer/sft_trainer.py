@@ -264,6 +264,7 @@ class SFTTrainer(Trainer):
             if hasattr(embeddings, "_trl_old_forward"):
                 embeddings.forward = embeddings._trl_old_forward
                 del embeddings._trl_old_forward
+                del embeddings.neftune_noise_alpha
 
         return output
 
