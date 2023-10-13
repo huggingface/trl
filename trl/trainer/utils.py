@@ -737,3 +737,26 @@ class PerPromptStatTracker:
 
     def get_stats(self):
         return {k: {"mean": np.mean(v), "std": np.std(v), "count": len(v)} for k, v in self.stats.items()}
+
+
+def neftune_forward(self, input: torch.Tensor):
+    """
+    Implements the NEFTune forward pass for the model. Note this works only for
+    torch.nn.Embedding layers
+
+    Args:
+        input (`torch.Tensor`):
+            The input tensor to the model.
+        noise_alpha (`float`):
+            The noise alpha value to use for the NEFTune forward pass.
+    """
+    embeddings = torch.nn.functional.embedding(
+        input, self.weight, self.padding_idx, self.max_norm, self.norm_type, self.scale_grad_by_freq, self.sparse
+    )
+
+    if self.training:
+        dims = torch.tensor(embeddings.size(1) * embeddings.size(2))
+        mag_norm = self.neftune_noise_alpha / torch.sqrt(dims)
+        embeddings = embeddings + torch.zeros_like(embeddings).uniform_(-mag_norm, mag_norm)
+
+    return embeddings
