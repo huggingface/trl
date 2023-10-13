@@ -365,7 +365,7 @@ class DPOTrainer(Trainer):
         elif self.loss_type == "hinge":
             losses = torch.relu(1 - self.beta * logits)
          else:
-            raise ValueError(f"Unknown loss type: {self.loss_type}")
+            raise ValueError(f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge']")
 
         chosen_rewards = self.beta * (policy_chosen_logps - reference_chosen_logps).detach()
         rejected_rewards = self.beta * (policy_rejected_logps - reference_rejected_logps).detach()
