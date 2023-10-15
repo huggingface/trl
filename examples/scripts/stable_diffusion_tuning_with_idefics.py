@@ -15,22 +15,18 @@
 
 import argparse
 import os
+import tempfile
+import time
 
 import numpy as np
 import torch
-from huggingface_hub import hf_hub_download, HfApi
 from datasets import load_dataset
-
-from trl import DDPOConfig, DDPOTrainer, DefaultDDPOStableDiffusionPipeline
-
-import tempfile
+from httpx import HTTPError
+from huggingface_hub import HfApi, hf_hub_download
+from PIL import Image
 from text_generation import Client
 
-from PIL import Image
-
-import time
-
-from httpx import HTTPError
+from trl import DDPOConfig, DDPOTrainer, DefaultDDPOStableDiffusionPipeline
 
 
 endpoint = "https://api-inference.huggingface.co/models/HuggingFaceM4/idefics-80b-instruct"
