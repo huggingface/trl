@@ -424,6 +424,12 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
+We have tried NEFTune for supervised finetuning `mistralai/Mistral-7B-v0.1` model and proved that using NEFTune led to having a performance boost of ~25%.
+
+<div style="text-align: center">
+<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl-neftune-mistral-7b.png">
+</div>
+
 ## Best practices
 
 Pay attention to the following best practices when training a model with that trainer:
