@@ -333,7 +333,10 @@ class PreTrainedModelWrapper(nn.Module):
                 The current device.
         """
         dummy_accelerator = Accelerator()
-        return dummy_accelerator.local_process_index if (torch.cuda.is_available() or is_xpu_available()) else "cpu"
+        if is_xpu_available():
+            return f"xpu:{dummy_accelerator.local_process_index}"
+        else:
+            return dummy_accelerator.local_process_index if torch.cuda.is_available() else "cpu"
 
     @classmethod
     def _split_kwargs(cls, kwargs):
