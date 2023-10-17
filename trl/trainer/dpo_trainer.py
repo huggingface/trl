@@ -250,10 +250,17 @@ class DPOTrainer(Trainer):
             )
 
         if self.ref_model is None:
-            if not hasattr(self.accelerator.unwrap_model(self.model), "disable_adapter"):
-                raise ValueError(
-                    "You are using a `peft` version that does not support `disable_adapter`. Please update your `peft` version to the latest version."
-                )
+            # if dataset has reference model logps and sample outputs, we don't need a reference model
+            if (
+                "reference_chosen_logps" in self.train_dataset[0]
+                and "reference_rejected_logps" in self.train_dataset[0]
+            ):
+                self.ref_model = None
+            else:
+                if not hasattr(self.accelerator.unwrap_model(self.model), "disable_adapter"):
+                    raise ValueError(
+                        "You are using a `peft` version that does not support `disable_adapter`. Please update your `peft` version to the latest version."
+                    )
         else:
             if self.is_deepspeed_enabled:
                 self.ref_model = self._prepare_deepspeed(self.ref_model)
@@ -444,7 +451,7 @@ class DPOTrainer(Trainer):
 
         return (chosen_logps, rejected_logps, chosen_logits, rejected_logits)
 
-    def get_batch_metrics(
+    def get_batch_loss_metrics(
         self,
         model,
         batch: Dict[str, Union[List, torch.LongTensor]],
@@ -459,22 +466,28 @@ class DPOTrainer(Trainer):
             policy_chosen_logits,
             policy_rejected_logits,
         ) = self.concatenated_forward(model, batch)
-        with torch.no_grad():
-            if self.ref_model is None:
-                with self.accelerator.unwrap_model(self.model).disable_adapter():
+
+        # if reference_chosen_logps and reference_rejected_logps in batch use them, otherwise use the reference model
+        if "reference_chosen_logps" in batch and "reference_rejected_logps" in batch:
+            reference_chosen_logps = batch["reference_chosen_logps"]
+            reference_rejected_logps = batch["reference_rejected_logps"]
+        else:
+            with torch.no_grad():
+                if self.ref_model is None:
+                    with self.accelerator.unwrap_model(self.model).disable_adapter():
+                        (
+                            reference_chosen_logps,
+                            reference_rejected_logps,
+                            _,
+                            _,
+                        ) = self.concatenated_forward(self.model, batch)
+                else:
                     (
                         reference_chosen_logps,
                         reference_rejected_logps,
                         _,
                         _,
-                    ) = self.concatenated_forward(self.model, batch)
-            else:
-                (
-                    reference_chosen_logps,
-                    reference_rejected_logps,
-                    _,
-                    _,
-                ) = self.concatenated_forward(self.ref_model, batch)
+                    ) = self.concatenated_forward(self.ref_model, batch)
 
         losses, chosen_rewards, rejected_rewards = self.dpo_loss(
             policy_chosen_logps,
@@ -507,7 +520,7 @@ class DPOTrainer(Trainer):
                 "compute_loss is only implemented for DPODataCollatorWithPadding, and you passed a datacollator that is different than "
                 "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
             )
-        loss, metrics = self.get_batch_metrics(model, inputs, train_eval="train")
+        loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="train")
 
         # force log the metrics
         if self.accelerator.is_main_process:
@@ -528,23 +541,27 @@ class DPOTrainer(Trainer):
             pad_token_id=self.tokenizer.pad_token_id,
         )
 
-        if self.ref_model is None:
-            with self.accelerator.unwrap_model(self.model).disable_adapter():
-                reference_output = self.model.generate(
+        # if reference_output in batch use that otherwise use the reference model
+        if "reference_output" in batch:
+            reference_output = batch["reference_output"]
+        else:
+            if self.ref_model is None:
+                with self.accelerator.unwrap_model(self.model).disable_adapter():
+                    reference_output = self.model.generate(
+                        batch["prompt_input_ids"],
+                        attention_mask=batch["prompt_attention_mask"],
+                        max_length=self.max_length,
+                        do_sample=True,
+                        pad_token_id=self.tokenizer.pad_token_id,
+                    )
+            else:
+                reference_output = self.ref_model.generate(
                     batch["prompt_input_ids"],
                     attention_mask=batch["prompt_attention_mask"],
                     max_length=self.max_length,
                     do_sample=True,
                     pad_token_id=self.tokenizer.pad_token_id,
                 )
-        else:
-            reference_output = self.ref_model.generate(
-                batch["prompt_input_ids"],
-                attention_mask=batch["prompt_attention_mask"],
-                max_length=self.max_length,
-                do_sample=True,
-                pad_token_id=self.tokenizer.pad_token_id,
-            )
 
         policy_output = pad_to_length(policy_output, self.max_length, self.tokenizer.pad_token_id)
         policy_output_decoded = self.tokenizer.batch_decode(policy_output, skip_special_tokens=True)
@@ -573,7 +590,7 @@ class DPOTrainer(Trainer):
                 ignore_keys = []
 
         with torch.no_grad():
-            loss, metrics = self.get_batch_metrics(model, inputs, train_eval="eval")
+            loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="eval")
 
         # force log the metrics
         if self.accelerator.is_main_process:
