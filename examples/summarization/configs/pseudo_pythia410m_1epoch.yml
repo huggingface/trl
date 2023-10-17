@@ -1,0 +1,8 @@
+output_dir: /home/toolkit/huggingface/openai_summarize_comparisons_relabel_pythia410m_1epoch
+model_name: /home/toolkit/huggingface/tldr_gptrm_sft_pythia410m_amp16_lr5e-6_1epoch
+train_split: train
+eval_split: test[:5000]
+load_in_8bit: False
+fp16: True
+batch_size: 32
+seq_length: 560

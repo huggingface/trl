@@ -179,6 +179,10 @@ class ScriptArguments:
             "help": "This essentially cuts the training time in half if you want to sacrifice a little precision and have a supported GPU."
         },
     )
+    fp16_model: Optional[bool] = field(
+        default=False,
+        metadata={},
+    )
     load_in_8bit: Optional[bool] = field(default=False, metadata={"help": "load the model in 8 bits precision"})
     load_in_4bit: Optional[bool] = field(default=False, metadata={"help": "load the model in 4 bits precision"})
     use_lora: Optional[bool] = field(
@@ -195,6 +199,7 @@ class ScriptArguments:
         metadata={"help": "Enables gradient checkpointing."},
     )
     just_eval: Optional[bool] = field(default=False)
+    eval_steps: Optional[float] = field(default=None)
     pretrained_adapter: Optional[str] = field(default=None)
 
 
@@ -227,8 +232,8 @@ def create_and_prepare_model(args):
 
     if args.bf16:
         torch_dtype = torch.bfloat16
-    # elif args.fp16:
-    #     torch_dtype = torch.float16
+    elif args.fp16_model:
+        torch_dtype = torch.float16
     else:
         torch_dtype = torch.float32
 
@@ -361,7 +366,8 @@ training_args = TrainingArguments(
     optim=script_args.optimizer_type,
     warmup_steps=script_args.num_warmup_steps,
     logging_steps=script_args.logging_steps,
-    evaluation_strategy="epoch" if script_args.eval_split != "none" else "no",
+    evaluation_strategy=("steps" if script_args.eval_steps is not None else "epoch"),
+    eval_steps=script_args.eval_steps,
     save_strategy="epoch",
     gradient_checkpointing=script_args.gradient_checkpointing,
     ddp_find_unused_parameters=False,
