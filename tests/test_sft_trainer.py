@@ -12,11 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import copy
+import inspect
 import os
 import tempfile
 import unittest
 
 import numpy as np
+import torch
 from datasets import Dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
 
@@ -558,6 +560,47 @@ class SFTTrainerTester(unittest.TestCase):
             # make sure the trainer did 5 steps
             self.assertTrue("pytorch_model.bin" in os.listdir(tmp_dir + "/checkpoint-4"))
 
+    def test_sft_trainer_with_model_neftune(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                evaluation_strategy="steps",
+                max_steps=2,
+                eval_steps=1,
+                save_steps=1,
+                per_device_train_batch_size=2,
+            )
+
+            trainer = SFTTrainer(
+                model=self.model,
+                args=training_args,
+                train_dataset=self.train_dataset,
+                eval_dataset=self.eval_dataset,
+                neftune_noise_alpha=5,
+                packing=True,
+            )
+
+            # inspect input embeddings forward code source
+            input_embeddings_forward_code_source = inspect.getsource(trainer.model.get_input_embeddings().forward)
+
+            self.assertTrue(
+                "mag_norm = self.neftune_noise_alpha / torch.sqrt(dims)" in input_embeddings_forward_code_source
+            )
+
+            # training should work fine
+            trainer.train()
+
+            # inspect input embeddings forward code source - this time it should not contain any code from NEFTune.
+            input_embeddings_forward_code_source = inspect.getsource(trainer.model.get_input_embeddings().forward)
+
+            self.assertFalse(
+                "mag_norm = self.neftune_noise_alpha / torch.sqrt(dims)" in input_embeddings_forward_code_source
+            )
+
+            # Make sure forward pass works fine
+            _ = trainer.model(torch.LongTensor([[1, 0, 1]]))
+
     @require_peft
     def test_peft_sft_trainer(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -598,3 +641,66 @@ class SFTTrainerTester(unittest.TestCase):
             self.assertTrue("adapter_model.bin" in os.listdir(tmp_dir + "/checkpoint-2"))
             self.assertTrue("adapter_config.json" in os.listdir(tmp_dir + "/checkpoint-2"))
             self.assertTrue("pytorch_model.bin" not in os.listdir(tmp_dir + "/checkpoint-2"))
+
+    @require_peft
+    def test_peft_sft_trainer_neftune(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                evaluation_strategy="steps",
+                max_steps=4,
+                eval_steps=2,
+                save_steps=2,
+                per_device_train_batch_size=2,
+            )
+
+            peft_config = LoraConfig(
+                r=16,
+                lora_alpha=32,
+                lora_dropout=0.05,
+                bias="none",
+                task_type="CAUSAL_LM",
+            )
+
+            trainer = SFTTrainer(
+                model=self.model_id,
+                args=training_args,
+                train_dataset=self.train_dataset,
+                eval_dataset=self.eval_dataset,
+                peft_config=peft_config,
+                neftune_noise_alpha=5,
+                packing=True,
+            )
+
+            self.assertTrue(isinstance(trainer.model, PeftModel))
+
+            # inspect input embeddings forward code source
+            input_embeddings_forward_code_source = inspect.getsource(
+                trainer.model.base_model.get_input_embeddings().forward
+            )
+
+            self.assertTrue(
+                "mag_norm = self.neftune_noise_alpha / torch.sqrt(dims)" in input_embeddings_forward_code_source
+            )
+
+            trainer.train()
+
+            # inspect input embeddings forward code source - this time it should not contain any code from NEFTune.
+            input_embeddings_forward_code_source = inspect.getsource(
+                trainer.model.base_model.get_input_embeddings().forward
+            )
+
+            self.assertFalse(
+                "mag_norm = self.neftune_noise_alpha / torch.sqrt(dims)" in input_embeddings_forward_code_source
+            )
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+            self.assertIsNotNone(trainer.state.log_history[0]["eval_loss"])
+
+            self.assertTrue("adapter_model.bin" in os.listdir(tmp_dir + "/checkpoint-2"))
+            self.assertTrue("adapter_config.json" in os.listdir(tmp_dir + "/checkpoint-2"))
+            self.assertTrue("pytorch_model.bin" not in os.listdir(tmp_dir + "/checkpoint-2"))
+
+            # Make sure forward pass works fine to check if embeddings forward is not broken.
+            _ = trainer.model(torch.LongTensor([[1, 0, 1]]))
