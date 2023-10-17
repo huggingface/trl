@@ -471,8 +471,15 @@ class DPODataCollatorWithPadding:
             prompt = feature["prompt"]
             chosen = feature["chosen"]
             rejected = feature["rejected"]
-
             batch_element = self.tokenize_batch_element(prompt, chosen, rejected)
+
+            # if feature has reference chosen/refected log probs and sample outputs add them to batch_element
+            if "reference_chosen_logps" in feature and "reference_rejected_logps" in feature:
+                batch_element["reference_chosen_logps"] = feature["reference_chosen_logps"]
+                batch_element["reference_rejected_logps"] = feature["reference_rejected_logps"]
+            if "reference_output" in feature:
+                batch_element["reference_output"] = feature["reference_output"]
+
             tokenized_batch.append(batch_element)
 
         # return collated batch
