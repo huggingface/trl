@@ -112,13 +112,7 @@ if script_args.sanity_check:
     dataset = dataset.select(range(min(len(dataset), 100)))
    
 # load the model and tokenizer 
-model = AutoModelForCausalLM.from_pretrained(
-    script_args.model_name_or_path,
-    device_map=accelerator.device,
-    trust_remote_code=True,
-    revision=script_args.revision,
-    torch_dtype=torch.float16
-)
+model = AutoModelForCausalLM.from_pretrained(script_args.model_name_or_path)
 
 tokenizer = AutoTokenizer.from_pretrained(script_args.model_name_or_path, use_fast=True)
 
@@ -204,8 +198,8 @@ dataset = Dataset.from_dict(
 
 
 def postprocessing(samples):
-    chosen = [samples[i]["left_sample"] if left_score>right_score else samples[i]["right_sample"] for i, left_score, right_score in enumerate(zip(samples["left_score"], samples["right_score"]))]
-    rejected = [samples[i]["right_sample"] if left_score>right_score else samples[i]["left_sample"] for i, left_score, right_score in enumerate(zip(samples["left_score"], samples["right_score"]))]
+    chosen = [samples["left_sample"][i] if left_score>right_score else samples["right_sample"][i] for i, (left_score, right_score) in enumerate(zip(samples["left_score"], samples["right_score"]))]
+    rejected = [samples["right_sample"][i] if left_score>right_score else samples["left_sample"][i] for i, (left_score, right_score) in enumerate(zip(samples["left_score"], samples["right_score"]))]
     
     return {
         "chosen": chosen,
