@@ -74,13 +74,8 @@ class DPOTrainerTester(unittest.TestCase):
         # fmt: on
         return Dataset.from_dict(dummy_dataset_dict)
 
-    @parameterized.expand(
-        [
-            ["gpt2"],
-            ["t5"],
-        ]
-    )
-    def test_dpo_trainer(self, name):
+    @parameterized.expand([["gpt2", "sigmoid"], ["t5", "hinge"]])
+    def test_dpo_trainer(self, name, loss_type):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
                 output_dir=tmp_dir,
@@ -107,6 +102,7 @@ class DPOTrainerTester(unittest.TestCase):
                 model=model,
                 ref_model=ref_model,
                 beta=0.1,
+                loss_type=loss_type,
                 args=training_args,
                 tokenizer=tokenizer,
                 train_dataset=dummy_dataset,
