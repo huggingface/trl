@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from accelerate import Accelerator
 from accelerate.utils import ProjectConfiguration
 
-from ..core import entropy_from_logits, get_masked_mean_min_max, mask_and_reduce, masked_reverse_cumsum, set_seed
+from ..core import entropy_from_logits, get_masked_mean_min_max, masked_reverse_cumsum, set_seed, make_mask
 from ..models import PreTrainedModelWrapper
 from . import BaseTrainer, SoftQLearningConfig
 
@@ -141,13 +141,19 @@ class SoftQLearningTrainer(BaseTrainer):
     def _forward_SQL(self, mode, batch):
         if mode == "SQL_OFF":
             # teacher forcing
-            outputs = self.model(input_ids=batch[0].input_ids, decoder_input_ids=batch[1].input_ids)
-            target_outputs = self.target_model(input_ids=batch[0].input_ids, decoder_input_ids=batch[1].input_ids)
+            outputs = self.model(
+                input_ids=batch[0].input_ids, attention_mask=batch[0].attention_mask, labels=batch[1].input_ids
+            )
+            target_outputs = self.target_model(
+                input_ids=batch[0].input_ids,
+                attention_mask=batch[0].attention_mask,
+                decoder_input_ids=batch[1].input_ids,
+            )
 
             logits = outputs.logits.to(self.device)
             target_logits = target_outputs.logits.to(self.device)
             output_ids = batch[1].input_ids.to(self.device)  # potential trouble spot
-            sequence_lengths = batch[1].attention_mask.sum(dim=-1).to(self.device)
+            output_mask = batch[1].attention_mask.to(self.device)
 
         elif mode == "SQL_ON":
             generation_length = batch[1].input_ids.shape[1]
@@ -163,19 +169,20 @@ class SoftQLearningTrainer(BaseTrainer):
             )
 
             # generation of on-policy training data
-            on_policy_training_data = (batch[0].input_ids, outputs.sequences[:, 1:])
+            on_policy_training_data = (batch[0].input_ids, batch[0].attention_mask, outputs.sequences[:, 1:])
 
             # has to follow the steps taken by the model
             target_outputs = self.target_model(
                 input_ids=on_policy_training_data[0],
-                decoder_input_ids=on_policy_training_data[1],
+                attention_mask=on_policy_training_data[1],
+                decoder_input_ids=on_policy_training_data[2],
             )
 
             # possible problematic spot
             logits = torch.stack(outputs.scores, dim=1).to(self.device)
             target_logits = target_outputs.logits.to(self.device)
             output_ids = outputs.sequences[:, 1:].contiguous().to(self.device)
-            sequence_lengths = (output_ids != self.tokenizer.pad_token_id).sum(dim=-1).to(self.device)
+            output_mask = make_mask(output_ids, self.tokenizer.pad_token_id).to(self.device)
 
         else:
             raise NotImplementedError
@@ -192,7 +199,7 @@ class SoftQLearningTrainer(BaseTrainer):
             logits_=target_logits,
             actions=output_ids,
             rewards=shaped_rewards,
-            sequence_length=sequence_lengths,
+            mask=output_mask,
             coefficient=self.loss_coefficients,
             # Do not add margin losses unless the
             # actions are ground truth actions.
@@ -223,7 +230,7 @@ class SoftQLearningTrainer(BaseTrainer):
         logits_: FloatTensor,
         actions: LongTensor,
         rewards: FloatTensor,
-        sequence_length: LongTensor,
+        mask: LongTensor,
         coefficient: Optional[float] = None,
         margin_constant: Optional[float] = None,
         margin_coefficient: Optional[float] = None,
@@ -239,8 +246,6 @@ class SoftQLearningTrainer(BaseTrainer):
             rewards:         [batch_size]
             sequence_length: [batch_size]
         """
-
-        print(f"implementation: {implementation}")
 
         if implementation not in [
             "single-step-pcl",
@@ -288,23 +293,18 @@ class SoftQLearningTrainer(BaseTrainer):
             logits_=logits_,
             actions=actions,
             rewards=rewards,
-            sequence_length=sequence_length,
+            mask=mask,
         )
 
-        loss = mask_and_reduce(sequence=raw_losses, sequence_length=sequence_length)
+        loss = ((raw_losses * mask).sum(dim=-1) / mask.float().sum(dim=-1)).mean()
         loss_log = {
             "loss": loss,
-            "sequence_length": sequence_length.float().mean(),
-            "loss-normalized": mask_and_reduce(
-                sequence=raw_losses,
-                sequence_length=sequence_length,
-                average_across_timesteps=True,
-                sum_over_timesteps=False,
-            ),
+            "sequence_length": mask.sum(dim=-1).float().mean(),
+            "loss-normalized": loss.mean() / mask.float().mean(),  # check
         }
 
         for key, value in quantities_to_log.items():
-            masked_mean, masked_min, masked_max = get_masked_mean_min_max(value, lengths=sequence_length)
+            masked_mean, masked_min, masked_max = get_masked_mean_min_max(value, mask=mask)
             loss_log[f"{key}/min"] = masked_min
             loss_log[f"{key}/max"] = masked_max
             loss_log[f"{key}/mean"] = masked_mean
@@ -360,7 +360,7 @@ def single_step_pcl_loss(
     logits_: FloatTensor,
     actions: LongTensor,
     rewards: FloatTensor,
-    sequence_length: LongTensor,
+    mask: LongTensor,
 ) -> Tuple[FloatTensor, Dict[str, Any]]:
     Q = gather_2d_on_last_dim(tensor=logits, index=actions, shape=actions.shape)
     V = logits.logsumexp(dim=-1)
@@ -372,6 +372,8 @@ def single_step_pcl_loss(
     V_ = logits_.logsumexp(dim=-1)
     Q_[:, :-1] = V_[:, 1:]
     A_[:, :-1] = V_[:, 1:] - V_[:, :-1]
+
+    sequence_length = mask.sum(dim=-1).to(torch.long)
     # Terminal V-target is the last V-target before
     # the episode ends, thus depends on `sequence_length`
     terminal_V_ = V_[torch.arange(sequence_length.shape[0]), sequence_length - 1]
@@ -398,7 +400,7 @@ def multistep_pcl_loss(
     logits_: FloatTensor,
     actions: LongTensor,
     rewards: FloatTensor,
-    sequence_length: LongTensor,
+    mask: BoolTensor,  # check
     freeze_future_steps: bool = False,
 ) -> Tuple[FloatTensor, Dict[str, Any]]:
     Q = gather_2d_on_last_dim(tensor=logits, index=actions, shape=actions.shape)
@@ -408,7 +410,7 @@ def multistep_pcl_loss(
     # Target outputs
     V_ = logits_.logsumexp(dim=-1)
 
-    A2 = masked_reverse_cumsum(A, lengths=sequence_length, dim=-1)
+    A2 = masked_reverse_cumsum(A, mask=mask, dim=-1)
 
     if freeze_future_steps is True:
         # This line of code essentially
@@ -434,7 +436,7 @@ def single_step_pcl_variant_loss(
     logits_: FloatTensor,
     actions: LongTensor,
     rewards: FloatTensor,
-    sequence_length: LongTensor,
+    mask: LongTensor,
     coefficient: Optional[float] = None,
     margin_constant: Optional[float] = None,
     margin_coefficient: Optional[float] = None,
@@ -444,7 +446,7 @@ def single_step_pcl_variant_loss(
         logits_=logits_,
         actions=actions,
         rewards=rewards,
-        sequence_length=sequence_length,
+        mask=mask,
     )
 
     add_prefix_to_dict_keys_inplace(quantities_to_log_2, prefix="0/")
@@ -455,7 +457,7 @@ def single_step_pcl_variant_loss(
             logits_=logits,
             actions=actions,
             rewards=rewards,
-            sequence_length=sequence_length,
+            mask=mask,
         )
 
         raw_losses = coefficient * raw_losses_2 + (1 - coefficient) * raw_losses_2_r
@@ -495,7 +497,7 @@ def multistep_pcl_variant_loss(
     logits_: FloatTensor,
     actions: LongTensor,
     rewards: FloatTensor,
-    sequence_length: LongTensor,
+    mask: LongTensor,
     coefficient: Optional[float] = None,
 ) -> Tuple[FloatTensor, Dict[str, Any]]:
     raw_losses_3, quantities_to_log_3 = multistep_pcl_loss(
@@ -503,7 +505,7 @@ def multistep_pcl_variant_loss(
         logits_=logits_,
         actions=actions,
         rewards=rewards,
-        sequence_length=sequence_length,
+        mask=mask,
     )
 
     add_prefix_to_dict_keys_inplace(quantities_to_log_3, prefix="0/")
@@ -514,7 +516,7 @@ def multistep_pcl_variant_loss(
             logits_=logits,
             actions=actions,
             rewards=rewards,
-            sequence_length=sequence_length,
+            mask=mask,
         )
 
         raw_losses = coefficient * raw_losses_3 + (1 - coefficient) * raw_losses_3_r
@@ -539,7 +541,7 @@ def combined_pcl_loss(
     logits_: FloatTensor,
     actions: LongTensor,
     rewards: FloatTensor,
-    sequence_length: LongTensor,
+    mask: LongTensor,
     coefficient: Optional[float] = None,
 ) -> Tuple[FloatTensor, Dict[str, Any]]:
     raw_losses_2, quantities_to_log_2 = single_step_pcl_variant_loss(
@@ -547,7 +549,7 @@ def combined_pcl_loss(
         logits_=logits_,
         actions=actions,
         rewards=rewards,
-        sequence_length=sequence_length,
+        mask=mask,
         coefficient=coefficient,
     )
 
@@ -556,7 +558,7 @@ def combined_pcl_loss(
         logits_=logits_,
         actions=actions,
         rewards=rewards,
-        sequence_length=sequence_length,
+        mask=mask,
         coefficient=coefficient,
     )
 
