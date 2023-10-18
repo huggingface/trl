@@ -67,7 +67,6 @@ class ScriptArguments:
             r=16,
             lora_alpha=16,
             bias="none",
-            task_type="CAUSAL_LM",
             task_type="SEQ_CLS",
             modules_to_save=["scores"],
         ),
