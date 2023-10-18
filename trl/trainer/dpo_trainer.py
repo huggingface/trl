@@ -297,7 +297,14 @@ class DPOTrainer(Trainer):
         model.eval()
         return model
 
-    def concatenated_inputs(self, batch: Dict[str, Union[List, torch.LongTensor]]) -> Dict[str, torch.LongTensor]:
+    @staticmethod
+    def concatenated_inputs(
+        batch: Dict[str, Union[List, torch.LongTensor]],
+        is_encoder_decoder: bool = False,
+        label_pad_token_id: int = -100,
+        padding_value: int = 0,
+        device: Optional[torch.device] = None,
+    ) -> Dict[str, torch.LongTensor]:
         """Concatenate the chosen and rejected inputs into a single tensor.
 
         Args:
@@ -308,19 +315,19 @@ class DPOTrainer(Trainer):
         """
         concatenated_batch = {}
 
-        if self.is_encoder_decoder:
+        if is_encoder_decoder:
             max_length = max(batch["chosen_labels"].shape[1], batch["rejected_labels"].shape[1])
         else:
             max_length = max(batch["chosen_input_ids"].shape[1], batch["rejected_input_ids"].shape[1])
 
         for k in batch:
             if k.startswith("chosen") and isinstance(batch[k], torch.Tensor):
-                pad_value = self.label_pad_token_id if "labels" in k or self.is_encoder_decoder else self.padding_value
+                pad_value = label_pad_token_id if "labels" in k or is_encoder_decoder else padding_value
                 concatenated_key = k.replace("chosen", "concatenated")
                 concatenated_batch[concatenated_key] = pad_to_length(batch[k], max_length, pad_value=pad_value)
         for k in batch:
             if k.startswith("rejected") and isinstance(batch[k], torch.Tensor):
-                pad_value = self.label_pad_token_id if "labels" in k or self.is_encoder_decoder else self.padding_value
+                pad_value = label_pad_token_id if "labels" in k or is_encoder_decoder else padding_value
                 concatenated_key = k.replace("rejected", "concatenated")
                 concatenated_batch[concatenated_key] = torch.cat(
                     (
@@ -328,9 +335,9 @@ class DPOTrainer(Trainer):
                         pad_to_length(batch[k], max_length, pad_value=pad_value),
                     ),
                     dim=0,
-                ).to(self.accelerator.device)
+                ).to(device=device)
 
-        if self.is_encoder_decoder:
+        if is_encoder_decoder:
             concatenated_batch["concatenated_input_ids"] = batch["prompt_input_ids"].repeat(2, 1)
             concatenated_batch["concatenated_attention_mask"] = batch["prompt_attention_mask"].repeat(2, 1)
 
@@ -379,11 +386,13 @@ class DPOTrainer(Trainer):
 
         return losses, chosen_rewards, rejected_rewards
 
-    def _get_batch_logps(
-        self,
+    @staticmethod
+    def get_batch_logps(
         logits: torch.FloatTensor,
         labels: torch.LongTensor,
         average_log_prob: bool = False,
+        label_pad_token_id: int = -100,
+        is_encoder_decoder: bool = False,
     ) -> torch.FloatTensor:
         """Compute the log probabilities of the given labels under the given logits.
 
@@ -398,13 +407,13 @@ class DPOTrainer(Trainer):
         if logits.shape[:-1] != labels.shape:
             raise ValueError("Logits (batch and sequence length dim) and labels must have the same shape.")
 
-        if not self.is_encoder_decoder:
+        if not is_encoder_decoder:
             labels = labels[:, 1:].clone()
             logits = logits[:, :-1, :]
-        loss_mask = labels != self.label_pad_token_id
+        loss_mask = labels != label_pad_token_id
 
         # dummy token; we'll ignore the losses on these tokens later
-        labels[labels == self.label_pad_token_id] = 0
+        labels[labels == label_pad_token_id] = 0
 
         per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
 
@@ -420,7 +429,13 @@ class DPOTrainer(Trainer):
 
         We do this to avoid doing two forward passes, because it's faster for FSDP.
         """
-        concatenated_batch = self.concatenated_inputs(batch)
+        concatenated_batch = self.concatenated_inputs(
+            batch,
+            is_encoder_decoder=self.is_encoder_decoder,
+            label_pad_token_id=self.label_pad_token_id,
+            padding_value=self.padding_value,
+            device=self.accelerator.device,
+        )
         len_chosen = batch["chosen_labels"].shape[0]
 
         model_kwargs = (
@@ -437,10 +452,12 @@ class DPOTrainer(Trainer):
             **model_kwargs,
         ).logits.to(torch.float32)
 
-        all_logps = self._get_batch_logps(
+        all_logps = self.get_batch_logps(
             all_logits,
             concatenated_batch["concatenated_labels"],
             average_log_prob=False,
+            is_encoder_decoder=self.is_encoder_decoder,
+            label_pad_token_id=self.label_pad_token_id,
         )
 
         chosen_logps = all_logps[:len_chosen]
