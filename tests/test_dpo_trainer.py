@@ -22,7 +22,7 @@ from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokeni
 
 from trl import DPOTrainer
 
-from .testing_utils import require_peft
+from .testing_utils import require_no_wandb, require_peft
 
 
 class DPOTrainerTester(unittest.TestCase):
@@ -74,13 +74,8 @@ class DPOTrainerTester(unittest.TestCase):
         # fmt: on
         return Dataset.from_dict(dummy_dataset_dict)
 
-    @parameterized.expand(
-        [
-            ["gpt2"],
-            ["t5"],
-        ]
-    )
-    def test_dpo_trainer(self, name):
+    @parameterized.expand([["gpt2", "sigmoid"], ["t5", "hinge"]])
+    def test_dpo_trainer(self, name, loss_type):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
                 output_dir=tmp_dir,
@@ -107,6 +102,7 @@ class DPOTrainerTester(unittest.TestCase):
                 model=model,
                 ref_model=ref_model,
                 beta=0.1,
+                loss_type=loss_type,
                 args=training_args,
                 tokenizer=tokenizer,
                 train_dataset=dummy_dataset,
@@ -213,3 +209,34 @@ class DPOTrainerTester(unittest.TestCase):
                     # check the params have changed - ignore 0 biases
                     if param.sum() != 0:
                         self.assertFalse(torch.equal(param, new_param))
+
+    @require_no_wandb
+    def test_dpo_trainer_generate_during_eval_no_wandb(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=1,
+                learning_rate=9e-1,
+                evaluation_strategy="steps",
+            )
+
+            dummy_dataset = self._init_dummy_dataset()
+
+            with self.assertRaisesRegex(
+                ValueError,
+                expected_regex="`generate_during_eval=True` requires Weights and Biases to be installed."
+                " Please install `wandb` to resolve.",
+            ):
+                DPOTrainer(
+                    model=self.model,
+                    ref_model=None,
+                    beta=0.1,
+                    args=training_args,
+                    tokenizer=self.tokenizer,
+                    train_dataset=dummy_dataset,
+                    eval_dataset=dummy_dataset,
+                    generate_during_eval=True,
+                )

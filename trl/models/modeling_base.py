@@ -23,7 +23,7 @@ from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError, HFValidationError, LocalEntryNotFoundError
 from transformers import PreTrainedModel
 
-from ..import_utils import is_peft_available
+from ..import_utils import is_peft_available, is_transformers_greater_than
 
 
 if is_peft_available():
@@ -38,6 +38,11 @@ if is_peft_available():
         prepare_model_for_kbit_training,
     )
     from peft.peft_model import set_peft_model_state_dict
+
+if is_transformers_greater_than("4.33.0"):
+    from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
+else:
+    from transformers.deepspeed import is_deepspeed_zero3_enabled
 
 LAYER_PATTERNS = [
     "transformer.h.{layer}",
@@ -519,6 +524,10 @@ def create_reference_model(
     Returns
         `PreTrainedModelWrapper`
     """
+    if is_deepspeed_zero3_enabled():
+        raise ValueError(
+            "DeepSpeed ZeRO-3 is enabled and is not compatible with `create_reference_model()`. Please instantiate your reference model directly with `AutoCausalLM.from_pretrained()`."
+        )
 
     parameter_names = [n for n, _ in model.named_parameters()]
     ref_model = deepcopy(model)

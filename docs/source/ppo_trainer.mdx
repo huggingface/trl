@@ -24,7 +24,7 @@ Resulting in the following subset of the dataset:
 
 ```py
 ppo_dataset_dict = {
-    "prompt": [
+    "query": [
         "Explain the moon landing to a 6 year old in a few sentences.",
         "Why aren’t birds real?",
         "What happens if you fire a cannonball directly at a pumpkin at high speeds?",
@@ -88,7 +88,7 @@ Now we are ready to initialize the `PPOTrainer` using the defined config, datase
 from trl import PPOTrainer
 
 ppo_trainer = PPOTrainer(
-    model,
+    model=model,
     config=config,
     train_dataset=train_dataset,
     tokenizer=tokenizer,

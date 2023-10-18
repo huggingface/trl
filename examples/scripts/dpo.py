@@ -13,6 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Note: you need to install transformers from main to run this script. See https://huggingface.co/docs/transformers/installation#install-from-source
+# TODO: bump transformers version in requirements at next release.
+
 # 0. imports
 from dataclasses import dataclass, field
 from typing import Dict, Optional
@@ -142,7 +145,10 @@ if __name__ == "__main__":
         logging_steps=10,  # match results in blog post
         eval_steps=500,
         output_dir="./test",
+        optim="rmsprop",
+        warmup_steps=150,
         report_to=script_args.report_to,
+        bf16=True,
     )
 
     # 5. initialize the DPO trainer
@@ -157,6 +163,7 @@ if __name__ == "__main__":
         max_length=script_args.max_length,
         max_target_length=script_args.max_target_length,
         max_prompt_length=script_args.max_prompt_length,
+        generate_during_eval=True,
     )
 
     # 6. train

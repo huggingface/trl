@@ -24,7 +24,8 @@ from diffusers import DDIMScheduler, StableDiffusionPipeline, UNet2DConditionMod
 from diffusers.loaders import AttnProcsLayers
 from diffusers.models.attention_processor import LoRAAttnProcessor
 from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import rescale_noise_cfg
-from diffusers.utils.torch_utils import randn_tensor
+
+from ..core import randn_tensor
 
 
 @dataclass

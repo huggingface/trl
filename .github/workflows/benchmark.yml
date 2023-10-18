@@ -10,12 +10,12 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        python-version: [3.8]
+        python-version: [3.9]
         os: [self-hosted]
 
     name: Benchmark
     # Only run if it#s a PR and the comment contains /Benchmark
-    if: github.event.issue.pull_request && contains(github.event.comment.body, '/benchmark-core-trl-experiments') && contains('["vwxyzjn", "younesbelkada", "lvwerra"]', github.actor)
+    if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/benchmark-trl-experiments') && contains(FromJSON('["vwxyzjn", "younesbelkada", "lvwerra", "lewtun"]'), github.actor)
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -39,6 +39,19 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: ${{ matrix.python-version }}
+      # - name: Cleanup pip packages (specific to self-hosted runners)
+      #   run: |
+      #     echo PATH is $PATH
+      #     echo PYTHONPATH is $PYTHONPATH
+      #     echo which python is $(which python)
+      #     echo which pip is $(which pip)
+
+      #     pip_list=$(pip list --format=freeze | grep -v "^pip==" | grep -v "^setuptools==")
+      #     if [ ! -z "$pip_list" ]; then
+      #         echo "$pip_list" | xargs pip uninstall -y
+      #     fi
+      - name: Print python depdenencies
+        run: pip list --format=freeze
       - name: Install dependencies
         run: |
           pip install .[test,benchmark]
@@ -50,7 +63,19 @@ jobs:
           GITHUB_CONTEXT: ${{ toJson(github) }}
           PERSONAL_ACCESS_TOKEN_GITHUB: ${{ secrets.PERSONAL_ACCESS_TOKEN_GITHUB }}
         run: |
-          bash benchmark/benchmark_and_report.sh
+          COMMENT="${{ github.event.comment.body }}"
+          if [[ "$COMMENT" == *"/benchmark-trl-experiments benchmark/benchmark_level1.sh"* ]]; then
+            echo "Running benchmark/benchmark_level1.sh"
+            BENCHMARK_SCRIPT="benchmark/benchmark_level1.sh" BENCHMARK_PLOT_SCRIPT="benchmark/benchmark_level1_plot.sh" bash benchmark/benchmark_and_report.sh
+          elif [[ "$COMMENT" == *"/benchmark-trl-experiments benchmark/benchmark_level2.sh"* ]]; then
+            echo "Running benchmark/benchmark_level2.sh"
+            BENCHMARK_SCRIPT="benchmark/benchmark_level2.sh" BENCHMARK_PLOT_SCRIPT="benchmark/benchmark_level2_plot.sh" bash benchmark/benchmark_and_report.sh
+          elif [[ "$COMMENT" == *"/benchmark-trl-experiments benchmark/benchmark_level3.sh"* ]]; then
+            echo "Running benchmark/benchmark_level3.sh"
+            BENCHMARK_SCRIPT="benchmark/benchmark_level3.sh" BENCHMARK_PLOT_SCRIPT="benchmark/benchmark_level3_plot.sh" bash benchmark/benchmark_and_report.sh
+          else
+            echo "Invalid command in comment. Skipping execution."
+          fi
 
       # send message to PR
       - name: Setup Node.js 16

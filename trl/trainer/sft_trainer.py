@@ -13,6 +13,7 @@
 # limitations under the License.
 import dataclasses
 import warnings
+from functools import wraps
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import torch
@@ -32,7 +33,7 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 
 from ..import_utils import is_peft_available
-from .utils import ConstantLengthDataset, DataCollatorForCompletionOnlyLM, PeftSavingCallback
+from .utils import ConstantLengthDataset, DataCollatorForCompletionOnlyLM, PeftSavingCallback, neftune_forward
 
 
 if is_peft_available():
@@ -95,6 +96,9 @@ class SFTTrainer(Trainer):
         dataset_batch_size (`int`):
             The number of examples to tokenize per batch. If batch_size <= 0 or batch_size == None,
             tokenize the full dataset as a single batch. Defaults to 1000.
+        neftune_noise_alpha (`Optional[float]`):
+            If not `None`, this will activate NEFTune noise embeddings. This has been proven to drastically improve model performances for instrcution
+            fine-tuning. Check out the original paper here: https://arxiv.org/abs/2310.05914 and the original code here: https://github.com/neelsjain/NEFTune
     """
 
     def __init__(
@@ -120,6 +124,7 @@ class SFTTrainer(Trainer):
         chars_per_token: Optional[float] = 3.6,
         dataset_num_proc: Optional[int] = None,
         dataset_batch_size: int = 1000,
+        neftune_noise_alpha: Optional[float] = None,
     ):
         if isinstance(model, str):
             warnings.warn(
@@ -176,6 +181,8 @@ class SFTTrainer(Trainer):
 
         self.dataset_num_proc = dataset_num_proc
         self.dataset_batch_size = dataset_batch_size
+        self.neftune_noise_alpha = neftune_noise_alpha
+
         if not packing:
             if dataset_text_field is None and formatting_func is None:
                 raise ValueError(
@@ -216,6 +223,9 @@ class SFTTrainer(Trainer):
                 "overflow issues when training a model in half-precision. You might consider adding `tokenizer.padding_side = 'right'` to your code."
             )
 
+        if self.neftune_noise_alpha is not None:
+            model = self._activate_neftune(model)
+
         super().__init__(
             model=model,
             args=args,
@@ -237,6 +247,26 @@ class SFTTrainer(Trainer):
             self.train_dataset.infinite = True
         elif self.args.max_steps == -1 and packing:
             self.train_dataset.infinite = False
+
+    @wraps(Trainer.train)
+    def train(self, *args, **kwargs):
+        output = super().train(*args, **kwargs)
+
+        # After training we make sure to retrieve back the original forward pass method
+        # for the embedding layer
+        if self.neftune_noise_alpha is not None:
+
+            if isinstance(self.model, PreTrainedModel):
+                embeddings = self.model.get_input_embeddings()
+            elif isinstance(self.model, PeftModel):
+                embeddings = self.model.base_model.get_input_embeddings()
+
+            if hasattr(embeddings, "_trl_old_forward"):
+                embeddings.forward = embeddings._trl_old_forward
+                del embeddings._trl_old_forward
+                del embeddings.neftune_noise_alpha
+
+        return output
 
     def _prepare_dataset(
         self,
@@ -320,3 +350,25 @@ class SFTTrainer(Trainer):
         )
 
         return tokenized_dataset
+
+    def _activate_neftune(self, model):
+        r"""
+        Activates the neftune as presented in this code: https://github.com/neelsjain/NEFTune and paper: https://arxiv.org/abs/2310.05914
+        """
+        if isinstance(model, PreTrainedModel):
+            embeddings = model.get_input_embeddings()
+        elif isinstance(model, PeftModel):
+            embeddings = model.base_model.get_input_embeddings()
+
+        embeddings.neftune_noise_alpha = self.neftune_noise_alpha
+        old_forward = embeddings.forward
+
+        # This hack seems to be needed to properly use a custom forward pass
+        # all credits to: https://discuss.pytorch.org/t/how-can-i-replace-the-forward-method-of-a-predefined-torchvision-model-with-my-customized-forward-function/54224/11
+        bound_method = neftune_forward.__get__(embeddings, embeddings.__class__)
+        setattr(embeddings, "forward", bound_method)
+
+        # embeddings.forward = neftune_forward
+        embeddings._trl_old_forward = old_forward
+
+        return model

@@ -51,9 +51,10 @@ class ScriptArguments:
             score_clip=None,
         )
     )
-    query_dataset: str = field(default="imdb", metadata={"help": "the dataset to query"})
-    use_seq2seq: bool = field(default=False, metadata={"help": "whether to use seq2seq models"})
-    use_peft: bool = field(default=False, metadata={"help": "whether to use peft"})
+    use_seq2seq: bool = False
+    """whether to use seq2seq models"""
+    use_peft: bool = False
+    """whether to use peft"""
     peft_config: Optional[LoraConfig] = field(
         default_factory=lambda: LoraConfig(
             r=16,
@@ -62,6 +63,7 @@ class ScriptArguments:
             task_type="CAUSAL_LM",
         ),
     )
+    trust_remote_code: bool = field(default=False, metadata={"help": "Enable `trust_remote_code`"})
 
 
 args = tyro.cli(ScriptArguments)
@@ -110,7 +112,7 @@ def build_dataset(config, query_dataset, input_min_text_length=2, input_max_text
 
 
 # We retrieve the dataloader by calling the `build_dataset` function.
-dataset = build_dataset(args.ppo_config, args.query_dataset)
+dataset = build_dataset(args.ppo_config, args.ppo_config.query_dataset)
 
 
 def collator(data):
@@ -122,7 +124,7 @@ set_seed(args.ppo_config.seed)
 
 # Now let's build the model, the reference model, and the tokenizer.
 if not args.use_peft:
-    ref_model = trl_model_class.from_pretrained(args.ppo_config.model_name, trust_remote_code=True)
+    ref_model = trl_model_class.from_pretrained(args.ppo_config.model_name, trust_remote_code=args.trust_remote_code)
     device_map = None
     peft_config = None
 else:
@@ -133,7 +135,7 @@ else:
 
 model = trl_model_class.from_pretrained(
     args.ppo_config.model_name,
-    trust_remote_code=True,
+    trust_remote_code=args.trust_remote_code,
     device_map=device_map,
     peft_config=peft_config,
 )

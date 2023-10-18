@@ -25,50 +25,25 @@ Note that the default implementation has a LoRA implementation path and a non-Lo
 
 Also in addition, there is the expectation of providing a reward function and a prompt function. The reward function is used to evaluate the generated images  and the prompt function is used to generate the prompts that are used to generate the images.
 
-## Getting started with `examples/scripts/stable_diffusion_tuning.py`
+## Getting started with `examples/scripts/ddpo.py`
 
-The `stable_diffusion_tuning.py` script is a working example of using the `DDPO` trainer to finetune a Stable Diffusion model. This example explicitly configures a small subset of the overall parameters associated with the config object (`DDPOConfig`).
+The `ddpo.py` script is a working example of using the `DDPO` trainer to finetune a Stable Diffusion model. This example explicitly configures a small subset of the overall parameters associated with the config object (`DDPOConfig`).
 
 **Note:** one A100 GPU is recommended to get this running. Anything below a A100 will not be able to run this example script and even if it does via relatively smaller sized parameters, the results will most likely be poor.
 
 Almost every configuration parameter has a default. There is only one commandline flag argument that is required of the user to get things up and running. The user is expected to have a [huggingface user access token](https://huggingface.co/docs/hub/security-tokens) that will be used to upload the model post finetuning to HuggingFace hub. The following bash command is to be entered to get things running
 
 ```batch
-python stable_diffusion_tuning.py --hf_user_access_token <token>
+python ddpo.py --hf_user_access_token <token>
 ```
 
-Again, the script uses a small subset of parameters to configure the trainer. And all of these are configurable via the commandline.
-It should be noted (in general) that because the trainer uses `accelerate` as a core component, some parameters are those of accelerate's.
-The commandline flags that are associated with the example script's parameters are listed below.
-
-|parameter|description|default|
-| ---- | ---- | ---- |
-|`--hf_hub_aesthetic_model_id`|The HuggingFace model hub id of the aesthetic scorer model|`"trl-lib/ddpo-aesthetic-predictor"`|
-|`--hf_hub_aesthetic_model_filename`|The filename of the aesthetic scorer model |`"aesthetic-model.pth"`|
-|`--pretrained_model`|The string id of the pretrained Stable Diffusion model|`"runwayml/stable-diffusion-v1-5"`|
-|`--pretrained_revision`|The revision of the pretrained Stable Diffusion model|`"main"`|
-|`--num_epochs`|The number of epochs to train for|`200`|
-|`--train_batch_size`|The batch size to use for training|`3`|
-|`--sample_batch_size`|The batch size to use for sampling|`6`|
-|`--gradient_accumulation_steps`|The number of accelerator based gradient accumulation steps to use|`1`|
-|`--sample_num_steps`| The number of steps to sample for|`50`|
-|`--sample_num_batches_per_epoch`|The number of batches to sample per epoch|`4`|
-|`--log_with`|The logger to use. Either `wandb` or `tensorboard`|`wandb`|
-|`--per_prompt_stat_tracking`|Whether to track stats per prompt. If false, advantages will be calculated using the mean and std of the entire batch as opposed to tracking per prompt|`True`|
-|`--per_prompt_stat_tracking_buffer_size`|The size of the buffer to use for tracking stats per prompt|`32`|
-|`--tracker_project_name`|The name of the project for use on the tracking platform (wandb/tensorboard/etc) |`"stable_diffusion_training"`|
-| `--logging_dir`|The directory to use for logging|`"logs"`|
-| `--project_dir`|The directory to use for saving the model|`"save"`|
-| `--automatic_checkpoint_naming`|Whether to automatically name model checkpoints|`True`|
-| `--total_limit`| Number of checkpoints to keep before overwriting old ones|`5`|
-| `--hf_hub_model_id`|The HuggingFace model hub id to use for saving the model|`"ddpo-finetuned-sd-model"`|
-| `--hf_user_access_token`| The HuggingFace user access token|`None`|
+To obtain the documentation of `stable_diffusion_tuning.py`, please run `python stable_diffusion_tuning.py --help`
 
 The following are things to keep in mind (The code checks this for you as well) in general while configuring the trainer (beyond the use case of using the example script)
 
-- The configurable sample batch size should be greater than or equal to the configurable training batch size
-- The configurable sample batch size must be divisible by the configurable train batch size
-- The configurable sample batch size must be divisible by both the configurable gradient accumulation steps and the configurable accelerator processes count
+- The configurable sample batch size (`--ddpo_config.sample_batch_size=6`) should be greater than or equal to the configurable training batch size (`--ddpo_config.train_batch_size=3`)
+- The configurable sample batch size (`--ddpo_config.sample_batch_size=6`) must be divisible by the configurable train batch size (`--ddpo_config.train_batch_size=3`)
+- The configurable sample batch size (`--ddpo_config.sample_batch_size=6`) must be divisible by both the configurable gradient accumulation steps (`--ddpo_config.train_gradient_accumulation_steps=1`) and the configurable accelerator processes count 
 
 ## Setting up the image logging hook function
 

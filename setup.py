@@ -57,7 +57,7 @@ To create the package for pypi.
 from setuptools import find_packages, setup
 
 
-__version__ = "0.7.2.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
+__version__ = "0.7.3.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
 
 REQUIRED_PKGS = [
     "torch>=1.4.0",
@@ -72,9 +72,12 @@ EXTRAS = {
     "peft": ["peft>=0.4.0"],
     "diffusers": ["diffusers>=0.18.0"],
     "deepspeed": ["deepspeed>=0.9.5"],
-    "dev": ["parameterized", "pytest", "pytest-xdist", "pre-commit", "peft>=0.4.0", "diffusers>=0.18.0"],
-    "benchmark": ["wandb", "ghapi", "openrlbenchmark==0.2.1a5"],
+    "benchmark": ["wandb", "ghapi", "openrlbenchmark==0.2.1a5", "requests", "deepspeed"],
+    "quantization": ["bitsandbytes>=0.41.0"],
 }
+EXTRAS["dev"] = []
+for reqs in EXTRAS.values():
+    EXTRAS["dev"].extend(reqs)
 
 setup(
     name="trl",

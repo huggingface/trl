@@ -12,6 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import random
 import warnings
 from collections import defaultdict
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
@@ -19,17 +20,27 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from accelerate.utils import is_deepspeed_available
 from datasets import Dataset
+from torch.utils.data import DataLoader
 from transformers import DataCollator, PreTrainedModel, PreTrainedTokenizerBase, Trainer, TrainingArguments
 from transformers.trainer_callback import TrainerCallback
+from transformers.trainer_utils import EvalLoopOutput
 
-from ..import_utils import is_peft_available
-from ..models import create_reference_model
+from ..import_utils import is_peft_available, is_wandb_available
+from ..models import PreTrainedModelWrapper, create_reference_model
 from .utils import DPODataCollatorWithPadding, disable_dropout_in_model, pad_to_length
 
 
 if is_peft_available():
     from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
+
+
+if is_wandb_available():
+    import wandb
+
+if is_deepspeed_available():
+    import deepspeed
 
 
 class DPOTrainer(Trainer):
@@ -44,6 +55,8 @@ class DPOTrainer(Trainer):
             reference model is provided, the trainer will create a reference model with the same architecture as the model to be optimized.
         beta (`float`, defaults to 0.1):
             The beta factor in DPO loss. Higher beta means less divergence from the initial policy.
+        loss_type (`str`, defaults to `"sigmoid"`):
+            The type of DPO loss to use. Either `"sigmoid"` the default DPO loss or `"hinge"` loss from SLiC paper.
         args (`transformers.TrainingArguments`):
             The arguments to use for training.
         data_collator (`transformers.DataCollator`):
@@ -81,6 +94,11 @@ class DPOTrainer(Trainer):
             If no model is provided, we need to know if the model_init returns an encoder-decoder.
         disable_dropout (`bool`, defaults to `True`):
             Whether or not to disable dropouts in `model` and `ref_model`.
+        generate_during_eval (`bool`, defaults to `False`):
+            Whether to sample and log generations during evaluation step.
+        compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
+            The function to use to compute the metrics. Must take a `EvalPrediction` and return
+            a dictionary string to metric values.
     """
 
     def __init__(
@@ -88,6 +106,7 @@ class DPOTrainer(Trainer):
         model: Union[PreTrainedModel, nn.Module] = None,
         ref_model: Optional[Union[PreTrainedModel, nn.Module]] = None,
         beta: float = 0.1,
+        loss_type: Literal["sigmoid", "hinge"] = "sigmoid",
         args: TrainingArguments = None,
         data_collator: Optional[DataCollator] = None,
         label_pad_token_id: int = -100,
@@ -109,6 +128,8 @@ class DPOTrainer(Trainer):
         peft_config: Optional[Dict] = None,
         is_encoder_decoder: Optional[bool] = None,
         disable_dropout: bool = True,
+        generate_during_eval: bool = False,
+        compute_metrics: Optional[Callable[[EvalLoopOutput], Dict]] = None,
     ):
         if not is_peft_available() and peft_config is not None:
             raise ValueError(
@@ -118,6 +139,12 @@ class DPOTrainer(Trainer):
             if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
                 model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=args.gradient_checkpointing)
             model = get_peft_model(model, peft_config)
+
+        if generate_during_eval and not is_wandb_available():
+            raise ValueError(
+                "`generate_during_eval=True` requires Weights and Biases to be installed."
+                " Please install `wandb` to resolve."
+            )
 
         if model is not None:
             self.is_encoder_decoder = model.config.is_encoder_decoder
@@ -193,25 +220,28 @@ class DPOTrainer(Trainer):
             if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
 
+        self.max_length = max_length
+        self.generate_during_eval = generate_during_eval
         self.label_pad_token_id = label_pad_token_id
         self.padding_value = padding_value
 
         self.beta = beta
+        self.loss_type = loss_type
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
         super().__init__(
-            model,
-            args,
-            data_collator,
-            train_dataset,
-            eval_dataset,
-            tokenizer,
-            model_init,
-            None,
-            callbacks,
-            optimizers,
-            preprocess_logits_for_metrics,
+            model=model,
+            args=args,
+            data_collator=data_collator,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            tokenizer=tokenizer,
+            model_init=model_init,
+            compute_metrics=compute_metrics,
+            callbacks=callbacks,
+            optimizers=optimizers,
+            preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
         if not hasattr(self, "accelerator"):
@@ -226,11 +256,39 @@ class DPOTrainer(Trainer):
                 )
         else:
             if self.is_deepspeed_enabled:
-                # Read more about the issue in https://github.com/huggingface/trl/pull/687
-                self.ref_model = self.accelerator._prepare_deepspeed(self.ref_model)[0]
-                self.ref_model.eval()
+                self.ref_model = self._prepare_deepspeed(self.ref_model)
             else:
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
+
+    def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
+        # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
+        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
+        config_kwargs = deepspeed_plugin.deepspeed_config
+        if model is not None:
+            if hasattr(model, "config"):
+                hidden_size = (
+                    max(model.config.hidden_sizes)
+                    if getattr(model.config, "hidden_sizes", None)
+                    else getattr(model.config, "hidden_size", None)
+                )
+                if hidden_size is not None and config_kwargs["zero_optimization"]["stage"] == 3:
+                    # Note that `stage3_prefetch_bucket_size` can produce DeepSpeed messages like: `Invalidate trace cache @ step 0: expected module 1, but got module 0`
+                    # This is expected and is not an error, see: https://github.com/microsoft/DeepSpeed/discussions/4081
+                    config_kwargs.update(
+                        {
+                            "zero_optimization.reduce_bucket_size": hidden_size * hidden_size,
+                            "zero_optimization.stage3_param_persistence_threshold": 10 * hidden_size,
+                            "zero_optimization.stage3_prefetch_bucket_size": 0.9 * hidden_size * hidden_size,
+                        }
+                    )
+
+        # If ZeRO-3 is used, we shard both the active and reference model.
+        # Otherwise, we assume the reference model fits in memory and is initialized on each device with ZeRO disabled (stage 0)
+        if config_kwargs["zero_optimization"]["stage"] != 3:
+            config_kwargs["zero_optimization"]["stage"] = 0
+        model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
+        model.eval()
+        return model
 
     def concatenated_inputs(self, batch: Dict[str, Union[List, torch.LongTensor]]) -> Dict[str, torch.LongTensor]:
         """Concatenate the chosen and rejected inputs into a single tensor.
@@ -302,7 +360,13 @@ class DPOTrainer(Trainer):
 
         logits = pi_logratios - ref_logratios
 
-        losses = -F.logsigmoid(self.beta * logits)
+        if self.loss_type == "sigmoid":
+            losses = -F.logsigmoid(self.beta * logits)
+        elif self.loss_type == "hinge":
+            losses = torch.relu(1 - self.beta * logits)
+        else:
+            raise ValueError(f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge']")
+
         chosen_rewards = self.beta * (policy_chosen_logps - reference_chosen_logps).detach()
         rejected_rewards = self.beta * (policy_rejected_logps - reference_rejected_logps).detach()
 
@@ -421,14 +485,14 @@ class DPOTrainer(Trainer):
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
         prefix = "eval_" if train_eval == "eval" else ""
-        metrics[f"{prefix}rewards/chosen"] = chosen_rewards.cpu().numpy().mean()
-        metrics[f"{prefix}rewards/rejected"] = rejected_rewards.cpu().numpy().mean()
-        metrics[f"{prefix}rewards/accuracies"] = reward_accuracies.cpu().numpy().mean()
-        metrics[f"{prefix}rewards/margins"] = (chosen_rewards - rejected_rewards).cpu().numpy().mean()
-        metrics[f"{prefix}logps/rejected"] = policy_rejected_logps.detach().cpu().numpy().mean()
-        metrics[f"{prefix}logps/chosen"] = policy_chosen_logps.detach().cpu().numpy().mean()
-        metrics[f"{prefix}logits/rejected"] = policy_rejected_logits.detach().cpu().numpy().mean()
-        metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.detach().cpu().numpy().mean()
+        metrics[f"{prefix}rewards/chosen"] = chosen_rewards.cpu().mean()
+        metrics[f"{prefix}rewards/rejected"] = rejected_rewards.cpu().mean()
+        metrics[f"{prefix}rewards/accuracies"] = reward_accuracies.cpu().mean()
+        metrics[f"{prefix}rewards/margins"] = (chosen_rewards - rejected_rewards).cpu().mean()
+        metrics[f"{prefix}logps/rejected"] = policy_rejected_logps.detach().cpu().mean()
+        metrics[f"{prefix}logps/chosen"] = policy_chosen_logps.detach().cpu().mean()
+        metrics[f"{prefix}logits/rejected"] = policy_rejected_logits.detach().cpu().mean()
+        metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.detach().cpu().mean()
 
         return losses.mean(), metrics
 
@@ -459,7 +523,7 @@ class DPOTrainer(Trainer):
         policy_output = model.generate(
             batch["prompt_input_ids"],
             attention_mask=batch["prompt_attention_mask"],
-            max_length=self.config.max_length,
+            max_length=self.max_length,
             do_sample=True,
             pad_token_id=self.tokenizer.pad_token_id,
         )
@@ -469,7 +533,7 @@ class DPOTrainer(Trainer):
                 reference_output = self.model.generate(
                     batch["prompt_input_ids"],
                     attention_mask=batch["prompt_attention_mask"],
-                    max_length=self.config.max_length,
+                    max_length=self.max_length,
                     do_sample=True,
                     pad_token_id=self.tokenizer.pad_token_id,
                 )
@@ -477,15 +541,15 @@ class DPOTrainer(Trainer):
             reference_output = self.ref_model.generate(
                 batch["prompt_input_ids"],
                 attention_mask=batch["prompt_attention_mask"],
-                max_length=self.config.max_length,
+                max_length=self.max_length,
                 do_sample=True,
                 pad_token_id=self.tokenizer.pad_token_id,
             )
 
-        policy_output = pad_to_length(policy_output, self.config.max_length, self.tokenizer.pad_token_id)
+        policy_output = pad_to_length(policy_output, self.max_length, self.tokenizer.pad_token_id)
         policy_output_decoded = self.tokenizer.batch_decode(policy_output, skip_special_tokens=True)
 
-        reference_output = pad_to_length(reference_output, self.config.max_length, self.tokenizer.pad_token_id)
+        reference_output = pad_to_length(reference_output, self.max_length, self.tokenizer.pad_token_id)
         reference_output_decoded = self.tokenizer.batch_decode(reference_output, skip_special_tokens=True)
 
         return policy_output_decoded, reference_output_decoded
@@ -523,15 +587,64 @@ class DPOTrainer(Trainer):
             "eval_logits/chosen": metrics["eval_logits/chosen"],
             "eval_logits/rejected": metrics["eval_logits/rejected"],
         }
-        logits = tuple(v for k, v in logits_dict.items() if k not in ignore_keys)
-        logits = torch.stack(logits).mean(axis=1)
-        labels = torch.zeros(logits.shape[0])
+        logits = tuple(v.unsqueeze(dim=0) for k, v in logits_dict.items() if k not in ignore_keys)
+        logits = torch.stack(logits).mean(axis=1).to(self.accelerator.device)
+        labels = torch.zeros(logits.shape[0], device=self.accelerator.device)
 
         return (loss.detach(), logits, labels)
 
     def store_metrics(self, metrics: Dict[str, float], train_eval: Literal["train", "eval"] = "train") -> None:
         for key, value in metrics.items():
             self._stored_metrics[train_eval][key].append(value)
+
+    def evaluation_loop(
+        self,
+        dataloader: DataLoader,
+        description: str,
+        prediction_loss_only: Optional[bool] = None,
+        ignore_keys: Optional[List[str]] = None,
+        metric_key_prefix: str = "eval",
+    ) -> EvalLoopOutput:
+        """
+        Overriding built-in evaluation loop to store metrics for each batch.
+        Prediction/evaluation loop, shared by `Trainer.evaluate()` and `Trainer.predict()`.
+
+        Works both with or without labels.
+        """
+
+        # Sample and save to game log if requested (for one batch to save time)
+        if self.generate_during_eval:
+            # Generate random indices within the range of the total number of samples
+            num_samples = len(dataloader.dataset)
+            random_indices = random.sample(range(num_samples), k=self.args.eval_batch_size)
+
+            # Use dataloader.dataset.select to get the random batch without iterating over the DataLoader
+            random_batch_dataset = dataloader.dataset.select(random_indices)
+            random_batch = self.data_collator(random_batch_dataset)
+            random_batch = self._prepare_inputs(random_batch)
+
+            policy_output_decoded, ref_output_decoded = self.get_batch_samples(self.model, random_batch)
+
+            self.log(
+                {
+                    "game_log": wandb.Table(
+                        columns=["Prompt", "Policy", "Ref Model"],
+                        rows=[
+                            [prompt, pol[len(prompt) :], ref[len(prompt) :]]
+                            for prompt, pol, ref in zip(
+                                random_batch["prompt"], policy_output_decoded, ref_output_decoded
+                            )
+                        ],
+                    )
+                }
+            )
+
+        # Base evaluation
+        initial_output = super().evaluation_loop(
+            dataloader, description, prediction_loss_only, ignore_keys, metric_key_prefix
+        )
+
+        return initial_output
 
     def log(self, logs: Dict[str, float]) -> None:
         """

@@ -75,21 +75,31 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
     def __init__(
         self,
         response_template: Union[str, List[int]],
-        instruction_template: Optional[str] = None,
+        instruction_template: Union[str, List[int]] = None,
         *args,
         mlm: bool = False,
         ignore_index: int = -100,
         **kwargs,
     ):
         super().__init__(*args, mlm=mlm, **kwargs)
+
         self.instruction_template = instruction_template
+        if isinstance(instruction_template, str):
+            # The user provides a string, must tokenize
+            self.instruction_token_ids = self.tokenizer.encode(self.instruction_template, add_special_tokens=False)
+        else:
+            # The user already provides the token ids
+            self.instruction_token_ids = instruction_template
+
         self.response_template = response_template
-        self.ignore_index = ignore_index
-        if type(response_template) == list:
+        if isinstance(response_template, str):
+            # The user provides a string, must tokenize
+            self.response_token_ids = self.tokenizer.encode(self.response_template, add_special_tokens=False)
+        else:
             # The user already provides the token ids
             self.response_token_ids = response_template
-        else:
-            self.response_token_ids = self.tokenizer.encode(self.response_template, add_special_tokens=False)
+
+        self.ignore_index = ignore_index
 
     def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
         batch = super().torch_call(examples)
@@ -142,7 +152,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                     )
                     batch["labels"][i, :] = self.ignore_index
 
-                human_token_ids = self.tokenizer.encode(self.instruction_template, add_special_tokens=False)
+                human_token_ids = self.instruction_token_ids
                 for human_idx in np.where(batch["labels"][i] == human_token_ids[0])[0]:
                     # find the indexes of the start of a human answer.
                     if human_token_ids == batch["labels"][i][human_idx : human_idx + len(human_token_ids)].tolist():
@@ -195,6 +205,9 @@ class RewardDataCollatorWithPadding:
     def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
         features_chosen = []
         features_rejected = []
+        margin = []
+        # check if we have a margin. If we do, we need to batch it as well
+        has_margin = "margin" in features[0]
         for feature in features:
             # check if the keys are named as expected
             if (
@@ -219,6 +232,8 @@ class RewardDataCollatorWithPadding:
                     "attention_mask": feature["attention_mask_rejected"],
                 }
             )
+            if has_margin:
+                margin.append(feature["margin"])
         batch_chosen = self.tokenizer.pad(
             features_chosen,
             padding=self.padding,
@@ -240,6 +255,9 @@ class RewardDataCollatorWithPadding:
             "attention_mask_rejected": batch_rejected["attention_mask"],
             "return_loss": True,
         }
+        if has_margin:
+            margin = torch.tensor(margin, dtype=torch.float)
+            batch["margin"] = margin
         return batch
 
 
@@ -719,3 +737,27 @@ class PerPromptStatTracker:
 
     def get_stats(self):
         return {k: {"mean": np.mean(v), "std": np.std(v), "count": len(v)} for k, v in self.stats.items()}
+
+
+def neftune_forward(self, input: torch.Tensor):
+    """
+    Implements the NEFTune forward pass for the model. Note this works only for
+    torch.nn.Embedding layers. This method is slightly adapted from the original source code
+    that can be found here: https://github.com/neelsjain/NEFTune
+
+    Args:
+        input (`torch.Tensor`):
+            The input tensor to the model.
+        noise_alpha (`float`):
+            The noise alpha value to use for the NEFTune forward pass.
+    """
+    embeddings = torch.nn.functional.embedding(
+        input, self.weight, self.padding_idx, self.max_norm, self.norm_type, self.scale_grad_by_freq, self.sparse
+    )
+
+    if self.training:
+        dims = torch.tensor(embeddings.size(1) * embeddings.size(2))
+        mag_norm = self.neftune_noise_alpha / torch.sqrt(dims)
+        embeddings = embeddings + torch.zeros_like(embeddings).uniform_(-mag_norm, mag_norm)
+
+    return embeddings

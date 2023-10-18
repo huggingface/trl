@@ -1,11 +1,11 @@
 # flake8: noqa
 
-__version__ = "0.7.2.dev0"
+__version__ = "0.7.3.dev0"
 
 from .core import set_seed
 from .environment import TextEnvironment, TextHistory
 from .extras import BestOfNSampler
-from .import_utils import is_diffusers_available, is_peft_available
+from .import_utils import is_diffusers_available, is_peft_available, is_wandb_available
 from .models import (
     AutoModelForCausalLMWithValueHead,
     AutoModelForSeq2SeqLMWithValueHead,
