@@ -1095,7 +1095,7 @@ class PPOTrainer(BaseTrainer):
         raise NotImplementedError
 
     def compute_advantages(
-        self: torch.FloatTensor,
+        self,
         values: torch.FloatTensor,
         rewards: torch.FloatTensor,
         mask: torch.FloatTensor,
