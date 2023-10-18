@@ -260,7 +260,14 @@ class SFTTrainer(Trainer):
         # After training we make sure to retrieve back the original forward pass method
         # for the embedding layer by removing the forward post hook.
         if self.neftune_noise_alpha is not None:
+            if isinstance(self.model, PreTrainedModel):
+                embeddings = self.model.get_input_embeddings()
+            elif isinstance(self.model, PeftModel):
+                embeddings = self.model.base_model.get_input_embeddings()
+
             self.neftune_hook_handle.remove()
+            del embeddings.neftune_noise_alpha
+
         return output
 
     def _prepare_dataset(
