@@ -64,16 +64,15 @@ class ScriptArguments:
     )
     use_peft: bool = False
     """whether to use peft"""
-    # peft_config: Optional[LoraConfig] = field(
-    #     default_factory=lambda: LoraConfig(
-    #         r=16,
-    #         lora_alpha=16,
-    #         bias="none",
-    #         task_type="CAUSAL_LM",
-    #         task_type="SEQ_CLS",
-    #         modules_to_save=["scores"],
-    #     ),
-    # )
+    peft_config: Optional[LoraConfig] = field(
+        default_factory=lambda: LoraConfig(
+            r=16,
+            lora_alpha=16,
+            bias="none",
+            task_type="SEQ_CLS",
+            modules_to_save=["scores"],
+        ),
+    )
 
 
 args = tyro.cli(ScriptArguments)
