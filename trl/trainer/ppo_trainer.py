@@ -1107,6 +1107,9 @@ class PPOTrainer(BaseTrainer):
         values = values * mask
         rewards = rewards * mask
 
+        if self.config.whiten_rewards:
+            rewards = masked_whiten(rewards, mask, shift_mean=False)
+
         for t in reversed(range(gen_len)):
             nextvalues = values[:, t + 1] if t < gen_len - 1 else 0.0
             delta = rewards[:, t] + self.config.gamma * nextvalues - values[:, t]
