@@ -282,13 +282,13 @@ class DPODataCollatorWithPadding:
     padding_value: int = 0
     is_encoder_decoder: Optional[bool] = False
 
-    def collate(self, batch):
+    def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
         # first, pad everything to the same length
         padded_batch = {}
-        for k in batch[0].keys():
+        for k in features[0].keys():
             if k.endswith("_input_ids") or k.endswith("_attention_mask") or k.endswith("_labels"):
                 if self.is_encoder_decoder:
-                    to_pad = [torch.LongTensor(ex[k]) for ex in batch]
+                    to_pad = [torch.LongTensor(ex[k]) for ex in features]
 
                     if (k.startswith("prompt")) and (k.endswith("input_ids")):
                         padding_value = self.tokenizer.pad_token_id
@@ -302,9 +302,9 @@ class DPODataCollatorWithPadding:
                 else:
                     # adapted from https://stackoverflow.com/questions/73256206
                     if "prompt" in k:
-                        to_pad = [torch.LongTensor(ex[k][::-1]) for ex in batch]
+                        to_pad = [torch.LongTensor(ex[k][::-1]) for ex in features]
                     else:
-                        to_pad = [torch.LongTensor(ex[k]) for ex in batch]
+                        to_pad = [torch.LongTensor(ex[k]) for ex in features]
                     if k.endswith("_input_ids"):
                         padding_value = self.tokenizer.pad_token_id
                     elif k.endswith("_labels"):
@@ -319,14 +319,12 @@ class DPODataCollatorWithPadding:
                     if "prompt" in k:
                         padded_batch[k] = padded_batch[k].flip(dims=[1])
             elif k.endswith("_logps"):
-                padded_batch[k] = torch.tensor([ex[k] for ex in batch])
+                # the cached reference model logprobs
+                padded_batch[k] = torch.tensor([ex[k] for ex in features])
             else:
-                padded_batch[k] = [ex[k] for ex in batch]
+                padded_batch[k] = [ex[k] for ex in features]
 
         return padded_batch
-
-    def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
-        return self.collate(features)
 
 
 class ConstantLengthDataset(IterableDataset):
