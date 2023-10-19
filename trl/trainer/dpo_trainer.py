@@ -231,62 +231,16 @@ class DPOTrainer(Trainer):
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
-        # use the data_collator to loop over the train and eval datasets and add reference model logps and sample outputs
+        # tokenize the dataset and compute reference logps for training and evaluation datasets
         train_dataset = train_dataset.map(self.tokenize_batch_element)
-
-        def padded_batch(batch):
-            padded_batch = {}
-            for k in batch:
-                if k.endswith("_input_ids") or k.endswith("_attention_mask") or k.endswith("_labels"):
-                    if self.is_encoder_decoder:
-                        to_pad = [torch.LongTensor(ex) for ex in batch[k]]
-
-                        if (k.startswith("prompt")) and (k.endswith("input_ids")):
-                            padding_value = self.tokenizer.pad_token_id
-                        elif k.endswith("_attention_mask"):
-                            padding_value = 0
-                        elif (k.startswith("chosen")) or (k.startswith("rejected")) or ("decoder" in k):
-                            padding_value = self.label_pad_token_id
-                        else:
-                            raise ValueError(f"Unexpected key in batch '{k}'")
-                        padded_batch[k] = pad_sequence(to_pad, batch_first=True, padding_value=padding_value)
-                    else:
-                        # adapted from https://stackoverflow.com/questions/73256206
-                        if "prompt" in k:
-                            to_pad = [torch.LongTensor(ex[::-1]) for ex in batch[k]]
-                        else:
-                            to_pad = [torch.LongTensor(ex) for ex in batch[k]]
-                        if k.endswith("_input_ids"):
-                            padding_value = self.tokenizer.pad_token_id
-                        elif k.endswith("_labels"):
-                            padding_value = self.label_pad_token_id
-                        elif k.endswith("_attention_mask"):
-                            padding_value = self.padding_value
-                        else:
-                            raise ValueError(f"Unexpected key in batch '{k}'")
-
-                        padded_batch[k] = pad_sequence(to_pad, batch_first=True, padding_value=padding_value)
-                        # for the prompt, flip back so padding is on left side
-                        if "prompt" in k:
-                            padded_batch[k] = padded_batch[k].flip(dims=[1])
-                else:
-                    padded_batch[k] = [ex for ex in batch[k]]
-
-            return self.compute_reference_logps(padded_batch)
-
-        train_dataset = train_dataset.map(padded_batch, batch_size=4, batched=True)
-
-        # train_dataloader = DataLoader(train_dataset, collate_fn=data_collator, batch_size=4)
-        # for batch in train_dataloader:
-        #     concatenated_batch = self.compute_reference_logps(batch)
-
-        # if eval_dataset:
-        #     eval_dataset = eval_dataset.map(self.tokenize_batch_element)
-
-        # TODO: Work out where reference_logps can be computed. Accelerator must exist or method need to
-        # be further adapted
-        # TODO: Set correct batch size
-        # train_dataset = train_dataset.map(self.compute_reference_logps, batched=True, batch_size=1)
+        train_dataset = train_dataset.map(
+            self.compute_reference_logps, batch_size=args.per_device_train_batch_size, batched=True
+        )
+        if eval_dataset is not None:
+            eval_dataset = eval_dataset.map(self.tokenize_batch_element)
+            eval_dataset = eval_dataset.map(
+                self.compute_reference_logps, batch_size=args.per_device_train_batch_size, batched=True
+            )
 
         super().__init__(
             model=model,
@@ -473,6 +427,42 @@ class DPOTrainer(Trainer):
 
     def compute_reference_logps(self, batch) -> Dict:
         """Computes logps for reference model for a single batch of a DPO specific dataset."""
+        padded_batch = {}
+        for k in batch:
+            if k.endswith("_input_ids") or k.endswith("_attention_mask") or k.endswith("_labels"):
+                if self.is_encoder_decoder:
+                    to_pad = [torch.LongTensor(ex) for ex in batch[k]]
+
+                    if (k.startswith("prompt")) and (k.endswith("input_ids")):
+                        padding_value = self.tokenizer.pad_token_id
+                    elif k.endswith("_attention_mask"):
+                        padding_value = 0
+                    elif (k.startswith("chosen")) or (k.startswith("rejected")) or ("decoder" in k):
+                        padding_value = self.label_pad_token_id
+                    else:
+                        raise ValueError(f"Unexpected key in batch '{k}'")
+                    padded_batch[k] = pad_sequence(to_pad, batch_first=True, padding_value=padding_value)
+                else:
+                    # adapted from https://stackoverflow.com/questions/73256206
+                    if "prompt" in k:
+                        to_pad = [torch.LongTensor(ex[::-1]) for ex in batch[k]]
+                    else:
+                        to_pad = [torch.LongTensor(ex) for ex in batch[k]]
+                    if k.endswith("_input_ids"):
+                        padding_value = self.tokenizer.pad_token_id
+                    elif k.endswith("_labels"):
+                        padding_value = self.label_pad_token_id
+                    elif k.endswith("_attention_mask"):
+                        padding_value = self.padding_value
+                    else:
+                        raise ValueError(f"Unexpected key in batch '{k}'")
+
+                    padded_batch[k] = pad_sequence(to_pad, batch_first=True, padding_value=padding_value)
+                    # for the prompt, flip back so padding is on left side
+                    if "prompt" in k:
+                        padded_batch[k] = padded_batch[k].flip(dims=[1])
+            else:
+                padded_batch[k] = [ex for ex in batch[k]]
 
         with torch.no_grad():
             if self.ref_model is None:
@@ -482,19 +472,19 @@ class DPOTrainer(Trainer):
                         reference_rejected_logps,
                         _,
                         _,
-                    ) = self.concatenated_forward(self.model, batch)
+                    ) = self.concatenated_forward(self.model, padded_batch)
             else:
                 (
                     reference_chosen_logps,
                     reference_rejected_logps,
                     _,
                     _,
-                ) = self.concatenated_forward(self.ref_model, batch)
+                ) = self.concatenated_forward(self.ref_model, padded_batch)
 
-            batch["reference_chosen_logps"] = reference_chosen_logps
-            batch["reference_rejected_logps"] = reference_rejected_logps
+            padded_batch["reference_chosen_logps"] = reference_chosen_logps
+            padded_batch["reference_rejected_logps"] = reference_rejected_logps
 
-        return batch
+        return padded_batch
 
     @staticmethod
     def concatenated_inputs(

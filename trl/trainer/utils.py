@@ -22,7 +22,7 @@ import numpy as np
 import torch
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import IterableDataset
-from transformers import DataCollatorForLanguageModeling, PreTrainedModel, PreTrainedTokenizerBase, TrainerCallback
+from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizerBase, TrainerCallback
 
 
 class AdaptiveKLController:
@@ -347,7 +347,7 @@ class DPODataCollatorWithPadding:
                 "rejected_attention_mask",
                 "rejected_labels",
             ]
-            batch_element = {k:feature[k] for k in batch_keys}
+            batch_element = {k: feature[k] for k in batch_keys}
 
             # if feature has reference chosen/refected log probs and sample outputs add them to batch_element
             if "reference_chosen_logps" in feature and "reference_rejected_logps" in feature:
