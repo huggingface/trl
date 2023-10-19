@@ -193,13 +193,9 @@ class DPOTrainer(Trainer):
 
             data_collator = DPODataCollatorWithPadding(
                 tokenizer,
-                max_length=max_length,
-                max_prompt_length=max_prompt_length,
                 label_pad_token_id=label_pad_token_id,
                 padding_value=padding_value,
-                truncation_mode=truncation_mode,
                 is_encoder_decoder=self.is_encoder_decoder,
-                max_target_length=max_target_length,
             )
 
             if args.remove_unused_columns:

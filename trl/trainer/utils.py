@@ -281,7 +281,6 @@ class DPODataCollatorWithPadding:
     label_pad_token_id: int = -100
     padding_value: int = 0
     is_encoder_decoder: Optional[bool] = False
-    truncation_mode: str = "keep_end"
 
     def collate(self, batch):
         # first, pad everything to the same length
@@ -328,10 +327,27 @@ class DPODataCollatorWithPadding:
         tokenized_batch = []
 
         for feature in features:
-            prompt = feature["prompt"]
-            chosen = feature["chosen"]
-            rejected = feature["rejected"]
-            batch_element = self.tokenize_batch_element(prompt, chosen, rejected)
+            # check if the keys are named as expected
+            if (
+                "chosen_input_ids" not in feature
+                or "chosen_attention_mask" not in feature
+                or "chosen_labels" not in feature
+                or "rejected_input_ids" not in feature
+                or "rejected_attention_mask" not in feature
+                or "rejected_labels" not in feature
+            ):
+                raise ValueError(
+                    "The features should include `chosen_input_ids`, `chosen_attention_mask`, `chosen_labels`, `rejected_input_ids`, `rejected_attention_mask` and `rejected_labels`"
+                )
+            batch_keys = [
+                "chosen_input_ids",
+                "chosen_attention_mask",
+                "chosen_labels",
+                "rejected_input_ids",
+                "rejected_attention_mask",
+                "rejected_labels",
+            ]
+            batch_element = {k:feature[k] for k in batch_keys}
 
             # if feature has reference chosen/refected log probs and sample outputs add them to batch_element
             if "reference_chosen_logps" in feature and "reference_rejected_logps" in feature:
