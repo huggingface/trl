@@ -68,7 +68,7 @@ class ScriptArguments:
             lora_alpha=16,
             bias="none",
             task_type="SEQ_CLS",
-            modules_to_save=["scores"],
+            modules_to_save=["score"],  # Typo fixed: scores -> score
         ),
     )
     load_in_8bit: bool = False
