@@ -232,7 +232,11 @@ class DPOTrainer(Trainer):
 
         # use the data_collator to loop over the train and eval datasets and add reference model logps and sample outputs
         train_dataset = train_dataset.map(self.tokenize_batch_element)
-        
+
+        train_dataloader = DataLoader(train_dataset, collate_fn=data_collator, batch_size=4)
+        for batch in train_dataloader:
+            concatenated_batch = self.compute_reference_logps(batch)
+
         if eval_dataset:
             eval_dataset = eval_dataset.map(self.tokenize_batch_element)
 
@@ -240,7 +244,7 @@ class DPOTrainer(Trainer):
         # be further adapted
         # TODO: Set correct batch size
         # train_dataset = train_dataset.map(self.compute_reference_logps, batched=True, batch_size=1)
-        
+
         super().__init__(
             model=model,
             args=args,
@@ -307,7 +311,7 @@ class DPOTrainer(Trainer):
         model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
         model.eval()
         return model
-    
+
     def tokenize_batch_element(self, feature) -> Dict:
         """Tokenize a single batch element from a DPO specific dataset.
 
@@ -421,13 +425,11 @@ class DPOTrainer(Trainer):
                 batch["chosen_decoder_input_ids"] = self.model.prepare_decoder_input_ids_from_labels(
                     labels=batch["chosen_labels"]
                 )
-        
+
         return batch
 
     def compute_reference_logps(self, batch) -> Dict:
-        """Computes logps for reference model for a single batch of a DPO specific dataset.
-
-        """
+        """Computes logps for reference model for a single batch of a DPO specific dataset."""
 
         with torch.no_grad():
             if self.ref_model is None:
@@ -577,7 +579,7 @@ class DPOTrainer(Trainer):
             return (per_token_logps * loss_mask).sum(-1)
 
     def concatenated_forward(
-        self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]
+        self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]], device: Optional[torch.device] = None
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         """Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
 
@@ -588,7 +590,7 @@ class DPOTrainer(Trainer):
             is_encoder_decoder=self.is_encoder_decoder,
             label_pad_token_id=self.label_pad_token_id,
             padding_value=self.padding_value,
-            device=self.accelerator.device,
+            device=device,
         )
         len_chosen = batch["chosen_labels"].shape[0]
 
@@ -636,7 +638,7 @@ class DPOTrainer(Trainer):
             policy_rejected_logps,
             policy_chosen_logits,
             policy_rejected_logits,
-        ) = self.concatenated_forward(model, batch)
+        ) = self.concatenated_forward(model, batch, device=self.accelerator.device)
 
         # if reference_chosen_logps and reference_rejected_logps in batch use them, otherwise use the reference model
         if "reference_chosen_logps" in batch and "reference_rejected_logps" in batch:
@@ -651,14 +653,14 @@ class DPOTrainer(Trainer):
                             reference_rejected_logps,
                             _,
                             _,
-                        ) = self.concatenated_forward(self.model, batch)
+                        ) = self.concatenated_forward(self.model, batch, device=self.accelerator.device)
                 else:
                     (
                         reference_chosen_logps,
                         reference_rejected_logps,
                         _,
                         _,
-                    ) = self.concatenated_forward(self.ref_model, batch)
+                    ) = self.concatenated_forward(self.ref_model, batch, device=self.accelerator.device)
 
         losses, chosen_rewards, rejected_rewards = self.dpo_loss(
             policy_chosen_logps,
