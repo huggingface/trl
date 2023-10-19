@@ -231,9 +231,16 @@ class DPOTrainer(Trainer):
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
         # use the data_collator to loop over the train and eval datasets and add reference model logps and sample outputs
-
         train_dataset = train_dataset.map(self.tokenize_batch_element)
+        
+        if eval_dataset:
+            eval_dataset = eval_dataset.map(self.tokenize_batch_element)
 
+        # TODO: Work out where reference_logps can be computed. Accelerator must exist or method need to
+        # be further adapted
+        # TODO: Set correct batch size
+        # train_dataset = train_dataset.map(self.compute_reference_logps, batched=True, batch_size=1)
+        
         super().__init__(
             model=model,
             args=args,
@@ -415,6 +422,33 @@ class DPOTrainer(Trainer):
                     labels=batch["chosen_labels"]
                 )
         
+        return batch
+
+    def compute_reference_logps(self, batch) -> Dict:
+        """Computes logps for reference model for a single batch of a DPO specific dataset.
+
+        """
+
+        with torch.no_grad():
+            if self.ref_model is None:
+                with self.accelerator.unwrap_model(self.model).disable_adapter():
+                    (
+                        reference_chosen_logps,
+                        reference_rejected_logps,
+                        _,
+                        _,
+                    ) = self.concatenated_forward(self.model, batch)
+            else:
+                (
+                    reference_chosen_logps,
+                    reference_rejected_logps,
+                    _,
+                    _,
+                ) = self.concatenated_forward(self.ref_model, batch)
+
+            batch["reference_chosen_logps"] = reference_chosen_logps
+            batch["reference_rejected_logps"] = reference_rejected_logps
+
         return batch
 
     @staticmethod
