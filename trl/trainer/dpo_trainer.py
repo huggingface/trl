@@ -427,6 +427,8 @@ class DPOTrainer(Trainer):
 
     def compute_reference_logps(self, batch) -> Dict:
         """Computes logps for reference model for a single batch of a DPO specific dataset."""
+
+        # pad the batch
         padded_batch = {}
         for k in batch:
             if k.endswith("_input_ids") or k.endswith("_attention_mask") or k.endswith("_labels"):
@@ -464,6 +466,7 @@ class DPOTrainer(Trainer):
             else:
                 padded_batch[k] = [ex for ex in batch[k]]
 
+        # compute reference logps
         with torch.no_grad():
             if self.ref_model is None:
                 with self.accelerator.unwrap_model(self.model).disable_adapter():
@@ -481,8 +484,8 @@ class DPOTrainer(Trainer):
                     _,
                 ) = self.concatenated_forward(self.ref_model, padded_batch)
 
-            padded_batch["reference_chosen_logps"] = reference_chosen_logps
-            padded_batch["reference_rejected_logps"] = reference_rejected_logps
+            padded_batch["reference_chosen_logps"] = reference_chosen_logps.item()
+            padded_batch["reference_rejected_logps"] = reference_rejected_logps.item()
 
         return padded_batch
 
