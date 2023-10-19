@@ -318,48 +318,15 @@ class DPODataCollatorWithPadding:
                     # for the prompt, flip back so padding is on left side
                     if "prompt" in k:
                         padded_batch[k] = padded_batch[k].flip(dims=[1])
+            elif k.endswith("_logps"):
+                padded_batch[k] = torch.tensor([ex[k] for ex in batch])
             else:
                 padded_batch[k] = [ex[k] for ex in batch]
 
         return padded_batch
 
     def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
-        tokenized_batch = []
-
-        for feature in features:
-            # check if the keys are named as expected
-            if (
-                "chosen_input_ids" not in feature
-                or "chosen_attention_mask" not in feature
-                or "chosen_labels" not in feature
-                or "rejected_input_ids" not in feature
-                or "rejected_attention_mask" not in feature
-                or "rejected_labels" not in feature
-            ):
-                raise ValueError(
-                    "The features should include `chosen_input_ids`, `chosen_attention_mask`, `chosen_labels`, `rejected_input_ids`, `rejected_attention_mask` and `rejected_labels`"
-                )
-            batch_keys = [
-                "chosen_input_ids",
-                "chosen_attention_mask",
-                "chosen_labels",
-                "rejected_input_ids",
-                "rejected_attention_mask",
-                "rejected_labels",
-            ]
-            batch_element = {k: feature[k] for k in batch_keys}
-
-            # if feature has reference chosen/refected log probs and sample outputs add them to batch_element
-            if "reference_chosen_logps" in feature and "reference_rejected_logps" in feature:
-                batch_element["reference_chosen_logps"] = feature["reference_chosen_logps"]
-                batch_element["reference_rejected_logps"] = feature["reference_rejected_logps"]
-            if "reference_output" in feature:
-                batch_element["reference_output"] = feature["reference_output"]
-
-            tokenized_batch.append(batch_element)
-
-        # return collated batch
-        return self.collate(tokenized_batch)
+        return self.collate(features)
 
 
 class ConstantLengthDataset(IterableDataset):

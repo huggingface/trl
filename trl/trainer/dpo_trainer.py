@@ -131,6 +131,7 @@ class DPOTrainer(Trainer):
         disable_dropout: bool = True,
         generate_during_eval: bool = False,
         compute_metrics: Optional[Callable[[EvalLoopOutput], Dict]] = None,
+        precompute_ref_logps: bool = False,
     ):
         if not is_peft_available() and peft_config is not None:
             raise ValueError(
@@ -233,14 +234,16 @@ class DPOTrainer(Trainer):
 
         # tokenize the dataset and compute reference logps for training and evaluation datasets
         train_dataset = train_dataset.map(self.tokenize_batch_element)
-        train_dataset = train_dataset.map(
-            self.compute_reference_logps, batch_size=args.per_device_train_batch_size, batched=True
-        )
-        if eval_dataset is not None:
-            eval_dataset = eval_dataset.map(self.tokenize_batch_element)
-            eval_dataset = eval_dataset.map(
+        if precompute_ref_logps:
+            train_dataset = train_dataset.map(
                 self.compute_reference_logps, batch_size=args.per_device_train_batch_size, batched=True
             )
+        if eval_dataset is not None:
+            eval_dataset = eval_dataset.map(self.tokenize_batch_element)
+            if precompute_ref_logps:
+                eval_dataset = eval_dataset.map(
+                    self.compute_reference_logps, batch_size=args.per_device_train_batch_size, batched=True
+                )
 
         super().__init__(
             model=model,
@@ -309,7 +312,7 @@ class DPOTrainer(Trainer):
         model.eval()
         return model
 
-    def tokenize_batch_element(self, feature) -> Dict:
+    def tokenize_batch_element(self, feature, model: Union[PreTrainedModel, nn.Module] = None) -> Dict:
         """Tokenize a single batch element from a DPO specific dataset.
 
         At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
@@ -415,11 +418,11 @@ class DPOTrainer(Trainer):
             batch["prompt_input_ids"] = prompt_tokens["input_ids"]
             batch["prompt_attention_mask"] = prompt_tokens["attention_mask"]
 
-            if self.model is not None and hasattr(self.model, "prepare_decoder_input_ids_from_labels"):
-                batch["rejected_decoder_input_ids"] = self.model.prepare_decoder_input_ids_from_labels(
+            if model is not None and hasattr(model, "prepare_decoder_input_ids_from_labels"):
+                batch["rejected_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
                     labels=batch["rejected_labels"]
                 )
-                batch["chosen_decoder_input_ids"] = self.model.prepare_decoder_input_ids_from_labels(
+                batch["chosen_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
                     labels=batch["chosen_labels"]
                 )
 
@@ -484,8 +487,8 @@ class DPOTrainer(Trainer):
                     _,
                 ) = self.concatenated_forward(self.ref_model, padded_batch)
 
-            padded_batch["reference_chosen_logps"] = reference_chosen_logps.item()
-            padded_batch["reference_rejected_logps"] = reference_rejected_logps.item()
+            padded_batch["reference_chosen_logps"] = reference_chosen_logps
+            padded_batch["reference_rejected_logps"] = reference_rejected_logps
 
         return padded_batch
 
