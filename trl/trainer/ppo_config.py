@@ -50,7 +50,7 @@ class PPOConfig:
     remove_unused_columns: bool = True
     """Remove unused columns from the dataset if `datasets.Dataset` is used"""
     tracker_kwargs: dict = field(default_factory=dict)
-    """Keyword arguments for the tracker (e.g. wandb_project)"""
+    """Keyword arguments for the tracker (e.g. wandb_project - example_kwargs_dict={'tracker_kwargs': {'wandb': {'entity': wandb_entity, 'name': exp_name}}})"""
     accelerator_kwargs: dict = field(default_factory=dict)
     """Keyword arguments for the accelerator"""
     project_kwargs: dict = field(default_factory=dict)
