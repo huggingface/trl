@@ -100,6 +100,9 @@ class DPOTrainer(Trainer):
         compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return
             a dictionary string to metric values.
+        precompute_ref_logps (`bool`, defaults to `False`):
+            Flag to precompute reference model logps for training and evaluation datasets. This is useful if you want to train
+            without the reference model.
     """
 
     def __init__(
