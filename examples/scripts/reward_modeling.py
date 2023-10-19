@@ -71,10 +71,6 @@ class ScriptArguments:
             modules_to_save=["scores"],
         ),
     )
-    load_in_8bit: bool = False
-    """load the model in 8 bits precision"""
-    load_in_4bit: bool = False
-    """load the model in 4 bits precision"""
 
 
 args = tyro.cli(ScriptArguments)
@@ -115,8 +111,8 @@ def preprocess_function(examples):
         "attention_mask_rejected": [],
     }
     for chosen, rejected in zip(examples["chosen"], examples["rejected"]):
-        tokenized_chosen = tokenizer(chosen, truncation=True)
-        tokenized_rejected = tokenizer(rejected, truncation=True)
+        tokenized_chosen = tokenizer(chosen)
+        tokenized_rejected = tokenizer(rejected)
 
         new_examples["input_ids_chosen"].append(tokenized_chosen["input_ids"])
         new_examples["attention_mask_chosen"].append(tokenized_chosen["attention_mask"])
