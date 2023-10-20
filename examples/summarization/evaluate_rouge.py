@@ -17,6 +17,8 @@ from transformers import (
     default_data_collator,
 )
 
+import wandb
+
 
 shutil.disk_usage = lambda x: shutil._ntuple_diskusage(1, 1, 1)
 
@@ -38,7 +40,8 @@ class ScriptArguments:
     batch_size: Optional[int] = field(default=1)
     bf16: Optional[bool] = field(default=True)
     seq_length: Optional[int] = field(default=512, metadata={"help": "Input sequence length"})
-    max_new_tokens: Optional[int] = field(default=50, metadata={"help": "Max new tokens to generate"})
+    max_new_tokens: Optional[int] = field(default=48, metadata={"help": "Max new tokens to generate"})
+    num_logged_samples: int = field(default=100, metadata={"help": "Max samples to log to wandb"})
 
 
 parser = HfArgumentParser(ScriptArguments)
@@ -124,6 +127,10 @@ gen_kwargs = {
     "max_new_tokens": args.max_new_tokens,
     "pad_token_id": tokenizer.pad_token_id,
 }
+
+wandb.init(project="trl")
+table = wandb.Table(columns=["prompt", "prediction", "label"])
+
 for batch in tqdm(eval_dataloader):
     with torch.no_grad():
         output_tokens = accelerator.unwrap_model(model).generate(
@@ -163,5 +170,20 @@ for batch in tqdm(eval_dataloader):
             references=decoded_labels,
         )
 
+        if len(table.data) < args.num_logged_samples:
+            num_samples_to_add = min(args.num_logged_samples - len(table.data), len(batch["input_ids"]))
+            for i in range(num_samples_to_add):
+                table.add_data(
+                    tokenizer.decode(batch["input_ids"][i], skip_special_tokens=True),
+                    decoded_preds[i],
+                    decoded_labels[i],
+                )
+
+            if len(table.data) == args.num_logged_samples:
+                wandb.log({"examples": table})
+
 result = rouge.compute()
 print(result)
+
+for key, value in result.items():
+    wandb.run.summary[key] = value
