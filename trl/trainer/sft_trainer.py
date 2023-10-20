@@ -114,7 +114,7 @@ class SFTTrainer(Trainer):
         callbacks: Optional[List[TrainerCallback]] = None,
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        peft_config: Optional[Dict] = None,
+        peft_config: Optional[PeftConfig] = None,
         dataset_text_field: Optional[str] = None,
         packing: Optional[bool] = False,
         formatting_func: Optional[Callable] = None,
