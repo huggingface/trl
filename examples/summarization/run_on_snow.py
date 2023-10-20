@@ -1,4 +1,5 @@
 import argparse
+import datetime
 import os
 from copy import deepcopy
 
@@ -21,6 +22,9 @@ def run_exp(exp_dict, savedir, args):
     if exp_name.startswith("marlhf"):
         print("MARLHF")
         accelerate_launch("rl_training_with_ma_value.py", exp_dict, args)
+    elif exp_name.startswith("vmrlhf"):
+        print("Separate Value Model RLHF")
+        accelerate_launch("rl_training_value_model.py", exp_dict, args)
     elif exp_name.startswith("rlhf"):
         print("RLHF")
         accelerate_launch("rl_training.py", exp_dict, args)
@@ -175,6 +179,10 @@ if __name__ == "__main__":
     else:
         job_config = None
         job_scheduler = None
+
+        if args.wandb:
+            timenow = datetime.datetime.now().strftime("%d-%m-%y_%H-%M-%S")
+            exp_list[0]["name"] = exp_list[0]["name"] + f"_local_{timenow}"
 
     # Run experiments and create results file
     hw.run_wizard(
