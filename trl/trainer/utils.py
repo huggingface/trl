@@ -751,13 +751,9 @@ def neftune_forward(self, input: torch.Tensor):
         noise_alpha (`float`):
             The noise alpha value to use for the NEFTune forward pass.
     """
-    embeddings = torch.nn.functional.embedding(
-        input, self.weight, self.padding_idx, self.max_norm, self.norm_type, self.scale_grad_by_freq, self.sparse
-    )
+    embeddings = self._trl_old_forward(input)
 
     if self.training:
-        dims = torch.tensor(embeddings.size(1) * embeddings.size(2))
-        mag_norm = self.neftune_noise_alpha / torch.sqrt(dims)
-        embeddings = embeddings + torch.zeros_like(embeddings).uniform_(-mag_norm, mag_norm)
+        embeddings = embeddings + (2*torch.rand_like(embeddings)-1)*self.neftune_noise_alpha
 
     return embeddings
