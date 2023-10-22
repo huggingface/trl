@@ -23,6 +23,9 @@ from .utils import (
     DataCollatorForCompletionOnlyLM,
     RunningMoments,
     disable_dropout_in_model,
+    generate,
+    compute_reward_score,
+    conduct_rejection_sampling,
 )
 
 # isort: on

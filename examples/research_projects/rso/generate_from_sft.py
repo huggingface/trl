@@ -16,19 +16,17 @@
 from dataclasses import dataclass, field
 from typing import Optional
 
-import torch
 from accelerate import Accelerator
 from datasets import Dataset, load_dataset
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     DataCollatorForSeq2Seq,
-    HfArgumentParser,
-    PreTrainedModel,
-    PreTrainedTokenizerBase
+    HfArgumentParser
 )
+
+from trl.trainer.utils import generate
 
 
 @dataclass
@@ -52,66 +50,6 @@ class ScriptArguments:
     num_return_sequences: Optional[int] = field(default=64, metadata={"help": "the number of return sequences"})
     # instrumentation
     sanity_check: Optional[bool] = field(default=False)
-    
-    
-@torch.no_grad()
-def generate(
-    model: PreTrainedModel,
-    dataloader: DataLoader,
-    tokenizer: PreTrainedTokenizerBase,
-    accelerator: Accelerator,
-    **generation_kwargs,
-) -> Dataset:
-    
-    all_predictions = []
-    all_prompts = []
-    pbar = tqdm(total=len(dataloader), disable=not accelerator.is_local_main_process)
-
-    for batch in dataloader:
-        sequence_length = batch["input_ids"].shape[1]
-
-        all_tokens = accelerator.unwrap_model(model).generate(
-            batch["input_ids"],
-            attention_mask=batch["attention_mask"],
-            **generation_kwargs,
-        )
-
-        generated_tokens = all_tokens[:, sequence_length:]
-        prompt_tokens = all_tokens[:,:sequence_length]
-
-        generated_tokens = accelerator.pad_across_processes(generated_tokens, dim=1, pad_index=tokenizer.pad_token_id)
-        prompt_tokens = accelerator.pad_across_processes(prompt_tokens, dim=1, pad_index=tokenizer.pad_token_id)
-
-        generated_tokens = accelerator.gather(generated_tokens)
-        generated_tokens = generated_tokens.cpu()
-        prompt_tokens = accelerator.gather(prompt_tokens)
-        prompt_tokens = prompt_tokens.cpu()
-
-        if isinstance(generated_tokens, tuple):
-            generated_tokens = generated_tokens[0]
-            prompt_tokens = prompt_tokens[0]
-
-        all_predictions.extend(generated_tokens)
-        all_prompts.extend(prompt_tokens)
-        pbar.update(1)
-
-    accelerator.wait_for_everyone()
-
-    all_predictions = tokenizer.batch_decode(all_predictions, skip_special_tokens=True)
-    all_prompts = tokenizer.batch_decode(all_prompts, skip_special_tokens=True)
-
-    def filter_text(text):
-        """
-        Only extract the AI response. Useful in case the model was not trained with masked human responses.
-        """
-        return text.split("Human:")[0].strip()
-
-    # postprocessing
-    all_predictions = [filter_text(generated_text) for generated_text in all_predictions]
-    
-    generated_dataset = Dataset.from_dict({"prompt": all_prompts, "response": all_predictions})
-
-    return generated_dataset
 
 
 if __name__ == "__main__":
@@ -166,7 +104,9 @@ if __name__ == "__main__":
     model, dataloader = accelerator.prepare(model, dataloader)
 
     # generate responses from sft policy
-    generated_dataset = generate(model, dataloader, tokenizer, accelerator, **generation_kwargs)
+    prompts, responses = generate(model, dataloader, tokenizer, accelerator, **generation_kwargs)
+    
+    generated_dataset = Dataset.from_dict({"prompt": prompts, "response": responses})
     
     # save the generated dataset
     generated_dataset.save_to_disk(script_args.save_dataset_path)

@@ -18,19 +18,17 @@ import warnings
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
-import numpy as np
-import torch
 from accelerate import Accelerator
 from datasets import Dataset, load_from_disk
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
     DataCollatorWithPadding,
-    HfArgumentParser,
-    PreTrainedModel
+    HfArgumentParser
 )
+
+from trl.trainer.utils import conduct_rejection_sampling, compute_reward_score
 
 @dataclass
 class ScriptArguments:
@@ -48,45 +46,6 @@ class ScriptArguments:
     
     # instrumentation
     sanity_check: Optional[bool] = field(default=False)
-    
-  
-# modified from https://arxiv.org/pdf/2309.06657.pdf 
-def conduct_rejection_sampling(
-    response_candidates: List[str],
-    response_rewards: List[float],
-    num_samples: int,
-    beta: float
-):
-    """Conducts rejection sampling guided by rewards.
-    
-    Args:
-        response_candidates: response candidates from sft policy
-        response_rewards: response rewards.
-        num_samples: number of samples to sub-sample.
-        beta: beta parameter in KL-constrained reward maximization objective.
-        
-    Returns:
-        accepted: Accepted rejection sampled sequences from the optimal policy.
-        rewards: the rewards associated to the accepted samples.
-    """
-    candidates = {c: r for c, r in zip(response_candidates, response_rewards)}
-    accepted = []
-    rewards = []
-    while len(accepted) < num_samples:
-        max_reward = max(candidates.values())
-        to_remove = []
-        for c, r in candidates.items():
-            u = np.random.uniform()
-            if u >= np.exp((r - max_reward) / beta):
-                continue
-            accepted.append(c)
-            rewards.append(r)
-            to_remove.append(c)
-            if len(accepted) == num_samples:
-                break
-        for c in to_remove:
-            candidates.pop(c)
-    return accepted, rewards
 
 
 def first_round_ranking(responses: List[str], rewards: List[float]) -> Tuple[List[str], List[str]]:
@@ -142,36 +101,6 @@ def tournament_ranking(responses: List[str], rewards: List[float]):
     
     return chosen, rejected
 
-      
-@torch.no_grad()
-def score(
-    model: PreTrainedModel,
-    dataloader: DataLoader,
-    accelerator: Accelerator
-) -> List[float]:
-    """Score the generated dataset based on a reward model.
-    
-    Args:
-        model: the model used to score samples.
-        dataloader: the dataloader containing batches of elements from the generated dataset.
-        accelerator: the accelerator object.
-        
-    Returns:
-        rewards: rewards assigned to each sample of the generated dataset.
-    """
-
-    rewards = []
-    pbar = tqdm(total=len(dataloader), disable=not accelerator.is_local_main_process)
-
-    for batch in dataloader:
-        scores = model(**batch).logits.squeeze(1)
-        scores = accelerator.gather(scores)
-        rewards.extend(scores)
-        pbar.update(1)
-        
-    rewards = [reward.item() for reward in rewards]
-
-    return rewards
 
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
@@ -216,7 +145,7 @@ if __name__ == "__main__":
 
     model, dataloader = accelerator.prepare(model, dataloader)
     
-    rewards = score(model, dataloader, accelerator)
+    rewards = compute_reward_score(model, dataloader, accelerator)
     
     rewards = rewards[: len(dataset)]
 
