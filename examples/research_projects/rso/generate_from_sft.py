@@ -1,49 +1,58 @@
-import os
-import warnings
-from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+# coding=utf-8
+# Copyright 2023 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-import numpy as np
+from dataclasses import dataclass, field
+from typing import Optional
+
 import torch
 from accelerate import Accelerator
-from datasets import Dataset, concatenate_datasets, load_dataset
+from datasets import Dataset, load_dataset
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import (
     AutoModelForCausalLM,
-    AutoModelForSequenceClassification,
     AutoTokenizer,
     DataCollatorForSeq2Seq,
-    DataCollatorWithPadding,
     HfArgumentParser,
     PreTrainedModel,
-    PreTrainedTokenizerBase,
-    Trainer,
-    TrainingArguments,
+    PreTrainedTokenizerBase
 )
+
 
 @dataclass
 class ScriptArguments:
+    # model parameters
     model_name_or_path: Optional[str] = field(default=None, metadata={"help": "the model name"})
     mixed_precision: Optional[str] = field(default="fp16", metadata={"help": "the model dtype"})
     # data parameters
     dataset_name: Optional[str] = field(default="Dahoas/full-hh-rlhf", metadata={"help": "the HF data path"})
-    split: Optional[bool] = field(default=True, metadata={"help": "the dataset split to use for generation"})
+    split: Optional[str] = field(default="train", metadata={"help": "the dataset split to use for generation"})
     batch_size: Optional[int] = field(default=8, metadata={"help": "the generation batch size"})
     max_prompt_length: Optional[int] = field(default=512, metadata={"help": "the maximum prompt length"})
-    save_dataset_path: Optional[str] = field(default="sft_gen_dataset", metadata={"help": "thepath to save the generated dataset"})
-
+    save_dataset_path: Optional[str] = field(default="sft_gen_dataset", metadata={"help": "the path for saving the generated dataset"})
     # generation parameters
     max_new_tokens: Optional[int] = field(
         default=128, metadata={"help": "the maximum number of tokens generated per sample"}
     )
-    temperature: Optional[float] = field(default=1.0)
-    top_p: Optional[float] = field(default=1.0)
-    top_k: Optional[float] = field(default=50)
-    num_return_sequences: Optional[int] = field(default=8)
-    
+    temperature: Optional[float] = field(default=1.0, metadata={"help": "the sampling temperature"})
+    top_p: Optional[float] = field(default=1.0, metadata={"help": "top_p sampling argument"})
+    top_k: Optional[float] = field(default=50, metadata={"help": "top_k sampling argument"})
+    num_return_sequences: Optional[int] = field(default=64, metadata={"help": "the number of return sequences"})
     # instrumentation
     sanity_check: Optional[bool] = field(default=False)
+    
     
 @torch.no_grad()
 def generate(
@@ -68,11 +77,10 @@ def generate(
         )
 
         generated_tokens = all_tokens[:, sequence_length:]
+        prompt_tokens = all_tokens[:,:sequence_length]
 
         generated_tokens = accelerator.pad_across_processes(generated_tokens, dim=1, pad_index=tokenizer.pad_token_id)
-        input_ids = torch.repeat_interleave(batch["input_ids"], generation_kwargs["num_return_sequences"], dim=0)
-
-        prompt_tokens = accelerator.pad_across_processes(input_ids, dim=1, pad_index=tokenizer.pad_token_id)
+        prompt_tokens = accelerator.pad_across_processes(prompt_tokens, dim=1, pad_index=tokenizer.pad_token_id)
 
         generated_tokens = accelerator.gather(generated_tokens)
         generated_tokens = generated_tokens.cpu()
@@ -90,6 +98,7 @@ def generate(
     accelerator.wait_for_everyone()
 
     all_predictions = tokenizer.batch_decode(all_predictions, skip_special_tokens=True)
+    all_prompts = tokenizer.batch_decode(all_prompts, skip_special_tokens=True)
 
     def filter_text(text):
         """
@@ -99,11 +108,11 @@ def generate(
 
     # postprocessing
     all_predictions = [filter_text(generated_text) for generated_text in all_predictions]
-    all_prompts = tokenizer.batch_decode(all_prompts, skip_special_tokens=True)
-
+    
     generated_dataset = Dataset.from_dict({"prompt": all_prompts, "response": all_predictions})
 
     return generated_dataset
+
 
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
@@ -138,7 +147,7 @@ if __name__ == "__main__":
     dataset = load_dataset(script_args.dataset_name)[script_args.split]
 
     if script_args.sanity_check:
-        dataset = dataset.dataset(range(min(len(dataset), 100)))
+        dataset = dataset.select(range(min(len(dataset), 100)))
 
     def tokenize_fn(samples):
         model_inputs = tokenizer(samples["prompt"])
@@ -148,13 +157,16 @@ if __name__ == "__main__":
         }
 
     dataset = dataset.map(tokenize_fn, batched=True, remove_columns=list(dataset.features))
+    dataset = dataset.filter(lambda x: len(x["input_ids"])<script_args.max_prompt_length)
 
-    data_collator = DataCollatorForSeq2Seq(tokenizer, max_length=script_args.max_length, pad_to_multiple_of=8)
+    data_collator = DataCollatorForSeq2Seq(tokenizer, max_length=script_args.max_prompt_length, pad_to_multiple_of=8)
 
     dataloader = DataLoader(dataset, batch_size=script_args.batch_size, shuffle=False, collate_fn=data_collator)
 
     model, dataloader = accelerator.prepare(model, dataloader)
 
+    # generate responses from sft policy
     generated_dataset = generate(model, dataloader, tokenizer, accelerator, **generation_kwargs)
     
+    # save the generated dataset
     generated_dataset.save_to_disk(script_args.save_dataset_path)
