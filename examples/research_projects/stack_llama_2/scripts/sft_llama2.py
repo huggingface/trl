@@ -186,6 +186,7 @@ training_args = TrainingArguments(
     bf16=True,
     remove_unused_columns=False,
     run_name="sft_llama2",
+    gradient_checkpointing=script_args.gradient_checkpointing,
 )
 
 train_dataset, eval_dataset = create_datasets(tokenizer, script_args)
