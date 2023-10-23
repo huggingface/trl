@@ -49,7 +49,5 @@ jobs:
         # cpu version of pytorch
         pip install .[test]
     - name: Test with pytest
-      env:
-        PYTORCH_MPS_HIGH_WATERMARK_RATIO: "0.7"  # for macos-latest only to avoid OOM
       run: |
         make test
