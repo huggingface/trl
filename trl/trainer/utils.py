@@ -754,7 +754,7 @@ def neftune_forward(self, input: torch.Tensor):
     embeddings = self._trl_old_forward(input)
 
     if self.training:
-        noise = (2*torch.rand_like(embeddings)-1)*self.neftune_noise_alpha
+        noise = torch.zeros_like(embeddings).uniform_(-self.neftune_noise_alpha, self.neftune_noise_alpha)
         embeddings = embeddings*(1+noise)
 
     return embeddings
