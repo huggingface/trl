@@ -18,6 +18,7 @@ import re
 import tempfile
 import unittest
 
+import pytest
 import torch
 from huggingface_hub import HfApi, HfFolder, delete_repo
 from parameterized import parameterized
@@ -200,6 +201,38 @@ class PPOTrainerTester(unittest.TestCase):
             reward = [torch.tensor(1.0), torch.tensor(0.0)]
             # train model
             train_stats = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+            break
+
+        for param in ppo_trainer.model.parameters():
+            assert param.grad is not None
+
+        for stat in EXPECTED_STATS:
+            assert stat in train_stats.keys()
+
+    def test_ppo_step_with_masks(self):
+        # initialize dataset
+        dummy_dataset = self._init_dummy_dataset()
+
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=self.gpt2_model,
+            ref_model=self.gpt2_model_ref,
+            tokenizer=self.gpt2_tokenizer,
+            dataset=dummy_dataset,
+        )
+        dummy_dataloader = ppo_trainer.dataloader
+        # train model with ppo
+        for query_tensor, response_tensor in dummy_dataloader:
+            # define a reward for response
+            # (this could be any reward such as human feedback or output from another model)
+            reward = [torch.tensor(1.0), torch.tensor(0.0)]
+
+            response_mask = [torch.ones_like(r) for r in response_tensor]
+
+            # train model
+            train_stats = ppo_trainer.step(
+                [q for q in query_tensor], [r for r in response_tensor], reward, response_mask
+            )
             break
 
         for param in ppo_trainer.model.parameters():
@@ -465,7 +498,7 @@ class PPOTrainerTester(unittest.TestCase):
             # train model - this should raise an error
             bs = ppo_trainer.config.batch_size
 
-            queries, responses, _ = ppo_trainer._step_safety_checker(
+            queries, responses, _, _ = ppo_trainer._step_safety_checker(
                 bs, [q for q in query_tensor], [r for r in response_tensor], reward
             )
 
@@ -1193,3 +1226,7 @@ class PPOTrainerTester(unittest.TestCase):
             # train model
             _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
             break
+
+    def test_batch_size_check(self):
+        with pytest.raises(ValueError):
+            PPOConfig(batch_size=2, mini_batch_size=2, gradient_accumulation_steps=2)

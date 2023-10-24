@@ -27,9 +27,17 @@ from .utils import (
 
 # isort: on
 
+from ..import_utils import is_diffusers_available
 from .base import BaseTrainer
+from .ddpo_config import DDPOConfig
+
+
+if is_diffusers_available():
+    from .ddpo_trainer import DDPOTrainer
+
 from .dpo_trainer import DPOTrainer
 from .ppo_config import PPOConfig
 from .ppo_trainer import PPOTrainer
 from .reward_trainer import RewardTrainer, compute_accuracy
 from .sft_trainer import SFTTrainer
+from .training_configs import RewardConfig

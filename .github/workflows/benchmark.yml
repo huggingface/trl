@@ -1,0 +1,107 @@
+name: "Benchmark on Comment"
+
+# https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  Benchmark:
+    strategy:
+      fail-fast: true
+      matrix:
+        python-version: [3.9]
+        os: [self-hosted]
+
+    name: Benchmark
+    # Only run if it#s a PR and the comment contains /Benchmark
+    if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/benchmark-trl-experiments') && contains(FromJSON('["vwxyzjn", "younesbelkada", "lvwerra", "lewtun"]'), github.actor)
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Get branch of PR
+        uses: xt0rted/pull-request-comment-branch@v1
+        id: comment-branch
+      - name: Set latest commit status as pending
+        uses: myrotvorets/set-commit-status-action@master
+        with:
+          sha: ${{ steps.comment-branch.outputs.head_sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          status: pending
+      - name: Checkout `main` branch
+        uses: actions/checkout@v3
+      - name: Checkout PR branch
+        run: gh pr checkout $PR_NUMBER
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+      # - name: Cleanup pip packages (specific to self-hosted runners)
+      #   run: |
+      #     echo PATH is $PATH
+      #     echo PYTHONPATH is $PYTHONPATH
+      #     echo which python is $(which python)
+      #     echo which pip is $(which pip)
+
+      #     pip_list=$(pip list --format=freeze | grep -v "^pip==" | grep -v "^setuptools==")
+      #     if [ ! -z "$pip_list" ]; then
+      #         echo "$pip_list" | xargs pip uninstall -y
+      #     fi
+      - name: Print python depdenencies
+        run: pip list --format=freeze
+      - name: Install dependencies
+        run: |
+          pip install .[test,benchmark]
+
+      - name: Login
+        run: wandb login ${{ secrets.WANDB_API_KEY }} && huggingface-cli login --token ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
+      - name: Run benchmark
+        env:
+          GITHUB_CONTEXT: ${{ toJson(github) }}
+          PERSONAL_ACCESS_TOKEN_GITHUB: ${{ secrets.PERSONAL_ACCESS_TOKEN_GITHUB }}
+        run: |
+          COMMENT="${{ github.event.comment.body }}"
+          if [[ "$COMMENT" == *"/benchmark-trl-experiments benchmark/benchmark_level1.sh"* ]]; then
+            echo "Running benchmark/benchmark_level1.sh"
+            BENCHMARK_SCRIPT="benchmark/benchmark_level1.sh" BENCHMARK_PLOT_SCRIPT="benchmark/benchmark_level1_plot.sh" bash benchmark/benchmark_and_report.sh
+          elif [[ "$COMMENT" == *"/benchmark-trl-experiments benchmark/benchmark_level2.sh"* ]]; then
+            echo "Running benchmark/benchmark_level2.sh"
+            BENCHMARK_SCRIPT="benchmark/benchmark_level2.sh" BENCHMARK_PLOT_SCRIPT="benchmark/benchmark_level2_plot.sh" bash benchmark/benchmark_and_report.sh
+          elif [[ "$COMMENT" == *"/benchmark-trl-experiments benchmark/benchmark_level3.sh"* ]]; then
+            echo "Running benchmark/benchmark_level3.sh"
+            BENCHMARK_SCRIPT="benchmark/benchmark_level3.sh" BENCHMARK_PLOT_SCRIPT="benchmark/benchmark_level3_plot.sh" bash benchmark/benchmark_and_report.sh
+          else
+            echo "Invalid command in comment. Skipping execution."
+          fi
+
+      # send message to PR
+      - name: Setup Node.js 16
+        uses: actions/setup-node@v3
+        with:
+          node-version: 16
+      - name: Add workflow result as comment on PR
+        uses: actions/github-script@v6
+        if: always()
+        with:
+          script: |
+            const name = '${{ github.workflow	}}';
+            const url = '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}';
+            const success = '${{ job.status }}' === 'success';
+            const body = `${name}: ${success ? 'succeeded ✅' : 'failed ❌'}\n${url}`;
+
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            })
+      - name: Set latest commit status as ${{ job.status }}
+        uses: myrotvorets/set-commit-status-action@master
+        if: always()
+        with:
+          sha: ${{ steps.comment-branch.outputs.head_sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          status: ${{ job.status }}

@@ -23,3 +23,14 @@ SUPPORTED_ARCHITECTURES = (
     AutoModelForSeq2SeqLMWithValueHead,
     AutoModelForCausalLMWithValueModel,
 )
+
+from ..import_utils import is_diffusers_available
+
+
+if is_diffusers_available():
+    from .modeling_sd_base import (
+        DDPOPipelineOutput,
+        DDPOSchedulerOutput,
+        DDPOStableDiffusionPipeline,
+        DefaultDDPOStableDiffusionPipeline,
+    )

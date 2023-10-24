@@ -14,6 +14,7 @@
 import os
 import random
 import warnings
+from collections import deque
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -21,7 +22,7 @@ import numpy as np
 import torch
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import IterableDataset
-from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizerBase, TrainerCallback
+from transformers import DataCollatorForLanguageModeling, PreTrainedModel, PreTrainedTokenizerBase, TrainerCallback
 
 
 class AdaptiveKLController:
@@ -74,21 +75,31 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
     def __init__(
         self,
         response_template: Union[str, List[int]],
-        instruction_template: Optional[str] = None,
+        instruction_template: Union[str, List[int]] = None,
         *args,
         mlm: bool = False,
         ignore_index: int = -100,
         **kwargs,
     ):
         super().__init__(*args, mlm=mlm, **kwargs)
+
         self.instruction_template = instruction_template
+        if isinstance(instruction_template, str):
+            # The user provides a string, must tokenize
+            self.instruction_token_ids = self.tokenizer.encode(self.instruction_template, add_special_tokens=False)
+        else:
+            # The user already provides the token ids
+            self.instruction_token_ids = instruction_template
+
         self.response_template = response_template
-        self.ignore_index = ignore_index
-        if type(response_template) == list:
+        if isinstance(response_template, str):
+            # The user provides a string, must tokenize
+            self.response_token_ids = self.tokenizer.encode(self.response_template, add_special_tokens=False)
+        else:
             # The user already provides the token ids
             self.response_token_ids = response_template
-        else:
-            self.response_token_ids = self.tokenizer.encode(self.response_template, add_special_tokens=False)
+
+        self.ignore_index = ignore_index
 
     def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
         batch = super().torch_call(examples)
@@ -106,14 +117,18 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                         response_token_ids_start_idx = idx
 
                 if response_token_ids_start_idx is None:
-                    raise RuntimeError(
-                        f'Could not find response key {self.response_token_ids} in token IDs {batch["labels"][i]}'
+                    warnings.warn(
+                        f"Could not find response key `{self.response_template}` in the "
+                        f'following instance: {self.tokenizer.decode(batch["input_ids"][i])} '
+                        f"This instance will be ignored in loss calculation. "
+                        f"Note, if this happens often, consider increasing the `max_seq_length`."
                     )
+                    batch["labels"][i, :] = self.ignore_index
+                else:
+                    response_token_ids_end_idx = response_token_ids_start_idx + len(self.response_token_ids)
 
-                response_token_ids_end_idx = response_token_ids_start_idx + len(self.response_token_ids)
-
-                # Make pytorch loss function ignore all tokens up through the end of the response key
-                batch["labels"][i, :response_token_ids_end_idx] = self.ignore_index
+                    # Make pytorch loss function ignore all tokens up through the end of the response key
+                    batch["labels"][i, :response_token_ids_end_idx] = self.ignore_index
 
         else:
             for i in range(len(examples)):
@@ -128,21 +143,29 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                     ):
                         response_token_ids_idxs.append(assistant_idx + len(self.response_token_ids))
 
-                if len(self.response_token_ids) == 0:
-                    raise RuntimeError(
-                        f'Could not find response key {self.response_token_ids} in token IDs {batch["labels"][i]}'
+                if len(response_token_ids_idxs) == 0:
+                    warnings.warn(
+                        f"Could not find response key `{self.response_template}` in the "
+                        f'following instance: {self.tokenizer.decode(batch["input_ids"][i])} '
+                        f"This instance will be ignored in loss calculation. "
+                        f"Note, if this happens often, consider increasing the `max_seq_length`."
                     )
+                    batch["labels"][i, :] = self.ignore_index
 
-                human_token_ids = self.tokenizer.encode(self.instruction_template, add_special_tokens=False)
+                human_token_ids = self.instruction_token_ids
                 for human_idx in np.where(batch["labels"][i] == human_token_ids[0])[0]:
                     # find the indexes of the start of a human answer.
                     if human_token_ids == batch["labels"][i][human_idx : human_idx + len(human_token_ids)].tolist():
                         human_token_ids_idxs.append(human_idx)
 
                 if len(human_token_ids_idxs) == 0:
-                    raise RuntimeError(
-                        f'Could not find response key {human_token_ids} in token IDs {batch["labels"][i]}'
+                    warnings.warn(
+                        f"Could not find instruction key `{self.instruction_template}` in the "
+                        f'following instance: {self.tokenizer.decode(batch["input_ids"][i])} '
+                        f"This instance will be ignored in loss calculation. "
+                        f"Note, if this happens often, consider increasing the `max_seq_length`."
                     )
+                    batch["labels"][i, :] = self.ignore_index
 
                 for idx, (start, end) in enumerate(zip(human_token_ids_idxs, response_token_ids_idxs)):
                     # Make pytorch loss function ignore all non response tokens
@@ -182,6 +205,9 @@ class RewardDataCollatorWithPadding:
     def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
         features_chosen = []
         features_rejected = []
+        margin = []
+        # check if we have a margin. If we do, we need to batch it as well
+        has_margin = "margin" in features[0]
         for feature in features:
             # check if the keys are named as expected
             if (
@@ -206,6 +232,8 @@ class RewardDataCollatorWithPadding:
                     "attention_mask": feature["attention_mask_rejected"],
                 }
             )
+            if has_margin:
+                margin.append(feature["margin"])
         batch_chosen = self.tokenizer.pad(
             features_chosen,
             padding=self.padding,
@@ -227,6 +255,9 @@ class RewardDataCollatorWithPadding:
             "attention_mask_rejected": batch_rejected["attention_mask"],
             "return_loss": True,
         }
+        if has_margin:
+            margin = torch.tensor(margin, dtype=torch.float)
+            batch["margin"] = margin
         return batch
 
 
@@ -237,6 +268,9 @@ class DPODataCollatorWithPadding:
     Args:
         tokenizer (`PreTrainedTokenizerBase`):
             The tokenizer used for encoding the data.
+        model (Optional[`PreTrainedModel`]):
+            The model that is being trained. If set and has the *prepare_decoder_input_ids_from_labels*, use it to
+            prepare the *decoder_input_ids*.
         padding (`Union[bool, str, `PaddingStrategy`]`, `optional`, defaults to `True`):
             padding_strategy to pass to the tokenizer.
         max_length (`Optional[int]`, `optional`, defaults to `None`):
@@ -247,16 +281,23 @@ class DPODataCollatorWithPadding:
             The label used for masking.
         padding_value (`int`, defaults to 0):
             The value used for padding.
+        is_encoder_decoder (`Optional[bool]`, `optional`, defaults to `None`):
+            Whether or not you model has an encoder_decoder architecture.
+        max_target_length (`Optional[int]`, `optional`, defaults to `None`):
+            The maximum length of the target to be processed. Only useful for encoder-decoder architectures.
         truncation_mode: (`str`, defaults to "keep_end"):
             The truncation mode to use when truncating the prompt.
     """
     tokenizer: PreTrainedTokenizerBase
+    model: Optional[PreTrainedModel] = None
     padding: Union[bool, str] = True
     max_length: Optional[int] = None
     max_prompt_length: Optional[int] = None
     label_pad_token_id: int = -100
     padding_value: int = 0
     truncation_mode: str = "keep_end"
+    is_encoder_decoder: Optional[bool] = False
+    max_target_length: Optional[int] = None
 
     def tokenize_batch_element(
         self,
@@ -274,69 +315,111 @@ class DPODataCollatorWithPadding:
             the sum of the length of the prompt and the chosen/rejected response, with
             label_pad_token_id  for the prompt tokens.
         """
-        chosen_tokens = self.tokenizer(chosen, add_special_tokens=False)
-        rejected_tokens = self.tokenizer(rejected, add_special_tokens=False)
-        prompt_tokens = self.tokenizer(prompt, add_special_tokens=False)
-
-        assert self.tokenizer.eos_token_id not in prompt_tokens["input_ids"], f"Prompt contains EOS token: {prompt}"
-        assert (
-            self.tokenizer.eos_token_id not in chosen_tokens["input_ids"]
-        ), f"Chosen response contains EOS token: {chosen}"
-        assert (
-            self.tokenizer.eos_token_id not in rejected_tokens["input_ids"]
-        ), f"Rejected response contains EOS token: {rejected}"
-
-        chosen_tokens["input_ids"].append(self.tokenizer.eos_token_id)
-        chosen_tokens["attention_mask"].append(1)
-
-        rejected_tokens["input_ids"].append(self.tokenizer.eos_token_id)
-        rejected_tokens["attention_mask"].append(1)
-
-        longer_response_length = max(len(chosen_tokens["input_ids"]), len(rejected_tokens["input_ids"]))
-
-        # if combined sequence is too long, truncate the prompt
-        if len(prompt_tokens["input_ids"]) + longer_response_length > self.max_length:
-            if self.truncation_mode == "keep_start":
-                prompt_tokens = {k: v[: self.max_prompt_length] for k, v in prompt_tokens.items()}
-            elif self.truncation_mode == "keep_end":
-                prompt_tokens = {k: v[-self.max_prompt_length :] for k, v in prompt_tokens.items()}
-            else:
-                raise ValueError(f"Unknown truncation mode: {self.truncation_mode}")
-
-        # if that's still too long, truncate the response
-        if len(prompt_tokens["input_ids"]) + longer_response_length > self.max_length:
-            chosen_tokens = {k: v[: self.max_length - self.max_prompt_length] for k, v in chosen_tokens.items()}
-            rejected_tokens = {k: v[: self.max_length - self.max_prompt_length] for k, v in rejected_tokens.items()}
-
-        # Create labels
-        chosen_sequence_tokens = {k: prompt_tokens[k] + chosen_tokens[k] for k in chosen_tokens}
-        rejected_sequence_tokens = {k: prompt_tokens[k] + rejected_tokens[k] for k in rejected_tokens}
-        chosen_sequence_tokens["labels"] = chosen_sequence_tokens["input_ids"][:]
-        chosen_sequence_tokens["labels"][: len(prompt_tokens["input_ids"])] = [self.label_pad_token_id] * len(
-            prompt_tokens["input_ids"]
-        )
-        rejected_sequence_tokens["labels"] = rejected_sequence_tokens["input_ids"][:]
-        rejected_sequence_tokens["labels"][: len(prompt_tokens["input_ids"])] = [self.label_pad_token_id] * len(
-            prompt_tokens["input_ids"]
-        )
-
         batch = {}
+
+        if not self.is_encoder_decoder:
+            chosen_tokens = self.tokenizer(chosen, add_special_tokens=False)
+            rejected_tokens = self.tokenizer(rejected, add_special_tokens=False)
+            prompt_tokens = self.tokenizer(prompt, add_special_tokens=False)
+
+            eos_token_id = self.tokenizer.eos_token_id
+            # Get indices in list prompt_tokens["input_ids"] that equals the EOS token (often 0)
+            eos_indices_prompt = [i for i, x in enumerate(prompt_tokens["input_ids"]) if x == eos_token_id]
+            # attention mask these indices to eos_token_id
+            new_attention_mask = [
+                0 if i in eos_indices_prompt else p for i, p in enumerate(prompt_tokens["attention_mask"])
+            ]
+            prompt_tokens["attention_mask"] = new_attention_mask
+
+            # do the same for chosen and rejected
+            eos_indices_chosen = [i for i, x in enumerate(chosen_tokens["input_ids"]) if x == eos_token_id]
+            new_attention_mask_c = [
+                0 if i in eos_indices_chosen else p for i, p in enumerate(chosen_tokens["attention_mask"])
+            ]
+            chosen_tokens["attention_mask"] = new_attention_mask_c
+
+            eos_indices_rejected = [i for i, x in enumerate(rejected_tokens["input_ids"]) if x == eos_token_id]
+            new_attention_mask_r = [
+                0 if i in eos_indices_rejected else p for i, p in enumerate(rejected_tokens["attention_mask"])
+            ]
+            rejected_tokens["attention_mask"] = new_attention_mask_r
+
+            # add EOS token to end of prompt
+            chosen_tokens["input_ids"].append(self.tokenizer.eos_token_id)
+            chosen_tokens["attention_mask"].append(1)
+
+            rejected_tokens["input_ids"].append(self.tokenizer.eos_token_id)
+            rejected_tokens["attention_mask"].append(1)
+
+            longer_response_length = max(len(chosen_tokens["input_ids"]), len(rejected_tokens["input_ids"]))
+
+            # if combined sequence is too long, truncate the prompt
+            if len(prompt_tokens["input_ids"]) + longer_response_length > self.max_length:
+                if self.truncation_mode == "keep_start":
+                    prompt_tokens = {k: v[: self.max_prompt_length] for k, v in prompt_tokens.items()}
+                elif self.truncation_mode == "keep_end":
+                    prompt_tokens = {k: v[-self.max_prompt_length :] for k, v in prompt_tokens.items()}
+                else:
+                    raise ValueError(f"Unknown truncation mode: {self.truncation_mode}")
+
+            # if that's still too long, truncate the response
+            if len(prompt_tokens["input_ids"]) + longer_response_length > self.max_length:
+                chosen_tokens = {k: v[: self.max_length - self.max_prompt_length] for k, v in chosen_tokens.items()}
+                rejected_tokens = {
+                    k: v[: self.max_length - self.max_prompt_length] for k, v in rejected_tokens.items()
+                }
+
+            # Create labels
+            chosen_sequence_tokens = {k: prompt_tokens[k] + chosen_tokens[k] for k in chosen_tokens}
+            rejected_sequence_tokens = {k: prompt_tokens[k] + rejected_tokens[k] for k in rejected_tokens}
+            chosen_sequence_tokens["labels"] = chosen_sequence_tokens["input_ids"][:]
+            chosen_sequence_tokens["labels"][: len(prompt_tokens["input_ids"])] = [self.label_pad_token_id] * len(
+                prompt_tokens["input_ids"]
+            )
+            rejected_sequence_tokens["labels"] = rejected_sequence_tokens["input_ids"][:]
+            rejected_sequence_tokens["labels"][: len(prompt_tokens["input_ids"])] = [self.label_pad_token_id] * len(
+                prompt_tokens["input_ids"]
+            )
+
+            for k, toks in {
+                "chosen": chosen_sequence_tokens,
+                "rejected": rejected_sequence_tokens,
+                "prompt": prompt_tokens,
+            }.items():
+                for type_key, tokens in toks.items():
+                    if type_key == "token_type_ids":
+                        continue
+                    batch[f"{k}_{type_key}"] = tokens
+
+        else:
+            chosen_tokens = self.tokenizer(
+                chosen, truncation=True, max_length=self.max_target_length, add_special_tokens=True
+            )
+            rejected_tokens = self.tokenizer(
+                rejected, truncation=True, max_length=self.max_target_length, add_special_tokens=True
+            )
+            prompt_tokens = self.tokenizer(
+                prompt, truncation=True, max_length=self.max_prompt_length, add_special_tokens=True
+            )
+
+            batch["chosen_labels"] = chosen_tokens["input_ids"]
+            batch["rejected_labels"] = rejected_tokens["input_ids"]
+            batch["prompt_input_ids"] = prompt_tokens["input_ids"]
+            batch["prompt_attention_mask"] = prompt_tokens["attention_mask"]
+
+            if self.model is not None and hasattr(self.model, "prepare_decoder_input_ids_from_labels"):
+                batch["rejected_decoder_input_ids"] = self.model.prepare_decoder_input_ids_from_labels(
+                    labels=batch["rejected_labels"]
+                )
+                batch["chosen_decoder_input_ids"] = self.model.prepare_decoder_input_ids_from_labels(
+                    labels=batch["chosen_labels"]
+                )
 
         batch["prompt"] = prompt
         batch["chosen"] = prompt + chosen
         batch["rejected"] = prompt + rejected
         batch["chosen_response_only"] = chosen
         batch["rejected_response_only"] = rejected
-
-        for k, toks in {
-            "chosen": chosen_sequence_tokens,
-            "rejected": rejected_sequence_tokens,
-            "prompt": prompt_tokens,
-        }.items():
-            for type_key, tokens in toks.items():
-                if type_key == "token_type_ids":
-                    continue
-                batch[f"{k}_{type_key}"] = tokens
 
         return batch
 
@@ -345,24 +428,37 @@ class DPODataCollatorWithPadding:
         padded_batch = {}
         for k in batch[0].keys():
             if k.endswith("_input_ids") or k.endswith("_attention_mask") or k.endswith("_labels"):
-                # adapted from https://stackoverflow.com/questions/73256206
-                if "prompt" in k:
-                    to_pad = [torch.LongTensor(ex[k][::-1]) for ex in batch]
-                else:
+                if self.is_encoder_decoder:
                     to_pad = [torch.LongTensor(ex[k]) for ex in batch]
-                if k.endswith("_input_ids"):
-                    padding_value = self.tokenizer.pad_token_id
-                elif k.endswith("_labels"):
-                    padding_value = self.label_pad_token_id
-                elif k.endswith("_attention_mask"):
-                    padding_value = self.padding_value
-                else:
-                    raise ValueError(f"Unexpected key in batch '{k}'")
 
-                padded_batch[k] = pad_sequence(to_pad, batch_first=True, padding_value=padding_value)
-                # for the prompt, flip back so padding is on left side
-                if "prompt" in k:
-                    padded_batch[k] = padded_batch[k].flip(dims=[1])
+                    if (k.startswith("prompt")) and (k.endswith("input_ids")):
+                        padding_value = self.tokenizer.pad_token_id
+                    elif k.endswith("_attention_mask"):
+                        padding_value = 0
+                    elif (k.startswith("chosen")) or (k.startswith("rejected")) or ("decoder" in k):
+                        padding_value = self.label_pad_token_id
+                    else:
+                        raise ValueError(f"Unexpected key in batch '{k}'")
+                    padded_batch[k] = pad_sequence(to_pad, batch_first=True, padding_value=padding_value)
+                else:
+                    # adapted from https://stackoverflow.com/questions/73256206
+                    if "prompt" in k:
+                        to_pad = [torch.LongTensor(ex[k][::-1]) for ex in batch]
+                    else:
+                        to_pad = [torch.LongTensor(ex[k]) for ex in batch]
+                    if k.endswith("_input_ids"):
+                        padding_value = self.tokenizer.pad_token_id
+                    elif k.endswith("_labels"):
+                        padding_value = self.label_pad_token_id
+                    elif k.endswith("_attention_mask"):
+                        padding_value = self.padding_value
+                    else:
+                        raise ValueError(f"Unexpected key in batch '{k}'")
+
+                    padded_batch[k] = pad_sequence(to_pad, batch_first=True, padding_value=padding_value)
+                    # for the prompt, flip back so padding is on left side
+                    if "prompt" in k:
+                        padded_batch[k] = padded_batch[k].flip(dims=[1])
             else:
                 padded_batch[k] = [ex[k] for ex in batch]
 
@@ -592,3 +688,81 @@ def disable_dropout_in_model(model: torch.nn.Module) -> None:
     for module in model.modules():
         if isinstance(module, torch.nn.Dropout):
             module.p = 0
+
+
+def exact_div(a, b, a_str, b_str, custom_error_message=""):
+    q = a // b
+    if a != q * b:
+        raise ValueError(f"{custom_error_message}, {a_str}={a}, {b_str}={b}, inexact division: {a} / {b} = {a / b}")
+    return q
+
+
+# copied from https://github.com/kvablack/ddpo-pytorch/blob/main/ddpo_pytorch/stat_tracking.py#L5
+class PerPromptStatTracker:
+    r"""
+    Class for tracking statistics per prompt. Mainly used to calculate advantage for the DPPO algorithm
+
+    Args:
+        buffer_size (`int`):
+            Size of the buffer to keep for each prompt.
+        min_count (`int`):
+            Minimum number of samples to keep in the buffer before calculating the mean and std.
+    """
+
+    def __init__(self, buffer_size, min_count):
+        self.buffer_size = buffer_size
+        self.min_count = min_count
+        self.stats = {}
+
+    def update(self, prompts, rewards):
+        prompts = np.array(prompts)
+        rewards = np.array(rewards)
+        unique = np.unique(prompts)
+        advantages = np.empty_like(rewards)
+        for prompt in unique:
+            prompt_rewards = rewards[prompts == prompt]
+            if prompt not in self.stats:
+                self.stats[prompt] = deque(maxlen=self.buffer_size)
+            self.stats[prompt].extend(prompt_rewards)
+
+            if len(self.stats[prompt]) < self.min_count:
+                mean = np.mean(rewards)
+                std = np.std(rewards) + 1e-6
+            else:
+                mean = np.mean(self.stats[prompt])
+                std = np.std(self.stats[prompt]) + 1e-6
+            advantages[prompts == prompt] = (prompt_rewards - mean) / std
+
+        return advantages
+
+    def get_stats(self):
+        return {k: {"mean": np.mean(v), "std": np.std(v), "count": len(v)} for k, v in self.stats.items()}
+
+
+def neftune_post_forward_hook(module, input, output):
+    """
+    Implements the NEFTune forward pass for the model using forward hooks. Note this works only for
+    torch.nn.Embedding layers. This method is slightly adapted from the original source code
+    that can be found here: https://github.com/neelsjain/NEFTune
+
+    Simply add it to your model as follows:
+    ```python
+    model = ...
+    model.embed_tokens.neftune_noise_alpha = 0.1
+    model.embed_tokens.register_forward_hook(neftune_post_forward_hook)
+    ```
+
+    Args:
+        module (`torch.nn.Module`):
+            The embedding module where the hook is attached. Note that you need to set
+            `module.neftune_noise_alpha` to the desired noise alpha value.
+        input (`torch.Tensor`):
+            The input tensor to the model.
+        output (`torch.Tensor`):
+            The output tensor of the model (i.e. the embeddings).
+    """
+    if module.training:
+        dims = torch.tensor(output.size(1) * output.size(2))
+        mag_norm = module.neftune_noise_alpha / torch.sqrt(dims)
+        output = output + torch.zeros_like(output).uniform_(-mag_norm, mag_norm)
+    return output

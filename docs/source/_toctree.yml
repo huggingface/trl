@@ -1,4 +1,4 @@
-- sections: 
+- sections:
   - local: index
     title: TRL
   - local: quickstart
@@ -23,12 +23,20 @@
     title: Reward Model Training
   - local: sft_trainer
     title: Supervised Fine-Tuning
+  - local: ppo_trainer
+    title: PPO Trainer
   - local: best_of_n
     title: Best of N Sampling
   - local: dpo_trainer
     title: DPO Trainer
+  - local: ddpo_trainer
+    title: Denoising Diffusion Policy Optimization
+  - local: text_environments
+    title: Text Environments
   title: API
-- sections: 
+- sections:
+  - local: example_overview
+    title: Example Overview
   - local: sentiment_tuning
     title: Sentiment Tuning
   - local: lora_tuning_peft
@@ -37,6 +45,8 @@
     title: Detoxifying a Language Model
   - local: using_llama_models
     title: Training StackLlama
+  - local: learning_tools
+    title: Learning to Use Tools
   - local: multi_adapter_rl
     title: Multi Adapter RLHF
   title: Examples

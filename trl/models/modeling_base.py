@@ -20,9 +20,10 @@ import torch
 import torch.nn as nn
 from accelerate import Accelerator
 from huggingface_hub import hf_hub_download
+from huggingface_hub.utils import EntryNotFoundError, HFValidationError, LocalEntryNotFoundError
 from transformers import PreTrainedModel
 
-from ..import_utils import is_peft_available
+from ..import_utils import is_peft_available, is_transformers_greater_than
 
 
 if is_peft_available():
@@ -34,9 +35,14 @@ if is_peft_available():
         PeftModelForSeq2SeqLM,
         PromptLearningConfig,
         get_peft_model,
-        prepare_model_for_int8_training,
+        prepare_model_for_kbit_training,
     )
     from peft.peft_model import set_peft_model_state_dict
+
+if is_transformers_greater_than("4.33.0"):
+    from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
+else:
+    from transformers.deepspeed import is_deepspeed_zero3_enabled
 
 LAYER_PATTERNS = [
     "transformer.h.{layer}",
@@ -115,7 +121,7 @@ class PreTrainedModelWrapper(nn.Module):
                 `from_pretrained` method. We also pre-process the kwargs to extract
                 the arguments that are specific to the `transformers.PreTrainedModel`
                 class and the arguments that are specific to trl models. The kwargs
-                also support `prepare_model_for_int8_training` arguments from
+                also support `prepare_model_for_kbit_training` arguments from
                 `peft` library.
         """
         if kwargs is not None:
@@ -172,7 +178,7 @@ class PreTrainedModelWrapper(nn.Module):
                         "adapter_config.json",
                         token=token,
                     )
-                except:  # noqa
+                except (EntryNotFoundError, LocalEntryNotFoundError, HFValidationError):
                     remote_adapter_config = None
             else:
                 remote_adapter_config = None
@@ -190,7 +196,8 @@ class PreTrainedModelWrapper(nn.Module):
                 if local_adapter_present:
                     trained_adapter_config = PeftConfig.from_pretrained(pretrained_model_name_or_path)
                 else:
-                    trained_adapter_config = PeftConfig.from_pretrained(remote_adapter_config)
+                    remote_adapter_dir = os.path.dirname(remote_adapter_config)
+                    trained_adapter_config = PeftConfig.from_pretrained(remote_adapter_dir)
 
                 # Load the pretrained base model
                 pretrained_model = cls.transformers_parent_class.from_pretrained(
@@ -210,7 +217,7 @@ class PreTrainedModelWrapper(nn.Module):
                 if peft_config is not None:
                     # Initialize a new peft adapter with the given config
                     if is_loaded_in_8bit or is_loaded_in_4bit:
-                        pretrained_model = prepare_model_for_int8_training(
+                        pretrained_model = prepare_model_for_kbit_training(
                             pretrained_model,
                             **peft_quantization_kwargs,
                         )
@@ -223,7 +230,7 @@ class PreTrainedModelWrapper(nn.Module):
             if peft_config is not None and isinstance(pretrained_model, PreTrainedModel):
                 # Initialize a new peft adapter with the given config
                 if is_loaded_in_8bit or is_loaded_in_4bit:
-                    pretrained_model = prepare_model_for_int8_training(
+                    pretrained_model = prepare_model_for_kbit_training(
                         pretrained_model,
                         **peft_quantization_kwargs,
                     )
@@ -277,7 +284,7 @@ class PreTrainedModelWrapper(nn.Module):
                         token=token,
                     )
                 # sharded
-                except:  # noqa
+                except (EntryNotFoundError, LocalEntryNotFoundError, HFValidationError):
                     if os.path.exists(sharded_index_filename):
                         index_file_name = sharded_index_filename
                     else:
@@ -287,7 +294,8 @@ class PreTrainedModelWrapper(nn.Module):
                                 "pytorch_model.bin.index.json",
                                 token=token,
                             )
-                        except ValueError:  # not continue training, do not have v_head weight
+                        except (EntryNotFoundError, LocalEntryNotFoundError, HFValidationError):
+                            # not continue training, do not have v_head weight
                             is_resuming_training = False
                             logging.warning(
                                 f"A {type(pretrained_model)} model is loaded from '{pretrained_model_name_or_path}', "
@@ -303,6 +311,7 @@ class PreTrainedModelWrapper(nn.Module):
                             if any(module in k for module in cls.supported_modules):
                                 files_to_download.add(v)
                         is_shared = True
+
             if is_resuming_training:
                 if is_shared:
                     # download each file and add it to the state_dict
@@ -351,7 +360,7 @@ class PreTrainedModelWrapper(nn.Module):
         check_peft_kwargs = False
 
         if is_peft_available():
-            from peft import prepare_model_for_int8_training
+            from peft import prepare_model_for_kbit_training
 
             check_peft_kwargs = True
 
@@ -366,7 +375,7 @@ class PreTrainedModelWrapper(nn.Module):
                 unsupported_kwargs[key] = value
 
             if check_peft_kwargs:
-                if key in prepare_model_for_int8_training.__code__.co_varnames:
+                if key in prepare_model_for_kbit_training.__code__.co_varnames:
                     peft_kwargs[key] = value
                     if key in unsupported_kwargs:
                         unsupported_kwargs.pop(key)
@@ -507,6 +516,10 @@ def create_reference_model(
     Returns
         `PreTrainedModelWrapper`
     """
+    if is_deepspeed_zero3_enabled():
+        raise ValueError(
+            "DeepSpeed ZeRO-3 is enabled and is not compatible with `create_reference_model()`. Please instantiate your reference model directly with `AutoCausalLM.from_pretrained()`."
+        )
 
     parameter_names = [n for n, _ in model.named_parameters()]
     ref_model = deepcopy(model)
