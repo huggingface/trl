@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import copy
-import inspect
 import os
 import tempfile
 import unittest
@@ -581,25 +580,27 @@ class SFTTrainerTester(unittest.TestCase):
                 packing=True,
             )
 
-            # inspect input embeddings forward code source
-            input_embeddings_forward_code_source = inspect.getsource(trainer.model.get_input_embeddings().forward)
+            trainer.model = trainer._activate_neftune(trainer.model)
 
-            self.assertTrue(
-                "mag_norm = self.neftune_noise_alpha / torch.sqrt(dims)" in input_embeddings_forward_code_source
-            )
+            device = trainer.model.get_input_embeddings().weight.device
+            trainer.model.train()
 
-            # training should work fine
+            torch.random.manual_seed(42)
+            embeds_neftune = trainer.model.get_input_embeddings()(torch.LongTensor([[1, 0, 1]]).to(device))
+
+            torch.random.manual_seed(24)
+            embeds_neftune_2 = trainer.model.get_input_embeddings()(torch.LongTensor([[1, 0, 1]]).to(device))
+
+            self.assertFalse(torch.allclose(embeds_neftune, embeds_neftune_2))
+            self.assertTrue(len(trainer.model.get_input_embeddings()._forward_hooks) > 0)
+
+            trainer.neftune_hook_handle.remove()
+
             trainer.train()
 
-            # inspect input embeddings forward code source - this time it should not contain any code from NEFTune.
-            input_embeddings_forward_code_source = inspect.getsource(trainer.model.get_input_embeddings().forward)
-
-            self.assertFalse(
-                "mag_norm = self.neftune_noise_alpha / torch.sqrt(dims)" in input_embeddings_forward_code_source
-            )
-
             # Make sure forward pass works fine
-            _ = trainer.model(torch.LongTensor([[1, 0, 1]]))
+            _ = trainer.model(torch.LongTensor([[1, 0, 1]]).to(device))
+            self.assertTrue(len(trainer.model.get_input_embeddings()._forward_hooks) == 0)
 
     @require_peft
     def test_peft_sft_trainer(self):
@@ -673,27 +674,25 @@ class SFTTrainerTester(unittest.TestCase):
                 packing=True,
             )
 
+            trainer.model = trainer._activate_neftune(trainer.model)
+
             self.assertTrue(isinstance(trainer.model, PeftModel))
 
-            # inspect input embeddings forward code source
-            input_embeddings_forward_code_source = inspect.getsource(
-                trainer.model.base_model.get_input_embeddings().forward
-            )
+            device = trainer.model.get_input_embeddings().weight.device
+            trainer.model.train()
 
-            self.assertTrue(
-                "mag_norm = self.neftune_noise_alpha / torch.sqrt(dims)" in input_embeddings_forward_code_source
-            )
+            torch.random.manual_seed(42)
+            embeds_neftune = trainer.model.get_input_embeddings()(torch.LongTensor([[1, 0, 1]]).to(device))
+
+            torch.random.manual_seed(24)
+            embeds_neftune_2 = trainer.model.get_input_embeddings()(torch.LongTensor([[1, 0, 1]]).to(device))
+
+            self.assertFalse(torch.allclose(embeds_neftune, embeds_neftune_2))
+            self.assertTrue(len(trainer.model.get_input_embeddings()._forward_hooks) > 0)
+
+            trainer.neftune_hook_handle.remove()
 
             trainer.train()
-
-            # inspect input embeddings forward code source - this time it should not contain any code from NEFTune.
-            input_embeddings_forward_code_source = inspect.getsource(
-                trainer.model.base_model.get_input_embeddings().forward
-            )
-
-            self.assertFalse(
-                "mag_norm = self.neftune_noise_alpha / torch.sqrt(dims)" in input_embeddings_forward_code_source
-            )
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
             self.assertIsNotNone(trainer.state.log_history[0]["eval_loss"])
@@ -703,4 +702,5 @@ class SFTTrainerTester(unittest.TestCase):
             self.assertTrue("pytorch_model.bin" not in os.listdir(tmp_dir + "/checkpoint-2"))
 
             # Make sure forward pass works fine to check if embeddings forward is not broken.
-            _ = trainer.model(torch.LongTensor([[1, 0, 1]]))
+            _ = trainer.model(torch.LongTensor([[1, 0, 1]]).to(device))
+            self.assertTrue(len(trainer.model.get_input_embeddings()._forward_hooks) == 0)
