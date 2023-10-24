@@ -1,0 +1,8 @@
+output_dir: /home/toolkit/huggingface/openai_summarize_comparisons_pythia1b
+model_name: /home/toolkit/huggingface/tldr_gptrm_sft_pythia1b_fp16_2epochs
+train_split: train
+eval_split: test[:5000]
+load_in_8bit: False
+fp16: True
+batch_size: 16
+seq_length: 560

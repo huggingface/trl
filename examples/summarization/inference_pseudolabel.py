@@ -37,7 +37,8 @@ class ScriptArguments:
     flash_attention: Optional[bool] = field(default=False)
     batch_size: Optional[int] = field(default=4)
     bf16: Optional[bool] = field(default=False)
-    fp16: Optional[bool] = field(default=True)
+    fp16: Optional[bool] = field(default=False)
+    fp16_model: Optional[bool] = field(default=False)
     seq_length: Optional[int] = field(default=560, metadata={"help": "Input sequence length"})
 
 
@@ -53,7 +54,7 @@ def create_and_prepare_model(args):
 
     if args.bf16:
         torch_dtype = torch.bfloat16
-    elif args.fp16:
+    elif args.fp16_model:
         torch_dtype = torch.float16
     else:
         torch_dtype = None

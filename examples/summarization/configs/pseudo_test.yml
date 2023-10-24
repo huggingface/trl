@@ -1,0 +1,9 @@
+output_dir: test_ds
+train_split: train[:100]
+eval_split: test[:100]
+###
+model_name: /home/toolkit/huggingface/tldr_gptrm_sft_pythia410m_amp16_lr5e-6_1epoch
+load_in_8bit: False
+fp16: True
+batch_size: 32
+seq_length: 560
