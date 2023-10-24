@@ -76,6 +76,10 @@ class ScriptArguments:
     lora_r: Optional[int] = field(default=8, metadata={"help": "the lora r parameter"})
     trust_remote_code: Optional[bool] = field(default=True, metadata={"help": "Enable `trust_remote_code`"})
     bf16: Optional[bool] = field(default=True)
+    fp16_model: Optional[bool] = field(
+        default=False,
+        metadata={},
+    )
     fp16: Optional[bool] = field(
         default=False,
         metadata={
@@ -152,6 +156,10 @@ if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
     args = parser.parse_args_into_dataclasses()[0]
 
+    from pprint import pprint
+
+    pprint(args)
+
     set_seed(args.seed)
     os.makedirs(args.output_dir, exist_ok=True)
 
@@ -167,7 +175,7 @@ if __name__ == "__main__":
 
     if args.bf16:
         torch_dtype = torch.bfloat16
-    elif args.fp16:
+    elif args.fp16_model:
         torch_dtype = torch.float16
     else:
         torch_dtype = None
@@ -214,6 +222,7 @@ if __name__ == "__main__":
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         gradient_checkpointing=args.gradient_checkpointing,
         bf16=args.bf16,
+        fp16=args.fp16,
         weight_decay=args.weight_decay,
         report_to=args.log_with,
         optim=args.optimizer_type,
