@@ -45,25 +45,40 @@ def run_exp(exp_dict, savedir, args):
 def accelerate_launch(training_file, training_args_dict, args):
     parser = launch.launch_command_parser()
     training_cmd_args = []
-    # if args.accelerate_config is not None:
-    #     training_cmd_args.extend(["--num_processes", str(args.gpus)])
-    #     training_cmd_args.extend(["--config_file", args.accelerate_config])
-    #
-    # if args.deepspeed is not None:
-    #     assert (
-    #         "gradient_accumulation_steps" in training_args_dict
-    #     ), "Must include gradient_accumulation_steps in config"
-    #     training_cmd_args.append("--use_deepspeed")
-    #     training_cmd_args.extend(["--zero_stage", str(args.deepspeed)])
-    #     training_cmd_args.extend(
-    #         ["--gradient_accumulation_steps", str(training_args_dict["gradient_accumulation_steps"])]
-    #     )
-
-    if args.gpus > 1:
-        # if not args.deepspeed:
-        training_cmd_args.append("--multi_gpu")
-        training_cmd_args.extend(["--num_machines", "1"])
+    if args.accelerate_config is not None and args.accelerate_config != "None":
+        training_cmd_args.extend(["--config_file", args.accelerate_config])
         training_cmd_args.extend(["--num_processes", str(args.gpus)])
+        training_cmd_args.extend(
+            ["--gradient_accumulation_steps", str(training_args_dict["gradient_accumulation_steps"])]
+        )
+    elif args.gpus > 1:
+        training_cmd_args.append("--multi_gpu")
+
+    # if training_args_dict.pop("fp16", False):
+    #     mixed_precision = "fp16"
+    # elif training_args_dict.pop("bf16", False):
+    #     mixed_precision = "bf16"
+    if training_args_dict.get("fp16", False):
+        mixed_precision = "fp16"
+    elif training_args_dict.get("bf16", False):
+        mixed_precision = "bf16"
+    else:
+        mixed_precision = "no"
+    training_cmd_args.extend(["--mixed_precision", mixed_precision])
+    #
+
+    training_cmd_args.extend(["--num_machines", "1"])
+    training_cmd_args.extend(["--num_processes", str(args.gpus)])
+    # if args.gpus > 1:
+    #     if args.deepspeed is not None and args.deepspeed != "None":
+    #         assert (
+    #             "gradient_accumulation_steps" in training_args_dict
+    #         ), "Must include gradient_accumulation_steps in config"
+    #         training_cmd_args.append("--use_deepspeed")
+    #         training_cmd_args.extend(["--zero_stage", str(args.deepspeed)])
+    #         training_cmd_args.extend(
+    #             ["--gradient_accumulation_steps", str(training_args_dict["gradient_accumulation_steps"])]
+    #         )
 
     training_cmd_args.append(training_file)
     for key, val in training_args_dict.items():
@@ -111,7 +126,7 @@ if __name__ == "__main__":
         help="path to your python executable",
     )
     parser.add_argument("-n", "--gpus", default=1, type=int, help="number of gpus to use for experiment")
-    # parser.add_argument("-a", "--accelerate_config", default=None, help="accelerate config")
+    parser.add_argument("-a", "--accelerate_config", default=None, help="accelerate config")
     # parser.add_argument("-d", "--deepspeed", default=None, help="ds stage")
     parser.add_argument("--gpu-mem", default=32, type=int, help="mem of gpus to use for experiment")
     parser.add_argument("--wandb", action="store_true", help="force enable wandb", default=False)

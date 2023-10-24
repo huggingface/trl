@@ -163,12 +163,12 @@ class ScriptArguments:
     per_device_train_batch_size: Optional[int] = field(default=2, metadata={"help": "the per device train batch size"})
     per_device_eval_batch_size: Optional[int] = field(default=1, metadata={"help": "the per device eval batch size"})
     num_train_epochs: Optional[int] = field(default=1, metadata={"help": "the number of training epochs"})
-    seq_length: Optional[int] = field(default=550, metadata={"help": "Input sequence length"})
+    seq_length: Optional[int] = field(default=560, metadata={"help": "Input sequence length"})
     gradient_accumulation_steps: Optional[int] = field(
         default=16, metadata={"help": "the number of gradient accumulation steps"}
     )
     bf16: Optional[bool] = field(
-        default=True,
+        default=False,
         metadata={
             "help": "This essentially cuts the training time in half if you want to sacrifice a little precision and have a supported GPU."
         },
