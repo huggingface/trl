@@ -228,9 +228,6 @@ class SFTTrainer(Trainer):
                 "overflow issues when training a model in half-precision. You might consider adding `tokenizer.padding_side = 'right'` to your code."
             )
 
-        if self.neftune_noise_alpha is not None:
-            model = self._activate_neftune(model)
-
         super().__init__(
             model=model,
             args=args,
@@ -255,6 +252,10 @@ class SFTTrainer(Trainer):
 
     @wraps(Trainer.train)
     def train(self, *args, **kwargs):
+        # Activate neftune right before training.
+        if self.neftune_noise_alpha is not None:
+            self.model = self._activate_neftune(self.model)
+
         output = super().train(*args, **kwargs)
 
         # After training we make sure to retrieve back the original forward pass method

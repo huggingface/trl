@@ -580,6 +580,8 @@ class SFTTrainerTester(unittest.TestCase):
                 packing=True,
             )
 
+            trainer.model = trainer._activate_neftune(trainer.model)
+
             device = trainer.model.get_input_embeddings().weight.device
             trainer.model.train()
 
@@ -591,6 +593,8 @@ class SFTTrainerTester(unittest.TestCase):
 
             self.assertFalse(torch.allclose(embeds_neftune, embeds_neftune_2))
             self.assertTrue(len(trainer.model.get_input_embeddings()._forward_hooks) > 0)
+
+            trainer.neftune_hook_handle.remove()
 
             trainer.train()
 
@@ -670,6 +674,8 @@ class SFTTrainerTester(unittest.TestCase):
                 packing=True,
             )
 
+            trainer.model = trainer._activate_neftune(trainer.model)
+
             self.assertTrue(isinstance(trainer.model, PeftModel))
 
             device = trainer.model.get_input_embeddings().weight.device
@@ -683,6 +689,8 @@ class SFTTrainerTester(unittest.TestCase):
 
             self.assertFalse(torch.allclose(embeds_neftune, embeds_neftune_2))
             self.assertTrue(len(trainer.model.get_input_embeddings()._forward_hooks) > 0)
+
+            trainer.neftune_hook_handle.remove()
 
             trainer.train()
 
