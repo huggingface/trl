@@ -38,10 +38,13 @@ class ScriptArguments:
     use_peft: Optional[bool] = field(default=True, metadata={"help": "Wether to use PEFT or not to train adapters"})
     seed: Optional[int] = field(default=0)
     batch_size: Optional[int] = field(default=1)
-    bf16: Optional[bool] = field(default=True)
+    bf16: Optional[bool] = field(default=False)
+    fp16: Optional[bool] = field(default=False)
     seq_length: Optional[int] = field(default=512, metadata={"help": "Input sequence length"})
     max_new_tokens: Optional[int] = field(default=48, metadata={"help": "Max new tokens to generate"})
     num_logged_samples: int = field(default=100, metadata={"help": "Max samples to log to wandb"})
+
+    strip: Optional[bool] = field(default=False, metadata={"help": "the dataset name"})
 
 
 parser = HfArgumentParser(ScriptArguments)
@@ -78,11 +81,15 @@ def create_dataset(tokenizer, args):
 
     padding = "max_length"
     max_source_length = args.seq_length
-    max_target_length = args.seq_length
+    max_target_length = 52
 
     def preprocess_function(example):
         inputs = example[args.dataset_text_field]
         targets = example[args.dataset_label_field]
+
+        if args.strip:
+            inputs = inputs.strip()
+            targets = targets.strip()
 
         model_inputs = tokenizer(inputs, max_length=max_source_length, padding=padding, truncation=True)
 
