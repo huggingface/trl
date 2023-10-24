@@ -134,8 +134,11 @@ class RewardTrainer(Trainer):
 
                 model = get_peft_model(model, peft_config)
 
-        if is_peft_available() and callbacks is None and isinstance(model, PeftModel):
-            callbacks = [PeftSavingCallback()]
+        if is_peft_available() and isinstance(model, PeftModel):
+            if callbacks is None:
+                callbacks = [PeftSavingCallback()]
+            else:
+                callbacks += [PeftSavingCallback()]
 
         if compute_metrics is None:
             compute_metrics = compute_accuracy
