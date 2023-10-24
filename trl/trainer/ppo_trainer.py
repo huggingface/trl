@@ -1015,7 +1015,10 @@ class PPOTrainer(BaseTrainer):
         self.optimizer.zero_grad()
         return train_stats
 
-    def compute_reward_score(self, input_ids: torch.FloatTensor, attention_mask: torch.FloatTensor = None, **kwargs):
+    @PPODecorators.empty_cuda_cache()
+    def compute_reward_model_score(
+        self, input_ids: torch.FloatTensor, attention_mask: torch.FloatTensor = None, **kwargs
+    ):
         r"""
         Computes the reward score for a given input for a model with a reward modelling adapter. The method has first to enable the adapter
         and then compute the reward score. After that the model disables the reward modeling
@@ -1029,7 +1032,8 @@ class PPOTrainer(BaseTrainer):
 
         # enable rm adapter
         unwrap_model.pretrained_model.set_adapter(unwrap_model.rm_adapter_name)
-        self.model.eval()
+        # TODO check
+        # self.model.eval()
 
         with torch.no_grad():
             _, _, scores = self.model(
@@ -1040,7 +1044,7 @@ class PPOTrainer(BaseTrainer):
             )
 
         unwrap_model.pretrained_model.set_adapter(unwrap_model.policy_adapter_name)
-        self.model.train()
+        # self.model.train()
 
         return scores
 
