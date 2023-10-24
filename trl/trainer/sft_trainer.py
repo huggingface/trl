@@ -33,12 +33,7 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 
 from ..import_utils import is_peft_available
-from .utils import (
-    ConstantLengthDataset,
-    DataCollatorForCompletionOnlyLM,
-    PeftSavingCallback,
-    neftune_post_forward_hook,
-)
+from .utils import ConstantLengthDataset, DataCollatorForCompletionOnlyLM, PeftSavingCallback, neftune_forward
 
 
 if is_peft_available():
@@ -119,7 +114,7 @@ class SFTTrainer(Trainer):
         callbacks: Optional[List[TrainerCallback]] = None,
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        peft_config: Optional[Dict] = None,
+        peft_config: Optional[PeftConfig] = None,
         dataset_text_field: Optional[str] = None,
         packing: Optional[bool] = False,
         formatting_func: Optional[Callable] = None,
@@ -258,15 +253,18 @@ class SFTTrainer(Trainer):
         output = super().train(*args, **kwargs)
 
         # After training we make sure to retrieve back the original forward pass method
-        # for the embedding layer by removing the forward post hook.
+        # for the embedding layer
         if self.neftune_noise_alpha is not None:
+
             if isinstance(self.model, PreTrainedModel):
                 embeddings = self.model.get_input_embeddings()
             elif isinstance(self.model, PeftModel):
                 embeddings = self.model.base_model.get_input_embeddings()
 
-            self.neftune_hook_handle.remove()
-            del embeddings.neftune_noise_alpha
+            if hasattr(embeddings, "_trl_old_forward"):
+                embeddings.forward = embeddings._trl_old_forward
+                del embeddings._trl_old_forward
+                del embeddings.neftune_noise_alpha
 
         return output
 
@@ -363,6 +361,14 @@ class SFTTrainer(Trainer):
             embeddings = model.base_model.get_input_embeddings()
 
         embeddings.neftune_noise_alpha = self.neftune_noise_alpha
-        hook_handle = embeddings.register_forward_hook(neftune_post_forward_hook)
-        self.neftune_hook_handle = hook_handle
+        old_forward = embeddings.forward
+
+        # This hack seems to be needed to properly use a custom forward pass
+        # all credits to: https://discuss.pytorch.org/t/how-can-i-replace-the-forward-method-of-a-predefined-torchvision-model-with-my-customized-forward-function/54224/11
+        bound_method = neftune_forward.__get__(embeddings, embeddings.__class__)
+        setattr(embeddings, "forward", bound_method)
+
+        # embeddings.forward = neftune_forward
+        embeddings._trl_old_forward = old_forward
+
         return model
