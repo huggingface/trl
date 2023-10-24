@@ -51,6 +51,7 @@ class ScriptArguments:
             num_train_epochs=1,
             gradient_accumulation_steps=16,
             gradient_checkpointing=True,
+            gradient_checkpointing_kwargs={"use_reentrant": True},
             learning_rate=1.41e-5,
             report_to="tensorboard",
             remove_unused_columns=False,
@@ -67,7 +68,6 @@ class ScriptArguments:
             r=16,
             lora_alpha=16,
             bias="none",
-            task_type="CAUSAL_LM",
             task_type="SEQ_CLS",
             modules_to_save=["scores"],
         ),
@@ -103,7 +103,7 @@ model = AutoModelForSequenceClassification.from_pretrained(
 
 # Step 2: Load the dataset and pre-process it
 tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-train_dataset = load_dataset(args.dataset_name, split="train")
+train_dataset = load_dataset(args.dataset_name, split="train[:50]")
 
 
 # Tokenize chosen/rejected pairs of inputs
