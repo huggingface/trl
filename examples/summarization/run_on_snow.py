@@ -28,6 +28,9 @@ def run_exp(exp_dict, savedir, args):
     elif exp_name.startswith("rlhf"):
         print("RLHF")
         accelerate_launch("rl_training.py", exp_dict, args)
+    elif exp_name.startswith("dpo"):
+        print("DPO")
+        accelerate_launch("dpo_training.py", exp_dict, args)
     elif exp_name.startswith("rm"):
         accelerate_launch("reward_modeling.py", exp_dict, args)
     elif exp_name.startswith("gptrm"):
