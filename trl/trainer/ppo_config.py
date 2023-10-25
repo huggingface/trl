@@ -115,6 +115,8 @@ class PPOConfig:
     """Use score normalization. Only applicable if use_score_scaling is True"""
     score_clip: Optional[float] = None
     """Score clipping"""
+    whiten_rewards: bool = False
+    """Whiten the rewards before compute advantages"""
 
     # computed hyperparameters at runtime; we use `tyro.conf.Suppress` to hide them from the help text
     is_encoder_decoder: Optional[tyro.conf.Suppress[bool]] = None
