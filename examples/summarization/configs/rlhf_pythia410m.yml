@@ -1,7 +1,6 @@
-train_split: train[:1000]
 model_name: /home/toolkit/huggingface/tldr_sft_pythia410m_fp32_trainall_3epochs
 reward_adapter_name: /home/toolkit/huggingface/tldr_gptrm1b_pythia410m_fp16_1epoch
-steps: 1000
+steps: 4000
 load_in_8bit: False
 bf16: False
 fp16: True

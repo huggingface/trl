@@ -41,8 +41,6 @@ class ScriptArguments:
     The name of the Casual LM model we wish to fine with PPO
     """
 
-    # NOTE: gpt2 models use Conv1D instead of Linear layers which are not yet supported in 8 bit mode
-    # models like gpt-neo* models are more suitable.
     model_name: Optional[str] = field(default="", metadata={"help": "the model name"})
     reward_adapter_name: Optional[str] = field(default="", metadata={"help": "the reward model name"})
     gold_reward_model_name: Optional[str] = field(default=None, metadata={"help": "the reward model name"})
@@ -53,7 +51,7 @@ class ScriptArguments:
     train_split: Optional[str] = field(
         default="train", metadata={"help": "the dataset split to evaluate on; default to 'none' (no evaluation)"}
     )
-    log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
+    log_with: Optional[str] = field(default="wandb", metadata={"help": "use 'wandb' to log with wandb"})
     learning_rate: Optional[float] = field(default=1.41e-5, metadata={"help": "the learning rate"})
     mini_batch_size: Optional[int] = field(default=1, metadata={"help": "the PPO minibatch size"})
     batch_size: Optional[int] = field(default=32, metadata={"help": "the batch size"})
@@ -361,7 +359,7 @@ for epoch, batch in tqdm(
     #     ema.copy_to()
     #     ema.load_state_dict(initial_state_dict)
     #     ppo_trainer.accelerator.print("elastic reset")
-    ppo_trainer.accelerator.print("here")
+    # ppo_trainer.accelerator.print(stats)
 
     if script_args.save_freq and epoch and epoch % script_args.save_freq == 0:
         ppo_trainer.save_pretrained(script_args.output_dir + f"step_{epoch}")
