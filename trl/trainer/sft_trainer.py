@@ -33,7 +33,12 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 
 from ..import_utils import is_peft_available
-from .utils import ConstantLengthDataset, DataCollatorForCompletionOnlyLM, PeftSavingCallback, neftune_forward
+from .utils import (
+    ConstantLengthDataset,
+    DataCollatorForCompletionOnlyLM,
+    PeftSavingCallback,
+    neftune_post_forward_hook,
+)
 
 
 if is_peft_available():
@@ -223,9 +228,6 @@ class SFTTrainer(Trainer):
                 "overflow issues when training a model in half-precision. You might consider adding `tokenizer.padding_side = 'right'` to your code."
             )
 
-        if self.neftune_noise_alpha is not None:
-            model = self._activate_neftune(model)
-
         super().__init__(
             model=model,
             args=args,
@@ -250,21 +252,22 @@ class SFTTrainer(Trainer):
 
     @wraps(Trainer.train)
     def train(self, *args, **kwargs):
+        # Activate neftune right before training.
+        if self.neftune_noise_alpha is not None:
+            self.model = self._activate_neftune(self.model)
+
         output = super().train(*args, **kwargs)
 
         # After training we make sure to retrieve back the original forward pass method
-        # for the embedding layer
+        # for the embedding layer by removing the forward post hook.
         if self.neftune_noise_alpha is not None:
-
             if isinstance(self.model, PreTrainedModel):
                 embeddings = self.model.get_input_embeddings()
             elif isinstance(self.model, PeftModel):
                 embeddings = self.model.base_model.get_input_embeddings()
 
-            if hasattr(embeddings, "_trl_old_forward"):
-                embeddings.forward = embeddings._trl_old_forward
-                del embeddings._trl_old_forward
-                del embeddings.neftune_noise_alpha
+            self.neftune_hook_handle.remove()
+            del embeddings.neftune_noise_alpha
 
         return output
 
@@ -361,14 +364,6 @@ class SFTTrainer(Trainer):
             embeddings = model.base_model.get_input_embeddings()
 
         embeddings.neftune_noise_alpha = self.neftune_noise_alpha
-        old_forward = embeddings.forward
-
-        # This hack seems to be needed to properly use a custom forward pass
-        # all credits to: https://discuss.pytorch.org/t/how-can-i-replace-the-forward-method-of-a-predefined-torchvision-model-with-my-customized-forward-function/54224/11
-        bound_method = neftune_forward.__get__(embeddings, embeddings.__class__)
-        setattr(embeddings, "forward", bound_method)
-
-        # embeddings.forward = neftune_forward
-        embeddings._trl_old_forward = old_forward
-
+        hook_handle = embeddings.register_forward_hook(neftune_post_forward_hook)
+        self.neftune_hook_handle = hook_handle
         return model

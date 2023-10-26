@@ -739,22 +739,28 @@ class PerPromptStatTracker:
         return {k: {"mean": np.mean(v), "std": np.std(v), "count": len(v)} for k, v in self.stats.items()}
 
 
-def neftune_forward(self, input: torch.Tensor):
+def neftune_post_forward_hook(module, input, output):
     """
-    Implements the NEFTune forward pass for the model. Note this works only for
+    Implements the NEFTune forward pass for the model using forward hooks. Note this works only for
     torch.nn.Embedding layers. This method is slightly adapted from the original source code
     that can be found here: https://github.com/neelsjain/NEFTune
 
+    Simply add it to your model as follows:
+    ```python
+    model = ...
+    model.embed_tokens.neftune_noise_alpha = 0.1
+    model.embed_tokens.register_forward_hook(neftune_post_forward_hook)
+    ```
+
     Args:
+        module (`torch.nn.Module`):
+            The embedding module where the hook is attached. Note that you need to set
+            `module.neftune_noise_alpha` to the desired noise alpha value.
         input (`torch.Tensor`):
             The input tensor to the model.
-        noise_alpha (`float`):
-            The noise alpha value to use for the NEFTune forward pass.
+        output (`torch.Tensor`):
+            The output tensor of the model (i.e. the embeddings).
     """
-    embeddings = self._trl_old_forward(input)
-
-    if self.training:
-        noise = torch.zeros_like(embeddings).uniform_(-self.neftune_noise_alpha, self.neftune_noise_alpha)
-        embeddings = embeddings*(1+noise)
-
-    return embeddings
+    if module.training:
+        output = output*(1 + torch.zeros_like(output).uniform_(-module.neftune_noise_alpha, module.neftune_noise_alpha))
+    return output
