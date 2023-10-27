@@ -204,7 +204,7 @@ if __name__ == "__main__":
     train_dataset, eval_dataset = create_datasets(tokenizer, args)
 
     if args.train_completions:
-        data_collator = DataCollatorForCompletionOnlyLM(tokenizer=tokenizer, response_template="TL;DR: ")
+        data_collator = DataCollatorForCompletionOnlyLM(tokenizer=tokenizer, response_template="TL;DR:")
     else:
         data_collator = None
 
