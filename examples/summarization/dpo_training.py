@@ -237,6 +237,7 @@ if __name__ == "__main__":
         logging_first_step=True,
         logging_steps=script_args.logging_steps,
         eval_steps=script_args.eval_steps,
+        save_steps=script_args.save_steps,
         optim=script_args.optimizer_type,
         warmup_steps=script_args.warmup_steps,
         report_to=script_args.report_to,

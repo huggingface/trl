@@ -638,6 +638,8 @@ class DPOTrainer(Trainer):
                     )
                 }
             )
+            ## hack to fix log_history and remove
+            self.state.log_history.pop()
 
         # Base evaluation
         initial_output = super().evaluation_loop(
