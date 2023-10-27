@@ -264,20 +264,18 @@ class RewardDataCollatorWithPadding:
 @dataclass
 class DPODataCollatorWithPadding:
     r"""
-    DPO DataCollator class that pads the inputs to the maximum length of the batch.
+    DPO DataCollator class that pads the tokenized inputs to the maximum length of the batch.
     Args:
-        tokenizer (`PreTrainedTokenizerBase`):
-            The tokenizer used for encoding the data.
+        pad_token_id (`int` defaults to 0):
+            The tokenizer's pad_token_id.
         label_pad_token_id (`int`, defaults to -100):
             The label used for masking.
         padding_value (`int`, defaults to 0):
             The value used for padding.
         is_encoder_decoder (`Optional[bool]`, `optional`, defaults to `None`):
             Whether or not you model has an encoder_decoder architecture.
-        truncation_mode: (`str`, defaults to "keep_end"):
-            The truncation mode to use when truncating the prompt.
     """
-    tokenizer: PreTrainedTokenizerBase
+    pad_token_id: int = 0
     label_pad_token_id: int = -100
     padding_value: int = 0
     is_encoder_decoder: Optional[bool] = False
@@ -291,7 +289,7 @@ class DPODataCollatorWithPadding:
                     to_pad = [torch.LongTensor(ex[k]) for ex in features]
 
                     if (k.startswith("prompt")) and (k.endswith("input_ids")):
-                        padding_value = self.tokenizer.pad_token_id
+                        padding_value = self.pad_token_id
                     elif k.endswith("_attention_mask"):
                         padding_value = 0
                     elif (k.startswith("chosen")) or (k.startswith("rejected")) or ("decoder" in k):
@@ -306,7 +304,7 @@ class DPODataCollatorWithPadding:
                     else:
                         to_pad = [torch.LongTensor(ex[k]) for ex in features]
                     if k.endswith("_input_ids"):
-                        padding_value = self.tokenizer.pad_token_id
+                        padding_value = self.pad_token_id
                     elif k.endswith("_labels"):
                         padding_value = self.label_pad_token_id
                     elif k.endswith("_attention_mask"):

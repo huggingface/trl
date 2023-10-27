@@ -121,10 +121,7 @@ class DPOTrainer(Trainer):
         tokenizer: Optional[PreTrainedTokenizerBase] = None,
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
-        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (
-            None,
-            None,
-        ),
+        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         max_length: Optional[int] = None,
         max_prompt_length: Optional[int] = None,
@@ -197,7 +194,7 @@ class DPOTrainer(Trainer):
                 max_target_length = 128
 
             data_collator = DPODataCollatorWithPadding(
-                tokenizer,
+                pad_token_id=tokenizer.pad_token_id,
                 label_pad_token_id=label_pad_token_id,
                 padding_value=padding_value,
                 is_encoder_decoder=self.is_encoder_decoder,
@@ -229,24 +226,12 @@ class DPOTrainer(Trainer):
         self.truncation_mode = truncation_mode
         self.max_target_length = max_target_length
         self.tokenizer = tokenizer
+        self.precompute_ref_logps = precompute_ref_logps
 
         self.beta = beta
         self.loss_type = loss_type
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
-
-        # tokenize the dataset and compute reference logps for training and evaluation datasets
-        train_dataset = train_dataset.map(self.tokenize_batch_element)
-        if precompute_ref_logps:
-            train_dataset = train_dataset.map(
-                self.compute_reference_logps, batch_size=args.per_device_train_batch_size, batched=True
-            )
-        if eval_dataset is not None:
-            eval_dataset = eval_dataset.map(self.tokenize_batch_element)
-            if precompute_ref_logps:
-                eval_dataset = eval_dataset.map(
-                    self.compute_reference_logps, batch_size=args.per_device_train_batch_size, batched=True
-                )
 
         super().__init__(
             model=model,
@@ -314,6 +299,29 @@ class DPOTrainer(Trainer):
         model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
         model.eval()
         return model
+
+    def get_train_dataloader(self) -> DataLoader:
+        # tokenize the dataset and compute reference logps for training datasets
+        self.train_dataset = self.train_dataset.map(self.tokenize_batch_element)
+        if self.precompute_ref_logps:
+            self.train_dataset = self.train_dataset.map(
+                self.compute_reference_logps, batch_size=self.args.per_device_train_batch_size, batched=True
+            )
+
+        return super().get_train_dataloader()
+
+    def get_eval_dataloader(self, eval_dataset: Optional[Dataset] = None) -> DataLoader:
+        if eval_dataset is None and self.eval_dataset is None:
+            raise ValueError("Trainer: evaluation requires an eval_dataset.")
+        eval_dataset = eval_dataset if eval_dataset is not None else self.eval_dataset
+
+        # tokenize the dataset and compute reference logps for evaluation datasets
+        eval_dataset = eval_dataset.map(self.tokenize_batch_element)
+        if self.precompute_ref_logps:
+            eval_dataset = eval_dataset.map(
+                self.compute_reference_logps, batch_size=self.args.per_device_train_batch_size, batched=True
+            )
+        return super().get_eval_dataloader(eval_dataset=eval_dataset)
 
     def tokenize_batch_element(self, feature, model: Union[PreTrainedModel, nn.Module] = None) -> Dict:
         """Tokenize a single batch element from a DPO specific dataset.
