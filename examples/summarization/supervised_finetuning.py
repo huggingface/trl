@@ -63,7 +63,7 @@ class ScriptArguments:
         default=16, metadata={"help": "the number of gradient accumulation steps"}
     )
     gradient_checkpointing: Optional[bool] = field(
-        default=True, metadata={"help": "whether to use gradient checkpointing"}
+        default=False, metadata={"help": "whether to use gradient checkpointing"}
     )
     seq_length: Optional[int] = field(default=560, metadata={"help": "Input sequence length"})
 
@@ -131,8 +131,13 @@ def chars_token_ratio(dataset, tokenizer, nb_examples=400):
     return total_characters / total_tokens
 
 
-def prepare_sample_text(example):
-    return example["prompt"] + example["label"]
+def prepare_sample_text(examples):
+    if isinstance(examples["label"], str):
+        return examples["prompt"] + examples["label"]
+    elif isinstance(examples["label"], list):
+        return list(map(str.__add__, examples["prompt"], examples["label"]))
+    else:
+        raise Exception(f"weird input examples of type {type(examples)}")
 
 
 def create_datasets(tokenizer, args):
@@ -155,10 +160,6 @@ def create_datasets(tokenizer, args):
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
     args = parser.parse_args_into_dataclasses()[0]
-
-    from pprint import pprint
-
-    pprint(args)
 
     set_seed(args.seed)
     os.makedirs(args.output_dir, exist_ok=True)
@@ -203,7 +204,9 @@ if __name__ == "__main__":
     train_dataset, eval_dataset = create_datasets(tokenizer, args)
 
     if args.train_completions:
-        data_collator = DataCollatorForCompletionOnlyLM(tokenizer=tokenizer, response_template="TLDR;")
+        data_collator = DataCollatorForCompletionOnlyLM(tokenizer=tokenizer, response_template="TL;DR: ")
+    else:
+        data_collator = None
 
     training_args = TrainingArguments(
         output_dir=args.output_dir,
@@ -253,7 +256,6 @@ if __name__ == "__main__":
     print(f"The character to token ratio of the train dataset is: {chars_per_token:.2f}")
 
     print("Starting main loop")
-
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
@@ -265,6 +267,7 @@ if __name__ == "__main__":
         formatting_func=prepare_sample_text,
         packing=(not args.train_completions),
         chars_per_token=chars_per_token,
+        data_collator=data_collator,
     )
 
     if args.use_peft:
@@ -299,6 +302,7 @@ if __name__ == "__main__":
 
             output_merged_dir = os.path.join(args.output_dir, "final_merged_checkpoint")
             model.save_pretrained(output_merged_dir, safe_serialization=True)
+
     else:
         results = trainer.evaluate()
         print(results)
