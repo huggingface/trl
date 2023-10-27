@@ -490,8 +490,8 @@ class DPOTrainer(Trainer):
                     _,
                 ) = self.concatenated_forward(self.ref_model, padded_batch)
 
-            padded_batch["reference_chosen_logps"] = reference_chosen_logps
-            padded_batch["reference_rejected_logps"] = reference_rejected_logps
+            padded_batch["reference_chosen_logps"] = reference_chosen_logps.cpu()
+            padded_batch["reference_rejected_logps"] = reference_rejected_logps.cpu()
 
         return padded_batch
 
