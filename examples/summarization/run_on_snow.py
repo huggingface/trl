@@ -101,6 +101,7 @@ if __name__ == "__main__":
         "-e",
         "--exp_group",
         help="Define the experiment group to run.",
+        nargs="+",
     )
     parser.add_argument(
         "-sb",
@@ -140,25 +141,32 @@ if __name__ == "__main__":
 
     args, extra_args = parser.parse_known_args()
 
-    with open(args.exp_group, "r") as fp:
-        exp_dict = yaml.safe_load(fp)
+    exp_list = []
+    for exp_file in args.exp_group:
+        with open(exp_file, "r") as fp:
+            exp_dict = yaml.safe_load(fp)
 
-    exp_dict["name"] = os.path.basename(args.exp_group)
+        exp_dict["name"] = os.path.basename(exp_file)
 
-    if args.search is not None and args.search != "None":
-        search_key, search_val_str = args.search.split("=")
-        search_vals = search_val_str.split(",")
-        exp_list = []
-        for val in search_vals:
-            exp_dict_copy = deepcopy(exp_dict)
-            exp_dict_copy[search_key] = val
-            exp_dict_copy["name"] = exp_dict_copy["name"] + f"/{search_key}={val}"
-            exp_list.append(exp_dict_copy)
-        # for key, val in vars(extra_args).items():
-        #     exp_dict[key] = val
-        print(exp_list)
-    else:
-        exp_list = [exp_dict]
+        if args.search is not None and args.search != "None":
+            search_key, search_val_str = args.search.split("=")
+            search_vals = search_val_str.split(",")
+            exps = []
+            for val in search_vals:
+                exp_dict_copy = deepcopy(exp_dict)
+                exp_dict_copy[search_key] = val
+                exp_dict_copy["name"] = exp_dict_copy["name"] + f"/{search_key}={val}"
+                exps.append(exp_dict_copy)
+            # for key, val in vars(extra_args).items():
+            #     exp_dict[key] = val
+            # print(exps)
+        else:
+            exps = [exp_dict]
+
+        exp_list.extend(exps)
+
+    args.exp_group = " ".join(args.exp_group)
+    print(args.exp_group)
 
     if args.job_scheduler == "toolkit":
         with open("/home/toolkit/wandb_api_key", "r") as f:
