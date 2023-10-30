@@ -31,6 +31,7 @@ from transformers import (
 from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, set_seed
 from trl.core import LengthSampler
 from trl.models.modeling_value_adapter import AutoModelForCausalLMWithValueAdapter
+from trl.trainer.utils import pad_to_length
 
 
 # import copy
@@ -127,6 +128,9 @@ class ScriptArguments:
     # # EMA stuff
     # ema_decay: Optional[float] = field(default=0.995, metadata={"help": "the ema decay rate"})
     # reset_freq: Optional[int] = field(default=None, metadata={"help": "reset every n epochs"})
+    input_ids_input: Optional[bool] = field(
+        default=False,
+    )
 
 
 def find_all_linear_names(args, model):
@@ -372,25 +376,44 @@ for epoch, batch in tqdm(
 
     question_tensors = batch["input_ids"]
 
-    response_tensors = ppo_trainer.generate(
+    full_response_tensors = ppo_trainer.generate(
         question_tensors,
-        return_prompt=False,
+        return_prompt=True,
         length_sampler=output_length_sampler,
         **generation_kwargs,
     )
+
+    response_tensors = []
+    for question, full_response in zip(question_tensors, full_response_tensors):
+        response_tensors.append(full_response[len(question) :])
+
     batch["response"] = tokenizer.batch_decode(response_tensors, skip_special_tokens=True)
 
     # Compute sentiment score
-    texts = [q + r for q, r in zip(batch["query"], batch["response"])]
-    reward_inputs = tokenizer(
-        texts, padding=True, truncation=True, return_tensors="pt", return_token_type_ids=False
-    ).to(ppo_trainer.accelerator.device)
+    if script_args.input_ids_input:
+        max_length = script_args.input_max_length + script_args.output_max_length
+        default_padding_side = tokenizer.padding_side
+        tokenizer.padding_side = "left"
+        full_response_mask = [torch.ones_like(element) for element in full_response_tensors]
+        full_response_encoding = {"input_ids": full_response_tensors, "attention_mask": full_response_mask}
+        policy_output = tokenizer.pad(
+            full_response_encoding,
+            padding="max_length",
+            max_length=max_length,
+            return_tensors="pt",
+        )
+        tokenizer.padding_side = default_padding_side
+    else:
+        texts = [q + r for q, r in zip(batch["query"], batch["response"])]
+        policy_output = tokenizer(
+            texts, padding=True, truncation=True, return_tensors="pt", return_token_type_ids=False
+        ).to(ppo_trainer.accelerator.device)
 
     if script_args.separate_reward_model:
         pipe_outputs = sentiment_pipe(texts, **sent_kwargs)
         raw_rewards = [torch.tensor(output[0]["score"]) for output in pipe_outputs]
     else:
-        raw_rewards = ppo_trainer.compute_reward_model_score(**reward_inputs)
+        raw_rewards = ppo_trainer.compute_reward_model_score(**policy_output)
         rewards = [(raw_rewards[i] - script_args.reward_baseline) for i in range(len(raw_rewards))]
 
     # Run PPO step
@@ -398,10 +421,11 @@ for epoch, batch in tqdm(
 
     if script_args.eval_steps is not None and epoch % script_args.eval_steps == 0:
         with torch.no_grad():
-            gold_rewards = gold_model(**reward_inputs)[0]
+            gold_rewards = gold_model(**policy_output)[0]
     else:
         gold_rewards = None
 
+    stats["epoch"] = epoch
     ppo_trainer.log_stats(stats, batch, rewards, gold_rewards)
 
     # if ema is not None:
