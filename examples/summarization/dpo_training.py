@@ -194,7 +194,7 @@ class DPOTrainerWithGold(DPOTrainer):
             self.state.log_history.pop()
 
             # gold reward
-            policy_output_attention_mask = (policy_output_ids == self.tokenizer.pad_token_id).to(torch.int64)
+            policy_output_attention_mask = (policy_output_ids != self.tokenizer.pad_token_id).to(torch.int64)
             with torch.no_grad():
                 gold_rewards = self.gold_model(
                     input_ids=policy_output_ids, attention_mask=policy_output_attention_mask
