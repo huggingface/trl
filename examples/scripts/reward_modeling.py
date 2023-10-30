@@ -47,7 +47,7 @@ class ScriptArguments:
     reward_config: RewardConfig = field(
         default_factory=lambda: RewardConfig(
             output_dir="output",
-            per_device_train_batch_size=1,
+            per_device_train_batch_size=64,
             num_train_epochs=1,
             gradient_accumulation_steps=16,
             gradient_checkpointing=True,
@@ -58,7 +58,7 @@ class ScriptArguments:
             optim="adamw_torch",
             logging_steps=500,
             evaluation_strategy="no",
-            max_length=128,
+            max_length=512,
         )
     )
     use_peft: bool = False
