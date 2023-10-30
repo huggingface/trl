@@ -27,6 +27,9 @@ from ..core import flatten_dict
 from ..import_utils import is_wandb_available
 
 
+JSONDict = Annotated[Optional[dict], tyro.conf.arg(metavar="JSON", constructor=json.loads)]
+
+
 @dataclass
 class PPOConfig:
     """
@@ -50,15 +53,15 @@ class PPOConfig:
     """The reward model to use - used only for tracking purposes"""
     remove_unused_columns: bool = True
     """Remove unused columns from the dataset if `datasets.Dataset` is used"""
-    tracker_kwargs: Annotated[Optional[dict], tyro.conf.arg(metavar="JSON", constructor=json.loads)] = field(default_factory=dict)
+    tracker_kwargs: JSONDict = field(default_factory=dict)
     """Keyword arguments for the tracker (e.g. python ppo.py --ppo_config.tracker_kwargs='{"wandb": {"entity": "my_wandb_entity", "name": "my_exp_name"}}'"""
-    accelerator_kwargs: Annotated[Optional[dict], tyro.conf.arg(metavar="JSON", constructor=json.loads)] = field(default_factory=dict)
+    accelerator_kwargs: JSONDict = field(default_factory=dict)
     """Keyword arguments for the accelerator"""
-    project_kwargs: Annotated[Optional[dict], tyro.conf.arg(metavar="JSON", constructor=json.loads)] = field(default_factory=dict)
+    project_kwargs: JSONDict = field(default_factory=dict)
     """Keyword arguments for the accelerator project config (e.g. `logging_dir`)"""
     tracker_project_name: str = "trl"
     """Name of project to use for tracking"""
-    push_to_hub_if_best_kwargs: Annotated[Optional[dict], tyro.conf.arg(metavar="JSON", constructor=json.loads)] = field(default_factory=dict)
+    push_to_hub_if_best_kwargs: JSONDict = field(default_factory=dict)
     """Keyword arguments for pushing model to the hub during training (e.g. repo_id)"""
 
     # hyperparameters
