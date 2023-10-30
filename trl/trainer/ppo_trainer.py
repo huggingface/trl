@@ -230,12 +230,13 @@ class PPOTrainer(BaseTrainer):
         elif ref_model is None and not self.is_peft_model:
             self.ref_model = create_reference_model(self.model, num_shared_layers=num_shared_layers)
         elif self.is_peft_model:
-            self.ref_model = self.model
+            self.ref_model = None
         else:
             raise ValueError(
                 f"ref_model must be a PreTrainedModelWrapper or `None`, got {type(ref_model)} - supported "
                 f"architectures are: {SUPPORTED_ARCHITECTURES} "
             )
+        self.optional_peft_ref_model = self.model if self.is_peft_model else if self.ref_model
         self.optional_peft_ctx = (
             self.accelerator.unwrap_model(self.model).pretrained_model.disable_adapter
             if self.is_peft_model
@@ -463,7 +464,7 @@ class PPOTrainer(BaseTrainer):
             if generate_ref_response:
                 with self.optional_peft_ctx():
                     ref_response = self._generate_batched(
-                        self.accelerator.unwrap_model(self.ref_model),
+                        self.accelerator.unwrap_model(self.optional_peft_ref_model),
                         query_tensor,
                         length_sampler=length_sampler,
                         batch_size=batch_size,
@@ -484,7 +485,7 @@ class PPOTrainer(BaseTrainer):
             )
             if generate_ref_response:
                 with self.optional_peft_ctx():
-                    ref_response = self.accelerator.unwrap_model(self.ref_model).generate(
+                    ref_response = self.accelerator.unwrap_model(self.optional_peft_ref_model).generate(
                         input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs
                     )
 
@@ -711,7 +712,7 @@ class PPOTrainer(BaseTrainer):
             )
             with self.optional_peft_ctx():
                 ref_logprobs, ref_logits_or_none, _, _ = self.batched_forward_pass(
-                    self.ref_model, queries, responses, model_inputs, return_logits=full_kl_penalty
+                    self.optional_peft_ref_model, queries, responses, model_inputs, return_logits=full_kl_penalty
                 )
 
         timing["time/ppo/forward_pass"] = time.time() - t
