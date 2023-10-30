@@ -12,8 +12,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import random
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Dict, List, Optional, Tuple
 
 import bitsandbytes as bnb
 import torch
@@ -21,9 +22,20 @@ from accelerate import Accelerator
 from datasets import load_dataset
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from peft.tuners.lora import LoraLayer
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, HfArgumentParser, TrainingArguments
+from torch.utils.data import DataLoader
+from transformers import (
+    AutoModelForCausalLM,
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+    BitsAndBytesConfig,
+    HfArgumentParser,
+    TrainingArguments,
+)
+from transformers.trainer_utils import EvalLoopOutput
 
+import wandb
 from trl import DPOTrainer
+from trl.trainer.utils import pad_to_length
 
 
 # Define and parse arguments.
@@ -110,6 +122,133 @@ class ScriptArguments:
             "https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992"
         },
     )
+
+    # gold model
+    gold_model_name: Optional[str] = field(default=None, metadata={"help": "the reward model name"})
+    gold_in_8bit: Optional[bool] = field(default=False, metadata={"help": "gold the model in 8 bits precision"})
+    gold_in_4bit: Optional[bool] = field(default=False, metadata={"help": "gold the model in 4 bits precision"})
+    gold_bf16: Optional[bool] = field(
+        default=False,
+    )
+    gold_fp16: Optional[bool] = field(
+        default=False,
+    )
+
+
+class DPOTrainerWithGold(DPOTrainer):
+    def __init__(
+        self,
+        gold_model,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.gold_model = self.accelerator.prepare_model(gold_model, evaluation_mode=True)
+
+    def evaluation_loop(
+        self,
+        dataloader: DataLoader,
+        description: str,
+        prediction_loss_only: Optional[bool] = None,
+        ignore_keys: Optional[List[str]] = None,
+        metric_key_prefix: str = "eval",
+    ) -> EvalLoopOutput:
+        """
+        Overriding built-in evaluation loop to store metrics for each batch.
+        Prediction/evaluation loop, shared by `Trainer.evaluate()` and `Trainer.predict()`.
+
+        Works both with or without labels.
+        """
+
+        # Sample and save to game log if requested (for one batch to save time)
+        if self.generate_during_eval:
+            # Generate random indices within the range of the total number of samples
+            num_samples = len(dataloader.dataset)
+            random_indices = random.sample(range(num_samples), k=self.args.eval_batch_size)
+
+            # Use dataloader.dataset.select to get the random batch without iterating over the DataLoader
+            random_batch_dataset = dataloader.dataset.select(random_indices)
+            random_batch = self.data_collator(random_batch_dataset)
+            random_batch = self._prepare_inputs(random_batch)
+
+            policy_output_decoded, ref_output_decoded, policy_output_ids = self.get_batch_samples(
+                self.model,
+                random_batch,
+                return_ids=True,
+            )
+
+            self.log(
+                {
+                    "game_log": wandb.Table(
+                        columns=["Prompt", "Policy", "Ref Model"],
+                        rows=[
+                            [prompt, pol[len(prompt) :], ref[len(prompt) :]]
+                            for prompt, pol, ref in zip(
+                                random_batch["prompt"], policy_output_decoded, ref_output_decoded
+                            )
+                        ],
+                    )
+                }
+            )
+            ## hack to fix log_history and remove
+            self.state.log_history.pop()
+
+            # gold reward
+            policy_output_attention_mask = (policy_output_ids == self.tokenizer.pad_token_id).to(torch.int64)
+            with torch.no_grad():
+                gold_rewards = self.gold_model(
+                    input_ids=policy_output_ids, attention_mask=policy_output_attention_mask
+                )[0]
+
+            gold_rewards = self.accelerator.gather_for_metrics(gold_rewards)
+        # Base evaluation
+        initial_output = super(DPOTrainer, self).evaluation_loop(
+            dataloader, description, prediction_loss_only, ignore_keys, metric_key_prefix
+        )
+
+        initial_output.metrics[f"{metric_key_prefix}_gold_rewards_mean"] = gold_rewards.mean().item()
+
+        return initial_output
+
+    def get_batch_samples(self, model, batch: Dict[str, torch.LongTensor], return_ids=False) -> Tuple[str, str]:
+        """Generate samples from the model and reference model for the given batch of inputs."""
+
+        policy_output = model.generate(
+            batch["prompt_input_ids"],
+            attention_mask=batch["prompt_attention_mask"],
+            max_length=self.max_length,
+            do_sample=True,
+            pad_token_id=self.tokenizer.pad_token_id,
+        )
+
+        if self.ref_model is None:
+            with self.accelerator.unwrap_model(self.model).disable_adapter():
+                reference_output = self.model.generate(
+                    batch["prompt_input_ids"],
+                    attention_mask=batch["prompt_attention_mask"],
+                    max_length=self.max_length,
+                    do_sample=True,
+                    pad_token_id=self.tokenizer.pad_token_id,
+                )
+        else:
+            reference_output = self.ref_model.generate(
+                batch["prompt_input_ids"],
+                attention_mask=batch["prompt_attention_mask"],
+                max_length=self.max_length,
+                do_sample=True,
+                pad_token_id=self.tokenizer.pad_token_id,
+            )
+
+        policy_output = pad_to_length(policy_output, self.max_length, self.tokenizer.pad_token_id)
+        policy_output_decoded = self.tokenizer.batch_decode(policy_output, skip_special_tokens=True)
+
+        reference_output = pad_to_length(reference_output, self.max_length, self.tokenizer.pad_token_id)
+        reference_output_decoded = self.tokenizer.batch_decode(reference_output, skip_special_tokens=True)
+
+        if return_ids:
+            return policy_output_decoded, reference_output_decoded, policy_output
+        else:
+            return policy_output_decoded, reference_output_decoded
 
 
 def find_all_linear_names(args, model):
@@ -206,7 +345,53 @@ def create_and_prepare_model(args):
     if getattr(model.config, "pad_token_id", None) is None:
         model.config.pad_token_id = model.config.eos_token_id
 
-    return model, tokenizer
+    if script_args.gold_in_8bit or script_args.gold_in_4bit:
+        gold_quantization_config = BitsAndBytesConfig(
+            load_in_8bit=script_args.gold_in_8bit, load_in_4bit=script_args.gold_in_4bit
+        )
+        device_map = {"": Accelerator().local_process_index}
+    else:
+        gold_device_map = None
+        gold_quantization_config = None
+
+    if script_args.gold_bf16:
+        torch_dtype = torch.bfloat16
+    elif script_args.gold_fp16:
+        torch_dtype = torch.float16
+    else:
+        torch_dtype = torch.float32
+
+    gold_model = AutoModelForSequenceClassification.from_pretrained(
+        script_args.gold_model_name,
+        quantization_config=gold_quantization_config,
+        torch_dtype=torch_dtype,
+        device_map=gold_device_map,
+    )
+
+    return model, tokenizer, gold_model
+
+
+def create_and_prepare_dataset(args):
+    def move_tldr_to_prompt(examples):
+        new_examples = {
+            "prompt": [],
+            "chosen": [],
+            "rejected": [],
+        }
+        for prompt, chosen, rejected in zip(examples["prompt"], examples["chosen"], examples["rejected"]):
+            new_examples["prompt"].append(prompt + "\nTL;DR: ")
+            new_examples["chosen"].append(chosen[8:])
+            new_examples["rejected"].append(rejected[8:])
+
+        return new_examples
+
+    train_dataset = load_dataset(args.dataset_name, split=args.train_split)
+    train_dataset = train_dataset.map(move_tldr_to_prompt, batched=True)
+
+    eval_dataset = load_dataset(args.dataset_name, split=args.eval_split)
+    eval_dataset = eval_dataset.map(move_tldr_to_prompt, batched=True)
+
+    return train_dataset, eval_dataset
 
 
 if __name__ == "__main__":
@@ -214,7 +399,7 @@ if __name__ == "__main__":
     script_args = parser.parse_args_into_dataclasses()[0]
 
     # 1. load a pretrained model
-    model, tokenizer = create_and_prepare_model(script_args)
+    model, tokenizer, gold_model = create_and_prepare_model(script_args)
 
     if script_args.ignore_bias_buffers:
         # torch distributed hack
@@ -222,8 +407,7 @@ if __name__ == "__main__":
             name for name, buffer in model.named_buffers() if buffer.dtype == torch.bool
         ]
 
-    train_dataset = load_dataset(script_args.dataset_name, split=script_args.train_split)
-    eval_dataset = load_dataset(script_args.dataset_name, split=script_args.eval_split)
+    train_dataset, eval_dataset = create_and_prepare_dataset(script_args)
 
     # 4. initialize training arguments:
     training_args = TrainingArguments(
@@ -247,8 +431,9 @@ if __name__ == "__main__":
     )
 
     # 5. initialize the DPO trainer
-    dpo_trainer = DPOTrainer(
-        model,
+    dpo_trainer = DPOTrainerWithGold(
+        model=model,
+        gold_model=gold_model,
         args=training_args,
         beta=script_args.beta,
         train_dataset=train_dataset,
