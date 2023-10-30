@@ -18,14 +18,19 @@ import bitsandbytes as bnb
 import torch
 from accelerate import Accelerator, DistributedDataParallelKwargs
 from datasets import load_dataset
-
-# from multi_adapter_model_value import AutoModelForCausalLMWithMultiAdapterValueHead
 from peft import LoraConfig, prepare_model_for_kbit_training
 from tqdm import tqdm
-from transformers import AutoTokenizer, BitsAndBytesConfig, HfArgumentParser, pipeline
+from transformers import (
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+    BitsAndBytesConfig,
+    HfArgumentParser,
+    pipeline,
+)
 
 from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, set_seed
 from trl.core import LengthSampler
+from trl.models.modeling_value_adapter import AutoModelForCausalLMWithValueAdapter
 
 
 # import copy
@@ -43,7 +48,6 @@ class ScriptArguments:
 
     model_name: Optional[str] = field(default="", metadata={"help": "the model name"})
     reward_adapter_name: Optional[str] = field(default="", metadata={"help": "the reward model name"})
-    gold_reward_model_name: Optional[str] = field(default=None, metadata={"help": "the reward model name"})
     # tokenizer_name: Optional[str] = field(default=None, metadata={"help": "the tokenizer name"})
     dataset_name: Optional[str] = field(
         default="CarperAI/openai_summarize_tldr", metadata={"help": "the dataset name"}
@@ -76,7 +80,7 @@ class ScriptArguments:
         metadata={"help": "Initial KL penalty coefficient (used for adaptive and linear control)"},
     )
     adap_kl_ctrl: Optional[bool] = field(default=True, metadata={"help": "Use adaptive KL control, otherwise linear"})
-    multi_adapter_value: Optional[bool] = field(default=False)
+    value_adapter: Optional[bool] = field(default=False)
     separate_reward_model: Optional[str] = field(default=None, metadata={"help": "the reward model name"})
 
     # Generation
@@ -108,6 +112,18 @@ class ScriptArguments:
     lora_dropout: Optional[float] = field(default=0.05, metadata={"help": "the lora dropout parameter"})
     lora_r: Optional[int] = field(default=8, metadata={"help": "the lora r parameter"})
     lora_all_linear: Optional[bool] = field(default=False, metadata={"help": "lora adapter on all linear layers"})
+
+    # Gold Model
+    eval_steps: Optional[int] = field(default=None)
+    gold_model_name: Optional[str] = field(default=None, metadata={"help": "the reward model name"})
+    gold_in_8bit: Optional[bool] = field(default=False, metadata={"help": "gold the model in 8 bits precision"})
+    gold_in_4bit: Optional[bool] = field(default=False, metadata={"help": "gold the model in 4 bits precision"})
+    gold_bf16: Optional[bool] = field(
+        default=False,
+    )
+    gold_fp16: Optional[bool] = field(
+        default=False,
+    )
     # # EMA stuff
     # ema_decay: Optional[float] = field(default=0.995, metadata={"help": "the ema decay rate"})
     # reset_freq: Optional[int] = field(default=None, metadata={"help": "reset every n epochs"})
@@ -147,10 +163,10 @@ def create_and_prepare_model(args):
     else:
         torch_dtype = torch.float32
 
-    # if script_args.multi_adapter_value:
-    #     model_cls = AutoModelForCausalLMWithMultiAdapterValueHead
-    # else:
-    model_cls = AutoModelForCausalLMWithValueHead
+    if script_args.value_adapter:
+        model_cls = AutoModelForCausalLMWithValueAdapter
+    else:
+        model_cls = AutoModelForCausalLMWithValueHead
 
     if args.use_lora:
         # we add `score` to the list of modules to save to
@@ -284,6 +300,35 @@ ppo_trainer = PPOTrainer(
     data_collator=collator,
 )
 
+
+# Gold Model
+if script_args.gold_model_name is not None:
+    if script_args.gold_in_8bit or script_args.gold_in_4bit:
+        gold_quantization_config = BitsAndBytesConfig(
+            load_in_8bit=script_args.gold_in_8bit, load_in_4bit=script_args.gold_in_4bit
+        )
+        gold_device_map = {"": ppo_trainer.accelerator.local_process_index}
+    else:
+        gold_device_map = None
+        gold_quantization_config = None
+
+    if script_args.gold_bf16:
+        torch_dtype = torch.bfloat16
+    elif script_args.gold_fp16:
+        torch_dtype = torch.float16
+    else:
+        torch_dtype = torch.float32
+
+    gold_model = AutoModelForSequenceClassification.from_pretrained(
+        script_args.gold_model_name,
+        quantization_config=gold_quantization_config,
+        torch_dtype=torch_dtype,
+        device_map=gold_device_map,
+    )
+
+    gold_model = ppo_trainer.accelerator.prepare(gold_model)
+    gold_model.eval()
+
 model.eval()
 
 if script_args.separate_reward_model:
@@ -350,7 +395,14 @@ for epoch, batch in tqdm(
 
     # Run PPO step
     stats = ppo_trainer.step(question_tensors, response_tensors, rewards)
-    ppo_trainer.log_stats(stats, batch, rewards)
+
+    if script_args.eval_steps is not None and epoch % script_args.eval_steps == 0:
+        with torch.no_grad():
+            gold_rewards = gold_model(**reward_inputs)[0]
+    else:
+        gold_rewards = None
+
+    ppo_trainer.log_stats(stats, batch, rewards, gold_rewards)
 
     # if ema is not None:
     #     ema.update()

@@ -1312,6 +1312,7 @@ class PPOTrainer(BaseTrainer):
         stats: dict,
         batch: dict,
         rewards: List[torch.FloatTensor],
+        gold_rewards: List[torch.FloatTensor] = None,
         columns_to_log: List[str] = ["query", "response"],
     ):
         """
@@ -1368,6 +1369,15 @@ class PPOTrainer(BaseTrainer):
             logs["env/reward_mean"] = torch.mean(rewards).cpu().numpy().item()
             logs["env/reward_std"] = torch.std(rewards).cpu().numpy().item()
             logs["env/reward_dist"] = rewards.cpu().numpy()
+
+            # gold reward stuff
+            if gold_rewards is not None:
+                if not isinstance(gold_rewards, torch.Tensor):
+                    gold_rewards = torch.tensor(gold_rewards).to(self.current_device)
+
+                logs["gold/reward_mean"] = torch.mean(gold_rewards).cpu().numpy().item()
+                logs["gold/reward_std"] = torch.std(gold_rewards).cpu().numpy().item()
+                logs["gold/reward_dist"] = gold_rewards.cpu().numpy()
 
             if self.config.log_with == "tensorboard":
                 # update the current step
