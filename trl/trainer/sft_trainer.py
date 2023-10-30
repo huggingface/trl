@@ -13,6 +13,7 @@
 # limitations under the License.
 import dataclasses
 import warnings
+from functools import wraps
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import torch
@@ -28,11 +29,17 @@ from transformers import (
     Trainer,
     TrainingArguments,
 )
+from transformers.modeling_utils import unwrap_model
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 
 from ..import_utils import is_peft_available
-from .utils import ConstantLengthDataset, DataCollatorForCompletionOnlyLM, PeftSavingCallback
+from .utils import (
+    ConstantLengthDataset,
+    DataCollatorForCompletionOnlyLM,
+    PeftSavingCallback,
+    neftune_post_forward_hook,
+)
 
 
 if is_peft_available():
@@ -95,6 +102,9 @@ class SFTTrainer(Trainer):
         dataset_batch_size (`int`):
             The number of examples to tokenize per batch. If batch_size <= 0 or batch_size == None,
             tokenize the full dataset as a single batch. Defaults to 1000.
+        neftune_noise_alpha (`Optional[float]`):
+            If not `None`, this will activate NEFTune noise embeddings. This has been proven to drastically improve model performances for instrcution
+            fine-tuning. Check out the original paper here: https://arxiv.org/abs/2310.05914 and the original code here: https://github.com/neelsjain/NEFTune
     """
 
     def __init__(
@@ -110,7 +120,7 @@ class SFTTrainer(Trainer):
         callbacks: Optional[List[TrainerCallback]] = None,
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        peft_config: Optional[Dict] = None,
+        peft_config: Optional[PeftConfig] = None,
         dataset_text_field: Optional[str] = None,
         packing: Optional[bool] = False,
         formatting_func: Optional[Callable] = None,
@@ -120,6 +130,7 @@ class SFTTrainer(Trainer):
         chars_per_token: Optional[float] = 3.6,
         dataset_num_proc: Optional[int] = None,
         dataset_batch_size: int = 1000,
+        neftune_noise_alpha: Optional[float] = None,
     ):
         if isinstance(model, str):
             warnings.warn(
@@ -176,6 +187,8 @@ class SFTTrainer(Trainer):
 
         self.dataset_num_proc = dataset_num_proc
         self.dataset_batch_size = dataset_batch_size
+        self.neftune_noise_alpha = neftune_noise_alpha
+
         if not packing:
             if dataset_text_field is None and formatting_func is None:
                 raise ValueError(
@@ -237,6 +250,27 @@ class SFTTrainer(Trainer):
             self.train_dataset.infinite = True
         elif self.args.max_steps == -1 and packing:
             self.train_dataset.infinite = False
+
+    @wraps(Trainer.train)
+    def train(self, *args, **kwargs):
+        # Activate neftune right before training.
+        if self.neftune_noise_alpha is not None:
+            self.model = self._activate_neftune(self.model)
+
+        output = super().train(*args, **kwargs)
+
+        # After training we make sure to retrieve back the original forward pass method
+        # for the embedding layer by removing the forward post hook.
+        if self.neftune_noise_alpha is not None:
+            if is_peft_available() and isinstance(self.model, PeftModel):
+                embeddings = unwrap_model(self.model.base_model).get_input_embeddings()
+            else:
+                embeddings = unwrap_model(self.model).get_input_embeddings()
+
+            self.neftune_hook_handle.remove()
+            del embeddings.neftune_noise_alpha
+
+        return output
 
     def _prepare_dataset(
         self,
@@ -320,3 +354,17 @@ class SFTTrainer(Trainer):
         )
 
         return tokenized_dataset
+
+    def _activate_neftune(self, model):
+        r"""
+        Activates the neftune as presented in this code: https://github.com/neelsjain/NEFTune and paper: https://arxiv.org/abs/2310.05914
+        """
+        if is_peft_available() and isinstance(self.model, PeftModel):
+            embeddings = unwrap_model(model.base_model).get_input_embeddings()
+        else:
+            embeddings = unwrap_model(model).get_input_embeddings()
+
+        embeddings.neftune_noise_alpha = self.neftune_noise_alpha
+        hook_handle = embeddings.register_forward_hook(neftune_post_forward_hook)
+        self.neftune_hook_handle = hook_handle
+        return model
