@@ -236,7 +236,7 @@ class PPOTrainer(BaseTrainer):
                 f"ref_model must be a PreTrainedModelWrapper or `None`, got {type(ref_model)} - supported "
                 f"architectures are: {SUPPORTED_ARCHITECTURES} "
             )
-        self.optional_peft_ref_model = self.model if self.is_peft_model else if self.ref_model
+        self.optional_peft_ref_model = self.model if self.is_peft_model else self.ref_model
         self.optional_peft_ctx = (
             self.accelerator.unwrap_model(self.model).pretrained_model.disable_adapter
             if self.is_peft_model
