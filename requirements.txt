@@ -2,7 +2,7 @@ datasets>=1.17.0
 diffusers>=0.21.2
 torch==1.13.1
 tqdm==4.65.2
-transformers==4.9.2
+transformers==4.29.2
 accelerate==0.21.0
 peft==0.5.0
 tyro>=0.5.7
