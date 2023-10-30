@@ -99,7 +99,7 @@ model = AutoModelForSequenceClassification.from_pretrained(
 
 # Step 2: Load the dataset and pre-process it
 tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-train_dataset = load_dataset(args.dataset_name, split="train[:50]")
+train_dataset = load_dataset(args.dataset_name, split="train")
 
 
 # Tokenize chosen/rejected pairs of inputs
