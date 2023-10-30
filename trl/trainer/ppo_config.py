@@ -11,11 +11,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import json
 import os
 import sys
 import warnings
-from dataclasses import dataclass, field
-from typing import Literal, Optional
+from dataclasses import dataclass
+from typing import Annotated, Literal, Optional
 
 import numpy as np
 import tyro
@@ -49,15 +50,15 @@ class PPOConfig:
     """The reward model to use - used only for tracking purposes"""
     remove_unused_columns: bool = True
     """Remove unused columns from the dataset if `datasets.Dataset` is used"""
-    tracker_kwargs: dict = field(default_factory=dict)
-    """Keyword arguments for the tracker (e.g. wandb_project - example_kwargs_dict={'tracker_kwargs': {'wandb': {'entity': wandb_entity, 'name': exp_name}}})"""
-    accelerator_kwargs: dict = field(default_factory=dict)
+    tracker_kwargs: Annotated[Optional[dict], tyro.conf.arg(metavar="JSON", constructor=json.loads)] = None
+    """Keyword arguments for the tracker (e.g. python ppo.py --ppo_config.tracker_kwargs='{"wandb": {"entity": "my_wandb_entity", "name": "my_exp_name"}}'"""
+    accelerator_kwargs: Annotated[Optional[dict], tyro.conf.arg(metavar="JSON", constructor=json.loads)] = None
     """Keyword arguments for the accelerator"""
-    project_kwargs: dict = field(default_factory=dict)
+    project_kwargs: Annotated[Optional[dict], tyro.conf.arg(metavar="JSON", constructor=json.loads)] = None
     """Keyword arguments for the accelerator project config (e.g. `logging_dir`)"""
     tracker_project_name: str = "trl"
     """Name of project to use for tracking"""
-    push_to_hub_if_best_kwargs: dict = field(default_factory=dict)
+    push_to_hub_if_best_kwargs: Annotated[Optional[dict], tyro.conf.arg(metavar="JSON", constructor=json.loads)] = None
     """Keyword arguments for pushing model to the hub during training (e.g. repo_id)"""
 
     # hyperparameters
