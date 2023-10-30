@@ -29,9 +29,9 @@ from transformers import (
     Trainer,
     TrainingArguments,
 )
+from transformers.modeling_utils import unwrap_model
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
-from transformers.modeling_utils import unwrap_model
 
 from ..import_utils import is_peft_available
 from .utils import (
