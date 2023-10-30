@@ -16,10 +16,11 @@ import os
 import sys
 import warnings
 from dataclasses import dataclass, field
-from typing import Annotated, Literal, Optional
+from typing import Literal, Optional
 
 import numpy as np
 import tyro
+from typing_extensions import Annotated
 
 from trl.trainer.utils import exact_div
 
