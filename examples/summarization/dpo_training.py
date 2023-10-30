@@ -31,7 +31,7 @@ from transformers import (
     HfArgumentParser,
     TrainingArguments,
 )
-from transformers.trainer_utils import EvalLoopOutput
+from transformers.trainer_utils import EvalLoopOutput, get_last_checkpoint
 
 import wandb
 from trl import DPOTrainer
@@ -446,4 +446,5 @@ if __name__ == "__main__":
     )
 
     # 6. train
-    dpo_trainer.train()
+    last_checkpoint = get_last_checkpoint(script_args.output_dir)
+    dpo_trainer.train(resume_from_checkpoint=last_checkpoint)
