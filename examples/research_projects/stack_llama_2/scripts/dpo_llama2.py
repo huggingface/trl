@@ -106,7 +106,7 @@ def get_stack_exchange_paired(
 
     def return_prompt_and_responses(samples) -> Dict[str, str]:
         return {
-            "prompt": ["Question: " + question + "\n\nAnswer: " for question in samples["question"]],
+            "prompt": [f"Question:\n{question}\n\nAnswer:\n" for question in samples["question"]],
             "chosen": samples["response_j"],
             "rejected": samples["response_k"],
         }

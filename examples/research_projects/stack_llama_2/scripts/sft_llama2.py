@@ -110,7 +110,11 @@ def print_trainable_parameters(model):
 
 def prepare_sample_text(example):
     """Prepare the text from a sample of the dataset."""
-    text = f"Question: {example['question']}\n\nAnswer: {example['response_j']}"
+    # Should use '\n' as separator instead of ' '.
+    # See:
+    #  1. https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
+    #  2. https://github.com/LianjiaTech/BELLE/issues/337
+    text = f"Question:\n{example['question']}\n\nAnswer:\n{example['response_j']}"
     return text
 
 
