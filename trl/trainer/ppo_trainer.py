@@ -485,9 +485,7 @@ class PPOTrainer(BaseTrainer):
             )
             if generate_ref_response:
                 with self.optional_peft_ctx():
-                    ref_response = ref_model.generate(
-                        input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs
-                    )
+                    ref_response = ref_model.generate(input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs)
 
             if not return_prompt and not self.is_encoder_decoder:
                 response = response[:, query_tensor.shape[0] :]
@@ -712,7 +710,11 @@ class PPOTrainer(BaseTrainer):
             )
             with self.optional_peft_ctx():
                 ref_logprobs, ref_logits_or_none, _, _ = self.batched_forward_pass(
-                    self.model if self.is_peft_model else self.ref_model, queries, responses, model_inputs, return_logits=full_kl_penalty
+                    self.model if self.is_peft_model else self.ref_model,
+                    queries,
+                    responses,
+                    model_inputs,
+                    return_logits=full_kl_penalty,
                 )
 
         timing["time/ppo/forward_pass"] = time.time() - t
