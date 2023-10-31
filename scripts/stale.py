@@ -39,8 +39,8 @@ def main():
         if (
             last_comment is not None
             and last_comment.user.login == "github-actions[bot]"
-            and (dt.utcnow() - issue.updated_at).days > 7
-            and (dt.utcnow() - issue.created_at).days >= 30
+            and (dt.now(timezone.utc) - issue.updated_at).days > 7
+            and (dt.now(timezone.utc) - issue.created_at).days >= 30
             and not any(label.name.lower() in LABELS_TO_EXEMPT for label in issue.get_labels())
         ):
             issue.edit(state="closed")
