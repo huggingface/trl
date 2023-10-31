@@ -450,8 +450,8 @@ class PPOTrainer(BaseTrainer):
         Returns:
             `torch.LongTensor`: A tensor of shape (`batch_size`, `gen_len`) containing response tokens.
         """
-if generate_ref_response:
-    ref_model = self.model if self.is_peft_model else self.ref_model
+        if generate_ref_response:
+            ref_model = self.model if self.is_peft_model else self.ref_model
         if isinstance(query_tensor, List):
             response = self._generate_batched(
                 self.model,
@@ -485,7 +485,6 @@ if generate_ref_response:
             )
             if generate_ref_response:
                 with self.optional_peft_ctx():
-                    
                     ref_response = ref_model.generate(
                         input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs
                     )
