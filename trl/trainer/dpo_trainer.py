@@ -99,6 +99,8 @@ class DPOTrainer(Trainer):
         compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return
             a dictionary string to metric values.
+        reduce_randomness (`bool`, defaults to `False`):
+            Whether or not to weight the impact of each sample in the loss by how sure the reward model is in its preference choice.
     """
 
     def __init__(
@@ -130,6 +132,7 @@ class DPOTrainer(Trainer):
         disable_dropout: bool = True,
         generate_during_eval: bool = False,
         compute_metrics: Optional[Callable[[EvalLoopOutput], Dict]] = None,
+        reduce_randomness: bool = False,
     ):
         if not is_peft_available() and peft_config is not None:
             raise ValueError(
@@ -200,6 +203,7 @@ class DPOTrainer(Trainer):
                 truncation_mode=truncation_mode,
                 is_encoder_decoder=self.is_encoder_decoder,
                 max_target_length=max_target_length,
+                reduce_randomness=reduce_randomness,
             )
 
             if args.remove_unused_columns:
@@ -224,6 +228,7 @@ class DPOTrainer(Trainer):
         self.generate_during_eval = generate_during_eval
         self.label_pad_token_id = label_pad_token_id
         self.padding_value = padding_value
+        self.reduce_randomness = reduce_randomness
 
         self.beta = beta
         self.loss_type = loss_type
@@ -335,6 +340,7 @@ class DPOTrainer(Trainer):
         policy_rejected_logps: torch.FloatTensor,
         reference_chosen_logps: torch.FloatTensor,
         reference_rejected_logps: torch.FloatTensor,
+        reward_ratio: torch.FloatTensor,
         reference_free: bool = False,
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         """Compute the DPO loss for a batch of policy and reference model log probabilities.
@@ -345,6 +351,7 @@ class DPOTrainer(Trainer):
             reference_chosen_logps: Log probabilities of the reference model for the chosen responses. Shape: (batch_size,)
             reference_rejected_logps: Log probabilities of the reference model for the rejected responses. Shape: (batch_size,)
             beta: Temperature parameter for the DPO loss, typically something in the range of 0.1 to 0.5. We ignore the reference model as beta -> 0.
+            reward_ratio: Difference between chosen and rejected reward. Shape: (batch_size,)
             reference_free: If True, we ignore the _provided_ reference model and implicitly use a reference model that assigns equal probability to all responses.
 
         Returns:
@@ -359,6 +366,9 @@ class DPOTrainer(Trainer):
             ref_logratios = 0
 
         logits = pi_logratios - ref_logratios
+
+        if self.reduce_randomness:
+            logits = reward_ratio * logits
 
         if self.loss_type == "sigmoid":
             losses = -F.logsigmoid(self.beta * logits)
@@ -476,11 +486,11 @@ class DPOTrainer(Trainer):
                     _,
                 ) = self.concatenated_forward(self.ref_model, batch)
 
+        if self.reduce_randomness:
+            reward_ratio = torch.sigmoid(batch["chosen_reward"] - batch["rejected_reward"])
+
         losses, chosen_rewards, rejected_rewards = self.dpo_loss(
-            policy_chosen_logps,
-            policy_rejected_logps,
-            reference_chosen_logps,
-            reference_rejected_logps,
+            policy_chosen_logps, policy_rejected_logps, reference_chosen_logps, reference_rejected_logps, reward_ratio
         )
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 

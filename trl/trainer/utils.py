@@ -287,6 +287,9 @@ class DPODataCollatorWithPadding:
             The maximum length of the target to be processed. Only useful for encoder-decoder architectures.
         truncation_mode: (`str`, defaults to "keep_end"):
             The truncation mode to use when truncating the prompt.
+        reduce_randomness: (`bool`, defaults to False):
+            Whether or not you want to return the chosen_rewards and rejected_rewards. Only useful if each sample has a
+            chosen and rejected reward.
     """
     tokenizer: PreTrainedTokenizerBase
     model: Optional[PreTrainedModel] = None
@@ -298,6 +301,7 @@ class DPODataCollatorWithPadding:
     truncation_mode: str = "keep_end"
     is_encoder_decoder: Optional[bool] = False
     max_target_length: Optional[int] = None
+    reduce_randomness: bool = False
 
     def tokenize_batch_element(
         self,
@@ -467,16 +471,31 @@ class DPODataCollatorWithPadding:
     def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
         tokenized_batch = []
 
+        chosen_reward = []
+        rejected_reward = []
+
         for feature in features:
             prompt = feature["prompt"]
             chosen = feature["chosen"]
             rejected = feature["rejected"]
+            chosen_reward.append(feature["chosen_reward"])
+            rejected_reward.append(feature["rejected_reward"])
 
             batch_element = self.tokenize_batch_element(prompt, chosen, rejected)
             tokenized_batch.append(batch_element)
 
         # return collated batch
-        return self.collate(tokenized_batch)
+        collated_batch = self.collate(tokenized_batch)
+
+        if self.reduce_randomness:
+            collated_batch.update(
+                {
+                    "chosen_reward": torch.FloatTensor(chosen_reward),
+                    "rejected_reward": torch.FloatTensor(rejected_reward),
+                }
+            )
+
+        return collated_batch
 
 
 class ConstantLengthDataset(IterableDataset):

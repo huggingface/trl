@@ -70,6 +70,24 @@ class DPOTrainerTester(unittest.TestCase):
                 "C++",
                 "Java",
             ],
+            "chosen_reward": [
+                1.,
+                0.5,
+                1.5,
+                3.0,
+                0.9,
+                1.2,
+                0.7
+            ],
+            "rejected_reward": [
+                0.8,
+                0.1,
+                1.,
+                2.0,
+                0.3,
+                1.0,
+                0.69
+            ]
         }
         # fmt: on
         return Dataset.from_dict(dummy_dataset_dict)
@@ -240,3 +258,41 @@ class DPOTrainerTester(unittest.TestCase):
                     eval_dataset=dummy_dataset,
                     generate_during_eval=True,
                 )
+
+    def test_dpo_trainer_reduce_randomness(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=4,
+                learning_rate=9e-1,
+                evaluation_strategy="steps",
+            )
+
+            dummy_dataset = self._init_dummy_dataset()
+
+            trainer = DPOTrainer(
+                model=self.model,
+                ref_model=None,
+                beta=0.1,
+                args=training_args,
+                tokenizer=self.tokenizer,
+                train_dataset=dummy_dataset,
+                eval_dataset=dummy_dataset,
+                reduce_randomness=True,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                # check the params have changed - ignore 0 biases
+                if param.sum() != 0:
+                    self.assertFalse(torch.equal(param, new_param))

@@ -85,6 +85,70 @@ Note that the `beta` is the temperature parameter for the DPO loss, typically so
 Given the preference data, we can fit a binary classifier according to the Bradley-Terry model and in fact the DPO authors propose the sigmoid loss on the normalized likelihood via the `logsigmoid` to fit a logistic regression.
 The [RSO](https://arxiv.org/abs/2309.06657) authors propose to use a hinge loss on the normalized likelihood from the [SLiC](https://arxiv.org/abs/2305.10425) paper. The `DPOTrainer` can be switched to this loss via the `loss_type="hinge"` argument and the `beta` in this case is the reciprocal of the margin.
 
+## Using DPO with pairs generated based on a Reward Model 
+
+Given a reward model and an SFT policy, you can generate preference pairs that can be use to train your model using the DPO Trainer. In this case, you may have access to the reward score for the chosen and rejected sample.
+You can use this reward with the DPO Trainer to reduce the randomness of reward model based preference pairs by setting the `reduce_randomness` parameter of the DPO Trainer to `True`. Setting this parameter to `True` will implicitly weight the impact of each sample in the loss by how sure the reward model is in its preference choice (based on the difference in reward score).
+Your dataset needs to contain the following entries:
+
+- `prompt`
+- `chosen`
+- `rejected`
+- `chosen_reward`
+- `rejected_reward`
+
+For example:
+
+```py
+dpo_dataset_dict = {
+    "prompt": [
+        "hello",
+        "how are you",
+        "What is your name?",
+        "What is your name?",
+        "Which is the best programming language?",
+        "Which is the best programming language?",
+        "Which is the best programming language?",
+    ],
+    "chosen": [
+        "hi nice to meet you",
+        "I am fine",
+        "My name is Mary",
+        "My name is Mary",
+        "Python",
+        "Python",
+        "Java",
+    ],
+    "rejected": [
+        "leave me alone",
+        "I am not fine",
+        "Whats it to you?",
+        "I dont have a name",
+        "Javascript",
+        "C++",
+        "C++",
+    ],
+    "chosen_reward": [
+        1.,
+        0.5,
+        1.5,
+        3.0,
+        0.9,
+        1.2,
+        0.7
+    ],
+    "rejected_reward": [
+        0.8,
+        0.1,
+        1.,
+        2.0,
+        0.3,
+        1.0,
+        0.69
+    ]
+}
+```
+
 ## Logging
 
 While training and evaluating we record the following reward metrics:
