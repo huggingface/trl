@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import dataclasses
+import inspect
 import warnings
 from functools import wraps
 from typing import Callable, Dict, List, Optional, Tuple, Union
@@ -159,9 +160,18 @@ class SFTTrainer(Trainer):
                     )
 
                 if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
-                    model = prepare_model_for_kbit_training(
-                        model, use_gradient_checkpointing=args.gradient_checkpointing
+                    _support_gc_kwargs = hasattr(
+                        args, "gradient_checkpointing_kwargs"
+                    ) and "gradient_checkpointing_kwargs" in list(
+                        inspect.signature(prepare_model_for_kbit_training).parameters
                     )
+
+                    preprare_model_kwargs = {"use_gradient_checkpointing": args.gradient_checkpointing}
+
+                    if _support_gc_kwargs:
+                        preprare_model_kwargs["gradient_checkpointing_kwargs"] = args.gradient_checkpointing_kwargs
+
+                    model = prepare_model_for_kbit_training(model, **preprare_model_kwargs)
 
                     args = dataclasses.replace(args, gradient_checkpointing=False)
 

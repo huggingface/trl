@@ -51,6 +51,7 @@ class ScriptArguments:
             num_train_epochs=1,
             gradient_accumulation_steps=16,
             gradient_checkpointing=True,
+            gradient_checkpointing_kwargs={"use_reentrant": False},
             learning_rate=1.41e-5,
             report_to="tensorboard",
             remove_unused_columns=False,
