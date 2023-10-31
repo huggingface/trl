@@ -661,6 +661,7 @@ class DPOTrainer(Trainer):
                     )
                 }
             )
+            self.state.log_history.pop()
 
         # Base evaluation
         initial_output = super().evaluation_loop(
