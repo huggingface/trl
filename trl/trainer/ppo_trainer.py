@@ -236,7 +236,6 @@ class PPOTrainer(BaseTrainer):
                 f"ref_model must be a PreTrainedModelWrapper or `None`, got {type(ref_model)} - supported "
                 f"architectures are: {SUPPORTED_ARCHITECTURES} "
             )
-        self.optional_peft_ref_model = self.model if self.is_peft_model else self.ref_model
         self.optional_peft_ctx = (
             self.accelerator.unwrap_model(self.model).pretrained_model.disable_adapter
             if self.is_peft_model
@@ -451,10 +450,11 @@ class PPOTrainer(BaseTrainer):
         Returns:
             `torch.LongTensor`: A tensor of shape (`batch_size`, `gen_len`) containing response tokens.
         """
-
+if generate_ref_response:
+    ref_model = self.model if self.is_peft_model else self.ref_model
         if isinstance(query_tensor, List):
             response = self._generate_batched(
-                self.accelerator.unwrap_model(self.model),
+                self.model,
                 query_tensor,
                 length_sampler=length_sampler,
                 batch_size=batch_size,
@@ -464,7 +464,7 @@ class PPOTrainer(BaseTrainer):
             if generate_ref_response:
                 with self.optional_peft_ctx():
                     ref_response = self._generate_batched(
-                        self.accelerator.unwrap_model(self.optional_peft_ref_model),
+                        ref_model,
                         query_tensor,
                         length_sampler=length_sampler,
                         batch_size=batch_size,
@@ -485,7 +485,8 @@ class PPOTrainer(BaseTrainer):
             )
             if generate_ref_response:
                 with self.optional_peft_ctx():
-                    ref_response = self.accelerator.unwrap_model(self.optional_peft_ref_model).generate(
+                    
+                    ref_response = ref_model.generate(
                         input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs
                     )
 
@@ -537,7 +538,7 @@ class PPOTrainer(BaseTrainer):
                 return_tensors="pt",
             ).to(self.current_device)
 
-            generations = model.generate(**padded_inputs, **generation_kwargs)
+            generations = self.accelerator.unwrap_model(model).generate(**padded_inputs, **generation_kwargs)
 
             for generation, mask in zip(generations, padded_inputs["attention_mask"]):
                 if not self.is_encoder_decoder:
@@ -712,7 +713,7 @@ class PPOTrainer(BaseTrainer):
             )
             with self.optional_peft_ctx():
                 ref_logprobs, ref_logits_or_none, _, _ = self.batched_forward_pass(
-                    self.optional_peft_ref_model, queries, responses, model_inputs, return_logits=full_kl_penalty
+                    self.model if self.is_peft_model else self.ref_model, queries, responses, model_inputs, return_logits=full_kl_penalty
                 )
 
         timing["time/ppo/forward_pass"] = time.time() - t
