@@ -12,6 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import inspect
 import random
 import warnings
 from collections import defaultdict
@@ -137,7 +138,18 @@ class DPOTrainer(Trainer):
             )
         elif is_peft_available() and peft_config is not None:
             if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
-                model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=args.gradient_checkpointing)
+                _support_gc_kwargs = hasattr(
+                    args, "gradient_checkpointing_kwargs"
+                ) and "gradient_checkpointing_kwargs" in list(
+                    inspect.signature(prepare_model_for_kbit_training).parameters
+                )
+
+                preprare_model_kwargs = {"use_gradient_checkpointing": args.gradient_checkpointing}
+
+                if _support_gc_kwargs:
+                    preprare_model_kwargs["gradient_checkpointing_kwargs"] = args.gradient_checkpointing_kwargs
+
+                model = prepare_model_for_kbit_training(model, **preprare_model_kwargs)
             elif getattr(args, "gradient_checkpointing", False):
                 # For backward compatibility with older versions of transformers
                 if hasattr(model, "enable_input_require_grads"):

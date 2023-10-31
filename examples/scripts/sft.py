@@ -63,6 +63,15 @@ class ScriptArguments:
     )
     save_total_limit: Optional[int] = field(default=10, metadata={"help": "Limits total number of checkpoints."})
     push_to_hub: Optional[bool] = field(default=False, metadata={"help": "Push the model to HF Hub"})
+    gradient_checkpointing: Optional[bool] = field(
+        default=False, metadata={"help": "Whether to use gradient checkpointing or no"}
+    )
+    gradient_checkpointing_kwargs: Optional[dict] = field(
+        default=None,
+        metadata={
+            "help": "key word arguments to be passed along `torch.utils.checkpoint.checkpoint` method - e.g. `use_reentrant=False`"
+        },
+    )
     hub_model_id: Optional[str] = field(default=None, metadata={"help": "The name of the model on HF Hub"})
 
 
@@ -114,6 +123,9 @@ training_args = TrainingArguments(
     save_total_limit=script_args.save_total_limit,
     push_to_hub=script_args.push_to_hub,
     hub_model_id=script_args.hub_model_id,
+    gradient_checkpointing=script_args.gradient_checkpointing,
+    # TODO: uncomment that on the next release
+    # gradient_checkpointing_kwargs=script_args.gradient_checkpointing_kwargs,
 )
 
 # Step 4: Define the LoraConfig
