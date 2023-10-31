@@ -23,6 +23,8 @@ import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 from transformers import top_k_top_p_filtering
 
+from .import_utils import is_xpu_available
+
 
 try:
     from collections.abc import Mapping
@@ -241,7 +243,10 @@ def set_seed(seed: int):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    if is_xpu_available():
+        torch.xpu.manual_seed_all(seed)
+    else:
+        torch.cuda.manual_seed_all(seed)
 
 
 class LengthSampler:
@@ -257,16 +262,22 @@ class LengthSampler:
 
 
 class PPODecorators(object):
-    optimize_cuda_cache = False
+    optimize_device_cache = False
 
     @classmethod
     @contextmanager
-    def empty_cuda_cache(cls):
+    def empty_device_cache(cls):
         yield
-        if cls.optimize_cuda_cache and torch.cuda.is_available():
-            gc.collect()
-            torch.cuda.empty_cache()
-            gc.collect()
+        if is_xpu_available():
+            if cls.optimize_device_cache and torch.xpu.is_available():
+                gc.collect()
+                torch.xpu.empty_cache()
+                gc.collect()
+        else:
+            if cls.optimize_device_cache and torch.cuda.is_available():
+                gc.collect()
+                torch.cuda.empty_cache()
+                gc.collect()
 
 
 def randn_tensor(

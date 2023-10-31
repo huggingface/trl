@@ -105,7 +105,9 @@ class PPOConfig:
     max_grad_norm: Optional[float] = None
     """Maximum gradient norm for gradient clipping"""
     optimize_cuda_cache: bool = False
-    """Optimize CUDA cache for slightly more memory-efficient training"""
+    """DEPRECATED: use `optimize_device_cache` instead, which does the same thing."""
+    optimize_device_cache: Optional[bool] = False
+    """Optimize device cache for slightly more memory-efficient training"""
     early_stopping: bool = False
     """Whether to stop the PPO optimization loop early is the KL too high"""
     target_kl: float = 1
@@ -134,6 +136,14 @@ class PPOConfig:
     """TO BE FILLED In RUNTIME: the effective `backward_batch_size` across all processes"""
     global_batch_size: tyro.conf.Suppress[int] = None
     """TO BE FILLED In RUNTIME: the effective `batch_size` across all processes"""
+
+    if optimize_cuda_cache is not None:
+        warnings.warn(
+            "The `optimize_cuda_cache` arguement will be deprecated soon, please use `optimize_device_cache` instead."
+        )
+        optimize_device_cache = optimize_cuda_cache
+    else:
+        optimize_device_cache = False
 
     def __post_init__(self):
         if self.forward_batch_size is not None:

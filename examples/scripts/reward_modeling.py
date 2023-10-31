@@ -22,7 +22,7 @@ from peft import LoraConfig
 from tqdm import tqdm
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, BitsAndBytesConfig
 
-from trl import RewardConfig, RewardTrainer
+from trl import RewardConfig, RewardTrainer, is_xpu_available
 
 
 tqdm.pandas()
@@ -83,7 +83,11 @@ if args.load_in_8bit and args.load_in_4bit:
 elif args.load_in_8bit or args.load_in_4bit:
     quantization_config = BitsAndBytesConfig(load_in_8bit=args.load_in_8bit, load_in_4bit=args.load_in_4bit)
     # Copy the model to each device
-    device_map = {"": Accelerator().local_process_index}
+    device_map = (
+        {"": f"xpu:{Accelerator().local_process_index}"}
+        if is_xpu_available()
+        else {"": Accelerator().local_process_index}
+    )
 else:
     device_map = None
     quantization_config = None

@@ -22,7 +22,7 @@ from peft import LoraConfig
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig, HfArgumentParser, TrainingArguments
 
-from trl import SFTTrainer
+from trl import SFTTrainer, is_xpu_available
 
 
 tqdm.pandas()
@@ -77,7 +77,11 @@ elif script_args.load_in_8bit or script_args.load_in_4bit:
         load_in_8bit=script_args.load_in_8bit, load_in_4bit=script_args.load_in_4bit
     )
     # Copy the model to each device
-    device_map = {"": Accelerator().local_process_index}
+    device_map = (
+        {"": f"xpu:{Accelerator().local_process_index}"}
+        if is_xpu_available()
+        else {"": Accelerator().local_process_index}
+    )
     torch_dtype = torch.bfloat16
 else:
     device_map = None

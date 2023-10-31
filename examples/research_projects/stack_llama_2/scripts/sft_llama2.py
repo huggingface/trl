@@ -12,6 +12,7 @@ from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TrainingArguments
 
 from trl import SFTTrainer
+from trl.import_utils import is_xpu_available
 from trl.trainer import ConstantLengthDataset
 
 
@@ -198,7 +199,10 @@ trainer.model.save_pretrained(output_dir)
 
 # Free memory for merging weights
 del base_model
-torch.cuda.empty_cache()
+if is_xpu_available():
+    torch.xpu.empty_cache()
+else:
+    torch.cuda.empty_cache()
 
 model = AutoPeftModelForCausalLM.from_pretrained(output_dir, device_map="auto", torch_dtype=torch.bfloat16)
 model = model.merge_and_unload()
