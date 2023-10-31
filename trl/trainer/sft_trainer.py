@@ -196,7 +196,7 @@ class SFTTrainer(Trainer):
                 "You passed a `neftune_noise_alpha` argument to the SFTTrainer, the value you passed will override the one in the `TrainingArguments`."
             )
             # self.neftune_noise_alpha is done at Trainer level
-        elif not self._trainer_supports_neftune and neftune_noise_alpha is not None:
+        elif not self._trainer_supports_neftune:
             self.neftune_noise_alpha = neftune_noise_alpha
 
         if not packing:
