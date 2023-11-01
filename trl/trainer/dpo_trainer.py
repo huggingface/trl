@@ -100,7 +100,7 @@ class DPOTrainer(Trainer):
         compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return
             a dictionary string to metric values.
-        precompute_ref_logps (`bool`, defaults to `False`):
+        precompute_ref_log_probs (`bool`, defaults to `False`):
             Flag to precompute reference model logps for training and evaluation datasets. This is useful if you want to train
             without the reference model.
     """
@@ -131,7 +131,7 @@ class DPOTrainer(Trainer):
         disable_dropout: bool = True,
         generate_during_eval: bool = False,
         compute_metrics: Optional[Callable[[EvalLoopOutput], Dict]] = None,
-        precompute_ref_logps: bool = False,
+        precompute_ref_log_probs: bool = False,
     ):
         if not is_peft_available() and peft_config is not None:
             raise ValueError(
@@ -226,7 +226,7 @@ class DPOTrainer(Trainer):
         self.truncation_mode = truncation_mode
         self.max_target_length = max_target_length
         self.tokenizer = tokenizer
-        self.precompute_ref_logps = precompute_ref_logps
+        self.precompute_ref_log_probs = precompute_ref_log_probs
 
         self.beta = beta
         self.loss_type = loss_type
@@ -303,7 +303,7 @@ class DPOTrainer(Trainer):
     def get_train_dataloader(self) -> DataLoader:
         # tokenize the dataset and compute reference logps for training datasets
         self.train_dataset = self.train_dataset.map(self.tokenize_batch_element)
-        if self.precompute_ref_logps:
+        if self.precompute_ref_log_probs:
             self.train_dataset = self.train_dataset.map(
                 self.compute_reference_logps, batch_size=self.args.per_device_train_batch_size, batched=True
             )
@@ -317,7 +317,7 @@ class DPOTrainer(Trainer):
 
         # tokenize the dataset and compute reference logps for evaluation datasets
         eval_dataset = eval_dataset.map(self.tokenize_batch_element)
-        if self.precompute_ref_logps:
+        if self.precompute_ref_log_probs:
             eval_dataset = eval_dataset.map(
                 self.compute_reference_logps, batch_size=self.args.per_device_train_batch_size, batched=True
             )

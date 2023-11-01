@@ -107,7 +107,7 @@ class DPOTrainerTester(unittest.TestCase):
                 tokenizer=tokenizer,
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
-                precompute_ref_logps=True,
+                precompute_ref_log_probs=True,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -145,7 +145,7 @@ class DPOTrainerTester(unittest.TestCase):
                 tokenizer=self.tokenizer,
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
-                precompute_ref_logps=True,
+                precompute_ref_log_probs=True,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -196,7 +196,7 @@ class DPOTrainerTester(unittest.TestCase):
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
                 peft_config=lora_config,
-                precompute_ref_logps=True,
+                precompute_ref_log_probs=True,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -242,5 +242,5 @@ class DPOTrainerTester(unittest.TestCase):
                     train_dataset=dummy_dataset,
                     eval_dataset=dummy_dataset,
                     generate_during_eval=True,
-                    precompute_ref_logps=True,
+                    precompute_ref_log_probs=True,
                 )
