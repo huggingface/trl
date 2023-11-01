@@ -1,25 +1,19 @@
-# Iterative Supervised Fine-tuning Trainer 
+# Iterative Trainer
 
 Iterative fine-tuning is a training method that enables to perform custom actions (generation and filtering for example) between optimization steps. In TRL we provide an easy-to-use API to fine-tune your models in an iterative way in just a few lines of code.
 
 ## Usage
 
-To get started quickly, instantiate an instance of the class with an 'IterativeSFTConfig', a model, and a tokenizer.
+To get started quickly, instantiate an instance a model, and a tokenizer.
 
 ```python
 
 model = AutoModelForCausalLM.from_pretrained(model_name)
 tokenizer = AutoTokenizer.from_pretrained(model_name)
-tokenizer.pad_token = tokenizer.eos_token
-
-config = IterativeSFTConfig(
-    model_name=model_name,
-    log_with=log_with,
-    project_kwargs={"logging_dir":logging_dir}
-)
+if tokenizer.pad_token is None:
+    tokenizer.pad_token = tokenizer.eos_token
 
 trainer = IterativeSFTTrainer(
-    config,
     model,
     tokenizer
 )
@@ -54,18 +48,6 @@ trainer.step(**inputs)
 ```
 
 For causal language models, labels will automatically be created from input_ids or from texts. When using sequence to sequence models you will have to provide your own labels or text_labels.
-The default step batch size is 32, but you can change it at the time of instance initialization of the 'IterativeSFTConfig' like so
-
-```python
-
-config = IterativeSFTConfig(
-    model_name=model_name,
-    step_batch_size=step_batch_size, 
-    log_with=log_with,
-    project_kwargs={"logging_dir":logging_dir}
-)
-
-```
 
 ## IterativeTrainer
 
