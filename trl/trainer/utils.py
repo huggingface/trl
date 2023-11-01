@@ -323,19 +323,22 @@ class DPODataCollatorWithPadding:
             #  2. https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
             #  3. https://github.com/LianjiaTech/BELLE/issues/337
 
-            assert isinstance(prompt, str)
+            if not isinstance(prompt, str):
+                raise ValueError(f"prompt should be an str but got {type(prompt)}")
             prompt_tokens = self.tokenizer(prompt, add_special_tokens=False)
             prompt_input_ids = prompt_tokens["input_ids"]
             prompt_attention_mask = prompt_tokens["attention_mask"]
             assert len(prompt_input_ids) == len(prompt_attention_mask)
 
-            assert isinstance(chosen, str)
+            if not isinstance(chosen, str):
+                raise ValueError(f"chosen should be an str but got {type(chosen)}")
             chosen_tokens = self.tokenizer(prompt + chosen, add_special_tokens=False)
             assert prompt_input_ids == chosen_tokens["input_ids"][: len(prompt_input_ids)]
             chosen_tokens["input_ids"] = chosen_tokens["input_ids"][len(prompt_input_ids) :]
             chosen_tokens["attention_mask"] = chosen_tokens["attention_mask"][len(prompt_input_ids) :]
 
-            assert isinstance(rejected, str)
+            if not isinstance(rejected, str):
+                raise ValueError(f"rejected should be an str but got {type(rejected)}")
             rejected_tokens = self.tokenizer(prompt + rejected, add_special_tokens=False)
             assert prompt_input_ids == rejected_tokens["input_ids"][: len(prompt_input_ids)]
             rejected_tokens["input_ids"] = rejected_tokens["input_ids"][len(prompt_input_ids) :]
