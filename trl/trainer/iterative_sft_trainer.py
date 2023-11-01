@@ -29,6 +29,11 @@ from transformers import (
 from transformers.trainer_utils import EvalLoopOutput
 
 from ..core import PPODecorators
+from ..import_utils import is_peft_available
+
+
+if is_peft_available():
+    from peft import PeftModel
 
 
 class IterativeSFTTrainer(Trainer):
@@ -84,7 +89,7 @@ class IterativeSFTTrainer(Trainer):
             )
 
         self.is_encoder_decoder = hasattr(model, "is_encoder_decoder")
-        self.is_peft_model = getattr(model, "is_peft_model", False)
+        self.is_peft_model = is_peft_available() and isinstance(self.model, PeftModel)
 
         self.tokenizer = tokenizer
 
