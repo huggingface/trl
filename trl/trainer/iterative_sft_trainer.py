@@ -55,7 +55,7 @@ class IterativeSFTTrainer(Trainer):
         **truncation_mode** (`str`, defaults to `keep_end`): -- The truncation mode to use, either `keep_end` or `keep_start`.
         **preprocess_logits_for_metrics** (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`): -- The function to use to preprocess the logits before computing the metrics.
         **compute_metrics** (`Callable[[EvalPrediction], Dict]`, *optional*): -- The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to metric values.
-        **optimize_cuda_cache** (`bool`, *optional*, defaults to `False`) -- Optimize CUDA cache for slightly more memory-efficient training
+        **optimize_cuda_cache** (`bool`, *optional*, defaults to `False`) -- Optimize CUDA cache for slightly more memory-efficient training.
     """
 
     def __init__(
@@ -86,6 +86,10 @@ class IterativeSFTTrainer(Trainer):
             warnings.warn(
                 f"The current model class {type(model)} is not compatible with `.generate()`"
                 "Please make sure that this is intended."
+            )
+        if optimizers[1] is None and args.max_steps == -1:
+            raise ValueError(
+                f"When no scheduler is provided, you need to set the total number of training steps to perform `max_steps`"
             )
 
         self.is_encoder_decoder = hasattr(model, "is_encoder_decoder")
@@ -120,6 +124,13 @@ class IterativeSFTTrainer(Trainer):
             optimizers=optimizers,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
+
+        self.optimizer, self.lr_scheduler = optimizers
+
+        if self.optimizer is None:
+            self.optimizer = self.create_optimizer()
+        if self.lr_scheduler is None:
+            self.lr_scheduler = self.create_scheduler(self.args.max_steps, optimizer=self.optimizer)
 
         self.tokenizer.truncation_side = "left" if self.truncation_mode == "keep_end" else "right"
 
