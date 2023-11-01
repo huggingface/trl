@@ -73,7 +73,7 @@ class IterativeSFTTrainer(Trainer):
         truncation_mode: Optional[str] = "keep_end",
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         compute_metrics: Optional[Callable[[EvalLoopOutput], Dict]] = None,
-        optimize_device_cache : Optional[bool] = False,
+        optimize_device_cache: Optional[bool] = False,
     ):
         # Step 0: check positional arguments validity
         if not isinstance(tokenizer, (PreTrainedTokenizerBase)):
@@ -112,7 +112,7 @@ class IterativeSFTTrainer(Trainer):
 
         self.max_length = max_length
         self.truncation_mode = truncation_mode
-        self.optimize_device_cache  = optimize_device_cache 
+        self.optimize_device_cache = optimize_device_cache
 
         super().__init__(
             model=model,
@@ -139,7 +139,7 @@ class IterativeSFTTrainer(Trainer):
                 "Your `Trainer` does not have an `accelerator` object. Consider upgrading `transformers`."
             )
 
-        PPODecorators.optimize_device_cache  = self.optimize_device_cache 
+        PPODecorators.optimize_device_cache = self.optimize_device_cache
 
     def prepare_model_inputs(self, input_ids: torch.Tensor, attention_mask: torch.Tensor, labels: torch.Tensor):
         if attention_mask is None:
