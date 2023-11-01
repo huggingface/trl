@@ -327,7 +327,7 @@ class DPOTrainer(Trainer):
         """Tokenize a single batch element from a DPO specific dataset.
 
         At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
-            in case the prompt + chosen or prompt + rejected responses is/are too long. First
+        in case the prompt + chosen or prompt + rejected responses is/are too long. First
             we truncate the prompt; if we're still too long, we truncate the chosen/rejected.
 
         We also create the labels for the chosen/rejected responses, which are of length equal to
