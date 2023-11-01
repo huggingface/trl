@@ -16,7 +16,7 @@ import unittest
 import torch
 from datasets import Dataset
 from parameterized import parameterized
-from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer, TrainingArguments
 
 from trl import IterativeSFTTrainer
 
@@ -91,7 +91,8 @@ class IterativeTrainerTester(unittest.TestCase):
             model = self.t5_model
             tokenizer = self.t5_tokenizer
 
-        iterative_trainer = IterativeSFTTrainer(model=model, tokenizer=tokenizer)
+        args = TrainingArguments(max_steps=2)
+        iterative_trainer = IterativeSFTTrainer(model=model, args=args, tokenizer=tokenizer)
 
         iterative_trainer.step(**inputs)
 

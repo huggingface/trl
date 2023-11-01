@@ -89,7 +89,7 @@ class IterativeSFTTrainer(Trainer):
             )
         if optimizers[1] is None and args.max_steps == -1:
             raise ValueError(
-                f"When no scheduler is provided, you need to set the total number of training steps to perform `max_steps`"
+                "When no scheduler is provided, you need to set the total number of training steps to perform `max_steps`"
             )
 
         self.is_encoder_decoder = hasattr(model, "is_encoder_decoder")
