@@ -121,6 +121,8 @@ class IterativeSFTTrainer(Trainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
+        self.tokenizer.truncation_side = "left" if self.truncation_mode == "keep_end" else "right"
+
         if not hasattr(self, "accelerator"):
             raise AttributeError(
                 "Your `Trainer` does not have an `accelerator` object. Consider upgrading `transformers`."
