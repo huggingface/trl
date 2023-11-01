@@ -12,13 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import warnings
-from typing import List, Optional
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import torch
-from accelerate import Accelerator
-from accelerate.utils import ProjectConfiguration
 from datasets import Dataset
-from torch.optim import Adam
 from torch.utils.data import DataLoader
 from transformers import (
     DataCollator,
@@ -26,67 +23,54 @@ from transformers import (
     DataCollatorForSeq2Seq,
     PreTrainedModel,
     PreTrainedTokenizerBase,
+    Trainer,
+    TrainingArguments,
 )
+from transformers.trainer_utils import EvalLoopOutput
 
-from ..core import PPODecorators, set_seed
-from ..import_utils import is_torch_greater_2_0
-from . import IterativeSFTConfig
+from ..core import PPODecorators
 
 
-class IterativeSFTTrainer:
+class IterativeSFTTrainer(Trainer):
     """
     The IterativeSFTTrainer can be used to finetune models with methods that requires some steps between optimization.
 
     Attributes:
-        **config** (`IterativeConfig`) -- Configuration object for IterativeTrainer.
         **model** (`PreTrainedModel`) -- Model to be optimized, either an 'AutoModelForCausalLM' or an 'AutoModelForSeq2SeqLM'.
             Check the documentation of `PreTrainedModel` for more details.
+        **args** (`transformers.TrainingArguments`): -- The arguments to use for training.
         **tokenizer** (`PreTrainedTokenizerBase`) -- Tokenizer to be used for encoding the
             data. Check the documentation of `transformers.PreTrainedTokenizer` and
             `transformers.PreTrainedTokenizerFast` for more details.
-        **optimizer** (`torch.optim.Optimizer`, *optional*) -- Optimizer to be used for training. If no optimizer is
-            provided, the trainer will create an Adam optimizer with the learning rate specified in the configuration
-            object.
+        **optimizers** (`Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`): -- The optimizer and scheduler to use for training.
         **data_collator** (Union[DataCollatorForLanguageModeling, DataCollatorForSeq2Seq], *optional*) -- Data collator to be used for training and
             passed along the dataloader.
-        **lr_scheduler** (`torch.optim.lr_scheduler`, *optional*) -- Learning rate scheduler to be used for training.
+        **eval_dataset** (`datasets.Dataset`): The dataset to use for evaluation.
+        **max_length** (`int`, defaults to `None`): -- The maximum length of the input.
+        **truncation_mode** (`str`, defaults to `keep_end`): -- The truncation mode to use, either `keep_end` or `keep_start`.
+        **preprocess_logits_for_metrics** (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`): -- The function to use to preprocess the logits before computing the metrics.
+        **compute_metrics** (`Callable[[EvalPrediction], Dict]`, *optional*): -- The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to metric values.
+        **optimize_cuda_cache** (`bool`, *optional*, defaults to `False`) -- Optimize CUDA cache for slightly more memory-efficient training
     """
 
     def __init__(
         self,
-        config: IterativeSFTConfig = None,
         model: PreTrainedModel = None,
+        args: TrainingArguments = None,
         tokenizer: PreTrainedTokenizerBase = None,
-        optimizer: Optional[torch.optim.Optimizer] = None,
+        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (
+            None,
+            None,
+        ),
         data_collator: Optional[DataCollator] = None,
-        lr_scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
+        eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
+        max_length: Optional[int] = None,
+        truncation_mode: Optional[str] = "keep_end",
+        preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
+        compute_metrics: Optional[Callable[[EvalLoopOutput], Dict]] = None,
+        optimize_cuda_cache: Optional[bool] = False,
     ):
-        """
-        Initialize IterativeSFTTrainer.
-
-        Args:
-            config (`IterativeConfig`):
-                Configuration object for IterativeTrainer.
-            model (`PreTrainedModel`):
-                Hugging Face transformer model.
-            tokenizer (`transformers.PreTrainedTokenizerBase`):
-                Hugging Face tokenizer.
-            optimizer (Optional[`torch.optim.Optimizer`]):
-                Optimizer used for training. If `None`, `Adam` is used as default.
-            data_collator (Optional['DataCollator']):
-                Data collator function.
-            lr_scheduler (Optional[`torch.optim.lr_scheduler`]):
-                Learning rate scheduler used for training.
-        """
-
-        self.config = config
-
-        # initial seed for reproducible experiments
-        set_seed(config.seed)
-
         # Step 0: check positional arguments validity
-        if not isinstance(config, IterativeSFTConfig):
-            raise ValueError(f"config must be a IterativeConfig, got {type(config)}")
         if not isinstance(tokenizer, (PreTrainedTokenizerBase)):
             raise ValueError(
                 f"tokenizer must be a PreTrainedTokenizerBase like a PreTrainedTokenizer or a PreTrainedTokenizerFast, got {type(tokenizer)}"
@@ -99,26 +83,8 @@ class IterativeSFTTrainer:
                 "Please make sure that this is intended."
             )
 
-        # Step 1: Initialize Accelerator
-        self.accelerator = Accelerator(
-            log_with=config.log_with,
-            gradient_accumulation_steps=config.gradient_accumulation_steps,
-            project_config=ProjectConfiguration(**config.project_kwargs),
-            **config.accelerator_kwargs,
-        )
-
-        is_using_tensorboard = config.log_with is not None and config.log_with == "tensorboard"
-
-        self.accelerator.init_trackers(
-            config.tracker_project_name,
-            config=dict(trl_ppo_trainer_config=config.to_dict()) if not is_using_tensorboard else config.to_dict(),
-            init_kwargs=config.tracker_kwargs,
-        )
-
-        self.model = model
-        self.model_params = filter(lambda p: p.requires_grad, self.model.parameters())
-        self.is_encoder_decoder = hasattr(self.model, "is_encoder_decoder")
-        self.is_peft_model = getattr(self.model, "is_peft_model", False)
+        self.is_encoder_decoder = hasattr(model, "is_encoder_decoder")
+        self.is_peft_model = getattr(model, "is_peft_model", False)
 
         self.tokenizer = tokenizer
 
@@ -128,52 +94,34 @@ class IterativeSFTTrainer:
                     "No data collator is provided. Using 'DataCollatorForSeq2Seq' with"
                     "'labels_pad_token_id' set to '-100' and 'pad_to_multiple_of' set to 8."
                 )
-                self.data_collator = DataCollatorForSeq2Seq(
-                    tokenizer, model=self.model, label_pad_token_id=-100, pad_to_multiple_of=8
-                )
+                self.data_collator = DataCollatorForSeq2Seq(tokenizer, label_pad_token_id=-100, pad_to_multiple_of=8)
             else:
                 warnings.warn("No data collator is provided. Using 'DataCollatorForLanguageModeling'")
                 self.data_collator = DataCollatorForLanguageModeling(self.tokenizer, mlm=False)
         else:
             self.data_collator = data_collator
 
-        if optimizer is None:
-            self.optimizer = Adam(
-                filter(lambda p: p.requires_grad, self.model.parameters()),
-                lr=self.config.learning_rate,
-            )
-        else:
-            self.optimizer = optimizer
+        self.max_length = max_length
+        self.truncation_mode = truncation_mode
+        self.optimize_cuda_cache = optimize_cuda_cache
 
-        self.lr_scheduler = lr_scheduler
-        if self.lr_scheduler is not None:
-            lr_scheduler_class = (
-                torch.optim.lr_scheduler._LRScheduler
-                if not is_torch_greater_2_0()
-                else torch.optim.lr_scheduler.LRScheduler
-            )
-
-            if not isinstance(self.lr_scheduler, lr_scheduler_class):
-                raise ValueError(
-                    "lr_scheduler must be a torch.optim.lr_scheduler._LRScheduler or torch.optim.lr_scheduler.LRScheduler (for torch >= 2.0)"
-                )
-
-        (self.model, self.optimizer, self.data_collator, self.lr_scheduler) = self.accelerator.prepare(
-            self.model, self.optimizer, self.data_collator, self.lr_scheduler
+        super().__init__(
+            model=model,
+            args=args,
+            data_collator=data_collator,
+            eval_dataset=eval_dataset,
+            tokenizer=tokenizer,
+            compute_metrics=compute_metrics,
+            optimizers=optimizers,
+            preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
-        self.is_distributed = self.accelerator.distributed_type == "MULTI_GPU"
+        if not hasattr(self, "accelerator"):
+            raise AttributeError(
+                "Your `Trainer` does not have an `accelerator` object. Consider upgrading `transformers`."
+            )
 
-        # post process for PP
-        if not getattr(self.model, "is_sequential_parallel", False):
-            self.current_device = self.accelerator.device
-        else:
-            self.current_device = torch.device("cuda:0")
-
-        # init the current step
-        self.current_step = 0
-
-        PPODecorators.optimize_cuda_cache = self.config.optimize_cuda_cache
+        PPODecorators.optimize_cuda_cache = self.optimize_cuda_cache
 
     def prepare_model_inputs(self, input_ids: torch.Tensor, attention_mask: torch.Tensor, labels: torch.Tensor):
         if attention_mask is None:
@@ -189,10 +137,20 @@ class IterativeSFTTrainer:
 
             input_data.pop("decoder_input_ids", None)  # This is directly computed inside the model
 
+            input_data["labels"][input_data["labels"] == self.tokenizer.pad_token_id] = -100
+
         else:
             input_data = self.data_collator(
                 [{"input_ids": ids, "attention_mask": att} for ids, att in zip(input_ids, attention_mask)]
             ).to(self.model.device)
+
+        # truncate in case the user has provided input_ids, attention_mask and labels
+        if self.truncation_mode == "keep_start":
+            input_data = {k: v[: self.max_length] for k, v in input_data.items()}
+        elif self.truncation_mode == "keep_end":
+            input_data = {k: v[-self.max_length :] for k, v in input_data.items()}
+        else:
+            raise ValueError(f"Unknown truncation mode: {self.truncation_mode}")
 
         return input_data
 
@@ -223,7 +181,6 @@ class IterativeSFTTrainer:
         texts: List[str],
         texts_labels: List[str],
     ):
-
         """
         Check if the input data is valid for training.
 
@@ -270,10 +227,17 @@ class IterativeSFTTrainer:
         return input_ids, attention_mask, labels, texts, texts_labels
 
     @PPODecorators.empty_cuda_cache()
-    def step(self, **kwargs):
+    def step(
+        self,
+        input_ids: Optional[List[torch.LongTensor]] = None,
+        attention_mask: Optional[List[torch.LongTensor]] = None,
+        labels: Optional[List[torch.LongTensor]] = None,
+        texts: Optional[List[str]] = None,
+        texts_labels: Optional[List[str]] = None,
+    ):
         """
         Run an optimisation step given a list of input_ids, attention_mask, and labels or a list of text and text_labels.
-        Keyword Args:
+        Args:
             input_ids (List[`torch.LongTensor`]):
                 List of tensors containing the input_ids (if not provided, text will be used)
             attention_mask (List[`torch.LongTensor`], , *optional*):
@@ -289,12 +253,6 @@ class IterativeSFTTrainer:
         """
 
         self.model.train()
-
-        input_ids = kwargs.get("input_ids", None)
-        attention_mask = kwargs.get("attention_mask", None)
-        labels = kwargs.get("labels", None)
-        texts = kwargs.get("texts", None)
-        texts_labels = kwargs.get("texts_labels", None)
 
         if input_ids is None and texts is None:
             raise ValueError("Step should include `input_ids` or `texts` as keyword arguments.")
@@ -313,9 +271,16 @@ class IterativeSFTTrainer:
         )
 
         if texts is not None:
-            input_ids = [self.tokenizer(text, return_tensors="pt")["input_ids"][0] for text in texts]
+            model_inputs = self.tokenizer(
+                texts, max_length=self.max_length, truncation=True, padding=True, return_tensors="pt"
+            )
+
+            input_ids, attention_mask = model_inputs["input_ids"], model_inputs["attention_mask"]
+
         if texts_labels is not None:
-            labels = [self.tokenizer(text_labels, return_tensors="pt")["input_ids"][0] for text_labels in texts_labels]
+            labels = self.tokenizer(
+                texts, max_length=self.max_length, truncation=True, padding=True, return_tensors="pt"
+            )["input_ids"]
 
         if labels is None:
             warnings.warn("No labels are provided. Setting labels to input_ids")
@@ -340,7 +305,7 @@ class IterativeSFTTrainer:
 
         step_dataloader = DataLoader(
             batch_data,
-            batch_size=self.config.step_batch_size,
+            batch_size=self.args.per_device_train_batch_size,
             shuffle=True,
             collate_fn=collator,
         )
@@ -353,6 +318,12 @@ class IterativeSFTTrainer:
                 loss = self.compute_loss(self.model, model_inputs)
 
                 self.accelerator.backward(loss)
+
+                if self.accelerator.sync_gradients and self.args.max_grad_norm is not None:
+                    self.accelerator.clip_grad_norm_(
+                        self.model.parameters(),
+                        self.args.max_grad_norm,
+                    )
 
                 self.optimizer.step()
                 self.optimizer.zero_grad()
