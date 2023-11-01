@@ -172,25 +172,6 @@ class IterativeSFTTrainer(Trainer):
 
         return input_data
 
-    def compute_loss(self, model, inputs, return_outputs=False):
-        """
-        Loss is computed as in the HuggingFace Trainer.
-
-        Subclass and override for custom behavior.
-        """
-
-        outputs = model(**inputs)
-
-        if isinstance(outputs, dict) and "loss" not in outputs:
-            raise ValueError(
-                "The model did not return a loss from the inputs, only the following keys: "
-                f"{','.join(outputs.keys())}. For reference, the inputs it received are {','.join(inputs.keys())}."
-            )
-        # We don't use .loss here since the model may return tuples instead of ModelOutput.
-        loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
-
-        return (loss, outputs) if return_outputs else loss
-
     @staticmethod
     def _step_safety_checker(
         input_ids: List[torch.LongTensor],
