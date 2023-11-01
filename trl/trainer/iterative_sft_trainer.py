@@ -352,31 +352,3 @@ class IterativeSFTTrainer(Trainer):
                 all_stats.append(dict(loss=dict(total=loss.detach())))
 
         return all_stats
-
-    def log_stats(
-        self,
-        stats: dict,
-    ):
-        """
-        A function that logs all the training stats.
-
-        Args:
-            stats (dict[str, Any]):
-                A dictionary of training stats.
-        """
-        # Log only if we are in the main process
-        if self.accelerator.is_main_process:
-            logs = {}
-
-            logs.update(stats)
-
-            # manually cast in fp32 for bf16 torch tensors
-            for k, v in logs.items():
-                if isinstance(v, torch.Tensor) and v.dtype == torch.bfloat16:
-                    logs[k] = v.float()
-
-            if self.config.log_with == "tensorboard":
-                # update the current step
-                self.current_step += 1
-
-            self.accelerator.log(logs, step=self.current_step if self.config.log_with == "tensorboard" else None)
