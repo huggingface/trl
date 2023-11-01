@@ -55,7 +55,7 @@ class IterativeSFTTrainer(Trainer):
         **truncation_mode** (`str`, defaults to `keep_end`): -- The truncation mode to use, either `keep_end` or `keep_start`.
         **preprocess_logits_for_metrics** (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`): -- The function to use to preprocess the logits before computing the metrics.
         **compute_metrics** (`Callable[[EvalPrediction], Dict]`, *optional*): -- The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to metric values.
-        **optimize_cuda_cache** (`bool`, *optional*, defaults to `False`) -- Optimize CUDA cache for slightly more memory-efficient training.
+        **optimize_device_cache ** (`bool`, *optional*, defaults to `False`) -- Optimize CUDA cache for slightly more memory-efficient training.
     """
 
     def __init__(
@@ -73,7 +73,7 @@ class IterativeSFTTrainer(Trainer):
         truncation_mode: Optional[str] = "keep_end",
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         compute_metrics: Optional[Callable[[EvalLoopOutput], Dict]] = None,
-        optimize_cuda_cache: Optional[bool] = False,
+        optimize_device_cache : Optional[bool] = False,
     ):
         # Step 0: check positional arguments validity
         if not isinstance(tokenizer, (PreTrainedTokenizerBase)):
@@ -112,7 +112,7 @@ class IterativeSFTTrainer(Trainer):
 
         self.max_length = max_length
         self.truncation_mode = truncation_mode
-        self.optimize_cuda_cache = optimize_cuda_cache
+        self.optimize_device_cache  = optimize_device_cache 
 
         super().__init__(
             model=model,
@@ -139,7 +139,7 @@ class IterativeSFTTrainer(Trainer):
                 "Your `Trainer` does not have an `accelerator` object. Consider upgrading `transformers`."
             )
 
-        PPODecorators.optimize_cuda_cache = self.optimize_cuda_cache
+        PPODecorators.optimize_device_cache  = self.optimize_device_cache 
 
     def prepare_model_inputs(self, input_ids: torch.Tensor, attention_mask: torch.Tensor, labels: torch.Tensor):
         if attention_mask is None:
@@ -225,7 +225,7 @@ class IterativeSFTTrainer(Trainer):
 
         return input_ids, attention_mask, labels, texts, texts_labels
 
-    @PPODecorators.empty_cuda_cache()
+    @PPODecorators.empty_device_cache()
     def step(
         self,
         input_ids: Optional[List[torch.LongTensor]] = None,
