@@ -92,7 +92,7 @@ class IterativeSFTTrainer(Trainer):
                 "When no scheduler is provided, you need to set the total number of training steps to perform `max_steps`"
             )
 
-        self.is_encoder_decoder = hasattr(model, "is_encoder_decoder")
+        self.is_encoder_decoder = getattr(model.config, "is_encoder_decoder", False)
         self.is_peft_model = is_peft_available() and isinstance(self.model, PeftModel)
 
         self.tokenizer = tokenizer
