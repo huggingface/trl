@@ -28,17 +28,24 @@ from .testing_utils import require_no_wandb, require_peft
 class DPOTrainerTester(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
-        cls.model = AutoModelForCausalLM.from_pretrained(cls.model_id)
-        cls.ref_model = AutoModelForCausalLM.from_pretrained(cls.model_id)
-        cls.tokenizer = AutoTokenizer.from_pretrained(cls.model_id)
-        cls.tokenizer.pad_token = cls.tokenizer.eos_token
-
-        # get t5 as seq2seq example:
-        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration-correct-vocab"
-        cls.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
-        cls.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
-        cls.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
+        cls.models = {
+            "gpt2": {
+                "model_id": "trl-internal-testing/dummy-GPT2-correct-vocab",
+                "model_type": AutoModelForCausalLM,
+                "tokenizer_type": AutoTokenizer,
+            },
+            "t5": {
+                "model_id": "trl-internal-testing/tiny-T5ForConditionalGeneration-correct-vocab",
+                "model_type": AutoModelForSeq2SeqLM,
+                "tokenizer_type": AutoTokenizer,
+            },
+            # add more models here if needed
+        }
+        for key, model_info in cls.models.items():
+            model_info["model"] = model_info["model_type"].from_pretrained(model_info["model_id"])
+            model_info["ref_model"] = model_info["model_type"].from_pretrained(model_info["model_id"])
+            model_info["tokenizer"] = model_info["tokenizer_type"].from_pretrained(model_info["model_id"])
+        cls.models["gpt2"]["tokenizer"].pad_token = cls.models["gpt2"]["tokenizer"].eos_token
 
     def _init_dummy_dataset(self):
         # fmt: off
@@ -74,8 +81,12 @@ class DPOTrainerTester(unittest.TestCase):
         # fmt: on
         return Dataset.from_dict(dummy_dataset_dict)
 
+    def _get_models_by_name(self, name):
+        return self.models[name]["model"], self.models[name]["ref_model"], self.models[name]["tokenizer"]
+
     @parameterized.expand([["gpt2", "sigmoid"], ["t5", "hinge"]])
     def test_dpo_trainer(self, name, loss_type):
+        model, ref_model, tokenizer = self._get_models_by_name(name)
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
                 output_dir=tmp_dir,
@@ -88,15 +99,6 @@ class DPOTrainerTester(unittest.TestCase):
             )
 
             dummy_dataset = self._init_dummy_dataset()
-
-            if name == "gpt2":
-                model = self.model
-                ref_model = self.ref_model
-                tokenizer = self.tokenizer
-            elif name == "t5":
-                model = self.t5_model
-                ref_model = self.t5_ref_model
-                tokenizer = self.t5_tokenizer
 
             trainer = DPOTrainer(
                 model=model,
@@ -123,7 +125,9 @@ class DPOTrainerTester(unittest.TestCase):
                 if param.sum() != 0:
                     self.assertFalse(torch.equal(param, new_param))
 
-    def test_dpo_trainer_without_providing_ref_model(self):
+    @parameterized.expand([["gpt2"], ["t5"]])
+    def test_dpo_trainer_without_providing_ref_model(self, name):
+        model, _, tokenizer = self._get_models_by_name(name)
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
                 output_dir=tmp_dir,
@@ -138,11 +142,11 @@ class DPOTrainerTester(unittest.TestCase):
             dummy_dataset = self._init_dummy_dataset()
 
             trainer = DPOTrainer(
-                model=self.model,
+                model=model,
                 ref_model=None,
                 beta=0.1,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                tokenizer=tokenizer,
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
                 precompute_ref_log_probs=True,
@@ -163,7 +167,9 @@ class DPOTrainerTester(unittest.TestCase):
 
     @require_peft
     @mark.peft_test
-    def test_dpo_trainer_without_providing_ref_model_with_lora(self):
+    @parameterized.expand([["gpt2"], ["t5"]])
+    def test_dpo_trainer_without_providing_ref_model_with_lora(self, name):
+        model, _, tokenizer = self._get_models_by_name(name)
         from peft import LoraConfig
 
         lora_config = LoraConfig(
@@ -188,11 +194,11 @@ class DPOTrainerTester(unittest.TestCase):
             dummy_dataset = self._init_dummy_dataset()
 
             trainer = DPOTrainer(
-                model=self.model,
+                model=model,
                 ref_model=None,
                 beta=0.1,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                tokenizer=tokenizer,
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
                 peft_config=lora_config,
@@ -214,7 +220,9 @@ class DPOTrainerTester(unittest.TestCase):
                         self.assertFalse(torch.equal(param, new_param))
 
     @require_no_wandb
-    def test_dpo_trainer_generate_during_eval_no_wandb(self):
+    @parameterized.expand([["gpt2"], ["t5"]])
+    def test_dpo_trainer_generate_during_eval_no_wandb(self, name):
+        model, _, tokenizer = self._get_models_by_name(name)
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
                 output_dir=tmp_dir,
@@ -234,11 +242,11 @@ class DPOTrainerTester(unittest.TestCase):
                 " Please install `wandb` to resolve.",
             ):
                 DPOTrainer(
-                    model=self.model,
+                    model=model,
                     ref_model=None,
                     beta=0.1,
                     args=training_args,
-                    tokenizer=self.tokenizer,
+                    tokenizer=tokenizer,
                     train_dataset=dummy_dataset,
                     eval_dataset=dummy_dataset,
                     generate_during_eval=True,
