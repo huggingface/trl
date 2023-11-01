@@ -101,7 +101,7 @@ class DPOTrainer(Trainer):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return
             a dictionary string to metric values.
         precompute_ref_log_probs (`bool`, defaults to `False`):
-            Flag to precompute reference model logps for training and evaluation datasets. This is useful if you want to train
+            Flag to precompute reference model log probabilities and evaluation datasets. This is useful if you want to train
             without the reference model.
     """
 
