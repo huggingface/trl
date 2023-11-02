@@ -84,8 +84,8 @@ class DPOTrainerTester(unittest.TestCase):
     def _get_models_by_name(self, name):
         return self.models[name]["model"], self.models[name]["ref_model"], self.models[name]["tokenizer"]
 
-    @parameterized.expand([["gpt2", "sigmoid"], ["t5", "hinge"]])
-    def test_dpo_trainer(self, name, loss_type):
+    @parameterized.expand([["gpt2", "sigmoid", True], ["t5", "hinge", False]])
+    def test_dpo_trainer(self, name, loss_type, precompute_ref_log_probs):
         model, ref_model, tokenizer = self._get_models_by_name(name)
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
@@ -109,7 +109,7 @@ class DPOTrainerTester(unittest.TestCase):
                 tokenizer=tokenizer,
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
-                precompute_ref_log_probs=True,
+                precompute_ref_log_probs=precompute_ref_log_probs,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -125,8 +125,8 @@ class DPOTrainerTester(unittest.TestCase):
                 if param.sum() != 0:
                     self.assertFalse(torch.equal(param, new_param))
 
-    @parameterized.expand([["gpt2"], ["t5"]])
-    def test_dpo_trainer_without_providing_ref_model(self, name):
+    @parameterized.expand([["gpt2", False], ["t5", True]])
+    def test_dpo_trainer_without_providing_ref_model(self, name, precompute_ref_log_probs):
         model, _, tokenizer = self._get_models_by_name(name)
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
@@ -149,7 +149,7 @@ class DPOTrainerTester(unittest.TestCase):
                 tokenizer=tokenizer,
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
-                precompute_ref_log_probs=True,
+                precompute_ref_log_probs=precompute_ref_log_probs,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -167,8 +167,8 @@ class DPOTrainerTester(unittest.TestCase):
 
     @require_peft
     @mark.peft_test
-    @parameterized.expand([["gpt2"], ["t5"]])
-    def test_dpo_trainer_without_providing_ref_model_with_lora(self, name):
+    @parameterized.expand([["gpt2", True], ["t5", False]])
+    def test_dpo_trainer_without_providing_ref_model_with_lora(self, name, precompute_ref_log_probs):
         model, _, tokenizer = self._get_models_by_name(name)
         from peft import LoraConfig
 
@@ -202,7 +202,7 @@ class DPOTrainerTester(unittest.TestCase):
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
                 peft_config=lora_config,
-                precompute_ref_log_probs=True,
+                precompute_ref_log_probs=precompute_ref_log_probs,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -219,9 +219,9 @@ class DPOTrainerTester(unittest.TestCase):
                     if param.sum() != 0:
                         self.assertFalse(torch.equal(param, new_param))
 
+    @parameterized.expand([["gpt2", False], ["t5", True]])
     @require_no_wandb
-    @parameterized.expand([["gpt2"], ["t5"]])
-    def test_dpo_trainer_generate_during_eval_no_wandb(self, name):
+    def test_dpo_trainer_generate_during_eval_no_wandb(self, name, precompute_ref_log_probs):
         model, _, tokenizer = self._get_models_by_name(name)
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
@@ -250,5 +250,5 @@ class DPOTrainerTester(unittest.TestCase):
                     train_dataset=dummy_dataset,
                     eval_dataset=dummy_dataset,
                     generate_during_eval=True,
-                    precompute_ref_log_probs=True,
+                    precompute_ref_log_probs=precompute_ref_log_probs,
                 )
