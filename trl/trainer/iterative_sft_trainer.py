@@ -251,8 +251,11 @@ class IterativeSFTTrainer(Trainer):
         Returns:
             `dict[str, Any]`: A summary of the training statistics
         """
-
         self.model.train()
+
+        if self.state.global_step == 0:
+            self.tr_loss = torch.tensor(0.0).to(self.args.device)
+            self._globalstep_last_logged = self.state.global_step
 
         if input_ids is None and texts is None:
             raise ValueError("Step should include `input_ids` or `texts` as keyword arguments.")
@@ -310,12 +313,15 @@ class IterativeSFTTrainer(Trainer):
             collate_fn=collator,
         )
 
-        all_stats = []
-
         for _, batch in enumerate(step_dataloader):
             with self.accelerator.accumulate(self.model):
                 model_inputs = {k: batch[k] for k in model_inputs_names}
                 loss = self.compute_loss(self.model, model_inputs)
+
+                if self.args.n_gpu > 1:
+                    loss = loss.mean()
+
+                tr_loss_step = loss.detach()
 
                 self.accelerator.backward(loss)
 
@@ -330,7 +336,32 @@ class IterativeSFTTrainer(Trainer):
                 if self.lr_scheduler is not None:
                     self.lr_scheduler.step()
 
-                # update stats etc
-                all_stats.append(dict(loss=dict(total=loss.detach())))
+                self.state.global_step += 1
 
-        return all_stats
+                # update stats etc
+                self.tr_loss += tr_loss_step
+
+                self._maybe_log_save_evaluate()
+
+    def _maybe_log_save_evaluate(self):
+        # check if eval is required
+        if self.args.eval_steps is not None:
+            if self.state.global_step % self.args.eval_steps == 0 and self.state.global_step != 0:
+                self.evaluate(self.eval_dataset)
+
+        # check if logging is required
+        if self.args.logging_steps is not None:
+            if self.state.global_step % self.args.logging_steps == 0 and self.state.global_step != 0:
+                logs: Dict[str, float] = {}
+
+                tr_loss_scalar = self._nested_gather(self.tr_loss).mean().item()
+
+                # reset tr_loss to zero
+                self.tr_loss -= self.tr_loss
+
+                logs["loss"] = round(tr_loss_scalar / (self.state.global_step - self._globalstep_last_logged), 4)
+                logs["learning_rate"] = self._get_learning_rate()
+
+                self._globalstep_last_logged = self.state.global_step
+
+                self.log(logs)
