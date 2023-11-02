@@ -15,6 +15,7 @@ from .models import (
 from .trainer import (
     DataCollatorForCompletionOnlyLM,
     DPOTrainer,
+    IterativeSFTTrainer,
     PPOConfig,
     PPOTrainer,
     RewardConfig,
