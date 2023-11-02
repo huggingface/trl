@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import dataclasses
-import inspect
 import warnings
 from functools import wraps
 from typing import Callable, Dict, List, Optional, Tuple, Union
@@ -106,6 +105,10 @@ class SFTTrainer(Trainer):
         neftune_noise_alpha (`Optional[float]`):
             If not `None`, this will activate NEFTune noise embeddings. This has been proven to drastically improve model performances for instrcution
             fine-tuning. Check out the original paper here: https://arxiv.org/abs/2310.05914 and the original code here: https://github.com/neelsjain/NEFTune
+        process_batched_dataset (`Optional[bool]`):
+            Whether to batch the dataset when tokenizing it. Defaults to `True` for performance reasons.
+            In case this value is set to `True` and using `formatting_func`, the `formatting_func` should process a dict of lists and return a list of
+            strings. In case this value is set to `False` and using `formatting_func`, the `formatting_func` should process a dict of strings and return a single string.
     """
 
     def __init__(
@@ -132,6 +135,7 @@ class SFTTrainer(Trainer):
         dataset_num_proc: Optional[int] = None,
         dataset_batch_size: int = 1000,
         neftune_noise_alpha: Optional[float] = None,
+        process_batched_dataset: Optional[bool] = True,
     ):
         if isinstance(model, str):
             warnings.warn(
@@ -145,6 +149,15 @@ class SFTTrainer(Trainer):
             )
 
         supported_classes = (PreTrainedModel,) if not is_peft_available() else (PreTrainedModel, PeftModel)
+
+        # Whether to process the dataset in batched form.
+        self.process_batched_dataset = process_batched_dataset
+
+        if packing and not process_batched_dataset:
+            warnings.warn(
+                "You passed `packing=True` and `process_batched_dataset=False` to the SFTTrainer. Note the argument `process_batched_dataset` will be ignored"
+                " as you can only use it when `packing=False`."
+            )
 
         if is_peft_available() and peft_config is not None:
             if not isinstance(peft_config, PeftConfig):
@@ -160,18 +173,9 @@ class SFTTrainer(Trainer):
                     )
 
                 if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
-                    _support_gc_kwargs = hasattr(
-                        args, "gradient_checkpointing_kwargs"
-                    ) and "gradient_checkpointing_kwargs" in list(
-                        inspect.signature(prepare_model_for_kbit_training).parameters
+                    model = prepare_model_for_kbit_training(
+                        model, use_gradient_checkpointing=args.gradient_checkpointing
                     )
-
-                    preprare_model_kwargs = {"use_gradient_checkpointing": args.gradient_checkpointing}
-
-                    if _support_gc_kwargs:
-                        preprare_model_kwargs["gradient_checkpointing_kwargs"] = args.gradient_checkpointing_kwargs
-
-                    model = prepare_model_for_kbit_training(model, **preprare_model_kwargs)
 
                     args = dataclasses.replace(args, gradient_checkpointing=False)
 
@@ -356,7 +360,7 @@ class SFTTrainer(Trainer):
             )
 
             if use_formatting_func and not self._dataset_sanity_checked:
-                if not isinstance(formatting_func(element), list):
+                if not isinstance(formatting_func(element), list) and self.process_batched_dataset:
                     raise ValueError(
                         "The `formatting_func` should return a list of processed strings since it can lead to silent bugs."
                     )
@@ -367,7 +371,7 @@ class SFTTrainer(Trainer):
 
         tokenized_dataset = dataset.map(
             tokenize,
-            batched=True,
+            batched=self.process_batched_dataset,
             remove_columns=dataset.column_names,
             num_proc=self.dataset_num_proc,
             batch_size=self.dataset_batch_size,

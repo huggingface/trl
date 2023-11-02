@@ -183,7 +183,29 @@ trainer = SFTTrainer(
 
 trainer.train()
 ```
-To preperly format your input make sure to process all the examples by looping over them and returning a list of processed text. Check out a full example on how to use SFTTrainer on alpaca dataset [here](https://github.com/huggingface/trl/pull/444#issue-1760952763)
+To preperly format your input make sure to process all the examples by looping over them and returning a list of processed text. Check out a full example on how to use SFTTrainer on alpaca dataset [here](https://github.com/huggingface/trl/pull/444#issue-1760952763).
+
+Note for formatting prompts with `packing=False` your `formatting_prompts_func` needs to process a dict of lists and return a list. This is because `dataset.map(xxx, batched=True)` is called under the hood. To disable this behaviour and use a simple `formatting_prompts_func` e.g.:
+```python
+def formatting_func(example):
+    text = f"### Question: {example['question']}\n ### Answer: {example['answer']}"
+    return text
+```
+You can pass `process_batched_dataset=False` at `SFTTrainer`'s `__init__` method:
+
+```python
+def formatting_func(example):
+    text = f"### Question: {example['question']}\n ### Answer: {example['answer']}"
+    return text
+
+trainer = SFTTrainer(
+    model,
+    train_dataset=dataset,
+    formatting_func=formatting_func,
+    process_batched_dataset=False,
+)
+```
+However processing the dataset will be slower.
 
 ### Packing dataset ([`ConstantLengthDataset`])
 

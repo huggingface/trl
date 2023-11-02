@@ -200,6 +200,15 @@ class SFTTrainerTester(unittest.TestCase):
                 packing=False,
             )
 
+            _ = SFTTrainer(
+                model=self.model,
+                args=training_args,
+                train_dataset=self.dummy_dataset,
+                formatting_func=formatting_prompts_func,
+                packing=False,
+                process_batched_dataset=False,
+            )
+
     def test_sft_trainer_with_model_num_train_epochs(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
