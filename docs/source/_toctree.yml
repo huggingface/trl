@@ -31,6 +31,8 @@
     title: DPO Trainer
   - local: ddpo_trainer
     title: Denoising Diffusion Policy Optimization
+  - local: iterative_sft_trainer
+    title: Iterative Supervised Fine-Tuning
   - local: text_environments
     title: Text Environments
   title: API
