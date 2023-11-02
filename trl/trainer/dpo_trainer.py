@@ -556,7 +556,7 @@ class DPOTrainer(Trainer):
         """Generate samples from the model and reference model for the given batch of inputs."""
 
         policy_output = model.generate(
-            batch["prompt_input_ids"],
+            input_ids=batch["prompt_input_ids"],
             attention_mask=batch["prompt_attention_mask"],
             max_length=self.max_length,
             do_sample=True,
