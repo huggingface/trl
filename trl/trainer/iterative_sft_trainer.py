@@ -93,7 +93,7 @@ class IterativeSFTTrainer(Trainer):
             )
 
         self.is_encoder_decoder = getattr(model.config, "is_encoder_decoder", False)
-        self.is_peft_model = is_peft_available() and isinstance(self.model, PeftModel)
+        self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
 
         self.tokenizer = tokenizer
 
@@ -117,7 +117,7 @@ class IterativeSFTTrainer(Trainer):
         super().__init__(
             model=model,
             args=args,
-            data_collator=data_collator,
+            data_collator=self.data_collator,
             eval_dataset=eval_dataset,
             tokenizer=tokenizer,
             compute_metrics=compute_metrics,
@@ -125,12 +125,12 @@ class IterativeSFTTrainer(Trainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
-        self.optimizer, self.lr_scheduler = optimizers
+        self.create_optimizer_and_scheduler(self.args.max_steps)
 
-        if self.optimizer is None:
-            self.optimizer = self.create_optimizer()
-        if self.lr_scheduler is None:
-            self.lr_scheduler = self.create_scheduler(self.args.max_steps, optimizer=self.optimizer)
+        # prepare model, optimizer and lr_scheduler
+        self.model, self.optimizer, self.lr_scheduler = self.accelerator.prepare(
+            self.model, self.optimizer, self.lr_scheduler
+        )
 
         self.tokenizer.truncation_side = "left" if self.truncation_mode == "keep_end" else "right"
 
@@ -163,12 +163,13 @@ class IterativeSFTTrainer(Trainer):
             ).to(self.model.device)
 
         # truncate in case the user has provided input_ids, attention_mask and labels
-        if self.truncation_mode == "keep_start":
-            input_data = {k: v[: self.max_length] for k, v in input_data.items()}
-        elif self.truncation_mode == "keep_end":
-            input_data = {k: v[-self.max_length :] for k, v in input_data.items()}
-        else:
-            raise ValueError(f"Unknown truncation mode: {self.truncation_mode}")
+        if self.max_length is not None:
+            if self.truncation_mode == "keep_start":
+                input_data = {k: v[: self.max_length] for k, v in input_data.items()}
+            elif self.truncation_mode == "keep_end":
+                input_data = {k: v[-self.max_length :] for k, v in input_data.items()}
+            else:
+                raise ValueError(f"Unknown truncation mode: {self.truncation_mode}")
 
         return input_data
 
