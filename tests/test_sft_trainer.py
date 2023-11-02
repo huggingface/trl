@@ -557,7 +557,7 @@ class SFTTrainerTester(unittest.TestCase):
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
             # make sure the trainer did 5 steps
-            self.assertTrue("model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2"))
+            self.assertTrue("model.safetensors" in os.listdir(tmp_dir + "/checkpoint-4"))
 
     def test_sft_trainer_with_model_neftune(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
