@@ -15,7 +15,7 @@ jobs:
 
     name: Benchmark
     # Only run if it#s a PR and the comment contains /Benchmark
-    if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/benchmark-trl-experiments') && contains('["vwxyzjn", "younesbelkada", "lvwerra"]', github.actor)
+    if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/benchmark-trl-experiments') && contains(FromJSON('["vwxyzjn", "younesbelkada", "lvwerra", "lewtun"]'), github.actor)
     runs-on: ${{ matrix.os }}
 
     steps:

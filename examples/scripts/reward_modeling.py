@@ -22,7 +22,7 @@ from peft import LoraConfig
 from tqdm import tqdm
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, BitsAndBytesConfig
 
-from trl import RewardConfig, RewardTrainer
+from trl import RewardConfig, RewardTrainer, is_xpu_available
 
 
 tqdm.pandas()
@@ -51,6 +51,7 @@ class ScriptArguments:
             num_train_epochs=1,
             gradient_accumulation_steps=16,
             gradient_checkpointing=True,
+            gradient_checkpointing_kwargs={"use_reentrant": False},
             learning_rate=1.41e-5,
             report_to="tensorboard",
             remove_unused_columns=False,
@@ -67,15 +68,10 @@ class ScriptArguments:
             r=16,
             lora_alpha=16,
             bias="none",
-            task_type="CAUSAL_LM",
             task_type="SEQ_CLS",
             modules_to_save=["scores"],
         ),
     )
-    load_in_8bit: bool = False
-    """load the model in 8 bits precision"""
-    load_in_4bit: bool = False
-    """load the model in 4 bits precision"""
 
 
 args = tyro.cli(ScriptArguments)
@@ -88,7 +84,11 @@ if args.load_in_8bit and args.load_in_4bit:
 elif args.load_in_8bit or args.load_in_4bit:
     quantization_config = BitsAndBytesConfig(load_in_8bit=args.load_in_8bit, load_in_4bit=args.load_in_4bit)
     # Copy the model to each device
-    device_map = {"": Accelerator().local_process_index}
+    device_map = (
+        {"": f"xpu:{Accelerator().local_process_index}"}
+        if is_xpu_available()
+        else {"": Accelerator().local_process_index}
+    )
 else:
     device_map = None
     quantization_config = None
@@ -116,8 +116,8 @@ def preprocess_function(examples):
         "attention_mask_rejected": [],
     }
     for chosen, rejected in zip(examples["chosen"], examples["rejected"]):
-        tokenized_chosen = tokenizer(chosen, truncation=True)
-        tokenized_rejected = tokenizer(rejected, truncation=True)
+        tokenized_chosen = tokenizer(chosen)
+        tokenized_rejected = tokenizer(rejected)
 
         new_examples["input_ids_chosen"].append(tokenized_chosen["input_ids"])
         new_examples["attention_mask_chosen"].append(tokenized_chosen["attention_mask"])

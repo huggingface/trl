@@ -57,7 +57,7 @@ To create the package for pypi.
 from setuptools import find_packages, setup
 
 
-__version__ = "0.7.2.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
+__version__ = "0.7.3.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
 
 REQUIRED_PKGS = [
     "torch>=1.4.0",
@@ -65,7 +65,7 @@ REQUIRED_PKGS = [
     "numpy>=1.18.2",
     "accelerate",
     "datasets",
-    "tyro>=0.5.7",
+    "tyro>=0.5.11",
 ]
 EXTRAS = {
     "test": ["parameterized", "pytest", "pytest-xdist", "accelerate", "peft>=0.4.0", "diffusers>=0.18.0"],

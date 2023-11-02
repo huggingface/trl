@@ -17,6 +17,7 @@ import os
 import time
 import typing
 import warnings
+from contextlib import nullcontext
 from typing import Callable, List, Optional, Union
 
 import datasets
@@ -51,7 +52,7 @@ from ..core import (
     stack_dicts,
     stats_to_np,
 )
-from ..import_utils import is_torch_greater_2_0
+from ..import_utils import is_torch_greater_2_0, is_xpu_available
 from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper, create_reference_model
 from . import AdaptiveKLController, BaseTrainer, FixedKLController, PPOConfig, RunningMoments
 
@@ -235,6 +236,11 @@ class PPOTrainer(BaseTrainer):
                 f"ref_model must be a PreTrainedModelWrapper or `None`, got {type(ref_model)} - supported "
                 f"architectures are: {SUPPORTED_ARCHITECTURES} "
             )
+        self.optional_peft_ctx = (
+            self.accelerator.unwrap_model(self.model).pretrained_model.disable_adapter
+            if self.is_peft_model
+            else nullcontext
+        )
 
         if not (isinstance(tokenizer, PreTrainedTokenizer) or isinstance(tokenizer, PreTrainedTokenizerFast)):
             raise ValueError(
@@ -341,9 +347,12 @@ class PPOTrainer(BaseTrainer):
         if not getattr(self.model, "is_sequential_parallel", False):
             self.current_device = self.accelerator.device
         else:
-            self.current_device = torch.device("cuda:0")
+            if is_xpu_available():
+                self.current_device = torch.device("xpu:0")
+            else:
+                self.current_device = torch.device("cuda:0")
 
-        PPODecorators.optimize_cuda_cache = self.config.optimize_cuda_cache
+        PPODecorators.optimize_device_cache = self.config.optimize_device_cache
 
         self.running = RunningMoments(self.accelerator)
 
@@ -420,6 +429,7 @@ class PPOTrainer(BaseTrainer):
         length_sampler: Callable = None,
         batch_size: int = 4,
         return_prompt: bool = True,
+        generate_ref_response: bool = False,
         **generation_kwargs,
     ):
         """
@@ -437,19 +447,33 @@ class PPOTrainer(BaseTrainer):
                 Batch size used for generation, defaults to `4`.
             return_prompt (`bool`, *optional*):
                 If set to `False` the prompt is not returned but only the newly generated tokens, defaults to `True`.
+            generate_ref_response (`bool`, *optional*):
+                If set to `True` the reference response is also generated, defaults to `False`.
 
         Returns:
             `torch.LongTensor`: A tensor of shape (`batch_size`, `gen_len`) containing response tokens.
         """
-
+        if generate_ref_response:
+            ref_model = self.model if self.is_peft_model else self.ref_model
         if isinstance(query_tensor, List):
-            return self._generate_batched(
+            response = self._generate_batched(
+                self.model,
                 query_tensor,
                 length_sampler=length_sampler,
                 batch_size=batch_size,
                 return_prompt=return_prompt,
                 **generation_kwargs,
             )
+            if generate_ref_response:
+                with self.optional_peft_ctx():
+                    ref_response = self._generate_batched(
+                        ref_model,
+                        query_tensor,
+                        length_sampler=length_sampler,
+                        batch_size=batch_size,
+                        return_prompt=return_prompt,
+                        **generation_kwargs,
+                    )
 
         else:
             if len(query_tensor.shape) == 2:
@@ -462,13 +486,22 @@ class PPOTrainer(BaseTrainer):
             response = self.accelerator.unwrap_model(self.model).generate(
                 input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs
             )
+            if generate_ref_response:
+                with self.optional_peft_ctx():
+                    ref_response = ref_model.generate(input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs)
 
             if not return_prompt and not self.is_encoder_decoder:
-                return response[:, query_tensor.shape[0] :]
-            return response
+                response = response[:, query_tensor.shape[0] :]
+                if generate_ref_response:
+                    ref_response = ref_response[:, query_tensor.shape[0] :]
+
+        if generate_ref_response:
+            return response, ref_response
+        return response
 
     def _generate_batched(
         self,
+        model: PreTrainedModelWrapper,
         query_tensors: List[torch.Tensor],
         length_sampler: Callable = None,
         batch_size: int = 4,
@@ -505,7 +538,7 @@ class PPOTrainer(BaseTrainer):
                 return_tensors="pt",
             ).to(self.current_device)
 
-            generations = self.accelerator.unwrap_model(self.model).generate(**padded_inputs, **generation_kwargs)
+            generations = self.accelerator.unwrap_model(model).generate(**padded_inputs, **generation_kwargs)
 
             for generation, mask in zip(generations, padded_inputs["attention_mask"]):
                 if not self.is_encoder_decoder:
@@ -576,7 +609,7 @@ class PPOTrainer(BaseTrainer):
 
         return queries, responses, scores, masks
 
-    @PPODecorators.empty_cuda_cache()
+    @PPODecorators.empty_device_cache()
     def step(
         self,
         queries: List[torch.LongTensor],
@@ -678,23 +711,13 @@ class PPOTrainer(BaseTrainer):
                 response_masks=response_masks,
                 return_logits=full_kl_penalty,
             )
-            # for when the model is a peft model
-            if self.is_peft_model and hasattr(
-                self.accelerator.unwrap_model(self.model).pretrained_model,
-                "disable_adapter",
-            ):
-                with self.accelerator.unwrap_model(self.model).pretrained_model.disable_adapter():
-                    ref_logprobs, ref_logits_or_none, _, _ = self.batched_forward_pass(
-                        self.model, queries, responses, model_inputs, return_logits=full_kl_penalty
-                    )
-            elif self.is_peft_model and not hasattr(self.model.pretrained_model, "disable_adapter"):
-                raise ValueError(
-                    "You are using a `peft` version that does not support `disable_adapter`. Please update your `peft` version to the latest version."
-                )
-
-            else:
+            with self.optional_peft_ctx():
                 ref_logprobs, ref_logits_or_none, _, _ = self.batched_forward_pass(
-                    self.ref_model, queries, responses, model_inputs, return_logits=full_kl_penalty
+                    self.model if self.is_peft_model else self.ref_model,
+                    queries,
+                    responses,
+                    model_inputs,
+                    return_logits=full_kl_penalty,
                 )
 
         timing["time/ppo/forward_pass"] = time.time() - t
@@ -909,7 +932,7 @@ class PPOTrainer(BaseTrainer):
         input_data.pop("labels", None)  # we don't want to compute LM losses
         return input_data
 
-    @PPODecorators.empty_cuda_cache()
+    @PPODecorators.empty_device_cache()
     def batched_forward_pass(
         self,
         model: PreTrainedModelWrapper,
@@ -1000,7 +1023,7 @@ class PPOTrainer(BaseTrainer):
             torch.cat(all_masks)[:, :-1],
         )
 
-    @PPODecorators.empty_cuda_cache()
+    @PPODecorators.empty_device_cache()
     def train_minibatch(
         self,
         old_logprobs: torch.FloatTensor,
@@ -1095,7 +1118,7 @@ class PPOTrainer(BaseTrainer):
         raise NotImplementedError
 
     def compute_advantages(
-        self: torch.FloatTensor,
+        self,
         values: torch.FloatTensor,
         rewards: torch.FloatTensor,
         mask: torch.FloatTensor,
@@ -1106,6 +1129,9 @@ class PPOTrainer(BaseTrainer):
 
         values = values * mask
         rewards = rewards * mask
+
+        if self.config.whiten_rewards:
+            rewards = masked_whiten(rewards, mask, shift_mean=False)
 
         for t in reversed(range(gen_len)):
             nextvalues = values[:, t + 1] if t < gen_len - 1 else 0.0

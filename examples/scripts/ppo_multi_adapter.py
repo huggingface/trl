@@ -21,7 +21,7 @@ from peft import LoraConfig
 from tqdm import tqdm
 from transformers import BitsAndBytesConfig, HfArgumentParser, LlamaTokenizer
 
-from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer
+from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, is_xpu_available
 from trl.core import LengthSampler
 
 
@@ -82,7 +82,7 @@ nf4_config = BitsAndBytesConfig(
 )
 model = AutoModelForCausalLMWithValueHead.from_pretrained(
     script_args.model_name,
-    device_map={"": 0},
+    device_map={"": "xpu:0"} if is_xpu_available() else {"": 0},
     peft_config=lora_config,
     quantization_config=nf4_config,
     reward_adapter=script_args.rm_adapter,

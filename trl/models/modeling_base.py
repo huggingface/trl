@@ -22,9 +22,8 @@ from accelerate import Accelerator
 from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError, HFValidationError, LocalEntryNotFoundError
 from transformers import PreTrainedModel
-from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 
-from ..import_utils import is_peft_available
+from ..import_utils import is_peft_available, is_transformers_greater_than, is_xpu_available
 
 
 if is_peft_available():
@@ -39,6 +38,11 @@ if is_peft_available():
         prepare_model_for_kbit_training,
     )
     from peft.peft_model import set_peft_model_state_dict
+
+if is_transformers_greater_than("4.33.0"):
+    from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
+else:
+    from transformers.deepspeed import is_deepspeed_zero3_enabled
 
 LAYER_PATTERNS = [
     "transformer.h.{layer}",
@@ -329,7 +333,10 @@ class PreTrainedModelWrapper(nn.Module):
                 The current device.
         """
         dummy_accelerator = Accelerator()
-        return dummy_accelerator.local_process_index if torch.cuda.is_available() else "cpu"
+        if is_xpu_available():
+            return f"xpu:{dummy_accelerator.local_process_index}"
+        else:
+            return dummy_accelerator.local_process_index if torch.cuda.is_available() else "cpu"
 
     @classmethod
     def _split_kwargs(cls, kwargs):
