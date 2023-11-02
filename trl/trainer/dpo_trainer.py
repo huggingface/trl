@@ -402,8 +402,8 @@ class DPOTrainer(Trainer):
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge']")
 
-        chosen_rewards = self.beta * (policy_chosen_logps - reference_chosen_logps).detach()
-        rejected_rewards = self.beta * (policy_rejected_logps - reference_rejected_logps).detach()
+        chosen_rewards = self.beta * (policy_chosen_logps.float() - reference_chosen_logps.float()).detach()
+        rejected_rewards = self.beta * (policy_rejected_logps.float() - reference_rejected_logps.float()).detach()
 
         return losses, chosen_rewards, rejected_rewards
 
