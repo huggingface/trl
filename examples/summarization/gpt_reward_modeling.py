@@ -201,6 +201,9 @@ class ScriptArguments:
     just_eval: Optional[bool] = field(default=False)
     eval_steps: Optional[float] = field(default=None)
     pretrained_adapter: Optional[str] = field(default=None)
+    padding: Optional[str] = field(
+        default="max_length", metadata={"help": "padding to use for preprocessing the dataset"}
+    )
 
 
 def find_all_linear_names(args, model):
@@ -325,10 +328,10 @@ def create_and_prepare_dataset(args, tokenizer, split, num_proc=2):
         }
         for prompt, chosen, rejected in zip(examples["prompt"], examples["chosen"], examples["rejected"]):
             tokenized_chosen = tokenizer(
-                prompt + "\n" + chosen, padding="max_length", truncation=True, max_length=script_args.seq_length
+                prompt + "\n" + chosen, padding=args.padding, truncation=True, max_length=script_args.seq_length
             )
             tokenized_rejected = tokenizer(
-                prompt + "\n" + rejected, padding="max_length", truncation=True, max_length=script_args.seq_length
+                prompt + "\n" + rejected, padding=args.padding, truncation=True, max_length=script_args.seq_length
             )
             new_examples["input_ids_chosen"].append(tokenized_chosen["input_ids"])
             new_examples["attention_mask_chosen"].append(tokenized_chosen["attention_mask"])
