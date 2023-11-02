@@ -28,10 +28,13 @@ from transformers import (
     pipeline,
 )
 
+# from transformers.trainer_utils import get_last_checkpoint
 from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, set_seed
 from trl.core import LengthSampler
 from trl.models.modeling_value_adapter import AutoModelForCausalLMWithValueAdapter
-from trl.trainer.utils import pad_to_length
+
+
+# from trl.trainer.utils import pad_to_length
 
 
 # import copy
@@ -129,6 +132,9 @@ class ScriptArguments:
     # ema_decay: Optional[float] = field(default=0.995, metadata={"help": "the ema decay rate"})
     # reset_freq: Optional[int] = field(default=None, metadata={"help": "reset every n epochs"})
     input_ids_input: Optional[bool] = field(
+        default=False,
+    )
+    strip_prompt: Optional[bool] = field(
         default=False,
     )
 
@@ -251,10 +257,20 @@ def create_and_prepare_dataset(args, tokenizer, split, num_proc=2):
     original_columns = dataset.column_names
     original_columns.remove("query")
 
+    def tokenize(queries):
+        if args.strip_prompt:
+            if isinstance(queries, list):
+                queries = [q.strip() for q in queries]
+            else:
+                queries = queries.strip()
+
+        return tokenizer(queries, truncation=True, max_length=args.input_max_length)
+
     dataset = dataset.map(
-        lambda examples: tokenizer(examples["query"], truncation=True, max_length=args.input_max_length),
+        tokenize,
         batched=True,
         num_proc=num_proc,
+        input_columns="query",
         remove_columns=original_columns,
     )
 

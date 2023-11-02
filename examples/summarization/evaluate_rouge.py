@@ -43,8 +43,11 @@ class ScriptArguments:
     seq_length: Optional[int] = field(default=512, metadata={"help": "Input sequence length"})
     max_new_tokens: Optional[int] = field(default=48, metadata={"help": "Max new tokens to generate"})
     num_logged_samples: int = field(default=100, metadata={"help": "Max samples to log to wandb"})
+    temperature: Optional[float] = field(default=0.0)
+    sample: Optional[bool] = field(default=False)
 
-    strip: Optional[bool] = field(default=False, metadata={"help": "the dataset name"})
+    strip: Optional[bool] = field(default=False)
+    log_with: Optional[str] = field(default="wandb")
 
 
 parser = HfArgumentParser(ScriptArguments)
@@ -133,6 +136,7 @@ model.eval()
 gen_kwargs = {
     "max_new_tokens": args.max_new_tokens,
     "pad_token_id": tokenizer.pad_token_id,
+    "do_sample": args.sample,
 }
 
 wandb.init(project="trl")
@@ -187,7 +191,20 @@ for batch in tqdm(eval_dataloader):
                 )
 
             if len(table.data) == args.num_logged_samples:
-                wandb.log({"examples": table})
+                if args.log_with == "wandb":
+                    wandb.log({"examples": table})
+                else:
+                    for row in table.iterrows():
+                        print("PROMPT")
+                        print(row[1][0])
+                        print("\n")
+                        print("PRED")
+                        print(row[1][1])
+                        print("\n")
+                        print("LABEL")
+                        print(row[1][2])
+                        print("\n")
+                        print("\n")
 
 result = rouge.compute()
 print(result)
