@@ -313,7 +313,7 @@ class DPOTrainer(Trainer):
         eval_dataset = eval_dataset.map(self.tokenize_batch_element)
         if self.precompute_ref_log_probs:
             eval_dataset = eval_dataset.map(
-                self.compute_reference_logps, batch_size=self.args.per_device_train_batch_size, batched=True
+                self.compute_reference_logps, batch_size=self.args.per_device_eval_batch_size, batched=True
             )
         return super().get_eval_dataloader(eval_dataset=eval_dataset)
 
