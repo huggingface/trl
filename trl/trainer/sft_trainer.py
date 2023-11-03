@@ -138,6 +138,12 @@ class SFTTrainer(Trainer):
     ):
         if model_kwargs is None:
             model_kwargs = {}
+        elif not isinstance(model, str):
+            warnings.warn(
+                "You passed model_kwargs to the SFTTrainer. But your model is already instatiated."
+                "model_kwargs will be ignored."
+            )
+
         if isinstance(model, str):
             warnings.warn(
                 "You passed a model_id to the SFTTrainer. This will automatically create an "

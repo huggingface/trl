@@ -148,8 +148,20 @@ class DPOTrainer(Trainer):
     ):
         if model_kwargs is None:
             model_kwargs = {}
+        elif not isinstance(model, str):
+            warnings.warn(
+                "You passed model_kwargs to the DPOTrainer. But your model is already instatiated."
+                "model_kwargs will be ignored."
+            )
+
         if ref_model_kwargs is None:
             ref_model_kwargs = {}
+        elif not isinstance(ref_model, str):
+            warnings.warn(
+                "You passed ref_model_kwargs to the DPOTrainer. But your ref_model is already instatiated."
+                "ref_model_kwargs will be ignored."
+            )
+
         if isinstance(model, str):
             warnings.warn(
                 "You passed a model_id to the DPOTrainer. This will automatically create an "
