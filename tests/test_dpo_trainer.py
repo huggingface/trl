@@ -167,7 +167,7 @@ class DPOTrainerTester(unittest.TestCase):
 
     @require_peft
     @mark.peft_test
-    @parameterized.expand([["gpt2", True], ["t5", False]])
+    @parameterized.expand([["gpt2", True], ["t5", True]])
     def test_dpo_trainer_without_providing_ref_model_with_lora(self, name, precompute_ref_log_probs):
         model, _, tokenizer = self._get_models_by_name(name)
         from peft import LoraConfig
