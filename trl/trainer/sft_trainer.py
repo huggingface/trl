@@ -134,10 +134,10 @@ class SFTTrainer(Trainer):
         dataset_num_proc: Optional[int] = None,
         dataset_batch_size: int = 1000,
         neftune_noise_alpha: Optional[float] = None,
-        model_kwargs: Optional[Dict] = None,
+        model_init_kwargs: Optional[Dict] = None,
     ):
-        if model_kwargs is None:
-            model_kwargs = {}
+        if model_init_kwargs is None:
+            model_init_kwargs = {}
         elif not isinstance(model, str):
             raise ValueError("You passed model_kwargs to the SFTTrainer. But your model is already instantiated.")
 
@@ -146,7 +146,7 @@ class SFTTrainer(Trainer):
                 "You passed a model_id to the SFTTrainer. This will automatically create an "
                 "`AutoModelForCausalLM` or a `PeftModel` (if you passed a `peft_config`) for you."
             )
-            model = AutoModelForCausalLM.from_pretrained(model, **model_kwargs)
+            model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
 
         if packing and data_collator is not None and isinstance(data_collator, DataCollatorForCompletionOnlyLM):
             raise ValueError(

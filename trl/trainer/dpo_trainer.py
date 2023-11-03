@@ -143,16 +143,16 @@ class DPOTrainer(Trainer):
         disable_dropout: bool = True,
         generate_during_eval: bool = False,
         compute_metrics: Optional[Callable[[EvalLoopOutput], Dict]] = None,
-        model_kwargs: Optional[Dict] = None,
-        ref_model_kwargs: Optional[Dict] = None,
+        model_init_kwargs: Optional[Dict] = None,
+        ref_model_init_kwargs: Optional[Dict] = None,
     ):
-        if model_kwargs is None:
-            model_kwargs = {}
+        if model_init_kwargs is None:
+            model_init_kwargs = {}
         elif not isinstance(model, str):
             raise ValueError("You passed model_kwargs to the DPOTrainer. But your model is already instantiated.")
 
-        if ref_model_kwargs is None:
-            ref_model_kwargs = {}
+        if ref_model_init_kwargs is None:
+            ref_model_init_kwargs = {}
         elif not isinstance(ref_model, str):
             raise ValueError(
                 "You passed ref_model_kwargs to the DPOTrainer. But your ref_model is already instantiated."
@@ -163,14 +163,14 @@ class DPOTrainer(Trainer):
                 "You passed a model_id to the DPOTrainer. This will automatically create an "
                 "`AutoModelForCausalLM` or a `PeftModel` (if you passed a `peft_config`) for you."
             )
-            model = AutoModelForCausalLM.from_pretrained(model, **model_kwargs)
+            model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
 
         if isinstance(ref_model, str):
             warnings.warn(
                 "You passed a ref model_id to the DPOTrainer. This will automatically create an "
                 "`AutoModelForCausalLM`"
             )
-            ref_model = AutoModelForCausalLM.from_pretrained(ref_model, **ref_model_kwargs)
+            ref_model = AutoModelForCausalLM.from_pretrained(ref_model, **ref_model_init_kwargs)
 
         if not is_peft_available() and peft_config is not None:
             raise ValueError(
