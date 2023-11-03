@@ -66,8 +66,6 @@ class DPOTrainer(Trainer):
             which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
         label_pad_token_id (`int`, defaults to `-100`):
             The label pad token id. This argument is required if you want to use the default data collator.
-        padding_value (`int`, defaults to `0`):
-            The padding value. This argument is required if you want to use the default data collator.
         truncation_mode (`str`, defaults to `keep_end`):
             The truncation mode to use, either `keep_end` or `keep_start`. This argument is required if you want to use the default data collator.
         train_dataset (`datasets.Dataset`):
@@ -115,7 +113,6 @@ class DPOTrainer(Trainer):
         args: TrainingArguments = None,
         data_collator: Optional[DataCollator] = None,
         label_pad_token_id: int = -100,
-        padding_value: int = 0,
         truncation_mode: str = "keep_end",
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
@@ -197,7 +194,6 @@ class DPOTrainer(Trainer):
             data_collator = DPODataCollatorWithPadding(
                 pad_token_id=tokenizer.pad_token_id,
                 label_pad_token_id=label_pad_token_id,
-                padding_value=padding_value,
                 is_encoder_decoder=self.is_encoder_decoder,
             )
 
@@ -222,7 +218,7 @@ class DPOTrainer(Trainer):
         self.max_length = max_length
         self.generate_during_eval = generate_during_eval
         self.label_pad_token_id = label_pad_token_id
-        self.padding_value = padding_value
+        self.padding_value = tokenizer.pad_token_id
         self.max_prompt_length = max_prompt_length
         self.truncation_mode = truncation_mode
         self.max_target_length = max_target_length
@@ -444,7 +440,7 @@ class DPOTrainer(Trainer):
                     to_pad = [torch.LongTensor(ex) for ex in batch[k]]
 
                     if (k.startswith("prompt")) and (k.endswith("input_ids")):
-                        padding_value = self.tokenizer.pad_token_id
+                        padding_value = self.padding_value
                     elif k.endswith("_attention_mask"):
                         padding_value = 0
                     elif (k.startswith("chosen")) or (k.startswith("rejected")) or ("decoder" in k):
@@ -459,11 +455,11 @@ class DPOTrainer(Trainer):
                     else:
                         to_pad = [torch.LongTensor(ex) for ex in batch[k]]
                     if k.endswith("_input_ids"):
-                        padding_value = self.tokenizer.pad_token_id
+                        padding_value = self.padding_value
                     elif k.endswith("_labels"):
                         padding_value = self.label_pad_token_id
                     elif k.endswith("_attention_mask"):
-                        padding_value = self.padding_value
+                        padding_value = 0
                     else:
                         raise ValueError(f"Unexpected key in batch '{k}'")
 
@@ -511,6 +507,10 @@ class DPOTrainer(Trainer):
 
         Args:
             batch: A batch of data. Must contain the keys 'chosen_input_ids' and 'rejected_input_ids', which are tensors of shape (batch_size, sequence_length).
+            is_encoder_decoder: Whether the model is an encoder-decoder model.
+            label_pad_token_id: The label pad token id.
+            padding_value: The padding value to use for the concatenated inputs_ids.
+            device: The device for the concatenated inputs.
 
         Returns:
             A dictionary containing the concatenated inputs under the key 'concatenated_input_ids'.
@@ -524,12 +524,22 @@ class DPOTrainer(Trainer):
 
         for k in batch:
             if k.startswith("chosen") and isinstance(batch[k], torch.Tensor):
-                pad_value = label_pad_token_id if "labels" in k or is_encoder_decoder else padding_value
+                if "labels" in k or is_encoder_decoder:
+                    pad_value = label_pad_token_id
+                elif k.endswith("_input_ids"):
+                    pad_value = padding_value
+                elif k.endswith("_attention_mask"):
+                    pad_value = 0
                 concatenated_key = k.replace("chosen", "concatenated")
                 concatenated_batch[concatenated_key] = pad_to_length(batch[k], max_length, pad_value=pad_value)
         for k in batch:
             if k.startswith("rejected") and isinstance(batch[k], torch.Tensor):
-                pad_value = label_pad_token_id if "labels" in k or is_encoder_decoder else padding_value
+                if "labels" in k or is_encoder_decoder:
+                    pad_value = label_pad_token_id
+                elif k.endswith("_input_ids"):
+                    pad_value = padding_value
+                elif k.endswith("_attention_mask"):
+                    pad_value = 0
                 concatenated_key = k.replace("rejected", "concatenated")
                 concatenated_batch[concatenated_key] = torch.cat(
                     (

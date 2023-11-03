@@ -270,14 +270,11 @@ class DPODataCollatorWithPadding:
             The tokenizer's pad_token_id.
         label_pad_token_id (`int`, defaults to -100):
             The label used for masking.
-        padding_value (`int`, defaults to 0):
-            The value used for padding.
         is_encoder_decoder (`Optional[bool]`, `optional`, defaults to `None`):
             Whether or not you model has an encoder_decoder architecture.
     """
     pad_token_id: int = 0
     label_pad_token_id: int = -100
-    padding_value: int = 0
     is_encoder_decoder: Optional[bool] = False
 
     def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -308,7 +305,7 @@ class DPODataCollatorWithPadding:
                     elif k.endswith("_labels"):
                         padding_value = self.label_pad_token_id
                     elif k.endswith("_attention_mask"):
-                        padding_value = self.padding_value
+                        padding_value = 0
                     else:
                         raise ValueError(f"Unexpected key in batch '{k}'")
 
