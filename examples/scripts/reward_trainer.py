@@ -39,7 +39,7 @@ class ScriptArguments:
     dataset_name_or_path: Optional[str] = field(default="Anthropic/hh-rlhf", metadata={"help": "the dataset name"})
     dataset_text_field: Optional[str] = field(default="text", metadata={"help": "the text field of the dataset"})
     eval_split: Optional[str] = field(
-        default="none", metadata={"help": "the dataset split to evaluate on; default to 'none' (no evaluation)"}
+        default="test", metadata={"help": "the dataset split to evaluate on; default to 'none' (no evaluation)"}
     )
     seq_length: Optional[int] = field(default=512, metadata={"help": "Input sequence length"})
     load_in_8bit: Optional[bool] = field(default=False, metadata={"help": "load the model in 8 bits precision"})
