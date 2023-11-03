@@ -36,6 +36,7 @@ class TBTrainerCallback(TrainerCallback):
                 mlflow.log_metric("lr", state.log_history[-1]["learning_rate"] , step=state.global_step)
                 mlflow.log_metric("throughput", throughput , step=state.global_step)
                 mlflow.log_metric("loss", state.log_history[-1]["loss"] , step=state.global_step)
+                mlflow.log_metric("accuracy", state.log_history[-1]["eval_accuracy"] , step=state.global_step)
                 print(f'loss: {state.log_history[-1]["loss"]}, lr: {state.log_history[-1]["learning_rate"]}, throughput: {throughput}, step: {state.global_step}')       
 
 # Log number of parameters function
