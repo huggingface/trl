@@ -434,7 +434,7 @@ class DPOTrainer(Trainer):
         return batch
 
     def compute_reference_logps(self, batch) -> Dict:
-        """Computes logps for reference model for a single batch of a DPO specific dataset."""
+        """Computes log probabilities of the reference model for a single batch of a DPO specific dataset."""
 
         # pad the batch
         padded_batch = {}
