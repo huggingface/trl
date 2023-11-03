@@ -13,155 +13,217 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Union
 import torch
 
-import tyro
-from accelerate import Accelerator
 from datasets import load_dataset
-from peft import LoraConfig
+from torch import nn
 from tqdm import tqdm
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, BitsAndBytesConfig
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, TrainingArguments, PreTrainedTokenizerBase
+import tyro
 
-from trl import RewardConfig, RewardTrainer
+from trl import RewardTrainer
 
 
 tqdm.pandas()
 
-
+### fix from https://github.com/huggingface/trl/issues/274
+# Define and parse arguments.
 @dataclass
 class ScriptArguments:
-    model_name: str = "gpt2"
+    model_name: str = "EleutherAI/pythia-1b"
     """the model name"""
     dataset_name: str = "CarperAI/openai_summarize_comparisons"
     """the dataset name"""
-    dataset_text_field: str = "text"
+    dataset_text_field: str = "prompt"
     """the text field of the dataset"""
-    eval_split: str = "valid1"
+    train_split: str = "train"
+    """the dataset split to train on"""
+    eval_split: str = "test"
     """the dataset split to evaluate on; default to 'none' (no evaluation)"""
-    load_in_8bit: bool = False
-    """load the model in 8 bits precision"""
-    load_in_4bit: bool = False
-    """load the model in 4 bits precision"""
     trust_remote_code: bool = True
     """Enable `trust_remote_code`"""
-    reward_config: RewardConfig = field(
-        default_factory=lambda: RewardConfig(
+    hf_trainer: TrainingArguments = field(
+        default_factory=lambda: TrainingArguments(
             output_dir="output",
-            per_device_train_batch_size=4,
+            per_device_train_batch_size=2,
+            per_device_eval_batch_size=4,
             num_train_epochs=1,
             gradient_accumulation_steps=16,
-            gradient_checkpointing=True,
-            learning_rate=1.41e-5,
+            gradient_checkpointing=False,
+            learning_rate=1e-5,
+            weight_decay=0.001,
+            warmup_steps=100,
+            lr_scheduler_type="cosine",
             report_to="tensorboard",
             remove_unused_columns=False,
             optim="adamw_torch",
             logging_steps=5,
-            evaluation_strategy="no",
-            max_length=600,
-            eval_steps=30,
+            evaluation_strategy="epoch",
         )
     )
-    use_peft: bool = False
-    """whether to use peft"""
-    peft_config: Optional[LoraConfig] = field(
-        default_factory=lambda: LoraConfig(
-            r=16,
-            lora_alpha=16,
-            bias="none",
-            task_type="SEQ_CLS",
-            modules_to_save=["scores"],
-        ),
+    seq_length: int = 560
+    """the length of the post + summary"""
+
+
+class GPTRewardTrainer(RewardTrainer):
+    def compute_loss(
+        self,
+        model,
+        inputs,
+        return_outputs=False,
+    ):
+        rewards = model(
+            input_ids=inputs["input_ids"],
+            attention_mask=inputs["attention_mask"],
+        )[0]
+        bsz = rewards.size(0)
+        jidx = torch.arange(0, bsz, 2)
+        kidx = jidx + 1
+        rewards_chosen = rewards[jidx]
+        rewards_rejected = rewards[kidx]
+        loss = -nn.functional.logsigmoid(rewards_chosen - rewards_rejected).mean()
+        if return_outputs:
+            return loss, {
+                "rewards_chosen": rewards_chosen,
+                "rewards_rejected": rewards_rejected,
+            }
+        return loss
+
+
+@dataclass
+class GPTRewardDataCollatorWithPadding:
+    r"""
+    Reward DataCollator class that pads the inputs to the maximum length of the batch.
+    Args:
+        tokenizer (`PreTrainedTokenizerBase`):
+            The tokenizer used for encoding the data.
+        padding (`Union[bool, str, `PaddingStrategy`]`, `optional`, defaults to `True`):
+            padding_strategy to pass to the tokenizer.
+        max_length (`Optional[int]`, `optional`, defaults to `None`):
+            The maximum length of the sequence to be processed.
+        pad_to_multiple_of (`Optional[int]`, `optional`, defaults to `None`):
+            If set will pad the sequence to a multiple of the provided value.
+        return_tensors (`str`, `optional`, defaults to `"pt"`):
+            The tensor type to use.
+    """
+    tokenizer: PreTrainedTokenizerBase
+    padding: Union[bool, str] = True
+    max_length: Optional[int] = None
+    pad_to_multiple_of: Optional[int] = None
+    return_tensors: str = "pt"
+
+    def __call__(self, features):
+        # features_chosen = []
+        # features_rejected = []
+        merged_features = []
+        for feature in features:
+            # check if the keys are named as expected
+            if (
+                "input_ids_chosen" not in feature
+                or "input_ids_rejected" not in feature
+                or "attention_mask_chosen" not in feature
+                or "attention_mask_rejected" not in feature
+            ):
+                raise ValueError(
+                    "The features should include `input_ids_chosen`, `attention_mask_chosen`, `input_ids_rejected` and `attention_mask_rejected`"
+                )
+
+            merged_features.append(
+                {
+                    "input_ids": feature["input_ids_chosen"],
+                    "attention_mask": feature["attention_mask_chosen"],
+                }
+            )
+            merged_features.append(
+                {
+                    "input_ids": feature["input_ids_rejected"],
+                    "attention_mask": feature["attention_mask_rejected"],
+                }
+            )
+        batch = self.tokenizer.pad(
+            merged_features,
+            padding=self.padding,
+            max_length=self.max_length,
+            pad_to_multiple_of=self.pad_to_multiple_of,
+            return_tensors=self.return_tensors,
+        )
+        batch = {
+            "input_ids": batch["input_ids"],
+            "attention_mask": batch["attention_mask"],
+            "return_loss": True,
+        }
+        return batch
+
+
+
+def create_and_prepare_model(args):
+
+    torch_dtype = torch.float32
+
+    model = AutoModelForSequenceClassification.from_pretrained(
+        args.model_name,
+        num_labels=1,
+        torch_dtype=torch_dtype,
     )
 
+    model.config.torch_dtype = torch_dtype
+    model.config.use_cache = True
+
+
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
+    if getattr(tokenizer, "pad_token", None) is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    if getattr(model.config, "pad_token_id", None) is None:
+        model.config.pad_token_id = model.config.eos_token_id
+
+    return model, tokenizer
+
+
+def create_and_prepare_dataset(args, tokenizer, split, num_proc=2):
+    dataset = load_dataset(args.dataset_name, split=split)
+    original_columns = dataset.column_names
+
+    def preprocess_function(examples):
+        new_examples = {
+            "input_ids_chosen": [],
+            "attention_mask_chosen": [],
+            "input_ids_rejected": [],
+            "attention_mask_rejected": [],
+        }
+        for prompt, chosen, rejected in zip(examples["prompt"], examples["chosen"], examples["rejected"]):
+            tokenized_chosen = tokenizer(
+                prompt + "\n\n" + chosen, padding="max_length", truncation=True, max_length=args.seq_length
+            )
+            tokenized_rejected = tokenizer(
+                prompt + "\n\n" + rejected, padding="max_length", truncation=True, max_length=args.seq_length
+            )
+            new_examples["input_ids_chosen"].append(tokenized_chosen["input_ids"])
+            new_examples["attention_mask_chosen"].append(tokenized_chosen["attention_mask"])
+            new_examples["input_ids_rejected"].append(tokenized_rejected["input_ids"])
+            new_examples["attention_mask_rejected"].append(tokenized_rejected["attention_mask"])
+
+        return new_examples
+
+    dataset = dataset.map(preprocess_function, batched=True, num_proc=num_proc, remove_columns=original_columns)
+
+    return dataset
 
 args = tyro.cli(ScriptArguments)
-args.reward_config.evaluation_strategy = "steps" if args.eval_split != "none" else "no"
+model, tokenizer = create_and_prepare_model(args)
+train_dataset = create_and_prepare_dataset(args, tokenizer, args.train_split)
+eval_dataset = create_and_prepare_dataset(args, tokenizer, args.eval_split)
 
+data_collator = GPTRewardDataCollatorWithPadding(tokenizer, max_length=args.seq_length, pad_to_multiple_of=8)
 
-# Step 1: Load the model
-if args.load_in_8bit and args.load_in_4bit:
-    raise ValueError("You can't load the model in 8 bits and 4 bits at the same time")
-elif args.load_in_8bit or args.load_in_4bit:
-    quantization_config = BitsAndBytesConfig(load_in_8bit=args.load_in_8bit, load_in_4bit=args.load_in_4bit)
-    # Copy the model to each device
-    device_map = {"": Accelerator().local_process_index}
-else:
-    device_map = None
-    quantization_config = None
-
-model = AutoModelForSequenceClassification.from_pretrained(
-    args.model_name,
-    quantization_config=quantization_config,
-    device_map=device_map,
-    trust_remote_code=args.trust_remote_code,
-    num_labels=1,
-)
-
-# Step 2: Load the dataset and pre-process it
-tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-tokenizer.pad_token_id = tokenizer.eos_token_id
-model.config.pad_token_id = model.config.eos_token_id
-train_dataset = load_dataset(args.dataset_name, split="train")
-
-
-# Tokenize chosen/rejected pairs of inputs
-# Adapt this section to your needs for custom datasets
-def preprocess_function(examples):
-    new_examples = {
-        "input_ids_chosen": [],
-        "attention_mask_chosen": [],
-        "input_ids_rejected": [],
-        "attention_mask_rejected": [],
-    }
-    for prompt, chosen, rejected in zip(examples["prompt"], examples["chosen"], examples["rejected"]):
-        tokenized_prompt = tokenizer(prompt + "\n\n", max_length=512, truncation=True)
-        tokenized_chosen = tokenizer(chosen, max_length=48, truncation=True)
-        tokenized_rejected = tokenizer(rejected, max_length=48, truncation=True)
-        new_examples["input_ids_chosen"].append(tokenized_prompt["input_ids"] + tokenized_chosen["input_ids"])
-        new_examples["attention_mask_chosen"].append(tokenized_prompt["attention_mask"] + tokenized_chosen["attention_mask"])
-        new_examples["input_ids_rejected"].append(tokenized_prompt["input_ids"] + tokenized_rejected["input_ids"])
-        new_examples["attention_mask_rejected"].append(tokenized_prompt["attention_mask"] + tokenized_rejected["attention_mask"])
-
-    return new_examples
-
-
-# Preprocess the dataset and filter out examples that are longer than args.max_length
-train_dataset = train_dataset.map(
-    preprocess_function,
-    batched=True,
-    # num_proc=16,
-)
-
-if args.eval_split == "none":
-    eval_dataset = None
-else:
-    eval_dataset = load_dataset(args.dataset_name, split=args.eval_split)
-
-    eval_dataset = eval_dataset.map(
-        preprocess_function,
-        batched=True,
-        num_proc=4,
-    )
-
-
-# Step 3: Define the LoraConfig
-if args.use_peft:
-    peft_config = args.peft_config
-else:
-    peft_config = None
-
-# Step 5: Define the Trainer
-trainer = RewardTrainer(
+trainer = GPTRewardTrainer(
     model=model,
     tokenizer=tokenizer,
-    args=args.reward_config,
+    args=args.hf_trainer,
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
-    peft_config=peft_config,
+    max_length=args.seq_length,
+    data_collator=data_collator,
 )
-
 trainer.train()
-
-metrics = trainer.evaluate()
-trainer.log_metrics(args.eval_split, metrics)
