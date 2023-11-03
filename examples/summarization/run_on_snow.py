@@ -210,6 +210,8 @@ if __name__ == "__main__":
             timenow = datetime.datetime.now().strftime("%d-%m-%y_%H-%M-%S")
             exp_list[0]["name"] = exp_list[0]["name"] + f"_local_{timenow}"
 
+        exp_list[0]["save_strategy"] = "no"
+
     # Run experiments and create results file
     hw.run_wizard(
         func=run_exp,

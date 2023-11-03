@@ -106,6 +106,7 @@ class ScriptArguments:
     logging_steps: Optional[int] = field(default=100, metadata={"help": "the number of update steps between two logs"})
     eval_steps: Optional[int] = field(default=1000, metadata={"help": "the number of steps to eval at"})
     save_steps: Optional[int] = field(default=1000, metadata={"help": "the number of steps to save at"})
+    save_strategy: Optional[str] = field(default="steps")
     report_to: Optional[str] = field(
         default="wandb",
         metadata={
@@ -139,11 +140,22 @@ class DPOTrainerWithGold(DPOTrainer):
     def __init__(
         self,
         gold_model,
+        generate_kwargs=None,
         *args,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.gold_model = self.accelerator.prepare_model(gold_model, evaluation_mode=True)
+        if generate_kwargs is not None:
+            self.generate_kwargs = generate_kwargs
+        else:
+            self.generate_kwargs = {
+                "max_length": self.max_length,
+                "do_sample": True,
+            }
+
+        if model.config.pad_token_id is None:
+            self.generate_kwargs["pad_token_id"] = self.tokenizer.pad_token_id
 
     def evaluation_loop(
         self,
@@ -216,9 +228,7 @@ class DPOTrainerWithGold(DPOTrainer):
         policy_output = model.generate(
             batch["prompt_input_ids"],
             attention_mask=batch["prompt_attention_mask"],
-            max_length=self.max_length,
-            do_sample=True,
-            pad_token_id=self.tokenizer.pad_token_id,
+            **self.generate_kwargs,
         )
 
         if self.ref_model is None:
@@ -226,17 +236,13 @@ class DPOTrainerWithGold(DPOTrainer):
                 reference_output = self.model.generate(
                     batch["prompt_input_ids"],
                     attention_mask=batch["prompt_attention_mask"],
-                    max_length=self.max_length,
-                    do_sample=True,
-                    pad_token_id=self.tokenizer.pad_token_id,
+                    **self.generate_kwargs,
                 )
         else:
             reference_output = self.ref_model.generate(
                 batch["prompt_input_ids"],
                 attention_mask=batch["prompt_attention_mask"],
-                max_length=self.max_length,
-                do_sample=True,
-                pad_token_id=self.tokenizer.pad_token_id,
+                **self.generate_kwargs,
             )
 
         policy_output = pad_to_length(policy_output, self.max_length, self.tokenizer.pad_token_id)
@@ -418,6 +424,7 @@ if __name__ == "__main__":
         gradient_accumulation_steps=script_args.gradient_accumulation_steps,
         learning_rate=script_args.learning_rate,
         evaluation_strategy="steps",
+        save_strategy=script_args.save_strategy,
         logging_first_step=True,
         logging_steps=script_args.logging_steps,
         eval_steps=script_args.eval_steps,
@@ -429,6 +436,14 @@ if __name__ == "__main__":
         fp16=script_args.fp16,
         ddp_find_unused_parameters=(script_args.gradient_checkpointing),
     )
+
+    generate_kwargs = {
+        "max_new_tokens": script_args.max_target_length,
+        "min_length": -1,
+        "top_k": 0.0,
+        "top_p": 1.0,
+        "do_sample": True,
+    }
 
     # 5. initialize the DPO trainer
     dpo_trainer = DPOTrainerWithGold(
@@ -443,6 +458,7 @@ if __name__ == "__main__":
         max_target_length=script_args.max_target_length,
         max_prompt_length=script_args.max_prompt_length,
         generate_during_eval=True,
+        generate_kwargs=generate_kwargs,
     )
 
     # 6. train
