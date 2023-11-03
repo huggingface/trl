@@ -51,13 +51,13 @@ class DPOTrainerTester(unittest.TestCase):
         # fmt: off
         dummy_dataset_dict = {
             "prompt": [
-                "hello",
-                "how are you",
-                "What is your name?",
-                "What is your name?",
-                "Which is the best programming language?",
-                "Which is the best programming language?",
-                "Which is the best programming language?",
+                "hello\n",
+                "how are you\n",
+                "What is your name?\n",
+                "What is your name?\n",
+                "Which is the best programming language?\n",
+                "Which is the best programming language?\n",
+                "Which is the best programming language?\n",
             ],
             "chosen": [
                 "hi nice to meet you",

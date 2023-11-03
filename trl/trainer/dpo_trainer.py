@@ -330,31 +330,40 @@ class DPOTrainer(Trainer):
         rejected = feature["rejected"]
 
         if not self.is_encoder_decoder:
-            chosen_tokens = self.tokenizer(chosen, add_special_tokens=False)
-            rejected_tokens = self.tokenizer(rejected, add_special_tokens=False)
+            # Check issues below for more details
+            #  1. https://github.com/huggingface/trl/issues/907
+            #  2. https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
+            #  3. https://github.com/LianjiaTech/BELLE/issues/337
+
+            if not isinstance(prompt, str):
+                raise ValueError(f"prompt should be an str but got {type(prompt)}")
             prompt_tokens = self.tokenizer(prompt, add_special_tokens=False)
+            prompt_input_ids = prompt_tokens["input_ids"]
+            prompt_attention_mask = prompt_tokens["attention_mask"]
+            if len(prompt_input_ids) != len(prompt_attention_mask):
+                raise ValueError("Prompt input ids and attention mask should have the same length.")
 
-            eos_token_id = self.tokenizer.eos_token_id
-            # Get indices in list prompt_tokens["input_ids"] that equals the EOS token (often 0)
-            eos_indices_prompt = [i for i, x in enumerate(prompt_tokens["input_ids"]) if x == eos_token_id]
-            # attention mask these indices to eos_token_id
-            new_attention_mask = [
-                0 if i in eos_indices_prompt else p for i, p in enumerate(prompt_tokens["attention_mask"])
-            ]
-            prompt_tokens["attention_mask"] = new_attention_mask
+            if not isinstance(chosen, str):
+                raise ValueError(f"chosen should be an str but got {type(chosen)}")
 
-            # do the same for chosen and rejected
-            eos_indices_chosen = [i for i, x in enumerate(chosen_tokens["input_ids"]) if x == eos_token_id]
-            new_attention_mask_c = [
-                0 if i in eos_indices_chosen else p for i, p in enumerate(chosen_tokens["attention_mask"])
-            ]
-            chosen_tokens["attention_mask"] = new_attention_mask_c
+            chosen_tokens = self.tokenizer(prompt + chosen, add_special_tokens=False)
+            if prompt_input_ids != chosen_tokens["input_ids"][: len(prompt_input_ids)]:
+                raise ValueError("Prompt input ids and chosen input ids should be the same up to the prompt.")
+            chosen_tokens["input_ids"] = chosen_tokens["input_ids"][len(prompt_input_ids) :]
+            chosen_tokens["attention_mask"] = chosen_tokens["attention_mask"][len(prompt_input_ids) :]
 
-            eos_indices_rejected = [i for i, x in enumerate(rejected_tokens["input_ids"]) if x == eos_token_id]
-            new_attention_mask_r = [
-                0 if i in eos_indices_rejected else p for i, p in enumerate(rejected_tokens["attention_mask"])
-            ]
-            rejected_tokens["attention_mask"] = new_attention_mask_r
+            if not isinstance(rejected, str):
+                raise ValueError(f"rejected should be an str but got {type(rejected)}")
+            rejected_tokens = self.tokenizer(prompt + rejected, add_special_tokens=False)
+            if prompt_input_ids != rejected_tokens["input_ids"][: len(prompt_input_ids)]:
+                raise ValueError("Prompt input ids and rejected input ids should be the same up to the prompt.")
+
+            rejected_tokens["input_ids"] = rejected_tokens["input_ids"][len(prompt_input_ids) :]
+            rejected_tokens["attention_mask"] = rejected_tokens["attention_mask"][len(prompt_input_ids) :]
+
+            # add BOS token to head of prompt
+            prompt_tokens["input_ids"] = [self.tokenizer.bos_token_id] + prompt_tokens["input_ids"]
+            prompt_tokens["attention_mask"] = [1] + prompt_tokens["attention_mask"]
 
             # add EOS token to end of prompt
             chosen_tokens["input_ids"].append(self.tokenizer.eos_token_id)
