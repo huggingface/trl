@@ -125,7 +125,7 @@ class DPOTrainerTester(unittest.TestCase):
                 if param.sum() != 0:
                     self.assertFalse(torch.equal(param, new_param))
 
-    @parameterized.expand([["gpt2", False], ["t5", True]])
+    @parameterized.expand([["gpt2", True], ["t5", True]])
     def test_dpo_trainer_without_providing_ref_model(self, name, precompute_ref_log_probs):
         model, _, tokenizer = self._get_models_by_name(name)
         with tempfile.TemporaryDirectory() as tmp_dir:
