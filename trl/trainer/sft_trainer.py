@@ -139,10 +139,7 @@ class SFTTrainer(Trainer):
         if model_kwargs is None:
             model_kwargs = {}
         elif not isinstance(model, str):
-            warnings.warn(
-                "You passed model_kwargs to the SFTTrainer. But your model is already instatiated."
-                "model_kwargs will be ignored."
-            )
+            raise ValueError("You passed model_kwargs to the SFTTrainer. But your model is already instantiated.")
 
         if isinstance(model, str):
             warnings.warn(
