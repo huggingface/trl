@@ -30,6 +30,8 @@ ALL_CAUSAL_LM_MODELS = [
     "trl-internal-testing/tiny-random-BloomForCausalLM",
     "trl-internal-testing/tiny-random-GPT2LMHeadModel",
     "trl-internal-testing/tiny-random-CodeGenForCausalLM-sharded",
+    "trl-internal-testing/tiny-random-GPTNeoXForCausalLM-safetensors-sharded",
+    "trl-internal-testing/tiny-random-GPTNeoXForCausalLM-safetensors"
     # "trl-internal-testing/tiny-random-LlamaForCausalLM", uncomment on the next transformers release
 ]
 
