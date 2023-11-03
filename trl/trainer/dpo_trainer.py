@@ -311,8 +311,6 @@ class DPOTrainer(Trainer):
         self.beta = beta
         self.loss_type = loss_type
 
-        self._stored_metrics = defaultdict(lambda: defaultdict(list))
-
         super().__init__(
             model=model,
             args=args,
@@ -528,21 +526,24 @@ class DPOTrainer(Trainer):
 
         return (chosen_logps, rejected_logps, chosen_logits, rejected_logits)
 
-    def get_batch_metrics(
+    def compute_loss(
         self,
-        model,
-        batch: Dict[str, Union[List, torch.LongTensor]],
-        train_eval: Literal["train", "eval"] = "train",
-    ):
-        """Compute the DPO loss and other metrics for the given batch of inputs for train or test."""
-        metrics = {}
-
+        model: Union[PreTrainedModel, nn.Module],
+        inputs: Dict[str, Union[torch.Tensor, Any]],
+        return_outputs=False,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
+        if not self.use_dpo_data_collator:
+            warnings.warn(
+                "compute_loss is only implemented for DPODataCollatorWithPadding, and you passed a datacollator that is different than "
+                "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
+            )
         (
             policy_chosen_logps,
             policy_rejected_logps,
             policy_chosen_logits,
             policy_rejected_logits,
         ) = self.concatenated_forward(model, batch)
+
         with torch.no_grad():
             if self.ref_model is None:
                 with self.accelerator.unwrap_model(self.model).disable_adapter():
@@ -566,40 +567,37 @@ class DPOTrainer(Trainer):
             reference_chosen_logps,
             reference_rejected_logps,
         )
+        loss = losses.mean()
+        outputs = {
+            "loss": loss,
+            "chosen_rewards": chosen_rewards,
+            "rejected_rewards": rejected_rewards,
+            "policy_chosen_logps": policy_chosen_logps.detach(),
+            "policy_rejected_logps": policy_chosen_logps.detach(),
+            "policy_chosen_logits": policy_chosen_logits.detach(),
+            "policy_rejected_logits": policy_chosen_logits.detach(),
+        }
+
+        return (loss, outputs) if return_outputs else loss
+
+    def compute_metrics(self, eval_preds: EvalPrediction):
+        preds, labels = eval_preds
+        chosen_rewards = preds["chosen_rewards"]
+        rejected_rewards = preds["rejected_rewards"]
+
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
-        prefix = "eval_" if train_eval == "eval" else ""
-        metrics[f"{prefix}rewards/chosen"] = chosen_rewards.cpu().mean()
-        metrics[f"{prefix}rewards/rejected"] = rejected_rewards.cpu().mean()
-        metrics[f"{prefix}rewards/accuracies"] = reward_accuracies.cpu().mean()
-        metrics[f"{prefix}rewards/margins"] = (chosen_rewards - rejected_rewards).cpu().mean()
-        metrics[f"{prefix}logps/rejected"] = policy_rejected_logps.detach().cpu().mean()
-        metrics[f"{prefix}logps/chosen"] = policy_chosen_logps.detach().cpu().mean()
-        metrics[f"{prefix}logits/rejected"] = policy_rejected_logits.detach().cpu().mean()
-        metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.detach().cpu().mean()
+        metrics = {}
+        metrics["rewards/chosen"] = chosen_rewards.cpu().mean()
+        metrics["rewards/rejected"] = rejected_rewards.cpu().mean()
+        metrics["rewards/accuracies"] = reward_accuracies.cpu().mean()
+        metrics["rewards/margins"] = (chosen_rewards - rejected_rewards).cpu().mean()
+        metrics["logps/rejected"] = preds["policy_rejected_logps"].detach().cpu().mean()
+        metrics["logps/chosen"] = preds["policy_chosen_logps"].detach().cpu().mean()
+        metrics["logits/rejected"] = preds["policy_rejected_logits"].detach().cpu().mean()
+        metrics["logits/chosen"] = preds["policy_chosen_logits"].detach().cpu().mean()
 
-        return losses.mean(), metrics
-
-    def compute_loss(
-        self,
-        model: Union[PreTrainedModel, nn.Module],
-        inputs: Dict[str, Union[torch.Tensor, Any]],
-        return_outputs=False,
-    ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
-        if not self.use_dpo_data_collator:
-            warnings.warn(
-                "compute_loss is only implemented for DPODataCollatorWithPadding, and you passed a datacollator that is different than "
-                "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
-            )
-        loss, metrics = self.get_batch_metrics(model, inputs, train_eval="train")
-
-        # force log the metrics
-        if self.accelerator.is_main_process:
-            self.store_metrics(metrics, train_eval="train")
-
-        if return_outputs:
-            return (loss, metrics)
-        return loss
+        return metrics
 
     def get_batch_samples(self, model, batch: Dict[str, torch.LongTensor]) -> Tuple[str, str]:
         """Generate samples from the model and reference model for the given batch of inputs."""
@@ -657,29 +655,17 @@ class DPOTrainer(Trainer):
                 ignore_keys = []
 
         with torch.no_grad():
-            loss, metrics = self.get_batch_metrics(model, inputs, train_eval="eval")
-
-        # force log the metrics
-        if self.accelerator.is_main_process:
-            self.store_metrics(metrics, train_eval="eval")
+            loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
 
         if prediction_loss_only:
             return (loss.detach(), None, None)
 
-        # logits for the chosen and rejected samples from model
-        logits_dict = {
-            "eval_logits/chosen": metrics["eval_logits/chosen"],
-            "eval_logits/rejected": metrics["eval_logits/rejected"],
-        }
-        logits = tuple(v.unsqueeze(dim=0) for k, v in logits_dict.items() if k not in ignore_keys)
-        logits = torch.stack(logits).mean(axis=1).to(self.accelerator.device)
-        labels = torch.zeros(logits.shape[0], device=self.accelerator.device)
+        # select the preferred sequence
+        # 0 for position 0 (chosen)
+        # 1 for position 1 (rejected)
+        labels = torch.int(outputs["chosen_rewards"] < outputs["rejected_rewards"])
 
-        return (loss.detach(), logits, labels)
-
-    def store_metrics(self, metrics: Dict[str, float], train_eval: Literal["train", "eval"] = "train") -> None:
-        for key, value in metrics.items():
-            self._stored_metrics[train_eval][key].append(value)
+        return (loss.detach(), outputs, labels)
 
     def evaluation_loop(
         self,
@@ -730,19 +716,3 @@ class DPOTrainer(Trainer):
         )
 
         return initial_output
-
-    def log(self, logs: Dict[str, float]) -> None:
-        """
-        Log `logs` on the various objects watching training, including stored metrics.
-
-        Args:
-            logs (`Dict[str, float]`):
-                The values to log.
-        """
-        # logs either has 'loss' or 'eval_loss'
-        train_eval = "train" if "loss" in logs else "eval"
-        # Add averaged stored metrics to logs
-        for key, metrics in self._stored_metrics[train_eval].items():
-            logs[key] = torch.tensor(metrics).mean().item()
-        del self._stored_metrics[train_eval]
-        return super().log(logs)
