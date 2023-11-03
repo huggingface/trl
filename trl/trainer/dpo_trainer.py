@@ -15,6 +15,7 @@
 import random
 import warnings
 from collections import defaultdict
+from contextlib import nullcontext
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import torch
@@ -159,7 +160,7 @@ class DPOTrainer(Trainer):
 
         if ref_model:
             self.ref_model = ref_model
-        elif self.is_peft_model:
+        elif self.is_peft_model or precompute_ref_log_probs:
             # The `model` with adapters turned off will be used as the reference model
             self.ref_model = None
         else:
@@ -252,19 +253,12 @@ class DPOTrainer(Trainer):
                 "Your `Trainer` does not have an `accelerator` object. Consider upgrading `transformers`."
             )
 
-        if self.ref_model is None:
-            # if dataset has reference model logps and sample outputs, we don't need a reference model
-            if (
-                "reference_chosen_logps" in self.train_dataset[0]
-                and "reference_rejected_logps" in self.train_dataset[0]
-            ):
-                self.ref_model = None
-            else:
-                if not hasattr(self.accelerator.unwrap_model(self.model), "disable_adapter"):
-                    raise ValueError(
-                        "You are using a `peft` version that does not support `disable_adapter`. Please update your `peft` version to the latest version."
-                    )
-        else:
+        if self.ref_model is None and not self.precompute_ref_log_probs:
+            if not hasattr(self.accelerator.unwrap_model(self.model), "disable_adapter"):
+                raise ValueError(
+                    "You are using a `peft` version that does not support `disable_adapter`. Please update your `peft` version to the latest version."
+                )
+        elif not self.precompute_ref_log_probs:
             if self.is_deepspeed_enabled:
                 self.ref_model = self._prepare_deepspeed(self.ref_model)
             else:
@@ -483,7 +477,9 @@ class DPOTrainer(Trainer):
         # compute reference logps
         with torch.no_grad():
             if self.ref_model is None:
-                with self.accelerator.unwrap_model(self.model).disable_adapter():
+                with self.accelerator.unwrap_model(
+                    self.model
+                ).disable_adapter() if self.is_peft_model else nullcontext():
                     (
                         reference_chosen_logps,
                         reference_rejected_logps,
@@ -496,7 +492,7 @@ class DPOTrainer(Trainer):
                     reference_rejected_logps,
                     _,
                     _,
-                ) = self.concatenated_forward(self.ref_model, padded_batch)
+                ) = self.concatenated_forward(self.ref_model.to(self.accelerator.device), padded_batch)
 
             padded_batch["reference_chosen_logps"] = reference_chosen_logps.cpu()
             padded_batch["reference_rejected_logps"] = reference_rejected_logps.cpu()
