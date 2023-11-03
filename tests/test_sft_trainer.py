@@ -150,7 +150,7 @@ class SFTTrainerTester(unittest.TestCase):
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
             self.assertIsNotNone(trainer.state.log_history[0]["eval_loss"])
 
-            self.assertTrue("pytorch_model.bin" in os.listdir(tmp_dir + "/checkpoint-2"))
+            self.assertTrue("model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2"))
 
     def test_sft_trainer_uncorrect_data(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -226,7 +226,7 @@ class SFTTrainerTester(unittest.TestCase):
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
             self.assertIsNotNone(trainer.state.log_history[0]["eval_loss"])
 
-            self.assertTrue("pytorch_model.bin" in os.listdir(tmp_dir + "/checkpoint-2"))
+            self.assertTrue("model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2"))
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
@@ -253,7 +253,7 @@ class SFTTrainerTester(unittest.TestCase):
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            self.assertTrue("pytorch_model.bin" in os.listdir(tmp_dir + "/checkpoint-2"))
+            self.assertTrue("model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2"))
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
@@ -278,7 +278,7 @@ class SFTTrainerTester(unittest.TestCase):
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            self.assertTrue("pytorch_model.bin" in os.listdir(tmp_dir + "/checkpoint-1"))
+            self.assertTrue("model.safetensors" in os.listdir(tmp_dir + "/checkpoint-1"))
 
     def test_sft_trainer_with_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -305,7 +305,7 @@ class SFTTrainerTester(unittest.TestCase):
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
             self.assertIsNotNone(trainer.state.log_history[0]["eval_loss"])
 
-            self.assertTrue("pytorch_model.bin" in os.listdir(tmp_dir + "/checkpoint-2"))
+            self.assertTrue("model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2"))
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
@@ -331,7 +331,7 @@ class SFTTrainerTester(unittest.TestCase):
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            self.assertTrue("pytorch_model.bin" in os.listdir(tmp_dir + "/checkpoint-2"))
+            self.assertTrue("model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2"))
 
         # with formatting_func + packed
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -358,7 +358,7 @@ class SFTTrainerTester(unittest.TestCase):
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            self.assertTrue("pytorch_model.bin" in os.listdir(tmp_dir + "/checkpoint-2"))
+            self.assertTrue("model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2"))
 
         # with formatting_func + packed
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -383,7 +383,7 @@ class SFTTrainerTester(unittest.TestCase):
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            self.assertTrue("pytorch_model.bin" in os.listdir(tmp_dir + "/checkpoint-2"))
+            self.assertTrue("model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2"))
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
@@ -407,7 +407,7 @@ class SFTTrainerTester(unittest.TestCase):
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            self.assertTrue("pytorch_model.bin" in os.listdir(tmp_dir + "/checkpoint-1"))
+            self.assertTrue("model.safetensors" in os.listdir(tmp_dir + "/checkpoint-1"))
 
     def test_data_collator_completion_lm(self):
         response_template = "### Response:\n"
@@ -529,7 +529,7 @@ class SFTTrainerTester(unittest.TestCase):
             self.assertIsNotNone(trainer.state.log_history[0]["eval_loss"])
 
             # make sure the trainer did 5 steps
-            self.assertTrue("pytorch_model.bin" in os.listdir(tmp_dir + "/checkpoint-5"))
+            self.assertTrue("model.safetensors" in os.listdir(tmp_dir + "/checkpoint-5"))
 
     def test_sft_trainer_infinite_with_model_epochs(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -557,7 +557,7 @@ class SFTTrainerTester(unittest.TestCase):
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
             # make sure the trainer did 5 steps
-            self.assertTrue("pytorch_model.bin" in os.listdir(tmp_dir + "/checkpoint-4"))
+            self.assertTrue("model.safetensors" in os.listdir(tmp_dir + "/checkpoint-4"))
 
     def test_sft_trainer_with_model_neftune(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -641,7 +641,7 @@ class SFTTrainerTester(unittest.TestCase):
 
             self.assertTrue("adapter_model.bin" in os.listdir(tmp_dir + "/checkpoint-2"))
             self.assertTrue("adapter_config.json" in os.listdir(tmp_dir + "/checkpoint-2"))
-            self.assertTrue("pytorch_model.bin" not in os.listdir(tmp_dir + "/checkpoint-2"))
+            self.assertTrue("model.safetensors" not in os.listdir(tmp_dir + "/checkpoint-2"))
 
     @require_peft
     def test_peft_sft_trainer_neftune(self):
@@ -699,7 +699,7 @@ class SFTTrainerTester(unittest.TestCase):
 
             self.assertTrue("adapter_model.bin" in os.listdir(tmp_dir + "/checkpoint-2"))
             self.assertTrue("adapter_config.json" in os.listdir(tmp_dir + "/checkpoint-2"))
-            self.assertTrue("pytorch_model.bin" not in os.listdir(tmp_dir + "/checkpoint-2"))
+            self.assertTrue("model.safetensors" not in os.listdir(tmp_dir + "/checkpoint-2"))
 
             # Make sure forward pass works fine to check if embeddings forward is not broken.
             _ = trainer.model(torch.LongTensor([[1, 0, 1]]).to(device))
