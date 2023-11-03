@@ -147,9 +147,11 @@ trainer = RewardTrainer(
 trainer.add_callback(TBTrainerCallback())
 
 train_result = trainer.train()
+eval_result = trainer.evaluate()
 
 trainer.save_model()
 trainer.log_metrics("train", train_result.metrics)
+trainer.log_metrics("eval", eval_result.metrics)
 trainer.save_metrics("train", train_result.metrics)
 
 mlflow.end_run()
