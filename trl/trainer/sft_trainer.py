@@ -106,7 +106,7 @@ class SFTTrainer(Trainer):
         neftune_noise_alpha (`Optional[float]`):
             If not `None`, this will activate NEFTune noise embeddings. This has been proven to drastically improve model performances for instrcution
             fine-tuning. Check out the original paper here: https://arxiv.org/abs/2310.05914 and the original code here: https://github.com/neelsjain/NEFTune
-        model_kwargs: (`Optional[Dict]`, *optional*):
+        model_init_kwargs: (`Optional[Dict]`, *optional*):
             Dict of Optional kwargs to pass when instantiating the model from a string
     """
 
