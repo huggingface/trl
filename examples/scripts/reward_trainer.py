@@ -21,6 +21,7 @@ import mlflow
 from peft import LoraConfig
 from tqdm import tqdm
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, BitsAndBytesConfig, HfArgumentParser
+import evaluate
 
 from trl import RewardConfig, RewardTrainer
 from trl.trainer.moreh_utils import TBTrainerCallback, get_num_parameters
@@ -142,6 +143,7 @@ trainer = RewardTrainer(
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
     peft_config=peft_config,
+    compute_metrics='accuracy',
 )
 
 trainer.add_callback(TBTrainerCallback())
