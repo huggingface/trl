@@ -95,10 +95,6 @@ if script_args.use_peft:
 else:
     peft_config = None
 
-def accuracy_metric(*args, **kwargs):
-    evaluate.load_metric("accuracy").compute
-    return {"accuracy": metric_funcion(*args, **kwargs)}
-
 # Step 5: Define the Trainer
 trainer = SFTTrainer(
     model=model,
@@ -108,7 +104,6 @@ trainer = SFTTrainer(
     eval_dataset=eval_dataset,
     dataset_text_field=script_args.dataset_text_field,
     peft_config=peft_config,
-    compute_metrics=accuracy_metric,
 )
 
 trainer.add_callback(TBTrainerCallback())

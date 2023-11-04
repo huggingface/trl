@@ -135,10 +135,6 @@ if script_args.use_peft:
 else:
     peft_config = None
 
-def accuracy_metric(*args, **kwargs):
-    metric_funcion = evaluate.load("accuracy").compute
-    return {"accuracy": metric_funcion(*args, **kwargs)}
-
 # Step 5: Define the Trainer
 trainer = RewardTrainer(
     model=model,
@@ -147,17 +143,14 @@ trainer = RewardTrainer(
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
     peft_config=peft_config,
-    compute_metrics=accuracy_metric,
 )
 
 trainer.add_callback(TBTrainerCallback())
 
 train_result = trainer.train()
-eval_result = trainer.evaluate()
 
 trainer.save_model()
 trainer.log_metrics("train", train_result.metrics)
-trainer.log_metrics("eval", eval_result.metrics)
 trainer.save_metrics("train", train_result.metrics)
 
 mlflow.end_run()
