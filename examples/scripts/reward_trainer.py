@@ -135,6 +135,8 @@ if script_args.use_peft:
 else:
     peft_config = None
 
+metric_funcion = evaluate.load_metric("accuracy").compute
+
 # Step 5: Define the Trainer
 trainer = RewardTrainer(
     model=model,
@@ -143,7 +145,7 @@ trainer = RewardTrainer(
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
     peft_config=peft_config,
-    compute_metrics='accuracy',
+    compute_metrics=metric_funcion,
 )
 
 trainer.add_callback(TBTrainerCallback())
