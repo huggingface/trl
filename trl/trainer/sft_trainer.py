@@ -282,10 +282,11 @@ class SFTTrainer(Trainer):
         # After training we make sure to retrieve back the original forward pass method
         # for the embedding layer by removing the forward post hook.
         if self.neftune_noise_alpha is not None and not self._trainer_supports_neftune:
-            if is_peft_available() and isinstance(self.model, PeftModel):
-                embeddings = unwrap_model(self.model.base_model).get_input_embeddings()
+            unwrapped_model = unwrap_model(self.model)
+            if is_peft_available() and isinstance(unwrapped_model, PeftModel):
+                embeddings = unwrapped_model.base_model.model.get_input_embeddings()
             else:
-                embeddings = unwrap_model(self.model).get_input_embeddings()
+                embeddings = unwrapped_model.get_input_embeddings()
 
             self.neftune_hook_handle.remove()
             del embeddings.neftune_noise_alpha
@@ -380,10 +381,11 @@ class SFTTrainer(Trainer):
         Activates the neftune as presented in this code: https://github.com/neelsjain/NEFTune and paper: https://arxiv.org/abs/2310.05914
         Since in transformers Trainer we do have an `_activate_neftune` method, we need to rename this method to avoid conflicts.
         """
-        if is_peft_available() and isinstance(self.model, PeftModel):
-            embeddings = unwrap_model(model.base_model).get_input_embeddings()
+        unwrapped_model = unwrap_model(model)
+        if is_peft_available() and isinstance(unwrapped_model, PeftModel):
+            embeddings = unwrapped_model.base_model.model.get_input_embeddings()
         else:
-            embeddings = unwrap_model(model).get_input_embeddings()
+            embeddings = unwrapped_model.get_input_embeddings()
 
         embeddings.neftune_noise_alpha = self.neftune_noise_alpha
         hook_handle = embeddings.register_forward_hook(neftune_post_forward_hook)
