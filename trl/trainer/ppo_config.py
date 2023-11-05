@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import json
 import os
 import sys
 import warnings
@@ -19,11 +20,15 @@ from typing import Literal, Optional
 
 import numpy as np
 import tyro
+from typing_extensions import Annotated
 
 from trl.trainer.utils import exact_div
 
 from ..core import flatten_dict
 from ..import_utils import is_wandb_available
+
+
+JSONDict = Annotated[Optional[dict], tyro.conf.arg(metavar="JSON", constructor=json.loads)]
 
 
 @dataclass
@@ -49,15 +54,15 @@ class PPOConfig:
     """The reward model to use - used only for tracking purposes"""
     remove_unused_columns: bool = True
     """Remove unused columns from the dataset if `datasets.Dataset` is used"""
-    tracker_kwargs: dict = field(default_factory=dict)
-    """Keyword arguments for the tracker (e.g. wandb_project)"""
-    accelerator_kwargs: dict = field(default_factory=dict)
+    tracker_kwargs: JSONDict = field(default_factory=dict)
+    """Keyword arguments for the tracker (e.g. python ppo.py --ppo_config.tracker_kwargs='{"wandb": {"entity": "my_wandb_entity", "name": "my_exp_name"}}'"""
+    accelerator_kwargs: JSONDict = field(default_factory=dict)
     """Keyword arguments for the accelerator"""
-    project_kwargs: dict = field(default_factory=dict)
+    project_kwargs: JSONDict = field(default_factory=dict)
     """Keyword arguments for the accelerator project config (e.g. `logging_dir`)"""
     tracker_project_name: str = "trl"
     """Name of project to use for tracking"""
-    push_to_hub_if_best_kwargs: dict = field(default_factory=dict)
+    push_to_hub_if_best_kwargs: JSONDict = field(default_factory=dict)
     """Keyword arguments for pushing model to the hub during training (e.g. repo_id)"""
 
     # hyperparameters
@@ -100,7 +105,9 @@ class PPOConfig:
     max_grad_norm: Optional[float] = None
     """Maximum gradient norm for gradient clipping"""
     optimize_cuda_cache: bool = False
-    """Optimize CUDA cache for slightly more memory-efficient training"""
+    """DEPRECATED: use `optimize_device_cache` instead, which does the same thing."""
+    optimize_device_cache: Optional[bool] = False
+    """Optimize device cache for slightly more memory-efficient training"""
     early_stopping: bool = False
     """Whether to stop the PPO optimization loop early is the KL too high"""
     target_kl: float = 1
@@ -129,6 +136,14 @@ class PPOConfig:
     """TO BE FILLED In RUNTIME: the effective `backward_batch_size` across all processes"""
     global_batch_size: tyro.conf.Suppress[int] = None
     """TO BE FILLED In RUNTIME: the effective `batch_size` across all processes"""
+
+    if optimize_cuda_cache is not None:
+        warnings.warn(
+            "The `optimize_cuda_cache` arguement will be deprecated soon, please use `optimize_device_cache` instead."
+        )
+        optimize_device_cache = optimize_cuda_cache
+    else:
+        optimize_device_cache = False
 
     def __post_init__(self):
         if self.forward_batch_size is not None:

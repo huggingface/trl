@@ -69,6 +69,15 @@ class ScriptArguments:
             "https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992"
         },
     )
+    gradient_checkpointing: Optional[bool] = field(
+        default=False, metadata={"help": "Whether to use gradient checkpointing or no"}
+    )
+    gradient_checkpointing_kwargs: Optional[dict] = field(
+        default=None,
+        metadata={
+            "help": "key word arguments to be passed along `torch.utils.checkpoint.checkpoint` method - e.g. `use_reentrant=False`"
+        },
+    )
 
 
 def extract_anthropic_prompt(prompt_and_response):
@@ -149,6 +158,9 @@ if __name__ == "__main__":
         warmup_steps=150,
         report_to=script_args.report_to,
         bf16=True,
+        gradient_checkpointing=script_args.gradient_checkpointing,
+        # TODO: uncomment that on the next transformers release
+        # gradient_checkpointing_kwargs=script_args.gradient_checkpointing_kwargs,
     )
 
     # 5. initialize the DPO trainer
