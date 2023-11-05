@@ -17,6 +17,7 @@ import random
 import warnings
 from collections import defaultdict
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
+from copy import deepcopy
 
 import torch
 import torch.nn as nn
@@ -298,7 +299,8 @@ class DPOTrainer(Trainer):
     def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
         # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-        config_kwargs = deepspeed_plugin.deepspeed_config
+        config_kwargs = deepcopy(deepspeed_plugin.deepspeed_config)
+
         if model is not None:
             if hasattr(model, "config"):
                 hidden_size = (
