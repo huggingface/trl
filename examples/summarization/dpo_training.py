@@ -12,12 +12,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import random
+# import random
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import bitsandbytes as bnb
 import torch
+import torch.nn as nn
 from accelerate import Accelerator
 from datasets import load_dataset
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
@@ -29,6 +30,7 @@ from transformers import (
     AutoTokenizer,
     BitsAndBytesConfig,
     HfArgumentParser,
+    PreTrainedModel,
     TrainingArguments,
 )
 from transformers.trainer_utils import EvalLoopOutput, get_last_checkpoint
@@ -134,6 +136,7 @@ class ScriptArguments:
     gold_fp16: Optional[bool] = field(
         default=False,
     )
+    generate_greedy: Optional[bool] = field(default=False)
 
 
 class DPOTrainerWithGold(DPOTrainer):
@@ -172,20 +175,28 @@ class DPOTrainerWithGold(DPOTrainer):
         Works both with or without labels.
         """
 
+        # Base evaluation
+        return super(DPOTrainer, self).evaluation_loop(
+            dataloader, description, prediction_loss_only, ignore_keys, metric_key_prefix
+        )
+        #
+        # initial_output.metrics[f"{metric_key_prefix}_gold_rewards_mean"] = gold_rewards.mean().item()
+        #
+        # return initial_output
+
+    def prediction_step(
+        self,
+        model: Union[PreTrainedModel, nn.Module],
+        inputs: Dict[str, Union[torch.Tensor, Any]],
+        prediction_loss_only: bool,
+        ignore_keys: Optional[List[str]] = None,
+    ):
+        loss, logits, labels = super().prediction_step(model, inputs, prediction_loss_only, ignore_keys)
         # Sample and save to game log if requested (for one batch to save time)
         if self.generate_during_eval:
-            # Generate random indices within the range of the total number of samples
-            num_samples = len(dataloader.dataset)
-            random_indices = random.sample(range(num_samples), k=self.args.eval_batch_size)
-
-            # Use dataloader.dataset.select to get the random batch without iterating over the DataLoader
-            random_batch_dataset = dataloader.dataset.select(random_indices)
-            random_batch = self.data_collator(random_batch_dataset)
-            random_batch = self._prepare_inputs(random_batch)
-
             policy_output_decoded, ref_output_decoded, policy_output_ids = self.get_batch_samples(
                 self.model,
-                random_batch,
+                inputs,
                 return_ids=True,
             )
 
@@ -195,9 +206,7 @@ class DPOTrainerWithGold(DPOTrainer):
                         columns=["Prompt", "Policy", "Ref Model"],
                         rows=[
                             [prompt, pol[len(prompt) :], ref[len(prompt) :]]
-                            for prompt, pol, ref in zip(
-                                random_batch["prompt"], policy_output_decoded, ref_output_decoded
-                            )
+                            for prompt, pol, ref in zip(inputs["prompt"], policy_output_decoded, ref_output_decoded)
                         ],
                     )
                 }
@@ -213,18 +222,14 @@ class DPOTrainerWithGold(DPOTrainer):
                 )[0]
 
             gold_rewards = self.accelerator.gather_for_metrics(gold_rewards)
-        # Base evaluation
-        initial_output = super(DPOTrainer, self).evaluation_loop(
-            dataloader, description, prediction_loss_only, ignore_keys, metric_key_prefix
-        )
+            # force log the metrics
+            if self.accelerator.is_main_process:
+                self.store_metrics({"gold_rewards_mean": gold_rewards.mean().item()}, train_eval="eval")
 
-        initial_output.metrics[f"{metric_key_prefix}_gold_rewards_mean"] = gold_rewards.mean().item()
-
-        return initial_output
+        return loss, logits, labels
 
     def get_batch_samples(self, model, batch: Dict[str, torch.LongTensor], return_ids=False) -> Tuple[str, str]:
         """Generate samples from the model and reference model for the given batch of inputs."""
-
         policy_output = model.generate(
             batch["prompt_input_ids"],
             attention_mask=batch["prompt_attention_mask"],
@@ -385,9 +390,9 @@ def create_and_prepare_dataset(args):
             "rejected": [],
         }
         for prompt, chosen, rejected in zip(examples["prompt"], examples["chosen"], examples["rejected"]):
-            new_examples["prompt"].append(prompt + "\nTL;DR: ")
-            new_examples["chosen"].append(chosen[8:])
-            new_examples["rejected"].append(rejected[8:])
+            new_examples["prompt"].append(prompt + "\nTL;DR:")
+            new_examples["chosen"].append(chosen[7:])
+            new_examples["rejected"].append(rejected[7:])
 
         return new_examples
 
@@ -437,13 +442,19 @@ if __name__ == "__main__":
         ddp_find_unused_parameters=(script_args.gradient_checkpointing),
     )
 
-    generate_kwargs = {
-        "max_new_tokens": script_args.max_target_length,
-        "min_length": -1,
-        "top_k": 0.0,
-        "top_p": 1.0,
-        "do_sample": True,
-    }
+    if script_args.generate_greedy:
+        generate_kwargs = {
+            "do_sample": False,
+            "num_beams": 1,
+        }
+    else:
+        generate_kwargs = {
+            "max_new_tokens": script_args.max_target_length,
+            "min_length": -1,
+            "top_k": 0.0,
+            "top_p": 1.0,
+            "do_sample": True,
+        }
 
     # 5. initialize the DPO trainer
     dpo_trainer = DPOTrainerWithGold(
