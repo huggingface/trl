@@ -266,8 +266,8 @@ class DPOTrainerTester(unittest.TestCase):
             task_type="CAUSAL_LM",
         )
 
-        # lora model
-        model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        # gpt2 lora model
+        model, _, tokenizer = self._get_models_by_name("gpt2")
         model_peft = get_peft_model(model, lora_config)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -289,7 +289,7 @@ class DPOTrainerTester(unittest.TestCase):
                 ref_model=None,
                 beta=0.1,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                tokenizer=tokenizer,
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
                 peft_config=lora_config,
