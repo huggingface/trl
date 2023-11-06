@@ -648,24 +648,8 @@ class DPOTrainer(Trainer):
                 "prediction_step is only implemented for DPODataCollatorWithPadding, and you passed a datacollator that is different than "
                 "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
             )
-        if ignore_keys is None:
-            if hasattr(model, "config"):
-                ignore_keys = getattr(model.config, "keys_to_ignore_at_inference", [])
-            else:
-                ignore_keys = []
 
-        with torch.no_grad():
-            loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
-
-        if prediction_loss_only:
-            return (loss.detach(), None, None)
-
-        # select the preferred sequence
-        # 0 for position 0 (chosen)
-        # 1 for position 1 (rejected)
-        labels = torch.int(outputs["chosen_rewards"] < outputs["rejected_rewards"])
-
-        return (loss.detach(), outputs, labels)
+        return super().prediction_step(model, inputs, prediction_loss_only, ignore_keys)
 
     def evaluation_loop(
         self,
