@@ -204,6 +204,7 @@ class ScriptArguments:
     padding: Optional[str] = field(
         default="max_length", metadata={"help": "padding to use for preprocessing the dataset"}
     )
+    fix_space: Optional[bool] = field(default=True)
 
 
 def find_all_linear_names(args, model):
@@ -327,6 +328,10 @@ def create_and_prepare_dataset(args, tokenizer, split, num_proc=2):
             "attention_mask_rejected": [],
         }
         for prompt, chosen, rejected in zip(examples["prompt"], examples["chosen"], examples["rejected"]):
+            # CarperAI's dataset has an extra space after TLDR
+            if args.fix_space:
+                chosen = chosen[:6] + chosen[7:]
+                rejected = rejected[:6] + rejected[7:]
             tokenized_chosen = tokenizer(
                 prompt + "\n" + chosen, padding=args.padding, truncation=True, max_length=script_args.seq_length
             )
