@@ -137,6 +137,10 @@ class DPOTrainer(Trainer):
                 "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
             )
         elif is_peft_available() and peft_config is not None:
+            # if model is a peft model and we have a peft_config, we merge and unload it first
+            if isinstance(model, PeftModel):
+                model = model.merge_and_unload()
+
             if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
                 _support_gc_kwargs = hasattr(
                     args, "gradient_checkpointing_kwargs"
@@ -160,7 +164,10 @@ class DPOTrainer(Trainer):
                         output.requires_grad_(True)
 
                     model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
+
+            # get peft model with the given config
             model = get_peft_model(model, peft_config)
+
         # For models that use gradient_checkpoiting, we need to attach a hook that enables input
         # to explicitly have `requires_grad=True`, otherwise training will either silently
         # fail or completely fail.
