@@ -106,6 +106,8 @@ class SFTTrainer(Trainer):
         neftune_noise_alpha (`Optional[float]`):
             If not `None`, this will activate NEFTune noise embeddings. This has been proven to drastically improve model performances for instrcution
             fine-tuning. Check out the original paper here: https://arxiv.org/abs/2310.05914 and the original code here: https://github.com/neelsjain/NEFTune
+        model_init_kwargs: (`Optional[Dict]`, *optional*):
+            Dict of Optional kwargs to pass when instantiating the model from a string
     """
 
     def __init__(
@@ -132,19 +134,24 @@ class SFTTrainer(Trainer):
         dataset_num_proc: Optional[int] = None,
         dataset_batch_size: int = 1000,
         neftune_noise_alpha: Optional[float] = None,
+        model_init_kwargs: Optional[Dict] = None,
     ):
+        if model_init_kwargs is None:
+            model_init_kwargs = {}
+        elif not isinstance(model, str):
+            raise ValueError("You passed model_kwargs to the SFTTrainer. But your model is already instantiated.")
+
         if isinstance(model, str):
             warnings.warn(
                 "You passed a model_id to the SFTTrainer. This will automatically create an "
                 "`AutoModelForCausalLM` or a `PeftModel` (if you passed a `peft_config`) for you."
             )
+            model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
 
         if packing and data_collator is not None and isinstance(data_collator, DataCollatorForCompletionOnlyLM):
             raise ValueError(
                 "You passed a `DataCollatorForCompletionOnlyLM` to the SFTTrainer. This is not compatible with the `packing` argument."
             )
-
-        supported_classes = (PreTrainedModel,) if not is_peft_available() else (PreTrainedModel, PeftModel)
 
         if is_peft_available() and peft_config is not None:
             if not isinstance(peft_config, PeftConfig):
@@ -154,11 +161,6 @@ class SFTTrainer(Trainer):
                 )
 
             if not isinstance(model, PeftModel):
-                if not isinstance(model, PreTrainedModel):
-                    model = AutoModelForCausalLM.from_pretrained(
-                        model,
-                    )
-
                 if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
                     _support_gc_kwargs = hasattr(
                         args, "gradient_checkpointing_kwargs"
@@ -179,8 +181,6 @@ class SFTTrainer(Trainer):
 
             if callbacks is None:
                 callbacks = [PeftSavingCallback]
-        elif not isinstance(model, supported_classes):
-            model = AutoModelForCausalLM.from_pretrained(model)
 
         if tokenizer is None:
             tokenizer = AutoTokenizer.from_pretrained(model.config._name_or_path)
