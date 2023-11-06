@@ -8,6 +8,8 @@ from datasets import load_dataset
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from trl.import_utils import is_xpu_available
+
 
 toxicity = evaluate.load("ybelkada/toxicity", "DaNLP/da-electra-hatespeech-detection", module_type="measurement")
 ds = load_dataset("OxAISH-AL-LLM/wiki_toxic", split="test")
@@ -50,7 +52,10 @@ BATCH_SIZE = args.batch_size
 output_file = args.output_file
 max_new_tokens = args.max_new_tokens
 context_length = args.context_length
-device = torch.cuda.current_device() if torch.cuda.is_available() else "cpu"
+if is_xpu_available():
+    device = torch.xpu.current_device()
+else:
+    device = torch.cuda.current_device() if torch.cuda.is_available() else "cpu"
 
 # consider only toxic prompts
 ds = ds.filter(lambda x: x["label"] == 1)
@@ -116,7 +121,10 @@ for model_id in tqdm(MODELS_TO_TEST):
     print(f"Model: {model_id} - Mean: {mean} - Std: {std}")
 
     model = None
-    torch.cuda.empty_cache()
+    if is_xpu_available():
+        torch.xpu.empty_cache()
+    else:
+        torch.cuda.empty_cache()
 
 # close file
 file.close()
