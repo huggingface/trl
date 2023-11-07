@@ -75,6 +75,8 @@ class DPOTrainer(Trainer):
             which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
         label_pad_token_id (`int`, defaults to `-100`):
             The label pad token id. This argument is required if you want to use the default data collator.
+        padding_value (`int`, defaults to `0`):
+            The padding value if it is different to the tokenizer's pad_token_id.
         truncation_mode (`str`, defaults to `keep_end`):
             The truncation mode to use, either `keep_end` or `keep_start`. This argument is required if you want to use the default data collator.
         train_dataset (`datasets.Dataset`):
@@ -126,6 +128,7 @@ class DPOTrainer(Trainer):
         args: TrainingArguments = None,
         data_collator: Optional[DataCollator] = None,
         label_pad_token_id: int = -100,
+        padding_value: int = 0,
         truncation_mode: str = "keep_end",
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
@@ -300,7 +303,7 @@ class DPOTrainer(Trainer):
         self.max_length = max_length
         self.generate_during_eval = generate_during_eval
         self.label_pad_token_id = label_pad_token_id
-        self.padding_value = tokenizer.pad_token_id
+        self.padding_value = padding_value if padding_value != tokenizer.pad_token_id else tokenizer.pad_token_id
         self.max_prompt_length = max_prompt_length
         self.truncation_mode = truncation_mode
         self.max_target_length = max_target_length
