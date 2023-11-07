@@ -1,0 +1,12 @@
+dataset_name: mnoukhov/openai_summarize_comparisons_relabel_pythia1b
+model_name: /home/toolkit/huggingface/tldr_gptrm_sft_pythia1b_fp16_2epochs
+just_eval: True
+use_lora: False
+train_split: train[:1]
+eval_split: test
+load_in_8bit: False
+fp16_model: False
+bf16: False
+fp16: True
+per_device_eval_batch_size: 8
+padding: do_not_pad

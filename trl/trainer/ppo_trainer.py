@@ -1375,9 +1375,9 @@ class PPOTrainer(BaseTrainer):
                 if not isinstance(gold_rewards, torch.Tensor):
                     gold_rewards = torch.tensor(gold_rewards).to(self.current_device)
 
-                logs["gold/reward_mean"] = torch.mean(gold_rewards).cpu().numpy().item()
-                logs["gold/reward_std"] = torch.std(gold_rewards).cpu().numpy().item()
-                logs["gold/reward_dist"] = gold_rewards.cpu().numpy()
+                logs["eval/gold_reward_mean"] = torch.mean(gold_rewards).cpu().numpy().item()
+                logs["eval/gold_reward_std"] = torch.std(gold_rewards).cpu().numpy().item()
+                logs["eval/gold_reward_dist"] = gold_rewards.cpu().numpy()
 
             if self.config.log_with == "tensorboard":
                 # update the current step

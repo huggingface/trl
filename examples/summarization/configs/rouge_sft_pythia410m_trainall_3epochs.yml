@@ -1,4 +1,4 @@
-model_name: /home/toolkit/trl/results/42327396ad18c00dd83abd7eec2808f0/code/results/final_model
+model_name: /home/toolkit/trl/results/bdb07860945be37257a211c5f83a9907/code/results/final_model
 split: test
 use_peft: False
 load_in_8bit: False

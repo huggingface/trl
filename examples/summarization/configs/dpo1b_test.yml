@@ -1,6 +1,3 @@
-train_split: train[:1000]
-eval_split: test[:10]
-##
 model_name: /home/toolkit/huggingface/tldr_sft_pythia410m_fp32_trainall_3epochs
 dataset_name: mnoukhov/openai_summarize_comparisons_relabel_pythia1b
 beta: 0.5
@@ -18,6 +15,5 @@ lora_dropout: 0.05
 gradient_accumulation_steps: 4
 per_device_train_batch_size: 4
 warmup_steps: 150
-eval_steps: 1
-save_steps: 2
-gold_model_name: /home/toolkit/huggingface/tldr_gptrm_sft_pythia1b_fp16_2epochs
+eval_steps: 10
+save_steps: 10

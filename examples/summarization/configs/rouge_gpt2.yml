@@ -1,0 +1,7 @@
+model_name: /home/toolkit/trl/results/c99dab82e83e9c00d8a8618014d64ed5/code/results/final_model
+split: test
+use_peft: False
+load_in_8bit: False
+batch_size: 8
+fp16: True
+sample: False
