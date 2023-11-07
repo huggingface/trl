@@ -294,6 +294,8 @@ class DPOTrainer(Trainer):
                 )
 
             self.use_dpo_data_collator = True
+
+            args.label_names = ["chosen_labels", "rejected_labels"]
         else:
             self.use_dpo_data_collator = False
 
@@ -685,7 +687,7 @@ class DPOTrainer(Trainer):
         return initial_output
 
 
-def compute_dpo_metrics(self, eval_preds: EvalPrediction):
+def compute_dpo_metrics(eval_preds: EvalPrediction):
     preds, labels = eval_preds
     chosen_rewards = preds["chosen_rewards"]
     rejected_rewards = preds["rejected_rewards"]
