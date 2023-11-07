@@ -15,7 +15,6 @@
 import inspect
 import random
 import warnings
-from collections import defaultdict
 from copy import deepcopy
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
@@ -34,7 +33,7 @@ from transformers import (
     TrainingArguments,
 )
 from transformers.trainer_callback import TrainerCallback
-from transformers.trainer_utils import EvalLoopOutput
+from transformers.trainer_utils import EvalLoopOutput, EvalPrediction
 
 from ..import_utils import is_peft_available, is_wandb_available
 from ..models import PreTrainedModelWrapper, create_reference_model
@@ -311,6 +310,9 @@ class DPOTrainer(Trainer):
         self.beta = beta
         self.loss_type = loss_type
 
+        if compute_metrics is None:
+            compute_metrics = compute_dpo_metrics
+
         super().__init__(
             model=model,
             args=args,
@@ -542,7 +544,7 @@ class DPOTrainer(Trainer):
             policy_rejected_logps,
             policy_chosen_logits,
             policy_rejected_logits,
-        ) = self.concatenated_forward(model, batch)
+        ) = self.concatenated_forward(model, inputs)
 
         with torch.no_grad():
             if self.ref_model is None:
@@ -552,14 +554,14 @@ class DPOTrainer(Trainer):
                         reference_rejected_logps,
                         _,
                         _,
-                    ) = self.concatenated_forward(self.model, batch)
+                    ) = self.concatenated_forward(self.model, inputs)
             else:
                 (
                     reference_chosen_logps,
                     reference_rejected_logps,
                     _,
                     _,
-                ) = self.concatenated_forward(self.ref_model, batch)
+                ) = self.concatenated_forward(self.ref_model, inputs)
 
         losses, chosen_rewards, rejected_rewards = self.dpo_loss(
             policy_chosen_logps,
@@ -579,25 +581,6 @@ class DPOTrainer(Trainer):
         }
 
         return (loss, outputs) if return_outputs else loss
-
-    def compute_metrics(self, eval_preds: EvalPrediction):
-        preds, labels = eval_preds
-        chosen_rewards = preds["chosen_rewards"]
-        rejected_rewards = preds["rejected_rewards"]
-
-        reward_accuracies = (chosen_rewards > rejected_rewards).float()
-
-        metrics = {}
-        metrics["rewards/chosen"] = chosen_rewards.cpu().mean()
-        metrics["rewards/rejected"] = rejected_rewards.cpu().mean()
-        metrics["rewards/accuracies"] = reward_accuracies.cpu().mean()
-        metrics["rewards/margins"] = (chosen_rewards - rejected_rewards).cpu().mean()
-        metrics["logps/rejected"] = preds["policy_rejected_logps"].detach().cpu().mean()
-        metrics["logps/chosen"] = preds["policy_chosen_logps"].detach().cpu().mean()
-        metrics["logits/rejected"] = preds["policy_rejected_logits"].detach().cpu().mean()
-        metrics["logits/chosen"] = preds["policy_chosen_logits"].detach().cpu().mean()
-
-        return metrics
 
     def get_batch_samples(self, model, batch: Dict[str, torch.LongTensor]) -> Tuple[str, str]:
         """Generate samples from the model and reference model for the given batch of inputs."""
@@ -700,3 +683,23 @@ class DPOTrainer(Trainer):
         )
 
         return initial_output
+
+
+def compute_dpo_metrics(self, eval_preds: EvalPrediction):
+    preds, labels = eval_preds
+    chosen_rewards = preds["chosen_rewards"]
+    rejected_rewards = preds["rejected_rewards"]
+
+    reward_accuracies = (chosen_rewards > rejected_rewards).float()
+
+    metrics = {}
+    metrics["rewards/chosen"] = chosen_rewards.cpu().mean()
+    metrics["rewards/rejected"] = rejected_rewards.cpu().mean()
+    metrics["rewards/accuracies"] = reward_accuracies.cpu().mean()
+    metrics["rewards/margins"] = (chosen_rewards - rejected_rewards).cpu().mean()
+    metrics["logps/rejected"] = preds["policy_rejected_logps"].detach().cpu().mean()
+    metrics["logps/chosen"] = preds["policy_chosen_logps"].detach().cpu().mean()
+    metrics["logits/rejected"] = preds["policy_rejected_logits"].detach().cpu().mean()
+    metrics["logits/chosen"] = preds["policy_chosen_logits"].detach().cpu().mean()
+
+    return metrics
