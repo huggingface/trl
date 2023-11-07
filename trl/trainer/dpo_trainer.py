@@ -16,6 +16,7 @@ import inspect
 import random
 import warnings
 from collections import defaultdict
+from copy import deepcopy
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import torch
@@ -24,7 +25,14 @@ import torch.nn.functional as F
 from accelerate.utils import is_deepspeed_available
 from datasets import Dataset
 from torch.utils.data import DataLoader
-from transformers import DataCollator, PreTrainedModel, PreTrainedTokenizerBase, Trainer, TrainingArguments
+from transformers import (
+    AutoModelForCausalLM,
+    DataCollator,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+    Trainer,
+    TrainingArguments,
+)
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
 
@@ -100,12 +108,17 @@ class DPOTrainer(Trainer):
         compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return
             a dictionary string to metric values.
+        model_init_kwargs: (`Optional[Dict]`, *optional*):
+            Dict of Optional kwargs to pass when instantiating the model from a string
+        ref_model_init_kwargs: (`Optional[Dict]`, *optional*):
+            Dict of Optional kwargs to pass when instantiating the ref model from a string
+
     """
 
     def __init__(
         self,
-        model: Union[PreTrainedModel, nn.Module] = None,
-        ref_model: Optional[Union[PreTrainedModel, nn.Module]] = None,
+        model: Union[PreTrainedModel, nn.Module, str] = None,
+        ref_model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
         beta: float = 0.1,
         loss_type: Literal["sigmoid", "hinge"] = "sigmoid",
         args: TrainingArguments = None,
@@ -131,12 +144,44 @@ class DPOTrainer(Trainer):
         disable_dropout: bool = True,
         generate_during_eval: bool = False,
         compute_metrics: Optional[Callable[[EvalLoopOutput], Dict]] = None,
+        model_init_kwargs: Optional[Dict] = None,
+        ref_model_init_kwargs: Optional[Dict] = None,
     ):
+        if model_init_kwargs is None:
+            model_init_kwargs = {}
+        elif not isinstance(model, str):
+            raise ValueError("You passed model_kwargs to the DPOTrainer. But your model is already instantiated.")
+
+        if ref_model_init_kwargs is None:
+            ref_model_init_kwargs = {}
+        elif not isinstance(ref_model, str):
+            raise ValueError(
+                "You passed ref_model_kwargs to the DPOTrainer. But your ref_model is already instantiated."
+            )
+
+        if isinstance(model, str):
+            warnings.warn(
+                "You passed a model_id to the DPOTrainer. This will automatically create an "
+                "`AutoModelForCausalLM` or a `PeftModel` (if you passed a `peft_config`) for you."
+            )
+            model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
+
+        if isinstance(ref_model, str):
+            warnings.warn(
+                "You passed a ref model_id to the DPOTrainer. This will automatically create an "
+                "`AutoModelForCausalLM`"
+            )
+            ref_model = AutoModelForCausalLM.from_pretrained(ref_model, **ref_model_init_kwargs)
+
         if not is_peft_available() and peft_config is not None:
             raise ValueError(
                 "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
             )
         elif is_peft_available() and peft_config is not None:
+            # if model is a peft model and we have a peft_config, we merge and unload it first
+            if isinstance(model, PeftModel):
+                model = model.merge_and_unload()
+
             if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
                 _support_gc_kwargs = hasattr(
                     args, "gradient_checkpointing_kwargs"
@@ -160,7 +205,10 @@ class DPOTrainer(Trainer):
                         output.requires_grad_(True)
 
                     model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
+
+            # get peft model with the given config
             model = get_peft_model(model, peft_config)
+
         # For models that use gradient_checkpoiting, we need to attach a hook that enables input
         # to explicitly have `requires_grad=True`, otherwise training will either silently
         # fail or completely fail.
@@ -298,7 +346,8 @@ class DPOTrainer(Trainer):
     def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
         # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-        config_kwargs = deepspeed_plugin.deepspeed_config
+        config_kwargs = deepcopy(deepspeed_plugin.deepspeed_config)
+
         if model is not None:
             if hasattr(model, "config"):
                 hidden_size = (
@@ -556,7 +605,7 @@ class DPOTrainer(Trainer):
         """Generate samples from the model and reference model for the given batch of inputs."""
 
         policy_output = model.generate(
-            batch["prompt_input_ids"],
+            input_ids=batch["prompt_input_ids"],
             attention_mask=batch["prompt_attention_mask"],
             max_length=self.max_length,
             do_sample=True,

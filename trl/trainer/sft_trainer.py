@@ -106,6 +106,8 @@ class SFTTrainer(Trainer):
         neftune_noise_alpha (`Optional[float]`):
             If not `None`, this will activate NEFTune noise embeddings. This has been proven to drastically improve model performances for instrcution
             fine-tuning. Check out the original paper here: https://arxiv.org/abs/2310.05914 and the original code here: https://github.com/neelsjain/NEFTune
+        model_init_kwargs: (`Optional[Dict]`, *optional*):
+            Dict of Optional kwargs to pass when instantiating the model from a string
     """
 
     def __init__(
@@ -132,19 +134,24 @@ class SFTTrainer(Trainer):
         dataset_num_proc: Optional[int] = None,
         dataset_batch_size: int = 1000,
         neftune_noise_alpha: Optional[float] = None,
+        model_init_kwargs: Optional[Dict] = None,
     ):
+        if model_init_kwargs is None:
+            model_init_kwargs = {}
+        elif not isinstance(model, str):
+            raise ValueError("You passed model_kwargs to the SFTTrainer. But your model is already instantiated.")
+
         if isinstance(model, str):
             warnings.warn(
                 "You passed a model_id to the SFTTrainer. This will automatically create an "
                 "`AutoModelForCausalLM` or a `PeftModel` (if you passed a `peft_config`) for you."
             )
+            model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
 
         if packing and data_collator is not None and isinstance(data_collator, DataCollatorForCompletionOnlyLM):
             raise ValueError(
                 "You passed a `DataCollatorForCompletionOnlyLM` to the SFTTrainer. This is not compatible with the `packing` argument."
             )
-
-        supported_classes = (PreTrainedModel,) if not is_peft_available() else (PreTrainedModel, PeftModel)
 
         if is_peft_available() and peft_config is not None:
             if not isinstance(peft_config, PeftConfig):
@@ -154,11 +161,6 @@ class SFTTrainer(Trainer):
                 )
 
             if not isinstance(model, PeftModel):
-                if not isinstance(model, PreTrainedModel):
-                    model = AutoModelForCausalLM.from_pretrained(
-                        model,
-                    )
-
                 if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
                     _support_gc_kwargs = hasattr(
                         args, "gradient_checkpointing_kwargs"
@@ -179,8 +181,6 @@ class SFTTrainer(Trainer):
 
             if callbacks is None:
                 callbacks = [PeftSavingCallback]
-        elif not isinstance(model, supported_classes):
-            model = AutoModelForCausalLM.from_pretrained(model)
 
         if tokenizer is None:
             tokenizer = AutoTokenizer.from_pretrained(model.config._name_or_path)
@@ -282,10 +282,11 @@ class SFTTrainer(Trainer):
         # After training we make sure to retrieve back the original forward pass method
         # for the embedding layer by removing the forward post hook.
         if self.neftune_noise_alpha is not None and not self._trainer_supports_neftune:
-            if is_peft_available() and isinstance(self.model, PeftModel):
-                embeddings = unwrap_model(self.model.base_model).get_input_embeddings()
+            unwrapped_model = unwrap_model(self.model)
+            if is_peft_available() and isinstance(unwrapped_model, PeftModel):
+                embeddings = unwrapped_model.base_model.model.get_input_embeddings()
             else:
-                embeddings = unwrap_model(self.model).get_input_embeddings()
+                embeddings = unwrapped_model.get_input_embeddings()
 
             self.neftune_hook_handle.remove()
             del embeddings.neftune_noise_alpha
@@ -380,10 +381,11 @@ class SFTTrainer(Trainer):
         Activates the neftune as presented in this code: https://github.com/neelsjain/NEFTune and paper: https://arxiv.org/abs/2310.05914
         Since in transformers Trainer we do have an `_activate_neftune` method, we need to rename this method to avoid conflicts.
         """
-        if is_peft_available() and isinstance(self.model, PeftModel):
-            embeddings = unwrap_model(model.base_model).get_input_embeddings()
+        unwrapped_model = unwrap_model(model)
+        if is_peft_available() and isinstance(unwrapped_model, PeftModel):
+            embeddings = unwrapped_model.base_model.model.get_input_embeddings()
         else:
-            embeddings = unwrap_model(model).get_input_embeddings()
+            embeddings = unwrapped_model.get_input_embeddings()
 
         embeddings.neftune_noise_alpha = self.neftune_noise_alpha
         hook_handle = embeddings.register_forward_hook(neftune_post_forward_hook)
