@@ -31,7 +31,7 @@ tqdm.pandas()
 # Define and parse arguments.
 @dataclass
 class ScriptArguments:
-    model_name: str = "EleutherAI/pythia-1b"
+    model_name: str = "EleutherAI/pythia-1b-deduped"
     """the model name"""
     dataset_name: str = "CarperAI/openai_summarize_comparisons"
     """the dataset name"""
@@ -168,7 +168,7 @@ def create_and_prepare_model(args):
     )
 
     model.config.torch_dtype = torch_dtype
-    model.config.use_cache = True
+    model.config.use_cache = not args.hf_trainer.gradient_checkpointing
 
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
