@@ -32,9 +32,7 @@ from transformers import (
 from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, set_seed
 from trl.core import LengthSampler
 from trl.models.modeling_value_adapter import AutoModelForCausalLMWithValueAdapter
-
-
-# from trl.trainer.utils import pad_to_length
+from trl.trainer.utils import pad_to_length
 
 
 # import copy
@@ -128,6 +126,7 @@ class ScriptArguments:
     gold_fp16: Optional[bool] = field(
         default=False,
     )
+    gold_eval_greedy: Optional[bool] = field(default=False)
     # # EMA stuff
     # ema_decay: Optional[float] = field(default=0.995, metadata={"help": "the ema decay rate"})
     # reset_freq: Optional[int] = field(default=None, metadata={"help": "reset every n epochs"})
@@ -436,6 +435,15 @@ for epoch, batch in tqdm(
     stats = ppo_trainer.step(question_tensors, response_tensors, rewards)
 
     if script_args.eval_steps is not None and epoch % script_args.eval_steps == 0:
+        if script_args.gold_eval_greedy:
+            raise Exception("not yet implemented")
+            greedy_output = ppo_trainer.generate(
+                question_tensors, do_sample=False, num_beams=1, max_new_tokens=script_args.output_max_length
+            )
+            max_length = script_args.input_max_length + script_args.output_max_length
+            policy_output = pad_to_length(greedy_output, max_length, tokenizer.pad_token_id)
+            policy_output_decoded = self.tokenizer.batch_decode(policy_output, skip_special_tokens=True)
+
         with torch.no_grad():
             gold_rewards = gold_model(**policy_output)[0]
     else:
