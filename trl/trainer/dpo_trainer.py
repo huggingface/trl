@@ -15,6 +15,7 @@
 import inspect
 import random
 import warnings
+import numpy as np
 from collections import defaultdict
 from contextlib import nullcontext
 from copy import deepcopy
@@ -415,6 +416,31 @@ class DPOTrainer(Trainer):
         chosen = feature["chosen"]
         rejected = feature["rejected"]
 
+        def build_tokenized_answer(prompt, answer):
+            """
+            Llama tokenizer does satisfy `enc(a + b) = enc(a) + enc(b)`. 
+            It does ensure `enc(a + b) = enc(a) + enc(a + b)[len(enc(a)):]`.
+            Reference:
+                https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
+            """
+            
+            full_tokenized = self.tokenizer(prompt + answer, add_special_tokens=False)
+            prompt_input_ids = self.tokenizer(prompt, add_special_tokens=False)["input_ids"]
+
+            answer_input_ids = full_tokenized["input_ids"][len(prompt_input_ids):]
+            answer_attention_mask = full_tokenized["attention_mask"][len(prompt_input_ids):]
+
+            # Concat tokens to form `enc(a) + enc(a + b)[len(enc(a)):]`
+            full_concat_input_ids = np.concatenate([prompt_input_ids, answer_input_ids])
+
+            # Prepare input tokens for token by token comparison
+            full_input_ids = np.array(full_tokenized["input_ids"])
+
+            if len(full_input_ids) != len(full_concat_input_ids) or np.any(full_input_ids != full_concat_input_ids):
+                raise ValueError("Prompt input ids and answer input ids should be the same up to the prompt.")
+
+            return dict(input_ids=answer_input_ids, attention_mask=answer_attention_mask)
+
         if not self.is_encoder_decoder:
             # Check issues below for more details
             #  1. https://github.com/huggingface/trl/issues/907
@@ -432,18 +458,13 @@ class DPOTrainer(Trainer):
             if not isinstance(chosen, str):
                 raise ValueError(f"chosen should be an str but got {type(chosen)}")
 
-            chosen_tokens = self.tokenizer(prompt + chosen, add_special_tokens=False)
-            if prompt_input_ids != chosen_tokens["input_ids"][: len(prompt_input_ids)]:
-                raise ValueError("Prompt input ids and chosen input ids should be the same up to the prompt.")
+            chosen_tokens = build_tokenized_answer(prompt, chosen)
             chosen_tokens["input_ids"] = chosen_tokens["input_ids"][len(prompt_input_ids) :]
             chosen_tokens["attention_mask"] = chosen_tokens["attention_mask"][len(prompt_input_ids) :]
 
             if not isinstance(rejected, str):
                 raise ValueError(f"rejected should be an str but got {type(rejected)}")
-            rejected_tokens = self.tokenizer(prompt + rejected, add_special_tokens=False)
-            if prompt_input_ids != rejected_tokens["input_ids"][: len(prompt_input_ids)]:
-                raise ValueError("Prompt input ids and rejected input ids should be the same up to the prompt.")
-
+            rejected_tokens = build_tokenized_answer(prompt, rejected)
             rejected_tokens["input_ids"] = rejected_tokens["input_ids"][len(prompt_input_ids) :]
             rejected_tokens["attention_mask"] = rejected_tokens["attention_mask"][len(prompt_input_ids) :]
 
