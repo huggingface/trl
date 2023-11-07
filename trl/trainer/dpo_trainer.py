@@ -435,8 +435,8 @@ class DPOTrainer(Trainer):
             # Prepare input tokens for token by token comparison
             full_input_ids = np.array(full_tokenized["input_ids"])
 
-            if len(full_input_ids) != len(full_concat_input_ids) or np.any(full_input_ids != full_concat_input_ids):
-                raise ValueError("Prompt input ids and answer input ids should be the same up to the prompt.")
+            if len(full_input_ids) != len(full_concat_input_ids):
+                raise ValueError("Prompt input ids and answer input ids should have the same length.")
             
             # On some tokenizers, like Llama-2 tokenizer, there are occasions where tokens
             # can be merged together when tokenizing prompt+answer. This could result
@@ -518,7 +518,7 @@ class DPOTrainer(Trainer):
             for answer_tokens in [chosen_tokens, rejected_tokens]:
                 if len(answer_tokens["prompt_input_ids"]) + longer_response_length > self.max_length:
                     for k in ['prompt_input_ids', 'prompt_attention_mask']:
-                        chosen_tokens[k] = chosen_tokens[: self.max_length - self.max_prompt_length]
+                        answer_tokens[k] = answer_tokens[k][: self.max_length - self.max_prompt_length]
 
             # Create labels
             chosen_sequence_tokens = {k: chosen_tokens[f"prompt_{k}"] + chosen_tokens[k] for k in ["input_ids", "attention_mask"]}
