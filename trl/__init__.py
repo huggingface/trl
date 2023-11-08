@@ -1,6 +1,6 @@
 # flake8: noqa
 
-__version__ = "0.7.4"
+__version__ = "0.7.5.dev0"
 
 from .core import set_seed
 from .environment import TextEnvironment, TextHistory
