@@ -15,18 +15,17 @@
 import inspect
 import random
 import warnings
-import numpy as np
 from collections import defaultdict
 from contextlib import nullcontext
 from copy import deepcopy
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from accelerate.utils import is_deepspeed_available
 from datasets import Dataset
-from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader
 from transformers import (
     AutoModelForCausalLM,
@@ -380,9 +379,37 @@ class DPOTrainer(Trainer):
     def get_train_dataloader(self) -> DataLoader:
         # tokenize the dataset and compute reference logps for training datasets
         self.train_dataset = self.train_dataset.map(self.tokenize_batch_element)
+
         if self.precompute_ref_log_probs:
-            self.train_dataset = self.train_dataset.map(
-                self.compute_reference_log_probs, batch_size=self.args.per_device_train_batch_size, batched=True
+            dataloader_params = {
+                "batch_size": self.args.per_device_train_batch_size,
+                "collate_fn": self.data_collator,
+                "num_workers": self.args.dataloader_num_workers,
+                "pin_memory": self.args.dataloader_pin_memory,
+                "shuffle": False,
+            }
+
+            # prepare dataloader
+            data_loader = self.accelerator.prepare(DataLoader(self.train_dataset, **dataloader_params))
+
+            reference_chosen_logps = []
+            reference_rejected_logps = []
+            for padded_batch in data_loader:
+                reference_chosen_logp, reference_rejected_logp = self.compute_reference_log_probs(padded_batch)
+                reference_chosen_logp, reference_rejected_logp = self.accelerator.gather(
+                    (reference_chosen_logp, reference_rejected_logp)
+                )
+                reference_chosen_logps.append(reference_chosen_logp)
+                reference_rejected_logps.append(reference_rejected_logp)
+
+            all_reference_chosen_logps = torch.cat(reference_chosen_logps).cpu().numpy()
+            all_reference_rejected_logps = torch.cat(reference_rejected_logps).cpu().numpy()
+
+            self.train_dataset = self.train_dataset.add_column(
+                name="reference_chosen_logps", column=all_reference_chosen_logps
+            )
+            self.train_dataset = self.train_dataset.add_column(
+                name="reference_rejected_logps", column=all_reference_rejected_logps
             )
 
         return super().get_train_dataloader()
@@ -394,10 +421,37 @@ class DPOTrainer(Trainer):
 
         # tokenize the dataset and compute reference logps for evaluation datasets
         eval_dataset = eval_dataset.map(self.tokenize_batch_element)
+
         if self.precompute_ref_log_probs:
-            eval_dataset = eval_dataset.map(
-                self.compute_reference_log_probs, batch_size=self.args.per_device_eval_batch_size, batched=True
+            dataloader_params = {
+                "batch_size": self.args.per_device_eval_batch_size,
+                "collate_fn": self.data_collator,
+                "num_workers": self.args.dataloader_num_workers,
+                "pin_memory": self.args.dataloader_pin_memory,
+                "shuffle": False,
+            }
+
+            # prepare dataloader
+            data_loader = self.accelerator.prepare(DataLoader(eval_dataset, **dataloader_params))
+
+            reference_chosen_logps = []
+            reference_rejected_logps = []
+            for padded_batch in data_loader:
+                reference_chosen_logp, reference_rejected_logp = self.compute_reference_log_probs(padded_batch)
+                reference_chosen_logp, reference_rejected_logp = self.accelerator.gather(
+                    (reference_chosen_logp, reference_rejected_logp)
+                )
+                reference_chosen_logps.append(reference_chosen_logp)
+                reference_rejected_logps.append(reference_rejected_logp)
+
+            all_reference_chosen_logps = torch.cat(reference_chosen_logps).cpu().numpy()
+            all_reference_rejected_logps = torch.cat(reference_rejected_logps).cpu().numpy()
+
+            eval_dataset = eval_dataset.add_column(name="reference_chosen_logps", column=all_reference_chosen_logps)
+            eval_dataset = eval_dataset.add_column(
+                name="reference_rejected_logps", column=all_reference_rejected_logps
             )
+
         return super().get_eval_dataloader(eval_dataset=eval_dataset)
 
     def tokenize_batch_element(self, feature, model: Union[PreTrainedModel, nn.Module] = None) -> Dict:
@@ -418,16 +472,17 @@ class DPOTrainer(Trainer):
 
         def build_tokenized_answer(prompt, answer):
             """
-            Llama tokenizer does satisfy `enc(a + b) = enc(a) + enc(b)`. 
+            Llama tokenizer does satisfy `enc(a + b) = enc(a) + enc(b)`.
             It does ensure `enc(a + b) = enc(a) + enc(a + b)[len(enc(a)):]`.
             Reference:
                 https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
             """
-            
+
             full_tokenized = self.tokenizer(prompt + answer, add_special_tokens=False)
             prompt_input_ids = self.tokenizer(prompt, add_special_tokens=False)["input_ids"]
 
-            answer_input_ids = full_tokenized["input_ids"][len(prompt_input_ids):]
+            answer_input_ids = full_tokenized["input_ids"][len(prompt_input_ids) :]
+            answer_attention_mask = full_tokenized["attention_mask"][len(prompt_input_ids) :]
 
             # Concat tokens to form `enc(a) + enc(a + b)[len(enc(a)):]`
             full_concat_input_ids = np.concatenate([prompt_input_ids, answer_input_ids])
@@ -437,15 +492,15 @@ class DPOTrainer(Trainer):
 
             if len(full_input_ids) != len(full_concat_input_ids):
                 raise ValueError("Prompt input ids and answer input ids should have the same length.")
-            
+
             # On some tokenizers, like Llama-2 tokenizer, there are occasions where tokens
             # can be merged together when tokenizing prompt+answer. This could result
             # on the last token from the prompt being different when tokenized on its own
             # vs when done as prompt+answer.
             response_token_ids_start_idx = len(prompt_input_ids)
 
-            # If tokenized prompt is different than both prompt+answer, then it means the 
-            # last token has changed due to merging. 
+            # If tokenized prompt is different than both prompt+answer, then it means the
+            # last token has changed due to merging.
             if prompt_input_ids != full_tokenized["input_ids"][:response_token_ids_start_idx]:
                 response_token_ids_start_idx -= 1
 
@@ -459,8 +514,10 @@ class DPOTrainer(Trainer):
             answer_attention_mask = full_tokenized["attention_mask"][response_token_ids_start_idx:]
 
             return dict(
-                prompt_input_ids=prompt_input_ids, prompt_attention_mask=prompt_attention_mask,
-                input_ids=answer_input_ids, attention_mask=answer_attention_mask
+                prompt_input_ids=prompt_input_ids,
+                prompt_attention_mask=prompt_attention_mask,
+                input_ids=answer_input_ids,
+                attention_mask=answer_attention_mask,
             )
 
         if not self.is_encoder_decoder:
@@ -499,17 +556,16 @@ class DPOTrainer(Trainer):
 
             longer_response_length = max(len(chosen_tokens["input_ids"]), len(rejected_tokens["input_ids"]))
 
-
             # if combined sequence is too long, truncate the prompt
             for answer_tokens in [chosen_tokens, rejected_tokens]:
                 if len(answer_tokens["prompt_input_ids"]) + longer_response_length > self.max_length:
                     if self.truncation_mode == "keep_start":
                         # prompt_tokens = {k: v[: self.max_prompt_length] for k, v in prompt_tokens.items()}
-                        for k in ['prompt_input_ids', 'prompt_attention_mask']:
+                        for k in ["prompt_input_ids", "prompt_attention_mask"]:
                             answer_tokens[k] = answer_tokens[k][: self.max_prompt_length]
                     elif self.truncation_mode == "keep_end":
                         # prompt_tokens = {k: v[-self.max_prompt_length :] for k, v in prompt_tokens.items()}
-                        for k in ['prompt_input_ids', 'prompt_attention_mask']:
+                        for k in ["prompt_input_ids", "prompt_attention_mask"]:
                             answer_tokens[k] = answer_tokens[k][-self.max_prompt_length :]
                     else:
                         raise ValueError(f"Unknown truncation mode: {self.truncation_mode}")
@@ -517,20 +573,24 @@ class DPOTrainer(Trainer):
             # if that's still too long, truncate the response
             for answer_tokens in [chosen_tokens, rejected_tokens]:
                 if len(answer_tokens["prompt_input_ids"]) + longer_response_length > self.max_length:
-                    for k in ['prompt_input_ids', 'prompt_attention_mask']:
+                    for k in ["prompt_input_ids", "prompt_attention_mask"]:
                         answer_tokens[k] = answer_tokens[k][: self.max_length - self.max_prompt_length]
 
             # Create labels
-            chosen_sequence_tokens = {k: chosen_tokens[f"prompt_{k}"] + chosen_tokens[k] for k in ["input_ids", "attention_mask"]}
-            rejected_sequence_tokens = {k: rejected_tokens[f"prompt_{k}"] + rejected_tokens[k] for k in ["input_ids", "attention_mask"]}
+            chosen_sequence_tokens = {
+                k: chosen_tokens[f"prompt_{k}"] + chosen_tokens[k] for k in ["input_ids", "attention_mask"]
+            }
+            rejected_sequence_tokens = {
+                k: rejected_tokens[f"prompt_{k}"] + rejected_tokens[k] for k in ["input_ids", "attention_mask"]
+            }
             chosen_sequence_tokens["labels"] = chosen_sequence_tokens["input_ids"][:]
-            chosen_sequence_tokens["labels"][: len(chosen_tokens["prompt_input_ids"])] = [self.label_pad_token_id] * len(
-                chosen_tokens["prompt_input_ids"]
-            )
+            chosen_sequence_tokens["labels"][: len(chosen_tokens["prompt_input_ids"])] = [
+                self.label_pad_token_id
+            ] * len(chosen_tokens["prompt_input_ids"])
             rejected_sequence_tokens["labels"] = rejected_sequence_tokens["input_ids"][:]
-            rejected_sequence_tokens["labels"][: len(rejected_tokens["prompt_input_ids"])] = [self.label_pad_token_id] * len(
-                rejected_tokens["prompt_input_ids"]
-            )
+            rejected_sequence_tokens["labels"][: len(rejected_tokens["prompt_input_ids"])] = [
+                self.label_pad_token_id
+            ] * len(rejected_tokens["prompt_input_ids"])
 
             for k, toks in {
                 "chosen": chosen_sequence_tokens,
@@ -567,47 +627,8 @@ class DPOTrainer(Trainer):
 
         return batch
 
-    def compute_reference_log_probs(self, batch: Dict) -> Dict:
-        """Computes log probabilities of the reference model for a single batch of a DPO specific dataset."""
-
-        # pad the batch
-        padded_batch = {}
-        for k in batch:
-            if k.endswith("_input_ids") or k.endswith("_attention_mask") or k.endswith("_labels"):
-                if self.is_encoder_decoder:
-                    to_pad = [torch.LongTensor(ex) for ex in batch[k]]
-
-                    if (k.startswith("prompt")) and (k.endswith("input_ids")):
-                        padding_value = self.padding_value
-                    elif k.endswith("_attention_mask"):
-                        padding_value = 0
-                    elif (k.startswith("chosen")) or (k.startswith("rejected")) or ("decoder" in k):
-                        padding_value = self.label_pad_token_id
-                    else:
-                        raise ValueError(f"Unexpected key in batch '{k}'")
-                    padded_batch[k] = pad_sequence(to_pad, batch_first=True, padding_value=padding_value)
-                else:
-                    # adapted from https://stackoverflow.com/questions/73256206
-                    if "prompt" in k:
-                        to_pad = [torch.LongTensor(ex[::-1]) for ex in batch[k]]
-                    else:
-                        to_pad = [torch.LongTensor(ex) for ex in batch[k]]
-                    if k.endswith("_input_ids"):
-                        padding_value = self.padding_value
-                    elif k.endswith("_labels"):
-                        padding_value = self.label_pad_token_id
-                    elif k.endswith("_attention_mask"):
-                        padding_value = 0
-                    else:
-                        raise ValueError(f"Unexpected key in batch '{k}'")
-
-                    padded_batch[k] = pad_sequence(to_pad, batch_first=True, padding_value=padding_value)
-                    # for the prompt, flip back so padding is on left side
-                    if "prompt" in k:
-                        padded_batch[k] = padded_batch[k].flip(dims=[1])
-            else:
-                padded_batch[k] = [ex for ex in batch[k]]
-
+    def compute_reference_log_probs(self, padded_batch: Dict) -> Dict:
+        """Computes log probabilities of the reference model for a single padded batch of a DPO specific dataset."""
         # compute reference logps
         with torch.no_grad():
             if self.ref_model is None:
@@ -628,10 +649,7 @@ class DPOTrainer(Trainer):
                     _,
                 ) = self.concatenated_forward(self.ref_model.to(self.accelerator.device), padded_batch)
 
-            padded_batch["reference_chosen_logps"] = reference_chosen_logps.cpu()
-            padded_batch["reference_rejected_logps"] = reference_rejected_logps.cpu()
-
-        return padded_batch
+        return reference_chosen_logps, reference_rejected_logps
 
     @staticmethod
     def concatenated_inputs(
