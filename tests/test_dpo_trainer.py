@@ -44,13 +44,15 @@ class DPOTrainerTester(unittest.TestCase):
         # fmt: off
         dummy_dataset_dict = {
             "prompt": [
-                "hello\n",
-                "how are you\n",
-                "What is your name?\n",
-                "What is your name?\n",
-                "Which is the best programming language?\n",
-                "Which is the best programming language?\n",
-                "Which is the best programming language?\n",
+                "hello",
+                "how are you",
+                "What is your name?",
+                "What is your name?",
+                "Which is the best programming language?",
+                "Which is the best programming language?",
+                "Which is the best programming language?",
+                "[INST] How is the stock price? [/INST]",
+                "[INST] How is the stock price? [/INST] ",
             ],
             "chosen": [
                 "hi nice to meet you",
@@ -60,6 +62,8 @@ class DPOTrainerTester(unittest.TestCase):
                 "Python",
                 "Python",
                 "Python",
+                "$46 as of 10am EST",
+                "46 as of 10am EST",
             ],
             "rejected": [
                 "leave me alone",
@@ -69,6 +73,8 @@ class DPOTrainerTester(unittest.TestCase):
                 "Javascript",
                 "C++",
                 "Java",
+                " $46 as of 10am EST",
+                " 46 as of 10am EST",
             ],
         }
         # fmt: on
