@@ -73,7 +73,7 @@ EXTRAS = {
     "diffusers": ["diffusers>=0.18.0"],
     "deepspeed": ["deepspeed>=0.9.5"],
     "benchmark": ["wandb", "ghapi", "openrlbenchmark==0.2.1a5", "requests", "deepspeed"],
-    "quantization": ["bitsandbytes>=0.41.0"],
+    "quantization": ["bitsandbytes<=0.41.1"],
 }
 EXTRAS["dev"] = []
 for reqs in EXTRAS.values():
