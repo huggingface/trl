@@ -309,7 +309,7 @@ class DPOTrainer(Trainer):
         self.max_target_length = max_target_length
         self.tokenizer = tokenizer
         self.precompute_ref_log_probs = precompute_ref_log_probs
-        
+
         # Since ref_logs are precomputed on the first call to get_train/eval_dataloader
         # keep track of first called to avoid computation of future calls
         self._precomputed_train_ref_log_probs = False
@@ -390,7 +390,7 @@ class DPOTrainer(Trainer):
 
         # tokenize the dataset and compute reference logps for training datasets
         self.train_dataset = self.train_dataset.map(self.tokenize_batch_element)
-        
+
         if self.precompute_ref_log_probs and not self._precomputed_train_ref_log_probs:
             dataloader_params = {
                 "batch_size": self.args.per_device_train_batch_size,
