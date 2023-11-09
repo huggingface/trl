@@ -52,7 +52,7 @@ jobs:
       run: |
         make test
 
-  tests_no_peft:
+  tests_no_optional_dep:
     needs: check_code_quality
     runs-on: 'ubuntu-latest'
     steps:
