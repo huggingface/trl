@@ -309,6 +309,11 @@ class DPOTrainer(Trainer):
         self.max_target_length = max_target_length
         self.tokenizer = tokenizer
         self.precompute_ref_log_probs = precompute_ref_log_probs
+        
+        # Since ref_logs are precomputed on the first call to get_train/eval_dataloader
+        # keep track of first called to avoid computation of future calls
+        self.precomputed_train_ref_log_probs = False
+        self.precomputed_eval_ref_log_probs = False
 
         self.beta = beta
         self.loss_type = loss_type
@@ -377,10 +382,16 @@ class DPOTrainer(Trainer):
         return model
 
     def get_train_dataloader(self) -> DataLoader:
+        """
+        Returns the training [`~torch.utils.data.DataLoader`].
+
+        Subclass of transformers.src.transformers.trainer.get_train_dataloader to precompute `ref_log_probs`.
+        """
+
         # tokenize the dataset and compute reference logps for training datasets
         self.train_dataset = self.train_dataset.map(self.tokenize_batch_element)
-
-        if self.precompute_ref_log_probs:
+        
+        if self.precompute_ref_log_probs and not self.precomputed_train_ref_log_probs:
             dataloader_params = {
                 "batch_size": self.args.per_device_train_batch_size,
                 "collate_fn": self.data_collator,
@@ -412,9 +423,21 @@ class DPOTrainer(Trainer):
                 name="reference_rejected_logps", column=all_reference_rejected_logps
             )
 
+            self.precomputed_train_ref_log_probs = True
+
         return super().get_train_dataloader()
 
     def get_eval_dataloader(self, eval_dataset: Optional[Dataset] = None) -> DataLoader:
+        """
+        Returns the evaluation [`~torch.utils.data.DataLoader`].
+
+        Subclass of transformers.src.transformers.trainer.get_eval_dataloader to precompute `ref_log_probs`.
+
+        Args:
+            eval_dataset (`torch.utils.data.Dataset`, *optional*):
+                If provided, will override `self.eval_dataset`. If it is a [`~datasets.Dataset`], columns not accepted
+                by the `model.forward()` method are automatically removed. It must implement `__len__`.
+        """
         if eval_dataset is None and self.eval_dataset is None:
             raise ValueError("Trainer: evaluation requires an eval_dataset.")
         eval_dataset = eval_dataset if eval_dataset is not None else self.eval_dataset
@@ -422,7 +445,8 @@ class DPOTrainer(Trainer):
         # tokenize the dataset and compute reference logps for evaluation datasets
         eval_dataset = eval_dataset.map(self.tokenize_batch_element)
 
-        if self.precompute_ref_log_probs:
+        if self.precompute_ref_log_probs and not self.precomputed_eval_ref_log_probs:
+
             dataloader_params = {
                 "batch_size": self.args.per_device_eval_batch_size,
                 "collate_fn": self.data_collator,
@@ -451,6 +475,8 @@ class DPOTrainer(Trainer):
             eval_dataset = eval_dataset.add_column(
                 name="reference_rejected_logps", column=all_reference_rejected_logps
             )
+
+            self.precomputed_eval_ref_log_probs = True
 
         return super().get_eval_dataloader(eval_dataset=eval_dataset)
 
