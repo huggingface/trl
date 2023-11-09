@@ -339,7 +339,7 @@ class DPOTrainer(Trainer):
                 raise ValueError(
                     "You are using a `peft` version that does not support `disable_adapter`. Please update your `peft` version to the latest version."
                 )
-        elif not self.precompute_ref_log_probs:
+        else:
             if self.is_deepspeed_enabled:
                 self.ref_model = self._prepare_deepspeed(self.ref_model)
             else:
@@ -647,7 +647,7 @@ class DPOTrainer(Trainer):
                     reference_rejected_logps,
                     _,
                     _,
-                ) = self.concatenated_forward(self.ref_model.to(self.accelerator.device), padded_batch)
+                ) = self.concatenated_forward(self.ref_model, padded_batch)
 
         return reference_chosen_logps, reference_rejected_logps
 
