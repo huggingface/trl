@@ -396,7 +396,7 @@ class DPOTrainer(Trainer):
             reference_rejected_logps = []
             for padded_batch in data_loader:
                 reference_chosen_logp, reference_rejected_logp = self.compute_reference_log_probs(padded_batch)
-                reference_chosen_logp, reference_rejected_logp = self.accelerator.gather(
+                reference_chosen_logp, reference_rejected_logp = self.accelerator.gather_for_metrics(
                     (reference_chosen_logp, reference_rejected_logp)
                 )
                 reference_chosen_logps.append(reference_chosen_logp)
@@ -438,7 +438,7 @@ class DPOTrainer(Trainer):
             reference_rejected_logps = []
             for padded_batch in data_loader:
                 reference_chosen_logp, reference_rejected_logp = self.compute_reference_log_probs(padded_batch)
-                reference_chosen_logp, reference_rejected_logp = self.accelerator.gather(
+                reference_chosen_logp, reference_rejected_logp = self.accelerator.gather_for_metrics(
                     (reference_chosen_logp, reference_rejected_logp)
                 )
                 reference_chosen_logps.append(reference_chosen_logp)
