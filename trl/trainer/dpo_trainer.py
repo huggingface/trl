@@ -312,8 +312,8 @@ class DPOTrainer(Trainer):
         
         # Since ref_logs are precomputed on the first call to get_train/eval_dataloader
         # keep track of first called to avoid computation of future calls
-        self.precomputed_train_ref_log_probs = False
-        self.precomputed_eval_ref_log_probs = False
+        self._precomputed_train_ref_log_probs = False
+        self._precomputed_eval_ref_log_probs = False
 
         self.beta = beta
         self.loss_type = loss_type
@@ -391,7 +391,7 @@ class DPOTrainer(Trainer):
         # tokenize the dataset and compute reference logps for training datasets
         self.train_dataset = self.train_dataset.map(self.tokenize_batch_element)
         
-        if self.precompute_ref_log_probs and not self.precomputed_train_ref_log_probs:
+        if self.precompute_ref_log_probs and not self._precomputed_train_ref_log_probs:
             dataloader_params = {
                 "batch_size": self.args.per_device_train_batch_size,
                 "collate_fn": self.data_collator,
@@ -423,7 +423,7 @@ class DPOTrainer(Trainer):
                 name="reference_rejected_logps", column=all_reference_rejected_logps
             )
 
-            self.precomputed_train_ref_log_probs = True
+            self._precomputed_train_ref_log_probs = True
 
         return super().get_train_dataloader()
 
@@ -445,7 +445,7 @@ class DPOTrainer(Trainer):
         # tokenize the dataset and compute reference logps for evaluation datasets
         eval_dataset = eval_dataset.map(self.tokenize_batch_element)
 
-        if self.precompute_ref_log_probs and not self.precomputed_eval_ref_log_probs:
+        if self.precompute_ref_log_probs and not self._precomputed_eval_ref_log_probs:
 
             dataloader_params = {
                 "batch_size": self.args.per_device_eval_batch_size,
@@ -476,7 +476,7 @@ class DPOTrainer(Trainer):
                 name="reference_rejected_logps", column=all_reference_rejected_logps
             )
 
-            self.precomputed_eval_ref_log_probs = True
+            self._precomputed_eval_ref_log_probs = True
 
         return super().get_eval_dataloader(eval_dataset=eval_dataset)
 
