@@ -68,7 +68,7 @@ REQUIRED_PKGS = [
     "tyro>=0.5.11",
 ]
 EXTRAS = {
-    "test": ["parameterized", "pytest", "pytest-xdist", "accelerate", "peft>=0.4.0", "diffusers>=0.18.0"],
+    "test": ["parameterized", "pytest", "pytest-xdist", "accelerate"],
     "peft": ["peft>=0.4.0"],
     "diffusers": ["diffusers>=0.18.0"],
     "deepspeed": ["deepspeed>=0.9.5"],

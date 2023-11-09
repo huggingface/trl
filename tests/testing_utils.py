@@ -15,7 +15,7 @@ import unittest
 
 import torch
 
-from trl import is_peft_available, is_wandb_available, is_xpu_available
+from trl import is_diffusers_available, is_peft_available, is_wandb_available, is_xpu_available
 
 
 def require_peft(test_case):
@@ -24,6 +24,15 @@ def require_peft(test_case):
     """
     if not is_peft_available():
         test_case = unittest.skip("test requires peft")(test_case)
+    return test_case
+
+
+def require_diffusers(test_case):
+    """
+    Decorator marking a test that requires diffusers. Skips the test if diffusers is not available.
+    """
+    if not is_diffusers_available():
+        test_case = unittest.skip("test requires diffusers")(test_case)
     return test_case
 
 
