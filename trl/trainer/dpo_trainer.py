@@ -15,6 +15,7 @@
 import inspect
 import random
 import warnings
+from collections import OrderedDict
 from copy import deepcopy
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
@@ -46,6 +47,7 @@ if is_peft_available():
 
 if is_wandb_available():
     import wandb
+
 
 if is_deepspeed_available():
     import deepspeed
@@ -572,15 +574,17 @@ class DPOTrainer(Trainer):
             reference_rejected_logps,
         )
         loss = losses.mean()
-        outputs = {
-            "loss": loss,
-            "chosen_rewards": chosen_rewards,
-            "rejected_rewards": rejected_rewards,
-            "policy_chosen_logps": policy_chosen_logps.detach(),
-            "policy_rejected_logps": policy_chosen_logps.detach(),
-            "policy_chosen_logits": policy_chosen_logits.detach(),
-            "policy_rejected_logits": policy_chosen_logits.detach(),
-        }
+        outputs = OrderedDict(
+            {
+                "loss": loss,
+                "chosen_rewards": chosen_rewards,
+                "rejected_rewards": rejected_rewards,
+                "policy_chosen_logps": policy_chosen_logps.detach(),
+                "policy_rejected_logps": policy_chosen_logps.detach(),
+                "reference_chosen_logps": reference_chosen_logps.detach(),
+                "reference_rejected_logps": reference_chosen_logps.detach(),
+            }
+        )
 
         return (loss, outputs) if return_outputs else loss
 
@@ -688,20 +692,23 @@ class DPOTrainer(Trainer):
 
 
 def compute_dpo_metrics(eval_preds: EvalPrediction):
-    preds, labels = eval_preds
-    chosen_rewards = preds["chosen_rewards"]
-    rejected_rewards = preds["rejected_rewards"]
+    (
+        chosen_rewards,
+        rejected_rewards,
+        policy_chosen_logps,
+        policy_rejected_logps,
+        reference_chosen_logps,
+        reference_rejected_logps,
+    ) = eval_preds.predictions
 
-    reward_accuracies = (chosen_rewards > rejected_rewards).float()
+    reward_accuracies = (chosen_rewards > rejected_rewards).mean()
 
     metrics = {}
-    metrics["rewards/chosen"] = chosen_rewards.cpu().mean()
-    metrics["rewards/rejected"] = rejected_rewards.cpu().mean()
-    metrics["rewards/accuracies"] = reward_accuracies.cpu().mean()
-    metrics["rewards/margins"] = (chosen_rewards - rejected_rewards).cpu().mean()
-    metrics["logps/rejected"] = preds["policy_rejected_logps"].detach().cpu().mean()
-    metrics["logps/chosen"] = preds["policy_chosen_logps"].detach().cpu().mean()
-    metrics["logits/rejected"] = preds["policy_rejected_logits"].detach().cpu().mean()
-    metrics["logits/chosen"] = preds["policy_chosen_logits"].detach().cpu().mean()
+    metrics["rewards/chosen"] = chosen_rewards.mean()
+    metrics["rewards/rejected"] = rejected_rewards.mean()
+    metrics["rewards/accuracies"] = reward_accuracies.mean()
+    metrics["rewards/margins"] = (chosen_rewards - rejected_rewards).mean()
+    metrics["logps/rejected"] = policy_rejected_logps.mean()
+    metrics["logps/chosen"] = policy_chosen_logps.mean()
 
     return metrics
