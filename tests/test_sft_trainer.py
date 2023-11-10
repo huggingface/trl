@@ -191,7 +191,7 @@ class SFTTrainerTester(unittest.TestCase):
                     packing=False,
                 )
 
-            # but this shpuld work
+            # but this should work
             _ = SFTTrainer(
                 model=self.model,
                 args=training_args,
