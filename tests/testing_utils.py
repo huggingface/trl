@@ -15,7 +15,7 @@ import unittest
 
 import torch
 
-from trl import is_peft_available, is_wandb_available
+from trl import is_peft_available, is_wandb_available, is_xpu_available
 
 
 def require_peft(test_case):
@@ -63,4 +63,13 @@ def require_torch_multi_gpu(test_case):
     """
     if torch.cuda.device_count() < 2:
         test_case = unittest.skip("test requires multiple GPUs")(test_case)
+    return test_case
+
+
+def require_torch_multi_xpu(test_case):
+    """
+    Decorator marking a test that requires multiple XPUs. Skips the test if there aren't enough XPUs.
+    """
+    if torch.xpu.device_count() < 2 and is_xpu_available():
+        test_case = unittest.skip("test requires multiple XPUs")(test_case)
     return test_case

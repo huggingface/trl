@@ -5,8 +5,8 @@ from typing import Dict, Optional
 
 import torch
 from datasets import Dataset, load_dataset
-from peft import AutoPeftModelForCausalLM, LoraConfig
-from transformers import AutoTokenizer, HfArgumentParser, TrainingArguments
+from peft import LoraConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, TrainingArguments
 
 from trl import DPOTrainer
 
@@ -124,7 +124,7 @@ if __name__ == "__main__":
     script_args = parser.parse_args_into_dataclasses()[0]
 
     # 1. load a pretrained model
-    model = AutoPeftModelForCausalLM.from_pretrained(
+    model = AutoModelForCausalLM.from_pretrained(
         script_args.model_name_or_path,
         low_cpu_mem_usage=True,
         torch_dtype=torch.float16,
@@ -138,7 +138,7 @@ if __name__ == "__main__":
             name for name, buffer in model.named_buffers() if buffer.dtype == torch.bool
         ]
 
-    model_ref = AutoPeftModelForCausalLM.from_pretrained(
+    model_ref = AutoModelForCausalLM.from_pretrained(
         script_args.model_name_or_path,
         low_cpu_mem_usage=True,
         torch_dtype=torch.float16,

@@ -33,10 +33,14 @@ class ValueHead(nn.Module):
         self.dropout = nn.Dropout(summary_dropout_prob) if summary_dropout_prob else nn.Identity()
 
         # some models such as OPT have a projection layer before the word embeddings - e.g. OPT-350m
+        if hasattr(config, "hidden_size"):
+            hidden_size = config.hidden_size
         if hasattr(config, "word_embed_proj_dim"):
             hidden_size = config.word_embed_proj_dim
-        else:
-            hidden_size = config.hidden_size
+        elif hasattr(config, "is_encoder_decoder"):
+            if config.is_encoder_decoder and hasattr(config, "decoder"):
+                if hasattr(config.decoder, "hidden_size"):
+                    hidden_size = config.decoder.hidden_size
 
         self.summary = nn.Linear(hidden_size, 1)
 

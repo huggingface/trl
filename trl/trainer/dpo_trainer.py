@@ -12,9 +12,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import inspect
 import random
 import warnings
-from collections import defaultdict
+from collections import OrderedDict
+from copy import deepcopy
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import torch
@@ -23,9 +25,16 @@ import torch.nn.functional as F
 from accelerate.utils import is_deepspeed_available
 from datasets import Dataset
 from torch.utils.data import DataLoader
-from transformers import DataCollator, PreTrainedModel, PreTrainedTokenizerBase, Trainer, TrainingArguments
+from transformers import (
+    AutoModelForCausalLM,
+    DataCollator,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+    Trainer,
+    TrainingArguments,
+)
 from transformers.trainer_callback import TrainerCallback
-from transformers.trainer_utils import EvalLoopOutput
+from transformers.trainer_utils import EvalLoopOutput, EvalPrediction
 
 from ..import_utils import is_peft_available, is_wandb_available
 from ..models import PreTrainedModelWrapper, create_reference_model
@@ -38,6 +47,7 @@ if is_peft_available():
 
 if is_wandb_available():
     import wandb
+
 
 if is_deepspeed_available():
     import deepspeed
@@ -99,12 +109,17 @@ class DPOTrainer(Trainer):
         compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return
             a dictionary string to metric values.
+        model_init_kwargs: (`Optional[Dict]`, *optional*):
+            Dict of Optional kwargs to pass when instantiating the model from a string
+        ref_model_init_kwargs: (`Optional[Dict]`, *optional*):
+            Dict of Optional kwargs to pass when instantiating the ref model from a string
+
     """
 
     def __init__(
         self,
-        model: Union[PreTrainedModel, nn.Module] = None,
-        ref_model: Optional[Union[PreTrainedModel, nn.Module]] = None,
+        model: Union[PreTrainedModel, nn.Module, str] = None,
+        ref_model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
         beta: float = 0.1,
         loss_type: Literal["sigmoid", "hinge"] = "sigmoid",
         args: TrainingArguments = None,
@@ -130,15 +145,84 @@ class DPOTrainer(Trainer):
         disable_dropout: bool = True,
         generate_during_eval: bool = False,
         compute_metrics: Optional[Callable[[EvalLoopOutput], Dict]] = None,
+        model_init_kwargs: Optional[Dict] = None,
+        ref_model_init_kwargs: Optional[Dict] = None,
     ):
+        if model_init_kwargs is None:
+            model_init_kwargs = {}
+        elif not isinstance(model, str):
+            raise ValueError("You passed model_kwargs to the DPOTrainer. But your model is already instantiated.")
+
+        if ref_model_init_kwargs is None:
+            ref_model_init_kwargs = {}
+        elif not isinstance(ref_model, str):
+            raise ValueError(
+                "You passed ref_model_kwargs to the DPOTrainer. But your ref_model is already instantiated."
+            )
+
+        if isinstance(model, str):
+            warnings.warn(
+                "You passed a model_id to the DPOTrainer. This will automatically create an "
+                "`AutoModelForCausalLM` or a `PeftModel` (if you passed a `peft_config`) for you."
+            )
+            model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
+
+        if isinstance(ref_model, str):
+            warnings.warn(
+                "You passed a ref model_id to the DPOTrainer. This will automatically create an "
+                "`AutoModelForCausalLM`"
+            )
+            ref_model = AutoModelForCausalLM.from_pretrained(ref_model, **ref_model_init_kwargs)
+
         if not is_peft_available() and peft_config is not None:
             raise ValueError(
                 "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
             )
         elif is_peft_available() and peft_config is not None:
+            # if model is a peft model and we have a peft_config, we merge and unload it first
+            if isinstance(model, PeftModel):
+                model = model.merge_and_unload()
+
             if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
-                model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=args.gradient_checkpointing)
+                _support_gc_kwargs = hasattr(
+                    args, "gradient_checkpointing_kwargs"
+                ) and "gradient_checkpointing_kwargs" in list(
+                    inspect.signature(prepare_model_for_kbit_training).parameters
+                )
+
+                preprare_model_kwargs = {"use_gradient_checkpointing": args.gradient_checkpointing}
+
+                if _support_gc_kwargs:
+                    preprare_model_kwargs["gradient_checkpointing_kwargs"] = args.gradient_checkpointing_kwargs
+
+                model = prepare_model_for_kbit_training(model, **preprare_model_kwargs)
+            elif getattr(args, "gradient_checkpointing", False):
+                # For backward compatibility with older versions of transformers
+                if hasattr(model, "enable_input_require_grads"):
+                    model.enable_input_require_grads()
+                else:
+
+                    def make_inputs_require_grad(module, input, output):
+                        output.requires_grad_(True)
+
+                    model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
+
+            # get peft model with the given config
             model = get_peft_model(model, peft_config)
+
+        # For models that use gradient_checkpoiting, we need to attach a hook that enables input
+        # to explicitly have `requires_grad=True`, otherwise training will either silently
+        # fail or completely fail.
+        elif getattr(args, "gradient_checkpointing", False):
+            # For backward compatibility with older versions of transformers
+            if hasattr(model, "enable_input_require_grads"):
+                model.enable_input_require_grads()
+            else:
+
+                def make_inputs_require_grad(module, input, output):
+                    output.requires_grad_(True)
+
+                model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
 
         if generate_during_eval and not is_wandb_available():
             raise ValueError(
@@ -212,6 +296,8 @@ class DPOTrainer(Trainer):
                 )
 
             self.use_dpo_data_collator = True
+
+            args.label_names = ["chosen_labels", "rejected_labels"]
         else:
             self.use_dpo_data_collator = False
 
@@ -228,7 +314,8 @@ class DPOTrainer(Trainer):
         self.beta = beta
         self.loss_type = loss_type
 
-        self._stored_metrics = defaultdict(lambda: defaultdict(list))
+        if compute_metrics is None:
+            compute_metrics = compute_dpo_metrics
 
         super().__init__(
             model=model,
@@ -263,7 +350,8 @@ class DPOTrainer(Trainer):
     def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
         # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-        config_kwargs = deepspeed_plugin.deepspeed_config
+        config_kwargs = deepcopy(deepspeed_plugin.deepspeed_config)
+
         if model is not None:
             if hasattr(model, "config"):
                 hidden_size = (
@@ -444,58 +532,6 @@ class DPOTrainer(Trainer):
 
         return (chosen_logps, rejected_logps, chosen_logits, rejected_logits)
 
-    def get_batch_metrics(
-        self,
-        model,
-        batch: Dict[str, Union[List, torch.LongTensor]],
-        train_eval: Literal["train", "eval"] = "train",
-    ):
-        """Compute the DPO loss and other metrics for the given batch of inputs for train or test."""
-        metrics = {}
-
-        (
-            policy_chosen_logps,
-            policy_rejected_logps,
-            policy_chosen_logits,
-            policy_rejected_logits,
-        ) = self.concatenated_forward(model, batch)
-        with torch.no_grad():
-            if self.ref_model is None:
-                with self.accelerator.unwrap_model(self.model).disable_adapter():
-                    (
-                        reference_chosen_logps,
-                        reference_rejected_logps,
-                        _,
-                        _,
-                    ) = self.concatenated_forward(self.model, batch)
-            else:
-                (
-                    reference_chosen_logps,
-                    reference_rejected_logps,
-                    _,
-                    _,
-                ) = self.concatenated_forward(self.ref_model, batch)
-
-        losses, chosen_rewards, rejected_rewards = self.dpo_loss(
-            policy_chosen_logps,
-            policy_rejected_logps,
-            reference_chosen_logps,
-            reference_rejected_logps,
-        )
-        reward_accuracies = (chosen_rewards > rejected_rewards).float()
-
-        prefix = "eval_" if train_eval == "eval" else ""
-        metrics[f"{prefix}rewards/chosen"] = chosen_rewards.cpu().mean()
-        metrics[f"{prefix}rewards/rejected"] = rejected_rewards.cpu().mean()
-        metrics[f"{prefix}rewards/accuracies"] = reward_accuracies.cpu().mean()
-        metrics[f"{prefix}rewards/margins"] = (chosen_rewards - rejected_rewards).cpu().mean()
-        metrics[f"{prefix}logps/rejected"] = policy_rejected_logps.detach().cpu().mean()
-        metrics[f"{prefix}logps/chosen"] = policy_chosen_logps.detach().cpu().mean()
-        metrics[f"{prefix}logits/rejected"] = policy_rejected_logits.detach().cpu().mean()
-        metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.detach().cpu().mean()
-
-        return losses.mean(), metrics
-
     def compute_loss(
         self,
         model: Union[PreTrainedModel, nn.Module],
@@ -507,21 +543,56 @@ class DPOTrainer(Trainer):
                 "compute_loss is only implemented for DPODataCollatorWithPadding, and you passed a datacollator that is different than "
                 "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
             )
-        loss, metrics = self.get_batch_metrics(model, inputs, train_eval="train")
+        (
+            policy_chosen_logps,
+            policy_rejected_logps,
+            policy_chosen_logits,
+            policy_rejected_logits,
+        ) = self.concatenated_forward(model, inputs)
 
-        # force log the metrics
-        if self.accelerator.is_main_process:
-            self.store_metrics(metrics, train_eval="train")
+        with torch.no_grad():
+            if self.ref_model is None:
+                with self.accelerator.unwrap_model(self.model).disable_adapter():
+                    (
+                        reference_chosen_logps,
+                        reference_rejected_logps,
+                        _,
+                        _,
+                    ) = self.concatenated_forward(self.model, inputs)
+            else:
+                (
+                    reference_chosen_logps,
+                    reference_rejected_logps,
+                    _,
+                    _,
+                ) = self.concatenated_forward(self.ref_model, inputs)
 
-        if return_outputs:
-            return (loss, metrics)
-        return loss
+        losses, chosen_rewards, rejected_rewards = self.dpo_loss(
+            policy_chosen_logps,
+            policy_rejected_logps,
+            reference_chosen_logps,
+            reference_rejected_logps,
+        )
+        loss = losses.mean()
+        outputs = OrderedDict(
+            {
+                "loss": loss,
+                "chosen_rewards": chosen_rewards,
+                "rejected_rewards": rejected_rewards,
+                "policy_chosen_logps": policy_chosen_logps.detach(),
+                "policy_rejected_logps": policy_chosen_logps.detach(),
+                "reference_chosen_logps": reference_chosen_logps.detach(),
+                "reference_rejected_logps": reference_chosen_logps.detach(),
+            }
+        )
+
+        return (loss, outputs) if return_outputs else loss
 
     def get_batch_samples(self, model, batch: Dict[str, torch.LongTensor]) -> Tuple[str, str]:
         """Generate samples from the model and reference model for the given batch of inputs."""
 
         policy_output = model.generate(
-            batch["prompt_input_ids"],
+            input_ids=batch["prompt_input_ids"],
             attention_mask=batch["prompt_attention_mask"],
             max_length=self.max_length,
             do_sample=True,
@@ -566,36 +637,8 @@ class DPOTrainer(Trainer):
                 "prediction_step is only implemented for DPODataCollatorWithPadding, and you passed a datacollator that is different than "
                 "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
             )
-        if ignore_keys is None:
-            if hasattr(model, "config"):
-                ignore_keys = getattr(model.config, "keys_to_ignore_at_inference", [])
-            else:
-                ignore_keys = []
 
-        with torch.no_grad():
-            loss, metrics = self.get_batch_metrics(model, inputs, train_eval="eval")
-
-        # force log the metrics
-        if self.accelerator.is_main_process:
-            self.store_metrics(metrics, train_eval="eval")
-
-        if prediction_loss_only:
-            return (loss.detach(), None, None)
-
-        # logits for the chosen and rejected samples from model
-        logits_dict = {
-            "eval_logits/chosen": metrics["eval_logits/chosen"],
-            "eval_logits/rejected": metrics["eval_logits/rejected"],
-        }
-        logits = tuple(v.unsqueeze(dim=0) for k, v in logits_dict.items() if k not in ignore_keys)
-        logits = torch.stack(logits).mean(axis=1).to(self.accelerator.device)
-        labels = torch.zeros(logits.shape[0], device=self.accelerator.device)
-
-        return (loss.detach(), logits, labels)
-
-    def store_metrics(self, metrics: Dict[str, float], train_eval: Literal["train", "eval"] = "train") -> None:
-        for key, value in metrics.items():
-            self._stored_metrics[train_eval][key].append(value)
+        return super().prediction_step(model, inputs, prediction_loss_only, ignore_keys)
 
     def evaluation_loop(
         self,
@@ -638,7 +681,6 @@ class DPOTrainer(Trainer):
                     )
                 }
             )
-            ## hack to fix log_history and remove
             self.state.log_history.pop()
 
         # Base evaluation
@@ -648,18 +690,25 @@ class DPOTrainer(Trainer):
 
         return initial_output
 
-    def log(self, logs: Dict[str, float]) -> None:
-        """
-        Log `logs` on the various objects watching training, including stored metrics.
 
-        Args:
-            logs (`Dict[str, float]`):
-                The values to log.
-        """
-        # logs either has 'loss' or 'eval_loss'
-        train_eval = "train" if "loss" in logs else "eval"
-        # Add averaged stored metrics to logs
-        for key, metrics in self._stored_metrics[train_eval].items():
-            logs[key] = torch.tensor(metrics).mean().item()
-        del self._stored_metrics[train_eval]
-        return super().log(logs)
+def compute_dpo_metrics(eval_preds: EvalPrediction):
+    (
+        chosen_rewards,
+        rejected_rewards,
+        policy_chosen_logps,
+        policy_rejected_logps,
+        reference_chosen_logps,
+        reference_rejected_logps,
+    ) = eval_preds.predictions
+
+    reward_accuracies = (chosen_rewards > rejected_rewards).mean()
+
+    metrics = {}
+    metrics["rewards/chosen"] = chosen_rewards.mean()
+    metrics["rewards/rejected"] = rejected_rewards.mean()
+    metrics["rewards/accuracies"] = reward_accuracies.mean()
+    metrics["rewards/margins"] = (chosen_rewards - rejected_rewards).mean()
+    metrics["logps/rejected"] = policy_rejected_logps.mean()
+    metrics["logps/chosen"] = policy_chosen_logps.mean()
+
+    return metrics
