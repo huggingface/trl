@@ -178,6 +178,7 @@ class SFTTrainerTester(unittest.TestCase):
                 args=training_args,
                 train_dataset=self.dummy_dataset,
                 formatting_func=formatting_prompts_func,
+                max_seq_length=32, # make sure there is at least 1 packed sequence
                 packing=True,
             )
 
