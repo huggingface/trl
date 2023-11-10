@@ -481,6 +481,8 @@ class PreTrainedModelWrapper(nn.Module):
             dtype=pretrained_model.dtype,
         )
         score.load_state_dict(score_dict)
+        for param in score.parameters():
+            param.requires_grad = False
 
         return score
 
@@ -556,16 +558,17 @@ class PreTrainedModelWrapper(nn.Module):
         self.pretrained_model.set_adapter(self.rm_adapter_name)
         self.pretrained_model.eval()
 
-        base_model_output = self.pretrained_model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            output_hidden_states=True,
-            return_dict=True,
-            **kwargs,
-        )
+        with torch.no_grad():
+            base_model_output = self.pretrained_model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                output_hidden_states=True,
+                return_dict=True,
+                **kwargs,
+            )
 
-        last_hidden_states = base_model_output.hidden_states[-1]
-        scores = self.score(last_hidden_states)
+            last_hidden_states = base_model_output.hidden_states[-1]
+            scores = self.score(last_hidden_states)
 
         self.pretrained_model.set_adapter(self.policy_adapter_name)
         self.pretrained_model.eval()

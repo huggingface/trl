@@ -16,7 +16,6 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import torch
-from accelerate.utils import DistributedDataParallelKwargs
 from datasets import load_dataset
 from peft import LoraConfig
 from tqdm import tqdm
@@ -112,7 +111,6 @@ config = PPOConfig(
     use_score_scaling=script_args.use_score_scaling,
     use_score_norm=script_args.use_score_norm,
     score_clip=script_args.score_clip,
-    accelerator_kwargs={"kwargs_handlers": [DistributedDataParallelKwargs(find_unused_parameters=True)]},
 )
 
 ppo_trainer = PPOTrainer(
