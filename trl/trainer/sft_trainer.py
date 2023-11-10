@@ -338,7 +338,10 @@ class SFTTrainer(Trainer):
             def data_generator(constant_length_iterator):
                 for i in constant_length_iterator:
                     yield i
-            return Dataset.from_generator(data_generator, gen_kwargs={"constant_length_iterator": constant_length_iterator})
+
+            return Dataset.from_generator(
+                data_generator, gen_kwargs={"constant_length_iterator": constant_length_iterator}
+            )
 
         raise ValueError(
             "You need to pass a `dataset_text_field` or `formatting_func` argument to the SFTTrainer if you want to use the `ConstantLengthDataset`."
