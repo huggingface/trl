@@ -20,7 +20,7 @@ from typing import Any, Callable, Dict, List, Optional, Union
 
 import numpy as np
 import torch
-from diffusers import DDIMScheduler, StableDiffusionPipeline, UNet2DConditionModel
+from diffusers import DDIMScheduler, StableDiffusionPipeline, StableDiffusionXLPipeline, AutoencoderKL, UNet2DConditionModel
 from diffusers.loaders import AttnProcsLayers
 from diffusers.models.attention_processor import LoRAAttnProcessor
 from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import rescale_noise_cfg
@@ -331,12 +331,15 @@ def pipeline_step(
     latents: Optional[torch.FloatTensor] = None,
     prompt_embeds: Optional[torch.FloatTensor] = None,
     negative_prompt_embeds: Optional[torch.FloatTensor] = None,
+    pooled_prompt_embeds: Optional[torch.FloatTensor] = None,
+    negative_pooled_prompt_embeds: Optional[torch.FloatTensor] = None,
     output_type: Optional[str] = "pil",
     return_dict: bool = True,
     callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,
     callback_steps: int = 1,
     cross_attention_kwargs: Optional[Dict[str, Any]] = None,
     guidance_rescale: float = 0.0,
+    sdxl: bool = False
 ):
     r"""
     Function invoked when calling the pipeline for generation.  Args: prompt (`str` or `List[str]`, *optional*): The prompt or prompts to guide the image generation. If not defined, one has to pass `prompt_embeds`.  instead.  height (`int`, *optional*, defaults to self.unet.config.sample_size * self.vae_scale_factor): The height in pixels of the generated image.
@@ -406,15 +409,29 @@ def pipeline_step(
     width = width or self.unet.config.sample_size * self.vae_scale_factor
 
     # 1. Check inputs. Raise error if not correct
-    self.check_inputs(
-        prompt,
-        height,
-        width,
-        callback_steps,
-        negative_prompt,
-        prompt_embeds,
-        negative_prompt_embeds,
-    )
+    if sdxl:
+        self.check_inputs(
+            prompt,
+            prompt, # duplicate the prompt for the refiner
+            height,
+            width,
+            callback_steps,
+            negative_prompt,
+            prompt_embeds,
+            negative_prompt_embeds,
+            pooled_prompt_embeds=pooled_prompt_embeds,
+            negative_pooled_prompt_embeds=negative_pooled_prompt_embeds,
+        )
+    else:
+        self.check_inputs(
+            prompt,
+            height,
+            width,
+            callback_steps,
+            negative_prompt,
+            prompt_embeds,
+            negative_prompt_embeds,
+        )
 
     # 2. Define call parameters
     if prompt is not None and isinstance(prompt, str):
@@ -432,16 +449,31 @@ def pipeline_step(
 
     # 3. Encode input prompt
     text_encoder_lora_scale = cross_attention_kwargs.get("scale", None) if cross_attention_kwargs is not None else None
-    prompt_embeds = self._encode_prompt(
-        prompt,
-        device,
-        num_images_per_prompt,
-        do_classifier_free_guidance,
-        negative_prompt,
-        prompt_embeds=prompt_embeds,
-        negative_prompt_embeds=negative_prompt_embeds,
-        lora_scale=text_encoder_lora_scale,
-    )
+    if sdxl:
+        prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = self.encode_prompt(
+            prompt,
+            prompt,
+            device,
+            num_images_per_prompt,
+            do_classifier_free_guidance,
+            negative_prompt,
+            prompt_embeds=prompt_embeds,
+            negative_prompt_embeds=negative_prompt_embeds,
+            pooled_prompt_embeds=pooled_prompt_embeds,
+            negative_pooled_prompt_embeds=negative_pooled_prompt_embeds,
+            lora_scale=text_encoder_lora_scale,
+        )
+    else:
+        prompt_embeds = self._encode_prompt(
+            prompt,
+            device,
+            num_images_per_prompt,
+            do_classifier_free_guidance,
+            negative_prompt,
+            prompt_embeds=prompt_embeds,
+            negative_prompt_embeds=negative_prompt_embeds,
+            lora_scale=text_encoder_lora_scale,
+        )
 
     # 4. Prepare timesteps
     self.scheduler.set_timesteps(num_inference_steps, device=device)
@@ -524,10 +556,18 @@ def pipeline_step(
 
 
 class DefaultDDPOStableDiffusionPipeline(DDPOStableDiffusionPipeline):
-    def __init__(self, pretrained_model_name: str, *, pretrained_model_revision: str = "main", use_lora: bool = True):
-        self.sd_pipeline = StableDiffusionPipeline.from_pretrained(
-            pretrained_model_name, revision=pretrained_model_revision
-        )
+    def __init__(self, pretrained_model_name: str, *, pretrained_model_revision: str = "main", use_lora: bool = True, sdxl_vae: str = ""):
+
+        if sdxl_vae is not None and len(sdxl_vae) > 0:
+            vae = AutoencoderKL.from_pretrained(sdxl_vae)
+
+            self.sd_pipeline = StableDiffusionXLPipeline.from_pretrained(
+                pretrained_model_name, revision=pretrained_model_revision, vae=vae
+            )
+        else:
+            self.sd_pipeline = StableDiffusionPipeline.from_pretrained(
+                pretrained_model_name, revision=pretrained_model_revision
+            )
 
         self.use_lora = use_lora
         self.pretrained_model = pretrained_model_name

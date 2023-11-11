@@ -97,6 +97,12 @@ class DDPOConfig:
     """The maximum number of workers to use for async reward computation."""
     negative_prompts: Optional[str] = ""
     """Comma-separated list of prompts to use as negative examples."""
+    width: Optional[int] = None
+    """Width of the generated samples"""
+    height: Optional[int] = None
+    """Height of the generated samples"""
+    sdxl: bool = False
+    """Whether the model in question is based on SDXL"""
 
     def to_dict(self):
         output_dict = {}

@@ -27,24 +27,31 @@ from transformers import CLIPModel, CLIPProcessor
 from trl import DDPOConfig, DDPOTrainer, DefaultDDPOStableDiffusionPipeline
 from trl.import_utils import is_xpu_available
 
+from io import BytesIO
+from PIL import Image
+
 
 @dataclass
 class ScriptArguments:
     hf_user_access_token: str
-    pretrained_model: str = "runwayml/stable-diffusion-v1-5"
+    pretrained_model: str = "stabilityai/stable-diffusion-xl-base-1.0"
     """the pretrained model to use"""
     pretrained_revision: str = "main"
     """the pretrained model revision to use"""
-    hf_hub_model_id: str = "ddpo-finetuned-stable-diffusion"
+    sdxl_vae: str = "madebyollin/sdxl-vae-fp16-fix"
+    """the name of the pretrained SDXL VAE model to use"""
+    hf_hub_model_id: str = "ddpo-finetuned-stable-diffusion-xl"
     """HuggingFace repo to save model weights to"""
-    hf_hub_aesthetic_model_id: str = "trl-lib/ddpo-aesthetic-predictor"
-    """HuggingFace model ID for aesthetic scorer model weights"""
-    hf_hub_aesthetic_model_filename: str = "aesthetic-model.pth"
-    """HuggingFace model filename for aesthetic scorer model weights"""
+    compression_quality: int = 80
+    """JPEG compression quality"""
+    mode: str = "compressibility" # or 'incompressibility'
+    """Whether we are looking to make images more compressible or incompressible"""
 
     ddpo_config: DDPOConfig = field(
         default_factory=lambda: DDPOConfig(
-            sdxl=False,
+            width=1024,
+            height=1024,
+            sdxl=True,
             num_epochs=200,
             train_gradient_accumulation_steps=1,
             sample_num_steps=50,
@@ -64,69 +71,33 @@ class ScriptArguments:
         )
     )
 
-
-class MLP(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.layers = nn.Sequential(
-            nn.Linear(768, 1024),
-            nn.Dropout(0.2),
-            nn.Linear(1024, 128),
-            nn.Dropout(0.2),
-            nn.Linear(128, 64),
-            nn.Dropout(0.1),
-            nn.Linear(64, 16),
-            nn.Linear(16, 1),
-        )
-
-    @torch.no_grad()
-    def forward(self, embed):
-        return self.layers(embed)
-
-
-class AestheticScorer(torch.nn.Module):
-    """
-    This model attempts to predict the aesthetic score of an image. The aesthetic score
-    is a numerical approximation of how much a specific image is liked by humans on average.
-    This is from https://github.com/christophschuhmann/improved-aesthetic-predictor
-    """
-
-    def __init__(self, *, dtype, model_id, model_filename):
-        super().__init__()
-        self.clip = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
-        self.processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
-        self.mlp = MLP()
-        try:
-            cached_path = hf_hub_download(model_id, model_filename)
-        except EntryNotFoundError:
-            cached_path = os.path.join(model_id, model_filename)
-        state_dict = torch.load(cached_path)
-        self.mlp.load_state_dict(state_dict)
-        self.dtype = dtype
-        self.eval()
-
-    @torch.no_grad()
-    def __call__(self, images):
-        device = next(self.parameters()).device
-        inputs = self.processor(images=images, return_tensors="pt")
-        inputs = {k: v.to(self.dtype).to(device) for k, v in inputs.items()}
-        embed = self.clip.get_image_features(**inputs)
-        # normalize embedding
-        embed = embed / torch.linalg.vector_norm(embed, dim=-1, keepdim=True)
-        return self.mlp(embed).squeeze(1)
-
-
-def aesthetic_scorer(hub_model_id, model_filename):
-    scorer = AestheticScorer(
-        model_id=hub_model_id,
-        model_filename=model_filename,
-        dtype=torch.float32,
-    )
-    scorer = scorer.xpu() if is_xpu_available() else scorer.cuda()
+def scorer(compression_quality = 80, mode = 'compressibility'):
 
     def _fn(images, prompts, metadata):
         images = (images * 255).round().clamp(0, 255).to(torch.uint8)
-        scores = scorer(images)
+        scores = []
+        for i in range(images.shape[0]):
+            img = Image.fromarray(images[i].cpu().detach().numpy())
+
+            # Convert the image to a JPEG format with the specified compression quality
+            output_buffer = BytesIO()
+            img.save(output_buffer, 'JPEG', quality=compression_quality)
+            output_buffer.seek(0) # Reset the output buffer position
+            output_buffer = output_buffer.getbuffer()
+
+            # Get the byte representation of the original image
+            original_bytes = BytesIO()
+            img.save(original_bytes, 'PNG')
+            original_bytes.seek(0)
+            original_bytes = original_bytes.getbuffer()
+
+            # Calculate the ratio between the sizes of the two images
+            ratio = original_bytes.nbytes / output_buffer.nbytes
+            if mode == 'incompressibility':
+                ratio = 1 / ratio
+
+            scores.append(ratio)
+
         return scores, {}
 
     return _fn
@@ -189,12 +160,12 @@ if __name__ == "__main__":
     args = tyro.cli(ScriptArguments)
 
     pipeline = DefaultDDPOStableDiffusionPipeline(
-        args.pretrained_model, pretrained_model_revision=args.pretrained_revision, use_lora=True,
+        args.pretrained_model, pretrained_model_revision=args.pretrained_revision, use_lora=True, sdxl_vae=args.sdxl_vae,
     )
 
     trainer = DDPOTrainer(
         args.ddpo_config,
-        aesthetic_scorer(args.hf_hub_aesthetic_model_id, args.hf_hub_aesthetic_model_filename),
+        scorer(args.compression_quality, args.mode),
         prompt_fn,
         pipeline,
         image_samples_hook=image_outputs_logger,

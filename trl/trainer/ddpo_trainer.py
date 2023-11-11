@@ -159,6 +159,7 @@ class DDPOTrainer(BaseTrainer):
                 max_length=self.sd_pipeline.tokenizer.model_max_length,
             ).input_ids.to(self.accelerator.device)
         )[0]
+        self.pooled_neg_prompt_embed = self.neg_prompt_embed[0]
 
         if config.per_prompt_stat_tracking:
             self.stat_tracker = PerPromptStatTracker(
@@ -430,6 +431,7 @@ class DDPOTrainer(BaseTrainer):
         self.sd_pipeline.unet.eval()
 
         sample_neg_prompt_embeds = self.neg_prompt_embed.repeat(batch_size, 1, 1)
+        sample_pooled_neg_prompt_embeds = self.pooled_neg_prompt_embed.repeat(batch_size, 1)
 
         for _ in range(iterations):
             prompts, prompt_metadata = zip(*[self.prompt_fn() for _ in range(batch_size)])
@@ -442,15 +444,21 @@ class DDPOTrainer(BaseTrainer):
                 max_length=self.sd_pipeline.tokenizer.model_max_length,
             ).input_ids.to(self.accelerator.device)
             prompt_embeds = self.sd_pipeline.text_encoder(prompt_ids)[0]
+            pooled_prompt_embeds = prompt_embeds[0]
 
             with self.autocast():
                 sd_output = self.sd_pipeline(
+                    width=self.config.width,
+                    height=self.config.height,
                     prompt_embeds=prompt_embeds,
+                    pooled_prompt_embeds=pooled_prompt_embeds,
                     negative_prompt_embeds=sample_neg_prompt_embeds,
+                    negative_pooled_prompt_embeds=sample_pooled_neg_prompt_embeds,
                     num_inference_steps=self.config.sample_num_steps,
                     guidance_scale=self.config.sample_guidance_scale,
                     eta=self.config.sample_eta,
                     output_type="pt",
+                    sdxl=self.config.sdxl
                 )
 
                 images = sd_output.images
@@ -465,11 +473,13 @@ class DDPOTrainer(BaseTrainer):
                 {
                     "prompt_ids": prompt_ids,
                     "prompt_embeds": prompt_embeds,
+                    "pooled_prompt_embeds": pooled_prompt_embeds,
                     "timesteps": timesteps,
                     "latents": latents[:, :-1],  # each entry is the latent before timestep t
                     "next_latents": latents[:, 1:],  # each entry is the latent after timestep t
                     "log_probs": log_probs,
                     "negative_prompt_embeds": sample_neg_prompt_embeds,
+                    "negative_pooled_prompt_embeds": sample_pooled_neg_prompt_embeds,
                 }
             )
             prompt_image_pairs.append([images, prompts, prompt_metadata])
