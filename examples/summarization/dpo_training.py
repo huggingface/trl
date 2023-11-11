@@ -33,10 +33,11 @@ from transformers import (
     PreTrainedModel,
     TrainingArguments,
 )
-from transformers.trainer_utils import EvalLoopOutput, get_last_checkpoint
+from transformers.trainer_utils import EvalLoopOutput, EvalPrediction, get_last_checkpoint
 
 import wandb
 from trl import DPOTrainer
+from trl.trainer.dpo_trainer import compute_dpo_metrics
 from trl.trainer.utils import pad_to_length
 
 
@@ -144,10 +145,13 @@ class DPOTrainerWithGold(DPOTrainer):
         self,
         gold_model,
         generate_kwargs=None,
-        *args,
+        compute_metrics=None,
         **kwargs,
     ):
-        super().__init__(*args, **kwargs)
+        if compute_metrics is None:
+            kwargs["compute_metrics"] = compute_dpo_gold_metrics
+
+        super().__init__(**kwargs)
         self.gold_model = self.accelerator.prepare_model(gold_model, evaluation_mode=True)
         if generate_kwargs is not None:
             self.generate_kwargs = generate_kwargs
@@ -222,9 +226,8 @@ class DPOTrainerWithGold(DPOTrainer):
                 )[0]
 
             gold_rewards = self.accelerator.gather_for_metrics(gold_rewards)
-            # force log the metrics
-            if self.accelerator.is_main_process:
-                self.store_metrics({"gold_rewards_mean": gold_rewards.mean().item()}, train_eval="eval")
+
+            logits = logits + (gold_rewards,)
 
         return loss, logits, labels
 
@@ -260,6 +263,16 @@ class DPOTrainerWithGold(DPOTrainer):
             return policy_output_decoded, reference_output_decoded, policy_output
         else:
             return policy_output_decoded, reference_output_decoded
+
+
+def compute_dpo_gold_metrics(eval_preds: EvalPrediction):
+    gold_rewards = eval_preds.predictions[-1]
+    eval_preds.predictions = eval_preds.predictions[:-1]
+    metrics = compute_dpo_metrics(eval_preds)
+
+    metrics["gold_rewards_mean"] = gold_rewards.mean()
+
+    return metrics
 
 
 def find_all_linear_names(args, model):

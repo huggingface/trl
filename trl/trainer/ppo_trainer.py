@@ -1069,7 +1069,7 @@ class PPOTrainer(BaseTrainer):
         self.optimizer.zero_grad()
         return train_stats
 
-    @PPODecorators.empty_cuda_cache()
+    @PPODecorators.empty_device_cache()
     def compute_reward_model_score(
         self, input_ids: torch.FloatTensor, attention_mask: torch.FloatTensor = None, **kwargs
     ):
