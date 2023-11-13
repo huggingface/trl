@@ -29,6 +29,7 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
     BitsAndBytesConfig,
+    GenerationConfig,
     HfArgumentParser,
     PreTrainedModel,
     TrainingArguments,
@@ -107,6 +108,7 @@ class ScriptArguments:
     # instrumentation
     output_dir: Optional[str] = field(default="results", metadata={"help": "the output directory"})
     logging_steps: Optional[int] = field(default=100, metadata={"help": "the number of update steps between two logs"})
+    log_n_samples_during_eval: Optional[int] = field(default=100)
     eval_steps: Optional[int] = field(default=1000, metadata={"help": "the number of steps to eval at"})
     save_steps: Optional[int] = field(default=1000, metadata={"help": "the number of steps to save at"})
     save_strategy: Optional[str] = field(default="steps")
@@ -144,25 +146,28 @@ class DPOTrainerWithGold(DPOTrainer):
     def __init__(
         self,
         gold_model,
-        generate_kwargs=None,
+        generation_config=None,
         compute_metrics=None,
+        log_n_samples_during_eval=0,
         **kwargs,
     ):
         if compute_metrics is None:
             kwargs["compute_metrics"] = compute_dpo_gold_metrics
 
         super().__init__(**kwargs)
+        self.log_n_samples_during_eval = log_n_samples_during_eval
         self.gold_model = self.accelerator.prepare_model(gold_model, evaluation_mode=True)
-        if generate_kwargs is not None:
-            self.generate_kwargs = generate_kwargs
+        if generation_config is not None:
+            self.generation_config = generation_config
         else:
-            self.generate_kwargs = {
-                "max_length": self.max_length,
-                "do_sample": True,
-            }
+            self.generation_config = GenerationConfig(
+                do_sample=False,
+                num_beams=1,
+                max_length=self.max_length,
+            )
 
         if model.config.pad_token_id is None:
-            self.generate_kwargs["pad_token_id"] = self.tokenizer.pad_token_id
+            self.generation_config.pad_token_id = self.tokenizer.pad_token_id
 
     def evaluation_loop(
         self,
@@ -179,10 +184,14 @@ class DPOTrainerWithGold(DPOTrainer):
         Works both with or without labels.
         """
 
+        self.samples_to_log = self.log_n_samples_during_eval
+        # self.seen_prompts = set()
         # Base evaluation
         return super(DPOTrainer, self).evaluation_loop(
             dataloader, description, prediction_loss_only, ignore_keys, metric_key_prefix
         )
+
+        # self.seen_prompts = set()
         #
         # initial_output.metrics[f"{metric_key_prefix}_gold_rewards_mean"] = gold_rewards.mean().item()
         #
@@ -197,11 +206,12 @@ class DPOTrainerWithGold(DPOTrainer):
     ):
         loss, logits, labels = super().prediction_step(model, inputs, prediction_loss_only, ignore_keys)
         # Sample and save to game log if requested (for one batch to save time)
-        if self.generate_during_eval:
-            policy_output_decoded, ref_output_decoded, policy_output_ids = self.get_batch_samples(
+        if self.samples_to_log > 0:
+            policy_output_decoded, ref_output_decoded, policy_output_ids = self.get_unique_batch_samples(
                 self.model,
                 inputs,
                 return_ids=True,
+                max_batch_size=self.samples_to_log,
             )
 
             self.log(
@@ -217,6 +227,7 @@ class DPOTrainerWithGold(DPOTrainer):
             )
             ## hack to fix log_history and remove
             self.state.log_history.pop()
+            self.samples_to_log -= len(policy_output_decoded)
 
             # gold reward
             policy_output_attention_mask = (policy_output_ids != self.tokenizer.pad_token_id).to(torch.int64)
@@ -231,26 +242,53 @@ class DPOTrainerWithGold(DPOTrainer):
 
         return loss, logits, labels
 
-    def get_batch_samples(self, model, batch: Dict[str, torch.LongTensor], return_ids=False) -> Tuple[str, str]:
-        """Generate samples from the model and reference model for the given batch of inputs."""
+    def get_unique_batch_samples(
+        self, model, inputs: Dict[str, torch.LongTensor], return_ids=False, max_batch_size=None
+    ) -> Tuple[str, str]:
+        """Reduce inputs to unseen prompts, and maximum batch size if necessary
+        Generate samples from the model and reference model for the given batch of inputs."""
+        # unseen_idx = []
+        # for i, prompt in enumerate(inputs["prompt"]):
+        #     if prompt not in self.seen_prompts:
+        #         unseen_idx.append(i)
+        #         self.seen_prompts.add(prompt)
+        #
+        # inputs = {
+        #     "input_ids": inputs["prompt_input_ids"][unseen_idx],
+        #     "attention_mask": inputs["prompt_attention_mask"][unseen_idx],
+        # }
+        #
+        # batch_size = len(unseen_idx)
+        inputs = {
+            "input_ids": inputs["prompt_input_ids"],
+            "attention_mask": inputs["prompt_attention_mask"],
+        }
+        batch_size = inputs["input_ids"].size(0)
+
+        if batch_size == 0:
+            return None, None, None
+        elif batch_size > max_batch_size:
+            inputs = {
+                "input_ids": inputs["input_ids"][:max_batch_size],
+                "attention_mask": inputs["attention_mask"][:max_batch_size],
+            }
+            batch_size = max_batch_size
+
         policy_output = model.generate(
-            batch["prompt_input_ids"],
-            attention_mask=batch["prompt_attention_mask"],
-            **self.generate_kwargs,
+            **inputs,
+            generation_config=self.generation_config,
         )
 
         if self.ref_model is None:
             with self.accelerator.unwrap_model(self.model).disable_adapter():
                 reference_output = self.model.generate(
-                    batch["prompt_input_ids"],
-                    attention_mask=batch["prompt_attention_mask"],
-                    **self.generate_kwargs,
+                    **inputs,
+                    generation_config=self.generation_config,
                 )
         else:
             reference_output = self.ref_model.generate(
-                batch["prompt_input_ids"],
-                attention_mask=batch["prompt_attention_mask"],
-                **self.generate_kwargs,
+                **inputs,
+                generation_config=self.generation_config,
             )
 
         policy_output = pad_to_length(policy_output, self.max_length, self.tokenizer.pad_token_id)
@@ -366,8 +404,8 @@ def create_and_prepare_model(args):
     if getattr(tokenizer, "pad_token", None) is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    if getattr(model.config, "pad_token_id", None) is None:
-        model.config.pad_token_id = model.config.eos_token_id
+    # if getattr(model.config, "pad_token_id", None) is None:
+    #     model.config.pad_token_id = model.config.eos_token_id
 
     if script_args.gold_in_8bit or script_args.gold_in_4bit:
         gold_quantization_config = BitsAndBytesConfig(
@@ -456,18 +494,22 @@ if __name__ == "__main__":
     )
 
     if script_args.generate_greedy:
-        generate_kwargs = {
-            "do_sample": False,
-            "num_beams": 1,
-        }
+        generation_config = GenerationConfig(
+            do_sample=False,
+            num_beams=1,
+            eos_token_id=tokenizer.eos_token_id,
+            pad_token_id=tokenizer.eos_token_id,
+        )
     else:
-        generate_kwargs = {
-            "max_new_tokens": script_args.max_target_length,
-            "min_length": -1,
-            "top_k": 0.0,
-            "top_p": 1.0,
-            "do_sample": True,
-        }
+        generation_config = GenerationConfig(
+            max_new_tokens=script_args.max_target_length,
+            min_length=-1,
+            top_k=0.0,
+            top_p=1.0,
+            do_sample=True,
+            eos_token_id=tokenizer.eos_token_id,
+            pad_token_id=tokenizer.eos_token_id,
+        )
 
     # 5. initialize the DPO trainer
     dpo_trainer = DPOTrainerWithGold(
@@ -481,8 +523,8 @@ if __name__ == "__main__":
         max_length=script_args.max_length,
         max_target_length=script_args.max_target_length,
         max_prompt_length=script_args.max_prompt_length,
-        generate_during_eval=True,
-        generate_kwargs=generate_kwargs,
+        log_n_samples_during_eval=script_args.log_n_samples_during_eval,
+        generation_config=generation_config,
     )
 
     # 6. train
