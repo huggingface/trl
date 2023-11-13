@@ -20,6 +20,7 @@ from typing import Callable, Dict, List, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 from datasets import Dataset
+from datasets.arrow_writer import SchemaInferenceError
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -339,9 +340,15 @@ class SFTTrainer(Trainer):
                 for i in constant_length_iterator:
                     yield i
 
-            return Dataset.from_generator(
-                data_generator, gen_kwargs={"constant_length_iterator": constant_length_iterator}
-            )
+            try:
+                packed_dataset = Dataset.from_generator(
+                    data_generator, gen_kwargs={"constant_length_iterator": constant_length_iterator}
+                )
+            except SchemaInferenceError:
+                raise ValueError(
+                    "Error occurred while packing the dataset. Make sure that your dataset has enough samples to at least yield one packed sequence."
+                )
+            return packed_dataset
 
         raise ValueError(
             "You need to pass a `dataset_text_field` or `formatting_func` argument to the SFTTrainer if you want to use the `ConstantLengthDataset`."
