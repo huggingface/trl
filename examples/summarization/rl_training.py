@@ -73,7 +73,8 @@ class ScriptArguments:
         metadata={"help": "a baseline value that is subtracted from the reward"},
     )
     batched_gen: Optional[bool] = field(default=False, metadata={"help": "whether to use the batched text gen"})
-    save_freq: Optional[int] = field(default=None, metadata={"help": "n steps to save the model"})
+    save_steps: Optional[int] = field(default=1000, metadata={"help": "the number of steps to save at"})
+    save_strategy: Optional[str] = field(default="steps")
     output_dir: Optional[str] = field(default="runs/", metadata={"help": "n steps to save the model"})
     seed: Optional[int] = field(default=0, metadata={"help": "the seed"})
     steps: Optional[int] = field(default=20000, metadata={"help": "number of epochs"})
@@ -436,13 +437,12 @@ for epoch, batch in tqdm(
 
     if script_args.eval_steps is not None and epoch % script_args.eval_steps == 0:
         if script_args.gold_eval_greedy:
-            raise Exception("not yet implemented")
             greedy_output = ppo_trainer.generate(
                 question_tensors, do_sample=False, num_beams=1, max_new_tokens=script_args.output_max_length
             )
             max_length = script_args.input_max_length + script_args.output_max_length
-            policy_output = pad_to_length(greedy_output, max_length, tokenizer.pad_token_id)
-            policy_output_decoded = self.tokenizer.batch_decode(policy_output, skip_special_tokens=True)
+            # policy_output = pad_to_length(greedy_output, max_length, tokenizer.pad_token_id)
+            policy_output_decoded = tokenizer.batch_decode(greedy_output, skip_special_tokens=True)
 
         with torch.no_grad():
             gold_rewards = gold_model(**policy_output)[0]
@@ -461,5 +461,5 @@ for epoch, batch in tqdm(
     #     ppo_trainer.accelerator.print("elastic reset")
     # ppo_trainer.accelerator.print(stats)
 
-    if script_args.save_freq and epoch and epoch % script_args.save_freq == 0:
+    if script_args.save_strategy != "no" and epoch > 0 and epoch % script_args.save_steps == 0:
         ppo_trainer.save_pretrained(script_args.output_dir + f"step_{epoch}")
