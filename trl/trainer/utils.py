@@ -99,6 +99,14 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
             # The user already provides the token ids
             self.response_token_ids = response_template
 
+        if not self.mlm and self.instruction_template and self.tokenizer.pad_token_id == self.tokenizer.eos_token_id:
+            warnings.warn(
+                "The pad_token_id and eos_token_id values of this tokenizer are identical. "
+                "If you are planning for multi-turn training, "
+                "it can result in the model continuously generating questions and answers without eos token. "
+                "To avoid this, set the pad_token_id to a different value."
+            )
+
         self.ignore_index = ignore_index
 
     def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
