@@ -111,6 +111,8 @@ trainer = SFTTrainer(
 trainer.train() 
 ```
 
+Make sure to have a `pad_token_id` which is different from `eos_token_id` which can result in the model not properly predicting EOS (End of Sentence) tokens during generation. 
+
 #### Using token_ids directly for `response_template`
 
 Some tokenizers like Llama 2 (`meta-llama/Llama-2-XXb-hf`) tokenize sequences differently depending whether they have context or not. For example:
