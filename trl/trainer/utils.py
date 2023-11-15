@@ -551,8 +551,7 @@ class ConstantLengthDataset(IterableDataset):
             self.formatting_func = formatting_func
 
         if formatting_func is not None:
-            formatting_func_signature = formatting_func.__code__.co_varnames
-            if len(formatting_func_signature) > 1:
+            if formatting_func.__code__.co_argcount > 1:
                 warnings.warn(
                     "The passed formatting_func has more than one argument. Usually that function should have a single argument `example`"
                     " which corresponds to the dictionary returned by each element of the dataset. Make sure you know what you are doing."
