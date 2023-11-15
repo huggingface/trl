@@ -128,7 +128,7 @@ class DPOTrainer(Trainer):
         args: TrainingArguments = None,
         data_collator: Optional[DataCollator] = None,
         label_pad_token_id: int = -100,
-        padding_value: int = 0,
+        padding_value: int = None,
         truncation_mode: str = "keep_end",
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
@@ -303,7 +303,7 @@ class DPOTrainer(Trainer):
         self.max_length = max_length
         self.generate_during_eval = generate_during_eval
         self.label_pad_token_id = label_pad_token_id
-        self.padding_value = padding_value if padding_value != tokenizer.pad_token_id else tokenizer.pad_token_id
+        self.padding_value = padding_value if padding_value is not None else tokenizer.pad_token_id
         self.max_prompt_length = max_prompt_length
         self.truncation_mode = truncation_mode
         self.max_target_length = max_target_length
