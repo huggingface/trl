@@ -136,6 +136,7 @@ model.eval()
 gen_kwargs = {
     "max_new_tokens": args.max_new_tokens,
     "pad_token_id": tokenizer.pad_token_id,
+    "eos_token_id": tokenizer.eos_token_id,
     "do_sample": args.sample,
 }
 
@@ -150,37 +151,39 @@ for batch in tqdm(eval_dataloader):
             **gen_kwargs,
         )
 
-        # get just the generated tokens
-        generated_tokens = output_tokens[:, batch["input_ids"].shape[1] :]
+    # get just the generated tokens
+    generated_tokens = output_tokens[:, batch["input_ids"].shape[1] :]
 
-        generated_tokens = accelerator.pad_across_processes(generated_tokens, dim=1, pad_index=tokenizer.pad_token_id)
-        labels = batch["labels"]
-        # if not args.pad_to_max_length:
-        #     # If we did not pad to max length, we need to pad the labels too
-        #     labels = accelerator.pad_across_processes(batch["labels"], dim=1, pad_index=tokenizer.pad_token_id)
+    generated_tokens = accelerator.pad_across_processes(generated_tokens, dim=1, pad_index=tokenizer.pad_token_id)
+    labels = batch["labels"]
+    # if not args.pad_to_max_length:
+    #     # If we did not pad to max length, we need to pad the labels too
+    #     labels = accelerator.pad_across_processes(batch["labels"], dim=1, pad_index=tokenizer.pad_token_id)
 
-        generated_tokens, labels = accelerator.gather_for_metrics((generated_tokens, labels))
-        generated_tokens = generated_tokens.cpu().numpy()
-        labels = labels.cpu().numpy()
+    generated_tokens, labels = accelerator.gather_for_metrics((generated_tokens, labels))
+    generated_tokens = generated_tokens.cpu().numpy()
+    labels = labels.cpu().numpy()
 
-        # if args.ignore_pad_token_for_loss:
-        #     # Replace -100 in the labels as we can't decode them.
-        #     labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
-        if isinstance(generated_tokens, tuple):
-            generated_tokens = generated_tokens[0]
-        decoded_preds = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
-        decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
+    # if args.ignore_pad_token_for_loss:
+    #     # Replace -100 in the labels as we can't decode them.
+    #     labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
+    if isinstance(generated_tokens, tuple):
+        generated_tokens = generated_tokens[0]
+    decoded_preds = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
+    decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
 
-        decoded_preds, decoded_labels = postprocess_text(decoded_preds, decoded_labels)
+    decoded_preds, decoded_labels = postprocess_text(decoded_preds, decoded_labels)
 
-        # print(f"Label {decoded_labels}")
-        # print(f"Pred {decoded_preds}")
+    # print(f"Label {decoded_labels}")
+    # print(f"Pred {decoded_preds}")
 
-        rouge.add_batch(
-            predictions=decoded_preds,
-            references=decoded_labels,
-        )
+    rouge.add_batch(
+        predictions=decoded_preds,
+        references=decoded_labels,
+    )
 
+    # log samples
+    if accelerator.is_main_process:
         if len(table.data) < args.num_logged_samples:
             num_samples_to_add = min(args.num_logged_samples - len(table.data), len(batch["input_ids"]))
             for i in range(num_samples_to_add):
