@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import List, Optional
 
 import bitsandbytes as bnb
 import torch
@@ -32,7 +32,6 @@ from transformers import (
 from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, set_seed
 from trl.core import LengthSampler
 from trl.models.modeling_value_adapter import AutoModelForCausalLMWithValueAdapter
-from trl.trainer.utils import pad_to_length
 
 
 # import copy
@@ -137,6 +136,8 @@ class ScriptArguments:
     strip_prompt: Optional[bool] = field(
         default=False,
     )
+
+    just_eval: Optional[bool] = field(default=False)
 
 
 def find_all_linear_names(args, model):
@@ -282,6 +283,31 @@ def collator(data):
     return dict((key, [d[key] for d in data]) for key in data[0])
 
 
+# def decode_and_encode(output_token_ids: List[torch.Tensor], tokenizer, max_length, de_and_retokenize=True):
+#     if de_and_retokenize:
+#         texts = [q + r for q, r in zip(batch["query"], batch["response"])]
+#         output_encoding = tokenizer(
+#             texts,
+#             padding=True,
+#             truncation=True,
+#             return_tensors="pt",
+#             return_token_type_ids=False,
+#             max_length=max_length,
+#         ).to(ppo_trainer.accelerator.device)
+#     else:
+#         default_padding_side = tokenizer.padding_side
+#         tokenizer.padding_side = "left"
+#         full_response_mask = [torch.ones_like(element) for element in output_token_ids]
+#         full_response_encoding = {"input_ids": output_token_ids, "attention_mask": full_response_mask}
+#         output_encoding = tokenizer.pad(
+#             full_response_encoding,
+#             padding=True,
+#             max_length=max_length,
+#             return_tensors="pt",
+#         )
+#         tokenizer.padding_side = default_padding_side
+#
+#     return output_encoding
 parser = HfArgumentParser(ScriptArguments)
 script_args: ScriptArguments = parser.parse_args_into_dataclasses()[0]
 config = PPOConfig(
@@ -433,16 +459,29 @@ for epoch, batch in tqdm(
         rewards = [(raw_rewards[i] - script_args.reward_baseline) for i in range(len(raw_rewards))]
 
     # Run PPO step
-    stats = ppo_trainer.step(question_tensors, response_tensors, rewards)
+    if not script_args.just_eval:
+        stats = ppo_trainer.step(question_tensors, response_tensors, rewards)
+    else:
+        stats = {}
 
     if script_args.eval_steps is not None and epoch % script_args.eval_steps == 0:
         if script_args.gold_eval_greedy:
+            greedy_generation_kwargs = {
+                "min_length": -1,
+                "top_k": 0.0,
+                "top_p": 1.0,
+                "do_sample": False,
+                "pad_token_id": tokenizer.pad_token_id,
+                "eos_token_id": tokenizer.eos_token_id,
+                "max_new_tokens": script_args.output_max_length,
+            }
             greedy_output = ppo_trainer.generate(
-                question_tensors, do_sample=False, num_beams=1, max_new_tokens=script_args.output_max_length
+                question_tensors,
+                return_prompt=True,
+                **greedy_generation_kwargs,
             )
             max_length = script_args.input_max_length + script_args.output_max_length
-            # policy_output = pad_to_length(greedy_output, max_length, tokenizer.pad_token_id)
-            policy_output_decoded = tokenizer.batch_decode(greedy_output, skip_special_tokens=True)
+            policy_output = tokenizer.batch_decode(greedy_output, skip_special_tokens=True)
 
         with torch.no_grad():
             gold_rewards = gold_model(**policy_output)[0]
@@ -452,13 +491,6 @@ for epoch, batch in tqdm(
     stats["epoch"] = epoch
     ppo_trainer.log_stats(stats, batch, rewards, gold_rewards)
 
-    # if ema is not None:
-    #     ema.update()
-    #
-    # if script_args.reset_freq and epoch and epoch % script_args.reset_freq == 0:
-    #     ema.copy_to()
-    #     ema.load_state_dict(initial_state_dict)
-    #     ppo_trainer.accelerator.print("elastic reset")
     # ppo_trainer.accelerator.print(stats)
 
     if script_args.save_strategy != "no" and epoch > 0 and epoch % script_args.save_steps == 0:
