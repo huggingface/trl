@@ -320,9 +320,10 @@ class DPOTrainer(Trainer):
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
-        # tokenize the dataset and compute reference logps for training datasets
-        train_dataset = train_dataset.map(self.tokenize_batch_element)
-        eval_dataset = eval_dataset.map(self.tokenize_batch_element)
+        # tokenize the dataset
+        train_dataset = train_dataset.map(self.tokenize_row)
+        if eval_dataset is not None:
+            eval_dataset = eval_dataset.map(self.tokenize_row)
 
         super().__init__(
             model=model,
@@ -527,9 +528,9 @@ class DPOTrainer(Trainer):
             input_ids=answer_input_ids,
             attention_mask=answer_attention_mask,
         )
-        
-    def tokenize_batch_element(self, feature, model: Union[PreTrainedModel, nn.Module] = None) -> Dict:
-        """Tokenize a single batch element from a DPO specific dataset.
+
+    def tokenize_row(self, feature, model: Union[PreTrainedModel, nn.Module] = None) -> Dict:
+        """Tokenize a single row from a DPO specific dataset.
 
         At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
         in case the prompt + chosen or prompt + rejected responses is/are too long. First
