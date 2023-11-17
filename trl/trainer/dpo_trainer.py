@@ -412,11 +412,11 @@ class DPOTrainer(Trainer):
                 reference_chosen_logp, reference_rejected_logp = self.accelerator.gather_for_metrics(
                     (reference_chosen_logp, reference_rejected_logp)
                 )
-                reference_chosen_logps.append(reference_chosen_logp)
-                reference_rejected_logps.append(reference_rejected_logp)
+                reference_chosen_logps.append(reference_chosen_logp.cpu())
+                reference_rejected_logps.append(reference_rejected_logp.cpu())
 
-            all_reference_chosen_logps = torch.cat(reference_chosen_logps).cpu().numpy()
-            all_reference_rejected_logps = torch.cat(reference_rejected_logps).cpu().numpy()
+            all_reference_chosen_logps = torch.cat(reference_chosen_logps).numpy()
+            all_reference_rejected_logps = torch.cat(reference_rejected_logps).numpy()
 
             self.train_dataset = self.train_dataset.add_column(
                 name="reference_chosen_logps", column=all_reference_chosen_logps
@@ -464,11 +464,11 @@ class DPOTrainer(Trainer):
                 reference_chosen_logp, reference_rejected_logp = self.accelerator.gather_for_metrics(
                     (reference_chosen_logp, reference_rejected_logp)
                 )
-                reference_chosen_logps.append(reference_chosen_logp)
-                reference_rejected_logps.append(reference_rejected_logp)
+                reference_chosen_logps.append(reference_chosen_logp.cpu())
+                reference_rejected_logps.append(reference_rejected_logp.cpu())
 
-            all_reference_chosen_logps = torch.cat(reference_chosen_logps).cpu().numpy()
-            all_reference_rejected_logps = torch.cat(reference_rejected_logps).cpu().numpy()
+            all_reference_chosen_logps = torch.cat(reference_chosen_logps).numpy()
+            all_reference_rejected_logps = torch.cat(reference_rejected_logps).numpy()
 
             eval_dataset = eval_dataset.add_column(name="reference_chosen_logps", column=all_reference_chosen_logps)
             eval_dataset = eval_dataset.add_column(
