@@ -66,7 +66,7 @@ class PreTrainedModelWrapper(nn.Module):
             The list of arguments that are supported by the wrapper class.
     """
     transformers_parent_class = None
-    supported_args = ("score_module", "supports_rm_adapter", "rm_adapter_name")
+    supported_args = None
     supported_modules = ("v_head",)
     supported_rm_modules = ("score",)
     supported_pretrained_model_architectures = (
