@@ -1318,7 +1318,7 @@ class PPOTrainer(BaseTrainer):
         if not isinstance(rewards, torch.Tensor):
             rewards = torch.tensor(rewards).to(self.current_device)
         rewards = self.accelerator.gather(rewards).flatten()
-        
+
         # Log only if we are in the main process
         if self.accelerator.is_main_process:
             logs = {}
