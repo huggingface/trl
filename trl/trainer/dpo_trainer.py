@@ -415,8 +415,8 @@ class DPOTrainer(Trainer):
                 reference_chosen_logps.append(reference_chosen_logp.cpu())
                 reference_rejected_logps.append(reference_rejected_logp.cpu())
 
-            all_reference_chosen_logps = torch.cat(reference_chosen_logps).numpy()
-            all_reference_rejected_logps = torch.cat(reference_rejected_logps).numpy()
+            all_reference_chosen_logps = torch.cat(reference_chosen_logps).float().numpy()
+            all_reference_rejected_logps = torch.cat(reference_rejected_logps).float().numpy()
 
             self.train_dataset = self.train_dataset.add_column(
                 name="reference_chosen_logps", column=all_reference_chosen_logps
@@ -467,8 +467,8 @@ class DPOTrainer(Trainer):
                 reference_chosen_logps.append(reference_chosen_logp.cpu())
                 reference_rejected_logps.append(reference_rejected_logp.cpu())
 
-            all_reference_chosen_logps = torch.cat(reference_chosen_logps).numpy()
-            all_reference_rejected_logps = torch.cat(reference_rejected_logps).numpy()
+            all_reference_chosen_logps = torch.cat(reference_chosen_logps).float().numpy()
+            all_reference_rejected_logps = torch.cat(reference_rejected_logps).float().numpy()
 
             eval_dataset = eval_dataset.add_column(name="reference_chosen_logps", column=all_reference_chosen_logps)
             eval_dataset = eval_dataset.add_column(
@@ -845,7 +845,7 @@ class DPOTrainer(Trainer):
             concatenated_batch["concatenated_input_ids"],
             attention_mask=concatenated_batch["concatenated_attention_mask"],
             **model_kwargs,
-        ).logits.to(torch.float32)
+        ).logits
 
         all_logps = self.get_batch_logps(
             all_logits,
