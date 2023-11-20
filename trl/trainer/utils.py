@@ -99,6 +99,14 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
             # The user already provides the token ids
             self.response_token_ids = response_template
 
+        if not self.mlm and self.instruction_template and self.tokenizer.pad_token_id == self.tokenizer.eos_token_id:
+            warnings.warn(
+                "The pad_token_id and eos_token_id values of this tokenizer are identical. "
+                "If you are planning for multi-turn training, "
+                "it can result in the model continuously generating questions and answers without eos token. "
+                "To avoid this, set the pad_token_id to a different value."
+            )
+
         self.ignore_index = ignore_index
 
     def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
@@ -543,8 +551,7 @@ class ConstantLengthDataset(IterableDataset):
             self.formatting_func = formatting_func
 
         if formatting_func is not None:
-            formatting_func_signature = formatting_func.__code__.co_varnames
-            if len(formatting_func_signature) > 1:
+            if formatting_func.__code__.co_argcount > 1:
                 warnings.warn(
                     "The passed formatting_func has more than one argument. Usually that function should have a single argument `example`"
                     " which corresponds to the dictionary returned by each element of the dataset. Make sure you know what you are doing."
@@ -737,3 +744,32 @@ class PerPromptStatTracker:
 
     def get_stats(self):
         return {k: {"mean": np.mean(v), "std": np.std(v), "count": len(v)} for k, v in self.stats.items()}
+
+
+def neftune_post_forward_hook(module, input, output):
+    """
+    Implements the NEFTune forward pass for the model using forward hooks. Note this works only for
+    torch.nn.Embedding layers. This method is slightly adapted from the original source code
+    that can be found here: https://github.com/neelsjain/NEFTune
+
+    Simply add it to your model as follows:
+    ```python
+    model = ...
+    model.embed_tokens.neftune_noise_alpha = 0.1
+    model.embed_tokens.register_forward_hook(neftune_post_forward_hook)
+    ```
+
+    Args:
+        module (`torch.nn.Module`):
+            The embedding module where the hook is attached. Note that you need to set
+            `module.neftune_noise_alpha` to the desired noise alpha value.
+        input (`torch.Tensor`):
+            The input tensor to the model.
+        output (`torch.Tensor`):
+            The output tensor of the model (i.e. the embeddings).
+    """
+    if module.training:
+        dims = torch.tensor(output.size(1) * output.size(2))
+        mag_norm = module.neftune_noise_alpha / torch.sqrt(dims)
+        output = output + torch.zeros_like(output).uniform_(-mag_norm, mag_norm)
+    return output

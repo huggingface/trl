@@ -74,13 +74,8 @@ class DPOTrainerTester(unittest.TestCase):
         # fmt: on
         return Dataset.from_dict(dummy_dataset_dict)
 
-    @parameterized.expand(
-        [
-            ["gpt2"],
-            ["t5"],
-        ]
-    )
-    def test_dpo_trainer(self, name):
+    @parameterized.expand([["gpt2", "sigmoid"], ["t5", "hinge"]])
+    def test_dpo_trainer(self, name, loss_type):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
                 output_dir=tmp_dir,
@@ -107,6 +102,7 @@ class DPOTrainerTester(unittest.TestCase):
                 model=model,
                 ref_model=ref_model,
                 beta=0.1,
+                loss_type=loss_type,
                 args=training_args,
                 tokenizer=tokenizer,
                 train_dataset=dummy_dataset,
@@ -244,3 +240,57 @@ class DPOTrainerTester(unittest.TestCase):
                     eval_dataset=dummy_dataset,
                     generate_during_eval=True,
                 )
+
+    @require_peft
+    @mark.peft_test
+    def test_dpo_lora_save(self):
+        from peft import LoraConfig, get_peft_model
+
+        lora_config = LoraConfig(
+            r=16,
+            lora_alpha=32,
+            lora_dropout=0.05,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+
+        # lora model
+        model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        model_peft = get_peft_model(model, lora_config)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=4,
+                learning_rate=9e-1,
+                evaluation_strategy="steps",
+            )
+
+            dummy_dataset = self._init_dummy_dataset()
+
+            # dpo train lora model with a lora config
+            trainer = DPOTrainer(
+                model=model_peft,
+                ref_model=None,
+                beta=0.1,
+                args=training_args,
+                tokenizer=self.tokenizer,
+                train_dataset=dummy_dataset,
+                eval_dataset=dummy_dataset,
+                peft_config=lora_config,
+            )
+
+            # train the model
+            trainer.train()
+
+            # save peft adapter
+            trainer.save_model()
+
+            # assert that the model is loaded without giving OSError
+            try:
+                AutoModelForCausalLM.from_pretrained(tmp_dir)
+            except OSError:
+                self.fail("Loading the saved peft adapter failed")

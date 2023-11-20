@@ -13,17 +13,55 @@
 # limitations under the License.
 
 
-import argparse
 import os
+from dataclasses import dataclass, field
 
 import numpy as np
 import torch
 import torch.nn as nn
+import tyro
 from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError
 from transformers import CLIPModel, CLIPProcessor
 
 from trl import DDPOConfig, DDPOTrainer, DefaultDDPOStableDiffusionPipeline
+from trl.import_utils import is_xpu_available
+
+
+@dataclass
+class ScriptArguments:
+    hf_user_access_token: str
+    pretrained_model: str = "runwayml/stable-diffusion-v1-5"
+    """the pretrained model to use"""
+    pretrained_revision: str = "main"
+    """the pretrained model revision to use"""
+    hf_hub_model_id: str = "ddpo-finetuned-stable-diffusion"
+    """HuggingFace repo to save model weights to"""
+    hf_hub_aesthetic_model_id: str = "trl-lib/ddpo-aesthetic-predictor"
+    """HuggingFace model ID for aesthetic scorer model weights"""
+    hf_hub_aesthetic_model_filename: str = "aesthetic-model.pth"
+    """HuggingFace model filename for aesthetic scorer model weights"""
+
+    ddpo_config: DDPOConfig = field(
+        default_factory=lambda: DDPOConfig(
+            num_epochs=200,
+            train_gradient_accumulation_steps=1,
+            sample_num_steps=50,
+            sample_batch_size=6,
+            train_batch_size=3,
+            sample_num_batches_per_epoch=4,
+            per_prompt_stat_tracking=True,
+            per_prompt_stat_tracking_buffer_size=32,
+            tracker_project_name="stable_diffusion_training",
+            log_with="wandb",
+            project_kwargs={
+                "logging_dir": "./logs",
+                "automatic_checkpoint_naming": True,
+                "total_limit": 5,
+                "project_dir": "./save",
+            },
+        )
+    )
 
 
 class MLP(nn.Module):
@@ -82,7 +120,8 @@ def aesthetic_scorer(hub_model_id, model_filename):
         model_id=hub_model_id,
         model_filename=model_filename,
         dtype=torch.float32,
-    ).cuda()
+    )
+    scorer = scorer.xpu() if is_xpu_available() else scorer.cuda()
 
     def _fn(images, prompts, metadata):
         images = (images * 255).round().clamp(0, 255).to(torch.uint8)
@@ -145,80 +184,15 @@ def image_outputs_logger(image_data, global_step, accelerate_logger):
     )
 
 
-def parse_arguments():
-    parser = argparse.ArgumentParser(description="DDPOConfig settings and pretrained model details.")
-
-    # DDPOConfig arguments
-    parser.add_argument("--num_epochs", type=int, default=200)
-    parser.add_argument("--train_gradient_accumulation_steps", type=int, default=1)
-    parser.add_argument("--sample_num_steps", type=int, default=50)
-    parser.add_argument("--sample_batch_size", type=int, default=6)
-    parser.add_argument("--train_batch_size", type=int, default=3)
-    parser.add_argument("--sample_num_batches_per_epoch", type=int, default=4)
-    parser.add_argument("--per_prompt_stat_tracking", action="store_true", default=True)
-    parser.add_argument("--per_prompt_stat_tracking_buffer_size", type=int, default=32)
-    parser.add_argument("--tracker_project_name", default="stable_diffusion_training")
-    parser.add_argument("--log_with", default="wandb")
-
-    parser.add_argument("--logging_dir", default="./logs")
-    parser.add_argument("--automatic_checkpoint_naming", action="store_true", default=True)
-    parser.add_argument("--total_limit", type=int, default=5)
-    parser.add_argument("--project_dir", default="./save")
-
-    parser.add_argument("--pretrained_model", default="runwayml/stable-diffusion-v1-5")
-    parser.add_argument("--pretrained_revision", default="main")
-    parser.add_argument("--hf_user_access_token", required=True)
-    parser.add_argument(
-        "--hf_hub_model_id",
-        help="HuggingFace repo to save model weights to",
-        default="ddpo-finetuned-stable-diffusion",
-    )
-
-    parser.add_argument(
-        "--hf_hub_aesthetic_model_id",
-        help="HuggingFace model ID for aesthetic scorer model weights",
-        default="trl-lib/ddpo-aesthetic-predictor",
-    )
-
-    parser.add_argument(
-        "--hf_hub_aesthetic_model_filename",
-        default="aesthetic-model.pth",
-        help="HuggingFace model filename for aesthetic scorer model weights",
-    )
-
-    return parser.parse_args()
-
-
 if __name__ == "__main__":
-    args = parse_arguments()
-
-    project_kwargs = {
-        "logging_dir": args.logging_dir,
-        "automatic_checkpoint_naming": args.automatic_checkpoint_naming,
-        "total_limit": args.total_limit,
-        "project_dir": args.project_dir,
-    }
-
-    config = DDPOConfig(
-        num_epochs=args.num_epochs,
-        train_gradient_accumulation_steps=args.train_gradient_accumulation_steps,
-        sample_num_steps=args.sample_num_steps,
-        sample_batch_size=args.sample_batch_size,
-        train_batch_size=args.train_batch_size,
-        sample_num_batches_per_epoch=args.sample_num_batches_per_epoch,
-        per_prompt_stat_tracking=args.per_prompt_stat_tracking,
-        per_prompt_stat_tracking_buffer_size=args.per_prompt_stat_tracking_buffer_size,
-        tracker_project_name=args.tracker_project_name,
-        log_with=args.log_with,
-        project_kwargs=project_kwargs,
-    )
+    args = tyro.cli(ScriptArguments)
 
     pipeline = DefaultDDPOStableDiffusionPipeline(
         args.pretrained_model, pretrained_model_revision=args.pretrained_revision, use_lora=True
     )
 
     trainer = DDPOTrainer(
-        config,
+        args.ddpo_config,
         aesthetic_scorer(args.hf_hub_aesthetic_model_id, args.hf_hub_aesthetic_model_filename),
         prompt_fn,
         pipeline,

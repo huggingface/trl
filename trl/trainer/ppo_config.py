@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import json
 import os
 import sys
 import warnings
@@ -19,11 +20,15 @@ from typing import Literal, Optional
 
 import numpy as np
 import tyro
+from typing_extensions import Annotated
 
 from trl.trainer.utils import exact_div
 
 from ..core import flatten_dict
 from ..import_utils import is_wandb_available
+
+
+JSONDict = Annotated[Optional[dict], tyro.conf.arg(metavar="JSON", constructor=json.loads)]
 
 
 @dataclass
@@ -32,8 +37,13 @@ class PPOConfig:
     Configuration class for PPOTrainer
     """
 
+    # common parameters
     exp_name: str = os.path.basename(sys.argv[0])[: -len(".py")]
     """the name of this experiment (by default is the file name without the extension name)"""
+    seed: int = 0
+    """Seed value for random generations"""
+    log_with: Optional[Literal["wandb", "tensorboard"]] = None
+    """Log with either 'wandb' or 'tensorboard', check  https://huggingface.co/docs/accelerate/usage_guides/tracking for more details"""
     task_name: Optional[str] = None
     """Name of task to use - used only for tracking purposes"""
     model_name: Optional[str] = None
@@ -42,6 +52,20 @@ class PPOConfig:
     """Name of dataset to query - used only for tracking purposes"""
     reward_model: Optional[str] = None
     """The reward model to use - used only for tracking purposes"""
+    remove_unused_columns: bool = True
+    """Remove unused columns from the dataset if `datasets.Dataset` is used"""
+    tracker_kwargs: JSONDict = field(default_factory=dict)
+    """Keyword arguments for the tracker (e.g. python ppo.py --ppo_config.tracker_kwargs='{"wandb": {"entity": "my_wandb_entity", "name": "my_exp_name"}}'"""
+    accelerator_kwargs: JSONDict = field(default_factory=dict)
+    """Keyword arguments for the accelerator"""
+    project_kwargs: JSONDict = field(default_factory=dict)
+    """Keyword arguments for the accelerator project config (e.g. `logging_dir`)"""
+    tracker_project_name: str = "trl"
+    """Name of project to use for tracking"""
+    push_to_hub_if_best_kwargs: JSONDict = field(default_factory=dict)
+    """Keyword arguments for pushing model to the hub during training (e.g. repo_id)"""
+
+    # hyperparameters
     steps: int = 20000
     """Number of training steps"""
     learning_rate: float = 1e-5
@@ -76,38 +100,18 @@ class PPOConfig:
     """The number of gradient accumulation steps"""
     world_size: tyro.conf.Suppress[int] = None
     """The world size for distributed training"""
-    backward_batch_size: tyro.conf.Suppress[int] = None
-    """TO BE FILLED In RUNTIME: Number of samples optimized in an `optimizer.step()` call"""
-    global_backward_batch_size: tyro.conf.Suppress[int] = None
-    """TO BE FILLED In RUNTIME: the effective `backward_batch_size` across all processes"""
-    global_batch_size: tyro.conf.Suppress[int] = None
-    """TO BE FILLED In RUNTIME: the effective `batch_size` across all processes"""
     ppo_epochs: int = 4
     """Number of optimisation epochs per batch of samples"""
-    remove_unused_columns: bool = True
-    """Remove unused columns from the dataset if `datasets.Dataset` is used"""
-    log_with: Optional[Literal["wandb", "tensorboard"]] = None
-    """Log with either 'wandb' or 'tensorboard', check  https://huggingface.co/docs/accelerate/usage_guides/tracking for more details"""
-    tracker_kwargs: dict = field(default_factory=dict)
-    """Keyword arguments for the tracker (e.g. wandb_project)"""
-    accelerator_kwargs: dict = field(default_factory=dict)
-    """Keyword arguments for the accelerator"""
-    project_kwargs: dict = field(default_factory=dict)
-    """Keyword arguments for the accelerator project config (e.g. `logging_dir`)"""
-    tracker_project_name: str = "trl"
-    """Name of project to use for tracking"""
     max_grad_norm: Optional[float] = None
     """Maximum gradient norm for gradient clipping"""
-    seed: int = 0
-    """Seed value for random generations"""
     optimize_cuda_cache: bool = False
-    """Optimize CUDA cache for slightly more memory-efficient training"""
+    """DEPRECATED: use `optimize_device_cache` instead, which does the same thing."""
+    optimize_device_cache: Optional[bool] = False
+    """Optimize device cache for slightly more memory-efficient training"""
     early_stopping: bool = False
     """Whether to stop the PPO optimization loop early is the KL too high"""
     target_kl: float = 1
     """Stop early if we exceed this value by over 50%"""
-    push_to_hub_if_best_kwargs: dict = field(default_factory=dict)
-    """Keyword arguments for pushing model to the hub during training (e.g. repo_id)"""
     compare_steps: int = 1
     """Number of steps between comparison of the current reward with the best seen so far"""
     ratio_threshold: float = 10.0
@@ -118,12 +122,28 @@ class PPOConfig:
     """Use score normalization. Only applicable if use_score_scaling is True"""
     score_clip: Optional[float] = None
     """Score clipping"""
+    whiten_rewards: bool = False
+    """Whiten the rewards before compute advantages"""
 
-    # Model detection
+    # computed hyperparameters at runtime; we use `tyro.conf.Suppress` to hide them from the help text
     is_encoder_decoder: Optional[tyro.conf.Suppress[bool]] = None
     """TO BE FILLED In RUNTIME: Whether the model is an encoder-decoder model"""
     is_peft_model: Optional[tyro.conf.Suppress[bool]] = None
     """TO BE FILLED In RUNTIME: Whether the model is a PEFT model"""
+    backward_batch_size: tyro.conf.Suppress[int] = None
+    """TO BE FILLED In RUNTIME: Number of samples optimized in an `optimizer.step()` call"""
+    global_backward_batch_size: tyro.conf.Suppress[int] = None
+    """TO BE FILLED In RUNTIME: the effective `backward_batch_size` across all processes"""
+    global_batch_size: tyro.conf.Suppress[int] = None
+    """TO BE FILLED In RUNTIME: the effective `batch_size` across all processes"""
+
+    if optimize_cuda_cache is not None:
+        warnings.warn(
+            "The `optimize_cuda_cache` arguement will be deprecated soon, please use `optimize_device_cache` instead."
+        )
+        optimize_device_cache = optimize_cuda_cache
+    else:
+        optimize_device_cache = False
 
     def __post_init__(self):
         if self.forward_batch_size is not None:

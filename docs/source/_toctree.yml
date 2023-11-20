@@ -31,10 +31,14 @@
     title: DPO Trainer
   - local: ddpo_trainer
     title: Denoising Diffusion Policy Optimization
+  - local: iterative_sft_trainer
+    title: Iterative Supervised Fine-Tuning
   - local: text_environments
     title: Text Environments
   title: API
 - sections:
+  - local: example_overview
+    title: Example Overview
   - local: sentiment_tuning
     title: Sentiment Tuning
   - local: lora_tuning_peft

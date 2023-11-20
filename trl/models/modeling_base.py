@@ -21,9 +21,10 @@ import torch.nn as nn
 from accelerate import Accelerator
 from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError, HFValidationError, LocalEntryNotFoundError
+from safetensors.torch import load_file as safe_load_file
 from transformers import PreTrainedModel
 
-from ..import_utils import is_peft_available
+from ..import_utils import is_peft_available, is_transformers_greater_than, is_xpu_available
 
 
 if is_peft_available():
@@ -38,6 +39,11 @@ if is_peft_available():
         prepare_model_for_kbit_training,
     )
     from peft.peft_model import set_peft_model_state_dict
+
+if is_transformers_greater_than("4.33.0"):
+    from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
+else:
+    from transformers.deepspeed import is_deepspeed_zero3_enabled
 
 LAYER_PATTERNS = [
     "transformer.h.{layer}",
@@ -243,65 +249,58 @@ class PreTrainedModelWrapper(nn.Module):
         # state_dict is removed from the model after loading it.
         is_resuming_training = True
         if isinstance(pretrained_model_name_or_path, str):
+            safe_filename = os.path.join(pretrained_model_name_or_path, "model.safetensors")
             filename = os.path.join(pretrained_model_name_or_path, "pytorch_model.bin")
-            sharded_index_filename = os.path.join(pretrained_model_name_or_path, "pytorch_model.bin.index.json")
-            is_shared = False
 
-            if not os.path.exists(filename):
-                try:
-                    filename = hf_hub_download(
+            sharded_index_filename = os.path.join(pretrained_model_name_or_path, "pytorch_model.bin.index.json")
+            safe_sharded_index_filename = os.path.join(pretrained_model_name_or_path, "model.safetensors.index.json")
+            is_sharded = False
+            use_safe = os.path.exists(safe_filename)
+
+            if not (os.path.exists(filename) or os.path.exists(safe_filename)):
+                # Try with `pytorch_model.bin`
+                filename, files_to_download, is_sharded, is_resuming_training = cls._get_checkpoint_from_hub(
+                    pretrained_model,
+                    pretrained_model_name_or_path,
+                    sharded_index_filename,
+                    token=token,
+                )
+                # Try with safetensors
+                if filename is None and files_to_download is None:
+                    safe_filename, files_to_download, is_sharded, is_resuming_training = cls._get_checkpoint_from_hub(
+                        pretrained_model,
                         pretrained_model_name_or_path,
-                        "pytorch_model.bin",
+                        safe_sharded_index_filename,
                         token=token,
+                        model_name="model.safetensors",
+                        model_index_name="model.safetensors.index.json",
                     )
-                # sharded
-                except (EntryNotFoundError, LocalEntryNotFoundError, HFValidationError):
-                    if os.path.exists(sharded_index_filename):
-                        index_file_name = sharded_index_filename
-                    else:
-                        try:
-                            index_file_name = hf_hub_download(
-                                pretrained_model_name_or_path,
-                                "pytorch_model.bin.index.json",
-                                token=token,
-                            )
-                        except (EntryNotFoundError, LocalEntryNotFoundError, HFValidationError):
-                            # not continue training, do not have v_head weight
-                            is_resuming_training = False
-                            logging.warning(
-                                f"A {type(pretrained_model)} model is loaded from '{pretrained_model_name_or_path}', "
-                                f"and no v_head weight is found. This IS expected if you are not resuming PPO training."
-                            )
-                    # load json
-                    if is_resuming_training:
-                        with open(index_file_name, "r") as f:
-                            index = json.load(f)
-                        # check filename with `v_head` or any known extra module:
-                        files_to_download = set()
-                        for k, v in index["weight_map"].items():
-                            if any([module in k for module in cls.supported_modules]):
-                                files_to_download.add(v)
-                        is_shared = True
+                    use_safe = True
+                else:
+                    use_safe = False
+
+            loading_func = safe_load_file if use_safe else torch.load
+            load_kwargs = {} if use_safe else {"map_location": "cpu"}
 
             if is_resuming_training:
-                if is_shared:
+                if is_sharded:
                     # download each file and add it to the state_dict
                     state_dict = {}
+
                     for shard_file in files_to_download:
                         filename = hf_hub_download(
                             pretrained_model_name_or_path,
                             shard_file,
                             token=token,
                         )
-                        state_dict.update(torch.load(filename, map_location="cpu"))
+                        state_dict.update(loading_func(filename, **load_kwargs))
                 else:
-                    state_dict = torch.load(filename, map_location="cpu")
+                    state_dict = loading_func(filename if not use_safe else safe_filename, **load_kwargs)
 
         else:
             state_dict = pretrained_model_name_or_path.state_dict()
 
         model.is_peft_model = is_peft_model
-
         model.current_device = current_device
 
         if is_resuming_training:
@@ -318,6 +317,58 @@ class PreTrainedModelWrapper(nn.Module):
         return model
 
     @classmethod
+    def _get_checkpoint_from_hub(
+        cls,
+        pretrained_model,
+        pretrained_model_name_or_path,
+        index_filename,
+        token=None,
+        model_name="pytorch_model.bin",
+        model_index_name="pytorch_model.bin.index.json",
+    ):
+        files_to_download = None
+        filename = None
+        is_resuming_training = True
+        is_sharded = False
+
+        try:
+            filename = hf_hub_download(
+                pretrained_model_name_or_path,
+                model_name,
+                token=token,
+            )
+        # sharded
+        except (EntryNotFoundError, LocalEntryNotFoundError, HFValidationError):
+            if os.path.exists(index_filename):
+                index_file_name = index_filename
+            else:
+                try:
+                    index_file_name = hf_hub_download(
+                        pretrained_model_name_or_path,
+                        model_index_name,
+                        token=token,
+                    )
+                except (EntryNotFoundError, LocalEntryNotFoundError, HFValidationError):
+                    # not continue training, do not have v_head weight
+                    is_resuming_training = False
+                    logging.warning(
+                        f"A {type(pretrained_model)} model is loaded from '{pretrained_model_name_or_path}', "
+                        f"and no v_head weight is found. This IS expected if you are not resuming PPO training."
+                    )
+            # load json
+            if is_resuming_training:
+                with open(index_file_name, "r") as f:
+                    index = json.load(f)
+                # check filename with `v_head` or any known extra module:
+                files_to_download = set()
+                for k, v in index["weight_map"].items():
+                    if any([module in k for module in cls.supported_modules]):
+                        files_to_download.add(v)
+                is_sharded = True
+
+        return filename, files_to_download, is_sharded, is_resuming_training
+
+    @classmethod
     def _get_current_device(cls):
         r"""
         Get the current device. For GPU, we return the local process index using the `Accelerator`
@@ -328,7 +379,10 @@ class PreTrainedModelWrapper(nn.Module):
                 The current device.
         """
         dummy_accelerator = Accelerator()
-        return dummy_accelerator.local_process_index if torch.cuda.is_available() else "cpu"
+        if is_xpu_available():
+            return f"xpu:{dummy_accelerator.local_process_index}"
+        else:
+            return dummy_accelerator.local_process_index if torch.cuda.is_available() else "cpu"
 
     @classmethod
     def _split_kwargs(cls, kwargs):
@@ -519,6 +573,10 @@ def create_reference_model(
     Returns
         `PreTrainedModelWrapper`
     """
+    if is_deepspeed_zero3_enabled():
+        raise ValueError(
+            "DeepSpeed ZeRO-3 is enabled and is not compatible with `create_reference_model()`. Please instantiate your reference model directly with `AutoCausalLM.from_pretrained()`."
+        )
 
     parameter_names = [n for n, _ in model.named_parameters()]
     ref_model = deepcopy(model)

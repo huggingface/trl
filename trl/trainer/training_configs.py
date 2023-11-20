@@ -13,7 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from transformers import TrainingArguments
@@ -35,15 +35,9 @@ class RewardConfig(TrainingArguments):
                 If True, use gradient checkpointing to save memory at the expense of slower backward pass.
     """
 
-    max_length: Optional[int] = field(
-        default=None,
-        metadata={
-            "help": "The maximum length of the sequences in the batch. This argument is required if you want to use the default data collator."
-        },
-    )
-    gradient_checkpointing: Optional[bool] = field(
-        default=True,
-        metadata={
-            "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
-        },
-    )
+    max_length: Optional[int] = None
+    """The maximum length of the sequences in the batch. This argument is required if you want to use the default data collator."""
+    gradient_checkpointing: Optional[bool] = True
+    """If True, use gradient checkpointing to save memory at the expense of slower backward pass."""
+    gradient_checkpointing_kwargs: Optional[dict] = None
+    """Keyword arguments to pass to the gradient checkpointing function."""
