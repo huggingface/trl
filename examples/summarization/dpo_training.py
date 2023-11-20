@@ -404,8 +404,8 @@ def create_and_prepare_model(args):
     if getattr(tokenizer, "pad_token", None) is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # if getattr(model.config, "pad_token_id", None) is None:
-    #     model.config.pad_token_id = model.config.eos_token_id
+    if getattr(model.config, "pad_token_id", None) is None:
+        model.config.pad_token_id = model.config.eos_token_id
 
     if script_args.gold_in_8bit or script_args.gold_in_4bit:
         gold_quantization_config = BitsAndBytesConfig(
@@ -429,6 +429,9 @@ def create_and_prepare_model(args):
         torch_dtype=torch_dtype,
         device_map=gold_device_map,
     )
+
+    if getattr(gold_model.config, "pad_token_id", None) is None:
+        gold_model.config.pad_token_id = gold_model.config.eos_token_id
 
     return model, tokenizer, gold_model
 
