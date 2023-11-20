@@ -644,6 +644,48 @@ class SFTTrainerTester(unittest.TestCase):
             self.assertTrue("model.safetensors" not in os.listdir(tmp_dir + "/checkpoint-2"))
 
     @require_peft
+    def test_peft_sft_trainer_gc(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                evaluation_strategy="steps",
+                max_steps=4,
+                eval_steps=2,
+                save_steps=2,
+                per_device_train_batch_size=2,
+                gradient_checkpointing=True,
+            )
+
+            peft_config = LoraConfig(
+                r=16,
+                lora_alpha=32,
+                lora_dropout=0.05,
+                bias="none",
+                task_type="CAUSAL_LM",
+            )
+
+            trainer = SFTTrainer(
+                model=self.model_id,
+                args=training_args,
+                train_dataset=self.train_dataset,
+                eval_dataset=self.eval_dataset,
+                peft_config=peft_config,
+                packing=True,
+            )
+
+            self.assertTrue(isinstance(trainer.model, PeftModel))
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+            self.assertIsNotNone(trainer.state.log_history[0]["eval_loss"])
+
+            self.assertTrue("adapter_model.bin" in os.listdir(tmp_dir + "/checkpoint-2"))
+            self.assertTrue("adapter_config.json" in os.listdir(tmp_dir + "/checkpoint-2"))
+            self.assertTrue("model.safetensors" not in os.listdir(tmp_dir + "/checkpoint-2"))
+
+    @require_peft
     def test_peft_sft_trainer_neftune(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
