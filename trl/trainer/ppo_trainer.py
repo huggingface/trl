@@ -1315,24 +1315,15 @@ class PPOTrainer(BaseTrainer):
             rewards (`List[torch.FloatTensor]`):
                 A tensor of rewards.
         """
+        if not isinstance(rewards, torch.Tensor):
+            rewards = torch.tensor(rewards).to(self.current_device)
+        rewards = self.accelerator.gather(rewards).flatten()
+        
         # Log only if we are in the main process
         if self.accelerator.is_main_process:
             logs = {}
 
             # Log stats
-            if not isinstance(rewards, torch.Tensor):
-                rewards = torch.tensor(rewards).to(self.current_device)
-
-            # Gather rewards if distributed
-            if self.is_distributed:
-                import torch.distributed as dist
-
-                dist.barrier()
-                world_size = dist.get_world_size()
-                tensors = [torch.zeros_like(rewards) for _ in range(world_size)]
-                dist.all_gather(tensors, rewards)
-                rewards = torch.cat(tensors)
-
             if "query" not in batch.keys() and "response" not in batch.keys():
                 # warn the user that the game logs will not be logged
                 warnings.warn(
@@ -1385,15 +1376,6 @@ class PPOTrainer(BaseTrainer):
         else:
             if self.is_distributed:
                 import torch.distributed as dist
-
-                if not isinstance(rewards, torch.Tensor):
-                    rewards = torch.tensor(rewards).to(self.current_device)
-
-                dist.barrier()
-                world_size = dist.get_world_size()
-                tensors = [torch.zeros_like(rewards) for _ in range(world_size)]
-                dist.all_gather(tensors, rewards)
-                rewards = torch.cat(tensors)
 
                 if self.config.log_with == "wandb":
                     if any([column_to_log not in batch.keys() for column_to_log in columns_to_log]):
