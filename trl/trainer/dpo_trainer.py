@@ -557,14 +557,10 @@ class DPOTrainer(Trainer):
             if not isinstance(chosen, str):
                 raise ValueError(f"chosen should be an str but got {type(chosen)}")
             chosen_tokens = self.build_tokenized_answer(prompt, chosen)
-            chosen_tokens["input_ids"] = chosen_tokens["input_ids"]
-            chosen_tokens["attention_mask"] = chosen_tokens["attention_mask"]
 
             if not isinstance(rejected, str):
                 raise ValueError(f"rejected should be an str but got {type(rejected)}")
             rejected_tokens = self.build_tokenized_answer(prompt, rejected)
-            rejected_tokens["input_ids"] = rejected_tokens["input_ids"]
-            rejected_tokens["attention_mask"] = rejected_tokens["attention_mask"]
 
             # add BOS token to head of prompt
             chosen_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + chosen_tokens["prompt_input_ids"]
