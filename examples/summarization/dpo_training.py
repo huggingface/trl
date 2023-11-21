@@ -49,6 +49,7 @@ class ScriptArguments:
     The arguments for the DPO training script.
     """
 
+    gold_model_name: str = field(metadata={"help": "the gold reward model name"})
     # data parameters
     dataset_name: Optional[str] = field(
         default="CarperAI/openai_summarize_comparisons", metadata={"help": "the dataset name"}
@@ -130,7 +131,6 @@ class ScriptArguments:
     )
 
     # gold model
-    gold_model_name: Optional[str] = field(default=None, metadata={"help": "the reward model name"})
     gold_in_8bit: Optional[bool] = field(default=False, metadata={"help": "gold the model in 8 bits precision"})
     gold_in_4bit: Optional[bool] = field(default=False, metadata={"help": "gold the model in 4 bits precision"})
     gold_bf16: Optional[bool] = field(
@@ -498,6 +498,7 @@ if __name__ == "__main__":
 
     if script_args.generate_greedy:
         generation_config = GenerationConfig(
+            max_new_tokens=script_args.max_target_length,
             do_sample=False,
             num_beams=1,
             eos_token_id=tokenizer.eos_token_id,
