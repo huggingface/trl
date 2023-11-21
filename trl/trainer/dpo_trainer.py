@@ -317,6 +317,8 @@ class DPOTrainer(Trainer):
         if compute_metrics is None:
             compute_metrics = compute_dpo_metrics
 
+        args.beta = beta
+
         super().__init__(
             model=model,
             args=args,
