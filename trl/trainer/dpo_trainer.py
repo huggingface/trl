@@ -464,24 +464,24 @@ class DPOTrainer(Trainer):
         reference_rejected_logps: torch.FloatTensor,
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         """Compute the IPO loss for a batch of policy and reference model log probabilities.
+        The beta is the regularization parameter for the IPO loss, denoted by tau in the paper.
 
         Args:
             policy_chosen_logps: Log probabilities of the policy model for the chosen responses. Shape: (batch_size,)
             policy_rejected_logps: Log probabilities of the policy model for the rejected responses. Shape: (batch_size,)
             reference_chosen_logps: Log probabilities of the reference model for the chosen responses. Shape: (batch_size,)
             reference_rejected_logps: Log probabilities of the reference model for the rejected responses. Shape: (batch_size,)
-            beta: Regularization parameter for the IPO loss, denoted by tau in the paper.
 
         Returns:
             A tuple of three tensors: (losses, chosen_rewards, rejected_rewards).
-            The losses tensor contains the DPO loss for each example in the batch.
+            The losses tensor contains the IPO loss for each example in the batch.
             The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
         """
-        pi_logratios = policy_chosen_logps - policy_rejected_logps
-        ref_logratios = reference_chosen_logps - reference_rejected_logps
+        pi_logratios = policy_chosen_logps + reference_rejected_logps
+        ref_logratios = policy_rejected_logps + reference_chosen_logps
 
         logits = pi_logratios - ref_logratios
-
+        # eqn (17) of the paper:
         losses = (logits - 1 / (2 * self.beta)) ** 2
 
         chosen_rewards = self.beta * (policy_chosen_logps - reference_chosen_logps).detach()
