@@ -422,13 +422,13 @@ class DPOTrainer(Trainer):
         reference_free: bool = False,
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         """Compute the DPO loss for a batch of policy and reference model log probabilities.
+        The beta is a temperature parameter for the DPO loss, typically something in the range of 0.1 to 0.5. We ignore the reference model as beta -> 0.
 
         Args:
             policy_chosen_logps: Log probabilities of the policy model for the chosen responses. Shape: (batch_size,)
             policy_rejected_logps: Log probabilities of the policy model for the rejected responses. Shape: (batch_size,)
             reference_chosen_logps: Log probabilities of the reference model for the chosen responses. Shape: (batch_size,)
             reference_rejected_logps: Log probabilities of the reference model for the rejected responses. Shape: (batch_size,)
-            beta: Temperature parameter for the DPO loss, typically something in the range of 0.1 to 0.5. We ignore the reference model as beta -> 0.
             reference_free: If True, we ignore the _provided_ reference model and implicitly use a reference model that assigns equal probability to all responses.
 
         Returns:
@@ -437,10 +437,10 @@ class DPOTrainer(Trainer):
             The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
         """
         pi_logratios = policy_chosen_logps - policy_rejected_logps
-        ref_logratios = reference_chosen_logps - reference_rejected_logps
-
         if reference_free:
             ref_logratios = 0
+        else:
+            ref_logratios = reference_chosen_logps - reference_rejected_logps
 
         logits = pi_logratios - ref_logratios
 
