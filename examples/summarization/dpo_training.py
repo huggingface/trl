@@ -191,7 +191,7 @@ class DPOTrainerWithGold(DPOTrainer):
         """
 
         self.samples_to_log = self.log_n_samples_during_eval
-        self.seen_prompts = set()
+        self.seen_prompts = dict()
         return super(DPOTrainer, self).evaluation_loop(
             dataloader, description, prediction_loss_only, ignore_keys, metric_key_prefix
         )
@@ -205,16 +205,12 @@ class DPOTrainerWithGold(DPOTrainer):
     ):
         loss, logits, labels = super().prediction_step(model, inputs, prediction_loss_only, ignore_keys)
 
-        # default gold_reward is -100
-        # use this as something of a padding that we remove in compute_metrics
-        gold_reward_logits = torch.full_like(logits[0], -100)
-
         # get only previously unseen prompts
         unseen_idx = []
         for i, prompt in enumerate(inputs["prompt"]):
             if prompt not in self.seen_prompts:
                 unseen_idx.append(i)
-                self.seen_prompts.add(prompt)
+                self.seen_prompts[prompt] = None
 
         if unseen_idx:
             unseen_inputs = {
@@ -236,7 +232,6 @@ class DPOTrainerWithGold(DPOTrainer):
                 )[0]
 
             gold_rewards = self.accelerator.gather_for_metrics(gold_rewards)
-            gold_reward_logits[unseen_idx] = gold_rewards.flatten()
 
             # Sample and save to game log if requested (for one batch to save time)
             if self.samples_to_log > 0:
@@ -260,6 +255,13 @@ class DPOTrainerWithGold(DPOTrainer):
                 self.state.log_history.pop()
                 self.samples_to_log -= len(policy_output_decoded)
 
+        for idx, reward in zip(unseen_idx, gold_rewards):
+            prompt = inputs["prompt"][idx]
+            self.seen_prompts[prompt] = reward.item()
+
+        gold_reward_logits = torch.tensor([self.seen_prompts[prompt] for prompt in inputs["prompt"]]).to(
+            logits[0].device
+        )
         logits = logits + (gold_reward_logits,)
 
         return loss, logits, labels
@@ -302,9 +304,7 @@ def compute_dpo_gold_metrics(eval_preds: EvalPrediction):
     eval_preds.predictions = preds[:-1]
     metrics = compute_dpo_metrics(eval_preds)
 
-    # ignore the -100 index
-    # hack until we figure out something better
-    metrics["gold_rewards_mean"] = gold_rewards[gold_rewards != -100].mean()
+    metrics["gold_rewards_mean"] = gold_rewards.mean()
     return metrics
 
 
