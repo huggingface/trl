@@ -482,7 +482,7 @@ class DPOTrainer(Trainer):
 
         logits = pi_logratios - ref_logratios
 
-        losses = F.mse_loss(logits, -1 / (2 * self.beta))
+        losses = (logits - 1 / (2 * self.beta)) ** 2
 
         chosen_rewards = self.beta * (policy_chosen_logps - reference_chosen_logps).detach()
         rejected_rewards = self.beta * (policy_rejected_logps - reference_rejected_logps).detach()
