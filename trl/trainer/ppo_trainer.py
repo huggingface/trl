@@ -25,7 +25,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from accelerate import Accelerator
-from accelerate.utils import ProjectConfiguration, is_deepspeed_available
+from accelerate.utils import ProjectConfiguration, is_deepspeed_available, gather_object
 from datasets import Dataset
 from huggingface_hub import whoami
 from packaging import version
@@ -1338,16 +1338,11 @@ class PPOTrainer(BaseTrainer):
 
                 batch_list = [batch[column_to_log] for column_to_log in columns_to_log]
                 if self.is_distributed:
-                    import torch.distributed as dist
-
-                    dist.barrier()
+                    self.accelerator.wait_for_everyone()
                     gathered_batch_list = []
                     for b in batch_list:
-                        gather = [None for _ in range(dist.get_world_size())]
-                        dist.all_gather_object(gather, b)
-                        flattened = [msg for sublist in gather for msg in sublist]
+                        flattened = gather_object(b)
                         gathered_batch_list.append(flattened)
-
                     batch_list = gathered_batch_list
 
                 table_rows = [list(r) for r in zip(*batch_list, rewards.cpu().tolist())]
@@ -1372,23 +1367,6 @@ class PPOTrainer(BaseTrainer):
                 logs,
                 step=self.current_step if self.config.log_with == "tensorboard" else None,
             )
-
-        else:
-            if self.is_distributed:
-                import torch.distributed as dist
-
-                if self.config.log_with == "wandb":
-                    if any([column_to_log not in batch.keys() for column_to_log in columns_to_log]):
-                        raise ValueError(
-                            f"Columns to log {columns_to_log} are not present in the batch {batch.keys()}."
-                        )
-
-                    batch_list = [batch[column_to_log] for column_to_log in columns_to_log]
-
-                    dist.barrier()
-                    for b in batch_list:
-                        gather = [None for _ in range(dist.get_world_size())]
-                        dist.all_gather_object(gather, b)
 
     def create_model_card(self, path: str, model_name: Optional[str] = "TRL Model") -> None:
         """Creates and saves a model card for a TRL model.
