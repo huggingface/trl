@@ -437,24 +437,24 @@ def create_and_prepare_model(args):
 
 
 def create_and_prepare_dataset(args):
-    def move_tldr_to_prompt(examples):
-        new_examples = {
-            "prompt": [],
-            "chosen": [],
-            "rejected": [],
-        }
-        for prompt, chosen, rejected in zip(examples["prompt"], examples["chosen"], examples["rejected"]):
-            new_examples["prompt"].append(prompt + "\nTL;DR:")
-            new_examples["chosen"].append(chosen[7:])
-            new_examples["rejected"].append(rejected[7:])
-
-        return new_examples
+# def move_tldr_to_prompt(examples):
+#     new_examples = {
+#         "prompt": [],
+#         "chosen": [],
+#         "rejected": [],
+#     }
+#     for prompt, chosen, rejected in zip(examples["prompt"], examples["chosen"], examples["rejected"]):
+#         new_examples["prompt"].append(prompt + "\nTL;DR:")
+#         new_examples["chosen"].append(chosen[7:])
+#         new_examples["rejected"].append(rejected[7:])
+#
+#     return new_examples
 
     train_dataset = load_dataset(args.dataset_name, split=args.train_split)
-    train_dataset = train_dataset.map(move_tldr_to_prompt, batched=True)
+# train_dataset = train_dataset.map(move_tldr_to_prompt, batched=True)
 
     eval_dataset = load_dataset(args.dataset_name, split=args.eval_split)
-    eval_dataset = eval_dataset.map(move_tldr_to_prompt, batched=True)
+# eval_dataset = eval_dataset.map(move_tldr_to_prompt, batched=True)
 
     return train_dataset, eval_dataset
 
