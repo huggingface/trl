@@ -140,6 +140,12 @@ class ScriptArguments:
         default=False,
     )
     generate_greedy: Optional[bool] = field(default=False)
+    # gold_dataset_name: Optional[str] = field(
+    #     default="CarperAI/openai_summarize_comparisons", metadata={"help": "the dataset name"}
+    # )
+    # gold_dataset_eval_split: Optional[str] = field(
+    #     default="CarperAI/openai_summarize_comparisons", metadata={"help": "the dataset name"}
+    # )
 
 
 class DPOTrainerWithGold(DPOTrainer):
@@ -185,17 +191,10 @@ class DPOTrainerWithGold(DPOTrainer):
         """
 
         self.samples_to_log = self.log_n_samples_during_eval
-        # self.seen_prompts = set()
-        # Base evaluation
+        self.seen_prompts = set()
         return super(DPOTrainer, self).evaluation_loop(
             dataloader, description, prediction_loss_only, ignore_keys, metric_key_prefix
         )
-
-        # self.seen_prompts = set()
-        #
-        # initial_output.metrics[f"{metric_key_prefix}_gold_rewards_mean"] = gold_rewards.mean().item()
-        #
-        # return initial_output
 
     def prediction_step(
         self,
@@ -205,29 +204,29 @@ class DPOTrainerWithGold(DPOTrainer):
         ignore_keys: Optional[List[str]] = None,
     ):
         loss, logits, labels = super().prediction_step(model, inputs, prediction_loss_only, ignore_keys)
-        # Sample and save to game log if requested (for one batch to save time)
-        if self.samples_to_log > 0:
-            policy_output_decoded, ref_output_decoded, policy_output_ids = self.get_unique_batch_samples(
-                self.model,
-                inputs,
-                return_ids=True,
-                max_batch_size=self.samples_to_log,
-            )
 
-            self.log(
-                {
-                    "game_log": wandb.Table(
-                        columns=["Prompt", "Policy", "Ref Model"],
-                        rows=[
-                            [prompt, pol[len(prompt) :], ref[len(prompt) :]]
-                            for prompt, pol, ref in zip(inputs["prompt"], policy_output_decoded, ref_output_decoded)
-                        ],
-                    )
-                }
+        # default gold_reward is -100
+        # use this as something of a padding that we remove in compute_metrics
+        gold_reward_logits = torch.full_like(logits[0], -100)
+
+        # get only previously unseen prompts
+        unseen_idx = []
+        for i, prompt in enumerate(inputs["prompt"]):
+            if prompt not in self.seen_prompts:
+                unseen_idx.append(i)
+                self.seen_prompts.add(prompt)
+
+        if unseen_idx:
+            unseen_inputs = {
+                "input_ids": inputs["prompt_input_ids"][unseen_idx],
+                "attention_mask": inputs["prompt_attention_mask"][unseen_idx],
+            }
+
+            policy_output_decoded, ref_output_decoded, policy_output_ids = self.get_batch_samples(
+                self.model,
+                unseen_inputs,
+                return_ids=True,
             )
-            ## hack to fix log_history and remove
-            self.state.log_history.pop()
-            self.samples_to_log -= len(policy_output_decoded)
 
             # gold reward
             policy_output_attention_mask = (policy_output_ids != self.tokenizer.pad_token_id).to(torch.int64)
@@ -237,43 +236,37 @@ class DPOTrainerWithGold(DPOTrainer):
                 )[0]
 
             gold_rewards = self.accelerator.gather_for_metrics(gold_rewards)
+            gold_reward_logits[unseen_idx] = gold_rewards.flatten()
 
-            logits = logits + (gold_rewards,)
+            # Sample and save to game log if requested (for one batch to save time)
+            if self.samples_to_log > 0:
+                rows_to_log = []
+                for i, (prompt, pol, ref) in enumerate(
+                    zip(inputs["prompt"], policy_output_decoded, ref_output_decoded)
+                ):
+                    if i + 1 > self.samples_to_log:
+                        break
+                    rows_to_log.append([prompt, pol[len(prompt) :], ref[len(prompt) :]])
+
+                self.log(
+                    {
+                        "game_log": wandb.Table(
+                            columns=["Prompt", "Policy", "Ref Model"],
+                            rows=rows_to_log,
+                        )
+                    }
+                )
+                ## hack to fix log_history and remove
+                self.state.log_history.pop()
+                self.samples_to_log -= len(policy_output_decoded)
+
+        logits = logits + (gold_reward_logits,)
 
         return loss, logits, labels
 
-    def get_unique_batch_samples(
-        self, model, inputs: Dict[str, torch.LongTensor], return_ids=False, max_batch_size=None
-    ) -> Tuple[str, str]:
+    def get_batch_samples(self, model, inputs: Dict[str, torch.LongTensor], return_ids=False) -> Tuple[str, str]:
         """Reduce inputs to unseen prompts, and maximum batch size if necessary
         Generate samples from the model and reference model for the given batch of inputs."""
-        # unseen_idx = []
-        # for i, prompt in enumerate(inputs["prompt"]):
-        #     if prompt not in self.seen_prompts:
-        #         unseen_idx.append(i)
-        #         self.seen_prompts.add(prompt)
-        #
-        # inputs = {
-        #     "input_ids": inputs["prompt_input_ids"][unseen_idx],
-        #     "attention_mask": inputs["prompt_attention_mask"][unseen_idx],
-        # }
-        #
-        # batch_size = len(unseen_idx)
-        inputs = {
-            "input_ids": inputs["prompt_input_ids"],
-            "attention_mask": inputs["prompt_attention_mask"],
-        }
-        batch_size = inputs["input_ids"].size(0)
-
-        if batch_size == 0:
-            return None, None, None
-        elif batch_size > max_batch_size:
-            inputs = {
-                "input_ids": inputs["input_ids"][:max_batch_size],
-                "attention_mask": inputs["attention_mask"][:max_batch_size],
-            }
-            batch_size = max_batch_size
-
         policy_output = model.generate(
             **inputs,
             generation_config=self.generation_config,
@@ -304,12 +297,14 @@ class DPOTrainerWithGold(DPOTrainer):
 
 
 def compute_dpo_gold_metrics(eval_preds: EvalPrediction):
-    gold_rewards = eval_preds.predictions[-1]
-    eval_preds.predictions = eval_preds.predictions[:-1]
+    preds = eval_preds.predictions
+    gold_rewards = preds[-1]
+    eval_preds.predictions = preds[:-1]
     metrics = compute_dpo_metrics(eval_preds)
 
-    metrics["gold_rewards_mean"] = gold_rewards.mean()
-
+    # ignore the -100 index
+    # hack until we figure out something better
+    metrics["gold_rewards_mean"] = gold_rewards[gold_rewards != -100].mean()
     return metrics
 
 
@@ -437,24 +432,24 @@ def create_and_prepare_model(args):
 
 
 def create_and_prepare_dataset(args):
-# def move_tldr_to_prompt(examples):
-#     new_examples = {
-#         "prompt": [],
-#         "chosen": [],
-#         "rejected": [],
-#     }
-#     for prompt, chosen, rejected in zip(examples["prompt"], examples["chosen"], examples["rejected"]):
-#         new_examples["prompt"].append(prompt + "\nTL;DR:")
-#         new_examples["chosen"].append(chosen[7:])
-#         new_examples["rejected"].append(rejected[7:])
-#
-#     return new_examples
+    # def move_tldr_to_prompt(examples):
+    #     new_examples = {
+    #         "prompt": [],
+    #         "chosen": [],
+    #         "rejected": [],
+    #     }
+    #     for prompt, chosen, rejected in zip(examples["prompt"], examples["chosen"], examples["rejected"]):
+    #         new_examples["prompt"].append(prompt + "\nTL;DR:")
+    #         new_examples["chosen"].append(chosen[7:])
+    #         new_examples["rejected"].append(rejected[7:])
+    #
+    #     return new_examples
 
     train_dataset = load_dataset(args.dataset_name, split=args.train_split)
-# train_dataset = train_dataset.map(move_tldr_to_prompt, batched=True)
+    # train_dataset = train_dataset.map(move_tldr_to_prompt, batched=True)
 
     eval_dataset = load_dataset(args.dataset_name, split=args.eval_split)
-# eval_dataset = eval_dataset.map(move_tldr_to_prompt, batched=True)
+    # eval_dataset = eval_dataset.map(move_tldr_to_prompt, batched=True)
 
     return train_dataset, eval_dataset
 
