@@ -25,7 +25,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from accelerate import Accelerator
-from accelerate.utils import ProjectConfiguration, is_deepspeed_available, gather_object
+from accelerate.utils import ProjectConfiguration, gather_object, is_deepspeed_available
 from datasets import Dataset
 from huggingface_hub import whoami
 from packaging import version
