@@ -1,6 +1,7 @@
 import argparse
 import datetime
 import os
+import subprocess
 from copy import deepcopy
 
 import yaml
@@ -10,12 +11,14 @@ from haven import haven_wizard as hw
 
 def run_exp(exp_dict, savedir, args):
     exp_name = exp_dict.pop("name")
+    git_hash = exp_dict.pop("git")
     print(args)
 
     if args.wandb:
         os.environ["WANDB_MODE"] = "online"
         os.environ["WANDB_RUN_ID"] = os.path.basename(savedir)
         os.environ["WANDB_NAME"] = exp_name
+        os.environ["WANDB_RUN_GROUP"] = exp_name + git_hash
     else:
         os.environ["WANDB_MODE"] = "disabled"
 
@@ -149,6 +152,7 @@ if __name__ == "__main__":
             exp_dict = yaml.safe_load(fp)
 
         exp_dict["name"] = os.path.basename(exp_file)
+        exp_dict["git"] = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).decode("ascii").strip()
 
         if args.search is not None and args.search != "None":
             search_key, search_val_str = args.search.split("=")
