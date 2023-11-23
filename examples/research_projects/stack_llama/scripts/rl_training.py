@@ -92,6 +92,7 @@ config = PPOConfig(
 
 train_dataset = load_dataset("lvwerra/stack-exchange-paired", data_dir="data/rl", split="train")
 train_dataset = train_dataset.select(range(100000))
+original_columns = train_dataset.column_names
 
 # We then define the arguments to pass to the sentiment analysis pipeline.
 # We set `return_all_scores` to True to get the sentiment score for each token.
@@ -130,9 +131,6 @@ def build_dataset(
             The dataloader for the dataset.
     """
 
-    # load imdb with datasets
-    ds = load_dataset(dataset_name, data_dir="data/rl", split="train")
-    original_columns = ds.column_names
     num_proc = 24
 
     def preprocess_function(examples):
