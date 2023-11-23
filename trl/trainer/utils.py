@@ -518,6 +518,8 @@ class PackedIterableDataset(IterableDataset):
                 Id of the end of sequence token if the passed tokenizer does not have an EOS token.
             shuffle ('bool', *optional*, defaults to True)
                 Shuffle the examples before they are returned
+            append_concat_token ('bool', *optional*, defaults to True)
+                If true, appends `eos_token_id` at the end of each sample being packed.
     """
 
     def __init__(
@@ -629,6 +631,8 @@ class ConstantLengthDataset(PackedIterableDataset):
                 Id of the end of sequence token if the passed tokenizer does not have an EOS token.
             shuffle ('bool', *optional*, defaults to True)
                 Shuffle the examples before they are returned
+            append_concat_token ('bool', *optional*, defaults to True)
+                If true, appends `eos_token_id` at the end of each sample being packed.
     """
 
     def __len__(self):
