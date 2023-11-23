@@ -594,19 +594,16 @@ class DPOTrainer(Trainer):
                 ) = self.concatenated_forward(self.ref_model, batch)
 
         if self.loss_type == "ipo":
-            losses, chosen_rewards, rejected_rewards = self.ipo_loss(
-                policy_chosen_logps,
-                policy_rejected_logps,
-                reference_chosen_logps,
-                reference_rejected_logps,
-            )
+            loss_fn = self.ipo_loss
         else:
-            losses, chosen_rewards, rejected_rewards = self.dpo_loss(
-                policy_chosen_logps,
-                policy_rejected_logps,
-                reference_chosen_logps,
-                reference_rejected_logps,
-            )
+            loss_fn = self.dpo_loss
+           
+        losses, chosen_rewards, rejected_rewards = loss_fn(
+            policy_chosen_logps,
+            policy_rejected_logps,
+            reference_chosen_logps,
+            reference_rejected_logps,
+        )     
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
         prefix = "eval_" if train_eval == "eval" else ""
