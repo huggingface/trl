@@ -22,12 +22,7 @@ import numpy as np
 import torch
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import IterableDataset
-from transformers import (
-    DataCollatorForLanguageModeling,
-    PreTrainedModel,
-    PreTrainedTokenizerBase,
-    TrainerCallback,
-)
+from transformers import DataCollatorForLanguageModeling, PreTrainedModel, PreTrainedTokenizerBase, TrainerCallback
 
 
 class AdaptiveKLController:
