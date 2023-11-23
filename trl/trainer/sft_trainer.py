@@ -40,6 +40,7 @@ from .utils import (
     DataCollatorForCompletionOnlyLM,
     PeftSavingCallback,
     neftune_post_forward_hook,
+    peft_module_casting_to_bf16,
 )
 
 
@@ -188,6 +189,8 @@ class SFTTrainer(Trainer):
                         model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
 
                 model = get_peft_model(model, peft_config)
+                if args.bf16 and getattr(model, "is_loaded_in_4bit", False):
+                    peft_module_casting_to_bf16(model)
 
             if callbacks is None:
                 callbacks = [PeftSavingCallback]

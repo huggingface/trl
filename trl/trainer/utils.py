@@ -22,7 +22,12 @@ import numpy as np
 import torch
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import IterableDataset
-from transformers import DataCollatorForLanguageModeling, PreTrainedModel, PreTrainedTokenizerBase, TrainerCallback
+from transformers import (
+    DataCollatorForLanguageModeling,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+    TrainerCallback,
+)
 
 
 class AdaptiveKLController:
@@ -204,6 +209,7 @@ class RewardDataCollatorWithPadding:
         return_tensors (`str`, `optional`, defaults to `"pt"`):
             The tensor type to use.
     """
+
     tokenizer: PreTrainedTokenizerBase
     padding: Union[bool, str] = True
     max_length: Optional[int] = None
@@ -296,6 +302,7 @@ class DPODataCollatorWithPadding:
         truncation_mode: (`str`, defaults to "keep_end"):
             The truncation mode to use when truncating the prompt.
     """
+
     tokenizer: PreTrainedTokenizerBase
     model: Optional[PreTrainedModel] = None
     padding: Union[bool, str] = True
@@ -487,11 +494,12 @@ class DPODataCollatorWithPadding:
         return self.collate(tokenized_batch)
 
 
-class ConstantLengthDataset(IterableDataset):
+class PackedIterableDataset(IterableDataset):
     """
     Iterable dataset that returns constant length chunks of tokens from stream of text files.
     The dataset also formats the text before tokenization with a specific format that is provided
-    by the user.
+    by the user. This dataset doesn't have the `len` attribute because packing changes the
+    number of samples in the dataset significantly.
 
         Args:
             tokenizer (`transformers.PreTrainedTokenizer`):
@@ -529,6 +537,7 @@ class ConstantLengthDataset(IterableDataset):
         chars_per_token=3.6,
         eos_token_id=0,
         shuffle=True,
+        append_concat_token=True,
     ):
         self.tokenizer = tokenizer
 
@@ -545,6 +554,7 @@ class ConstantLengthDataset(IterableDataset):
         self.current_size = 0
         self.max_buffer_size = seq_length * chars_per_token * num_of_sequences
         self.shuffle = shuffle
+        self.append_concat_token = append_concat_token
         if formatting_func is None:
             self.formatting_func = lambda x: x[dataset_text_field]
         else:
@@ -556,9 +566,6 @@ class ConstantLengthDataset(IterableDataset):
                     "The passed formatting_func has more than one argument. Usually that function should have a single argument `example`"
                     " which corresponds to the dictionary returned by each element of the dataset. Make sure you know what you are doing."
                 )
-
-    def __len__(self):
-        return len(self.dataset)
 
     def __iter__(self):
         iterator = iter(self.dataset)
@@ -581,7 +588,9 @@ class ConstantLengthDataset(IterableDataset):
             tokenized_inputs = self.tokenizer(buffer, truncation=False)["input_ids"]
             all_token_ids = []
             for tokenized_input in tokenized_inputs:
-                all_token_ids.extend(tokenized_input + [self.concat_token_id])
+                if self.append_concat_token:
+                    tokenized_input = tokenized_input + [self.concat_token_id]
+                all_token_ids.extend(tokenized_input)
             examples = []
             for i in range(0, len(all_token_ids), self.seq_length):
                 input_ids = all_token_ids[i : i + self.seq_length]
@@ -595,6 +604,40 @@ class ConstantLengthDataset(IterableDataset):
                     "input_ids": torch.LongTensor(example),
                     "labels": torch.LongTensor(example),
                 }
+
+
+class ConstantLengthDataset(PackedIterableDataset):
+    """
+    Iterable dataset that returns constant length chunks of tokens from stream of text files.
+    The dataset also formats the text before tokenization with a specific format that is provided
+    by the user.
+
+        Args:
+            tokenizer (`transformers.PreTrainedTokenizer`):
+                The processor used for processing the data.
+            dataset (`dataset.Dataset`):
+                Dataset with text files.
+            dataset_text_field (`str`, **optional**):
+                Name of the field in the dataset that contains the text. Used only if `formatting_func` is `None`.
+            formatting_func (`Callable`, **optional**):
+                Function that formats the text before tokenization. Usually it is recommended to have follows a certain
+                pattern such as `"### Question: {question}\n ### Answer: {answer}\n"`
+            infinite (`bool`, *optional*, defaults to `False`):
+                If True the iterator is reset after dataset reaches end else stops.
+            seq_length (`int`, *optional*, defaults to `1024`):
+                Length of token sequences to return.
+            num_of_sequences (`int`, *optional*, defaults to `1024`):
+                Number of token sequences to keep in buffer.
+            chars_per_token (`int`, *optional*, defaults to `3.6`):
+                Number of characters per token used to estimate number of tokens in text buffer.
+            eos_token_id (`int`, *optional*, defaults to `0`):
+                Id of the end of sequence token if the passed tokenizer does not have an EOS token.
+            shuffle ('bool', *optional*, defaults to True)
+                Shuffle the examples before they are returned
+    """
+
+    def __len__(self):
+        return len(self.dataset)
 
 
 class PeftSavingCallback(TrainerCallback):
@@ -773,3 +816,17 @@ def neftune_post_forward_hook(module, input, output):
         mag_norm = module.neftune_noise_alpha / torch.sqrt(dims)
         output = output + torch.zeros_like(output).uniform_(-mag_norm, mag_norm)
     return output
+
+
+def peft_module_casting_to_bf16(model):
+    from peft.tuners.tuners_utils import BaseTunerLayer
+
+    for name, module in model.named_modules():
+        if isinstance(module, BaseTunerLayer):
+            module = module.to(torch.bfloat16)
+        if "norm" in name:
+            module = module.to(torch.float32)
+        if any(x in name for x in ["lm_head", "embed_tokens", "wte", "wpe"]):
+            if hasattr(module, "weight"):
+                if module.weight.dtype == torch.float32:
+                    module = module.to(torch.bfloat16)
