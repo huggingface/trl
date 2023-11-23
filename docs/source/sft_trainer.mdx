@@ -232,6 +232,7 @@ You can directly pass the kwargs of the `from_pretrained()` method to the [`SFTT
 
 ```python
 model = AutoModelForCausalLM.from_pretrained("facebook/opt-350m", torch_dtype=torch.bfloat16)
+```
 
 ```python
 ...
@@ -240,6 +241,9 @@ trainer = SFTTrainer(
     "facebook/opt-350m",
     train_dataset=dataset,
     dataset_text_field="text",
+    model_init_kwargs={
+        "torch_dtype": torch.bfloat16,
+    },
 )
 
 trainer.train()
