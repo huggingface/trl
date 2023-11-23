@@ -422,7 +422,6 @@ class DPOTrainer(Trainer):
         reference_free: bool = False,
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         """Compute the DPO loss for a batch of policy and reference model log probabilities.
-        The beta is a temperature parameter for the DPO loss, typically something in the range of 0.1 to 0.5. We ignore the reference model as beta -> 0.
 
         Args:
             policy_chosen_logps: Log probabilities of the policy model for the chosen responses. Shape: (batch_size,)
@@ -444,6 +443,8 @@ class DPOTrainer(Trainer):
 
         logits = pi_logratios - ref_logratios
 
+        # The beta is a temperature parameter for the DPO loss, typically something in the range of 0.1 to 0.5.
+        # We ignore the reference model as beta -> 0.
         if self.loss_type == "sigmoid":
             losses = -F.logsigmoid(self.beta * logits)
         elif self.loss_type == "hinge":
@@ -464,7 +465,6 @@ class DPOTrainer(Trainer):
         reference_rejected_logps: torch.FloatTensor,
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         """Compute the IPO loss for a batch of policy and reference model log probabilities.
-        The beta is the regularization parameter for the IPO loss, denoted by tau in the paper.
 
         Args:
             policy_chosen_logps: Log probabilities of the policy model for the chosen responses. Shape: (batch_size,)
@@ -481,7 +481,7 @@ class DPOTrainer(Trainer):
         ref_logratios = policy_rejected_logps + reference_chosen_logps
 
         logits = pi_logratios - ref_logratios
-        # eqn (17) of the paper:
+        # eqn (17) of the paper where beta is the regularization parameter for the IPO loss, denoted by tau in the paper.
         losses = (logits - 1 / (2 * self.beta)) ** 2
 
         chosen_rewards = self.beta * (policy_chosen_logps - reference_chosen_logps).detach()
@@ -597,13 +597,13 @@ class DPOTrainer(Trainer):
             loss_fn = self.ipo_loss
         else:
             loss_fn = self.dpo_loss
-           
+
         losses, chosen_rewards, rejected_rewards = loss_fn(
             policy_chosen_logps,
             policy_rejected_logps,
             reference_chosen_logps,
             reference_rejected_logps,
-        )     
+        )
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
         prefix = "eval_" if train_eval == "eval" else ""
