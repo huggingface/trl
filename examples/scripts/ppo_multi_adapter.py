@@ -19,7 +19,7 @@ import torch
 from datasets import load_dataset
 from peft import LoraConfig
 from tqdm import tqdm
-from transformers import BitsAndBytesConfig, HfArgumentParser, LlamaTokenizer
+from transformers import AutoTokenizer, BitsAndBytesConfig, HfArgumentParser
 
 from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, is_xpu_available
 from trl.core import LengthSampler
@@ -88,7 +88,7 @@ model = AutoModelForCausalLMWithValueHead.from_pretrained(
     reward_adapter=script_args.rm_adapter,
     use_safetensors=script_args.use_safetensors,
 )
-tokenizer = LlamaTokenizer.from_pretrained(script_args.model_name)
+tokenizer = AutoTokenizer.from_pretrained(script_args.model_name)
 
 tokenizer.pad_token = tokenizer.eos_token
 
@@ -127,6 +127,7 @@ generation_kwargs = {
     "top_p": 0.9,
     "do_sample": True,
     "pad_token_id": tokenizer.pad_token_id,
+    "max_new_tokens": 32,
 }
 
 for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
@@ -142,7 +143,7 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     # Compute reward score
     texts = [q + r for q, r in zip(batch["query"], batch["response"])]
     inputs = tokenizer(texts, padding=True, truncation=True, return_tensors="pt").to(ppo_trainer.accelerator.device)
-    raw_rewards = ppo_trainer.model.compute_reward_score(**inputs)
+    raw_rewards = ppo_trainer.accelerator.unwrap_model(ppo_trainer.model).compute_reward_score(**inputs)
     rewards = [raw_rewards[i, -1, 1] for i in range(len(raw_rewards))]  # take last token
 
     # Run PPO step

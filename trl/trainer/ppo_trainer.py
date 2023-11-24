@@ -330,7 +330,7 @@ class PPOTrainer(BaseTrainer):
         # In a distributed setup, only logging needs to be performed on the main process
         # check: https://pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html
         # or: https://discuss.pytorch.org/t/use-distributed-data-parallel-correctly/82500/11
-        self.is_distributed = self.accelerator.distributed_type == "MULTI_GPU"
+        self.is_distributed = self.accelerator.num_processes > 1
 
         # init the current step
         self.current_step = 0
