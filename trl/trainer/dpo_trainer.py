@@ -445,7 +445,6 @@ class DPOTrainer(Trainer):
         eval_dataset = eval_dataset if eval_dataset is not None else self.eval_dataset
 
         if self.precompute_ref_log_probs and not self._precomputed_eval_ref_log_probs:
-
             dataloader_params = {
                 "batch_size": self.args.per_device_eval_batch_size,
                 "collate_fn": self.data_collator,
@@ -809,10 +808,9 @@ class DPOTrainer(Trainer):
         rejected_rewards = self.beta * (policy_rejected_logps - reference_rejected_logps).detach()
 
         return losses, chosen_rewards, rejected_rewards
-    
+
     @staticmethod
-    def _get_batch_logps(
-        self,
+    def get_batch_logps(
         logits: torch.FloatTensor,
         labels: torch.LongTensor,
         average_log_prob: bool = False,
