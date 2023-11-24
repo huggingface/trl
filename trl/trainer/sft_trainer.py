@@ -129,7 +129,7 @@ class SFTTrainer(Trainer):
         packing: Optional[bool] = False,
         formatting_func: Optional[Callable] = None,
         max_seq_length: Optional[int] = None,
-        infinite: Optional[bool] = False,
+        infinite: Optional[bool] = None,
         num_of_sequences: Optional[int] = 1024,
         chars_per_token: Optional[float] = 3.6,
         dataset_num_proc: Optional[int] = None,
@@ -141,6 +141,11 @@ class SFTTrainer(Trainer):
             model_init_kwargs = {}
         elif not isinstance(model, str):
             raise ValueError("You passed model_kwargs to the SFTTrainer. But your model is already instantiated.")
+
+        if infinite is not None:
+            warnings.warn(
+                "The `infinite` argument is deprecated. Use `TrainingArgument.max_steps` or `TrainingArgument.num_epochs` instead to control training length."
+            )
 
         if isinstance(model, str):
             warnings.warn(
@@ -227,7 +232,6 @@ class SFTTrainer(Trainer):
                 dataset_text_field,
                 max_seq_length,
                 formatting_func,
-                infinite,
                 num_of_sequences,
                 chars_per_token,
             )
@@ -239,7 +243,6 @@ class SFTTrainer(Trainer):
                 dataset_text_field,
                 max_seq_length,
                 formatting_func,
-                infinite,
                 num_of_sequences,
                 chars_per_token,
             )
@@ -302,7 +305,6 @@ class SFTTrainer(Trainer):
         dataset_text_field,
         max_seq_length,
         formatting_func,
-        infinite,
         num_of_sequences,
         chars_per_token,
     ):
@@ -318,6 +320,64 @@ class SFTTrainer(Trainer):
                 tokenizer, dataset, dataset_text_field, max_seq_length, formatting_func
             )
 
+        else:
+            return self._prepare_packed_dataloader(
+                tokenizer,
+                dataset,
+                dataset_text_field,
+                max_seq_length,
+                num_of_sequences,
+                chars_per_token,
+                formatting_func,
+            )
+
+    def _prepare_non_packed_dataloader(
+        self, tokenizer, dataset, dataset_text_field, max_seq_length, formatting_func=None
+    ):
+        use_formatting_func = formatting_func is not None and dataset_text_field is None
+        self._dataset_sanity_checked = False
+
+        # Inspired from: https://huggingface.co/learn/nlp-course/chapter7/6?fw=pt
+        def tokenize(element):
+            outputs = tokenizer(
+                element[dataset_text_field] if not use_formatting_func else formatting_func(element),
+                truncation=True,
+                padding=False,
+                max_length=max_seq_length,
+                return_overflowing_tokens=False,
+                return_length=False,
+            )
+
+            if use_formatting_func and not self._dataset_sanity_checked:
+                if not isinstance(formatting_func(element), list):
+                    raise ValueError(
+                        "The `formatting_func` should return a list of processed strings since it can lead to silent bugs."
+                    )
+                else:
+                    self._dataset_sanity_checked = True
+
+            return {"input_ids": outputs["input_ids"], "attention_mask": outputs["attention_mask"]}
+
+        tokenized_dataset = dataset.map(
+            tokenize,
+            batched=True,
+            remove_columns=dataset.column_names,
+            num_proc=self.dataset_num_proc,
+            batch_size=self.dataset_batch_size,
+        )
+
+        return tokenized_dataset
+
+    def _prepare_packed_dataloader(
+        self,
+        tokenizer,
+        dataset,
+        dataset_text_field,
+        max_seq_length,
+        num_of_sequences,
+        chars_per_token,
+        formatting_func=None,
+    ):
         if dataset_text_field is not None or formatting_func is not None:
             if tokenizer is None:
                 raise ValueError(
@@ -349,47 +409,10 @@ class SFTTrainer(Trainer):
                     "Error occurred while packing the dataset. Make sure that your dataset has enough samples to at least yield one packed sequence."
                 )
             return packed_dataset
-
-        raise ValueError(
-            "You need to pass a `dataset_text_field` or `formatting_func` argument to the SFTTrainer if you want to use the `ConstantLengthDataset`."
-        )
-
-    def _prepare_non_packed_dataloader(
-        self, tokenizer, dataset, dataset_text_field, max_seq_len, formatting_func=None
-    ):
-        use_formatting_func = formatting_func is not None and dataset_text_field is None
-        self._dataset_sanity_checked = False
-
-        # Inspired from: https://huggingface.co/learn/nlp-course/chapter7/6?fw=pt
-        def tokenize(element):
-            outputs = tokenizer(
-                element[dataset_text_field] if not use_formatting_func else formatting_func(element),
-                truncation=True,
-                padding=False,
-                max_length=max_seq_len,
-                return_overflowing_tokens=False,
-                return_length=False,
+        else:
+            raise ValueError(
+                "You need to pass a `dataset_text_field` or `formatting_func` argument to the SFTTrainer if you want to use the `ConstantLengthDataset`."
             )
-
-            if use_formatting_func and not self._dataset_sanity_checked:
-                if not isinstance(formatting_func(element), list):
-                    raise ValueError(
-                        "The `formatting_func` should return a list of processed strings since it can lead to silent bugs."
-                    )
-                else:
-                    self._dataset_sanity_checked = True
-
-            return {"input_ids": outputs["input_ids"], "attention_mask": outputs["attention_mask"]}
-
-        tokenized_dataset = dataset.map(
-            tokenize,
-            batched=True,
-            remove_columns=dataset.column_names,
-            num_proc=self.dataset_num_proc,
-            batch_size=self.dataset_batch_size,
-        )
-
-        return tokenized_dataset
 
     def _trl_activate_neftune(self, model):
         r"""
