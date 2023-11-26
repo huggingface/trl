@@ -338,7 +338,6 @@ class GoldModelRewardCallback(TrainerCallback):
             max_prompt_length=max_prompt_length,
             prompt_field="prompt",
         )
-        # TODO switch to PromptCollator
         dataloader_params = {
             "batch_size": args.eval_batch_size,
             "collate_fn": data_collator,
@@ -353,7 +352,11 @@ class GoldModelRewardCallback(TrainerCallback):
         samples_to_log = []
         gold_reward_sum = 0.0
         total_samples = 0
-        for inputs in tqdm(self.dataloader, desc="Gold Eval"):
+
+        if state.is_local_process_zero:
+            pbar = tqdm(total=len(self.dataloader), desc="Gold Eval", dynamic_ncols=True)
+
+        for inputs in self.dataloader:
             policy_output_decoded, ref_output_decoded, policy_output_ids = self.get_batch_samples(
                 model,
                 tokenizer,
@@ -371,15 +374,19 @@ class GoldModelRewardCallback(TrainerCallback):
 
             gold_rewards = self.accelerator.gather_for_metrics(gold_rewards)
 
-            gold_reward_sum += gold_rewards.sum().item()
-            total_samples += len(inputs["prompt"])
+            if state.is_local_process_zero:
+                gold_reward_sum += gold_rewards.sum().item()
+                total_samples += gold_rewards.size(0)
 
-            # Sample and save to game log if requested (for one batch to save time)
-            for i, (prompt, pol, ref) in enumerate(zip(inputs["prompt"], policy_output_decoded, ref_output_decoded)):
-                if len(samples_to_log) < self.log_n_samples_during_eval:
-                    samples_to_log.append([prompt, pol[len(prompt) :], ref[len(prompt) :]])
-                else:
-                    break
+                # Sample and save to game log if requested (for one batch to save time)
+                for i, (prompt, pol, ref) in enumerate(
+                    zip(inputs["prompt"], policy_output_decoded, ref_output_decoded)
+                ):
+                    if len(samples_to_log) < self.log_n_samples_during_eval:
+                        samples_to_log.append([prompt, pol[len(prompt) :], ref[len(prompt) :]])
+                    else:
+                        break
+                pbar.update(1)
 
                 # self.log(
                 #     {
@@ -393,9 +400,8 @@ class GoldModelRewardCallback(TrainerCallback):
                 # self.state.log_history.pop()
                 # self.samples_to_log -= len(policy_output_decoded)
 
-        print(f"gold reward mean {gold_reward_sum / total_samples}")
-
         if state.is_world_process_zero:
+            print(f"gold reward mean {gold_reward_sum / total_samples}")
             wandb.log(
                 {
                     "eval/gold_rewards_mean": {gold_reward_sum / total_samples},
