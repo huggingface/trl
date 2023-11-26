@@ -1,6 +1,6 @@
 model_name: mnoukhov/pythia410m-tldr-sft
 dataset_name: mnoukhov/openai_summarize_comparisons_relabel_pythia1b_tldrprompt
-gold_model_name: /home/toolkit/huggingface/tldr_gptrm_sft_pythia1b_fp16_2epochs
+gold_model_name: mnoukhov/pythia1b-tldr-sft-rm
 beta: 0.5
 num_train_epochs: 5
 eval_steps: 750
@@ -16,4 +16,3 @@ lora_dropout: 0.05
 gradient_accumulation_steps: 4
 per_device_train_batch_size: 4
 warmup_steps: 150
-generate_greedy: True

@@ -140,7 +140,7 @@ class ScriptArguments:
     gold_fp16: Optional[bool] = field(
         default=False,
     )
-    generate_greedy: Optional[bool] = field(default=False)
+    generate_greedy: Optional[bool] = field(default=True)
     gold_dataset_name: Optional[str] = field(
         default="CarperAI/openai_summarize_tldr", metadata={"help": "the dataset name"}
     )
