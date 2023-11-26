@@ -145,6 +145,7 @@ class ScriptArguments:
         default="CarperAI/openai_summarize_tldr", metadata={"help": "the dataset name"}
     )
     gold_eval_split: Optional[str] = field(default="valid")
+    just_eval: Optional[bool] = field(default=False)
 
 
 def compute_dpo_gold_metrics(eval_preds: EvalPrediction):
@@ -353,10 +354,9 @@ class GoldModelRewardCallback(TrainerCallback):
         gold_reward_sum = 0.0
         total_samples = 0
 
-        if state.is_local_process_zero:
-            pbar = tqdm(total=len(self.dataloader), desc="Gold Eval", dynamic_ncols=True)
-
-        for inputs in self.dataloader:
+        for inputs in tqdm(
+            self.dataloader, desc="Gold Eval", dynamic_ncols=True, disable=not state.is_local_process_zero
+        ):
             policy_output_decoded, ref_output_decoded, policy_output_ids = self.get_batch_samples(
                 model,
                 tokenizer,
@@ -386,33 +386,22 @@ class GoldModelRewardCallback(TrainerCallback):
                         samples_to_log.append([prompt, pol[len(prompt) :], ref[len(prompt) :]])
                     else:
                         break
-                pbar.update(1)
-
-                # self.log(
-                #     {
-                #         "game_log": wandb.Table(
-                #             columns=["Prompt", "Policy", "Ref Model"],
-                #             rows=rows_to_log,
-                #         )
-                #     }
-                # )
-                # ## hack to fix log_history and remove
-                # self.state.log_history.pop()
-                # self.samples_to_log -= len(policy_output_decoded)
 
         if state.is_world_process_zero:
             print(f"gold reward mean {gold_reward_sum / total_samples}")
-            wandb.log(
-                {
-                    "eval/gold_rewards_mean": {gold_reward_sum / total_samples},
-                    "game_log": wandb.Table(
+            gold_log = {
+                "eval/gold_rewards_mean": gold_reward_sum / total_samples,
+                "epoch": round(state.epoch, 2),
+                "step": state.global_step,
+            }
+            if samples_to_log:
+                gold_log["game_log"] = (
+                    wandb.Table(
                         columns=["Prompt", "Policy", "Ref Model"],
                         rows=samples_to_log,
                     ),
-                    "epoch": round(state.epoch, 2),
-                    "step": state.global_step,
-                }
-            )
+                )
+            wandb.log(gold_log)
 
     def get_batch_samples(self, model, tokenizer, input_ids, attention_mask, return_ids=False) -> Tuple[str, str]:
         """Reduce inputs to unseen prompts, and maximum batch size if necessary
@@ -504,6 +493,13 @@ if __name__ == "__main__":
         split=script_args.gold_eval_split,
     )
 
+    def strip_prompt(examples):
+        examples["prompt"] = [prompt.strip() for prompt in examples["prompt"]]
+
+        return examples
+
+    gold_eval_dataset = gold_eval_dataset.map(strip_prompt, batched=True)
+
     if script_args.generate_greedy:
         generation_config = GenerationConfig(
             max_new_tokens=script_args.max_target_length,
@@ -549,5 +545,8 @@ if __name__ == "__main__":
     dpo_trainer.add_callback(gold_eval_callback)
 
     # 6. train
-    last_checkpoint = get_last_checkpoint(script_args.output_dir)
-    dpo_trainer.train(resume_from_checkpoint=last_checkpoint)
+    if not script_args.just_eval:
+        last_checkpoint = get_last_checkpoint(script_args.output_dir)
+        dpo_trainer.train(resume_from_checkpoint=last_checkpoint)
+    else:
+        dpo_trainer.evaluate()
