@@ -391,9 +391,10 @@ class GoldModelRewardCallback(TrainerCallback):
             print(f"gold reward mean {gold_reward_sum / total_samples}")
             gold_log = {
                 "eval/gold_rewards_mean": gold_reward_sum / total_samples,
-                "epoch": round(state.epoch, 2),
-                "step": state.global_step,
             }
+            if state.epoch:
+                gold_log["epoch"] = round(state.epoch, 2)
+                gold_log["step"] = state.global_step
             if samples_to_log:
                 gold_log["game_log"] = (
                     wandb.Table(
