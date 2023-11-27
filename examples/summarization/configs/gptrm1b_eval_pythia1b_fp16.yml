@@ -1,5 +1,5 @@
-dataset_name: mnoukhov/openai_summarize_comparisons_relabel_pythia1b
-model_name: /home/toolkit/huggingface/tldr_gptrm_sft_pythia1b_fp16_2epochs
+dataset_name: mnoukhov/openai_summarize_comparisons_relabel_pythia1b_tldrprompt
+model_name: mnoukhov/pythia1b-tldr-sft-rm
 just_eval: True
 use_lora: False
 train_split: train[:1]
