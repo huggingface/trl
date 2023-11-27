@@ -1369,7 +1369,16 @@ class PPOTrainer(BaseTrainer):
             )
 
     def create_model_card(self, path: str, model_name: Optional[str] = "TRL Model") -> None:
-         except:  # noqa
+        """Creates and saves a model card for a TRL model.
+
+        Args:
+            path (`str`): The path to save the model card to.
+            model_name (`str`, *optional*): The name of the model, defaults to `TRL Model`.
+        """
+        try:
+            user = whoami()["name"]
+        # handle the offline case
+        except:  # noqa
             warnings.warn("Cannot retrieve user information assuming you are running in offline mode.")
             return
 
