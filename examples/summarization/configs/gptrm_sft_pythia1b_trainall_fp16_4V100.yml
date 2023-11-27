@@ -14,4 +14,3 @@ num_train_epochs: 2
 seq_length: 560
 eval_steps: 250
 padding: do_not_pad
-fix_space: True

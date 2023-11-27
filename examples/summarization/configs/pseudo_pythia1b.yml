@@ -1,5 +1,6 @@
-output_dir: /home/toolkit/huggingface/openai_summarize_comparisons_pythia1b
-model_name: /home/toolkit/huggingface/tldr_gptrm_sft_pythia1b_fp16_2epochs
+output_dir: /home/toolkit/huggingface/openai_summarize_comparisons_tldrprompt_relabel1b
+model_name: mnoukhov/pythia1b-sft-rm-tldrprompt
+dataset_name: mnoukhov/openai_summarize_comparisons_tldrprompt
 train_split: train
 eval_split: test[:5000]
 load_in_8bit: False

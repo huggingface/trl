@@ -1,3 +1,4 @@
+import os
 import shutil
 from dataclasses import dataclass, field
 from typing import Optional
@@ -27,7 +28,7 @@ class ScriptArguments:
     model_name: Optional[str] = field(default="EleutherAI/pythia-6.9b-deduped", metadata={"help": "the model name"})
     # tokenizer_name: Optional[str] = field(default=None, metadata={"help": "the tokenizer name"})
     dataset_name: Optional[str] = field(
-        default="CarperAI/openai_summarize_comparisons", metadata={"help": "the dataset name"}
+        default="mnoukhov/openai_summarize_comparisons_tldrprompt", metadata={"help": "the dataset name"}
     )
     train_split: Optional[str] = field(default="train[:20]", metadata={"help": "the dataset name"})
     eval_split: Optional[str] = field(default="test[:20]", metadata={"help": "the dataset name"})
@@ -85,14 +86,14 @@ def preprocess_function(examples):
     str_rejected = []
 
     for prompt, chosen, rejected in zip(examples["prompt"], examples["chosen"], examples["rejected"]):
-        str_chosen.append(prompt + "\n" + chosen)
-        str_rejected.append(prompt + "\n" + rejected)
+        str_chosen.append(prompt + " " + chosen)
+        str_rejected.append(prompt + " " + rejected)
 
     tokenized_chosen = tokenizer(
-        str_chosen, padding="max_length", truncation=True, max_length=script_args.seq_length, return_tensors="pt"
+        str_chosen, padding=True, truncation=True, max_length=script_args.seq_length, return_tensors="pt"
     )
     tokenized_rejected = tokenizer(
-        str_rejected, padding="max_length", truncation=True, max_length=script_args.seq_length, return_tensors="pt"
+        str_rejected, padding=True, truncation=True, max_length=script_args.seq_length, return_tensors="pt"
     )
 
     return {
@@ -146,18 +147,24 @@ for split in data_splits:
 
             pseudolabels = accelerator.gather(pseudolabels).cpu().numpy()
 
-            for prompt, init_chosen, init_rejected, label in zip(
-                examples["prompt"], examples["chosen"], examples["rejected"], pseudolabels
-            ):
-                output_dataset["prompt"].append(prompt)
-                if label >= 0:
-                    output_dataset["chosen"].append(init_chosen)
-                    output_dataset["rejected"].append(init_rejected)
-                else:
-                    output_dataset["chosen"].append(init_rejected)
-                    output_dataset["rejected"].append(init_chosen)
+            if accelerator.is_local_main_process:
+                for prompt, init_chosen, init_rejected, label in zip(
+                    examples["prompt"], examples["chosen"], examples["rejected"], pseudolabels
+                ):
+                    output_dataset["prompt"].append(prompt)
+                    if label >= 0:
+                        output_dataset["chosen"].append(init_chosen)
+                        output_dataset["rejected"].append(init_rejected)
+                    else:
+                        output_dataset["chosen"].append(init_rejected)
+                        output_dataset["rejected"].append(init_chosen)
 
-    ds_info = DatasetInfo("CarperAI/openai_summarize_comparisons relabelled with a finetuned Pythia 6.9B")
-    relabel_dataset[split] = Dataset.from_dict(output_dataset, split=split, info=ds_info)
+    if accelerator.is_local_main_process:
+        ds_info = DatasetInfo(f"{script_args.dataset_name} relabelled with {script_args.model_name}")
+        if not split.isalnum():
+            split = "".join(c for c in split if c.isalpha())
+        relabel_dataset[split] = Dataset.from_dict(output_dataset, split=split, info=ds_info)
 
-relabel_dataset.save_to_disk(script_args.output_dir)
+if accelerator.is_local_main_process:
+    relabel_dataset.save_to_disk(script_args.output_dir)
+    relabel_dataset.push_to_hub(os.path.basename(script_args.output_dir))

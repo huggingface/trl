@@ -204,7 +204,6 @@ class ScriptArguments:
     padding: Optional[str] = field(
         default="max_length", metadata={"help": "padding to use for preprocessing the dataset"}
     )
-    fix_space: Optional[bool] = field(default=False)
     save_strategy: Optional[str] = field(default="steps")
 
 
