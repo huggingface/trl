@@ -1340,7 +1340,7 @@ class PPOTrainer(BaseTrainer):
                 if self.is_distributed:
                     self.accelerator.wait_for_everyone()
                     gathered_batch_list = []
-                    for b in batch_list:
+                    for batch in batch_list:
                         flattened = gather_object(b)
                         gathered_batch_list.append(flattened)
                     batch_list = gathered_batch_list
