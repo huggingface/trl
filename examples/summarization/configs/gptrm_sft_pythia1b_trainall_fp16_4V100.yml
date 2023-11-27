@@ -1,4 +1,4 @@
-model_name: /home/toolkit/huggingface/tldr_sft_pythia1b_fp16_trainall_3epochs
+model_name: mnoukhov/pythia1b-tldr-sft
 load_in_8bit: False
 bf16: False
 fp16: True

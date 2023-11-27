@@ -144,7 +144,7 @@ class ScriptArguments:
         default="/home/toolkit/huggingface/tldr_sft_pythia7b", metadata={"help": "the model name"}
     )
     dataset_name: Optional[str] = field(
-        default="CarperAI/openai_summarize_comparisons", metadata={"help": "the dataset name"}
+        default="mnoukhov/openai_summarize_comparisons_tldrprompt", metadata={"help": "the dataset name"}
     )
     dataset_text_field: Optional[str] = field(default="prompt", metadata={"help": "the text field of the dataset"})
     log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
@@ -329,20 +329,11 @@ def create_and_prepare_dataset(args, tokenizer, split, num_proc=2):
             "attention_mask_rejected": [],
         }
         for prompt, chosen, rejected in zip(examples["prompt"], examples["chosen"], examples["rejected"]):
-            if args.dataset_name == "mnoukhov/openai_summarize_comparisons_relabel_pythia1b_tldrprompt":
-                concat = " "
-            else:
-                concat = "\n"
-                # CarperAI's dataset has an extra space after TLDR
-                if args.fix_space:
-                    chosen = chosen[:6] + chosen[7:]
-                    rejected = rejected[:6] + rejected[7:]
-
             tokenized_chosen = tokenizer(
-                prompt + concat + chosen, padding=args.padding, truncation=True, max_length=script_args.seq_length
+                prompt + " " + chosen, padding=args.padding, truncation=True, max_length=script_args.seq_length
             )
             tokenized_rejected = tokenizer(
-                prompt + concat + rejected, padding=args.padding, truncation=True, max_length=script_args.seq_length
+                prompt + " " + rejected, padding=args.padding, truncation=True, max_length=script_args.seq_length
             )
             new_examples["input_ids_chosen"].append(tokenized_chosen["input_ids"])
             new_examples["attention_mask_chosen"].append(tokenized_chosen["attention_mask"])
@@ -360,7 +351,10 @@ parser = HfArgumentParser(ScriptArguments)
 script_args = parser.parse_args_into_dataclasses()[0]
 
 model, tokenizer = create_and_prepare_model(script_args)
-train_dataset = create_and_prepare_dataset(script_args, tokenizer, script_args.train_split)
+if not script_args.just_eval:
+    train_dataset = create_and_prepare_dataset(script_args, tokenizer, script_args.train_split)
+else:
+    train_dataset = None
 eval_dataset = create_and_prepare_dataset(script_args, tokenizer, script_args.eval_split)
 
 # don't include gradient_checkpointing here, see trl#728
