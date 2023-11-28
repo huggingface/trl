@@ -674,7 +674,7 @@ def compute_accuracy(eval_pred) -> Dict[str, float]:
         warnings.warn(
             "Some of the predictions are equal, which is probably not what you want. In our basic setting, we set the equal predictions to be wrong."
         )
-    predictions = predictions[:, 0] < predictions[:, 1]
+    predictions = np.argmax(predictions, axis=1)
 
     accuracy = np.array(predictions == labels, dtype=float).mean().item()
     return {"accuracy": accuracy}
