@@ -672,7 +672,7 @@ def compute_accuracy(eval_pred) -> Dict[str, float]:
     # We want to see how much of the time rewards_chosen > rewards_rejected.
     if np.array(predictions[:, 0] == predictions[:, 1], dtype=float).sum() > 0:
         warnings.warn(
-            "Some of the predictions are equal, which is probably not what you want. In our basic setting, we set the equal predictions to be wrong."
+            f"There are {np.array(predictions[:, 0] == predictions[:, 1]).sum()} out of {len(predictions[:, 0])} instances where the predictions for both options are equal. As a consequence the accuracy can be misleading."
         )
     predictions = np.argmax(predictions, axis=1)
 
