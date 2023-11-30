@@ -87,6 +87,8 @@ The [RSO](https://arxiv.org/abs/2309.06657) authors propose to use a hinge loss 
 
 The [IPO](https://arxiv.org/abs/2310.12036) authors provide a deeper theoretical understanding of the DPO algorithms and identify an issue with overfitting and propose an alternative loss which can be used via the `loss_type="ipo"` argument to the trainer.
 
+The [cDPO](https://ericmitchell.ai/cdpo.pdf) is a tweak on the DPO loss where we assume that the preference labels are noisy with some probability that can be passed to the `DPOTrainer` via `label_smoothing` argument (between 0 and 0.5) and then a conservative DPO loss is used.
+
 ## Logging
 
 While training and evaluating we record the following reward metrics:
