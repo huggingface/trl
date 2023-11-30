@@ -139,7 +139,7 @@ class PPOConfig:
 
     if optimize_cuda_cache is not None:
         warnings.warn(
-            "The `optimize_cuda_cache` arguement will be deprecated soon, please use `optimize_device_cache` instead."
+            "The `optimize_cuda_cache` argument will be deprecated soon, please use `optimize_device_cache` instead."
         )
         optimize_device_cache = optimize_cuda_cache
     else:
