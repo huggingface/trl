@@ -311,6 +311,11 @@ class DPOTrainer(Trainer):
         self.label_pad_token_id = label_pad_token_id
         self.padding_value = padding_value
 
+        if loss_type in ["hinge", "ipo"] and label_smoothing > 0:
+            warnings.warn(
+                "You are using a loss type that does not support label smoothing. Ignoring label_smoothing parameter."
+            )
+
         self.beta = beta
         self.label_smoothing = label_smoothing
         self.loss_type = loss_type
