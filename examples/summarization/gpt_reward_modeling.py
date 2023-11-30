@@ -14,12 +14,12 @@
 # limitations under the License.
 import os
 from dataclasses import dataclass, field
-from typing import Optional, Union
+from typing import Dict, List, Optional, Union
 
 import bitsandbytes as bnb
 import torch
 from accelerate import Accelerator
-from datasets import builder, load_dataset
+from datasets import DatasetDict, DatasetInfo, builder, load_dataset
 from peft import LoraConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
 from peft.tuners.lora import LoraLayer
 from torch import nn
@@ -199,12 +199,14 @@ class ScriptArguments:
         metadata={"help": "Enables gradient checkpointing."},
     )
     just_eval: Optional[bool] = field(default=False)
+    # just_predict: Optional[bool] = field(default=False)
     eval_steps: Optional[float] = field(default=None)
     pretrained_adapter: Optional[str] = field(default=None)
     padding: Optional[str] = field(
         default="max_length", metadata={"help": "padding to use for preprocessing the dataset"}
     )
     save_strategy: Optional[str] = field(default="steps")
+    predict_relabel: Optional[bool] = field(default=False)
 
 
 def find_all_linear_names(args, model):
@@ -307,9 +309,7 @@ def create_and_prepare_model(args):
     return model, tokenizer
 
 
-def create_and_prepare_dataset(args, tokenizer, split, num_proc=2):
-    dataset = load_dataset(args.dataset_name, split=split)
-
+def prepare_dataset(args, dataset, tokenizer, num_proc=2):
     # def summary_filter(example):
     #     return (example["chosen"] != example["rejected"]) and (
     #         len(example["chosen"].split()) >= 5 or len(example["rejected"].split()) >= 5
@@ -351,10 +351,13 @@ script_args = parser.parse_args_into_dataclasses()[0]
 
 model, tokenizer = create_and_prepare_model(script_args)
 if not script_args.just_eval:
-    train_dataset = create_and_prepare_dataset(script_args, tokenizer, script_args.train_split)
+    train_data = load_dataset(script_args.dataset_name, split=script_args.train_split)
+    train_dataset = prepare_dataset(script_args, train_data, tokenizer)
 else:
     train_dataset = None
-eval_dataset = create_and_prepare_dataset(script_args, tokenizer, script_args.eval_split)
+
+eval_data = load_dataset(script_args.dataset_name, split=script_args.eval_split)
+eval_dataset = prepare_dataset(script_args, eval_data, tokenizer)
 
 # don't include gradient_checkpointing here, see trl#728
 training_args = TrainingArguments(
@@ -394,8 +397,61 @@ trainer = GPTRewardTrainer(
 
 if script_args.just_eval:
     print("Evaluating")
+    # results = trainer.evaluate()
     results = trainer.evaluate()
     print(results)
+elif script_args.predict_relabel:
+    print("Prediction")
+
+    def relabel_with_preds(batch: Dict[str, List]):
+        relabel_batch = {
+            "prompt": [],
+            "chosen": [],
+            "rejected": [],
+        }
+        for prompt, chosen, rejected, pred_chosen, pred_rejected in zip(
+            batch["prompt"],
+            batch["chosen"],
+            batch["rejected"],
+            batch["pred_chosen"],
+            batch["pred_rejected"],
+        ):
+            relabel_batch["prompt"].append(prompt)
+            if pred_chosen >= pred_rejected:
+                relabel_batch["chosen"].append(chosen)
+                relabel_batch["rejected"].append(rejected)
+            else:
+                relabel_batch["chosen"].append(rejected)
+                relabel_batch["rejected"].append(chosen)
+
+        return relabel_batch
+
+    relabel_dataset = DatasetDict()
+    for split, pred_dataset in [("train", train_dataset), ("test", eval_dataset)]:
+        preds, _, metrics = trainer.predict(pred_dataset)
+        print(f"metrics {metrics}")
+
+        print("Relabelling Dataset and Saving")
+        ds_split = script_args.train_split if split == "train" else script_args.eval_split
+        dataset = load_dataset(script_args.dataset_name, split=ds_split)
+        dataset = dataset.add_column("pred_chosen", preds[:, 0])
+        dataset = dataset.add_column("pred_rejected", preds[:, 1])
+
+        dataset = dataset.map(relabel_with_preds, batched=True, remove_columns=["pred_chosen", "pred_rejected"])
+
+        dataset._info.description = f"{script_args.dataset_name} relabelled with {script_args.model_name}"
+        relabel_dataset[split] = dataset
+
+    print("Pushing")
+    relabel_dataset.push_to_hub(os.path.basename(script_args.output_dir))
+
+    for split, dataset in relabel_dataset.items():
+        print(f"Re-evaluating relabel {split} dataset of size {len(dataset)}")
+        eval_dataset = prepare_dataset(script_args, dataset, tokenizer)
+        results = trainer.evaluate(eval_dataset)
+        print(results)
+
+
 else:
     print("Training")
     trainer.train()
