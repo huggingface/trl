@@ -25,7 +25,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from accelerate import Accelerator
-from accelerate.utils import ProjectConfiguration, is_deepspeed_available
+from accelerate.utils import ProjectConfiguration, gather_object, is_deepspeed_available
 from datasets import Dataset
 from huggingface_hub import whoami
 from packaging import version
@@ -1315,14 +1315,15 @@ class PPOTrainer(BaseTrainer):
             rewards (`List[torch.FloatTensor]`):
                 A tensor of rewards.
         """
+        if not isinstance(rewards, torch.Tensor):
+            rewards = torch.tensor(rewards).to(self.current_device)
+        rewards = self.accelerator.gather(rewards).flatten()
+
         # Log only if we are in the main process
         if self.accelerator.is_main_process:
             logs = {}
 
             # Log stats
-            if not isinstance(rewards, torch.Tensor):
-                rewards = torch.tensor(rewards).to(self.current_device)
-
             if "query" not in batch.keys() and "response" not in batch.keys():
                 # warn the user that the game logs will not be logged
                 warnings.warn(
@@ -1336,17 +1337,16 @@ class PPOTrainer(BaseTrainer):
                     raise ValueError(f"Columns to log {columns_to_log} are not present in the batch {batch.keys()}.")
 
                 batch_list = [batch[column_to_log] for column_to_log in columns_to_log]
+                if self.is_distributed:
+                    self.accelerator.wait_for_everyone()
+                    gathered_batch_list = []
+                    for batch in batch_list:
+                        flattened = gather_object(batch)
+                        gathered_batch_list.append(flattened)
+                    batch_list = gathered_batch_list
 
                 table_rows = [list(r) for r in zip(*batch_list, rewards.cpu().tolist())]
                 logs.update({"game_log": wandb.Table(columns=[*columns_to_log, "reward"], rows=table_rows)})
-            # All reduce rewards if distributed
-            if self.is_distributed:
-                import torch.distributed as dist
-
-                dist.barrier()
-
-                dist.all_reduce(rewards, op=torch.distributed.ReduceOp.SUM)
-                rewards /= self.accelerator.num_processes
 
             logs.update(stats)
 
@@ -1367,16 +1367,6 @@ class PPOTrainer(BaseTrainer):
                 logs,
                 step=self.current_step if self.config.log_with == "tensorboard" else None,
             )
-
-        else:
-            if self.is_distributed:
-                import torch.distributed as dist
-
-                if not isinstance(rewards, torch.Tensor):
-                    rewards = torch.tensor(rewards).to(self.current_device)
-
-                dist.barrier()
-                dist.all_reduce(rewards, op=torch.distributed.ReduceOp.SUM)
 
     def create_model_card(self, path: str, model_name: Optional[str] = "TRL Model") -> None:
         """Creates and saves a model card for a TRL model.
