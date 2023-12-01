@@ -386,18 +386,18 @@ class PreTrainedModelWrapper(nn.Module):
     @classmethod
     def _get_current_device(cls):
         r"""
-        Get the current device. For GPU, we return the local process index using the `Accelerator`
+        Get the current device. For GPU, we return the local process index using LOCAL_RANK
         object to handle corner cases when running scripts in distributed environments.
 
         Returns:
             current_device (`Union[int, str]`):
                 The current device.
         """
-        dummy_accelerator = Accelerator()
+        local_rank = int(os.environ.get('LOCAL_RANK', '0'))
         if is_xpu_available():
-            return f"xpu:{dummy_accelerator.local_process_index}"
+            return f"xpu:{local_rank}"
         else:
-            return dummy_accelerator.local_process_index if torch.cuda.is_available() else "cpu"
+            return local_rank if torch.cuda.is_available() else "cpu"
 
     @classmethod
     def _split_kwargs(cls, kwargs):
