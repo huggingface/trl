@@ -793,8 +793,8 @@ class DPOTrainer(Trainer):
 
         return losses, chosen_rewards, rejected_rewards
 
-    def _get_batch_logps(
-        self,
+    @staticmethod
+    def get_batch_logps(
         logits: torch.FloatTensor,
         labels: torch.LongTensor,
         average_log_prob: bool = False,
