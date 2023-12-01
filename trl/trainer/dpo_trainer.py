@@ -632,7 +632,7 @@ class DPOTrainer(Trainer):
         if self.ref_model is None:
             with self.accelerator.unwrap_model(self.model).disable_adapter():
                 reference_output = self.model.generate(
-                    batch["prompt_input_ids"],
+                    input_ids=batch["prompt_input_ids"],
                     attention_mask=batch["prompt_attention_mask"],
                     max_length=self.max_length,
                     do_sample=True,
@@ -640,7 +640,7 @@ class DPOTrainer(Trainer):
                 )
         else:
             reference_output = self.ref_model.generate(
-                batch["prompt_input_ids"],
+                input_ids=batch["prompt_input_ids"],
                 attention_mask=batch["prompt_attention_mask"],
                 max_length=self.max_length,
                 do_sample=True,
