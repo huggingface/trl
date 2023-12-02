@@ -19,7 +19,7 @@ from typing import Dict, List, Optional, Union
 import bitsandbytes as bnb
 import torch
 from accelerate import Accelerator
-from datasets import DatasetDict, DatasetInfo, builder, load_dataset
+from datasets import DatasetDict, builder, load_dataset
 from peft import LoraConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
 from peft.tuners.lora import LoraLayer
 from torch import nn
@@ -401,7 +401,6 @@ if script_args.just_eval:
     results = trainer.evaluate()
     print(results)
 elif script_args.predict_relabel:
-    print("Prediction")
 
     def relabel_with_preds(batch: Dict[str, List]):
         relabel_batch = {
@@ -428,29 +427,36 @@ elif script_args.predict_relabel:
 
     relabel_dataset = DatasetDict()
     for split, pred_dataset in [("train", train_dataset), ("test", eval_dataset)]:
+        trainer.accelerator.print(f"Prediction {split}")
         preds, _, metrics = trainer.predict(pred_dataset)
-        print(f"metrics {metrics}")
+        trainer.accelerator.print(f"metrics {metrics}")
 
-        print("Relabelling Dataset and Saving")
-        ds_split = script_args.train_split if split == "train" else script_args.eval_split
-        dataset = load_dataset(script_args.dataset_name, split=ds_split)
-        dataset = dataset.add_column("pred_chosen", preds[:, 0])
-        dataset = dataset.add_column("pred_rejected", preds[:, 1])
+        if trainer.accelerator.is_local_main_process:
+            print("Relabelling Dataset and Saving")
+            ds_split = script_args.train_split if split == "train" else script_args.eval_split
+            dataset = load_dataset(script_args.dataset_name, split=ds_split)
+            dataset = dataset.add_column("pred_chosen", preds[:, 0])
+            dataset = dataset.add_column("pred_rejected", preds[:, 1])
 
-        dataset = dataset.map(relabel_with_preds, batched=True, remove_columns=["pred_chosen", "pred_rejected"])
+            dataset = dataset.map(relabel_with_preds, batched=True, remove_columns=["pred_chosen", "pred_rejected"])
 
-        dataset._info.description = f"{script_args.dataset_name} relabelled with {script_args.model_name}"
-        relabel_dataset[split] = dataset
+            dataset._info.description = f"{script_args.dataset_name} relabelled with {script_args.model_name}"
+            relabel_dataset[split] = dataset
 
-    print("Pushing")
-    relabel_dataset.push_to_hub(os.path.basename(script_args.output_dir))
+    if trainer.accelerator.is_local_main_process:
+        print("Saving")
+        relabel_dataset.save_to_disk(script_args.output_dir)
+        print("Pushing")
+        relabel_dataset.push_to_hub(os.path.basename(script_args.output_dir))
 
-    for split, dataset in relabel_dataset.items():
-        print(f"Re-evaluating relabel {split} dataset of size {len(dataset)}")
-        eval_dataset = prepare_dataset(script_args, dataset, tokenizer)
-        results = trainer.evaluate(eval_dataset)
-        print(results)
-
+    # TODO this freezes for some reason
+    # for split, dataset in relabel_dataset.items():
+    #     if trainer.accelerator.is_local_main_process:
+    #         eval_dataset = prepare_dataset(script_args, dataset, tokenizer)
+    #     trainer.accelerator.print(f"Re-evaluating relabel {split} dataset of size {len(dataset)}")
+    #     trainer.accelerator.wait_for_everyone()
+    #     results = trainer.evaluate(eval_dataset)
+    #     trainer.accelerator.print(results)
 
 else:
     print("Training")
