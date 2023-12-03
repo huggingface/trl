@@ -1,0 +1,10 @@
+model_name: mnoukhov/pythia1b-sft-rm-tldrprompt
+just_eval: True
+use_lora: False
+train_split: train[:1]
+eval_split: test[:5000]
+load_in_8bit: False
+fp16_model: False
+bf16: False
+fp16: True
+per_device_eval_batch_size: 8
