@@ -1,5 +1,5 @@
-dataset_name: mnoukhov/openai_summarize_comparisons_relabel_pythia1b
-model_name: /home/toolkit/huggingface/tldr_sft_pythia410m_fp16_trainall_3epochs
+model_name: mnoukhov/pythia410m-tldr-sft
+dataset_name: mnoukhov/openai_summarize_comparisons_tldrprompt_relabel1b
 load_in_8bit: False
 bf16: False
 fp16: True

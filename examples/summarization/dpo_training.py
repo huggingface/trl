@@ -50,14 +50,13 @@ class ScriptArguments:
     The arguments for the DPO training script.
     """
 
-    gold_model_name: str = field(metadata={"help": "the gold reward model name"})
     # data parameters
     dataset_name: Optional[str] = field(
-        default="CarperAI/openai_summarize_comparisons", metadata={"help": "the dataset name"}
+        default="mnoukhov/openai_summarize_comparisons_tldrprompt_relabel1b", metadata={"help": "the dataset name"}
     )
     train_split: Optional[str] = field(default="train", metadata={"help": "the dataset split to train on"})
     eval_split: Optional[str] = field(
-        default="test[:5000]", metadata={"help": "the dataset split to evaluate on; default to 'none' (no evaluation)"}
+        default="test", metadata={"help": "the dataset split to evaluate on; default to 'none' (no evaluation)"}
     )
     beta: Optional[float] = field(default=0.1, metadata={"help": "the beta parameter for DPO loss"})
 
@@ -132,6 +131,7 @@ class ScriptArguments:
     )
 
     # gold model
+    gold_model_name: str = field(default=None, metadata={"help": "the gold reward model name"})
     gold_in_8bit: Optional[bool] = field(default=False, metadata={"help": "gold the model in 8 bits precision"})
     gold_in_4bit: Optional[bool] = field(default=False, metadata={"help": "gold the model in 4 bits precision"})
     gold_bf16: Optional[bool] = field(
