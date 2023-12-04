@@ -178,8 +178,20 @@ class SFTTrainerTester(unittest.TestCase):
                 args=training_args,
                 train_dataset=self.dummy_dataset,
                 formatting_func=formatting_prompts_func,
+                max_seq_length=32,  # make sure there is at least 1 packed sequence
                 packing=True,
             )
+
+            with self.assertRaises(ValueError):
+                # This should not work because not enough data for one sample
+                _ = SFTTrainer(
+                    model=self.model,
+                    args=training_args,
+                    train_dataset=self.dummy_dataset,
+                    formatting_func=formatting_prompts_func,
+                    max_seq_length=1024,  # make sure there is NOT at least 1 packed sequence
+                    packing=True,
+                )
 
             # This should not work as well
             with self.assertRaises(ValueError):
@@ -191,7 +203,7 @@ class SFTTrainerTester(unittest.TestCase):
                     packing=False,
                 )
 
-            # but this shpuld work
+            # but this should work
             _ = SFTTrainer(
                 model=self.model,
                 args=training_args,
