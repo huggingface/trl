@@ -145,7 +145,7 @@ class SFTTrainer(Trainer):
 
         if infinite is not None:
             warnings.warn(
-                "The `infinite` argument is deprecated. Use `TrainingArgument.max_steps` or `TrainingArgument.num_epochs` instead to control training length."
+                "The `infinite` argument is deprecated and will be removed in a future version of TRL. Use `TrainingArguments.max_steps` or `TrainingArguments.num_train_epochs` instead to control training length."
             )
 
         if isinstance(model, str):
@@ -382,7 +382,7 @@ class SFTTrainer(Trainer):
         if dataset_text_field is not None or formatting_func is not None:
             if tokenizer is None:
                 raise ValueError(
-                    "You need to pass a tokenizer when using the SFT Trainer when passing a `dataset_text_field`."
+                    "You need to pass a tokenizer when using `dataset_text_field` with `SFTTrainer`."
                 )
 
             constant_length_iterator = ConstantLengthDataset(
