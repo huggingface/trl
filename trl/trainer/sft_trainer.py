@@ -381,9 +381,7 @@ class SFTTrainer(Trainer):
     ):
         if dataset_text_field is not None or formatting_func is not None:
             if tokenizer is None:
-                raise ValueError(
-                    "You need to pass a tokenizer when using `dataset_text_field` with `SFTTrainer`."
-                )
+                raise ValueError("You need to pass a tokenizer when using `dataset_text_field` with `SFTTrainer`.")
 
             constant_length_iterator = ConstantLengthDataset(
                 tokenizer,
