@@ -35,11 +35,10 @@ from transformers import (
     TrainerCallback,
     TrainingArguments,
 )
-from transformers.trainer_utils import EvalPrediction, get_last_checkpoint
+from transformers.trainer_utils import get_last_checkpoint
 
 import wandb
 from trl import DPOTrainer
-from trl.trainer.dpo_trainer import compute_dpo_metrics
 from trl.trainer.utils import pad_to_length
 
 
@@ -146,16 +145,6 @@ class ScriptArguments:
     )
     gold_eval_split: Optional[str] = field(default="valid")
     just_eval: Optional[bool] = field(default=False)
-
-
-def compute_dpo_gold_metrics(eval_preds: EvalPrediction):
-    preds = eval_preds.predictions
-    gold_rewards = preds[-1]
-    eval_preds.predictions = preds[:-1]
-    metrics = compute_dpo_metrics(eval_preds)
-
-    metrics["gold_rewards_mean"] = gold_rewards.mean()
-    return metrics
 
 
 def find_all_linear_names(args, model):
