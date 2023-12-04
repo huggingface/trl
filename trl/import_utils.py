@@ -75,7 +75,7 @@ def is_wandb_available() -> bool:
 
 
 def is_xpu_available() -> bool:
-    if is_accelerate_greater_20_0:
+    if is_accelerate_greater_20_0():
         import accelerate
 
         return accelerate.utils.is_xpu_available()
