@@ -210,7 +210,7 @@ def create_and_prepare_model(args):
             lora_alpha=args.lora_alpha,
             lora_dropout=args.lora_dropout,
             bias="none",
-            task_type="SEQ_CLS",
+            task_type="CAUSAL_LM",
             target_modules=modules,
             modules_to_save=modules_to_save,
         )
