@@ -18,7 +18,7 @@ from copy import deepcopy
 
 import torch
 import torch.nn as nn
-from accelerate import Accelerator
+from accelerate import PartialState
 from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError, HFValidationError, LocalEntryNotFoundError
 from safetensors.torch import load_file as safe_load_file
@@ -386,18 +386,18 @@ class PreTrainedModelWrapper(nn.Module):
     @classmethod
     def _get_current_device(cls):
         r"""
-        Get the current device. For GPU, we return the local process index using the `Accelerator`
+        Get the current device. For GPU, we return the local process index using the `accelerate.PartialState`
         object to handle corner cases when running scripts in distributed environments.
 
         Returns:
             current_device (`Union[int, str]`):
                 The current device.
         """
-        dummy_accelerator = Accelerator()
+        state = PartialState()
         if is_xpu_available():
-            return f"xpu:{dummy_accelerator.local_process_index}"
+            return f"xpu:{state.local_process_index}"
         else:
-            return dummy_accelerator.local_process_index if torch.cuda.is_available() else "cpu"
+            return state.local_process_index if torch.cuda.is_available() else "cpu"
 
     @classmethod
     def _split_kwargs(cls, kwargs):
