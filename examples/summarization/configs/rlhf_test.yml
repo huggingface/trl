@@ -1,6 +1,10 @@
-train_split: train[:1000]
-model_name: /home/toolkit/huggingface/tldr_sft_pythia410m_fp32_trainall_3epochs
-reward_adapter_name: /home/toolkit/huggingface/tldr_gptrm1b_pythia410m_fp16_1epoch
+train_split: train[:100]
+eval_split: valid[:100]
+just_eval: True
+# reward_adapter_name: /home/toolkit/huggingface/tldr_gptrm1b_pythia410m_fp16_1epoch
+model_name: mnoukhov/pythia410m-tldr-sft
+reward_adapter_name: /home/toolkit/trl/results/5da04d103cb60a5a040df0a3cfa6efd4/code/results/final_checkpoint
+gold_model_name: mnoukhov/pythia1b-sft-rm-tldrprompt
 steps: 1000
 load_in_8bit: False
 bf16: False
@@ -13,6 +17,7 @@ lora_dropout: 0.
 gradient_accumulation_steps: 4
 mini_batch_size: 8
 batch_size: 32
-gold_model_name: /home/toolkit/huggingface/tldr_gptrm_sft_pythia1b_fp16_2epochs
 eval_steps: 1
-input_ids_input: True
+ppo_epochs: 1
+input_ids_input: False
+strip_prompt: True

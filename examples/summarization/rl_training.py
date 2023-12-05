@@ -12,21 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import bitsandbytes as bnb
 import torch
 from accelerate import Accelerator, DistributedDataParallelKwargs
 from datasets import load_dataset
 from peft import LoraConfig, prepare_model_for_kbit_training
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
     BitsAndBytesConfig,
     HfArgumentParser,
+    PreTrainedTokenizerBase,
     pipeline,
 )
+
+import wandb
 
 # from transformers.trainer_utils import get_last_checkpoint
 from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, set_seed
@@ -54,6 +58,9 @@ class ScriptArguments:
         default="CarperAI/openai_summarize_tldr", metadata={"help": "the dataset name"}
     )
     train_split: Optional[str] = field(
+        default="train", metadata={"help": "the dataset split to evaluate on; default to 'none' (no evaluation)"}
+    )
+    eval_split: Optional[str] = field(
         default="train", metadata={"help": "the dataset split to evaluate on; default to 'none' (no evaluation)"}
     )
     log_with: Optional[str] = field(default="wandb", metadata={"help": "use 'wandb' to log with wandb"})
@@ -126,7 +133,7 @@ class ScriptArguments:
     gold_fp16: Optional[bool] = field(
         default=False,
     )
-    gold_eval_greedy: Optional[bool] = field(default=False)
+    gold_eval_greedy: Optional[bool] = field(default=True)
     # # EMA stuff
     # ema_decay: Optional[float] = field(default=0.995, metadata={"help": "the ema decay rate"})
     # reset_freq: Optional[int] = field(default=None, metadata={"help": "reset every n epochs"})
@@ -138,6 +145,34 @@ class ScriptArguments:
     )
 
     just_eval: Optional[bool] = field(default=False)
+
+
+@dataclass
+class PromptCollator:
+    tokenizer: PreTrainedTokenizerBase
+    padding: Union[bool, str] = True
+    max_prompt_length: Optional[int] = None
+    prompt_field: str = "prompt"
+    return_tensors: str = "pt"
+
+    def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
+        prompts = [feat[self.prompt_field] for feat in features]
+
+        original_side = self.tokenizer.padding_side
+        self.tokenizer.padding_side = "left"
+
+        tokenized_batch = self.tokenizer(
+            prompts,
+            truncation=True,
+            padding=True,
+            max_length=self.max_prompt_length,
+            return_tensors=self.return_tensors,
+        )
+        tokenized_batch["prompt"] = prompts
+
+        self.tokenizer.padding_side = original_side
+
+        return tokenized_batch
 
 
 def find_all_linear_names(args, model):
@@ -248,31 +283,33 @@ def create_and_prepare_model(args):
     if getattr(model.config, "pad_token_id", None) is None:
         model.config.pad_token_id = model.config.eos_token_id
 
+    model.eval()
+
     return model, tokenizer
 
 
 def create_and_prepare_dataset(args, tokenizer, split, num_proc=2):
     dataset = load_dataset(args.dataset_name, split=split)
 
+    def strip_prompt(examples):
+        examples["prompt"] = [prompt.strip() for prompt in examples["prompt"]]
+
+        return examples
+
+    if args.strip_prompt:
+        dataset = dataset.map(strip_prompt, batched=True)
+
     dataset = dataset.rename_column("prompt", "query")
     original_columns = dataset.column_names
     original_columns.remove("query")
 
-    def tokenize(queries):
-        if args.strip_prompt:
-            if isinstance(queries, list):
-                queries = [q.strip() for q in queries]
-            else:
-                queries = queries.strip()
-
-        return tokenizer(queries, truncation=True, max_length=args.input_max_length)
-
     dataset = dataset.map(
-        tokenize,
+        tokenizer,
         batched=True,
         num_proc=num_proc,
         input_columns="query",
         remove_columns=original_columns,
+        fn_kwargs=dict(truncation=True, max_length=args.input_max_length),
     )
 
     dataset.set_format("torch")
@@ -283,77 +320,39 @@ def collator(data):
     return dict((key, [d[key] for d in data]) for key in data[0])
 
 
-# def decode_and_encode(output_token_ids: List[torch.Tensor], tokenizer, max_length, de_and_retokenize=True):
-#     if de_and_retokenize:
-#         texts = [q + r for q, r in zip(batch["query"], batch["response"])]
-#         output_encoding = tokenizer(
-#             texts,
-#             padding=True,
-#             truncation=True,
-#             return_tensors="pt",
-#             return_token_type_ids=False,
-#             max_length=max_length,
-#         ).to(ppo_trainer.accelerator.device)
-#     else:
-#         default_padding_side = tokenizer.padding_side
-#         tokenizer.padding_side = "left"
-#         full_response_mask = [torch.ones_like(element) for element in output_token_ids]
-#         full_response_encoding = {"input_ids": output_token_ids, "attention_mask": full_response_mask}
-#         output_encoding = tokenizer.pad(
-#             full_response_encoding,
-#             padding=True,
-#             max_length=max_length,
-#             return_tensors="pt",
-#         )
-#         tokenizer.padding_side = default_padding_side
-#
-#     return output_encoding
-parser = HfArgumentParser(ScriptArguments)
-script_args: ScriptArguments = parser.parse_args_into_dataclasses()[0]
-config = PPOConfig(
-    steps=script_args.steps,
-    model_name=script_args.model_name,
-    learning_rate=script_args.learning_rate,
-    log_with=script_args.log_with,
-    batch_size=script_args.batch_size,
-    mini_batch_size=script_args.mini_batch_size,
-    gradient_accumulation_steps=script_args.gradient_accumulation_steps,
-    optimize_cuda_cache=True,
-    early_stopping=script_args.early_stopping,
-    target_kl=script_args.target_kl,
-    ppo_epochs=script_args.ppo_epochs,
-    seed=script_args.seed,
-    init_kl_coef=script_args.init_kl_coef,
-    adap_kl_ctrl=script_args.adap_kl_ctrl,
-    accelerator_kwargs={"kwargs_handlers": [DistributedDataParallelKwargs(find_unused_parameters=False)]},
-)
+def decode_and_encode(output_token_ids: List[torch.Tensor], tokenizer, max_length, de_and_retokenize=True):
+    if de_and_retokenize:
+        texts = [q + r for q, r in zip(batch["query"], batch["response"])]
+        output_encoding = tokenizer(
+            texts,
+            padding=True,
+            truncation=True,
+            return_tensors="pt",
+            return_token_type_ids=False,
+            max_length=max_length,
+        ).to(ppo_trainer.accelerator.device)
+    else:
+        default_padding_side = tokenizer.padding_side
+        tokenizer.padding_side = "left"
+        full_response_mask = [torch.ones_like(element) for element in output_token_ids]
+        full_response_encoding = {"input_ids": output_token_ids, "attention_mask": full_response_mask}
+        output_encoding = tokenizer.pad(
+            full_response_encoding,
+            padding=True,
+            max_length=max_length,
+            return_tensors="pt",
+        )
+        tokenizer.padding_side = default_padding_side
 
-# set seed before initializing value head for deterministic eval
-set_seed(config.seed)
-
-model, tokenizer = create_and_prepare_model(script_args)
-train_dataset = create_and_prepare_dataset(script_args, tokenizer, script_args.train_split)
-# eval_dataset = create_and_prepare_dataset(script_args, tokenizer, script_args.eval_split)
+    return output_encoding
 
 
-# We then build the PPOTrainer, passing the model, the reference model, the tokenizer
-ppo_trainer = PPOTrainer(
-    config,
-    model,
-    ref_model=None,
-    tokenizer=tokenizer,
-    dataset=train_dataset,
-    data_collator=collator,
-)
-
-
-# Gold Model
-if script_args.gold_model_name is not None:
+def create_and_prepare_gold_model(script_args, accelerator):
     if script_args.gold_in_8bit or script_args.gold_in_4bit:
         gold_quantization_config = BitsAndBytesConfig(
             load_in_8bit=script_args.gold_in_8bit, load_in_4bit=script_args.gold_in_4bit
         )
-        gold_device_map = {"": ppo_trainer.accelerator.local_process_index}
+        gold_device_map = {"": accelerator.local_process_index}
     else:
         gold_device_map = None
         gold_quantization_config = None
@@ -372,126 +371,314 @@ if script_args.gold_model_name is not None:
         device_map=gold_device_map,
     )
 
-    gold_model = ppo_trainer.accelerator.prepare(gold_model)
+    if getattr(gold_model.config, "pad_token_id", None) is None:
+        gold_model.config.pad_token_id = gold_model.config.eos_token_id
+
+    gold_model = accelerator.prepare(gold_model)
     gold_model.eval()
 
-model.eval()
+    return gold_model
 
-if script_args.separate_reward_model:
-    device = ppo_trainer.accelerator.device
-    if ppo_trainer.accelerator.num_processes == 1:
-        device = 0 if torch.cuda.is_available() else "cpu"  # to avoid a ` pipeline` bug
-    sentiment_pipe = pipeline(
-        "sentiment-analysis",
-        model=script_args.separate_reward_model,
-        device_map={"": Accelerator().local_process_index},
-        model_kwargs={"load_in_8bit": True},
-        tokenizer=tokenizer,
-        return_token_type_ids=False,
-    )
-    sent_kwargs = {
-        "return_all_scores": True,
-        "function_to_apply": "none",
-        "batch_size": 16,
-        "truncation": True,
-    }
-# We then define the arguments to pass to the `generate` function. These arguments
-# are passed to the `generate` function of the PPOTrainer, which is a wrapper around
-# the `generate` function of the trained model.
-generation_kwargs = {
-    "min_length": -1,
-    "top_k": 0.0,
-    "top_p": 1.0,
-    "do_sample": True,
-    "pad_token_id": tokenizer.pad_token_id,
-    "eos_token_id": tokenizer.eos_token_id,
-}
-output_length_sampler = LengthSampler(script_args.output_min_length, script_args.output_max_length)
 
-for epoch, batch in tqdm(
-    enumerate(ppo_trainer.dataloader),
-    total=config.total_ppo_epochs,
-    disable=not ppo_trainer.accelerator.is_local_main_process,
+def create_and_prepare_eval(args, tokenizer, accelerator):
+    dataset = load_dataset(args.dataset_name, split=args.eval_split)
+
+    def strip_prompt(examples):
+        examples["prompt"] = [prompt.strip() for prompt in examples["prompt"]]
+
+        return examples
+
+    if args.strip_prompt:
+        dataset = dataset.map(strip_prompt, batched=True)
+
+    # data_collator = PromptCollator(
+    #     tokenizer,
+    #     max_prompt_length=args.input_max_length,
+    #     prompt_field="prompt",
+    # )
+    dataloader = DataLoader(dataset, batch_size=args.batch_size)
+
+    return accelerator.prepare(dataloader)
+
+
+def get_batch_samples(
+    accelerator, model, tokenizer, input_ids, attention_mask, return_ids=False, generation_config=None
 ):
-    if epoch >= config.total_ppo_epochs:
-        break
-
-    question_tensors = batch["input_ids"]
-
-    full_response_tensors = ppo_trainer.generate(
-        question_tensors,
-        return_prompt=True,
-        length_sampler=output_length_sampler,
-        **generation_kwargs,
+    policy_output = model.generate(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        generation_config=generation_config,
     )
 
-    response_tensors = []
-    for question, full_response in zip(question_tensors, full_response_tensors):
-        response_tensors.append(full_response[len(question) :])
-
-    batch["response"] = tokenizer.batch_decode(response_tensors, skip_special_tokens=True)
-
-    # Compute sentiment score
-    if script_args.input_ids_input:
-        max_length = script_args.input_max_length + script_args.output_max_length
-        default_padding_side = tokenizer.padding_side
-        tokenizer.padding_side = "left"
-        full_response_mask = [torch.ones_like(element) for element in full_response_tensors]
-        full_response_encoding = {"input_ids": full_response_tensors, "attention_mask": full_response_mask}
-        policy_output = tokenizer.pad(
-            full_response_encoding,
-            padding="max_length",
-            max_length=max_length,
-            return_tensors="pt",
+    # if self.ref_model is None:
+    with accelerator.unwrap_model(model).disable_adapter():
+        reference_output = model.generate(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            generation_config=generation_config,
         )
-        tokenizer.padding_side = default_padding_side
+    # else:
+    #     reference_output = self.ref_model.generate(
+    #         **inputs,
+    #         generation_config=self.generation_config,
+    #     )
+
+    policy_output = pad_to_length(policy_output, self.max_length, tokenizer.pad_token_id)
+    policy_output_decoded = tokenizer.batch_decode(policy_output, skip_special_tokens=True)
+
+    reference_output = pad_to_length(reference_output, self.max_length, tokenizer.pad_token_id)
+    reference_output_decoded = tokenizer.batch_decode(reference_output, skip_special_tokens=True)
+
+    if return_ids:
+        return policy_output_decoded, reference_output_decoded, policy_output
     else:
+        return policy_output_decoded, reference_output_decoded
+
+
+def gold_eval(dataloader, model, gold_model, accelerator, epoch, log_n_samples_during_eval=0):
+    samples_to_log = []
+    gold_reward_sum = 0.0
+    total_samples = 0
+    greedy_generation_kwargs = {
+        "min_length": -1,
+        "top_p": 1.0,
+        "do_sample": False,
+        "pad_token_id": tokenizer.pad_token_id,
+        "eos_token_id": tokenizer.eos_token_id,
+        "max_new_tokens": script_args.output_max_length,
+    }
+    for batch in tqdm(
+        dataloader,
+        disable=not ppo_trainer.accelerator.is_local_main_process,
+        desc="Gold Eval",
+    ):
+        import pdb
+
+        pdb.set_trace()
+        full_response_tensors = ppo_trainer.generate(
+            batch["input_ids"],
+            return_prompt=True,
+            **greedy_generation_kwargs,
+        )
+
+        response_tensors = []
+        for question, full_response in zip(question_tensors, full_response_tensors):
+            response_tensors.append(full_response[len(question) :])
+
+        batch["response"] = tokenizer.batch_decode(response_tensors, skip_special_tokens=True)
+
+        texts = [q + r for q, r in zip(batch["prompt"], batch["response"])]
+        import pdb
+
+        pdb.set_trace()
+        policy_output = tokenizer(
+            texts, padding=True, truncation=True, return_tensors="pt", return_token_type_ids=False
+        ).to(ppo_trainer.accelerator.device)
+
+        # gold reward
+        with torch.no_grad():
+            gold_rewards = gold_model(
+                input_ids=policy_output["input_ids"], attention_mask=policy_output["attention_mask"]
+            )[0]
+
+        gold_rewards = accelerator.gather_for_metrics(gold_rewards)
+
+        if accelerator.is_local_main_process():
+            gold_reward_sum += gold_rewards.sum().item()
+            total_samples += gold_rewards.size(0)
+
+            for i, (prompt, resp) in enumerate(zip(batch["prompt"], batch["response"])):
+                if len(samples_to_log) < log_n_samples_during_eval:
+                    samples_to_log.append([prompt, resp])
+                else:
+                    break
+
+    if accelerator.is_local_main_process():
+        print(f"gold reward mean {gold_reward_sum / total_samples}")
+        gold_log = {
+            "eval/gold_rewards_mean": gold_reward_sum / total_samples,
+        }
+        gold_log["epoch"] = epoch
+        if samples_to_log:
+            gold_log["game_log"] = (
+                wandb.Table(
+                    columns=["Prompt", "Policy", "Ref Model"],
+                    rows=samples_to_log,
+                ),
+            )
+        accelerator.log(gold_log)
+
+    return gold_reward_sum / total_samples, samples_to_log
+
+
+if __name__ == "__main__":
+    parser = HfArgumentParser(ScriptArguments)
+    script_args: ScriptArguments = parser.parse_args_into_dataclasses()[0]
+    config = PPOConfig(
+        steps=script_args.steps,
+        model_name=script_args.model_name,
+        learning_rate=script_args.learning_rate,
+        log_with=script_args.log_with,
+        batch_size=script_args.batch_size,
+        mini_batch_size=script_args.mini_batch_size,
+        gradient_accumulation_steps=script_args.gradient_accumulation_steps,
+        optimize_cuda_cache=True,
+        early_stopping=script_args.early_stopping,
+        target_kl=script_args.target_kl,
+        ppo_epochs=script_args.ppo_epochs,
+        seed=script_args.seed,
+        init_kl_coef=script_args.init_kl_coef,
+        adap_kl_ctrl=script_args.adap_kl_ctrl,
+        accelerator_kwargs={"kwargs_handlers": [DistributedDataParallelKwargs(find_unused_parameters=False)]},
+    )
+
+    # set seed before initializing value head for deterministic eval
+    set_seed(config.seed)
+
+    model, tokenizer = create_and_prepare_model(script_args)
+    train_dataset = create_and_prepare_dataset(script_args, tokenizer, script_args.train_split)
+
+    # We then build the PPOTrainer, passing the model, the reference model, the tokenizer
+    ppo_trainer = PPOTrainer(
+        config,
+        model,
+        ref_model=None,
+        tokenizer=tokenizer,
+        dataset=train_dataset,
+        data_collator=collator,
+    )
+
+    # Gold Model Eval
+    if script_args.gold_model_name is not None:
+        gold_model = create_and_prepare_gold_model(script_args, ppo_trainer.accelerator)
+        eval_dataloader = create_and_prepare_eval(script_args, tokenizer, ppo_trainer.accelerator)
+
+    if script_args.just_eval:
+        gold_eval(
+            eval_dataloader,
+            ppo_trainer.model,
+            gold_model,
+            ppo_trainer.accelerator,
+            epoch=0,
+            log_n_samples_during_eval=0,
+        )
+        exit()
+
+    if script_args.separate_reward_model:
+        device = ppo_trainer.accelerator.device
+        if ppo_trainer.accelerator.num_processes == 1:
+            device = 0 if torch.cuda.is_available() else "cpu"  # to avoid a ` pipeline` bug
+        sentiment_pipe = pipeline(
+            "sentiment-analysis",
+            model=script_args.separate_reward_model,
+            device_map={"": Accelerator().local_process_index},
+            model_kwargs={"load_in_8bit": True},
+            tokenizer=tokenizer,
+            return_token_type_ids=False,
+        )
+        sent_kwargs = {
+            "return_all_scores": True,
+            "function_to_apply": "none",
+            "batch_size": 16,
+            "truncation": True,
+        }
+    # We then define the arguments to pass to the `generate` function. These arguments
+    # are passed to the `generate` function of the PPOTrainer, which is a wrapper around
+    # the `generate` function of the trained model.
+    generation_kwargs = {
+        "min_length": -1,
+        "top_k": 0.0,
+        "top_p": 1.0,
+        "do_sample": True,
+        "pad_token_id": tokenizer.pad_token_id,
+        "eos_token_id": tokenizer.eos_token_id,
+    }
+    output_length_sampler = LengthSampler(script_args.output_min_length, script_args.output_max_length)
+
+    for epoch, batch in tqdm(
+        enumerate(ppo_trainer.dataloader),
+        total=config.total_ppo_epochs,
+        disable=not ppo_trainer.accelerator.is_local_main_process,
+    ):
+        if epoch >= config.total_ppo_epochs:
+            break
+
+        question_tensors = batch["input_ids"]
+
+        full_response_tensors = ppo_trainer.generate(
+            question_tensors,
+            return_prompt=True,
+            length_sampler=output_length_sampler,
+            **generation_kwargs,
+        )
+
+        response_tensors = []
+        for question, full_response in zip(question_tensors, full_response_tensors):
+            response_tensors.append(full_response[len(question) :])
+
+        batch["response"] = tokenizer.batch_decode(response_tensors, skip_special_tokens=True)
+
+        # policy_output_encoding = create_encoding_from_output()
+        # # Compute sentiment score
+        # if script_args.input_ids_input:
+        #     max_length = script_args.input_max_length + script_args.output_max_length
+        #     default_padding_side = tokenizer.padding_side
+        #     tokenizer.padding_side = "left"
+        #     full_response_mask = [torch.ones_like(element) for element in full_response_tensors]
+        #     full_response_encoding = {"input_ids": full_response_tensors, "attention_mask": full_response_mask}
+        #     policy_output = tokenizer.pad(
+        #         full_response_encoding,
+        #         padding="max_length",
+        #         max_length=max_length,
+        #         return_tensors="pt",
+        #     )
+        #     tokenizer.padding_side = default_padding_side
+        # else:
         texts = [q + r for q, r in zip(batch["query"], batch["response"])]
         policy_output = tokenizer(
             texts, padding=True, truncation=True, return_tensors="pt", return_token_type_ids=False
         ).to(ppo_trainer.accelerator.device)
 
-    if script_args.separate_reward_model:
-        pipe_outputs = sentiment_pipe(texts, **sent_kwargs)
-        raw_rewards = [torch.tensor(output[0]["score"]) for output in pipe_outputs]
-    else:
+        # if script_args.separate_reward_model:
+        #     pipe_outputs = sentiment_pipe(texts, **sent_kwargs)
+        #     raw_rewards = [torch.tensor(output[0]["score"]) for output in pipe_outputs]
+        # else:
         raw_rewards = ppo_trainer.compute_reward_model_score(**policy_output)
         rewards = [(raw_rewards[i] - script_args.reward_baseline) for i in range(len(raw_rewards))]
 
-    # Run PPO step
-    if not script_args.just_eval:
-        stats = ppo_trainer.step(question_tensors, response_tensors, rewards)
-    else:
-        stats = {}
+        # Run PPO step
+        if not script_args.just_eval:
+            stats = ppo_trainer.step(question_tensors, response_tensors, rewards)
+        else:
+            stats = {}
 
-    if script_args.eval_steps is not None and epoch % script_args.eval_steps == 0:
-        if script_args.gold_eval_greedy:
-            greedy_generation_kwargs = {
-                "min_length": -1,
-                "top_k": 0.0,
-                "top_p": 1.0,
-                "do_sample": False,
-                "pad_token_id": tokenizer.pad_token_id,
-                "eos_token_id": tokenizer.eos_token_id,
-                "max_new_tokens": script_args.output_max_length,
-            }
-            greedy_output = ppo_trainer.generate(
-                question_tensors,
-                return_prompt=True,
-                **greedy_generation_kwargs,
-            )
-            max_length = script_args.input_max_length + script_args.output_max_length
-            policy_output = tokenizer.batch_decode(greedy_output, skip_special_tokens=True)
+        if script_args.eval_steps is not None and epoch % script_args.eval_steps == 0:
+            if script_args.gold_eval_greedy:
+                greedy_generation_kwargs = {
+                    "min_length": -1,
+                    "top_p": 1.0,
+                    "do_sample": False,
+                    "pad_token_id": tokenizer.pad_token_id,
+                    "eos_token_id": tokenizer.eos_token_id,
+                    "max_new_tokens": script_args.output_max_length,
+                }
+                greedy_output = ppo_trainer.generate(
+                    question_tensors,
+                    return_prompt=True,
+                    **greedy_generation_kwargs,
+                )
+                max_length = script_args.input_max_length + script_args.output_max_length
+                policy_output = tokenizer.batch_decode(greedy_output, skip_special_tokens=True)
 
-        with torch.no_grad():
-            gold_rewards = gold_model(**policy_output)[0]
-    else:
-        gold_rewards = None
+            with torch.no_grad():
+                gold_rewards = gold_model(**policy_output)[0]
+        else:
+            gold_rewards = None
 
-    stats["epoch"] = epoch
-    ppo_trainer.log_stats(stats, batch, rewards, gold_rewards)
+        stats["epoch"] = epoch
+        ppo_trainer.log_stats(stats, batch, rewards, gold_rewards)
 
-    # ppo_trainer.accelerator.print(stats)
+        # ppo_trainer.accelerator.print(stats)
 
-    if script_args.save_strategy != "no" and epoch > 0 and epoch % script_args.save_steps == 0:
-        ppo_trainer.save_pretrained(script_args.output_dir + f"step_{epoch}")
+        if script_args.save_strategy != "no" and epoch > 0 and epoch % script_args.save_steps == 0:
+            ppo_trainer.save_pretrained(script_args.output_dir + f"step_{epoch}")
