@@ -188,6 +188,16 @@ class SFTTrainer(Trainer):
 
                     if args is not None:
                         args = dataclasses.replace(args, gradient_checkpointing=False)
+                elif getattr(args, "gradient_checkpointing", False):
+                    # For backward compatibility with older versions of transformers
+                    if hasattr(model, "enable_input_require_grads"):
+                        model.enable_input_require_grads()
+                    else:
+
+                        def make_inputs_require_grad(module, input, output):
+                            output.requires_grad_(True)
+
+                        model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
 
                 model = get_peft_model(model, peft_config)
 
