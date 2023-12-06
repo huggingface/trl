@@ -439,7 +439,7 @@ class SFTTrainerTester(unittest.TestCase):
                 train_dataset=self.train_dataset,
                 eval_dataset={
                     "data1": self.eval_dataset,
-                    "data2": self.train_dataset,
+                    "data2": self.eval_dataset,
                 },
                 packing=True,
             )
