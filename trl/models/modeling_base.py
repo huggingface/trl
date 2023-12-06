@@ -444,6 +444,7 @@ class PreTrainedModelWrapper(nn.Module):
         pretrained_model.train()
 
         filename = os.path.join(adapter_model_id, "adapter_model.bin")
+        safe_loading = False
         if not os.path.exists(filename):
             try:
                 local_filename = hf_hub_download(
@@ -452,13 +453,28 @@ class PreTrainedModelWrapper(nn.Module):
                     token=token,
                 )
             except:  # noqa
-                raise ValueError(
-                    "Could not find adapter model in the Hub, make sure you have the correct adapter model id."
-                )
+                filename = os.path.join(adapter_model_id, "adapter_model.safetensors")
+                safe_loading = True
+                if not os.path.exists(filename):
+                    try:
+                        local_filename = hf_hub_download(
+                            adapter_model_id,
+                            "adapter_model.safetensors",
+                            token=token,
+                        )
+                    except:  # noqa
+                        raise ValueError(
+                            "Could not find adapter model in the Hub, make sure you have the correct adapter model id."
+                        )
+                else:
+                    local_filename = filename
         else:
             local_filename = filename
 
-        adapter_state_dict = torch.load(local_filename, map_location="cpu")
+        loading_func = safe_load_file if safe_loading else torch.load
+        load_kwargs = {} if safe_loading else {"map_location": "cpu"}
+
+        adapter_state_dict = loading_func(local_filename, **load_kwargs)
 
         for score_name_candidate in cls.supported_rm_modules:
             if any([score_name_candidate in name for name in adapter_state_dict.keys()]):
