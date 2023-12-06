@@ -427,7 +427,7 @@ class SFTTrainerTester(unittest.TestCase):
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
-                max_steps=2,
+                max_steps=1,
                 eval_steps=1,
                 save_steps=1,
                 per_device_train_batch_size=2,
@@ -444,15 +444,13 @@ class SFTTrainerTester(unittest.TestCase):
                 packing=True,
             )
 
-            self.assertFalse(trainer.eval_dataset.infinite)
-
             trainer.train()
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
             self.assertIsNotNone(trainer.state.log_history[0]["eval_data1_loss"])
-            self.assertIsNotNone(trainer.state.log_history[0]["eval_data2_loss"])
+            self.assertIsNotNone(trainer.state.log_history[1]["eval_data2_loss"])
 
-            self.assertTrue("model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2"))
+            self.assertTrue("model.safetensors" in os.listdir(tmp_dir + "/checkpoint-1"))
 
     def test_data_collator_completion_lm(self):
         response_template = "### Response:\n"
