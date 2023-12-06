@@ -24,7 +24,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from accelerate.utils import is_deepspeed_available
+from accelerate.utils import is_deepspeed_available, tqdm
 from datasets import Dataset
 from torch.utils.data import DataLoader
 from transformers import (
@@ -416,7 +416,7 @@ class DPOTrainer(Trainer):
 
             reference_chosen_logps = []
             reference_rejected_logps = []
-            for padded_batch in data_loader:
+            for padded_batch in tqdm(iterable=data_loader, desc="Train dataset reference log probs"):
                 reference_chosen_logp, reference_rejected_logp = self.compute_reference_log_probs(padded_batch)
                 reference_chosen_logp, reference_rejected_logp = self.accelerator.gather_for_metrics(
                     (reference_chosen_logp, reference_rejected_logp)
@@ -467,7 +467,7 @@ class DPOTrainer(Trainer):
 
             reference_chosen_logps = []
             reference_rejected_logps = []
-            for padded_batch in data_loader:
+            for padded_batch in tqdm(iterable=data_loader, desc="Eval dataset reference log probs"):
                 reference_chosen_logp, reference_rejected_logp = self.compute_reference_log_probs(padded_batch)
                 reference_chosen_logp, reference_rejected_logp = self.accelerator.gather_for_metrics(
                     (reference_chosen_logp, reference_rejected_logp)
