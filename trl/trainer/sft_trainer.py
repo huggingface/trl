@@ -72,9 +72,10 @@ class SFTTrainer(Trainer):
         tokenizer (Optional[`transformers.PreTrainedTokenizer`]):
             The tokenizer to use for training. If not specified, the tokenizer associated to the model will be used.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
-                The model initializer to use for training. If None is specified, the default model initializer will be used.
-        compute_metrics (`Callable[[transformers.EvalPrediction], Dict]`, *optional* defaults to `compute_accuracy`):
-            The metrics to use for evaluation. If no metrics are specified, the default metric (`compute_accuracy`) will be used.
+            The model initializer to use for training. If None is specified, the default model initializer will be used.
+        compute_metrics (`Callable[[transformers.EvalPrediction], Dict]`, *optional* defaults to None):
+            The function used to compute metrics during evaluation. It should return a dictionary mapping metric names to metric values.
+            If not specified, only the loss will be computed during evaluation.
         callbacks (`List[transformers.TrainerCallback]`):
             The callbacks to use for training.
         optimizers (`Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):

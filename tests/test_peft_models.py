@@ -137,10 +137,10 @@ class PeftModelTester(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             model.save_pretrained(tmp_dir)
 
-            # check that the files `adapter_model.bin` and `adapter_config.json` are in the directory
+            # check that the files `adapter_model.safetensors` and `adapter_config.json` are in the directory
             self.assertTrue(
-                os.path.isfile(f"{tmp_dir}/adapter_model.bin"),
-                msg=f"{tmp_dir}/adapter_model.bin does not exist",
+                os.path.isfile(f"{tmp_dir}/adapter_model.safetensors"),
+                msg=f"{tmp_dir}/adapter_model.safetensors does not exist",
             )
             self.assertTrue(
                 os.path.exists(f"{tmp_dir}/adapter_config.json"),
@@ -177,10 +177,10 @@ class PeftModelTester(unittest.TestCase):
             pretrained_model.save_pretrained(tmp_dir)
             model_from_pretrained = AutoModelForCausalLMWithValueHead.from_pretrained(tmp_dir)
 
-            # check that the files `adapter_model.bin` and `adapter_config.json` are in the directory
+            # check that the files `adapter_model.safetensors` and `adapter_config.json` are in the directory
             self.assertTrue(
-                os.path.isfile(f"{tmp_dir}/adapter_model.bin"),
-                msg=f"{tmp_dir}/adapter_model.bin does not exist",
+                os.path.isfile(f"{tmp_dir}/adapter_model.safetensors"),
+                msg=f"{tmp_dir}/adapter_model.safetensors does not exist",
             )
             self.assertTrue(
                 os.path.exists(f"{tmp_dir}/adapter_config.json"),
