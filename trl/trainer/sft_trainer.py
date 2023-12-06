@@ -253,16 +253,21 @@ class SFTTrainer(Trainer):
                 chars_per_token,
             )
         if eval_dataset is not None:
-            eval_dataset = self._prepare_dataset(
-                eval_dataset,
-                tokenizer,
-                packing,
-                dataset_text_field,
-                max_seq_length,
-                formatting_func,
-                num_of_sequences,
-                chars_per_token,
-            )
+            _multiple = isinstance(eval_dataset, dict)
+            _eval_datasets = eval_dataset if _multiple else {"singleton": eval_dataset}
+            for _eval_dataset_name, _eval_dataset in _eval_datasets.items():
+                _eval_datasets[_eval_dataset_name] = self._prepare_dataset(
+                    _eval_dataset,
+                    tokenizer,
+                    packing,
+                    dataset_text_field,
+                    max_seq_length,
+                    formatting_func,
+                    num_of_sequences,
+                    chars_per_token,
+                )
+            if not _multiple:
+                eval_dataset = _eval_datasets["singleton"]
 
         if tokenizer.padding_side is not None and tokenizer.padding_side != "right":
             warnings.warn(
