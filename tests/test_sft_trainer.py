@@ -651,7 +651,7 @@ class SFTTrainerTester(unittest.TestCase):
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
             self.assertIsNotNone(trainer.state.log_history[0]["eval_loss"])
 
-            self.assertTrue("adapter_model.bin" in os.listdir(tmp_dir + "/checkpoint-2"))
+            self.assertTrue("adapter_model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2"))
             self.assertTrue("adapter_config.json" in os.listdir(tmp_dir + "/checkpoint-2"))
             self.assertTrue("model.safetensors" not in os.listdir(tmp_dir + "/checkpoint-2"))
 
@@ -693,7 +693,7 @@ class SFTTrainerTester(unittest.TestCase):
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
             self.assertIsNotNone(trainer.state.log_history[0]["eval_loss"])
 
-            self.assertTrue("adapter_model.bin" in os.listdir(tmp_dir + "/checkpoint-2"))
+            self.assertTrue("adapter_model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2"))
             self.assertTrue("adapter_config.json" in os.listdir(tmp_dir + "/checkpoint-2"))
             self.assertTrue("model.safetensors" not in os.listdir(tmp_dir + "/checkpoint-2"))
 
@@ -751,7 +751,7 @@ class SFTTrainerTester(unittest.TestCase):
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
             self.assertIsNotNone(trainer.state.log_history[0]["eval_loss"])
 
-            self.assertTrue("adapter_model.bin" in os.listdir(tmp_dir + "/checkpoint-2"))
+            self.assertTrue("adapter_model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2"))
             self.assertTrue("adapter_config.json" in os.listdir(tmp_dir + "/checkpoint-2"))
             self.assertTrue("model.safetensors" not in os.listdir(tmp_dir + "/checkpoint-2"))
 
