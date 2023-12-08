@@ -562,7 +562,7 @@ class DPOTrainer(Trainer):
             if not isinstance(prompt, str):
                 raise ValueError(f"prompt should be an str but got {type(prompt)}")
             prompt_tokens = self.tokenizer(prompt, add_special_tokens=False)
-            prompt_tokens = {f"prompt_{k}":v for k,v in prompt_tokens.items()}
+            prompt_tokens = {f"prompt_{k}": v for k, v in prompt_tokens.items()}
 
             if not isinstance(chosen, str):
                 raise ValueError(f"chosen should be an str but got {type(chosen)}")
@@ -576,7 +576,7 @@ class DPOTrainer(Trainer):
             prompt_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + prompt_tokens["prompt_input_ids"]
             chosen_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + chosen_tokens["prompt_input_ids"]
             rejected_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + rejected_tokens["prompt_input_ids"]
-            
+
             prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens["prompt_attention_mask"]
             chosen_tokens["prompt_attention_mask"] = [1] + chosen_tokens["prompt_attention_mask"]
             rejected_tokens["prompt_attention_mask"] = [1] + rejected_tokens["prompt_attention_mask"]
@@ -627,7 +627,7 @@ class DPOTrainer(Trainer):
             for k, toks in {
                 "chosen_": chosen_sequence_tokens,
                 "rejected_": rejected_sequence_tokens,
-                "": prompt_tokens
+                "": prompt_tokens,
             }.items():
                 for type_key, tokens in toks.items():
                     if type_key == "token_type_ids":
