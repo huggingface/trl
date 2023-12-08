@@ -35,6 +35,10 @@ class ScriptArguments:
     """the pretrained model to use"""
     pretrained_revision: str = "main"
     """the pretrained model revision to use"""
+    sdxl: bool = False
+    """whether to use SDXL"""
+    sdxl_vae: str = "madebyollin/sdxl-vae-fp16-fix"
+    """the name of the pretrained SDXL VAE model to use"""
     hf_hub_model_id: str = "ddpo-finetuned-stable-diffusion"
     """HuggingFace repo to save model weights to"""
     hf_hub_aesthetic_model_id: str = "trl-lib/ddpo-aesthetic-predictor"
@@ -44,7 +48,6 @@ class ScriptArguments:
 
     ddpo_config: DDPOConfig = field(
         default_factory=lambda: DDPOConfig(
-            sdxl=False,
             num_epochs=200,
             train_gradient_accumulation_steps=1,
             sample_num_steps=50,
@@ -189,7 +192,7 @@ if __name__ == "__main__":
     args = tyro.cli(ScriptArguments)
 
     pipeline = DefaultDDPOStableDiffusionPipeline(
-        args.pretrained_model, pretrained_model_revision=args.pretrained_revision, use_lora=True,
+        args.pretrained_model, pretrained_model_revision=args.pretrained_revision, use_lora=True, sdxl=args.sdxl, sdxl_vae=args.sdxl_vae,
     )
 
     trainer = DDPOTrainer(

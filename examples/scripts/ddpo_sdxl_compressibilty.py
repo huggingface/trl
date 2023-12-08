@@ -29,6 +29,7 @@ from trl.import_utils import is_xpu_available
 
 from io import BytesIO
 from PIL import Image
+from einops import rearrange
 
 
 @dataclass
@@ -38,6 +39,8 @@ class ScriptArguments:
     """the pretrained model to use"""
     pretrained_revision: str = "main"
     """the pretrained model revision to use"""
+    sdxl: bool = True
+    """whether to use SDXL"""
     sdxl_vae: str = "madebyollin/sdxl-vae-fp16-fix"
     """the name of the pretrained SDXL VAE model to use"""
     hf_hub_model_id: str = "ddpo-finetuned-stable-diffusion-xl"
@@ -51,7 +54,6 @@ class ScriptArguments:
         default_factory=lambda: DDPOConfig(
             width=1024,
             height=1024,
-            sdxl=True,
             num_epochs=200,
             train_gradient_accumulation_steps=1,
             sample_num_steps=50,
@@ -77,7 +79,7 @@ def scorer(compression_quality = 80, mode = 'compressibility'):
         images = (images * 255).round().clamp(0, 255).to(torch.uint8)
         scores = []
         for i in range(images.shape[0]):
-            img = Image.fromarray(images[i].cpu().detach().numpy())
+            img = Image.fromarray(rearrange(images[i].cpu().detach().numpy(), "c h w -> w h c"))
 
             # Convert the image to a JPEG format with the specified compression quality
             output_buffer = BytesIO()
@@ -160,7 +162,7 @@ if __name__ == "__main__":
     args = tyro.cli(ScriptArguments)
 
     pipeline = DefaultDDPOStableDiffusionPipeline(
-        args.pretrained_model, pretrained_model_revision=args.pretrained_revision, use_lora=True, sdxl_vae=args.sdxl_vae,
+        args.pretrained_model, pretrained_model_revision=args.pretrained_revision, use_lora=True, sdxl=args.sdxl, sdxl_vae=args.sdxl_vae,
     )
 
     trainer = DDPOTrainer(

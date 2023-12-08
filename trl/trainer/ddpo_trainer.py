@@ -136,6 +136,7 @@ class DDPOTrainer(BaseTrainer):
 
         self.sd_pipeline.vae.to(self.accelerator.device, dtype=inference_dtype)
         self.sd_pipeline.text_encoder.to(self.accelerator.device, dtype=inference_dtype)
+        self.sd_pipeline.text_encoder_2.to(self.accelerator.device, dtype=inference_dtype)
         self.sd_pipeline.unet.to(self.accelerator.device, dtype=inference_dtype)
 
         trainable_layers = self.sd_pipeline.get_trainable_layers()
@@ -159,7 +160,6 @@ class DDPOTrainer(BaseTrainer):
                 max_length=self.sd_pipeline.tokenizer.model_max_length,
             ).input_ids.to(self.accelerator.device)
         )[0]
-        self.pooled_neg_prompt_embed = self.neg_prompt_embed[0]
 
         if config.per_prompt_stat_tracking:
             self.stat_tracker = PerPromptStatTracker(
@@ -309,7 +309,7 @@ class DDPOTrainer(BaseTrainer):
 
         return global_step
 
-    def calculate_loss(self, latents, timesteps, next_latents, log_probs, advantages, embeds):
+    def calculate_loss(self, latents, timesteps, next_latents, log_probs, add_time_ids, advantages, embeds, add_text_embeds):
         """
         Calculate the loss for a batch of an unpacked sample
 
@@ -338,6 +338,7 @@ class DDPOTrainer(BaseTrainer):
                     torch.cat([latents] * 2),
                     torch.cat([timesteps] * 2),
                     embeds,
+                    added_cond_kwargs={'text_embeds':add_text_embeds, 'time_ids': add_time_ids}
                 ).sample
                 noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
                 noise_pred = noise_pred_uncond + self.config.sample_guidance_scale * (
@@ -348,6 +349,7 @@ class DDPOTrainer(BaseTrainer):
                     latents,
                     timesteps,
                     embeds,
+                    added_cond_kwargs={'text_embeds':add_text_embeds, 'time_ids':add_time_ids}
                 ).sample
             # compute the log prob of next_latents given latents under the current model
 
@@ -430,8 +432,17 @@ class DDPOTrainer(BaseTrainer):
         prompt_image_pairs = []
         self.sd_pipeline.unet.eval()
 
-        sample_neg_prompt_embeds = self.neg_prompt_embed.repeat(batch_size, 1, 1)
-        sample_pooled_neg_prompt_embeds = self.pooled_neg_prompt_embed.repeat(batch_size, 1)
+        print(self.accelerator.mixed_precision)
+        print(self.accelerator.device)
+
+        if self.accelerator.mixed_precision == "fp16":
+            inference_dtype = torch.float16
+        elif self.accelerator.mixed_precision == "bf16":
+            inference_dtype = torch.bfloat16
+        else:
+            inference_dtype = torch.float32
+
+        sample_neg_prompt_embeds = self.neg_prompt_embed.repeat(batch_size, 1, 1).to(self.accelerator.device, inference_dtype)
 
         for _ in range(iterations):
             prompts, prompt_metadata = zip(*[self.prompt_fn() for _ in range(batch_size)])
@@ -443,43 +454,66 @@ class DDPOTrainer(BaseTrainer):
                 truncation=True,
                 max_length=self.sd_pipeline.tokenizer.model_max_length,
             ).input_ids.to(self.accelerator.device)
-            prompt_embeds = self.sd_pipeline.text_encoder(prompt_ids)[0]
-            pooled_prompt_embeds = prompt_embeds[0]
+            prompt_embeds = self.sd_pipeline.text_encoder(prompt_ids)[0].to(self.accelerator.device, inference_dtype)
+
+            prompts = list(prompts)
+            (
+                prompt_embeds,
+                negative_prompt_embeds,
+                pooled_prompt_embeds,
+                negative_pooled_prompt_embeds,
+            ) = self.sd_pipeline.encode_prompt(
+                prompt=prompts,
+                prompt_2=prompts,
+                device=self.sd_pipeline.text_encoder.device,
+                num_images_per_prompt=1,
+                do_classifier_free_guidance=True,
+                negative_prompt=[""] if self.config.negative_prompts is None else self.config.negative_prompts,
+                negative_prompt_2=[""] if self.config.negative_prompts is None else self.config.negative_prompts,
+            )
+            prompt_embeds = prompt_embeds.to(self.accelerator.device, inference_dtype)
+            negative_prompt_embeds = negative_prompt_embeds.to(self.accelerator.device, inference_dtype)
+            pooled_prompt_embeds = pooled_prompt_embeds.to(self.accelerator.device, inference_dtype)
+            negative_pooled_prompt_embeds = negative_pooled_prompt_embeds.to(self.accelerator.device, inference_dtype)
+            sample_neg_prompt_embeds = sample_neg_prompt_embeds.to(self.accelerator.device, inference_dtype)
 
             with self.autocast():
                 sd_output = self.sd_pipeline(
                     width=self.config.width,
                     height=self.config.height,
                     prompt_embeds=prompt_embeds,
-                    pooled_prompt_embeds=pooled_prompt_embeds,
-                    negative_prompt_embeds=sample_neg_prompt_embeds,
-                    negative_pooled_prompt_embeds=sample_pooled_neg_prompt_embeds,
+                    negative_prompt_embeds=negative_prompt_embeds,
                     num_inference_steps=self.config.sample_num_steps,
                     guidance_scale=self.config.sample_guidance_scale,
                     eta=self.config.sample_eta,
                     output_type="pt",
-                    sdxl=self.config.sdxl
+                    pooled_prompt_embeds = pooled_prompt_embeds,
+                    negative_pooled_prompt_embeds = negative_pooled_prompt_embeds
                 )
 
                 images = sd_output.images
                 latents = sd_output.latents
                 log_probs = sd_output.log_probs
+                add_time_ids = sd_output.add_time_ids
 
             latents = torch.stack(latents, dim=1)  # (batch_size, num_steps + 1, ...)
             log_probs = torch.stack(log_probs, dim=1)  # (batch_size, num_steps, 1)
+            add_time_ids = torch.stack(add_time_ids, dim=1)
             timesteps = self.sd_pipeline.scheduler.timesteps.repeat(batch_size, 1)  # (batch_size, num_steps)
 
             samples.append(
                 {
                     "prompt_ids": prompt_ids,
                     "prompt_embeds": prompt_embeds,
-                    "pooled_prompt_embeds": pooled_prompt_embeds,
                     "timesteps": timesteps,
                     "latents": latents[:, :-1],  # each entry is the latent before timestep t
                     "next_latents": latents[:, 1:],  # each entry is the latent after timestep t
                     "log_probs": log_probs,
-                    "negative_prompt_embeds": sample_neg_prompt_embeds,
-                    "negative_pooled_prompt_embeds": sample_pooled_neg_prompt_embeds,
+                    "add_time_ids": add_time_ids,
+                    "negative_prompt_embeds": negative_prompt_embeds,
+                    "pooled_prompt_embeds": pooled_prompt_embeds,
+                    "negative_pooled_prompt_embeds": negative_pooled_prompt_embeds
+                    #"negative_prompt_embeds": sample_neg_prompt_embeds,
                 }
             )
             prompt_image_pairs.append([images, prompts, prompt_metadata])
@@ -510,6 +544,14 @@ class DDPOTrainer(BaseTrainer):
                 embeds = torch.cat([sample["negative_prompt_embeds"], sample["prompt_embeds"]])
             else:
                 embeds = sample["prompt_embeds"]
+            
+            if self.config.train_cfg:
+                # concat negative prompts to sample prompts to avoid two forward passes
+                add_text_embeds = torch.cat([sample["negative_pooled_prompt_embeds"], sample["pooled_prompt_embeds"]])
+                add_time_ids = torch.cat([sample["add_time_ids"], sample["add_time_ids"]])
+            else:
+                add_text_embeds = sample["pooled_prompt_embeds"]
+                add_time_ids = sample["add_time_ids"]
 
             for j in range(self.num_train_timesteps):
                 with self.accelerator.accumulate(self.sd_pipeline.unet):
@@ -518,8 +560,10 @@ class DDPOTrainer(BaseTrainer):
                         sample["timesteps"][:, j],
                         sample["next_latents"][:, j],
                         sample["log_probs"][:, j],
+                        add_time_ids,
                         sample["advantages"],
                         embeds,
+                        add_text_embeds,
                     )
                     info["approx_kl"].append(approx_kl)
                     info["clipfrac"].append(clipfrac)

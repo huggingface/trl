@@ -101,8 +101,6 @@ class DDPOConfig:
     """Width of the generated samples"""
     height: Optional[int] = None
     """Height of the generated samples"""
-    sdxl: bool = False
-    """Whether the model in question is based on SDXL"""
 
     def to_dict(self):
         output_dict = {}
