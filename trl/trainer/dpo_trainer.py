@@ -561,6 +561,8 @@ class DPOTrainer(Trainer):
 
             if not isinstance(prompt, str):
                 raise ValueError(f"prompt should be an str but got {type(prompt)}")
+            prompt_tokens = self.tokenizer(prompt, add_special_tokens=False)
+            prompt_tokens = {f"prompt_{k}":v for k,v in prompt_tokens.items()}
 
             if not isinstance(chosen, str):
                 raise ValueError(f"chosen should be an str but got {type(chosen)}")
@@ -571,12 +573,15 @@ class DPOTrainer(Trainer):
             rejected_tokens = self.build_tokenized_answer(prompt, rejected)
 
             # add BOS token to head of prompt
+            prompt_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + prompt_tokens["prompt_input_ids"]
             chosen_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + chosen_tokens["prompt_input_ids"]
             rejected_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + rejected_tokens["prompt_input_ids"]
+            
+            prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens["prompt_attention_mask"]
             chosen_tokens["prompt_attention_mask"] = [1] + chosen_tokens["prompt_attention_mask"]
             rejected_tokens["prompt_attention_mask"] = [1] + rejected_tokens["prompt_attention_mask"]
 
-            # add EOS token to end of prompt
+            # add EOS token to end of answer
             chosen_tokens["input_ids"].append(self.tokenizer.eos_token_id)
             chosen_tokens["attention_mask"].append(1)
 
@@ -586,14 +591,12 @@ class DPOTrainer(Trainer):
             longer_response_length = max(len(chosen_tokens["input_ids"]), len(rejected_tokens["input_ids"]))
 
             # if combined sequence is too long, truncate the prompt
-            for answer_tokens in [chosen_tokens, rejected_tokens]:
+            for answer_tokens in [chosen_tokens, rejected_tokens, prompt_tokens]:
                 if len(answer_tokens["prompt_input_ids"]) + longer_response_length > self.max_length:
                     if self.truncation_mode == "keep_start":
-                        # prompt_tokens = {k: v[: self.max_prompt_length] for k, v in prompt_tokens.items()}
                         for k in ["prompt_input_ids", "prompt_attention_mask"]:
                             answer_tokens[k] = answer_tokens[k][: self.max_prompt_length]
                     elif self.truncation_mode == "keep_end":
-                        # prompt_tokens = {k: v[-self.max_prompt_length :] for k, v in prompt_tokens.items()}
                         for k in ["prompt_input_ids", "prompt_attention_mask"]:
                             answer_tokens[k] = answer_tokens[k][-self.max_prompt_length :]
                     else:
@@ -622,13 +625,14 @@ class DPOTrainer(Trainer):
             ] * len(rejected_tokens["prompt_input_ids"])
 
             for k, toks in {
-                "chosen": chosen_sequence_tokens,
-                "rejected": rejected_sequence_tokens,
+                "chosen_": chosen_sequence_tokens,
+                "rejected_": rejected_sequence_tokens,
+                "": prompt_tokens
             }.items():
                 for type_key, tokens in toks.items():
                     if type_key == "token_type_ids":
                         continue
-                    batch[f"{k}_{type_key}"] = tokens
+                    batch[f"{k}{type_key}"] = tokens
 
         else:
             chosen_tokens = self.tokenizer(
