@@ -602,7 +602,7 @@ class DPOTrainer(Trainer):
             # if that's still too long, truncate the response
             for answer_tokens in [chosen_tokens, rejected_tokens]:
                 if len(answer_tokens["prompt_input_ids"]) + longer_response_length > self.max_length:
-                    for k in ["prompt_input_ids", "prompt_attention_mask"]:
+                    for k in ["input_ids", "attention_mask"]:
                         answer_tokens[k] = answer_tokens[k][: self.max_length - self.max_prompt_length]
 
             # Create labels
