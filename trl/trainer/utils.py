@@ -453,7 +453,7 @@ class DPODataCollatorWithPadding:
                     if "prompt" in k:
                         to_pad = [torch.LongTensor(ex[k][::-1]) for ex in batch]
                     else:
-                        to_pad = [torch.LongTensor(ex[k]) for ex in batch]
+                        to_pad = [torch.LongTensor(ex[k][:-1]) for ex in batch]
                     if k.endswith("_input_ids"):
                         padding_value = self.tokenizer.pad_token_id
                     elif k.endswith("_labels"):
