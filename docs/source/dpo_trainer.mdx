@@ -89,6 +89,8 @@ The [IPO](https://arxiv.org/abs/2310.12036) authors provide a deeper theoretical
 
 The [cDPO](https://ericmitchell.ai/cdpo.pdf) is a tweak on the DPO loss where we assume that the preference labels are noisy with some probability that can be passed to the `DPOTrainer` via `label_smoothing` argument (between 0 and 0.5) and then a conservative DPO loss is used.
 
+The [KTO](https://github.com/ContextualAI/HALOs/blob/main/assets/report.pdf) loss is derived to directly maximize the utility of LLM generations instead of the log-likelihood of prefereces. 
+
 ## Logging
 
 While training and evaluating we record the following reward metrics:
