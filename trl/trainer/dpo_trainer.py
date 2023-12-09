@@ -65,9 +65,9 @@ class DPOTrainer(Trainer):
         beta (`float`, defaults to 0.1):
             The beta factor in DPO loss. Higher beta means less divergence from the initial policy. For the IPO loss, beta is the regularization parameter denoted by tau in the paper.
         label_smoothing (`float`, defaults to 0):
-            The robust DPO label smoothing parameter that should be between 0 and 0.5.
+            The robust DPO label smoothing parameter from the [cDPO](https://ericmitchell.ai/cdpo.pdf) report that should be between 0 and 0.5.
         loss_type (`str`, defaults to `"sigmoid"`):
-            The type of DPO loss to use. Either `"sigmoid"` the default DPO loss,`"hinge"` loss from SLiC paper, `"ipo"` from IPO paper, or `"kto"` from the HALOs paper.
+            The type of DPO loss to use. Either `"sigmoid"` the default DPO loss,`"hinge"` loss from [SLiC](https://arxiv.org/abs/2305.10425) paper, `"ipo"` from [IPO](https://arxiv.org/abs/2310.12036) paper, or `"kto"` from the HALOs [report](https://github.com/ContextualAI/HALOs/blob/main/assets/report.pdf).
         args (`transformers.TrainingArguments`):
             The arguments to use for training.
         data_collator (`transformers.DataCollator`):
