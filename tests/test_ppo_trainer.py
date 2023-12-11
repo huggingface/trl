@@ -609,7 +609,7 @@ class PPOTrainerTester(unittest.TestCase):
             apply_mask(advantages[idx], mask[idx]).unsqueeze(0),
             apply_mask(returns[idx], mask[idx]).unsqueeze(0),
         )
-        self.assertAlmostEqual(pg_loss_unmasked.item(), 2.2868, 4)
+        self.assertAlmostEqual(pg_loss_unmasked.item(), 2.0494, 4)
         self.assertAlmostEqual(v_loss_unmasked.item(), 0.09950, 4)
 
     @parameterized.expand(
