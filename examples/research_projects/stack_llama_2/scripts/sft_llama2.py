@@ -8,7 +8,7 @@ from accelerate import Accelerator
 from datasets import load_dataset
 from peft import AutoPeftModelForCausalLM, LoraConfig
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TrainingArguments, HfArgumentParser
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, HfArgumentParser, TrainingArguments
 
 from trl import SFTTrainer
 from trl.import_utils import is_xpu_available
@@ -52,6 +52,7 @@ if training_args.group_by_length and script_args.packing:
 # `gradient_checkpointing=True` will cause `Variable._execution_engine.run_backward`.
 if training_args.gradient_checkpointing:
     raise ValueError("gradient_checkpointing not supported")
+
 
 def chars_token_ratio(dataset, tokenizer, nb_examples=400):
     """
