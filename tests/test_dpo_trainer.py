@@ -81,7 +81,7 @@ class DPOTrainerTester(unittest.TestCase):
         return Dataset.from_dict(dummy_dataset_dict)
 
     @parameterized.expand(
-        [["gpt2", "sigmoid", True], ["t5", "hinge", False], ["gpt2", "ipo", False], ["t5", "ipo", True]]
+        [["gpt2", "sigmoid", True], ["t5", "hinge", False], ["gpt2", "ipo", False], ["t5", "ipo", True], ["gpt2", "kto", True], ["t5", "kto", False]]
     )
     def test_dpo_trainer(self, name, loss_type, pre_compute):
         with tempfile.TemporaryDirectory() as tmp_dir:

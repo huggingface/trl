@@ -18,7 +18,7 @@ from copy import deepcopy
 
 import torch
 import torch.nn as nn
-from accelerate import Accelerator
+from accelerate import PartialState
 from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError, HFValidationError, LocalEntryNotFoundError
 from safetensors.torch import load_file as safe_load_file
@@ -386,18 +386,18 @@ class PreTrainedModelWrapper(nn.Module):
     @classmethod
     def _get_current_device(cls):
         r"""
-        Get the current device. For GPU, we return the local process index using the `Accelerator`
+        Get the current device. For GPU, we return the local process index using the `accelerate.PartialState`
         object to handle corner cases when running scripts in distributed environments.
 
         Returns:
             current_device (`Union[int, str]`):
                 The current device.
         """
-        dummy_accelerator = Accelerator()
+        state = PartialState()
         if is_xpu_available():
-            return f"xpu:{dummy_accelerator.local_process_index}"
+            return f"xpu:{state.local_process_index}"
         else:
-            return dummy_accelerator.local_process_index if torch.cuda.is_available() else "cpu"
+            return state.local_process_index if torch.cuda.is_available() else "cpu"
 
     @classmethod
     def _split_kwargs(cls, kwargs):
@@ -444,6 +444,7 @@ class PreTrainedModelWrapper(nn.Module):
         pretrained_model.train()
 
         filename = os.path.join(adapter_model_id, "adapter_model.bin")
+        safe_loading = False
         if not os.path.exists(filename):
             try:
                 local_filename = hf_hub_download(
@@ -452,13 +453,28 @@ class PreTrainedModelWrapper(nn.Module):
                     token=token,
                 )
             except:  # noqa
-                raise ValueError(
-                    "Could not find adapter model in the Hub, make sure you have the correct adapter model id."
-                )
+                filename = os.path.join(adapter_model_id, "adapter_model.safetensors")
+                safe_loading = True
+                if not os.path.exists(filename):
+                    try:
+                        local_filename = hf_hub_download(
+                            adapter_model_id,
+                            "adapter_model.safetensors",
+                            token=token,
+                        )
+                    except:  # noqa
+                        raise ValueError(
+                            "Could not find adapter model in the Hub, make sure you have the correct adapter model id."
+                        )
+                else:
+                    local_filename = filename
         else:
             local_filename = filename
 
-        adapter_state_dict = torch.load(local_filename, map_location="cpu")
+        loading_func = safe_load_file if safe_loading else torch.load
+        load_kwargs = {} if safe_loading else {"map_location": "cpu"}
+
+        adapter_state_dict = loading_func(local_filename, **load_kwargs)
 
         for score_name_candidate in cls.supported_rm_modules:
             if any([score_name_candidate in name for name in adapter_state_dict.keys()]):

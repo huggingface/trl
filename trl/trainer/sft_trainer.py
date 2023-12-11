@@ -72,9 +72,10 @@ class SFTTrainer(Trainer):
         tokenizer (Optional[`transformers.PreTrainedTokenizer`]):
             The tokenizer to use for training. If not specified, the tokenizer associated to the model will be used.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
-                The model initializer to use for training. If None is specified, the default model initializer will be used.
-        compute_metrics (`Callable[[transformers.EvalPrediction], Dict]`, *optional* defaults to `compute_accuracy`):
-            The metrics to use for evaluation. If no metrics are specified, the default metric (`compute_accuracy`) will be used.
+            The model initializer to use for training. If None is specified, the default model initializer will be used.
+        compute_metrics (`Callable[[transformers.EvalPrediction], Dict]`, *optional* defaults to None):
+            The function used to compute metrics during evaluation. It should return a dictionary mapping metric names to metric values.
+            If not specified, only the loss will be computed during evaluation.
         callbacks (`List[transformers.TrainerCallback]`):
             The callbacks to use for training.
         optimizers (`Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
@@ -175,14 +176,19 @@ class SFTTrainer(Trainer):
                         inspect.signature(prepare_model_for_kbit_training).parameters
                     )
 
-                    preprare_model_kwargs = {"use_gradient_checkpointing": args.gradient_checkpointing}
+                    preprare_model_kwargs = {
+                        "use_gradient_checkpointing": getattr(args, "gradient_checkpointing", False)
+                    }
 
                     if _support_gc_kwargs:
-                        preprare_model_kwargs["gradient_checkpointing_kwargs"] = args.gradient_checkpointing_kwargs
+                        preprare_model_kwargs["gradient_checkpointing_kwargs"] = getattr(
+                            args, "gradient_checkpointing_kwargs", None
+                        )
 
                     model = prepare_model_for_kbit_training(model, **preprare_model_kwargs)
 
-                    args = dataclasses.replace(args, gradient_checkpointing=False)
+                    if args is not None:
+                        args = dataclasses.replace(args, gradient_checkpointing=False)
                 elif getattr(args, "gradient_checkpointing", False):
                     # For backward compatibility with older versions of transformers
                     if hasattr(model, "enable_input_require_grads"):
@@ -247,16 +253,21 @@ class SFTTrainer(Trainer):
                 chars_per_token,
             )
         if eval_dataset is not None:
-            eval_dataset = self._prepare_dataset(
-                eval_dataset,
-                tokenizer,
-                packing,
-                dataset_text_field,
-                max_seq_length,
-                formatting_func,
-                num_of_sequences,
-                chars_per_token,
-            )
+            _multiple = isinstance(eval_dataset, dict)
+            _eval_datasets = eval_dataset if _multiple else {"singleton": eval_dataset}
+            for _eval_dataset_name, _eval_dataset in _eval_datasets.items():
+                _eval_datasets[_eval_dataset_name] = self._prepare_dataset(
+                    _eval_dataset,
+                    tokenizer,
+                    packing,
+                    dataset_text_field,
+                    max_seq_length,
+                    formatting_func,
+                    num_of_sequences,
+                    chars_per_token,
+                )
+            if not _multiple:
+                eval_dataset = _eval_datasets["singleton"]
 
         if tokenizer.padding_side is not None and tokenizer.padding_side != "right":
             warnings.warn(
