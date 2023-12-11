@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import List, Optional
 
 import torch
 from accelerate import Accelerator
@@ -73,6 +73,8 @@ class ScriptArguments:
         },
     )
     hub_model_id: Optional[str] = field(default=None, metadata={"help": "The name of the model on HF Hub"})
+    mixed_precision: Optional[str] = field(default="bf16", metadata={"help": "Mixed precision training"})
+    target_modules: Optional[List[str]] = field(default=None, metadata={"help": "Target modules for LoRA adapters"})
 
 
 parser = HfArgumentParser(ScriptArguments)
@@ -135,6 +137,7 @@ if script_args.use_peft:
         lora_alpha=script_args.peft_lora_alpha,
         bias="none",
         task_type="CAUSAL_LM",
+        target_modules=script_args.target_modules,
     )
 else:
     peft_config = None
