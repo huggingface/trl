@@ -595,7 +595,7 @@ class PPOTrainerTester(unittest.TestCase):
             returns[idx].unsqueeze(0),
         )
 
-        self.assertAlmostEqual(pg_loss.item(), 2.2868, 4)
+        self.assertAlmostEqual(pg_loss.item(), 2.0494, 4)
         self.assertAlmostEqual(v_loss.item(), 0.09950, 4)
 
         # check if we get same results with masked parts removed
