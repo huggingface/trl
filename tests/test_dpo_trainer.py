@@ -51,6 +51,8 @@ class DPOTrainerTester(unittest.TestCase):
                 "Which is the best programming language?",
                 "Which is the best programming language?",
                 "Which is the best programming language?",
+                "[INST] How is the stock price? [/INST]",
+                "[INST] How is the stock price? [/INST] ",
             ],
             "chosen": [
                 "hi nice to meet you",
@@ -60,6 +62,8 @@ class DPOTrainerTester(unittest.TestCase):
                 "Python",
                 "Python",
                 "Python",
+                "$46 as of 10am EST",
+                "46 as of 10am EST",
             ],
             "rejected": [
                 "leave me alone",
@@ -69,15 +73,24 @@ class DPOTrainerTester(unittest.TestCase):
                 "Javascript",
                 "C++",
                 "Java",
+                " $46 as of 10am EST",
+                " 46 as of 10am EST",
             ],
         }
         # fmt: on
         return Dataset.from_dict(dummy_dataset_dict)
 
     @parameterized.expand(
-        [["gpt2", "sigmoid"], ["t5", "hinge"], ["gpt2", "ipo"], ["t5", "ipo"], ["gpt2", "kto"], ["t5", "kto"]]
+        [
+            ["gpt2", "sigmoid", True],
+            ["t5", "hinge", False],
+            ["gpt2", "ipo", False],
+            ["t5", "ipo", True],
+            ["gpt2", "kto", True],
+            ["t5", "kto", False],
+        ]
     )
-    def test_dpo_trainer(self, name, loss_type):
+    def test_dpo_trainer(self, name, loss_type, pre_compute):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
                 output_dir=tmp_dir,
@@ -109,6 +122,7 @@ class DPOTrainerTester(unittest.TestCase):
                 tokenizer=tokenizer,
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
+                precompute_ref_log_probs=pre_compute,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -146,6 +160,7 @@ class DPOTrainerTester(unittest.TestCase):
                 tokenizer=self.tokenizer,
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
+                precompute_ref_log_probs=True,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -196,6 +211,7 @@ class DPOTrainerTester(unittest.TestCase):
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
                 peft_config=lora_config,
+                precompute_ref_log_probs=True,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -283,6 +299,7 @@ class DPOTrainerTester(unittest.TestCase):
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
                 peft_config=lora_config,
+                precompute_ref_log_probs=True,
             )
 
             # train the model

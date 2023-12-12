@@ -22,6 +22,7 @@ from typing import Dict, Optional
 
 import torch
 from datasets import Dataset, load_dataset
+from peft import LoraConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, TrainingArguments
 
 from trl import DPOTrainer
@@ -51,6 +52,10 @@ class ScriptArguments:
     )
     label_pad_token_id: Optional[int] = field(default=-100, metadata={"help": "label for non response tokens"})
     max_steps: Optional[int] = field(default=1000, metadata={"help": "max number of training steps"})
+    # lora parameters
+    use_peft: Optional[bool] = field(default=True, metadata={"help": "Wether to use PEFT or not to train adapters"})
+    peft_lora_r: Optional[int] = field(default=64, metadata={"help": "the r parameter of the LoRA adapters"})
+    peft_lora_alpha: Optional[int] = field(default=16, metadata={"help": "the alpha parameter of the LoRA adapters"})
     # instrumentation
     sanity_check: Optional[bool] = field(default=True, metadata={"help": "only train on 1000 samples"})
     report_to: Optional[str] = field(
@@ -163,6 +168,16 @@ if __name__ == "__main__":
         # gradient_checkpointing_kwargs=script_args.gradient_checkpointing_kwargs,
     )
 
+    if script_args.use_peft:
+        peft_config = LoraConfig(
+            r=script_args.peft_lora_r,
+            lora_alpha=script_args.peft_lora_alpha,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+    else:
+        peft_config = None
+
     # 5. initialize the DPO trainer
     dpo_trainer = DPOTrainer(
         model,
@@ -176,6 +191,7 @@ if __name__ == "__main__":
         max_target_length=script_args.max_target_length,
         max_prompt_length=script_args.max_prompt_length,
         generate_during_eval=True,
+        peft_config=peft_config,
     )
 
     # 6. train
