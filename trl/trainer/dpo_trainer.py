@@ -353,6 +353,13 @@ class DPOTrainer(Trainer):
                 "Your `Trainer` does not have an `accelerator` object. Consider upgrading `transformers`."
             )
 
+        # Deepspeed Zero-3 does not support precompute_ref_log_probs
+        if self.is_deepspeed_enabled:
+            if self.accelerator.state.deepspeed_plugin.zero_stage == 3 and self.precompute_ref_log_probs:
+                raise ValueError(
+                    "You cannot use `precompute_ref_log_probs=True` with Deepspeed ZeRO-3. Please set `precompute_ref_log_probs=False`."
+                )
+
         if self.ref_model is None:
             if not (self.is_peft_model or self.precompute_ref_log_probs):
                 raise ValueError(
