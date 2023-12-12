@@ -40,7 +40,7 @@ class ScriptArguments:
         default="timdettmers/openassistant-guanaco", metadata={"help": "the dataset name"}
     )
     dataset_text_field: Optional[str] = field(default="text", metadata={"help": "the text field of the dataset"})
-    log_with: Optional[str] = field(default="none", metadata={"help": "use 'wandb' to log with wandb"})
+    report_to: Optional[str] = field(default="none", metadata={"help": "use 'wandb' to log with wandb"})
     learning_rate: Optional[float] = field(default=1.41e-5, metadata={"help": "the learning rate"})
     batch_size: Optional[int] = field(default=64, metadata={"help": "the batch size"})
     seq_length: Optional[int] = field(default=512, metadata={"help": "Input sequence length"})
@@ -120,7 +120,7 @@ training_args = TrainingArguments(
     logging_steps=script_args.logging_steps,
     num_train_epochs=script_args.num_train_epochs,
     max_steps=script_args.max_steps,
-    report_to=script_args.log_with,
+    report_to=script_args.report_to,
     save_steps=script_args.save_steps,
     save_total_limit=script_args.save_total_limit,
     push_to_hub=script_args.push_to_hub,
