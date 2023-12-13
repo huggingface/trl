@@ -52,7 +52,7 @@ from ..core import (
     stack_dicts,
     stats_to_np,
 )
-from ..import_utils import is_torch_greater_2_0, is_xpu_available
+from ..import_utils import is_npu_available, is_torch_greater_2_0, is_xpu_available
 from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper, create_reference_model
 from . import AdaptiveKLController, BaseTrainer, FixedKLController, PPOConfig, RunningMoments
 
@@ -349,6 +349,8 @@ class PPOTrainer(BaseTrainer):
         else:
             if is_xpu_available():
                 self.current_device = torch.device("xpu:0")
+            elif is_npu_available():
+                self.current_device = torch.device("npu:0")
             else:
                 self.current_device = torch.device("cuda:0")
 
