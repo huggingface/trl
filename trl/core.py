@@ -39,17 +39,17 @@ WANDB_PADDING = -1
 def flatten_dict(nested: Dict, sep: str = "/") -> Dict:
     """Flatten dictionary and concatenate nested keys with separator."""
 
-    def rec(nest: Dict, prefix: str, into: Dict) -> None:
+    def recurse(nest: Dict, prefix: str, into: Dict) -> None:
         for k, v in nest.items():
             if sep in k:
                 raise ValueError(f"separator '{sep}' not allowed to be in key '{k}'")
             if isinstance(v, Mapping):
-                rec(v, prefix + k + sep, into)
+                recurse(v, prefix + k + sep, into)
             else:
                 into[prefix + k] = v
 
     flat = {}
-    rec(nested, "", flat)
+    recurse(nested, "", flat)
     return flat
 
 
@@ -151,7 +151,7 @@ def masked_whiten(values: torch.Tensor, mask: torch.Tensor, shift_mean: bool = T
 
 def clip_by_value(x: torch.Tensor, tensor_min: float, tensor_max: float) -> torch.Tensor:
     """
-    Tensor extenstion to torch.clamp
+    Tensor extension to torch.clamp
     https://github.com/pytorch/pytorch/issues/2793#issuecomment-428784713
     """
     clipped = torch.max(torch.min(x, tensor_max), tensor_min)
@@ -287,10 +287,10 @@ class PPODecorators(object):
 
 def randn_tensor(
     shape: Union[Tuple, List],
-    generator: Optional[Union[List["torch.Generator"], "torch.Generator"]] = None,
-    device: Optional["torch.device"] = None,
-    dtype: Optional["torch.dtype"] = None,
-    layout: Optional["torch.layout"] = None,
+    generator: Optional[Union[List[torch.Generator], torch.Generator]] = None,
+    device: Optional[torch.device] = None,
+    dtype: Optional[torch.dtype] = None,
+    layout: Optional[torch.layout] = None,
 ) -> torch.Tensor:
     """A helper function to create random tensors on the desired `device` with the desired `dtype`. When
     passing a list of generators, you can seed each batch size individually. If CPU generators are passed, the tensor
