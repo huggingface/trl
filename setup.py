@@ -105,7 +105,7 @@ setup(
     long_description_content_type="text/markdown",
     zip_safe=False,
     version=__version__,
-    description="A Pytorch implementation of Proximal Policy Optimization for transfomer language models.",
+    description="Train transformer language models with reinforcement learning.",
     keywords="ppo, transformers, huggingface, gpt2, language modeling, rlhf",
     author="Leandro von Werra",
     author_email="leandro.vonwerra@gmail.com",
