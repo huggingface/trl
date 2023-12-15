@@ -25,7 +25,7 @@ from transformers import AutoTokenizer, pipeline
 
 from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead, PPOConfig, PPOTrainer, set_seed
 from trl.core import LengthSampler
-from trl.import_utils import is_xpu_available
+from trl.import_utils import is_npu_available, is_xpu_available
 
 
 tqdm.pandas()
@@ -157,6 +157,8 @@ device = ppo_trainer.accelerator.device
 if ppo_trainer.accelerator.num_processes == 1:
     if is_xpu_available():
         device = "xpu:0"
+    elif is_npu_available():
+        device = "npu:0"
     else:
         device = 0 if torch.cuda.is_available() else "cpu"  # to avoid a `pipeline` bug
 ds_plugin = ppo_trainer.accelerator.state.deepspeed_plugin
