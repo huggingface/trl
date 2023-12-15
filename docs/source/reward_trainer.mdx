@@ -29,7 +29,7 @@ You should pass an `AutoModelForSequenceClassification` model to the [`RewardTra
 Just pass a `peft_config` in the keyword arguments of [`RewardTrainer`], and the trainer should automatically take care of converting the model into a PEFT model!
 
 ```python
-from peft import LoraConfig, task_type
+from peft import LoraConfig, TaskType
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from trl import RewardTrainer, RewardConfig
 
