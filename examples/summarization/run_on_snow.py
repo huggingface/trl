@@ -46,6 +46,9 @@ def run_exp(exp_dict, savedir, args):
     elif exp_name.startswith("pseudo"):
         exp_dict.pop("save_strategy", None)
         accelerate_launch("inference_pseudolabel.py", exp_dict, args)
+    elif exp_name.startswith("create_rlhf"):
+        exp_dict.pop("save_strategy", None)
+        accelerate_launch("create_rlhf_dataset.py", exp_dict, args)
     else:
         raise Exception(f"Config file {exp_name} does not start with one of the correct prefixes")
 
