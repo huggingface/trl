@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import bitsandbytes as bnb
 import torch
 from accelerate import Accelerator
-from datasets import load_dataset
+from datasets import concatenate_datasets, load_dataset
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from peft.tuners.lora import LoraLayer
 from torch.utils.data import DataLoader
@@ -58,6 +58,9 @@ class ScriptArguments:
         default="test", metadata={"help": "the dataset split to evaluate on; default to 'none' (no evaluation)"}
     )
     beta: Optional[float] = field(default=0.1, metadata={"help": "the beta parameter for DPO loss"})
+
+    pseudo_dataset_name: Optional[str] = field(default=None, metadata={"help": "the dataset name"})
+    pseudo_dataset_split: Optional[str] = field(default="train", metadata={"help": "the dataset name"})
 
     # model parameters
     model_name: Optional[str] = field(default="gpt2", metadata={"help": "the model name"})
@@ -270,9 +273,25 @@ def create_and_prepare_model(args):
     return model, tokenizer, gold_model
 
 
+def strip_prompt(examples):
+    examples["prompt"] = [prompt.strip() for prompt in examples["prompt"]]
+
+    return examples
+
+
 def create_and_prepare_dataset(args):
     train_dataset = load_dataset(args.dataset_name, split=args.train_split)
     eval_dataset = load_dataset(args.dataset_name, split=args.eval_split)
+
+    if args.pseudo_dataset_name is not None:
+        all_train_datasets = [train_dataset]
+        pseudo_dataset_names = args.pseudo_dataset_name.split(",")
+        for ds_name in pseudo_dataset_names:
+            dataset = load_dataset(ds_name, split=args.pseudo_dataset_split)
+            dataset = dataset.map(strip_prompt, batched=True)
+            all_train_datasets.append(dataset)
+
+        train_dataset = concatenate_datasets(all_train_datasets)
 
     return train_dataset, eval_dataset
 
@@ -482,11 +501,6 @@ if __name__ == "__main__":
         script_args.gold_dataset_name,
         split=script_args.gold_eval_split,
     )
-
-    def strip_prompt(examples):
-        examples["prompt"] = [prompt.strip() for prompt in examples["prompt"]]
-
-        return examples
 
     gold_eval_dataset = gold_eval_dataset.map(strip_prompt, batched=True)
 
