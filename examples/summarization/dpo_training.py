@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # import random
+import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -149,7 +150,7 @@ class ScriptArguments:
         default="CarperAI/openai_summarize_tldr", metadata={"help": "the dataset name"}
     )
     gold_eval_split: Optional[str] = field(default="valid")
-    just_eval: Optional[bool] = field(default=False)
+    mode: Optional[str] = field(default="train")
 
 
 def find_all_linear_names(args, model):
@@ -556,9 +557,63 @@ if __name__ == "__main__":
         dpo_trainer.add_callback(gold_eval_callback)
 
     # 6. train
-    if not script_args.just_eval:
+    if script_args.mode == "train":
         last_checkpoint = get_last_checkpoint(script_args.output_dir)
         dpo_trainer.train(resume_from_checkpoint=last_checkpoint)
-    else:
+    elif script_args.mode == "eval":
         results = dpo_trainer.evaluate()
         print(results)
+    elif script_args.mode == "relabel":
+
+        def relabel_with_preds(batch: Dict[str, List]):
+            relabel_batch = {
+                "prompt": [],
+                "chosen": [],
+                "rejected": [],
+            }
+            for prompt, chosen, rejected, pred_chosen, pred_rejected in zip(
+                batch["prompt"],
+                batch["chosen"],
+                batch["rejected"],
+                batch["pred_chosen"],
+                batch["pred_rejected"],
+            ):
+                relabel_batch["prompt"].append(prompt)
+                if pred_chosen >= pred_rejected:
+                    relabel_batch["chosen"].append(chosen)
+                    relabel_batch["rejected"].append(rejected)
+                else:
+                    relabel_batch["chosen"].append(rejected)
+                    relabel_batch["rejected"].append(chosen)
+
+            return relabel_batch
+
+        dpo_trainer.accelerator.print(f"Prediction {script_args.eval_split}")
+        preds, _, metrics = dpo_trainer.predict(eval_dataset)
+        (
+            chosen_rewards,
+            rejected_rewards,
+            policy_chosen_logps,
+            policy_rejected_logps,
+            reference_chosen_logps,
+            reference_rejected_logps,
+        ) = preds
+        dpo_trainer.accelerator.print(f"metrics {metrics}")
+
+        if dpo_trainer.accelerator.is_local_main_process:
+            print("Relabelling Dataset and Saving")
+            dataset = load_dataset(script_args.dataset_name, split=script_args.eval_split)
+            dataset = dataset.add_column("pred_chosen", chosen_rewards)
+            dataset = dataset.add_column("pred_rejected", rejected_rewards)
+
+            relabel_dataset = dataset.map(
+                relabel_with_preds, batched=True, remove_columns=["pred_chosen", "pred_rejected"]
+            )
+
+            relabel_dataset._info.description = f"{script_args.dataset_name} relabelled with {script_args.model_name}"
+
+        if dpo_trainer.accelerator.is_local_main_process:
+            print("Saving")
+            relabel_dataset.save_to_disk(script_args.output_dir)
+            print("Pushing")
+            relabel_dataset.push_to_hub(os.path.basename(script_args.output_dir), split=script_args.eval_split)
