@@ -112,7 +112,7 @@ class ScriptArguments:
     output_dir: Optional[str] = field(default="results", metadata={"help": "the output directory"})
     logging_steps: Optional[int] = field(default=100, metadata={"help": "the number of update steps between two logs"})
     log_n_samples_during_eval: Optional[int] = field(default=100)
-    eval_steps: Optional[int] = field(default=1000, metadata={"help": "the number of steps to eval at"})
+    eval_steps: Optional[int] = field(default=None, metadata={"help": "the number of steps to eval at"})
     save_steps: Optional[int] = field(default=1000, metadata={"help": "the number of steps to save at"})
     save_strategy: Optional[str] = field(default="steps")
     report_to: Optional[str] = field(
@@ -469,7 +469,7 @@ if __name__ == "__main__":
         remove_unused_columns=False,
         gradient_accumulation_steps=script_args.gradient_accumulation_steps,
         learning_rate=script_args.learning_rate,
-        evaluation_strategy="steps",
+        evaluation_strategy="epoch" if script_args.eval_steps is None else "steps",
         save_strategy=script_args.save_strategy,
         logging_first_step=True,
         logging_steps=script_args.logging_steps,
