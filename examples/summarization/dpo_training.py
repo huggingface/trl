@@ -20,7 +20,7 @@ import bitsandbytes as bnb
 import torch
 from accelerate import Accelerator
 from datasets import concatenate_datasets, load_dataset
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+from peft import AutoPeftModelForCausalLM, LoraConfig, PeftConfig, get_peft_model, prepare_model_for_kbit_training
 from peft.tuners.lora import LoraLayer
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
@@ -95,6 +95,7 @@ class ScriptArguments:
     warmup_steps: Optional[int] = field(default=150)
     learning_rate: Optional[float] = field(default=1e-3, metadata={"help": "optimizer learning rate"})
     per_device_train_batch_size: Optional[int] = field(default=4, metadata={"help": "batch size per device"})
+    per_device_eval_batch_size: Optional[int] = field(default=8, metadata={"help": "batch size per device"})
     gradient_accumulation_steps: Optional[int] = field(
         default=1, metadata={"help": "the number of gradient accumulation steps"}
     )
@@ -104,6 +105,7 @@ class ScriptArguments:
         default=48, metadata={"help": "Only used for encoder decoder model. Max target of each sample's prompt"}
     )
     num_train_epochs: Optional[int] = field(default=1, metadata={"help": "the number of training epochs"})
+    max_steps: Optional[int] = field(default=-1)
     gradient_checkpointing: Optional[bool] = field(
         default=False, metadata={"help": "whether to use gradient checkpointing"}
     )
@@ -184,7 +186,15 @@ def create_and_prepare_model(args):
     else:
         dtype = torch.float32
 
-    model = AutoModelForCausalLM.from_pretrained(
+    if "adapter" in args.model_name:
+        model_cls = AutoPeftModelForCausalLM
+        config = PeftConfig.from_pretrained(args.model_name)
+        tokenizer_name = config.base_model_name_or_path
+    else:
+        model_cls = AutoModelForCausalLM
+        tokenizer_name = args.model_name
+
+    model = model_cls.from_pretrained(
         args.model_name,
         quantization_config=quantization_config,
         device_map=device_map,
@@ -236,7 +246,7 @@ def create_and_prepare_model(args):
                     module = module.to(torch.bfloat16)
 
     # tokenizer_name = script_args.model_name if script_args.tokenizer_name is None else script_args.tokenizer_name
-    tokenizer = AutoTokenizer.from_pretrained(script_args.model_name)
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
     # tokenizer.truncation_side = "left"
     if getattr(tokenizer, "pad_token", None) is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -244,11 +254,15 @@ def create_and_prepare_model(args):
     if getattr(model.config, "pad_token_id", None) is None:
         model.config.pad_token_id = model.config.eos_token_id
 
+    return model, tokenizer
+
+
+def create_and_prepare_gold_model(args):
     if script_args.gold_in_8bit or script_args.gold_in_4bit:
         gold_quantization_config = BitsAndBytesConfig(
             load_in_8bit=script_args.gold_in_8bit, load_in_4bit=script_args.gold_in_4bit
         )
-        device_map = {"": Accelerator().local_process_index}
+        gold_device_map = {"": Accelerator().local_process_index}
     else:
         gold_device_map = None
         gold_quantization_config = None
@@ -270,7 +284,7 @@ def create_and_prepare_model(args):
     if getattr(gold_model.config, "pad_token_id", None) is None:
         gold_model.config.pad_token_id = gold_model.config.eos_token_id
 
-    return model, tokenizer, gold_model
+    return gold_model
 
 
 def strip_prompt(examples):
@@ -451,7 +465,7 @@ if __name__ == "__main__":
     script_args = parser.parse_args_into_dataclasses()[0]
 
     # 1. load a pretrained model
-    model, tokenizer, gold_model = create_and_prepare_model(script_args)
+    model, tokenizer = create_and_prepare_model(script_args)
 
     if script_args.ignore_bias_buffers:
         # torch distributed hack
@@ -465,7 +479,9 @@ if __name__ == "__main__":
     training_args = TrainingArguments(
         output_dir=script_args.output_dir,
         per_device_train_batch_size=script_args.per_device_train_batch_size,
+        per_device_eval_batch_size=script_args.per_device_eval_batch_size,
         num_train_epochs=script_args.num_train_epochs,
+        max_steps=script_args.max_steps,
         remove_unused_columns=False,
         gradient_accumulation_steps=script_args.gradient_accumulation_steps,
         learning_rate=script_args.learning_rate,
@@ -497,60 +513,52 @@ if __name__ == "__main__":
     )
 
     # Gold Eval
-    gold_eval_dataset = load_dataset(
-        script_args.gold_dataset_name,
-        split=script_args.gold_eval_split,
-    )
-
-    gold_eval_dataset = gold_eval_dataset.map(strip_prompt, batched=True)
-
-    if script_args.generate_greedy:
-        generation_config = GenerationConfig(
-            max_new_tokens=script_args.max_target_length,
-            do_sample=False,
-            num_beams=1,
-            eos_token_id=tokenizer.eos_token_id,
-            pad_token_id=tokenizer.eos_token_id,
+    if script_args.gold_model_name is not None:
+        gold_model = create_and_prepare_gold_model(script_args)
+        gold_eval_dataset = load_dataset(
+            script_args.gold_dataset_name,
+            split=script_args.gold_eval_split,
         )
-    else:
-        generation_config = GenerationConfig(
-            max_new_tokens=script_args.max_target_length,
-            min_length=-1,
-            top_k=0.0,
-            top_p=1.0,
-            do_sample=True,
-            eos_token_id=tokenizer.eos_token_id,
-            pad_token_id=tokenizer.eos_token_id,
-        )
-    # gold_eval_dataset = gold_eval_dataset.map(
-    #     tokenizer,
-    #     input_columns=["prompt"],
-    #     batched=True,
-    #     fn_kwargs=dict(
-    #         truncation=True,
-    #         padding=False,
-    #         max_length=script_args.max_length,
-    #         return_overflowing_tokens=False,
-    #         return_length=False,
-    #     ),
-    # )
-    gold_eval_callback = GoldModelRewardCallback(
-        training_args,
-        gold_model,
-        gold_eval_dataset,
-        tokenizer,
-        dpo_trainer.accelerator,
-        script_args.max_length,
-        script_args.max_prompt_length,
-        script_args.log_n_samples_during_eval,
-        generation_config,
-    )
 
-    dpo_trainer.add_callback(gold_eval_callback)
+        gold_eval_dataset = gold_eval_dataset.map(strip_prompt, batched=True)
+
+        if script_args.generate_greedy:
+            generation_config = GenerationConfig(
+                max_new_tokens=script_args.max_target_length,
+                do_sample=False,
+                num_beams=1,
+                eos_token_id=tokenizer.eos_token_id,
+                pad_token_id=tokenizer.eos_token_id,
+            )
+        else:
+            generation_config = GenerationConfig(
+                max_new_tokens=script_args.max_target_length,
+                min_length=-1,
+                top_k=0.0,
+                top_p=1.0,
+                do_sample=True,
+                eos_token_id=tokenizer.eos_token_id,
+                pad_token_id=tokenizer.eos_token_id,
+            )
+
+        gold_eval_callback = GoldModelRewardCallback(
+            training_args,
+            gold_model,
+            gold_eval_dataset,
+            tokenizer,
+            dpo_trainer.accelerator,
+            script_args.max_length,
+            script_args.max_prompt_length,
+            script_args.log_n_samples_during_eval,
+            generation_config,
+        )
+
+        dpo_trainer.add_callback(gold_eval_callback)
 
     # 6. train
     if not script_args.just_eval:
         last_checkpoint = get_last_checkpoint(script_args.output_dir)
         dpo_trainer.train(resume_from_checkpoint=last_checkpoint)
     else:
-        dpo_trainer.evaluate()
+        results = dpo_trainer.evaluate()
+        print(results)

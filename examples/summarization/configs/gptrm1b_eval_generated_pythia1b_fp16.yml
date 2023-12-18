@@ -1,0 +1,11 @@
+dataset_name: mnoukhov/openai_summarize_generated_20k
+model_name: mnoukhov/pythia1b-sft-rm-tldrprompt
+just_eval: True
+use_lora: False
+train_split: train
+eval_split: train
+load_in_8bit: False
+fp16_model: False
+bf16: False
+fp16: True
+per_device_eval_batch_size: 8

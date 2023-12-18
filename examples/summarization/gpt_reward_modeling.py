@@ -457,7 +457,6 @@ elif script_args.predict_relabel:
     #     trainer.accelerator.wait_for_everyone()
     #     results = trainer.evaluate(eval_dataset)
     #     trainer.accelerator.print(results)
-
 else:
     print("Training")
     trainer.train()
