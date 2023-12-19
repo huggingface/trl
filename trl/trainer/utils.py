@@ -204,6 +204,7 @@ class RewardDataCollatorWithPadding:
         return_tensors (`str`, `optional`, defaults to `"pt"`):
             The tensor type to use.
     """
+
     tokenizer: PreTrainedTokenizerBase
     padding: Union[bool, str] = True
     max_length: Optional[int] = None
@@ -281,6 +282,7 @@ class DPODataCollatorWithPadding:
         is_encoder_decoder (`Optional[bool]`, `optional`, defaults to `None`):
             Whether or not you model has an encoder_decoder architecture.
     """
+
     pad_token_id: int = 0
     label_pad_token_id: int = -100
     is_encoder_decoder: Optional[bool] = False
@@ -358,6 +360,8 @@ class ConstantLengthDataset(IterableDataset):
                 Id of the end of sequence token if the passed tokenizer does not have an EOS token.
             shuffle ('bool', *optional*, defaults to True)
                 Shuffle the examples before they are returned
+            append_concat_token ('bool', *optional*, defaults to True)
+                If true, appends `eos_token_id` at the end of each sample being packed.
     """
 
     def __init__(
@@ -372,6 +376,7 @@ class ConstantLengthDataset(IterableDataset):
         chars_per_token=3.6,
         eos_token_id=0,
         shuffle=True,
+        append_concat_token=True,
     ):
         self.tokenizer = tokenizer
 
@@ -388,6 +393,7 @@ class ConstantLengthDataset(IterableDataset):
         self.current_size = 0
         self.max_buffer_size = seq_length * chars_per_token * num_of_sequences
         self.shuffle = shuffle
+        self.append_concat_token = append_concat_token
         if formatting_func is None:
             self.formatting_func = lambda x: x[dataset_text_field]
         else:
@@ -424,7 +430,9 @@ class ConstantLengthDataset(IterableDataset):
             tokenized_inputs = self.tokenizer(buffer, truncation=False)["input_ids"]
             all_token_ids = []
             for tokenized_input in tokenized_inputs:
-                all_token_ids.extend(tokenized_input + [self.concat_token_id])
+                if self.append_concat_token:
+                    tokenized_input = tokenized_input + [self.concat_token_id]
+                all_token_ids.extend(tokenized_input)
             examples = []
             for i in range(0, len(all_token_ids), self.seq_length):
                 input_ids = all_token_ids[i : i + self.seq_length]
@@ -620,3 +628,17 @@ def neftune_post_forward_hook(module, input, output):
         mag_norm = module.neftune_noise_alpha / torch.sqrt(dims)
         output = output + torch.zeros_like(output).uniform_(-mag_norm, mag_norm)
     return output
+
+
+def peft_module_casting_to_bf16(model):
+    from peft.tuners.tuners_utils import BaseTunerLayer
+
+    for name, module in model.named_modules():
+        if isinstance(module, BaseTunerLayer):
+            module = module.to(torch.bfloat16)
+        if "norm" in name:
+            module = module.to(torch.float32)
+        if any(x in name for x in ["lm_head", "embed_tokens", "wte", "wpe"]):
+            if hasattr(module, "weight"):
+                if module.weight.dtype == torch.float32:
+                    module = module.to(torch.bfloat16)
