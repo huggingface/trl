@@ -151,6 +151,7 @@ class ScriptArguments:
     )
     gold_eval_split: Optional[str] = field(default="valid")
     mode: Optional[str] = field(default="train")
+    eval_first_step: Optional[bool] = field(default=True)
 
 
 def find_all_linear_names(args, model):
@@ -555,6 +556,15 @@ if __name__ == "__main__":
         )
 
         dpo_trainer.add_callback(gold_eval_callback)
+
+    if script_args.eval_first_step:
+
+        class EvaluateFirstStepCallback(TrainerCallback):
+            def on_step_end(self, args, state, control, **kwargs):
+                if state.global_step == 1:
+                    control.should_evaluate = True
+
+        dpo_trainer.add_callback(EvaluateFirstStepCallback())
 
     # 6. train
     if script_args.mode == "train":
