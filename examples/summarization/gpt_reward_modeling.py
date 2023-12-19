@@ -198,15 +198,13 @@ class ScriptArguments:
         default=False,
         metadata={"help": "Enables gradient checkpointing."},
     )
-    just_eval: Optional[bool] = field(default=False)
-    # just_predict: Optional[bool] = field(default=False)
+    mode: Optional[str] = field(default="train")
     eval_steps: Optional[float] = field(default=None)
     pretrained_adapter: Optional[str] = field(default=None)
     padding: Optional[str] = field(
         default="max_length", metadata={"help": "padding to use for preprocessing the dataset"}
     )
     save_strategy: Optional[str] = field(default="steps")
-    predict_relabel: Optional[bool] = field(default=False)
 
 
 def find_all_linear_names(args, model):
@@ -350,14 +348,17 @@ parser = HfArgumentParser(ScriptArguments)
 script_args = parser.parse_args_into_dataclasses()[0]
 
 model, tokenizer = create_and_prepare_model(script_args)
-if not script_args.just_eval:
+if script_args.mode != "eval":
     train_data = load_dataset(script_args.dataset_name, split=script_args.train_split)
     train_dataset = prepare_dataset(script_args, train_data, tokenizer)
 else:
     train_dataset = None
 
-eval_data = load_dataset(script_args.dataset_name, split=script_args.eval_split)
-eval_dataset = prepare_dataset(script_args, eval_data, tokenizer)
+if script_args.eval_split is not None and script_args.eval_split != "None":
+    eval_data = load_dataset(script_args.dataset_name, split=script_args.eval_split)
+    eval_dataset = prepare_dataset(script_args, eval_data, tokenizer)
+else:
+    eval_dataset = None
 
 # don't include gradient_checkpointing here, see trl#728
 training_args = TrainingArguments(
@@ -395,12 +396,22 @@ trainer = GPTRewardTrainer(
     data_collator=data_collator,
 )
 
-if script_args.just_eval:
+if script_args.mode == "train":
+    print("Training")
+    trainer.train()
+    trainer.evaluate()
+
+    print("Saving last checkpoint of the model")
+    trainer.save_model(script_args.output_dir)
+
+    output_dir = os.path.join(script_args.output_dir, "final_checkpoint")
+    trainer.model.save_pretrained(output_dir)
+elif script_args.mode == "eval":
     print("Evaluating")
     # results = trainer.evaluate()
     results = trainer.evaluate()
     print(results)
-elif script_args.predict_relabel:
+elif script_args.mode == "relabel":
 
     def relabel_with_preds(batch: Dict[str, List]):
         relabel_batch = {
@@ -427,6 +438,8 @@ elif script_args.predict_relabel:
 
     relabel_dataset = DatasetDict()
     for split, pred_dataset in [("train", train_dataset), ("test", eval_dataset)]:
+        if pred_dataset is None:
+            continue
         trainer.accelerator.print(f"Prediction {split}")
         preds, _, metrics = trainer.predict(pred_dataset)
         trainer.accelerator.print(f"metrics {metrics}")
@@ -448,7 +461,8 @@ elif script_args.predict_relabel:
         relabel_dataset.save_to_disk(script_args.output_dir)
         print("Pushing")
         relabel_dataset.push_to_hub(os.path.basename(script_args.output_dir))
-
+else:
+    raise Exception(f"incorrect mode {script_args.mode}")
     # TODO this freezes for some reason
     # for split, dataset in relabel_dataset.items():
     #     if trainer.accelerator.is_local_main_process:
@@ -457,13 +471,3 @@ elif script_args.predict_relabel:
     #     trainer.accelerator.wait_for_everyone()
     #     results = trainer.evaluate(eval_dataset)
     #     trainer.accelerator.print(results)
-else:
-    print("Training")
-    trainer.train()
-    trainer.evaluate()
-
-    print("Saving last checkpoint of the model")
-    trainer.save_model(script_args.output_dir)
-
-    output_dir = os.path.join(script_args.output_dir, "final_checkpoint")
-    trainer.model.save_pretrained(output_dir)

@@ -1,4 +1,4 @@
-dataset_name: mnoukhov/openai_summarize_generated_20k
+dataset_name: mnoukhov/openai_summarize_generated_20k_relabelled
 model_name: mnoukhov/pythia1b-sft-rm-tldrprompt
 just_eval: True
 use_lora: False
