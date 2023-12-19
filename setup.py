@@ -61,7 +61,7 @@ __version__ = "0.7.5.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1
 
 REQUIRED_PKGS = [
     "torch>=1.4.0",
-    "transformers>=4.18.0",
+    "transformers>=4.31.0",
     "numpy>=1.18.2",
     "accelerate",
     "datasets",
