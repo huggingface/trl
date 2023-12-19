@@ -26,7 +26,7 @@ from transformers.trainer_utils import EvalPrediction
 
 from ..import_utils import is_peft_available
 from .training_configs import RewardConfig
-from .utils import PeftSavingCallback, RewardDataCollatorWithPadding, compute_accuracy
+from .utils import RewardDataCollatorWithPadding, compute_accuracy
 
 
 if is_peft_available():
@@ -146,12 +146,6 @@ class RewardTrainer(Trainer):
                     model = prepare_model_for_kbit_training(model, **preprare_model_kwargs)
 
                 model = get_peft_model(model, peft_config)
-
-        if is_peft_available() and isinstance(model, PeftModel):
-            if callbacks is None:
-                callbacks = [PeftSavingCallback()]
-            else:
-                callbacks += [PeftSavingCallback()]
 
         if compute_metrics is None:
             compute_metrics = compute_accuracy
