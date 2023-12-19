@@ -279,33 +279,6 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
-Note that in case of training adapters, we manually add a saving callback to automatically save the adapters only:
-```python
-class PeftSavingCallback(TrainerCallback):
-    def on_save(self, args, state, control, **kwargs):
-        checkpoint_path = os.path.join(args.output_dir, f"checkpoint-{state.global_step}")
-        kwargs["model"].save_pretrained(checkpoint_path)
-
-        if "pytorch_model.bin" in os.listdir(checkpoint_path):
-            os.remove(os.path.join(checkpoint_path, "pytorch_model.bin"))
-```
-If you want to add more callbacks, make sure to add this one as well to properly save the adapters only during training.
-```python
-...
-
-callbacks = [YourCustomCallback(), PeftSavingCallback()]
-
-trainer = SFTTrainer(
-    "EleutherAI/gpt-neo-125m",
-    train_dataset=dataset,
-    dataset_text_field="text",
-    peft_config=peft_config,
-    callbacks=callbacks
-)
-
-trainer.train()
-```
-
 You can also continue training your `PeftModel`. For that, first load a `PeftModel` outside `SFTTrainer` and pass it directly to the trainer without the `peft_config` argument being passed.
 
 ### Training adapters with base 8 bit models 
