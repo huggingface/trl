@@ -361,6 +361,8 @@ class ConstantLengthDataset(IterableDataset):
                 Shuffle the examples before they are returned
             append_concat_token ('bool', *optional*, defaults to True)
                 If true, appends `eos_token_id` at the end of each sample being packed.
+            add_special_tokens ('bool', *optional*, defaults to True)
+                If true, tokenizers adds special tokens to each sample being packed.
     """
 
     def __init__(
