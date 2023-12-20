@@ -637,3 +637,14 @@ def peft_module_casting_to_bf16(model):
             if hasattr(module, "weight"):
                 if module.weight.dtype == torch.float32:
                     module = module.to(torch.bfloat16)
+
+
+def trl_sanitze_kwargs_for_tagging(tag_name, kwargs=None):
+    if kwargs is not None:
+        if "tags" not in kwargs:
+            kwargs["tags"] = [tag_name]
+        elif "tags" in kwargs and isinstance(kwargs["tags"], list):
+            kwargs["tags"].append(tag_name)
+        elif "tags" in kwargs and isinstance(kwargs["tags"], str):
+            kwargs["tags"] = [kwargs["tags"], tag_name]
+    return kwargs
