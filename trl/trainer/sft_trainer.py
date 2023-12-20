@@ -326,6 +326,21 @@ class SFTTrainer(Trainer):
 
         return output
 
+    @wraps(Trainer.push_to_hub)
+    def push_to_hub(self, commit_message: Optional[str] = "End of training", blocking: bool = True, **kwargs) -> str:
+        """
+        Overwrite the `push_to_hub` method in order to force-add the tag "sft" when pushing the
+        model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
+        """
+        if "tags" not in kwargs:
+            kwargs["tags"] = ["sft"]
+        elif "tags" in kwargs and isinstance(kwargs["tags"], list):
+            kwargs["tags"].append("sft")
+        elif "tags" in kwargs and isinstance(kwargs["tags"], str):
+            kwargs["tags"] = [kwargs["tags"], "sft"]
+
+        return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)
+
     def _prepare_dataset(
         self,
         dataset,
