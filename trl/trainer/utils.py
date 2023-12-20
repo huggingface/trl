@@ -361,6 +361,8 @@ class ConstantLengthDataset(IterableDataset):
                 Shuffle the examples before they are returned
             append_concat_token ('bool', *optional*, defaults to True)
                 If true, appends `eos_token_id` at the end of each sample being packed.
+            add_special_tokens ('bool', *optional*, defaults to True)
+                If true, tokenizers adds special tokens to each sample being packed.
     """
 
     def __init__(
@@ -376,6 +378,7 @@ class ConstantLengthDataset(IterableDataset):
         eos_token_id=0,
         shuffle=True,
         append_concat_token=True,
+        add_special_tokens=True,
     ):
         self.tokenizer = tokenizer
 
@@ -393,6 +396,7 @@ class ConstantLengthDataset(IterableDataset):
         self.max_buffer_size = seq_length * chars_per_token * num_of_sequences
         self.shuffle = shuffle
         self.append_concat_token = append_concat_token
+        self.add_special_tokens = add_special_tokens
         if formatting_func is None:
             self.formatting_func = lambda x: x[dataset_text_field]
         else:
@@ -426,7 +430,9 @@ class ConstantLengthDataset(IterableDataset):
                     else:
                         more_examples = False
                         break
-            tokenized_inputs = self.tokenizer(buffer, truncation=False)["input_ids"]
+            tokenized_inputs = self.tokenizer(buffer, add_special_tokens=self.add_special_tokens, truncation=False)[
+                "input_ids"
+            ]
             all_token_ids = []
             for tokenized_input in tokenized_inputs:
                 if self.append_concat_token:

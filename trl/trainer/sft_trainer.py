@@ -111,6 +111,8 @@ class SFTTrainer(Trainer):
             fine-tuning. Check out the original paper here: https://arxiv.org/abs/2310.05914 and the original code here: https://github.com/neelsjain/NEFTune
         model_init_kwargs: (`Optional[Dict]`, *optional*):
             Dict of Optional kwargs to pass when instantiating the model from a string
+        dataset_kwargs: (`Optional[Dict]`, *optional*):
+            Dict of Optional kwargs to pass when creating packed or non-packed datasets
     """
 
     def __init__(
@@ -138,6 +140,7 @@ class SFTTrainer(Trainer):
         dataset_batch_size: int = 1000,
         neftune_noise_alpha: Optional[float] = None,
         model_init_kwargs: Optional[Dict] = None,
+        dataset_kwargs: Optional[Dict] = None,
     ):
         if model_init_kwargs is None:
             model_init_kwargs = {}
@@ -240,6 +243,8 @@ class SFTTrainer(Trainer):
             if data_collator is None:
                 data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
+        if dataset_kwargs is None:
+            dataset_kwargs = {}
         if train_dataset is not None:
             train_dataset = self._prepare_dataset(
                 train_dataset,
@@ -250,6 +255,7 @@ class SFTTrainer(Trainer):
                 formatting_func,
                 num_of_sequences,
                 chars_per_token,
+                **dataset_kwargs,
             )
         if eval_dataset is not None:
             _multiple = isinstance(eval_dataset, dict)
@@ -264,6 +270,7 @@ class SFTTrainer(Trainer):
                     formatting_func,
                     num_of_sequences,
                     chars_per_token,
+                    **dataset_kwargs,
                 )
             if not _multiple:
                 eval_dataset = _eval_datasets["singleton"]
@@ -328,6 +335,8 @@ class SFTTrainer(Trainer):
         formatting_func,
         num_of_sequences,
         chars_per_token,
+        append_concat_token=True,
+        add_special_tokens=True,
     ):
         if dataset is None:
             raise ValueError("The dataset should not be None")
@@ -338,7 +347,7 @@ class SFTTrainer(Trainer):
 
         if not packing:
             return self._prepare_non_packed_dataloader(
-                tokenizer, dataset, dataset_text_field, max_seq_length, formatting_func
+                tokenizer, dataset, dataset_text_field, max_seq_length, formatting_func, add_special_tokens
             )
 
         else:
@@ -350,10 +359,12 @@ class SFTTrainer(Trainer):
                 num_of_sequences,
                 chars_per_token,
                 formatting_func,
+                append_concat_token,
+                add_special_tokens,
             )
 
     def _prepare_non_packed_dataloader(
-        self, tokenizer, dataset, dataset_text_field, max_seq_length, formatting_func=None
+        self, tokenizer, dataset, dataset_text_field, max_seq_length, formatting_func=None, add_special_tokens=True
     ):
         use_formatting_func = formatting_func is not None and dataset_text_field is None
         self._dataset_sanity_checked = False
@@ -362,6 +373,7 @@ class SFTTrainer(Trainer):
         def tokenize(element):
             outputs = tokenizer(
                 element[dataset_text_field] if not use_formatting_func else formatting_func(element),
+                add_special_tokens=add_special_tokens,
                 truncation=True,
                 padding=False,
                 max_length=max_seq_length,
@@ -398,6 +410,8 @@ class SFTTrainer(Trainer):
         num_of_sequences,
         chars_per_token,
         formatting_func=None,
+        append_concat_token=True,
+        add_special_tokens=True,
     ):
         if dataset_text_field is not None or formatting_func is not None:
             if tokenizer is None:
@@ -413,6 +427,8 @@ class SFTTrainer(Trainer):
                 num_of_sequences=num_of_sequences,
                 chars_per_token=chars_per_token,
                 eos_token_id=tokenizer.eos_token_id,
+                append_concat_token=append_concat_token,
+                add_special_tokens=add_special_tokens,
             )
 
             def data_generator(constant_length_iterator):
