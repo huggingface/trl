@@ -1,7 +1,7 @@
 model_name: mnoukhov/pythia410m-tldr-sft
 dataset_name: mnoukhov/openai_summarize_comparisons_tldrprompt_relabel1b
 gold_model_name: mnoukhov/pythia1b-sft-rm-tldrprompt
-pseudo_dataset_name: mnoukhov/openai_summarize_generated_20k_relabel_410m_dpo1
+pseudo_dataset_name: mnoukhov/openai_summarize_generated_20k_relabel_1b
 beta: 0.5
 max_steps: 10000
 eval_steps: 1000
