@@ -243,7 +243,8 @@ class SFTTrainer(Trainer):
             if data_collator is None:
                 data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
-        dataset_kwargs = dataset_kwargs or {}
+        if dataset_kwargs is None:
+            dataset_kwargs = {}
         if train_dataset is not None:
             train_dataset = self._prepare_dataset(
                 train_dataset,
