@@ -22,7 +22,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
-from transformers import PreTrainedTokenizerBase, top_k_top_p_filtering
+from transformers import top_k_top_p_filtering
 
 from .import_utils import is_xpu_available
 
