@@ -398,6 +398,7 @@ class DPOTrainer(Trainer):
         # Otherwise, we assume the reference model fits in memory and is initialized on each device with ZeRO disabled (stage 0)
         if config_kwargs["zero_optimization"]["stage"] != 3:
             config_kwargs["zero_optimization"]["stage"] = 0
+        config_kwargs.pop('scheduler', None)
         model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
         model.eval()
         return model
