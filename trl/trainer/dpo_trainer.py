@@ -492,6 +492,9 @@ class DPOTrainer(Trainer):
                 name="reference_rejected_logps", column=all_reference_rejected_logps
             )
 
+            # Save calculated reference_chosen_logps and reference_rejected_logps to the eval_dataset for subsequent runs
+            if self.eval_dataset is not None:
+                self.eval_dataset = eval_dataset
             self._precomputed_eval_ref_log_probs = True
 
         return super().get_eval_dataloader(eval_dataset=eval_dataset)
