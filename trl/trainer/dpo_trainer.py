@@ -18,6 +18,7 @@ import warnings
 from collections import defaultdict
 from contextlib import nullcontext
 from copy import deepcopy
+from functools import wraps
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
@@ -40,7 +41,7 @@ from transformers.trainer_utils import EvalLoopOutput
 
 from ..import_utils import is_peft_available, is_wandb_available
 from ..models import PreTrainedModelWrapper, create_reference_model
-from .utils import DPODataCollatorWithPadding, disable_dropout_in_model, pad_to_length
+from .utils import DPODataCollatorWithPadding, disable_dropout_in_model, pad_to_length, trl_sanitze_kwargs_for_tagging
 
 
 if is_peft_available():
@@ -120,6 +121,7 @@ class DPOTrainer(Trainer):
         ref_model_init_kwargs: (`Optional[Dict]`, *optional*):
             Dict of Optional kwargs to pass when instantiating the ref model from a string
     """
+    _tag_name = "trl-dpo"
 
     def __init__(
         self,
@@ -1131,3 +1133,13 @@ class DPOTrainer(Trainer):
             logs[key] = torch.tensor(metrics).mean().item()
         del self._stored_metrics[train_eval]
         return super().log(logs)
+
+    @wraps(Trainer.push_to_hub)
+    def push_to_hub(self, commit_message: Optional[str] = "End of training", blocking: bool = True, **kwargs) -> str:
+        """
+        Overwrite the `push_to_hub` method in order to force-add the tag "sft" when pushing the
+        model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
+        """
+        kwargs = trl_sanitze_kwargs_for_tagging(tag_name=self._tag_name, kwargs=kwargs)
+
+        return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)
