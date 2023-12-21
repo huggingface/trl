@@ -189,38 +189,6 @@ def stats_to_np(stats_dict: Dict) -> Dict:
     return new_dict
 
 
-def listify_batch(tensor: torch.Tensor) -> List[torch.Tensor]:
-    """Turns the first dimension of a tensor into a list."""
-    return [tensor[i] for i in range(tensor.shape[0])]
-
-
-def build_bert_batch_from_txt(
-    text_list: List[str], tokenizer: PreTrainedTokenizerBase, device: Union[str, torch.device]
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Create token id and attention mask tensors from text list for BERT classification."""
-
-    # tokenize
-    tensors = [tokenizer.encode(txt, return_tensors="pt").to(device) for txt in text_list]
-
-    # find max length to pad to
-    max_len = max([t.size()[1] for t in tensors])
-
-    # get padded tensors and attention masks
-    # (attention masks make bert ignore padding)
-    padded_tensors = []
-    attention_masks = []
-    for tensor in tensors:
-        attention_mask = torch.ones(tensor.size(), device=device)
-        padded_tensors.append(pad_to_size(tensor, max_len, padding=0))
-        attention_masks.append(pad_to_size(attention_mask, max_len, padding=0))
-
-    # stack all tensors
-    padded_tensors = torch.cat(padded_tensors)
-    attention_masks = torch.cat(attention_masks)
-
-    return padded_tensors, attention_masks
-
-
 def respond_to_batch(
     model: nn.Module, queries: List[torch.LongTensor], txt_len: int = 20, top_k: int = 0, top_p: float = 1.0
 ) -> torch.LongTensor:
