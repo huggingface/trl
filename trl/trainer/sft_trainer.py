@@ -42,6 +42,7 @@ from .utils import (
     DataCollatorForCompletionOnlyLM,
     neftune_post_forward_hook,
     peft_module_casting_to_bf16,
+    trl_sanitze_kwargs_for_tagging,
 )
 
 
@@ -114,6 +115,7 @@ class SFTTrainer(Trainer):
         dataset_kwargs: (`Optional[Dict]`, *optional*):
             Dict of Optional kwargs to pass when creating packed or non-packed datasets
     """
+    _tag_name = "trl-sft"
 
     def __init__(
         self,
@@ -325,6 +327,16 @@ class SFTTrainer(Trainer):
             del embeddings.neftune_noise_alpha
 
         return output
+
+    @wraps(Trainer.push_to_hub)
+    def push_to_hub(self, commit_message: Optional[str] = "End of training", blocking: bool = True, **kwargs) -> str:
+        """
+        Overwrite the `push_to_hub` method in order to force-add the tag "sft" when pushing the
+        model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
+        """
+        kwargs = trl_sanitze_kwargs_for_tagging(tag_name=self._tag_name, kwargs=kwargs)
+
+        return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)
 
     def _prepare_dataset(
         self,
