@@ -15,6 +15,7 @@
 import os
 from collections import defaultdict
 from concurrent import futures
+from functools import wraps
 from typing import Any, Callable, Optional, Tuple
 from warnings import warn
 
@@ -22,10 +23,11 @@ import torch
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
+from transformers import Trainer
 
 from ..models import DDPOStableDiffusionPipeline
 from . import BaseTrainer, DDPOConfig
-from .utils import PerPromptStatTracker
+from .utils import PerPromptStatTracker, trl_sanitze_kwargs_for_tagging
 
 
 logger = get_logger(__name__)
@@ -45,6 +47,8 @@ class DDPOTrainer(BaseTrainer):
         **sd_pipeline** (`DDPOStableDiffusionPipeline`) -- Stable Diffusion pipeline to be used for training.
         **image_samples_hook** (Optional[Callable[[Any, Any, Any], Any]]) -- Hook to be called to log images
     """
+
+    _tag_name = "trl-ddpo"
 
     def __init__(
         self,
@@ -574,3 +578,13 @@ class DDPOTrainer(BaseTrainer):
 
     def _save_pretrained(self, save_directory):
         self.sd_pipeline.save_pretrained(save_directory)
+
+    @wraps(Trainer.push_to_hub)
+    def push_to_hub(self, commit_message: Optional[str] = "End of training", blocking: bool = True, **kwargs) -> str:
+        """
+        Overwrite the `push_to_hub` method in order to force-add the tag "sft" when pushing the
+        model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
+        """
+        kwargs = trl_sanitze_kwargs_for_tagging(tag_name=self._tag_name, kwargs=kwargs)
+
+        return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)
