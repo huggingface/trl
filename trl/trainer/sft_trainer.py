@@ -115,7 +115,7 @@ class SFTTrainer(Trainer):
         dataset_kwargs: (`Optional[Dict]`, *optional*):
             Dict of Optional kwargs to pass when creating packed or non-packed datasets
     """
-    _tag_name = "trl-sft"
+    _tag_names = ["trl", "sft"]
 
     def __init__(
         self,
@@ -338,9 +338,8 @@ class SFTTrainer(Trainer):
             from unsloth import FastLlamaModel, FastMistralModel
 
             if isinstance(self.model, (FastLlamaModel, FastMistralModel)):
-                self._tag_name = "trl-unsloth"
-
-        kwargs = trl_sanitze_kwargs_for_tagging(tag_name=self._tag_name, kwargs=kwargs)
+                self._tag_names = ["trl", "unsloth"]
+        kwargs = trl_sanitze_kwargs_for_tagging(tag_names=self._tag_names, kwargs=kwargs)
 
         return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)
 

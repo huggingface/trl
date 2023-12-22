@@ -140,7 +140,7 @@ class PPOTrainer(BaseTrainer):
         **lr_scheduler** (`torch.optim.lr_scheduler`, *optional*) -- Learning rate scheduler to be used for training.
     """
 
-    _tag_name = "trl-ppo"
+    _tag_names = ["trl", "ppo"]
 
     def __init__(
         self,
@@ -1452,6 +1452,6 @@ class PPOTrainer(BaseTrainer):
         Overwrite the `push_to_hub` method in order to force-add the tag "sft" when pushing the
         model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
         """
-        kwargs = trl_sanitze_kwargs_for_tagging(tag_name=self._tag_name, kwargs=kwargs)
+        kwargs = trl_sanitze_kwargs_for_tagging(tag_names=self._tag_names, kwargs=kwargs)
 
         return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)

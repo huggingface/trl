@@ -121,7 +121,8 @@ class DPOTrainer(Trainer):
         ref_model_init_kwargs: (`Optional[Dict]`, *optional*):
             Dict of Optional kwargs to pass when instantiating the ref model from a string
     """
-    _tag_name = "trl-dpo"
+
+    _tag_names = ["trl", "dpo"]
 
     def __init__(
         self,
@@ -320,7 +321,7 @@ class DPOTrainer(Trainer):
         self._precomputed_train_ref_log_probs = False
         self._precomputed_eval_ref_log_probs = False
 
-        if loss_type in ["hinge", "ipo", "kto"] and label_smoothing > 0:
+        if loss_type in ["hinge", "ipo", "kto_pair"] and label_smoothing > 0:
             warnings.warn(
                 "You are using a loss type that does not support label smoothing. Ignoring label_smoothing parameter."
             )
@@ -492,6 +493,9 @@ class DPOTrainer(Trainer):
                 name="reference_rejected_logps", column=all_reference_rejected_logps
             )
 
+            # Save calculated reference_chosen_logps and reference_rejected_logps to the eval_dataset for subsequent runs
+            if self.eval_dataset is not None:
+                self.eval_dataset = eval_dataset
             self._precomputed_eval_ref_log_probs = True
 
         return super().get_eval_dataloader(eval_dataset=eval_dataset)
@@ -798,7 +802,7 @@ class DPOTrainer(Trainer):
         elif self.loss_type == "ipo":
             # eqn (17) of the paper where beta is the regularization parameter for the IPO loss, denoted by tau in the paper.
             losses = (logits - 1 / (2 * self.beta)) ** 2
-        elif self.loss_type == "kto":
+        elif self.loss_type == "kto_pair":
             # eqn (7) of the HALOs paper
             chosen_KL = (policy_chosen_logps - reference_chosen_logps).mean().clamp(min=0)
             rejected_KL = (policy_rejected_logps - reference_rejected_logps).mean().clamp(min=0)
@@ -815,7 +819,7 @@ class DPOTrainer(Trainer):
             )
         else:
             raise ValueError(
-                f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'kto']"
+                f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'kto_pair']"
             )
 
         chosen_rewards = self.beta * (policy_chosen_logps - reference_chosen_logps).detach()
@@ -1140,6 +1144,6 @@ class DPOTrainer(Trainer):
         Overwrite the `push_to_hub` method in order to force-add the tag "sft" when pushing the
         model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
         """
-        kwargs = trl_sanitze_kwargs_for_tagging(tag_name=self._tag_name, kwargs=kwargs)
+        kwargs = trl_sanitze_kwargs_for_tagging(tag_names=self._tag_names, kwargs=kwargs)
 
         return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)

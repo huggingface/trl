@@ -86,8 +86,8 @@ class DPOTrainerTester(unittest.TestCase):
             ["t5", "hinge", False],
             ["gpt2", "ipo", False],
             ["t5", "ipo", True],
-            ["gpt2", "kto", True],
-            ["t5", "kto", False],
+            ["gpt2", "kto_pair", True],
+            ["t5", "kto_pair", False],
         ]
     )
     def test_dpo_trainer(self, name, loss_type, pre_compute):
