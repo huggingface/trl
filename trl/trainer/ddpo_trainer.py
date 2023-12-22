@@ -48,7 +48,7 @@ class DDPOTrainer(BaseTrainer):
         **image_samples_hook** (Optional[Callable[[Any, Any, Any], Any]]) -- Hook to be called to log images
     """
 
-    _tag_name = "trl-ddpo"
+    _tag_names = ["trl", "ddpo"]
 
     def __init__(
         self,
@@ -585,6 +585,6 @@ class DDPOTrainer(BaseTrainer):
         Overwrite the `push_to_hub` method in order to force-add the tag "sft" when pushing the
         model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
         """
-        kwargs = trl_sanitze_kwargs_for_tagging(tag_name=self._tag_name, kwargs=kwargs)
+        kwargs = trl_sanitze_kwargs_for_tagging(tag_names=self._tag_names, kwargs=kwargs)
 
         return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)
