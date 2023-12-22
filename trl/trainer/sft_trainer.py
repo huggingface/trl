@@ -36,7 +36,7 @@ from transformers.modeling_utils import unwrap_model
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 
-from ..import_utils import is_peft_available
+from ..import_utils import is_peft_available, is_unsloth_available
 from .utils import (
     ConstantLengthDataset,
     DataCollatorForCompletionOnlyLM,
@@ -334,6 +334,12 @@ class SFTTrainer(Trainer):
         Overwrite the `push_to_hub` method in order to force-add the tag "sft" when pushing the
         model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
         """
+        if is_unsloth_available():
+            from unsloth import FastLlamaModel, FastMistralModel
+
+            if isinstance(self.model, (FastLlamaModel, FastMistralModel)):
+                self._tag_name = "trl-unsloth"
+
         kwargs = trl_sanitze_kwargs_for_tagging(tag_name=self._tag_name, kwargs=kwargs)
 
         return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)

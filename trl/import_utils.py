@@ -25,6 +25,10 @@ def is_peft_available() -> bool:
     return importlib.util.find_spec("peft") is not None
 
 
+def is_unsloth_available() -> bool:
+    return importlib.util.find_spec("unsloth") is not None
+
+
 def is_accelerate_greater_20_0() -> bool:
     if _is_python_greater_3_8:
         from importlib.metadata import version
