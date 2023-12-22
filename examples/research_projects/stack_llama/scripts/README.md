@@ -1,7 +1,7 @@
 # RLHF pipeline for the creation of StackLLaMa: a Stack exchange llama-7b model.
 There were three main steps to the training process:
 1. Supervised fine-tuning of the base llama-7b model to create llama-7b-se:
-    - `torchrun --nnodes 1  --nproc_per_node 8 examples/research_projects/stack_llama/scripts/supervised_finetuning.py --model_path=<LLAMA_MODEL_PATH> --streaming --no_gradient_checkpointing --learning_rate 1e-5 --max_steps 5000 --output_dir ./llama-se`
+    - `torchrun --nnodes 1  --nproc_per_node 8 examples/research_projects/stack_llama/scripts/supervised_finetuning.py --model_path=<LLAMA_MODEL_PATH> --streaming --learning_rate 1e-5 --max_steps 5000 --output_dir ./llama-se`
 2. Reward modeling using dialog pairs from the SE dataset using the llama-7b-se to create llama-7b-se-rm:
     - `torchrun --nnodes 1  --nproc_per_node 8 examples/research_projects/stack_llama/scripts/reward_modeling.py --model_name=<LLAMA_SE_MODEL>`
 3. RL fine-tuning of llama-7b-se with the llama-7b-se-rm reward model:
