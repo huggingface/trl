@@ -649,6 +649,6 @@ def trl_sanitze_kwargs_for_tagging(tag_names, kwargs=None):
         elif "tags" in kwargs and isinstance(kwargs["tags"], list):
             kwargs["tags"].extend(tag_names)
         elif "tags" in kwargs and isinstance(kwargs["tags"], str):
-            tag_names.appendkwargs["tags"]()
+            tag_names.append(kwargs["tags"])
             kwargs["tags"] = tag_names
     return kwargs
