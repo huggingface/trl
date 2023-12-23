@@ -99,7 +99,7 @@ class AestheticScorer(torch.nn.Module):
             cached_path = hf_hub_download(model_id, model_filename)
         except EntryNotFoundError:
             cached_path = os.path.join(model_id, model_filename)
-        state_dict = torch.load(cached_path)
+        state_dict = torch.load(cached_path, map_location=torch.device("cpu"))
         self.mlp.load_state_dict(state_dict)
         self.dtype = dtype
         self.eval()
