@@ -16,7 +16,6 @@ from transformers import (
     GPT2Model,
     HfArgumentParser,
     TrainingArguments,
-    set_seed,
 )
 from transformers.pytorch_utils import Conv1D
 from transformers.trainer_utils import get_last_checkpoint
@@ -93,6 +92,7 @@ class ScriptArguments:
     packing: Optional[bool] = field(default=True)
 
     output_dir: Optional[str] = field(default="./results", metadata={"help": "the output directory"})
+    output_model_name: Optional[str] = field(default=None, metadata={"help": "the model pushed to hub"})
     log_freq: Optional[int] = field(default=1, metadata={"help": "the logging frequency"})
     logging_steps: Optional[int] = field(default=10, metadata={"help": "the number of logging steps"})
     eval_steps: Optional[int] = field(default=1000, metadata={"help": "the number of steps to eval at"})
@@ -220,7 +220,6 @@ if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
     args = parser.parse_args_into_dataclasses()[0]
 
-    set_seed(args.seed)
     os.makedirs(args.output_dir, exist_ok=True)
 
     model, tokenizer = create_model(args)
@@ -256,6 +255,7 @@ if __name__ == "__main__":
         optim=args.optimizer_type,
         remove_unused_columns=False,
         disable_tqdm=False,
+        seed=args.seed,
         # find_unused_params is necessary for grad checkpointing
         ddp_find_unused_parameters=(args.gradient_checkpointing),
     )
@@ -334,6 +334,9 @@ if __name__ == "__main__":
 
             output_merged_dir = os.path.join(args.output_dir, "final_merged_checkpoint")
             model.save_pretrained(output_merged_dir, safe_serialization=True)
+
+        if args.output_model_name is not None:
+            model.push_to_hub(args.output_model_name)
 
     else:
         results = trainer.evaluate()
