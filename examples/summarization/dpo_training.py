@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # import random
+import math
 import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -112,6 +113,7 @@ class ScriptArguments:
     )
 
     # instrumentation
+    seed: Optional[int] = field(default=0)
     output_dir: Optional[str] = field(default="results", metadata={"help": "the output directory"})
     logging_steps: Optional[int] = field(default=100, metadata={"help": "the number of update steps between two logs"})
     log_n_samples_during_eval: Optional[int] = field(default=100)
@@ -313,15 +315,18 @@ def create_and_prepare_dataset(args):
 
 
 @dataclass
-class PromptCollator:
+class PromptAndTextCollator:
     tokenizer: PreTrainedTokenizerBase
     padding: Union[bool, str] = True
     max_prompt_length: Optional[int] = None
+    max_length: Optional[int] = None
     prompt_field: str = "prompt"
+    target_field: str = "label"
     return_tensors: str = "pt"
 
     def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
         prompts = [feat[self.prompt_field] for feat in features]
+        texts = [feat[self.prompt_field] + " " + feat[self.target_field] for feat in features]
 
         original_side = self.tokenizer.padding_side
         self.tokenizer.padding_side = "left"
@@ -336,6 +341,26 @@ class PromptCollator:
         tokenized_batch["prompt"] = prompts
 
         self.tokenizer.padding_side = original_side
+
+        tokenized_texts = self.tokenizer(
+            texts,
+            truncation=True,
+            padding=True,
+            max_length=self.max_length,
+            return_tensors=self.return_tensors,
+        )
+
+        text_labels = tokenized_texts["input_ids"].clone()
+        if self.tokenizer.pad_token_id is not None:
+            text_labels[text_labels == self.tokenizer.pad_token_id] = -100
+
+        tokenized_batch.update(
+            {
+                "text_input_ids": tokenized_texts["input_ids"],
+                "text_attention_mask": tokenized_texts["attention_mask"],
+                "text_labels": text_labels,
+            }
+        )
 
         return tokenized_batch
 
@@ -358,9 +383,10 @@ class GoldModelRewardCallback(TrainerCallback):
         self.generation_config = generation_config
 
         # data_collator = DataCollatorWithPadding(tokenizer)
-        data_collator = PromptCollator(
+        data_collator = PromptAndTextCollator(
             tokenizer,
             max_prompt_length=max_prompt_length,
+            max_length=max_length,
             prompt_field="prompt",
         )
         dataloader_params = {
@@ -376,11 +402,23 @@ class GoldModelRewardCallback(TrainerCallback):
     def on_evaluate(self, args, state, control, model, tokenizer, metrics, **kwargs):
         samples_to_log = []
         gold_reward_sum = 0.0
+        nll_sum = 0.0
         total_samples = 0
 
         for inputs in tqdm(
             self.dataloader, desc="Gold Eval", dynamic_ncols=True, disable=not state.is_local_process_zero
         ):
+            # get loss over true continuation i.e. ppl on dataset
+            with torch.no_grad():
+                nll_loss = model(
+                    input_ids=inputs["text_input_ids"],
+                    attention_mask=inputs["text_attention_mask"],
+                    labels=inputs["text_labels"],
+                ).loss
+
+            nll_loss = self.accelerator.gather_for_metrics(nll_loss)
+
+            # generate from model
             policy_output_decoded, ref_output_decoded, policy_output_ids = self.get_batch_samples(
                 model,
                 tokenizer,
@@ -399,6 +437,7 @@ class GoldModelRewardCallback(TrainerCallback):
             gold_rewards = self.accelerator.gather_for_metrics(gold_rewards)
 
             if state.is_local_process_zero:
+                nll_sum += nll_loss.sum().item()
                 gold_reward_sum += gold_rewards.sum().item()
                 total_samples += gold_rewards.size(0)
 
@@ -412,10 +451,12 @@ class GoldModelRewardCallback(TrainerCallback):
                         break
 
         if state.is_world_process_zero:
-            print(f"gold reward mean {gold_reward_sum / total_samples}")
             gold_log = {
                 "eval/gold_rewards_mean": gold_reward_sum / total_samples,
+                "eval/perplexity": math.exp(nll_sum / total_samples),
             }
+            for key, value in gold_log.items():
+                print(f"{key}: {value}")
             if state.epoch:
                 gold_log["epoch"] = round(state.epoch, 2)
                 gold_log["step"] = state.global_step
