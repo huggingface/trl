@@ -16,7 +16,13 @@ import unittest
 
 import torch
 
-from trl import DDPOConfig, DDPOTrainer, DefaultDDPOStableDiffusionPipeline
+from trl import is_diffusers_available
+
+from .testing_utils import require_diffusers
+
+
+if is_diffusers_available():
+    from trl import DDPOConfig, DDPOTrainer, DefaultDDPOStableDiffusionPipeline
 
 
 def scorer_function(images, prompts, metadata):
@@ -27,6 +33,7 @@ def prompt_function():
     return ("cabbages", {})
 
 
+@require_diffusers
 class DDPOTrainerTester(unittest.TestCase):
     """
     Test the DDPOTrainer class.

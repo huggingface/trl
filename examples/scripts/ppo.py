@@ -25,6 +25,7 @@ from transformers import AutoTokenizer, pipeline
 
 from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead, PPOConfig, PPOTrainer, set_seed
 from trl.core import LengthSampler
+from trl.import_utils import is_npu_available, is_xpu_available
 
 
 tqdm.pandas()
@@ -154,7 +155,12 @@ ppo_trainer = PPOTrainer(args.ppo_config, model, ref_model, tokenizer, dataset=d
 # to the same device as the PPOTrainer.
 device = ppo_trainer.accelerator.device
 if ppo_trainer.accelerator.num_processes == 1:
-    device = 0 if torch.cuda.is_available() else "cpu"  # to avoid a `pipeline` bug
+    if is_xpu_available():
+        device = "xpu:0"
+    elif is_npu_available():
+        device = "npu:0"
+    else:
+        device = 0 if torch.cuda.is_available() else "cpu"  # to avoid a `pipeline` bug
 ds_plugin = ppo_trainer.accelerator.state.deepspeed_plugin
 task, model_name = args.ppo_config.reward_model.split(":")
 if ds_plugin is not None and ds_plugin.is_zero3_init_enabled():
@@ -186,14 +192,21 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     query_tensors = batch["input_ids"]
 
     # Get response from gpt2
-    response_tensors = ppo_trainer.generate(query_tensors, return_prompt=False, **generation_kwargs)
+    response_tensors, ref_response_tensors = ppo_trainer.generate(
+        query_tensors, return_prompt=False, generate_ref_response=True, **generation_kwargs
+    )
     batch["response"] = tokenizer.batch_decode(response_tensors)
+    batch["ref_response"] = tokenizer.batch_decode(ref_response_tensors)
 
     # Compute sentiment score
     texts = [q + r for q, r in zip(batch["query"], batch["response"])]
     pipe_outputs = sentiment_pipe(texts, **sent_kwargs)
     rewards = [torch.tensor(output[1]["score"]) for output in pipe_outputs]
+    ref_texts = [q + r for q, r in zip(batch["query"], batch["ref_response"])]
+    ref_pipe_outputs = sentiment_pipe(ref_texts, **sent_kwargs)
+    ref_rewards = [torch.tensor(output[1]["score"]) for output in ref_pipe_outputs]
+    batch["ref_rewards"] = ref_rewards
 
     # Run PPO step
     stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
-    ppo_trainer.log_stats(stats, batch, rewards)
+    ppo_trainer.log_stats(stats, batch, rewards, columns_to_log=["query", "response", "ref_response", "ref_rewards"])

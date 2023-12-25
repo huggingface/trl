@@ -2,7 +2,7 @@
 
 TRL supports custom reward modeling for anyone to perform reward modeling on their dataset and model.
 
-Check out a complete flexible example inside [`examples/scripts`](https://github.com/huggingface/trl/tree/main/examples/scripts/reward_modeling.py) folder.
+Check out a complete flexible example at [`examples/scripts/reward_modeling.py`](https://github.com/huggingface/trl/tree/main/examples/scripts/reward_modeling.py).
 
 ## Expected dataset format
 
@@ -29,7 +29,7 @@ You should pass an `AutoModelForSequenceClassification` model to the [`RewardTra
 Just pass a `peft_config` in the keyword arguments of [`RewardTrainer`], and the trainer should automatically take care of converting the model into a PEFT model!
 
 ```python
-from peft import LoraConfig, task_type
+from peft import LoraConfig, TaskType
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from trl import RewardTrainer, RewardConfig
 

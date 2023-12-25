@@ -25,6 +25,7 @@ from huggingface_hub.utils import EntryNotFoundError
 from transformers import CLIPModel, CLIPProcessor
 
 from trl import DDPOConfig, DDPOTrainer, DefaultDDPOStableDiffusionPipeline
+from trl.import_utils import is_npu_available, is_xpu_available
 
 
 @dataclass
@@ -98,7 +99,7 @@ class AestheticScorer(torch.nn.Module):
             cached_path = hf_hub_download(model_id, model_filename)
         except EntryNotFoundError:
             cached_path = os.path.join(model_id, model_filename)
-        state_dict = torch.load(cached_path)
+        state_dict = torch.load(cached_path, map_location=torch.device("cpu"))
         self.mlp.load_state_dict(state_dict)
         self.dtype = dtype
         self.eval()
@@ -119,7 +120,13 @@ def aesthetic_scorer(hub_model_id, model_filename):
         model_id=hub_model_id,
         model_filename=model_filename,
         dtype=torch.float32,
-    ).cuda()
+    )
+    if is_npu_available():
+        scorer = scorer.npu()
+    elif is_xpu_available():
+        scorer = scorer.xpu()
+    else:
+        scorer = scorer.cuda()
 
     def _fn(images, prompts, metadata):
         images = (images * 255).round().clamp(0, 255).to(torch.uint8)

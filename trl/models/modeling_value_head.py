@@ -33,10 +33,14 @@ class ValueHead(nn.Module):
         self.dropout = nn.Dropout(summary_dropout_prob) if summary_dropout_prob else nn.Identity()
 
         # some models such as OPT have a projection layer before the word embeddings - e.g. OPT-350m
+        if hasattr(config, "hidden_size"):
+            hidden_size = config.hidden_size
         if hasattr(config, "word_embed_proj_dim"):
             hidden_size = config.word_embed_proj_dim
-        else:
-            hidden_size = config.hidden_size
+        elif hasattr(config, "is_encoder_decoder"):
+            if config.is_encoder_decoder and hasattr(config, "decoder"):
+                if hasattr(config.decoder, "hidden_size"):
+                    hidden_size = config.decoder.hidden_size
 
         self.summary = nn.Linear(hidden_size, 1)
 
@@ -100,7 +104,7 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
             kwargs (`dict`, `optional`):
                 Additional keyword arguments, that are passed to the `ValueHead` class.
         """
-        super().__init__(pretrained_model)
+        super().__init__(pretrained_model, **kwargs)
         v_head_kwargs, _, _ = self._split_kwargs(kwargs)
 
         if not any(hasattr(self.pretrained_model, attribute) for attribute in self.lm_head_namings):
@@ -281,7 +285,7 @@ class AutoModelForSeq2SeqLMWithValueHead(PreTrainedModelWrapper):
     )
 
     def __init__(self, pretrained_model, **kwargs):
-        super().__init__(pretrained_model)
+        super().__init__(pretrained_model, **kwargs)
         v_head_kwargs, _, _ = self._split_kwargs(kwargs)
         self.is_encoder_decoder = True
 

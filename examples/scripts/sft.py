@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import List, Optional
 
 import torch
 from accelerate import Accelerator
@@ -22,7 +22,7 @@ from peft import LoraConfig
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig, HfArgumentParser, TrainingArguments
 
-from trl import SFTTrainer
+from trl import SFTTrainer, is_xpu_available
 
 
 tqdm.pandas()
@@ -40,7 +40,7 @@ class ScriptArguments:
         default="timdettmers/openassistant-guanaco", metadata={"help": "the dataset name"}
     )
     dataset_text_field: Optional[str] = field(default="text", metadata={"help": "the text field of the dataset"})
-    log_with: Optional[str] = field(default="none", metadata={"help": "use 'wandb' to log with wandb"})
+    report_to: Optional[str] = field(default="none", metadata={"help": "use 'wandb' to log with wandb"})
     learning_rate: Optional[float] = field(default=1.41e-5, metadata={"help": "the learning rate"})
     batch_size: Optional[int] = field(default=64, metadata={"help": "the batch size"})
     seq_length: Optional[int] = field(default=512, metadata={"help": "Input sequence length"})
@@ -63,7 +63,18 @@ class ScriptArguments:
     )
     save_total_limit: Optional[int] = field(default=10, metadata={"help": "Limits total number of checkpoints."})
     push_to_hub: Optional[bool] = field(default=False, metadata={"help": "Push the model to HF Hub"})
+    gradient_checkpointing: Optional[bool] = field(
+        default=False, metadata={"help": "Whether to use gradient checkpointing or no"}
+    )
+    gradient_checkpointing_kwargs: Optional[dict] = field(
+        default=None,
+        metadata={
+            "help": "key word arguments to be passed along `torch.utils.checkpoint.checkpoint` method - e.g. `use_reentrant=False`"
+        },
+    )
     hub_model_id: Optional[str] = field(default=None, metadata={"help": "The name of the model on HF Hub"})
+    mixed_precision: Optional[str] = field(default="bf16", metadata={"help": "Mixed precision training"})
+    target_modules: Optional[List[str]] = field(default=None, metadata={"help": "Target modules for LoRA adapters"})
 
 
 parser = HfArgumentParser(ScriptArguments)
@@ -77,7 +88,11 @@ elif script_args.load_in_8bit or script_args.load_in_4bit:
         load_in_8bit=script_args.load_in_8bit, load_in_4bit=script_args.load_in_4bit
     )
     # Copy the model to each device
-    device_map = {"": Accelerator().local_process_index}
+    device_map = (
+        {"": f"xpu:{Accelerator().local_process_index}"}
+        if is_xpu_available()
+        else {"": Accelerator().local_process_index}
+    )
     torch_dtype = torch.bfloat16
 else:
     device_map = None
@@ -105,11 +120,14 @@ training_args = TrainingArguments(
     logging_steps=script_args.logging_steps,
     num_train_epochs=script_args.num_train_epochs,
     max_steps=script_args.max_steps,
-    report_to=script_args.log_with,
+    report_to=script_args.report_to,
     save_steps=script_args.save_steps,
     save_total_limit=script_args.save_total_limit,
     push_to_hub=script_args.push_to_hub,
     hub_model_id=script_args.hub_model_id,
+    gradient_checkpointing=script_args.gradient_checkpointing,
+    # TODO: uncomment that on the next release
+    # gradient_checkpointing_kwargs=script_args.gradient_checkpointing_kwargs,
 )
 
 # Step 4: Define the LoraConfig
@@ -119,6 +137,7 @@ if script_args.use_peft:
         lora_alpha=script_args.peft_lora_alpha,
         bias="none",
         task_type="CAUSAL_LM",
+        target_modules=script_args.target_modules,
     )
 else:
     peft_config = None
