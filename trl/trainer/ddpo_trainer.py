@@ -40,6 +40,8 @@ tags:
 - ddpo
 - diffusers
 - reinforcement-learning
+- text-to-image
+- stable-diffusion
 ---
 
 # {model_name}
