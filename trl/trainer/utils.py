@@ -642,21 +642,10 @@ def peft_module_casting_to_bf16(model):
 
 
 def trl_sanitze_kwargs_for_tagging(model, tag_names, kwargs=None):
-    # In case unsloth is installed, manually check if the model
-    # is a `FastxxxModel` from unsloth
     if is_unsloth_available():
-        import unsloth
-        from unsloth import FastLlamaModel, FastMistralModel
-
-        classes_to_check = (FastLlamaModel, FastMistralModel)
-        # `FastLanguageModel` has been added in a later version of unsloth, therefore we need this extra
-        # check just in case.
-        if hasattr(unsloth, "FastLanguageModel"):
-            from unsloth import FastLanguageModel
-
-            classes_to_check = (*classes_to_check, FastLanguageModel)
-
-        if isinstance(model, classes_to_check):
+        # Unsloth adds a new attribute in the model config `unsloth_version`
+        # to keep track of models that have been patched with unsloth.
+        if getattr(model.config, "unsloth_version", None) is not None:
             tag_names.append("unsloth")
 
     if kwargs is not None:
