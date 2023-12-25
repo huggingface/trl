@@ -1,4 +1,4 @@
-# Supervised Fine-tuning Trainer 
+# Supervised Fine-tuning Trainer
 
 Supervised fine-tuning (or SFT for short) is a crucial step in RLHF. In TRL we provide an easy-to-use API to create your SFT models and train them with few lines of code on your dataset.
 
@@ -6,7 +6,7 @@ Check out a complete flexible example at [`examples/scripts/sft.py`](https://git
 
 ## Quickstart
 
-If you have a dataset hosted on the 🤗 Hub, you can easily fine-tune your SFT model using [`SFTTrainer`] from TRL. Let us assume your dataset is `imdb`, the text you want to predict is inside the `text` field of the dataset, and you want to fine-tune the `facebook/opt-350m` model. 
+If you have a dataset hosted on the 🤗 Hub, you can easily fine-tune your SFT model using [`SFTTrainer`] from TRL. Let us assume your dataset is `imdb`, the text you want to predict is inside the `text` field of the dataset, and you want to fine-tune the `facebook/opt-350m` model.
 The following code-snippet takes care of all the data pre-processing and training for you:
 
 ```python
@@ -50,7 +50,7 @@ The above snippets will use the default training arguments from the [`transforme
 
 ## Advanced usage
 
-### Train on completions only 
+### Train on completions only
 
 You can use the `DataCollatorForCompletionOnlyLM` to train your model on the generated prompts only. Note that this works only in the case when `packing=False`.
 To instantiate that collator for instruction data, pass a response template and the tokenizer. Here is an example of how it would work to fine-tune `opt-350m` on completions only on the CodeAlpaca dataset:
@@ -82,7 +82,7 @@ trainer = SFTTrainer(
     data_collator=collator,
 )
 
-trainer.train() 
+trainer.train()
 ```
 
 To instantiate that collator for assistant style conversation data, pass a response template, an instruction template and the tokenizer. Here is an example of how it would work to fine-tune `opt-350m` on assistant completions only on the Open Assistant Guanaco dataset:
@@ -108,15 +108,15 @@ trainer = SFTTrainer(
     data_collator=collator,
 )
 
-trainer.train() 
+trainer.train()
 ```
 
-Make sure to have a `pad_token_id` which is different from `eos_token_id` which can result in the model not properly predicting EOS (End of Sentence) tokens during generation. 
+Make sure to have a `pad_token_id` which is different from `eos_token_id` which can result in the model not properly predicting EOS (End of Sentence) tokens during generation.
 
 #### Using token_ids directly for `response_template`
 
 Some tokenizers like Llama 2 (`meta-llama/Llama-2-XXb-hf`) tokenize sequences differently depending whether they have context or not. For example:
-    
+
 ```python
 from transformers import AutoTokenizer
 tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf")
@@ -134,14 +134,14 @@ print_tokens_with_ids(response_template)  # [('▁###', 835), ('▁Ass', 4007), 
 ```
 
 In this case, and due to lack of context in `response_template`, the same string ("### Assistant:") is tokenized differently:
-    
+
     - Text (with context): `[2277, 29937, 4007, 22137, 29901]`
     - `response_template` (without context): `[835, 4007, 22137, 29901]`
 
 This will lead to an error when the `DataCollatorForCompletionOnlyLM` does not find the `response_template` in the dataset example text:
 
 ```
-RuntimeError: Could not find response key [835, 4007, 22137, 29901] in token IDs tensor([    1,   835,  ...])   
+RuntimeError: Could not find response key [835, 4007, 22137, 29901] in token IDs tensor([    1,   835,  ...])
 ```
 
 
@@ -156,7 +156,7 @@ data_collator = DataCollatorForCompletionOnlyLM(response_template_ids, tokenizer
 
 ### Format your input prompts
 
-For instruction fine-tuning, it is quite common to have two columns inside the dataset: one for the prompt & the other for the response. 
+For instruction fine-tuning, it is quite common to have two columns inside the dataset: one for the prompt & the other for the response.
 This allows people to format examples like [Stanford-Alpaca](https://github.com/tatsu-lab/stanford_alpaca) did as follows:
 ```bash
 Below is an instruction ...
@@ -204,7 +204,7 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
-Note that if you use a packed dataset and if you pass `max_steps` in the training arguments you will probably train your models for more than few epochs, depending on the way you have configured the packed dataset and the training protocol. Double check that you know and understand what you are doing. 
+Note that if you use a packed dataset and if you pass `max_steps` in the training arguments you will probably train your models for more than few epochs, depending on the way you have configured the packed dataset and the training protocol. Double check that you know and understand what you are doing.
 
 #### Customize your prompts using packed dataset
 
@@ -228,7 +228,7 @@ You can also customize the [`ConstantLengthDataset`] much more by directly passi
 
 ### Control over the pretrained model
 
-You can directly pass the kwargs of the `from_pretrained()` method to the [`SFTTrainer`]. For example, if you want to load a model in a different precision, analogous to 
+You can directly pass the kwargs of the `from_pretrained()` method to the [`SFTTrainer`]. For example, if you want to load a model in a different precision, analogous to
 
 ```python
 model = AutoModelForCausalLM.from_pretrained("facebook/opt-350m", torch_dtype=torch.bfloat16)
@@ -248,7 +248,7 @@ trainer = SFTTrainer(
 
 trainer.train()
 ```
-Note that all keyword arguments of `from_pretrained()` are supported. 
+Note that all keyword arguments of `from_pretrained()` are supported.
 
 ### Training adapters
 
@@ -281,7 +281,7 @@ trainer.train()
 
 You can also continue training your `PeftModel`. For that, first load a `PeftModel` outside `SFTTrainer` and pass it directly to the trainer without the `peft_config` argument being passed.
 
-### Training adapters with base 8 bit models 
+### Training adapters with base 8 bit models
 
 For that you need to first load your 8bit model outside the Trainer and pass a `PeftConfig` to the trainer. For example:
 
@@ -314,7 +314,7 @@ trainer.train()
 
 ## Using Flash Attention and Flash Attention 2
 
-You can benefit from Flash Attention 1 & 2 using SFTTrainer out of the box with minimal changes of code. 
+You can benefit from Flash Attention 1 & 2 using SFTTrainer out of the box with minimal changes of code.
 First, to make sure you have all the latest features from transformers, install transformers from source
 
 ```bash
@@ -471,8 +471,12 @@ Pay attention to the following best practices when training a model with that tr
 
 - [`SFTTrainer`] always pads by default the sequences to the `max_seq_length` argument of the [`SFTTrainer`]. If none is passed, the trainer will retrieve that value from the tokenizer. Some tokenizers do not provide default value, so there is a check to retrieve the minimum between 2048 and that value. Make sure to check it before training.
 - For training adapters in 8bit, you might need to tweak the arguments of the `prepare_model_for_kbit_training` method from PEFT, hence we advise users to use `prepare_in_int8_kwargs` field, or create the `PeftModel` outside the [`SFTTrainer`] and pass it.
-- For a more memory-efficient training using adapters, you can load the base model in 8bit, for that simply add `load_in_8bit` argument when creating the [`SFTTrainer`], or create a base model in 8bit outside the trainer and pass it.  
+- For a more memory-efficient training using adapters, you can load the base model in 8bit, for that simply add `load_in_8bit` argument when creating the [`SFTTrainer`], or create a base model in 8bit outside the trainer and pass it.
 - If you create a model outside the trainer, make sure to not pass to the trainer any additional keyword arguments that are relative to `from_pretrained()` method.
+
+## GPTQ Conversion
+
+You may experience some issues with GPTQ Quantization after completing training. Lowering `gradient_accumulation_steps` to `4` will resolve most issues during the quantization process to GPTQ format.
 
 ## SFTTrainer
 
