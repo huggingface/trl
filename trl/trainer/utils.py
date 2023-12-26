@@ -645,7 +645,7 @@ def trl_sanitze_kwargs_for_tagging(model, tag_names, kwargs=None):
     if is_unsloth_available():
         # Unsloth adds a new attribute in the model config `unsloth_version`
         # to keep track of models that have been patched with unsloth.
-        if getattr(model.config, "unsloth_version", None) is not None:
+        if hasattr(model, "config") and getattr(model.config, "unsloth_version", None) is not None:
             tag_names.append("unsloth")
 
     if kwargs is not None:
