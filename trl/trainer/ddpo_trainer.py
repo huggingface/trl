@@ -13,9 +13,9 @@
 # limitations under the License.
 
 import os
+import warnings
 from collections import defaultdict
 from concurrent import futures
-from functools import wraps
 from typing import Any, Callable, Optional, Tuple
 from warnings import warn
 
@@ -23,14 +23,33 @@ import torch
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
-from transformers import Trainer
+from huggingface_hub import whoami
 
 from ..models import DDPOStableDiffusionPipeline
 from . import BaseTrainer, DDPOConfig
-from .utils import PerPromptStatTracker, trl_sanitze_kwargs_for_tagging
+from .utils import PerPromptStatTracker
 
 
 logger = get_logger(__name__)
+
+
+MODEL_CARD_TEMPLATE = """---
+license: apache-2.0
+tags:
+- trl
+- ddpo
+- diffusers
+- reinforcement-learning
+- text-to-image
+- stable-diffusion
+---
+
+# {model_name}
+
+This is a diffusion model that has been fine-tuned with reinforcement learning to
+ guide the model outputs according to a value, function, or human feedback. The model can be used for image generation conditioned with text.
+
+"""
 
 
 class DDPOTrainer(BaseTrainer):
@@ -576,15 +595,27 @@ class DDPOTrainer(BaseTrainer):
         for epoch in range(self.first_epoch, epochs):
             global_step = self.step(epoch, global_step)
 
+    def create_model_card(self, path: str, model_name: Optional[str] = "TRL DDPO Model") -> None:
+        """Creates and saves a model card for a TRL model.
+
+        Args:
+            path (`str`): The path to save the model card to.
+            model_name (`str`, *optional*): The name of the model, defaults to `TRL DDPO Model`.
+        """
+        try:
+            user = whoami()["name"]
+        # handle the offline case
+        except:  # noqa
+            warnings.warn("Cannot retrieve user information assuming you are running in offline mode.")
+            return
+
+        if not os.path.exists(path):
+            os.makedirs(path)
+
+        model_card_content = MODEL_CARD_TEMPLATE.format(model_name=model_name, model_id=f"{user}/{path}")
+        with open(os.path.join(path, "README.md"), "w", encoding="utf-8") as f:
+            f.write(model_card_content)
+
     def _save_pretrained(self, save_directory):
         self.sd_pipeline.save_pretrained(save_directory)
-
-    @wraps(Trainer.push_to_hub)
-    def push_to_hub(self, commit_message: Optional[str] = "End of training", blocking: bool = True, **kwargs) -> str:
-        """
-        Overwrite the `push_to_hub` method in order to force-add the tag "sft" when pushing the
-        model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
-        """
-        kwargs = trl_sanitze_kwargs_for_tagging(tag_names=self._tag_names, kwargs=kwargs)
-
-        return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)
+        self.create_model_card(save_directory)
