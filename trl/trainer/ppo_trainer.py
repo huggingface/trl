@@ -18,7 +18,6 @@ import time
 import typing
 import warnings
 from contextlib import nullcontext
-from functools import wraps
 from typing import Callable, List, Optional, Union
 
 import datasets
@@ -36,7 +35,6 @@ from transformers import (
     PreTrainedTokenizer,
     PreTrainedTokenizerBase,
     PreTrainedTokenizerFast,
-    Trainer,
 )
 
 from ..core import (
@@ -57,7 +55,6 @@ from ..core import (
 from ..import_utils import is_npu_available, is_torch_greater_2_0, is_xpu_available
 from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper, create_reference_model
 from . import AdaptiveKLController, BaseTrainer, FixedKLController, PPOConfig, RunningMoments
-from .utils import trl_sanitze_kwargs_for_tagging
 
 
 if is_deepspeed_available():
@@ -67,6 +64,7 @@ MODEL_CARD_TEMPLATE = """---
 license: apache-2.0
 tags:
 - trl
+- ppo
 - transformers
 - reinforcement-learning
 ---
@@ -1445,13 +1443,3 @@ class PPOTrainer(BaseTrainer):
         model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
         model.eval()
         return model
-
-    @wraps(Trainer.push_to_hub)
-    def push_to_hub(self, commit_message: Optional[str] = "End of training", blocking: bool = True, **kwargs) -> str:
-        """
-        Overwrite the `push_to_hub` method in order to force-add the tag "sft" when pushing the
-        model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
-        """
-        kwargs = trl_sanitze_kwargs_for_tagging(tag_names=self._tag_names, kwargs=kwargs)
-
-        return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)
