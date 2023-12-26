@@ -23,6 +23,8 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import IterableDataset
 from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizerBase
 
+from ..import_utils import is_unsloth_available
+
 
 class AdaptiveKLController:
     """
@@ -639,9 +641,12 @@ def peft_module_casting_to_bf16(model):
                     module = module.to(torch.bfloat16)
 
 
-def trl_sanitze_kwargs_for_tagging(tag_names, kwargs=None):
-    if isinstance(tag_names, str):
-        tag_names = [tag_names]
+def trl_sanitze_kwargs_for_tagging(model, tag_names, kwargs=None):
+    if is_unsloth_available():
+        # Unsloth adds a new attribute in the model config `unsloth_version`
+        # to keep track of models that have been patched with unsloth.
+        if hasattr(model, "config") and getattr(model.config, "unsloth_version", None) is not None:
+            tag_names.append("unsloth")
 
     if kwargs is not None:
         if "tags" not in kwargs:
