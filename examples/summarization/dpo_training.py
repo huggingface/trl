@@ -15,13 +15,14 @@
 # import random
 import math
 import os
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import bitsandbytes as bnb
 import torch
 from accelerate import Accelerator
-from datasets import concatenate_datasets, load_dataset
+from datasets import Dataset, concatenate_datasets, load_dataset
 from peft import AutoPeftModelForCausalLM, LoraConfig, PeftConfig, get_peft_model, prepare_model_for_kbit_training
 from peft.tuners.lora import LoraLayer
 from torch.utils.data import DataLoader
@@ -398,12 +399,16 @@ class GoldModelRewardCallback(TrainerCallback):
         dataloader = DataLoader(gold_eval_dataset, **dataloader_params)
         self.gold_model, self.dataloader = accelerator.prepare(gold_model, dataloader)
         self.accelerator = accelerator
+        self.completed_step = -1
 
     def on_evaluate(self, args, state, control, model, tokenizer, metrics, **kwargs):
         samples_to_log = []
         gold_reward_sum = 0.0
         nll_sum = 0.0
         total_samples = 0
+
+        if state.global_step == self.completed_step:
+            return
 
         for inputs in tqdm(
             self.dataloader, desc="Gold Eval", dynamic_ncols=True, disable=not state.is_local_process_zero
@@ -461,13 +466,15 @@ class GoldModelRewardCallback(TrainerCallback):
                 gold_log["epoch"] = round(state.epoch, 2)
                 gold_log["step"] = state.global_step
             if samples_to_log:
-                gold_log["game_log"] = (
+                gold_log["gold_log"] = (
                     wandb.Table(
                         columns=["Prompt", "Policy", "Ref Model"],
                         rows=samples_to_log,
                     ),
                 )
             wandb.log(gold_log)
+
+        self.completed_step = state.global_step
 
     def get_batch_samples(self, model, tokenizer, input_ids, attention_mask, return_ids=False) -> Tuple[str, str]:
         """Reduce inputs to unseen prompts, and maximum batch size if necessary
@@ -501,6 +508,38 @@ class GoldModelRewardCallback(TrainerCallback):
             return policy_output_decoded, reference_output_decoded, policy_output
         else:
             return policy_output_decoded, reference_output_decoded
+
+
+class EvaluateOnTrain(TrainerCallback):
+    def __init__(self, trainer) -> None:
+        super().__init__()
+        self._trainer = trainer
+        self.completed_step = -1
+        self.train_eval_dataset = Dataset.from_dict(self._trainer.train_dataset[:5000])
+
+    def on_evaluate(self, args, state, control, **kwargs):
+        # stops recursion
+        if state.global_step == self.completed_step:
+            return
+
+        control_copy = deepcopy(control)
+        self.completed_step = state.global_step
+        self._trainer.evaluate(eval_dataset=self.train_eval_dataset, metric_key_prefix="train")
+        return control_copy
+
+    # def on_step_end(self, args, state, control, **kwargs):
+    #     if control.should_evaluate:
+    #         control_copy = deepcopy(control)
+    #         print("here epoch")
+    #         self._trainer.evaluate(eval_dataset=self._trainer.train_dataset, metric_key_prefix="train")
+    #         return control_copy
+    #
+    # def on_epoch_end(self, args, state, control, **kwargs):
+    #     if control.should_evaluate:
+    #         control_copy = deepcopy(control)
+    #         print("here epoch")
+    #         self._trainer.evaluate(eval_dataset=self._trainer.train_dataset, metric_key_prefix="train")
+    #         return control_copy
 
 
 if __name__ == "__main__":
@@ -554,6 +593,8 @@ if __name__ == "__main__":
         max_target_length=script_args.max_target_length,
         max_prompt_length=script_args.max_prompt_length,
     )
+
+    dpo_trainer.add_callback(EvaluateOnTrain(dpo_trainer))
 
     # Gold Eval
     if script_args.gold_model_name is not None:
