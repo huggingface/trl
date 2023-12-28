@@ -593,35 +593,28 @@ class DPOTrainer(Trainer):
                 raise ValueError(f"rejected should be an str but got {type(rejected)}")
             rejected_tokens = self.build_tokenized_answer(prompt, rejected)
 
-            # Last prompt token might get merged by tokenizer
+            # Last prompt token might get merged by tokenizer and
             # it should not be included for generation if that happens
             prompt_len_input_ids = len(prompt_tokens['prompt_input_ids'])
-
-            # print(prompt_len_input_ids)
-            # print(len(chosen_tokens["prompt_input_ids"]))
-            # print(len(rejected_tokens["prompt_input_ids"]))
 
             chosen_prompt_len_input_ids = len(chosen_tokens["prompt_input_ids"])
             rejected_prompt_len_input_ids = len(rejected_tokens["prompt_input_ids"])
             prompt_len_input_ids = min(chosen_prompt_len_input_ids, rejected_prompt_len_input_ids)
 
             for k, v in prompt_tokens.items():
-                # print(len(v), prompt_len_input_ids)
-                # print(prompt_tokens[k])
                 prompt_tokens[k] = v[:prompt_len_input_ids]
-                # print(prompt_tokens[k])
-                # print()
 
             # Make sure prompts only have one different token at most an
             # and length only differs by 1 at most
             num_diff_tokens = sum([a != b
-                for a,b in zip(
-                    chosen_tokens['prompt_input_ids'], rejected_tokens['prompt_input_ids']
-                )
+                for a,b in zip(chosen_tokens['prompt_input_ids'], rejected_tokens['prompt_input_ids'])
             ])
             num_diff_len = abs(chosen_prompt_len_input_ids - rejected_prompt_len_input_ids)
             if num_diff_tokens > 1 or num_diff_len > 1:
-                raise ValueError("Chosen and rejected prompt_input_ids might only differ on the last token due to tokenizer merge ops.")
+                raise ValueError(
+                    "Chosen and rejected prompt_input_ids might only differ on the "
+                    "last token due to tokenizer merge ops."
+                )
 
             # add BOS token to head of prompt
             prompt_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + prompt_tokens["prompt_input_ids"]
