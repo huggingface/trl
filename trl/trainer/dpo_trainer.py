@@ -595,7 +595,7 @@ class DPOTrainer(Trainer):
 
             # Last prompt token might get merged by tokenizer and
             # it should not be included for generation if that happens
-            prompt_len_input_ids = len(prompt_tokens['prompt_input_ids'])
+            prompt_len_input_ids = len(prompt_tokens["prompt_input_ids"])
 
             chosen_prompt_len_input_ids = len(chosen_tokens["prompt_input_ids"])
             rejected_prompt_len_input_ids = len(rejected_tokens["prompt_input_ids"])
@@ -606,9 +606,9 @@ class DPOTrainer(Trainer):
 
             # Make sure prompts only have one different token at most an
             # and length only differs by 1 at most
-            num_diff_tokens = sum([a != b
-                for a,b in zip(chosen_tokens['prompt_input_ids'], rejected_tokens['prompt_input_ids'])
-            ])
+            num_diff_tokens = sum(
+                [a != b for a, b in zip(chosen_tokens["prompt_input_ids"], rejected_tokens["prompt_input_ids"])]
+            )
             num_diff_len = abs(chosen_prompt_len_input_ids - rejected_prompt_len_input_ids)
             if num_diff_tokens > 1 or num_diff_len > 1:
                 raise ValueError(
