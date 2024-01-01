@@ -1,0 +1,46 @@
+# KTO Trainer
+
+
+## Expected dataset format
+
+The KTO trainer expects a very specific format for the dataset as it does not require pairwise preferences. Since the model will be trained to directly optimize un-paired datasets of preferred and un-preferred generations, given some prompts, we expect a dataset with the following columns:
+
+- `prompt`
+- `generation`
+- `chosen`
+
+for example:
+
+```
+kto_dataset_dict = {
+    "prompt": [
+        "Hey, hello",
+        "How are you",
+        "What is your name?",
+        "What is your name?",
+        "Which is the best programming language?",
+        "Which is the best programming language?",
+        "Which is the best programming language?",
+    ],
+    "generation": [
+        "hi nice to meet you",
+        "leave me alone",
+        "I don't have a name",
+        "My name is Mary",
+        "Python",
+        "C++",
+        "Java",
+    ],
+    "chosen": [
+        True,
+        False,
+        False,
+        True,
+        True,
+        False,
+        False,
+    ],
+}
+```
+
+where the `prompt` contains the context inputs, `generation` contains the corresponding  responses and `chosen` contains the corresponding flag that indicates if the generation is preferred or unprepared. As can be seen a prompt can have multiple responses and this is reflected in the entries being repeated in the dictionary's value arrays.
