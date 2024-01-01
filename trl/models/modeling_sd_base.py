@@ -632,7 +632,9 @@ class DefaultDDPOStableDiffusionPipeline(DDPOStableDiffusionPipeline):
         if len(models) != 1:
             raise ValueError("Given how the trainable params were set, this should be of length 1")
         if self.use_lora:
-            lora_state_dict, network_alphas = self.sd_pipeline.lora_state_dict(input_dir)
+            lora_state_dict, network_alphas = self.sd_pipeline.lora_state_dict(
+                input_dir, weight_name="pytorch_lora_weights.safetensors"
+            )
             self.sd_pipeline.load_lora_into_unet(lora_state_dict, network_alphas=network_alphas, unet=models[0])
 
         elif not self.use_lora and isinstance(models[0], UNet2DConditionModel):
