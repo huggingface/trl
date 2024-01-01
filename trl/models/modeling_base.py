@@ -1,4 +1,4 @@
-# Copyright 2023 DDPO-pytorch authors (Kevin Black), The HuggingFace Team, metric-space. All rights reserved.
+# Copyright 2022 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,634 +11,664 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-import contextlib
+import json
+import logging
 import os
-import warnings
-from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Union
+from copy import deepcopy
 
-import numpy as np
 import torch
-from diffusers import DDIMScheduler, StableDiffusionPipeline, UNet2DConditionModel
-from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import rescale_noise_cfg
-from diffusers.utils import convert_state_dict_to_diffusers
+import torch.nn as nn
+from accelerate import PartialState
+from huggingface_hub import hf_hub_download
+from huggingface_hub.utils import (
+    EntryNotFoundError,
+    HFValidationError,
+    LocalEntryNotFoundError,
+    RepositoryNotFoundError,
+)
+from safetensors.torch import load_file as safe_load_file
+from transformers import PreTrainedModel
 
-from ..core import randn_tensor
-from ..import_utils import is_peft_available
+from ..import_utils import is_npu_available, is_peft_available, is_transformers_greater_than, is_xpu_available
 
 
 if is_peft_available():
-    from peft import LoraConfig
-    from peft.utils import get_peft_model_state_dict
+    from peft import (
+        PeftConfig,
+        PeftModel,
+        PeftModelForCausalLM,
+        PeftModelForSeq2SeqLM,
+        PromptLearningConfig,
+        get_peft_model,
+        prepare_model_for_kbit_training,
+    )
+
+if is_transformers_greater_than("4.33.0"):
+    from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
+else:
+    from transformers.deepspeed import is_deepspeed_zero3_enabled
+
+LAYER_PATTERNS = [
+    "transformer.h.{layer}",
+    "model.decoder.layers.{layer}",
+    "gpt_neox.layers.{layer}",
+    "model.layers.{layer}",
+]
 
 
-@dataclass
-class DDPOPipelineOutput(object):
+class PreTrainedModelWrapper(nn.Module):
+    r"""
+    A wrapper class around a (`transformers.PreTrainedModel`) to be compatible with the
+    (`~transformers.PreTrained`) class in order to keep some attributes and methods of the
+    (`~transformers.PreTrainedModel`) class.
+
+    Attributes:
+        pretrained_model: (`transformers.PreTrainedModel`)
+            The model to be wrapped.
+        parent_class: (`transformers.PreTrainedModel`)
+            The parent class of the model to be wrapped.
+        supported_args: (`list`)
+            The list of arguments that are supported by the wrapper class.
     """
-    Output class for the diffusers pipeline to be finetuned with the DDPO trainer
+    transformers_parent_class = None
+    supported_args = None
+    supported_modules = ("v_head",)
+    supported_rm_modules = ("score",)
+    supported_pretrained_model_architectures = (
+        (PreTrainedModel)
+        if not is_peft_available()
+        else (PreTrainedModel, PeftModelForCausalLM, PeftModelForSeq2SeqLM)
+    )
 
-    Args:
-        images (`torch.Tensor`):
-            The generated images.
-        latents (`List[torch.Tensor]`):
-            The latents used to generate the images.
-        log_probs (`List[torch.Tensor]`):
-            The log probabilities of the latents.
+    def __init__(
+        self, pretrained_model=None, score_module=None, supports_rm_adapter=False, rm_adapter_name=None, **kwargs
+    ):
+        super().__init__()
+        self.pretrained_model = pretrained_model
 
-    """
+        self.config = pretrained_model.config
+        self.prepare_inputs_for_generation = pretrained_model.prepare_inputs_for_generation
+        self.is_loaded_in_8bit = getattr(pretrained_model, "is_loaded_in_8bit", False)
+        self.is_loaded_in_4bit = getattr(pretrained_model, "is_loaded_in_4bit", False)
+        self.is_sequential_parallel = False
 
-    images: torch.Tensor
-    latents: torch.Tensor
-    log_probs: torch.Tensor
+        if hasattr(pretrained_model, "gradient_checkpointing_disable"):
+            self.gradient_checkpointing_disable = pretrained_model.gradient_checkpointing_disable
+
+        if hasattr(pretrained_model, "gradient_checkpointing_enable"):
+            self.gradient_checkpointing_enable = pretrained_model.gradient_checkpointing_enable
+
+        self.supports_rm_adapter = supports_rm_adapter
+        self.rm_adapter_name = rm_adapter_name
+        self.policy_adapter_name = "default"
+        if score_module is not None:
+            self.score = score_module
+
+    @classmethod
+    def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
+        r"""
+        Instantiates a new model from a pretrained model from `transformers`. The
+        pretrained model is loaded using the `from_pretrained` method of the
+        `transformers.PreTrainedModel` class. The arguments that are specific to the
+        `transformers.PreTrainedModel` class are passed along this method and filtered
+        out from the `kwargs` argument.
 
 
-@dataclass
-class DDPOSchedulerOutput(object):
-    """
-    Output class for the diffusers scheduler to be finetuned with the DDPO trainer
-
-    Args:
-        latents (`torch.Tensor`):
-            Predicted sample at the previous timestep. Shape: `(batch_size, num_channels, height, width)`
-        log_probs (`torch.Tensor`):
-            Log probability of the above mentioned sample. Shape: `(batch_size)`
-    """
-
-    latents: torch.Tensor
-    log_probs: torch.Tensor
-
-
-class DDPOStableDiffusionPipeline(object):
-    """
-    Main class for the diffusers pipeline to be finetuned with the DDPO trainer
-    """
-
-    def __call__(self, *args, **kwargs) -> DDPOPipelineOutput:
-        raise NotImplementedError
-
-    def scheduler_step(self, *args, **kwargs) -> DDPOSchedulerOutput:
-        raise NotImplementedError
-
-    @property
-    def unet(self):
+        Args:
+            pretrained_model_name_or_path (`str` or `transformers.PreTrainedModel`):
+                The path to the pretrained model or its name.
+            *model_args (`list`, *optional*)):
+                Additional positional arguments passed along to the underlying model's
+                `from_pretrained` method.
+            **kwargs (`dict`, *optional*):
+                Additional keyword arguments passed along to the underlying model's
+                `from_pretrained` method. We also pre-process the kwargs to extract
+                the arguments that are specific to the `transformers.PreTrainedModel`
+                class and the arguments that are specific to trl models. The kwargs
+                also support `prepare_model_for_kbit_training` arguments from
+                `peft` library.
         """
-        Returns the 2d U-Net model used for diffusion.
-        """
-        raise NotImplementedError
+        if kwargs is not None:
+            peft_config = kwargs.pop("peft_config", None)
+            reward_adapter = kwargs.pop("reward_adapter", None)
+            reward_adapter_name = kwargs.pop("reward_adapter_name", "reward_adapter")
+            is_trainable = kwargs.pop("is_trainable", False)
+            trl_model_args, pretrained_kwargs, peft_quantization_kwargs = cls._split_kwargs(kwargs)
+            token = pretrained_kwargs.get("token", None)
+        else:
+            peft_config = None
+            is_trainable = False
+            trl_model_args = {}
+            pretrained_kwargs = {}
+            peft_quantization_kwargs = {}
+            token = None
 
-    @property
-    def vae(self):
-        """
-        Returns the Variational Autoencoder model used from mapping images to and from the latent space
-        """
-        raise NotImplementedError
+        if reward_adapter is not None and not isinstance(reward_adapter, str):
+            raise ValueError(
+                "The `reward_adapter` argument should be a string representing the name of local path or the Hub id to the Reward Modeling adapter."
+            )
 
-    @property
-    def tokenizer(self):
-        """
-        Returns the tokenizer used for tokenizing text inputs
-        """
-        raise NotImplementedError
+        is_peft_model = False
 
-    @property
-    def scheduler(self):
-        """
-        Returns the scheduler associated with the pipeline used for the diffusion process
-        """
-        raise NotImplementedError
+        current_device = cls._get_current_device()
+        if isinstance(pretrained_model_name_or_path, str):
+            is_loaded_in_8bit = pretrained_kwargs["load_in_8bit"] if "load_in_8bit" in pretrained_kwargs else False
+            is_loaded_in_4bit = pretrained_kwargs["load_in_4bit"] if "load_in_4bit" in pretrained_kwargs else False
+        else:
+            is_loaded_in_8bit = getattr(pretrained_model_name_or_path, "is_loaded_in_8bit", False)
+            is_loaded_in_4bit = getattr(pretrained_model_name_or_path, "is_loaded_in_4bit", False)
 
-    @property
-    def text_encoder(self):
-        """
-        Returns the text encoder used for encoding text inputs
-        """
-        raise NotImplementedError
+        if (is_loaded_in_8bit or is_loaded_in_4bit) and "device_map" not in pretrained_kwargs:
+            # warn users
+            logging.warning(
+                "The `device_map` argument is not provided. We will override the device_map argument."
+                " to set the entire"
+                " model on the current device. If you want to set the model on multiple devices, please provide"
+                " a custom `device_map` argument."
+            )
+            pretrained_kwargs["device_map"] = {"": current_device}
 
-    @property
-    def autocast(self):
-        """
-        Returns the autocast context manager
-        """
-        raise NotImplementedError
+        if is_peft_available() and peft_config is not None and not isinstance(peft_config, PeftConfig):
+            raise ValueError("The `peft_config` argument should be an instance of `peft.PeftConfig` class.")
 
-    def set_progress_bar_config(self, *args, **kwargs):
+        # First, load the pre-trained model using the parent-class
+        # either `AutoModelForCausalLM` or `AutoModelForSeq2SeqLM`
+        if isinstance(pretrained_model_name_or_path, str):
+            if is_peft_available():
+                try:
+                    # If there is a trained peft adapter in the hub, load its config.
+                    remote_adapter_config = hf_hub_download(
+                        pretrained_model_name_or_path,
+                        "adapter_config.json",
+                        token=token,
+                    )
+                except (EntryNotFoundError, LocalEntryNotFoundError, HFValidationError, RepositoryNotFoundError):
+                    remote_adapter_config = None
+            else:
+                remote_adapter_config = None
+
+            local_adapter_present = os.path.exists(os.path.join(pretrained_model_name_or_path, "adapter_config.json"))
+
+            if (local_adapter_present or remote_adapter_config is not None) and is_peft_available():
+                if peft_config is not None:
+                    logging.warning(
+                        "`peft_config` argument ignored since a peft config file was found in "
+                        f"{pretrained_model_name_or_path}"
+                    )
+
+                # Load the trained peft adapter config
+                if local_adapter_present:
+                    trained_adapter_config = PeftConfig.from_pretrained(pretrained_model_name_or_path)
+                else:
+                    remote_adapter_dir = os.path.dirname(remote_adapter_config)
+                    trained_adapter_config = PeftConfig.from_pretrained(remote_adapter_dir)
+
+                # Load the pretrained base model
+                pretrained_model = cls.transformers_parent_class.from_pretrained(
+                    trained_adapter_config.base_model_name_or_path, *model_args, **pretrained_kwargs
+                )
+
+                # Wrap the pretrained model with the trained peft adapter
+                pretrained_model = PeftModel.from_pretrained(
+                    pretrained_model, pretrained_model_name_or_path, is_trainable=is_trainable
+                )
+                logging.info("Trained peft adapter loaded")
+            else:
+                pretrained_model = cls.transformers_parent_class.from_pretrained(
+                    pretrained_model_name_or_path, *model_args, **pretrained_kwargs
+                )
+
+                if peft_config is not None:
+                    # Initialize a new peft adapter with the given config
+                    if is_loaded_in_8bit or is_loaded_in_4bit:
+                        pretrained_model = prepare_model_for_kbit_training(
+                            pretrained_model,
+                            **peft_quantization_kwargs,
+                        )
+                    pretrained_model = get_peft_model(pretrained_model, peft_config)
+                    logging.info("peft adapter initialised")
+
+        elif isinstance(pretrained_model_name_or_path, cls.supported_pretrained_model_architectures):
+            pretrained_model = pretrained_model_name_or_path
+
+            if peft_config is not None and isinstance(pretrained_model, PreTrainedModel):
+                # Initialize a new peft adapter with the given config
+                if is_loaded_in_8bit or is_loaded_in_4bit:
+                    pretrained_model = prepare_model_for_kbit_training(
+                        pretrained_model,
+                        **peft_quantization_kwargs,
+                    )
+                pretrained_model = get_peft_model(pretrained_model, peft_config)
+                logging.info("peft adapter initialised")
+        else:
+            raise ValueError(
+                "pretrained_model_name_or_path should be a string or a PreTrainedModel, "
+                f"but is {type(pretrained_model_name_or_path)}"
+            )
+
+        if is_peft_available():
+            if isinstance(pretrained_model, PeftModel):
+                is_peft_model = True
+                # for backward compatibility
+                if hasattr(pretrained_model, "active_peft_config") and isinstance(
+                    pretrained_model.active_peft_config, PromptLearningConfig
+                ):
+                    raise ValueError("PromptLearningConfig is not supported for PPO training.")
+
+        # Add reward modeling adapter if specified
+        if not is_peft_model and reward_adapter is not None:
+            raise ValueError("reward_adapter can only be used with a PeftModel. ")
+        elif is_peft_model and reward_adapter is not None:
+            score_module = cls.add_and_load_reward_modeling_adapter(
+                pretrained_model, reward_adapter, reward_adapter_name, token=token
+            )
+            multi_adapter_args = {
+                "score_module": score_module,
+                "supports_rm_adapter": True,
+                "rm_adapter_name": reward_adapter_name,
+            }
+        else:
+            multi_adapter_args = {"supports_rm_adapter": False}
+
+        # Then, create the full model by instantiating the wrapper class
+        model = cls(pretrained_model, **multi_adapter_args, **trl_model_args)
+
+        # if resume_training, load the state_dict again - this is ok since the
+        # state_dict is removed from the model after loading it.
+        is_resuming_training = True
+        if isinstance(pretrained_model_name_or_path, str):
+            safe_filename = os.path.join(pretrained_model_name_or_path, "model.safetensors")
+            filename = os.path.join(pretrained_model_name_or_path, "pytorch_model.bin")
+
+            sharded_index_filename = os.path.join(pretrained_model_name_or_path, "pytorch_model.bin.index.json")
+            safe_sharded_index_filename = os.path.join(pretrained_model_name_or_path, "model.safetensors.index.json")
+            is_sharded = False
+            use_safe = os.path.exists(safe_filename)
+
+            if not (os.path.exists(filename) or os.path.exists(safe_filename)):
+                # Try with `pytorch_model.bin`
+                filename, files_to_download, is_sharded, is_resuming_training = cls._get_checkpoint_from_hub(
+                    pretrained_model,
+                    pretrained_model_name_or_path,
+                    sharded_index_filename,
+                    token=token,
+                )
+                # Try with safetensors
+                if filename is None and files_to_download is None:
+                    safe_filename, files_to_download, is_sharded, is_resuming_training = cls._get_checkpoint_from_hub(
+                        pretrained_model,
+                        pretrained_model_name_or_path,
+                        safe_sharded_index_filename,
+                        token=token,
+                        model_name="model.safetensors",
+                        model_index_name="model.safetensors.index.json",
+                    )
+                    use_safe = True
+                else:
+                    use_safe = False
+
+            loading_func = safe_load_file if use_safe else torch.load
+            load_kwargs = {} if use_safe else {"map_location": "cpu"}
+
+            if is_resuming_training:
+                if is_sharded:
+                    # download each file and add it to the state_dict
+                    state_dict = {}
+
+                    for shard_file in files_to_download:
+                        filename = hf_hub_download(
+                            pretrained_model_name_or_path,
+                            shard_file,
+                            token=token,
+                        )
+                        state_dict.update(loading_func(filename, **load_kwargs))
+                else:
+                    state_dict = loading_func(filename if not use_safe else safe_filename, **load_kwargs)
+
+        else:
+            state_dict = pretrained_model_name_or_path.state_dict()
+
+        model.is_peft_model = is_peft_model
+        model.current_device = current_device
+
+        if is_resuming_training:
+            model.post_init(state_dict=state_dict)
+
+        return model
+
+    @classmethod
+    def _get_checkpoint_from_hub(
+        cls,
+        pretrained_model,
+        pretrained_model_name_or_path,
+        index_filename,
+        token=None,
+        model_name="pytorch_model.bin",
+        model_index_name="pytorch_model.bin.index.json",
+    ):
+        files_to_download = None
+        filename = None
+        is_resuming_training = True
+        is_sharded = False
+
+        try:
+            filename = hf_hub_download(
+                pretrained_model_name_or_path,
+                model_name,
+                token=token,
+            )
+        # sharded
+        except (EntryNotFoundError, LocalEntryNotFoundError, HFValidationError, RepositoryNotFoundError):
+            if os.path.exists(index_filename):
+                index_file_name = index_filename
+            else:
+                try:
+                    index_file_name = hf_hub_download(
+                        pretrained_model_name_or_path,
+                        model_index_name,
+                        token=token,
+                    )
+                except (EntryNotFoundError, LocalEntryNotFoundError, HFValidationError, RepositoryNotFoundError):
+                    # not continue training, do not have v_head weight
+                    is_resuming_training = False
+                    logging.warning(
+                        f"A {type(pretrained_model)} model is loaded from '{pretrained_model_name_or_path}', "
+                        f"and no v_head weight is found. This IS expected if you are not resuming PPO training."
+                    )
+            # load json
+            if is_resuming_training:
+                with open(index_file_name, "r") as f:
+                    index = json.load(f)
+                # check filename with `v_head` or any known extra module:
+                files_to_download = set()
+                for k, v in index["weight_map"].items():
+                    if any([module in k for module in cls.supported_modules]):
+                        files_to_download.add(v)
+                is_sharded = True
+
+        return filename, files_to_download, is_sharded, is_resuming_training
+
+    @classmethod
+    def _get_current_device(cls):
+        r"""
+        Get the current device. For GPU, we return the local process index using the `accelerate.PartialState`
+        object to handle corner cases when running scripts in distributed environments.
+
+        Returns:
+            current_device (`Union[int, str]`):
+                The current device.
         """
-        Sets the progress bar config for the pipeline
+        state = PartialState()
+        if is_xpu_available():
+            return f"xpu:{state.local_process_index}"
+        elif is_npu_available():
+            return f"npu:{state.local_process_index}"
+        else:
+            return state.local_process_index if torch.cuda.is_available() else "cpu"
+
+    @classmethod
+    def _split_kwargs(cls, kwargs):
+        """
+        Separate the kwargs from the arguments that we support inside
+        `supported_args` and the ones that we don't.
+        """
+        check_peft_kwargs = False
+
+        if is_peft_available():
+            from peft import prepare_model_for_kbit_training
+
+            check_peft_kwargs = True
+
+        supported_kwargs = {}
+        unsupported_kwargs = {}
+        peft_kwargs = {}
+
+        for key, value in kwargs.items():
+            if key in cls.supported_args:
+                supported_kwargs[key] = value
+            else:
+                unsupported_kwargs[key] = value
+
+            if check_peft_kwargs:
+                if key in prepare_model_for_kbit_training.__code__.co_varnames:
+                    peft_kwargs[key] = value
+                    if key in unsupported_kwargs:
+                        unsupported_kwargs.pop(key)
+
+        return supported_kwargs, unsupported_kwargs, peft_kwargs
+
+    @classmethod
+    def add_and_load_reward_modeling_adapter(
+        cls, pretrained_model, adapter_model_id, adapter_name="reward_model_adapter", token=None
+    ):
+        r"""
+        Add and load a reward modeling adapter. This method can only be used if the
+        model is a `PeftModel` and if you have initialized the model with the `reward_modeling_adapter_id`
+        argument, pointing to the id of the reward modeling adapter. The latest needs also to contain the
+        score head in order to produce the reward.
+        """
+        pretrained_model.load_adapter(adapter_model_id, adapter_name, is_trainable=False)
+        pretrained_model.train()
+
+        filename = os.path.join(adapter_model_id, "adapter_model.bin")
+        safe_loading = False
+        if not os.path.exists(filename):
+            try:
+                local_filename = hf_hub_download(
+                    adapter_model_id,
+                    "adapter_model.bin",
+                    token=token,
+                )
+            except:  # noqa
+                filename = os.path.join(adapter_model_id, "adapter_model.safetensors")
+                safe_loading = True
+                if not os.path.exists(filename):
+                    try:
+                        local_filename = hf_hub_download(
+                            adapter_model_id,
+                            "adapter_model.safetensors",
+                            token=token,
+                        )
+                    except:  # noqa
+                        raise ValueError(
+                            "Could not find adapter model in the Hub, make sure you have the correct adapter model id."
+                        )
+                else:
+                    local_filename = filename
+        else:
+            local_filename = filename
+
+        loading_func = safe_load_file if safe_loading else torch.load
+        load_kwargs = {} if safe_loading else {"map_location": "cpu"}
+
+        adapter_state_dict = loading_func(local_filename, **load_kwargs)
+
+        for score_name_candidate in cls.supported_rm_modules:
+            if any([score_name_candidate in name for name in adapter_state_dict.keys()]):
+                score_name = score_name_candidate
+                # we have found the correct head name and can break
+                break
+
+        score_dict = {}
+
+        for name, param in adapter_state_dict.items():
+            if score_name in name:
+                key_name = ".".join(name.split(".")[-1:])
+                score_dict[key_name] = param.to(cls._get_current_device())
+
+        num_labels, hidden_dim = score_dict["weight"].shape
+        has_bias = any(["bias" in name for name in adapter_state_dict.keys()])
+
+        score = nn.Linear(hidden_dim, num_labels, bias=has_bias).to(
+            device=cls._get_current_device(),
+            dtype=pretrained_model.dtype,
+        )
+        score.load_state_dict(score_dict)
+        for param in score.parameters():
+            param.requires_grad = False
+
+        return score
+
+    def push_to_hub(self, *args, **kwargs):
+        r"""
+        Push the pretrained model to the hub. This method is a wrapper around
+        `transformers.PreTrainedModel.push_to_hub`. Please refer to the documentation
+        of `transformers.PreTrainedModel.push_to_hub` for more information.
+
+        Args:
+            *args (`list`, *optional*):
+                Positional arguments passed along to the underlying model's
+                `push_to_hub` method.
+            **kwargs (`dict`, *optional*):
+                Keyword arguments passed along to the underlying model's
+                `push_to_hub` method.
         """
         raise NotImplementedError
 
     def save_pretrained(self, *args, **kwargs):
-        """
-        Saves all of the model weights
-        """
-        raise NotImplementedError
+        r"""
+        Save the pretrained model to a directory. This method is a wrapper around
+        `transformers.PreTrainedModel.save_pretrained`. Please refer to the documentation
+        of `transformers.PreTrainedModel.save_pretrained` for more information.
 
-    def get_trainable_layers(self, *args, **kwargs):
-        """
-        Returns the trainable parameters of the pipeline
-        """
-        raise NotImplementedError
-
-    def save_checkpoint(self, *args, **kwargs):
-        """
-        Light wrapper around accelerate's register_save_state_pre_hook which is run before saving state
-        """
-        raise NotImplementedError
-
-    def load_checkpoint(self, *args, **kwargs):
-        """
-        Light wrapper around accelerate's register_lad_state_pre_hook which is run before loading state
-        """
-        raise NotImplementedError
-
-
-def _left_broadcast(input_tensor, shape):
-    """
-    As opposed to the default direction of broadcasting (right to left), this function broadcasts
-    from left to right
         Args:
-            input_tensor (`torch.FloatTensor`): is the tensor to broadcast
-            shape (`Tuple[int]`): is the shape to broadcast to
+            *args (`list`, *optional*):
+                Positional arguments passed along to the underlying model's
+                `save_pretrained` method.
+            **kwargs (`dict`, *optional*):
+                Keyword arguments passed along to the underlying model's
+                `save_pretrained` method.
+        """
+        state_dict = kwargs.get("state_dict")
+        if state_dict is None:
+            state_dict = self.state_dict()
+            kwargs["state_dict"] = state_dict
+
+        # if it is a peft model only save the `v_head` state_dict and
+        # pop the `state_dict` from the kwargs to avoid slient bugs with `peft`
+        if self.is_peft_model:
+            save_path = args[0]
+            save_path = os.path.join(save_path, "pytorch_model.bin")
+            torch.save(state_dict, save_path)
+            _ = kwargs.pop("state_dict", None)
+
+        return self.pretrained_model.save_pretrained(*args, **kwargs)
+
+    def state_dict(self, *args, **kwargs):
+        r"""
+        Return the state_dict of the pretrained model.
+        """
+        raise NotImplementedError
+
+    def post_init(self, *args, **kwargs):
+        r"""
+        Post initialization method. This method is called after the model is
+        instantiated and loaded from a checkpoint. It can be used to perform
+        additional operations such as loading the state_dict.
+        """
+        raise NotImplementedError
+
+    def compute_reward_score(self, input_ids, attention_mask=None, **kwargs):
+        r"""
+        Computes the reward score for a given input. The method has first to enable the adapter
+        and then compute the reward score. After that the model disables the reward modeling
+        adapter and enables the default ppo adapter again.
+        """
+        if not self.supports_rm_adapter:
+            raise ValueError("This model does not support reward modeling adapter.")
+
+        # enable rm adapter
+        self.pretrained_model.set_adapter(self.rm_adapter_name)
+        self.pretrained_model.eval()
+
+        with torch.no_grad():
+            base_model_output = self.pretrained_model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                output_hidden_states=True,
+                return_dict=True,
+                **kwargs,
+            )
+
+            last_hidden_states = base_model_output.hidden_states[-1]
+            scores = self.score(last_hidden_states)
+
+        self.pretrained_model.set_adapter(self.policy_adapter_name)
+        self.pretrained_model.eval()
+
+        return scores
+
+
+def create_reference_model(
+    model: PreTrainedModelWrapper, num_shared_layers: int = None, pattern: str = None
+) -> PreTrainedModelWrapper:
     """
-    input_ndim = input_tensor.ndim
-    if input_ndim > len(shape):
-        raise ValueError(
-            "The number of dimensions of the tensor to broadcast cannot be greater than the length of the shape to broadcast to"
-        )
-    return input_tensor.reshape(input_tensor.shape + (1,) * (len(shape) - input_ndim)).broadcast_to(shape)
-
-
-def _get_variance(self, timestep, prev_timestep):
-    alpha_prod_t = torch.gather(self.alphas_cumprod, 0, timestep.cpu()).to(timestep.device)
-    alpha_prod_t_prev = torch.where(
-        prev_timestep.cpu() >= 0,
-        self.alphas_cumprod.gather(0, prev_timestep.cpu()),
-        self.final_alpha_cumprod,
-    ).to(timestep.device)
-    beta_prod_t = 1 - alpha_prod_t
-    beta_prod_t_prev = 1 - alpha_prod_t_prev
-
-    variance = (beta_prod_t_prev / beta_prod_t) * (1 - alpha_prod_t / alpha_prod_t_prev)
-
-    return variance
-
-
-def scheduler_step(
-    self,
-    model_output: torch.FloatTensor,
-    timestep: int,
-    sample: torch.FloatTensor,
-    eta: float = 0.0,
-    use_clipped_model_output: bool = False,
-    generator=None,
-    prev_sample: Optional[torch.FloatTensor] = None,
-) -> DDPOSchedulerOutput:
-    """
-
-    Predict the sample at the previous timestep by reversing the SDE. Core function to propagate the diffusion
-    process from the learned model outputs (most often the predicted noise).
+    Creates a static reference copy of a model. Note that model will be in `.eval()` mode.
 
     Args:
-        model_output (`torch.FloatTensor`): direct output from learned diffusion model.
-        timestep (`int`): current discrete timestep in the diffusion chain.
-        sample (`torch.FloatTensor`):
-            current instance of sample being created by diffusion process.
-        eta (`float`): weight of noise for added noise in diffusion step.
-        use_clipped_model_output (`bool`): if `True`, compute "corrected" `model_output` from the clipped
-            predicted original sample. Necessary because predicted original sample is clipped to [-1, 1] when
-            `self.config.clip_sample` is `True`. If no clipping has happened, "corrected" `model_output` would
-            coincide with the one provided as input and `use_clipped_model_output` will have not effect.
-        generator: random number generator.
-        variance_noise (`torch.FloatTensor`): instead of generating noise for the variance using `generator`, we
-            can directly provide the noise for the variance itself. This is useful for methods such as
-            CycleDiffusion. (https://arxiv.org/abs/2210.05559)
+        model (`PreTrainedModelWrapper`): The model to be copied.
+        num_shared_layers (`int`, *optional*): The number of initial layers that are shared between both models and kept frozen.
+        pattern (`str`, *optional*): The shared layers are selected with a string pattern
+            (e.g. "transformer.h.{layer}" for GPT2) and if a custom pattern is necessary it can be passed here.
 
-    Returns:
-        `DDPOSchedulerOutput`: the predicted sample at the previous timestep and the log probability of the sample
+    Returns
+        `PreTrainedModelWrapper`
     """
-
-    if self.num_inference_steps is None:
+    if is_deepspeed_zero3_enabled():
         raise ValueError(
-            "Number of inference steps is 'None', you need to run 'set_timesteps' after creating the scheduler"
+            "DeepSpeed ZeRO-3 is enabled and is not compatible with `create_reference_model()`. Please instantiate your reference model directly with `AutoCausalLM.from_pretrained()`."
         )
 
-    # See formulas (12) and (16) of DDIM paper https://arxiv.org/pdf/2010.02502.pdf
-    # Ideally, read DDIM paper in-detail understanding
+    parameter_names = [n for n, _ in model.named_parameters()]
+    ref_model = deepcopy(model)
 
-    # Notation (<variable name> -> <name in paper>
-    # - pred_noise_t -> e_theta(x_t, t)
-    # - pred_original_sample -> f_theta(x_t, t) or x_0
-    # - std_dev_t -> sigma_t
-    # - eta -> η
-    # - pred_sample_direction -> "direction pointing to x_t"
-    # - pred_prev_sample -> "x_t-1"
+    # if no layers are shared, return copy of model
+    if num_shared_layers is None:
+        for param_name in parameter_names:
+            param = ref_model.get_parameter(param_name)
+            param.requires_grad = False
+        return ref_model.eval()
 
-    # 1. get previous step value (=t-1)
-    prev_timestep = timestep - self.config.num_train_timesteps // self.num_inference_steps
-    # to prevent OOB on gather
-    prev_timestep = torch.clamp(prev_timestep, 0, self.config.num_train_timesteps - 1)
-
-    # 2. compute alphas, betas
-    alpha_prod_t = self.alphas_cumprod.gather(0, timestep.cpu())
-    alpha_prod_t_prev = torch.where(
-        prev_timestep.cpu() >= 0,
-        self.alphas_cumprod.gather(0, prev_timestep.cpu()),
-        self.final_alpha_cumprod,
-    )
-    alpha_prod_t = _left_broadcast(alpha_prod_t, sample.shape).to(sample.device)
-    alpha_prod_t_prev = _left_broadcast(alpha_prod_t_prev, sample.shape).to(sample.device)
-
-    beta_prod_t = 1 - alpha_prod_t
-
-    # 3. compute predicted original sample from predicted noise also called
-    # "predicted x_0" of formula (12) from https://arxiv.org/pdf/2010.02502.pdf
-    if self.config.prediction_type == "epsilon":
-        pred_original_sample = (sample - beta_prod_t ** (0.5) * model_output) / alpha_prod_t ** (0.5)
-        pred_epsilon = model_output
-    elif self.config.prediction_type == "sample":
-        pred_original_sample = model_output
-        pred_epsilon = (sample - alpha_prod_t ** (0.5) * pred_original_sample) / beta_prod_t ** (0.5)
-    elif self.config.prediction_type == "v_prediction":
-        pred_original_sample = (alpha_prod_t**0.5) * sample - (beta_prod_t**0.5) * model_output
-        pred_epsilon = (alpha_prod_t**0.5) * model_output + (beta_prod_t**0.5) * sample
+    # identify layer name pattern
+    if pattern is not None:
+        pattern = pattern.format(layer=num_shared_layers)
     else:
-        raise ValueError(
-            f"prediction_type given as {self.config.prediction_type} must be one of `epsilon`, `sample`, or"
-            " `v_prediction`"
-        )
+        for pattern_candidate in LAYER_PATTERNS:
+            pattern_candidate = pattern_candidate.format(layer=num_shared_layers)
+            if any([pattern_candidate in name for name in parameter_names]):
+                pattern = pattern_candidate
+                break
 
-    # 4. Clip or threshold "predicted x_0"
-    if self.config.thresholding:
-        pred_original_sample = self._threshold_sample(pred_original_sample)
-    elif self.config.clip_sample:
-        pred_original_sample = pred_original_sample.clamp(
-            -self.config.clip_sample_range, self.config.clip_sample_range
-        )
+    if pattern is None:
+        raise ValueError("Layer pattern could not be matched.")
 
-    # 5. compute variance: "sigma_t(η)" -> see formula (16)
-    # σ_t = sqrt((1 − α_t−1)/(1 − α_t)) * sqrt(1 − α_t/α_t−1)
-    variance = _get_variance(self, timestep, prev_timestep)
-    std_dev_t = eta * variance ** (0.5)
-    std_dev_t = _left_broadcast(std_dev_t, sample.shape).to(sample.device)
+    # divide parameters in shared and unshared parameter lists
+    shared_param_list = []
+    unshared_param_list = []
 
-    if use_clipped_model_output:
-        # the pred_epsilon is always re-derived from the clipped x_0 in Glide
-        pred_epsilon = (sample - alpha_prod_t ** (0.5) * pred_original_sample) / beta_prod_t ** (0.5)
-
-    # 6. compute "direction pointing to x_t" of formula (12) from https://arxiv.org/pdf/2010.02502.pdf
-    pred_sample_direction = (1 - alpha_prod_t_prev - std_dev_t**2) ** (0.5) * pred_epsilon
-
-    # 7. compute x_t without "random noise" of formula (12) from https://arxiv.org/pdf/2010.02502.pdf
-    prev_sample_mean = alpha_prod_t_prev ** (0.5) * pred_original_sample + pred_sample_direction
-
-    if prev_sample is not None and generator is not None:
-        raise ValueError(
-            "Cannot pass both generator and prev_sample. Please make sure that either `generator` or"
-            " `prev_sample` stays `None`."
-        )
-
-    if prev_sample is None:
-        variance_noise = randn_tensor(
-            model_output.shape,
-            generator=generator,
-            device=model_output.device,
-            dtype=model_output.dtype,
-        )
-        prev_sample = prev_sample_mean + std_dev_t * variance_noise
-
-    # log prob of prev_sample given prev_sample_mean and std_dev_t
-    log_prob = (
-        -((prev_sample.detach() - prev_sample_mean) ** 2) / (2 * (std_dev_t**2))
-        - torch.log(std_dev_t)
-        - torch.log(torch.sqrt(2 * torch.as_tensor(np.pi)))
-    )
-    # mean along all but batch dimension
-    log_prob = log_prob.mean(dim=tuple(range(1, log_prob.ndim)))
-
-    return DDPOSchedulerOutput(prev_sample.type(sample.dtype), log_prob)
-
-
-# 1. The output type for call is different as the logprobs are now returned
-# 2. An extra method called `scheduler_step` is added which is used to constraint the scheduler output
-@torch.no_grad()
-def pipeline_step(
-    self,
-    prompt: Optional[Union[str, List[str]]] = None,
-    height: Optional[int] = None,
-    width: Optional[int] = None,
-    num_inference_steps: int = 50,
-    guidance_scale: float = 7.5,
-    negative_prompt: Optional[Union[str, List[str]]] = None,
-    num_images_per_prompt: Optional[int] = 1,
-    eta: float = 0.0,
-    generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
-    latents: Optional[torch.FloatTensor] = None,
-    prompt_embeds: Optional[torch.FloatTensor] = None,
-    negative_prompt_embeds: Optional[torch.FloatTensor] = None,
-    output_type: Optional[str] = "pil",
-    return_dict: bool = True,
-    callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,
-    callback_steps: int = 1,
-    cross_attention_kwargs: Optional[Dict[str, Any]] = None,
-    guidance_rescale: float = 0.0,
-):
-    r"""
-    Function invoked when calling the pipeline for generation.  Args: prompt (`str` or `List[str]`, *optional*): The prompt or prompts to guide the image generation. If not defined, one has to pass `prompt_embeds`.  instead.  height (`int`, *optional*, defaults to self.unet.config.sample_size * self.vae_scale_factor): The height in pixels of the generated image.
-        width (`int`, *optional*, defaults to self.unet.config.sample_size * self.vae_scale_factor):
-            The width in pixels of the generated image.
-        num_inference_steps (`int`, *optional*, defaults to 50):
-            The number of denoising steps. More denoising steps usually lead to a higher quality image at the
-            expense of slower inference.
-        guidance_scale (`float`, *optional*, defaults to 7.5):
-            Guidance scale as defined in [Classifier-Free Diffusion Guidance](https://arxiv.org/abs/2207.12598).
-            `guidance_scale` is defined as `w` of equation 2. of [Imagen
-            Paper](https://arxiv.org/pdf/2205.11487.pdf). Guidance scale is enabled by setting `guidance_scale >
-            1`. Higher guidance scale encourages to generate images that are closely linked to the text `prompt`,
-            usually at the expense of lower image quality.
-        negative_prompt (`str` or `List[str]`, *optional*):
-            The prompt or prompts not to guide the image generation. If not defined, one has to pass
-            `negative_prompt_embeds` instead. Ignored when not using guidance (i.e., ignored if `guidance_scale` is
-            less than `1`).
-        num_images_per_prompt (`int`, *optional*, defaults to 1):
-            The number of images to generate per prompt.
-        eta (`float`, *optional*, defaults to 0.0):
-            Corresponds to parameter eta (η) in the DDIM paper: https://arxiv.org/abs/2010.02502. Only applies to
-            [`schedulers.DDIMScheduler`], will be ignored for others.
-        generator (`torch.Generator` or `List[torch.Generator]`, *optional*):
-            One or a list of [torch generator(s)](https://pytorch.org/docs/stable/generated/torch.Generator.html)
-            to make generation deterministic.
-        latents (`torch.FloatTensor`, *optional*):
-            Pre-generated noisy latents, sampled from a Gaussian distribution, to be used as inputs for image
-            generation. Can be used to tweak the same generation with different prompts. If not provided, a latents
-            tensor will ge generated by sampling using the supplied random `generator`.
-        prompt_embeds (`torch.FloatTensor`, *optional*):
-            Pre-generated text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt weighting. If not
-            provided, text embeddings will be generated from `prompt` input argument.
-        negative_prompt_embeds (`torch.FloatTensor`, *optional*):
-            Pre-generated negative text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt
-            weighting. If not provided, negative_prompt_embeds will be generated from `negative_prompt` input
-            argument.
-        output_type (`str`, *optional*, defaults to `"pil"`):
-            The output format of the generate image. Choose between
-            [PIL](https://pillow.readthedocs.io/en/stable/): `PIL.Image.Image` or `np.array`.
-        return_dict (`bool`, *optional*, defaults to `True`):
-            Whether or not to return a [`~pipelines.stable_diffusion.StableDiffusionPipelineOutput`] instead of a
-            plain tuple.
-        callback (`Callable`, *optional*):
-            A function that will be called every `callback_steps` steps during inference. The function will be
-            called with the following arguments: `callback(step: int, timestep: int, latents: torch.FloatTensor)`.
-        callback_steps (`int`, *optional*, defaults to 1):
-            The frequency at which the `callback` function will be called. If not specified, the callback will be
-            called at every step.
-        cross_attention_kwargs (`dict`, *optional*):
-            A kwargs dictionary that if specified is passed along to the `AttentionProcessor` as defined under
-            `self.processor` in
-            [diffusers.cross_attention](https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/cross_attention.py).
-        guidance_rescale (`float`, *optional*, defaults to 0.7):
-            Guidance rescale factor proposed by [Common Diffusion Noise Schedules and Sample Steps are
-            Flawed](https://arxiv.org/pdf/2305.08891.pdf) `guidance_scale` is defined as `φ` in equation 16. of
-            [Common Diffusion Noise Schedules and Sample Steps are Flawed](https://arxiv.org/pdf/2305.08891.pdf).
-            Guidance rescale factor should fix overexposure when using zero terminal SNR.
-
-    Examples:
-
-    Returns:
-        `DDPOPipelineOutput`: The generated image, the predicted latents used to generate the image and the associated log probabilities
-    """
-    # 0. Default height and width to unet
-    height = height or self.unet.config.sample_size * self.vae_scale_factor
-    width = width or self.unet.config.sample_size * self.vae_scale_factor
-
-    # 1. Check inputs. Raise error if not correct
-    self.check_inputs(
-        prompt,
-        height,
-        width,
-        callback_steps,
-        negative_prompt,
-        prompt_embeds,
-        negative_prompt_embeds,
-    )
-
-    # 2. Define call parameters
-    if prompt is not None and isinstance(prompt, str):
-        batch_size = 1
-    elif prompt is not None and isinstance(prompt, list):
-        batch_size = len(prompt)
-    else:
-        batch_size = prompt_embeds.shape[0]
-
-    device = self._execution_device
-    # here `guidance_scale` is defined analog to the guidance weight `w` of equation (2)
-    # of the Imagen paper: https://arxiv.org/pdf/2205.11487.pdf . `guidance_scale = 1`
-    # corresponds to doing no classifier free guidance.
-    do_classifier_free_guidance = guidance_scale > 1.0
-
-    # 3. Encode input prompt
-    text_encoder_lora_scale = cross_attention_kwargs.get("scale", None) if cross_attention_kwargs is not None else None
-    prompt_embeds = self._encode_prompt(
-        prompt,
-        device,
-        num_images_per_prompt,
-        do_classifier_free_guidance,
-        negative_prompt,
-        prompt_embeds=prompt_embeds,
-        negative_prompt_embeds=negative_prompt_embeds,
-        lora_scale=text_encoder_lora_scale,
-    )
-
-    # 4. Prepare timesteps
-    self.scheduler.set_timesteps(num_inference_steps, device=device)
-    timesteps = self.scheduler.timesteps
-
-    # 5. Prepare latent variables
-    num_channels_latents = self.unet.config.in_channels
-    latents = self.prepare_latents(
-        batch_size * num_images_per_prompt,
-        num_channels_latents,
-        height,
-        width,
-        prompt_embeds.dtype,
-        device,
-        generator,
-        latents,
-    )
-
-    # 6. Denoising loop
-    num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
-    all_latents = [latents]
-    all_log_probs = []
-    with self.progress_bar(total=num_inference_steps) as progress_bar:
-        for i, t in enumerate(timesteps):
-            # expand the latents if we are doing classifier free guidance
-            latent_model_input = torch.cat([latents] * 2) if do_classifier_free_guidance else latents
-            latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
-
-            # predict the noise residual
-            noise_pred = self.unet(
-                latent_model_input,
-                t,
-                encoder_hidden_states=prompt_embeds,
-                cross_attention_kwargs=cross_attention_kwargs,
-                return_dict=False,
-            )[0]
-
-            # perform guidance
-            if do_classifier_free_guidance:
-                noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
-
-            if do_classifier_free_guidance and guidance_rescale > 0.0:
-                # Based on 3.4. in https://arxiv.org/pdf/2305.08891.pdf
-                noise_pred = rescale_noise_cfg(noise_pred, noise_pred_text, guidance_rescale=guidance_rescale)
-
-            # compute the previous noisy sample x_t -> x_t-1
-            scheduler_output = scheduler_step(self.scheduler, noise_pred, t, latents, eta)
-            latents = scheduler_output.latents
-            log_prob = scheduler_output.log_probs
-
-            all_latents.append(latents)
-            all_log_probs.append(log_prob)
-
-            # call the callback, if provided
-            if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
-                progress_bar.update()
-                if callback is not None and i % callback_steps == 0:
-                    callback(i, t, latents)
-
-    if not output_type == "latent":
-        image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0]
-        image, has_nsfw_concept = self.run_safety_checker(image, device, prompt_embeds.dtype)
-    else:
-        image = latents
-        has_nsfw_concept = None
-
-    if has_nsfw_concept is None:
-        do_denormalize = [True] * image.shape[0]
-    else:
-        do_denormalize = [not has_nsfw for has_nsfw in has_nsfw_concept]
-
-    image = self.image_processor.postprocess(image, output_type=output_type, do_denormalize=do_denormalize)
-
-    # Offload last model to CPU
-    if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
-        self.final_offload_hook.offload()
-
-    return DDPOPipelineOutput(image, all_latents, all_log_probs)
-
-
-class DefaultDDPOStableDiffusionPipeline(DDPOStableDiffusionPipeline):
-    def __init__(self, pretrained_model_name: str, *, pretrained_model_revision: str = "main", use_lora: bool = True):
-        self.sd_pipeline = StableDiffusionPipeline.from_pretrained(
-            pretrained_model_name, revision=pretrained_model_revision
-        )
-
-        self.use_lora = use_lora
-        self.pretrained_model = pretrained_model_name
-        self.pretrained_revision = pretrained_model_revision
-
-        try:
-            self.sd_pipeline.load_lora_weights(pretrained_model_name, revision=pretrained_model_revision)
-            self.use_lora = True
-        except OSError:
-            if use_lora:
-                warnings.warn(
-                    "If you are aware that the pretrained model has no lora weights to it, ignore this message. "
-                    "Otherwise please check the if `pytorch_lora_weights.safetensors` exists in the model folder."
-                )
-
-        self.sd_pipeline.scheduler = DDIMScheduler.from_config(self.sd_pipeline.scheduler.config)
-        self.sd_pipeline.safety_checker = None
-
-        # memory optimization
-        self.sd_pipeline.vae.requires_grad_(False)
-        self.sd_pipeline.text_encoder.requires_grad_(False)
-        self.sd_pipeline.unet.requires_grad_(not self.use_lora)
-
-    def __call__(self, *args, **kwargs) -> DDPOPipelineOutput:
-        return pipeline_step(self.sd_pipeline, *args, **kwargs)
-
-    def scheduler_step(self, *args, **kwargs) -> DDPOSchedulerOutput:
-        return scheduler_step(self.sd_pipeline.scheduler, *args, **kwargs)
-
-    @property
-    def unet(self):
-        return self.sd_pipeline.unet
-
-    @property
-    def vae(self):
-        return self.sd_pipeline.vae
-
-    @property
-    def tokenizer(self):
-        return self.sd_pipeline.tokenizer
-
-    @property
-    def scheduler(self):
-        return self.sd_pipeline.scheduler
-
-    @property
-    def text_encoder(self):
-        return self.sd_pipeline.text_encoder
-
-    @property
-    def autocast(self):
-        return contextlib.nullcontext if self.use_lora else None
-
-    def save_pretrained(self, output_dir):
-        if self.use_lora:
-            state_dict = convert_state_dict_to_diffusers(get_peft_model_state_dict(self.sd_pipeline.unet))
-            self.sd_pipeline.save_lora_weights(save_directory=output_dir, unet_lora_layers=state_dict)
-        self.sd_pipeline.save_pretrained(output_dir)
-
-    def set_progress_bar_config(self, *args, **kwargs):
-        self.sd_pipeline.set_progress_bar_config(*args, **kwargs)
-
-    def get_trainable_layers(self):
-        if self.use_lora:
-            lora_config = LoraConfig(
-                r=4,
-                lora_alpha=4,
-                init_lora_weights="gaussian",
-                target_modules=["to_k", "to_q", "to_v", "to_out.0"],
-            )
-            self.sd_pipeline.unet.add_adapter(lora_config)
-
-            # To avoid accelerate unscaling problems in FP16.
-            for param in self.sd_pipeline.unet.parameters():
-                # only upcast trainable parameters (LoRA) into fp32
-                if param.requires_grad:
-                    param.data = param.to(torch.float32)
-            unet_lora_parameters = list(
-                filter(lambda p: p.requires_grad, self.sd_pipeline.unet.add_adapter.parameters())
-            )
-            return unet_lora_parameters
+    shared_parameter = True
+    for name, param in model.named_parameters():
+        if pattern in name:
+            shared_parameter = False
+        if shared_parameter:
+            shared_param_list.append(name)
         else:
-            return self.sd_pipeline.unet
+            unshared_param_list.append(name)
 
-    def save_checkpoint(self, models, weights, output_dir):
-        if len(models) != 1:
-            raise ValueError("Given how the trainable params were set, this should be of length 1")
-        if self.use_lora and hasattr(models[0], "peft_config") and getattr(models[0], "peft_config", None) is not None:
-            state_dict = convert_state_dict_to_diffusers(get_peft_model_state_dict(models[0]))
-            self.sd_pipeline.save_lora_weights(save_directory=output_dir, unet_lora_layers=state_dict)
-        elif not self.use_lora and isinstance(models[0], UNet2DConditionModel):
-            models[0].save_pretrained(os.path.join(output_dir, "unet"))
-        else:
-            raise ValueError(f"Unknown model type {type(models[0])}")
+    # create reference of the original parameter if they are shared
+    for param_name in shared_param_list:
+        param = model.get_parameter(param_name)
+        param.requires_grad = False
 
-    def load_checkpoint(self, models, input_dir):
-        if len(models) != 1:
-            raise ValueError("Given how the trainable params were set, this should be of length 1")
-        if self.use_lora:
-            lora_state_dict, network_alphas = self.sd_pipeline.lora_state_dict(input_dir)
-            self.sd_pipeline.load_lora_into_unet(lora_state_dict, network_alphas=network_alphas, unet=models[0])
+        ref_param = ref_model.get_parameter(param_name)  # noqa
+        ref_param = param  # noqa
 
-        elif not self.use_lora and isinstance(models[0], UNet2DConditionModel):
-            load_model = UNet2DConditionModel.from_pretrained(input_dir, subfolder="unet")
-            models[0].register_to_config(**load_model.config)
-            models[0].load_state_dict(load_model.state_dict())
-            del load_model
-        else:
-            raise ValueError(f"Unknown model type {type(models[0])}")
+    # for all other parameters just make sure they don't use gradients
+    for param_name in unshared_param_list:
+        param = ref_model.get_parameter(param_name)
+        param.requires_grad = False
+
+    if pattern is not None and len(unshared_param_list) == 0:
+        logging.warning("Pattern passed or found, but no layers matched in the model. Check for a typo.")
+
+    return ref_model.eval()
