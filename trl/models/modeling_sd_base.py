@@ -539,7 +539,11 @@ class DefaultDDPOStableDiffusionPipeline(DDPOStableDiffusionPipeline):
         self.pretrained_revision = pretrained_model_revision
 
         try:
-            self.sd_pipeline.load_lora_weights(pretrained_model_name, revision=pretrained_model_revision)
+            self.sd_pipeline.load_lora_weights(
+                pretrained_model_name,
+                weight_name="pytorch_lora_weights.safetensors",
+                revision=pretrained_model_revision,
+            )
             self.use_lora = True
         except OSError:
             if use_lora:
