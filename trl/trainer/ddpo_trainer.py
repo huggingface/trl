@@ -171,7 +171,9 @@ class DDPOTrainer(BaseTrainer):
         if self.config.allow_tf32:
             torch.backends.cuda.matmul.allow_tf32 = True
 
-        self.optimizer = self._setup_optimizer(trainable_layers.parameters())
+        self.optimizer = self._setup_optimizer(
+            trainable_layers.parameters() if not isinstance(trainable_layers, list) else trainable_layers
+        )
 
         self.neg_prompt_embed = self.sd_pipeline.text_encoder(
             self.sd_pipeline.tokenizer(
