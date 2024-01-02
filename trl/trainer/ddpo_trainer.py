@@ -195,7 +195,7 @@ class DDPOTrainer(BaseTrainer):
         # more memory
         self.autocast = self.sd_pipeline.autocast or self.accelerator.autocast
 
-        if hasattr(self, "use_lora") and self.use_lora:
+        if hasattr(self.sd_pipeline, "use_lora") and self.sd_pipeline.use_lora:
             self.sd_pipeline.unet, self.optimizer = self.accelerator.prepare(self.sd_pipeline.unet, self.optimizer)
             self.trainable_layers = trainable_layers
         else:
