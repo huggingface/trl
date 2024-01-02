@@ -171,7 +171,9 @@ class DDPOTrainer(BaseTrainer):
         if self.config.allow_tf32:
             torch.backends.cuda.matmul.allow_tf32 = True
 
-        self.optimizer = self._setup_optimizer(trainable_layers.parameters())
+        self.optimizer = self._setup_optimizer(
+            trainable_layers.parameters() if not isinstance(trainable_layers, list) else trainable_layers
+        )
 
         self.neg_prompt_embed = self.sd_pipeline.text_encoder(
             self.sd_pipeline.tokenizer(
@@ -193,7 +195,11 @@ class DDPOTrainer(BaseTrainer):
         # more memory
         self.autocast = self.sd_pipeline.autocast or self.accelerator.autocast
 
-        self.trainable_layers, self.optimizer = self.accelerator.prepare(trainable_layers, self.optimizer)
+        if hasattr(self.sd_pipeline, "use_lora") and self.sd_pipeline.use_lora:
+            unet, self.optimizer = self.accelerator.prepare(trainable_layers, self.optimizer)
+            self.trainable_layers = list(filter(lambda p: p.requires_grad, unet.parameters()))
+        else:
+            self.trainable_layers, self.optimizer = self.accelerator.prepare(trainable_layers, self.optimizer)
 
         if self.config.async_reward_computation:
             self.executor = futures.ThreadPoolExecutor(max_workers=config.max_workers)
@@ -541,7 +547,9 @@ class DDPOTrainer(BaseTrainer):
                     self.accelerator.backward(loss)
                     if self.accelerator.sync_gradients:
                         self.accelerator.clip_grad_norm_(
-                            self.trainable_layers.parameters(),
+                            self.trainable_layers.parameters()
+                            if not isinstance(self.trainable_layers, list)
+                            else self.trainable_layers,
                             self.config.train_max_grad_norm,
                         )
                     self.optimizer.step()
