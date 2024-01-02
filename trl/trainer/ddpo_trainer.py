@@ -198,7 +198,6 @@ class DDPOTrainer(BaseTrainer):
         if hasattr(self.sd_pipeline, "use_lora") and self.sd_pipeline.use_lora:
             unet, self.optimizer = self.accelerator.prepare(trainable_layers, self.optimizer)
             self.trainable_layers = list(filter(lambda p: p.requires_grad, unet.parameters()))
-            setattr(self.sd_pipeline, "unet", unet)
         else:
             self.trainable_layers, self.optimizer = self.accelerator.prepare(trainable_layers, self.optimizer)
 
