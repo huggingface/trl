@@ -19,12 +19,13 @@ from collections import defaultdict
 from contextlib import nullcontext
 from copy import deepcopy
 from functools import wraps
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Literal, Iterator, Optional, Tuple, Union
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.data.sampler import Sampler
 from accelerate.utils import is_deepspeed_available, tqdm
 from datasets import Dataset
 from torch.utils.data import DataLoader
@@ -521,11 +522,41 @@ class UnpairedPreferenceBatchSampler(Sampler[List[int]]):
     def __init__(self, data: List[str], batch_size: int) -> None:
         self.data = data
         self.batch_size = batch_size
+        self.n_examples = len(data)
 
     def __len__(self) -> int:
         return (len(self.data) + self.batch_size - 1) // self.batch_size
 
     def __iter__(self) -> Iterator[List[int]]:
-        sizes = torch.tensor([len(x) for x in self.data])
-        for batch in torch.chunk(torch.argsort(sizes), len(self)):
-            yield batch.tolist()
+        batch_idx = 0
+        example_idx = 0
+
+        while True:
+            batch = []
+            chosen_example_queue, rejected_example_queue = [], []
+            quota = self.batch_size // 2
+            for i, example in enumerate(self.data):
+                if example["chosen"]:
+                    chosen_example_queue.append(i)
+                else:
+                    rejected_example_queue.append(i)
+
+                # only flush queues when you can get an even number of chosen and rejected examples
+                # weave together chosen and rejected examples one after the other to prevent per-device microbatch from being all chosen or all rejected
+                if len(chosen_example_queue) >= quota and len(rejected_example_queue) >= quota:
+                    while len(batch) < self.batch_size:
+                        batch.append(chosen_example_queue.pop(0))
+                        batch.append(rejected_example_queue.pop(0))
+
+                if len(batch) >= self.batch_size:
+                    batch_idx += 1
+                    example_idx += len(batch)
+                    yield batch
+                    batch = []
+
+                    if self.n_examples is not None and example_idx >= self.n_examples:
+                        break
+
+                # if we have yielded all the batches we can, break
+                if batch_idx >= len(self):
+                    break
