@@ -614,8 +614,7 @@ class DefaultDDPOStableDiffusionPipeline(DDPOStableDiffusionPipeline):
                 # only upcast trainable parameters (LoRA) into fp32
                 if param.requires_grad:
                     param.data = param.to(torch.float32)
-            unet_lora_parameters = list(filter(lambda p: p.requires_grad, self.sd_pipeline.unet.parameters()))
-            return unet_lora_parameters
+            return self.sd_pipeline.unet
         else:
             return self.sd_pipeline.unet
 
