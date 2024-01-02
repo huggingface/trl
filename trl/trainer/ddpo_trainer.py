@@ -195,7 +195,11 @@ class DDPOTrainer(BaseTrainer):
         # more memory
         self.autocast = self.sd_pipeline.autocast or self.accelerator.autocast
 
-        self.trainable_layers, self.optimizer = self.accelerator.prepare(trainable_layers, self.optimizer)
+        if hasattr(self, "use_lora") and self.use_lora:
+            self.sd_pipeline.unet, self.optimizer = self.accelerator.prepare(self.sd_pipeline.unet, self.optimizer)
+            self.trainable_layers = trainable_layers
+        else:
+            self.trainable_layers, self.optimizer = self.accelerator.prepare(trainable_layers, self.optimizer)
 
         if self.config.async_reward_computation:
             self.executor = futures.ThreadPoolExecutor(max_workers=config.max_workers)
