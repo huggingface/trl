@@ -1045,15 +1045,15 @@ class PPOTrainer(BaseTrainer):
 
         Args:
             logprobs (`torch.FloatTensor`):
-                Log probabilities of the model, shape [batch_size, response_length]
+                Log probabilities of the model, shape [mini_batch_size, response_length]
             values (`torch.FloatTensor`):
-                Values of the value head, shape [batch_size, response_length]
+                Values of the value head, shape [mini_batch_size, response_length]
             query (`torch.LongTensor`):
-                Encoded queries, shape [batch_size, query_length]
+                Encoded queries, shape [mini_batch_size, query_length]
             response (`torch.LongTensor`):
-                Encoded responses, shape [batch_size, response_length]
+                Encoded responses, shape [mini_batch_size, response_length]
             model_input (`torch.LongTensor`):
-                Concatenated queries and responses, shape [batch_size, query_length+response_length]
+                Concatenated queries and responses, shape [mini_batch_size, query_length+response_length]
 
         Returns:
             train_stats (dict[str, `torch.Tensor`]):
