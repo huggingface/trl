@@ -196,7 +196,8 @@ class DDPOTrainer(BaseTrainer):
         self.autocast = self.sd_pipeline.autocast or self.accelerator.autocast
 
         if hasattr(self.sd_pipeline, "use_lora") and self.sd_pipeline.use_lora:
-            self.sd_pipeline.unet, self.optimizer = self.accelerator.prepare(self.sd_pipeline.unet, self.optimizer)
+            unet, self.optimizer = self.accelerator.prepare(self.sd_pipeline.unet, self.optimizer)
+            self.sd_pipeline.unet = unet
             self.trainable_layers = trainable_layers
         else:
             self.trainable_layers, self.optimizer = self.accelerator.prepare(trainable_layers, self.optimizer)
