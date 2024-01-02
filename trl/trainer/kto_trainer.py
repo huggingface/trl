@@ -38,7 +38,7 @@ from transformers import (
     TrainingArguments,
 )
 from transformers.trainer_callback import TrainerCallback
-from transformers.trainer_utils import EvalLoopOutput
+from transformers.trainer_utils import EvalLoopOutput, seed_worker
 
 from ..import_utils import is_peft_available, is_wandb_available
 from ..models import PreTrainedModelWrapper, create_reference_model
@@ -508,10 +508,12 @@ class KTOTrainer(Trainer):
             "pin_memory": self.args.dataloader_pin_memory,
             "persistent_workers": self.args.dataloader_persistent_workers,
             "sampler": self._get_train_sampler(),
+            "batch_sampler": UnpairedPreferenceBatchSampler(
+                train_dataset, self.args.train_batch_size * self.args.gradient_accumulation_steps
+            ),
         }
 
         if not isinstance(train_dataset, torch.utils.data.IterableDataset):
-            dataloader_params["sampler"] = self._get_train_sampler()
             dataloader_params["drop_last"] = self.args.dataloader_drop_last
             dataloader_params["worker_init_fn"] = seed_worker
 
