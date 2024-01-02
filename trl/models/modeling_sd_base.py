@@ -620,6 +620,9 @@ class DefaultDDPOStableDiffusionPipeline(DDPOStableDiffusionPipeline):
             return self.sd_pipeline.unet
 
     def save_checkpoint(self, models, weights, output_dir):
+        print(f"Detected {len(models)} models.")
+        for model in models:
+            print(type(model))
         if len(models) != 1:
             raise ValueError("Given how the trainable params were set, this should be of length 1")
         if self.use_lora and hasattr(models[0], "peft_config") and getattr(models[0], "peft_config", None) is not None:
