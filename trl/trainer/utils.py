@@ -452,6 +452,7 @@ class ConstantLengthDataset(IterableDataset):
                 yield {
                     "input_ids": torch.LongTensor(example),
                     "labels": torch.LongTensor(example),
+                    "attention_mask": [1 for _ in example],
                 }
 
 
