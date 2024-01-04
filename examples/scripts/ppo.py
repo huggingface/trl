@@ -33,24 +33,22 @@ tqdm.pandas()
 @dataclass
 class ScriptArguments:
     use_seq2seq: bool = field(default=False, metadata={"help": "whether to use seq2seq"})
-    use_peft: bool = field(default=False, metadata={"help": "whether to use peft"})
     trust_remote_code: bool = field(default=False, metadata={"help": "Enable `trust_remote_code`"})
 
     # LoraConfig
+    use_peft: bool = field(default=False, metadata={"help": "whether to use peft"})
     lora_alpha: Optional[float] = field(default=16, metadata={"help": "the lora alpha parameter"})
     lora_r: Optional[int] = field(default=16, metadata={"help": "the lora r parameter"})
 
 
 parser = HfArgumentParser((ScriptArguments, PPOConfig))
-script_args, ppo_config = parser.parse_args_into_dataclasses()
+args, ppo_config = parser.parse_args_into_dataclasses()
 
 # We then define the arguments to pass to the sentiment analysis pipeline.
 # We set `return_all_scores` to True to get the sentiment score for each token.
 sent_kwargs = {"return_all_scores": True, "function_to_apply": "none", "batch_size": 16}
 
-trl_model_class = (
-    AutoModelForCausalLMWithValueHead if not script_args.use_seq2seq else AutoModelForSeq2SeqLMWithValueHead
-)
+trl_model_class = AutoModelForCausalLMWithValueHead if not args.use_seq2seq else AutoModelForSeq2SeqLMWithValueHead
 
 
 # Below is an example function to build the dataset. In our case, we use the IMDB dataset
@@ -100,14 +98,14 @@ def collator(data):
 set_seed(ppo_config.seed)
 
 # Now let's build the model, the reference model, and the tokenizer.
-if not script_args.use_peft:
-    ref_model = trl_model_class.from_pretrained(ppo_config.model_name, trust_remote_code=script_args.trust_remote_code)
+if not args.use_peft:
+    ref_model = trl_model_class.from_pretrained(ppo_config.model_name, trust_remote_code=args.trust_remote_code)
     device_map = None
     peft_config = None
 else:
     peft_config = LoraConfig(
-        r=script_args.lora_r,
-        lora_alpha=script_args.lora_alpha,
+        r=args.lora_r,
+        lora_alpha=args.lora_alpha,
         bias="none",
         task_type="CAUSAL_LM",
     )
@@ -117,7 +115,7 @@ else:
 
 model = trl_model_class.from_pretrained(
     ppo_config.model_name,
-    trust_remote_code=script_args.trust_remote_code,
+    trust_remote_code=args.trust_remote_code,
     device_map=device_map,
     peft_config=peft_config,
 )

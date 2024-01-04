@@ -12,15 +12,29 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+"""
+python examples/scripts/reward_modeling.py \
+    --output_dir="output" \
+    --per_device_train_batch_size=64 \
+    --num_train_epochs=1 \
+    --gradient_accumulation_steps=16 \
+    --gradient_checkpointing=True \
+    --learning_rate=1.41e-5 \
+    --report_to="wandb" \
+    --remove_unused_columns=False \
+    --optim="adamw_torch" \
+    --logging_steps=10 \
+    --evaluation_strategy="no" \
+    --max_length=512 \
+"""
 from dataclasses import dataclass, field
 from typing import Optional
 
-import tyro
 from accelerate import Accelerator
 from datasets import load_dataset
 from peft import LoraConfig
 from tqdm import tqdm
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, BitsAndBytesConfig
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, BitsAndBytesConfig, HfArgumentParser
 
 from trl import RewardConfig, RewardTrainer, is_xpu_available
 
@@ -30,52 +44,25 @@ tqdm.pandas()
 
 @dataclass
 class ScriptArguments:
-    model_name: str = "facebook/opt-350m"
-    """the model name"""
-    dataset_name: str = "Anthropic/hh-rlhf"
-    """the dataset name"""
-    dataset_text_field: str = "text"
-    """the text field of the dataset"""
-    eval_split: str = "none"
-    """the dataset split to evaluate on; default to 'none' (no evaluation)"""
-    load_in_8bit: bool = False
-    """load the model in 8 bits precision"""
-    load_in_4bit: bool = False
-    """load the model in 4 bits precision"""
-    trust_remote_code: bool = True
-    """Enable `trust_remote_code`"""
-    reward_config: RewardConfig = field(
-        default_factory=lambda: RewardConfig(
-            output_dir="output",
-            per_device_train_batch_size=64,
-            num_train_epochs=1,
-            gradient_accumulation_steps=16,
-            gradient_checkpointing=True,
-            gradient_checkpointing_kwargs={"use_reentrant": False},
-            learning_rate=1.41e-5,
-            report_to="tensorboard",
-            remove_unused_columns=False,
-            optim="adamw_torch",
-            logging_steps=500,
-            evaluation_strategy="no",
-            max_length=512,
-        )
+    model_name: str = field(default="facebook/opt-350m", metadata={"help": "the model name"})
+    dataset_name: str = field(default="Anthropic/hh-rlhf", metadata={"help": "the dataset name"})
+    dataset_text_field: str = field(default="text", metadata={"help": "the text field of the dataset"})
+    eval_split: str = field(
+        default="none", metadata={"help": "the dataset split to evaluate on; default to 'none' (no evaluation)"}
     )
-    use_peft: bool = False
-    """whether to use peft"""
-    peft_config: Optional[LoraConfig] = field(
-        default_factory=lambda: LoraConfig(
-            r=16,
-            lora_alpha=16,
-            bias="none",
-            task_type="SEQ_CLS",
-            modules_to_save=["scores"],
-        ),
-    )
+    load_in_8bit: bool = field(default=False, metadata={"help": "load the model in 8 bits precision"})
+    load_in_4bit: bool = field(default=False, metadata={"help": "load the model in 4 bits precision"})
+    trust_remote_code: bool = field(default=True, metadata={"help": "Enable `trust_remote_code`"})
+
+    # LoraConfig
+    use_peft: bool = field(default=False, metadata={"help": "whether to use peft"})
+    lora_alpha: Optional[float] = field(default=16, metadata={"help": "the lora alpha parameter"})
+    lora_r: Optional[int] = field(default=16, metadata={"help": "the lora r parameter"})
 
 
-args = tyro.cli(ScriptArguments)
-args.reward_config.evaluation_strategy = "steps" if args.eval_split != "none" else "no"
+parser = HfArgumentParser((ScriptArguments, RewardConfig))
+args, reward_config = parser.parse_args_into_dataclasses()
+reward_config.evaluation_strategy = "steps" if args.eval_split != "none" else "no"
 
 
 # Step 1: Load the model
@@ -134,8 +121,8 @@ train_dataset = train_dataset.map(
     num_proc=4,
 )
 train_dataset = train_dataset.filter(
-    lambda x: len(x["input_ids_chosen"]) <= args.reward_config.max_length
-    and len(x["input_ids_rejected"]) <= args.reward_config.max_length
+    lambda x: len(x["input_ids_chosen"]) <= reward_config.max_length
+    and len(x["input_ids_rejected"]) <= reward_config.max_length
 )
 
 if args.eval_split == "none":
@@ -149,14 +136,20 @@ else:
         num_proc=4,
     )
     eval_dataset = eval_dataset.filter(
-        lambda x: len(x["input_ids_chosen"]) <= args.reward_config.max_length
-        and len(x["input_ids_rejected"]) <= args.reward_config.max_length
+        lambda x: len(x["input_ids_chosen"]) <= reward_config.max_length
+        and len(x["input_ids_rejected"]) <= reward_config.max_length
     )
 
 
 # Step 4: Define the LoraConfig
 if args.use_peft:
-    peft_config = args.peft_config
+    peft_config = LoraConfig(
+        r=args.lora_r,
+        lora_alpha=args.lora_alpha,
+        bias="none",
+        task_type="SEQ_CLS",
+        modules_to_save=["scores"],
+    )
 else:
     peft_config = None
 
@@ -164,7 +157,7 @@ else:
 trainer = RewardTrainer(
     model=model,
     tokenizer=tokenizer,
-    args=args.reward_config,
+    args=reward_config,
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
     peft_config=peft_config,
