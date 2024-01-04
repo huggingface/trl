@@ -201,7 +201,6 @@ class PPOTrainer(BaseTrainer):
             project_config=ProjectConfiguration(**config.project_kwargs),
             **config.accelerator_kwargs,
         )
-        # torch.cuda.set_device(self.accelerator.local_process_index)
 
         # Step 1.1 Runtime variables filled by the accelerator
         config.world_size = self.accelerator.num_processes
