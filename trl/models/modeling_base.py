@@ -20,11 +20,16 @@ import torch
 import torch.nn as nn
 from accelerate import PartialState
 from huggingface_hub import hf_hub_download
-from huggingface_hub.utils import EntryNotFoundError, HFValidationError, LocalEntryNotFoundError
+from huggingface_hub.utils import (
+    EntryNotFoundError,
+    HFValidationError,
+    LocalEntryNotFoundError,
+    RepositoryNotFoundError,
+)
 from safetensors.torch import load_file as safe_load_file
 from transformers import PreTrainedModel
 
-from ..import_utils import is_peft_available, is_transformers_greater_than, is_xpu_available
+from ..import_utils import is_npu_available, is_peft_available, is_transformers_greater_than, is_xpu_available
 
 
 if is_peft_available():
@@ -177,7 +182,7 @@ class PreTrainedModelWrapper(nn.Module):
                         "adapter_config.json",
                         token=token,
                     )
-                except (EntryNotFoundError, LocalEntryNotFoundError, HFValidationError):
+                except (EntryNotFoundError, LocalEntryNotFoundError, HFValidationError, RepositoryNotFoundError):
                     remote_adapter_config = None
             else:
                 remote_adapter_config = None
@@ -353,7 +358,7 @@ class PreTrainedModelWrapper(nn.Module):
                 token=token,
             )
         # sharded
-        except (EntryNotFoundError, LocalEntryNotFoundError, HFValidationError):
+        except (EntryNotFoundError, LocalEntryNotFoundError, HFValidationError, RepositoryNotFoundError):
             if os.path.exists(index_filename):
                 index_file_name = index_filename
             else:
@@ -363,7 +368,7 @@ class PreTrainedModelWrapper(nn.Module):
                         model_index_name,
                         token=token,
                     )
-                except (EntryNotFoundError, LocalEntryNotFoundError, HFValidationError):
+                except (EntryNotFoundError, LocalEntryNotFoundError, HFValidationError, RepositoryNotFoundError):
                     # not continue training, do not have v_head weight
                     is_resuming_training = False
                     logging.warning(
@@ -396,6 +401,8 @@ class PreTrainedModelWrapper(nn.Module):
         state = PartialState()
         if is_xpu_available():
             return f"xpu:{state.local_process_index}"
+        elif is_npu_available():
+            return f"npu:{state.local_process_index}"
         else:
             return state.local_process_index if torch.cuda.is_available() else "cpu"
 

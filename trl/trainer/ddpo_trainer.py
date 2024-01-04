@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import warnings
 from collections import defaultdict
 from concurrent import futures
 from typing import Any, Callable, Optional, Tuple
@@ -22,6 +23,7 @@ import torch
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
+from huggingface_hub import whoami
 
 from ..models import DDPOStableDiffusionPipeline
 from . import BaseTrainer, DDPOConfig
@@ -29,6 +31,25 @@ from .utils import PerPromptStatTracker
 
 
 logger = get_logger(__name__)
+
+
+MODEL_CARD_TEMPLATE = """---
+license: apache-2.0
+tags:
+- trl
+- ddpo
+- diffusers
+- reinforcement-learning
+- text-to-image
+- stable-diffusion
+---
+
+# {model_name}
+
+This is a diffusion model that has been fine-tuned with reinforcement learning to
+ guide the model outputs according to a value, function, or human feedback. The model can be used for image generation conditioned with text.
+
+"""
 
 
 class DDPOTrainer(BaseTrainer):
@@ -45,6 +66,8 @@ class DDPOTrainer(BaseTrainer):
         **sd_pipeline** (`DDPOStableDiffusionPipeline`) -- Stable Diffusion pipeline to be used for training.
         **image_samples_hook** (Optional[Callable[[Any, Any, Any], Any]]) -- Hook to be called to log images
     """
+
+    _tag_names = ["trl", "ddpo"]
 
     def __init__(
         self,
@@ -148,7 +171,9 @@ class DDPOTrainer(BaseTrainer):
         if self.config.allow_tf32:
             torch.backends.cuda.matmul.allow_tf32 = True
 
-        self.optimizer = self._setup_optimizer(trainable_layers.parameters())
+        self.optimizer = self._setup_optimizer(
+            trainable_layers.parameters() if not isinstance(trainable_layers, list) else trainable_layers
+        )
 
         self.neg_prompt_embed = self.sd_pipeline.text_encoder(
             self.sd_pipeline.tokenizer(
@@ -170,7 +195,11 @@ class DDPOTrainer(BaseTrainer):
         # more memory
         self.autocast = self.sd_pipeline.autocast or self.accelerator.autocast
 
-        self.trainable_layers, self.optimizer = self.accelerator.prepare(trainable_layers, self.optimizer)
+        if hasattr(self.sd_pipeline, "use_lora") and self.sd_pipeline.use_lora:
+            unet, self.optimizer = self.accelerator.prepare(trainable_layers, self.optimizer)
+            self.trainable_layers = list(filter(lambda p: p.requires_grad, unet.parameters()))
+        else:
+            self.trainable_layers, self.optimizer = self.accelerator.prepare(trainable_layers, self.optimizer)
 
         if self.config.async_reward_computation:
             self.executor = futures.ThreadPoolExecutor(max_workers=config.max_workers)
@@ -518,7 +547,9 @@ class DDPOTrainer(BaseTrainer):
                     self.accelerator.backward(loss)
                     if self.accelerator.sync_gradients:
                         self.accelerator.clip_grad_norm_(
-                            self.trainable_layers.parameters(),
+                            self.trainable_layers.parameters()
+                            if not isinstance(self.trainable_layers, list)
+                            else self.trainable_layers,
                             self.config.train_max_grad_norm,
                         )
                     self.optimizer.step()
@@ -572,5 +603,27 @@ class DDPOTrainer(BaseTrainer):
         for epoch in range(self.first_epoch, epochs):
             global_step = self.step(epoch, global_step)
 
+    def create_model_card(self, path: str, model_name: Optional[str] = "TRL DDPO Model") -> None:
+        """Creates and saves a model card for a TRL model.
+
+        Args:
+            path (`str`): The path to save the model card to.
+            model_name (`str`, *optional*): The name of the model, defaults to `TRL DDPO Model`.
+        """
+        try:
+            user = whoami()["name"]
+        # handle the offline case
+        except:  # noqa
+            warnings.warn("Cannot retrieve user information assuming you are running in offline mode.")
+            return
+
+        if not os.path.exists(path):
+            os.makedirs(path)
+
+        model_card_content = MODEL_CARD_TEMPLATE.format(model_name=model_name, model_id=f"{user}/{path}")
+        with open(os.path.join(path, "README.md"), "w", encoding="utf-8") as f:
+            f.write(model_card_content)
+
     def _save_pretrained(self, save_directory):
         self.sd_pipeline.save_pretrained(save_directory)
+        self.create_model_card(save_directory)

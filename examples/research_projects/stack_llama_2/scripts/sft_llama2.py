@@ -8,10 +8,10 @@ from accelerate import Accelerator
 from datasets import load_dataset
 from peft import AutoPeftModelForCausalLM, LoraConfig
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TrainingArguments, HfArgumentParser
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, HfArgumentParser, TrainingArguments
 
 from trl import SFTTrainer
-from trl.import_utils import is_xpu_available
+from trl.import_utils import is_npu_available, is_xpu_available
 from trl.trainer import ConstantLengthDataset
 
 
@@ -174,6 +174,8 @@ trainer.model.save_pretrained(output_dir)
 del base_model
 if is_xpu_available():
     torch.xpu.empty_cache()
+elif is_npu_available():
+    torch.npu.empty_cache()
 else:
     torch.cuda.empty_cache()
 

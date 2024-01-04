@@ -52,7 +52,7 @@ from ..core import (
     stack_dicts,
     stats_to_np,
 )
-from ..import_utils import is_torch_greater_2_0, is_xpu_available
+from ..import_utils import is_npu_available, is_torch_greater_2_0, is_xpu_available
 from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper, create_reference_model
 from . import AdaptiveKLController, BaseTrainer, FixedKLController, PPOConfig, RunningMoments
 
@@ -64,6 +64,7 @@ MODEL_CARD_TEMPLATE = """---
 license: apache-2.0
 tags:
 - trl
+- ppo
 - transformers
 - reinforcement-learning
 ---
@@ -136,6 +137,8 @@ class PPOTrainer(BaseTrainer):
             model, if no reference model is passed. If no number is provided, all the layers will be shared.
         **lr_scheduler** (`torch.optim.lr_scheduler`, *optional*) -- Learning rate scheduler to be used for training.
     """
+
+    _tag_names = ["trl", "ppo"]
 
     def __init__(
         self,
@@ -349,6 +352,8 @@ class PPOTrainer(BaseTrainer):
         else:
             if is_xpu_available():
                 self.current_device = torch.device("xpu:0")
+            elif is_npu_available():
+                self.current_device = torch.device("npu:0")
             else:
                 self.current_device = torch.device("cuda:0")
 
