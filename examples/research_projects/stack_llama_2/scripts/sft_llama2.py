@@ -53,6 +53,7 @@ if training_args.group_by_length and script_args.packing:
 if training_args.gradient_checkpointing:
     raise ValueError("gradient_checkpointing not supported")
 
+
 def chars_token_ratio(dataset, tokenizer, nb_examples=400):
     """
     Estimate the average number of characters per token in the dataset.
