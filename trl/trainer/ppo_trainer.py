@@ -1320,9 +1320,25 @@ class PPOTrainer(BaseTrainer):
             rewards (`List[torch.FloatTensor]`):
                 A tensor of rewards.
         """
+
+        # all gather stats
         if not isinstance(rewards, torch.Tensor):
             rewards = torch.tensor(rewards).to(self.current_device)
         rewards = self.accelerator.gather(rewards).flatten()
+
+        if self.config.log_with == "wandb":
+            import wandb
+
+            if any([column_to_log not in batch.keys() for column_to_log in columns_to_log]):
+                raise ValueError(f"Columns to log {columns_to_log} are not present in the batch {batch.keys()}.")
+
+            batch_list = [batch[column_to_log] for column_to_log in columns_to_log]
+            if self.is_distributed:
+                gathered_batch_list = []
+                for b in batch_list:
+                    flattened = gather_object(b)
+                    gathered_batch_list.append(flattened)
+                batch_list = gathered_batch_list
 
         # Log only if we are in the main process
         if self.accelerator.is_main_process:
@@ -1336,20 +1352,6 @@ class PPOTrainer(BaseTrainer):
                     "'response'. "
                 )
             elif self.config.log_with == "wandb":
-                import wandb
-
-                if any([column_to_log not in batch.keys() for column_to_log in columns_to_log]):
-                    raise ValueError(f"Columns to log {columns_to_log} are not present in the batch {batch.keys()}.")
-
-                batch_list = [batch[column_to_log] for column_to_log in columns_to_log]
-                if self.is_distributed:
-                    self.accelerator.wait_for_everyone()
-                    gathered_batch_list = []
-                    for batch in batch_list:
-                        flattened = gather_object(batch)
-                        gathered_batch_list.append(flattened)
-                    batch_list = gathered_batch_list
-
                 table_rows = [list(r) for r in zip(*batch_list, rewards.cpu().tolist())]
                 logs.update({"game_log": wandb.Table(columns=[*columns_to_log, "reward"], rows=table_rows)})
 
