@@ -91,7 +91,7 @@ class SFTTrainer(Trainer):
         formatting_func (`Optional[Callable]`):
             The formatting function to be used for creating the `ConstantLengthDataset`.
         max_seq_length (`Optional[int]`):
-            The maximum sequence length to use for the `ConstantLengthDataset` and for automaticallty creating the Dataset. Defaults to `512`.
+            The maximum sequence length to use for the `ConstantLengthDataset` and for automatically creating the Dataset. Defaults to `512`.
         infinite (`Optional[bool]`):
             Whether to use an infinite dataset or not. Defaults to `False`.
         num_of_sequences (`Optional[int]`):
@@ -108,7 +108,7 @@ class SFTTrainer(Trainer):
             The number of examples to tokenize per batch. If batch_size <= 0 or batch_size == None,
             tokenize the full dataset as a single batch. Defaults to 1000.
         neftune_noise_alpha (`Optional[float]`):
-            If not `None`, this will activate NEFTune noise embeddings. This has been proven to drastically improve model performances for instrcution
+            If not `None`, this will activate NEFTune noise embeddings. This has been proven to drastically improve model performances for instruction
             fine-tuning. Check out the original paper here: https://arxiv.org/abs/2310.05914 and the original code here: https://github.com/neelsjain/NEFTune
         model_init_kwargs: (`Optional[Dict]`, *optional*):
             Dict of Optional kwargs to pass when instantiating the model from a string
