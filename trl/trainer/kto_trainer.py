@@ -70,8 +70,6 @@ class KTOTrainer(Trainer):
         model: Union[PreTrainedModel, nn.Module, str] = None,
         ref_model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
         beta: float = 0.1,
-        label_smoothing: float = 0,
-        loss_type: Literal["sigmoid", "hinge", "ipo", "kto"] = "sigmoid",
         args: TrainingArguments = None,
         data_collator: Optional[DataCollator] = None,
         label_pad_token_id: int = -100,
@@ -259,6 +257,12 @@ class KTOTrainer(Trainer):
         self.tokenizer = tokenizer
         self.precompute_ref_log_probs = precompute_ref_log_probs
 
+        # metric
+        self._stored_metrics = defaultdict(lambda: defaultdict(list))
+
+        # KTO parameter
+        self.beta = beta
+
         # tokenize the dataset
         train_dataset = train_dataset.map(self.tokenize_row)
         if eval_dataset is not None:
@@ -267,8 +271,8 @@ class KTOTrainer(Trainer):
         # split the dataset and interleave them together with equal probability of choosing chosen or rejected
         interleaved_train_dataset = interleave_datasets(
             [
-                train_dataset.filter(lambda x: x["chosen"]).shuffle(),
-                train_dataset.filter(lambda x: not x["chosen"]).shuffle(),
+                train_dataset.filter(lambda x: x["chosen"]),
+                train_dataset.filter(lambda x: not x["chosen"]),
             ],
             probabilities=[0.5, 0.5],
             stopping_strategy="all_exhausted",
@@ -277,8 +281,8 @@ class KTOTrainer(Trainer):
         if eval_dataset is not None:
             interleaved_eval_dataset = interleave_datasets(
                 [
-                    eval_dataset.filter(lambda x: x["chosen"]).shuffle(),
-                    eval_dataset.filter(lambda x: not x["chosen"]).shuffle(),
+                    eval_dataset.filter(lambda x: x["chosen"]),
+                    eval_dataset.filter(lambda x: not x["chosen"]),
                 ],
                 probabilities=[0.5, 0.5],
                 stopping_strategy="all_exhausted",
@@ -564,6 +568,48 @@ class KTOTrainer(Trainer):
 
         return (chosen_logps, rejected_logps, chosen_logits, rejected_logits)
 
+    def kto_loss(
+        self,
+        policy_chosen_logps: torch.FloatTensor,
+        policy_rejected_logps: torch.FloatTensor,
+        reference_chosen_logps: torch.FloatTensor,
+        reference_rejected_logps: torch.FloatTensor,
+    ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+        """Compute the DPO loss for a batch of policy and reference model log probabilities.
+
+        Args:
+            policy_chosen_logps: Log probabilities of the policy model for the chosen responses. Shape: (batch_size,)
+            policy_rejected_logps: Log probabilities of the policy model for the rejected responses. Shape: (batch_size,)
+            reference_chosen_logps: Log probabilities of the reference model for the chosen responses. Shape: (batch_size,)
+            reference_rejected_logps: Log probabilities of the reference model for the rejected responses. Shape: (batch_size,)
+            reference_free: If True, we ignore the _provided_ reference model and implicitly use a reference model that assigns equal probability to all responses.
+
+        Returns:
+            A tuple of three tensors: (losses, chosen_rewards, rejected_rewards).
+            The losses tensor contains the DPO loss for each example in the batch.
+            The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
+        """
+        # eqn (7) of the HALOs paper
+        chosen_KL = (policy_chosen_logps - reference_chosen_logps).mean().clamp(min=0)
+        rejected_KL = (policy_rejected_logps - reference_rejected_logps).mean().clamp(min=0)
+
+        chosen_logratios = policy_chosen_logps - reference_chosen_logps
+        rejected_logratios = policy_rejected_logps - reference_rejected_logps
+        # As described in the KTO report, the KL term for chosen (rejected) is estimated using the rejected (chosen) half.
+        losses = torch.cat(
+            (
+                1 - F.sigmoid(self.beta * (chosen_logratios - rejected_KL)),
+                1 - F.sigmoid(self.beta * (chosen_KL - rejected_logratios)),
+            ),
+            0,
+        )
+
+        # implicit rewards
+        chosen_rewards = self.beta * (policy_chosen_logps - reference_chosen_logps).detach()
+        rejected_rewards = self.beta * (policy_rejected_logps - reference_rejected_logps).detach()
+
+        return losses, chosen_rewards, rejected_rewards
+
     def get_batch_loss_metrics(
         self,
         model,
@@ -579,10 +625,6 @@ class KTOTrainer(Trainer):
             policy_chosen_logits,
             policy_rejected_logits,
         ) = self.forward(model, batch)
-
-        import pdb
-
-        pdb.set_trace()
 
         # if reference_chosen_logps and reference_rejected_logps in batch use them, otherwise use the reference model
         if "reference_chosen_logps" in batch and "reference_rejected_logps" in batch:
@@ -615,14 +657,14 @@ class KTOTrainer(Trainer):
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
         prefix = "eval_" if train_eval == "eval" else ""
-        metrics[f"{prefix}rewards/chosen"] = chosen_rewards.cpu().mean()
-        metrics[f"{prefix}rewards/rejected"] = rejected_rewards.cpu().mean()
-        metrics[f"{prefix}rewards/accuracies"] = reward_accuracies.cpu().mean()
-        metrics[f"{prefix}rewards/margins"] = (chosen_rewards - rejected_rewards).cpu().mean()
-        metrics[f"{prefix}logps/rejected"] = policy_rejected_logps.detach().cpu().mean()
-        metrics[f"{prefix}logps/chosen"] = policy_chosen_logps.detach().cpu().mean()
-        metrics[f"{prefix}logits/rejected"] = policy_rejected_logits.detach().cpu().mean()
-        metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.detach().cpu().mean()
+        metrics[f"{prefix}rewards/chosen"] = chosen_rewards.mean().cpu()
+        metrics[f"{prefix}rewards/rejected"] = rejected_rewards.mean().cpu()
+        metrics[f"{prefix}rewards/accuracies"] = reward_accuracies.mean().cpu()
+        metrics[f"{prefix}rewards/margins"] = (chosen_rewards - rejected_rewards).mean().cpu()
+        metrics[f"{prefix}logps/rejected"] = policy_rejected_logps.detach().mean().cpu()
+        metrics[f"{prefix}logps/chosen"] = policy_chosen_logps.detach().mean().cpu()
+        metrics[f"{prefix}logits/rejected"] = policy_rejected_logits.detach().mean().cpu()
+        metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.detach().mean().cpu()
 
         return losses.mean(), metrics
 
@@ -647,6 +689,10 @@ class KTOTrainer(Trainer):
         if return_outputs:
             return (loss, metrics)
         return loss
+
+    def store_metrics(self, metrics: Dict[str, float], train_eval: Literal["train", "eval"] = "train") -> None:
+        for key, value in metrics.items():
+            self._stored_metrics[train_eval][key].append(value)
 
 
 #     def get_train_dataloader(self) -> DataLoader:
