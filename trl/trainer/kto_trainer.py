@@ -24,6 +24,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from accelerate.utils import is_deepspeed_available
 from datasets import Dataset, interleave_datasets
+from torch.utils.data import SequentialSampler
 from transformers import (
     AutoModelForCausalLM,
     DataCollator,
@@ -33,7 +34,7 @@ from transformers import (
     TrainingArguments,
 )
 from transformers.trainer_callback import TrainerCallback
-from transformers.trainer_utils import EvalLoopOutput
+from transformers.trainer_utils import EvalLoopOutput, has_length
 
 from ..import_utils import is_peft_available, is_wandb_available
 from ..models import PreTrainedModelWrapper, create_reference_model
@@ -684,87 +685,7 @@ class KTOTrainer(Trainer):
         for key, value in metrics.items():
             self._stored_metrics[train_eval][key].append(value)
 
-
-#     def get_train_dataloader(self) -> DataLoader:
-#         """
-#         Returns the training [`~torch.utils.data.DataLoader`].
-
-#         Will use no sampler if `train_dataset` does not implement `__len__`, a random sampler (adapted to distributed
-#         training if necessary) otherwise.
-
-#         Subclass and override this method if you want to inject some custom behavior.
-#         """
-#         if self.train_dataset is None:
-#             raise ValueError("Trainer: training requires a train_dataset.")
-
-#         train_dataset = self.train_dataset
-#         data_collator = self.data_collator
-#         if isinstance(train_dataset, Dataset):
-#             train_dataset = self._remove_unused_columns(train_dataset, description="training")
-#         else:
-#             data_collator = self._get_collator_with_removed_columns(data_collator, description="training")
-
-#         dataloader_params = {
-#             # "batch_size": self._train_batch_size,
-#             "collate_fn": data_collator,
-#             "num_workers": self.args.dataloader_num_workers,
-#             "pin_memory": self.args.dataloader_pin_memory,
-#             "persistent_workers": self.args.dataloader_persistent_workers,
-#             # "sampler": self._get_train_sampler(),
-#             "batch_sampler": UnpairedPreferenceBatchSampler(
-#                 train_dataset, self.args.train_batch_size * self.args.gradient_accumulation_steps
-#             ),
-#         }
-
-#         if not isinstance(train_dataset, torch.utils.data.IterableDataset):
-#             dataloader_params["drop_last"] = self.args.dataloader_drop_last
-#             dataloader_params["worker_init_fn"] = seed_worker
-#         import pdb
-
-#         pdb.set_trace()
-#         return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
-
-
-# class UnpairedPreferenceBatchSampler(Sampler[List[int]]):
-#     def __init__(self, data: List[str], batch_size: int) -> None:
-#         self.data = data
-#         self.batch_size = batch_size
-#         self.n_examples = len(data)
-
-#     def __len__(self) -> int:
-#         return (self.n_examples + self.batch_size - 1) // self.batch_size
-
-#     def __iter__(self) -> Iterator[List[int]]:
-#         batch_idx = 0
-#         example_idx = 0
-#         data = self.data.shuffle()
-
-#         while True:
-#             batch = []
-#             chosen_example_queue, rejected_example_queue = [], []
-#             quota = self.batch_size // 2
-#             for i, example in zip(data._indices, data):
-#                 if example["chosen"]:
-#                     chosen_example_queue.append(i)
-#                 else:
-#                     rejected_example_queue.append(i)
-
-#                 # only flush queues when you can get an even number of chosen and rejected examples
-#                 # weave together chosen and rejected examples one after the other to prevent per-device microbatch from being all chosen or all rejected
-#                 if len(chosen_example_queue) >= quota and len(rejected_example_queue) >= quota:
-#                     while len(batch) < self.batch_size:
-#                         batch.append(chosen_example_queue.pop(0))
-#                         batch.append(rejected_example_queue.pop(0))
-
-#                 if len(batch) >= self.batch_size:
-#                     batch_idx += 1
-#                     example_idx += len(batch)
-#                     yield batch
-#                     batch = []
-
-#                     if self.n_examples is not None and example_idx >= self.n_examples:
-#                         break
-
-#                 # if we have yielded all the batches we can, break
-#                 if batch_idx >= len(self):
-#                     break
+    def _get_train_sampler(self) -> Optional[torch.utils.data.Sampler]:
+        if self.train_dataset is None or not has_length(self.train_dataset):
+            return None
+        return SequentialSampler(self.train_dataset)
