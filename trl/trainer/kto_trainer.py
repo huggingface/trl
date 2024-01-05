@@ -27,7 +27,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data.sampler import Sampler
 from accelerate.utils import is_deepspeed_available, tqdm
-from datasets import Dataset
+from datasets import Dataset, interleave_datasets
 from torch.utils.data import DataLoader
 from transformers import (
     AutoModelForCausalLM,
@@ -264,12 +264,34 @@ class KTOTrainer(Trainer):
         if eval_dataset is not None:
             eval_dataset = eval_dataset.map(self.tokenize_row)
 
+        # split the dataset and interleave them together with equal probability of choosing chosen or rejected
+        interleaved_train_dataset = interleave_datasets(
+            [
+                train_dataset.filter(lambda x: x["chosen"]).shuffle(),
+                train_dataset.filter(lambda x: not x["chosen"]).shuffle(),
+            ],
+            probabilities=[0.5, 0.5],
+            stopping_strategy="all_exhausted",
+        )
+
+        if eval_dataset is not None:
+            interleaved_eval_dataset = interleave_datasets(
+                [
+                    eval_dataset.filter(lambda x: x["chosen"]).shuffle(),
+                    eval_dataset.filter(lambda x: not x["chosen"]).shuffle(),
+                ],
+                probabilities=[0.5, 0.5],
+                stopping_strategy="all_exhausted",
+            )
+        else:
+            interleaved_eval_dataset = None
+
         super().__init__(
             model=model,
             args=args,
             data_collator=data_collator,
-            train_dataset=train_dataset,
-            eval_dataset=eval_dataset,
+            train_dataset=interleaved_train_dataset,
+            eval_dataset=interleaved_eval_dataset,
             tokenizer=tokenizer,
             model_init=model_init,
             compute_metrics=compute_metrics,
@@ -482,83 +504,231 @@ class KTOTrainer(Trainer):
 
         return batch
 
-    def get_train_dataloader(self) -> DataLoader:
+    @staticmethod
+    def get_batch_logps(
+        logits: torch.FloatTensor,
+        labels: torch.LongTensor,
+        average_log_prob: bool = False,
+        label_pad_token_id: int = -100,
+        is_encoder_decoder: bool = False,
+    ) -> torch.FloatTensor:
+        """Compute the log probabilities of the given labels under the given logits.
+
+        Args:
+            logits: Logits of the model (unnormalized). Shape: (batch_size, sequence_length, vocab_size)
+            labels: Labels for which to compute the log probabilities. Label tokens with a value of label_pad_token_id are ignored. Shape: (batch_size, sequence_length)
+            average_log_prob: If True, return the average log probability per (non-masked) token. Otherwise, return the sum of the log probabilities of the (non-masked) tokens.
+
+        Returns:
+            A tensor of shape (batch_size,) containing the average/sum log probabilities of the given labels under the given logits.
         """
-        Returns the training [`~torch.utils.data.DataLoader`].
+        if logits.shape[:-1] != labels.shape:
+            raise ValueError("Logits (batch and sequence length dim) and labels must have the same shape.")
 
-        Will use no sampler if `train_dataset` does not implement `__len__`, a random sampler (adapted to distributed
-        training if necessary) otherwise.
+        if not is_encoder_decoder:
+            labels = labels[:, 1:].clone()
+            logits = logits[:, :-1, :]
+        loss_mask = labels != label_pad_token_id
 
-        Subclass and override this method if you want to inject some custom behavior.
-        """
-        if self.train_dataset is None:
-            raise ValueError("Trainer: training requires a train_dataset.")
+        # dummy token; we'll ignore the losses on these tokens later
+        labels[labels == label_pad_token_id] = 0
 
-        train_dataset = self.train_dataset
-        data_collator = self.data_collator
-        if isinstance(train_dataset, Dataset):
-            train_dataset = self._remove_unused_columns(train_dataset, description="training")
+        per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
+
+        if average_log_prob:
+            return (per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)
         else:
-            data_collator = self._get_collator_with_removed_columns(data_collator, description="training")
+            return (per_token_logps * loss_mask).sum(-1)
 
-        dataloader_params = {
-            "batch_size": self._train_batch_size,
-            "collate_fn": data_collator,
-            "num_workers": self.args.dataloader_num_workers,
-            "pin_memory": self.args.dataloader_pin_memory,
-            "persistent_workers": self.args.dataloader_persistent_workers,
-            "sampler": self._get_train_sampler(),
-            "batch_sampler": UnpairedPreferenceBatchSampler(
-                train_dataset, self.args.train_batch_size * self.args.gradient_accumulation_steps
-            ),
-        }
+    def forward(
+        self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]
+    ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+        all_logits = model(batch["generation_input_ids"], attention_mask=batch["generation_attention_mask"]).logits
 
-        if not isinstance(train_dataset, torch.utils.data.IterableDataset):
-            dataloader_params["drop_last"] = self.args.dataloader_drop_last
-            dataloader_params["worker_init_fn"] = seed_worker
+        all_logps = self.get_batch_logps(
+            all_logits,
+            batch["generation_labels"],
+            average_log_prob=False,
+            is_encoder_decoder=self.is_encoder_decoder,
+            label_pad_token_id=self.label_pad_token_id,
+        )
 
-        return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
+        chosen_idx = [i for i in range(all_logps.shape[0]) if batch["chosen"][i] is True]
+        rejected_idx = [i for i in range(all_logps.shape[0]) if batch["chosen"][i] is False]
 
+        chosen_logps = all_logps[chosen_idx, ...]
+        rejected_logps = all_logps[rejected_idx, ...]
 
-class UnpairedPreferenceBatchSampler(Sampler[List[int]]):
-    def __init__(self, data: List[str], batch_size: int) -> None:
-        self.data = data
-        self.batch_size = batch_size
-        self.n_examples = len(data)
+        chosen_logits = all_logits[chosen_idx, ...]
+        rejected_logits = all_logits[rejected_idx, ...]
 
-    def __len__(self) -> int:
-        return (len(self.data) + self.batch_size - 1) // self.batch_size
+        return (chosen_logps, rejected_logps, chosen_logits, rejected_logits)
 
-    def __iter__(self) -> Iterator[List[int]]:
-        batch_idx = 0
-        example_idx = 0
+    def get_batch_loss_metrics(
+        self,
+        model,
+        batch: Dict[str, Union[List, torch.LongTensor]],
+        train_eval: Literal["train", "eval"] = "train",
+    ):
+        """Compute the DPO loss and other metrics for the given batch of inputs for train or test."""
+        metrics = {}
 
-        while True:
-            batch = []
-            chosen_example_queue, rejected_example_queue = [], []
-            quota = self.batch_size // 2
-            for i, example in enumerate(self.data):
-                if example["chosen"]:
-                    chosen_example_queue.append(i)
+        (
+            policy_chosen_logps,
+            policy_rejected_logps,
+            policy_chosen_logits,
+            policy_rejected_logits,
+        ) = self.forward(model, batch)
+
+        import pdb
+
+        pdb.set_trace()
+
+        # if reference_chosen_logps and reference_rejected_logps in batch use them, otherwise use the reference model
+        if "reference_chosen_logps" in batch and "reference_rejected_logps" in batch:
+            reference_chosen_logps = batch["reference_chosen_logps"]
+            reference_rejected_logps = batch["reference_rejected_logps"]
+        else:
+            with torch.no_grad():
+                if self.ref_model is None:
+                    with self.accelerator.unwrap_model(self.model).disable_adapter():
+                        (
+                            reference_chosen_logps,
+                            reference_rejected_logps,
+                            _,
+                            _,
+                        ) = self.forward(self.model, batch)
                 else:
-                    rejected_example_queue.append(i)
+                    (
+                        reference_chosen_logps,
+                        reference_rejected_logps,
+                        _,
+                        _,
+                    ) = self.forward(self.ref_model, batch)
 
-                # only flush queues when you can get an even number of chosen and rejected examples
-                # weave together chosen and rejected examples one after the other to prevent per-device microbatch from being all chosen or all rejected
-                if len(chosen_example_queue) >= quota and len(rejected_example_queue) >= quota:
-                    while len(batch) < self.batch_size:
-                        batch.append(chosen_example_queue.pop(0))
-                        batch.append(rejected_example_queue.pop(0))
+        losses, chosen_rewards, rejected_rewards = self.kto_loss(
+            policy_chosen_logps,
+            policy_rejected_logps,
+            reference_chosen_logps,
+            reference_rejected_logps,
+        )
+        reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
-                if len(batch) >= self.batch_size:
-                    batch_idx += 1
-                    example_idx += len(batch)
-                    yield batch
-                    batch = []
+        prefix = "eval_" if train_eval == "eval" else ""
+        metrics[f"{prefix}rewards/chosen"] = chosen_rewards.cpu().mean()
+        metrics[f"{prefix}rewards/rejected"] = rejected_rewards.cpu().mean()
+        metrics[f"{prefix}rewards/accuracies"] = reward_accuracies.cpu().mean()
+        metrics[f"{prefix}rewards/margins"] = (chosen_rewards - rejected_rewards).cpu().mean()
+        metrics[f"{prefix}logps/rejected"] = policy_rejected_logps.detach().cpu().mean()
+        metrics[f"{prefix}logps/chosen"] = policy_chosen_logps.detach().cpu().mean()
+        metrics[f"{prefix}logits/rejected"] = policy_rejected_logits.detach().cpu().mean()
+        metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.detach().cpu().mean()
 
-                    if self.n_examples is not None and example_idx >= self.n_examples:
-                        break
+        return losses.mean(), metrics
 
-                # if we have yielded all the batches we can, break
-                if batch_idx >= len(self):
-                    break
+    def compute_loss(
+        self,
+        model: Union[PreTrainedModel, nn.Module],
+        inputs: Dict[str, Union[torch.Tensor, Any]],
+        return_outputs=False,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
+        if not self.use_dpo_data_collator:
+            warnings.warn(
+                "compute_loss is only implemented for DPODataCollatorWithPadding, and you passed a datacollator that is different than "
+                "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
+            )
+
+        loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="train")
+
+        # force log the metrics
+        if self.accelerator.is_main_process:
+            self.store_metrics(metrics, train_eval="train")
+
+        if return_outputs:
+            return (loss, metrics)
+        return loss
+
+
+#     def get_train_dataloader(self) -> DataLoader:
+#         """
+#         Returns the training [`~torch.utils.data.DataLoader`].
+
+#         Will use no sampler if `train_dataset` does not implement `__len__`, a random sampler (adapted to distributed
+#         training if necessary) otherwise.
+
+#         Subclass and override this method if you want to inject some custom behavior.
+#         """
+#         if self.train_dataset is None:
+#             raise ValueError("Trainer: training requires a train_dataset.")
+
+#         train_dataset = self.train_dataset
+#         data_collator = self.data_collator
+#         if isinstance(train_dataset, Dataset):
+#             train_dataset = self._remove_unused_columns(train_dataset, description="training")
+#         else:
+#             data_collator = self._get_collator_with_removed_columns(data_collator, description="training")
+
+#         dataloader_params = {
+#             # "batch_size": self._train_batch_size,
+#             "collate_fn": data_collator,
+#             "num_workers": self.args.dataloader_num_workers,
+#             "pin_memory": self.args.dataloader_pin_memory,
+#             "persistent_workers": self.args.dataloader_persistent_workers,
+#             # "sampler": self._get_train_sampler(),
+#             "batch_sampler": UnpairedPreferenceBatchSampler(
+#                 train_dataset, self.args.train_batch_size * self.args.gradient_accumulation_steps
+#             ),
+#         }
+
+#         if not isinstance(train_dataset, torch.utils.data.IterableDataset):
+#             dataloader_params["drop_last"] = self.args.dataloader_drop_last
+#             dataloader_params["worker_init_fn"] = seed_worker
+#         import pdb
+
+#         pdb.set_trace()
+#         return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
+
+
+# class UnpairedPreferenceBatchSampler(Sampler[List[int]]):
+#     def __init__(self, data: List[str], batch_size: int) -> None:
+#         self.data = data
+#         self.batch_size = batch_size
+#         self.n_examples = len(data)
+
+#     def __len__(self) -> int:
+#         return (self.n_examples + self.batch_size - 1) // self.batch_size
+
+#     def __iter__(self) -> Iterator[List[int]]:
+#         batch_idx = 0
+#         example_idx = 0
+#         data = self.data.shuffle()
+
+#         while True:
+#             batch = []
+#             chosen_example_queue, rejected_example_queue = [], []
+#             quota = self.batch_size // 2
+#             for i, example in zip(data._indices, data):
+#                 if example["chosen"]:
+#                     chosen_example_queue.append(i)
+#                 else:
+#                     rejected_example_queue.append(i)
+
+#                 # only flush queues when you can get an even number of chosen and rejected examples
+#                 # weave together chosen and rejected examples one after the other to prevent per-device microbatch from being all chosen or all rejected
+#                 if len(chosen_example_queue) >= quota and len(rejected_example_queue) >= quota:
+#                     while len(batch) < self.batch_size:
+#                         batch.append(chosen_example_queue.pop(0))
+#                         batch.append(rejected_example_queue.pop(0))
+
+#                 if len(batch) >= self.batch_size:
+#                     batch_idx += 1
+#                     example_idx += len(batch)
+#                     yield batch
+#                     batch = []
+
+#                     if self.n_examples is not None and example_idx >= self.n_examples:
+#                         break
+
+#                 # if we have yielded all the batches we can, break
+#                 if batch_idx >= len(self):
+#                     break
