@@ -13,22 +13,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import inspect
-import random
 import warnings
 from collections import defaultdict
-from contextlib import nullcontext
 from copy import deepcopy
-from functools import wraps
-from typing import Any, Callable, Dict, List, Literal, Iterator, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data.sampler import Sampler
-from accelerate.utils import is_deepspeed_available, tqdm
+from accelerate.utils import is_deepspeed_available
 from datasets import Dataset, interleave_datasets
-from torch.utils.data import DataLoader
 from transformers import (
     AutoModelForCausalLM,
     DataCollator,
@@ -38,16 +33,14 @@ from transformers import (
     TrainingArguments,
 )
 from transformers.trainer_callback import TrainerCallback
-from transformers.trainer_utils import EvalLoopOutput, seed_worker
+from transformers.trainer_utils import EvalLoopOutput
 
 from ..import_utils import is_peft_available, is_wandb_available
 from ..models import PreTrainedModelWrapper, create_reference_model
 from .utils import (
     DPODataCollatorWithPadding,
     disable_dropout_in_model,
-    pad_to_length,
     peft_module_casting_to_bf16,
-    trl_sanitze_kwargs_for_tagging,
 )
 
 
@@ -56,7 +49,7 @@ if is_peft_available():
 
 
 if is_wandb_available():
-    import wandb
+    pass
 
 if is_deepspeed_available():
     import deepspeed
@@ -93,6 +86,7 @@ class KTOTrainer(Trainer):
         precompute_ref_log_probs: bool = False,
         model_init_kwargs: Optional[Dict] = None,
         ref_model_init_kwargs: Optional[Dict] = None,
+        seed: Optional[int] = None,
     ):
         if model_init_kwargs is None:
             model_init_kwargs = {}
@@ -271,11 +265,9 @@ class KTOTrainer(Trainer):
         # split the dataset and interleave them together with equal probability of choosing chosen or rejected
         interleaved_train_dataset = interleave_datasets(
             [
-                train_dataset.filter(lambda x: x["chosen"]),
-                train_dataset.filter(lambda x: not x["chosen"]),
+                train_dataset.filter(lambda x: x["chosen"]).shuffle(seed=seed),
+                train_dataset.filter(lambda x: not x["chosen"]).shuffle(seed=seed),
             ],
-            probabilities=[0.5, 0.5],
-            stopping_strategy="all_exhausted",
         )
 
         if eval_dataset is not None:
@@ -284,8 +276,6 @@ class KTOTrainer(Trainer):
                     eval_dataset.filter(lambda x: x["chosen"]),
                     eval_dataset.filter(lambda x: not x["chosen"]),
                 ],
-                probabilities=[0.5, 0.5],
-                stopping_strategy="all_exhausted",
             )
         else:
             interleaved_eval_dataset = None
