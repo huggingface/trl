@@ -1,5 +1,6 @@
 # KTO Trainer
 
+TRL supports the KTO Trainer for training language models from unpaired preference data, as described in the [report](https://github.com/ContextualAI/HALOs/blob/main/assets/report.pdf) by  Kawin Ethayarajh, Winnie Xu, Dan Jurafsky, and Douwe Kiela.
 
 ## Expected dataset format
 
@@ -44,3 +45,30 @@ kto_dataset_dict = {
 ```
 
 where the `prompt` contains the context inputs, `generation` contains the corresponding  responses and `chosen` contains the corresponding flag that indicates if the generation is preferred or unprepared. As can be seen a prompt can have multiple responses and this is reflected in the entries being repeated in the dictionary's value arrays.
+
+## Expected model format
+The KTO trainer expects a model of `AutoModelForCausalLM`, compared to PPO that expects `AutoModelForCausalLMWithValueHead` for the value function.
+
+## Using the `KTOTrainer`
+
+For a detailed example have a look at the `examples/scripts/kto.py` script. At a high level we need to initialize the `KTOTrainer` with a `model` we wish to train, a reference `ref_model` which we will use to calculate the implicit rewards of the preferred and rejected response, the `beta` refers to the hyperparameter of the implicit reward, and the dataset contains the 3 entries listed above. Note that the `model` and `ref_model` need to have the same architecture (ie decoder only or encoder-decoder).
+
+```py
+kto_trainer = KTOTrainer(
+    model,
+    model_ref,
+    args=training_args,
+    beta=0.1,
+    train_dataset=train_dataset,
+    tokenizer=tokenizer,
+)
+```
+After this one can then call:
+
+```py
+kto_trainer.train()
+```
+
+## KTOTrainer
+
+[[autodoc]] KTOTrainer

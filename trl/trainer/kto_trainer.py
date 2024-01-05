@@ -694,6 +694,45 @@ class KTOTrainer(Trainer):
             return None
         return SequentialSampler(self.train_dataset)
 
+    def prediction_step(
+        self,
+        model: Union[PreTrainedModel, nn.Module],
+        inputs: Dict[str, Union[torch.Tensor, Any]],
+        prediction_loss_only: bool,
+        ignore_keys: Optional[List[str]] = None,
+    ):
+        if not self.use_dpo_data_collator:
+            warnings.warn(
+                "prediction_step is only implemented for DPODataCollatorWithPadding, and you passed a datacollator that is different than "
+                "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
+            )
+        if ignore_keys is None:
+            if hasattr(model, "config"):
+                ignore_keys = getattr(model.config, "keys_to_ignore_at_inference", [])
+            else:
+                ignore_keys = []
+
+        with torch.no_grad():
+            loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="eval")
+
+        # force log the metrics
+        if self.accelerator.is_main_process:
+            self.store_metrics(metrics, train_eval="eval")
+
+        if prediction_loss_only:
+            return (loss.detach(), None, None)
+
+        # logits for the chosen and rejected samples from model
+        logits_dict = {
+            "eval_logits/chosen": metrics["eval_logits/chosen"],
+            "eval_logits/rejected": metrics["eval_logits/rejected"],
+        }
+        logits = tuple(v.unsqueeze(dim=0) for k, v in logits_dict.items() if k not in ignore_keys)
+        logits = torch.stack(logits).mean(axis=1).to(self.accelerator.device)
+        labels = torch.zeros(logits.shape[0], device=self.accelerator.device)
+
+        return (loss.detach(), logits, labels)
+
     def evaluation_loop(
         self,
         dataloader: DataLoader,
