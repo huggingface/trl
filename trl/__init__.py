@@ -22,12 +22,12 @@ from .trainer import (
     DataCollatorForCompletionOnlyLM,
     DPOTrainer,
     IterativeSFTTrainer,
+    KTOTrainer,
     PPOConfig,
     PPOTrainer,
     RewardConfig,
     RewardTrainer,
     SFTTrainer,
-    KTOTrainer,
 )
 
 

@@ -38,11 +38,7 @@ from transformers.trainer_utils import EvalLoopOutput, has_length
 
 from ..import_utils import is_peft_available, is_wandb_available
 from ..models import PreTrainedModelWrapper, create_reference_model
-from .utils import (
-    DPODataCollatorWithPadding,
-    disable_dropout_in_model,
-    peft_module_casting_to_bf16,
-)
+from .utils import DPODataCollatorWithPadding, disable_dropout_in_model, peft_module_casting_to_bf16
 
 
 if is_peft_available():
