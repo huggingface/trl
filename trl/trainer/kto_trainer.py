@@ -16,6 +16,7 @@ import inspect
 import random
 import warnings
 from collections import defaultdict
+from contextlib import nullcontext
 from copy import deepcopy
 from functools import wraps
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
@@ -24,7 +25,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from accelerate.utils import is_deepspeed_available
+from accelerate.utils import is_deepspeed_available, tqdm
 from datasets import Dataset, interleave_datasets
 from torch.utils.data import DataLoader, SequentialSampler
 from transformers import (
@@ -255,6 +256,11 @@ class KTOTrainer(Trainer):
         self.tokenizer = tokenizer
         self.precompute_ref_log_probs = precompute_ref_log_probs
 
+        # Since ref_logs are precomputed on the first call to get_train/eval_dataloader
+        # keep track of first called to avoid computation of future calls
+        self._precomputed_train_ref_log_probs = False
+        self._precomputed_eval_ref_log_probs = False
+
         # metric
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
@@ -351,6 +357,58 @@ class KTOTrainer(Trainer):
         model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
         model.eval()
         return model
+
+    def get_train_dataloader(self) -> DataLoader:
+        """
+        Returns the training [`~torch.utils.data.DataLoader`].
+
+        Subclass of transformers.src.transformers.trainer.get_train_dataloader to precompute `ref_log_probs`.
+        """
+
+        if self.precompute_ref_log_probs and not self._precomputed_train_ref_log_probs:
+            dataloader_params = {
+                "batch_size": self.args.per_device_train_batch_size,
+                "collate_fn": self.data_collator,
+                "num_workers": self.args.dataloader_num_workers,
+                "pin_memory": self.args.dataloader_pin_memory,
+                "shuffle": False,
+            }
+
+            # prepare dataloader
+            data_loader = self.accelerator.prepare(DataLoader(self.train_dataset, **dataloader_params))
+            reference_logps = []
+            for padded_batch in tqdm(iterable=data_loader, desc="Train dataset reference log probs"):
+                reference_logp = self.compute_reference_log_probs(padded_batch)
+                reference_logp = self.accelerator.gather_for_metrics(reference_logp)
+                reference_logps.append(reference_logp.cpu())
+
+            all_reference_logps = torch.cat(reference_logps).float().numpy()
+            self.train_dataset = self.train_dataset.add_column(name="reference_logps", column=all_reference_logps)
+            self._precomputed_train_ref_log_probs = True
+            return super().get_train_dataloader()
+
+    def compute_reference_log_probs(self, padded_batch: Dict) -> Dict:
+        """Computes log probabilities of the reference model for a single padded batch of a KTO specific dataset."""
+        with torch.no_grad():
+            if self.ref_model is None:
+                with self.accelerator.unwrap_model(
+                    self.model
+                ).disable_adapter() if self.is_peft_model else nullcontext():
+                    all_logits = self.model(
+                        padded_batch["generation_input_ids"], attention_mask=padded_batch["generation_attention_mask"]
+                    ).logits
+            else:
+                all_logits = self.ref_model(
+                    padded_batch["generation_input_ids"], attention_mask=padded_batch["generation_attention_mask"]
+                ).logits
+
+        return self.get_batch_logps(
+            all_logits,
+            padded_batch["generation_labels"],
+            average_log_prob=False,
+            is_encoder_decoder=self.is_encoder_decoder,
+            label_pad_token_id=self.label_pad_token_id,
+        )
 
     def build_tokenized_answer(self, prompt, answer):
         """
@@ -589,7 +647,7 @@ class KTOTrainer(Trainer):
 
         chosen_logratios = policy_chosen_logps - reference_chosen_logps
         rejected_logratios = policy_rejected_logps - reference_rejected_logps
-        # As described in the KTO report, the KL term for chosen (rejected) is estimated using the rejected (chosen) half.
+        # As described in the KTO report, the KL term for chosen (/rejected) is estimated using the rejected (/chosen) half.
         losses = torch.cat(
             (
                 1 - F.sigmoid(self.beta * (chosen_logratios - rejected_KL)),
@@ -620,10 +678,13 @@ class KTOTrainer(Trainer):
             policy_rejected_logits,
         ) = self.forward(model, batch)
 
-        # if reference_chosen_logps and reference_rejected_logps in batch use them, otherwise use the reference model
-        if "reference_chosen_logps" in batch and "reference_rejected_logps" in batch:
-            reference_chosen_logps = batch["reference_chosen_logps"]
-            reference_rejected_logps = batch["reference_rejected_logps"]
+        # if reference_logps in batch use them, otherwise use the reference model
+        if "reference_logps" in batch:
+            chosen_idx = [i for i in range(batch.shape[0]) if batch["chosen"][i] is True]
+            rejected_idx = [i for i in range(batch.shape[0]) if batch["chosen"][i] is False]
+
+            reference_chosen_logps = batch["reference_logps"][chosen_idx, ...]
+            reference_rejected_logps = batch["reference_logps"][rejected_idx, ...]
         else:
             with torch.no_grad():
                 if self.ref_model is None:
