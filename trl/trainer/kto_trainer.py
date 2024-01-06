@@ -387,6 +387,49 @@ class KTOTrainer(Trainer):
             self._precomputed_train_ref_log_probs = True
             return super().get_train_dataloader()
 
+    def get_eval_dataloader(self, eval_dataset: Optional[Dataset] = None) -> DataLoader:
+        """
+        Returns the evaluation [`~torch.utils.data.DataLoader`].
+
+        Subclass of transformers.src.transformers.trainer.get_eval_dataloader to precompute `ref_log_probs`.
+
+        Args:
+            eval_dataset (`torch.utils.data.Dataset`, *optional*):
+                If provided, will override `self.eval_dataset`. If it is a [`~datasets.Dataset`], columns not accepted
+                by the `model.forward()` method are automatically removed. It must implement `__len__`.
+        """
+        if eval_dataset is None and self.eval_dataset is None:
+            raise ValueError("Trainer: evaluation requires an eval_dataset.")
+        eval_dataset = eval_dataset if eval_dataset is not None else self.eval_dataset
+
+        if self.precompute_ref_log_probs and not self._precomputed_eval_ref_log_probs:
+            dataloader_params = {
+                "batch_size": self.args.per_device_eval_batch_size,
+                "collate_fn": self.data_collator,
+                "num_workers": self.args.dataloader_num_workers,
+                "pin_memory": self.args.dataloader_pin_memory,
+                "shuffle": False,
+            }
+
+            # prepare dataloader
+            data_loader = self.accelerator.prepare(DataLoader(eval_dataset, **dataloader_params))
+
+            reference_logps = []
+            for padded_batch in tqdm(iterable=data_loader, desc="Eval dataset reference log probs"):
+                reference_logp = self.compute_reference_log_probs(padded_batch)
+                reference_logp = self.accelerator.gather_for_metrics(reference_logp)
+                reference_logps.append(reference_logp.cpu())
+
+            all_reference_logps = torch.cat(reference_logps).float().numpy()
+            eval_dataset = eval_dataset.add_column(name="reference_logps", column=all_reference_logps)
+
+            # Save calculated reference_chosen_logps and reference_rejected_logps to the eval_dataset for subsequent runs
+            if self.eval_dataset is not None:
+                self.eval_dataset = eval_dataset
+            self._precomputed_eval_ref_log_probs = True
+
+        return super().get_eval_dataloader(eval_dataset=eval_dataset)
+
     def compute_reference_log_probs(self, padded_batch: Dict) -> Dict:
         """Computes log probabilities of the reference model for a single padded batch of a KTO specific dataset."""
         with torch.no_grad():
