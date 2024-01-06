@@ -385,7 +385,8 @@ class KTOTrainer(Trainer):
             all_reference_logps = torch.cat(reference_logps).float().numpy()
             self.train_dataset = self.train_dataset.add_column(name="reference_logps", column=all_reference_logps)
             self._precomputed_train_ref_log_probs = True
-            return super().get_train_dataloader()
+
+        return super().get_train_dataloader()
 
     def get_eval_dataloader(self, eval_dataset: Optional[Dataset] = None) -> DataLoader:
         """
