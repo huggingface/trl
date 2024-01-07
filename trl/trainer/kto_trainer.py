@@ -268,9 +268,9 @@ class KTOTrainer(Trainer):
         self.beta = beta
 
         # tokenize the dataset
-        train_dataset = train_dataset.map(self.tokenize_row)
+        train_dataset = train_dataset.map(self.tokenize_row, fn_kwargs={"model": model})
         if eval_dataset is not None:
-            eval_dataset = eval_dataset.map(self.tokenize_row)
+            eval_dataset = eval_dataset.map(self.tokenize_row, fn_kwargs={"model": model})
 
         # split the dataset and interleave them together with equal probability of choosing chosen or rejected
         interleaved_train_dataset = interleave_datasets(
@@ -438,13 +438,30 @@ class KTOTrainer(Trainer):
                 with self.accelerator.unwrap_model(
                     self.model
                 ).disable_adapter() if self.is_peft_model else nullcontext():
-                    all_logits = self.model(
+                    if self.is_encoder_decoder:
+                        all_logits = self.model(
+                            padded_batch["prompt_input_ids"],
+                            attention_mask=padded_batch["prompt_attention_mask"],
+                            decoder_input_ids=padded_batch["generation_decoder_input_ids"],
+                            labels=padded_batch["generation_labels"],
+                        ).logits
+                    else:
+                        all_logits = self.model(
+                            padded_batch["generation_input_ids"],
+                            attention_mask=padded_batch["generation_attention_mask"],
+                        ).logits
+            else:
+                if self.is_encoder_decoder:
+                    all_logits = self.ref_model(
+                        padded_batch["prompt_input_ids"],
+                        attention_mask=padded_batch["prompt_attention_mask"],
+                        decoder_input_ids=padded_batch["generation_decoder_input_ids"],
+                        labels=padded_batch["generation_labels"],
+                    ).logits
+                else:
+                    all_logits = self.ref_model(
                         padded_batch["generation_input_ids"], attention_mask=padded_batch["generation_attention_mask"]
                     ).logits
-            else:
-                all_logits = self.ref_model(
-                    padded_batch["generation_input_ids"], attention_mask=padded_batch["generation_attention_mask"]
-                ).logits
 
         return self.get_batch_logps(
             all_logits,
@@ -593,13 +610,14 @@ class KTOTrainer(Trainer):
                 prompt, truncation=True, max_length=self.max_prompt_length, add_special_tokens=True
             )
 
-            batch["generation_labels"] = generation_tokens["input_ids"]
             batch["prompt_input_ids"] = prompt_tokens["input_ids"]
             batch["prompt_attention_mask"] = prompt_tokens["attention_mask"]
 
+            batch["generation_labels"] = generation_tokens["input_ids"]
+            batch["generation_attention_mask"] = generation_tokens["attention_mask"]
             if model is not None and hasattr(model, "prepare_decoder_input_ids_from_labels"):
-                batch["chosen_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
-                    labels=batch["chosen_labels"]
+                batch["generation_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
+                    labels=torch.tensor(batch["generation_labels"])
                 )
 
         return batch
@@ -643,7 +661,15 @@ class KTOTrainer(Trainer):
     def forward(
         self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
-        all_logits = model(batch["generation_input_ids"], attention_mask=batch["generation_attention_mask"]).logits
+        if self.is_encoder_decoder:
+            all_logits = model(
+                batch["prompt_input_ids"],
+                attention_mask=batch["prompt_attention_mask"],
+                decoder_input_ids=batch["generation_decoder_input_ids"],
+                labels=batch["generation_labels"],
+            ).logits
+        else:
+            all_logits = model(batch["generation_input_ids"], attention_mask=batch["generation_attention_mask"]).logits
 
         all_logps = self.get_batch_logps(
             all_logits,
@@ -724,8 +750,8 @@ class KTOTrainer(Trainer):
 
         # if reference_logps in batch use them, otherwise use the reference model
         if "reference_logps" in batch:
-            chosen_idx = [i for i in range(batch.shape[0]) if batch["chosen"][i] is True]
-            rejected_idx = [i for i in range(batch.shape[0]) if batch["chosen"][i] is False]
+            chosen_idx = [i for i in range(batch["reference_logps"].shape[0]) if batch["chosen"][i] is True]
+            rejected_idx = [i for i in range(batch["reference_logps"].shape[0]) if batch["chosen"][i] is False]
 
             reference_chosen_logps = batch["reference_logps"][chosen_idx, ...]
             reference_rejected_logps = batch["reference_logps"][rejected_idx, ...]

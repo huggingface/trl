@@ -341,9 +341,9 @@ class DPOTrainer(Trainer):
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
         # tokenize the dataset
-        train_dataset = train_dataset.map(self.tokenize_row)
+        train_dataset = train_dataset.map(self.tokenize_row, fn_kwargs={"model": model})
         if eval_dataset is not None:
-            eval_dataset = eval_dataset.map(self.tokenize_row)
+            eval_dataset = eval_dataset.map(self.tokenize_row, fn_kwargs={"model": model})
 
         super().__init__(
             model=model,
@@ -673,10 +673,10 @@ class DPOTrainer(Trainer):
 
             if model is not None and hasattr(model, "prepare_decoder_input_ids_from_labels"):
                 batch["rejected_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
-                    labels=batch["rejected_labels"]
+                    labels=torch.tensor(batch["rejected_labels"])
                 )
                 batch["chosen_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
-                    labels=batch["chosen_labels"]
+                    labels=torch.tensor(batch["chosen_labels"])
                 )
 
         return batch

@@ -76,11 +76,13 @@ class KTOTrainerTester(unittest.TestCase):
 
     @parameterized.expand(
         [
-            ["gpt2"],
-            ["t5"],
+            ["gpt2", True],
+            ["t5", True],
+            ["gpt2", False],
+            ["t5", False],
         ]
     )
-    def test_kto_trainer(self, name):
+    def test_kto_trainer(self, name, pre_compute):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
                 output_dir=tmp_dir,
@@ -111,6 +113,7 @@ class KTOTrainerTester(unittest.TestCase):
                 tokenizer=tokenizer,
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
+                precompute_ref_log_probs=pre_compute,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
