@@ -41,6 +41,8 @@ class ScriptArguments:
     """HuggingFace model ID for aesthetic scorer model weights"""
     hf_hub_aesthetic_model_filename: str = "aesthetic-model.pth"
     """HuggingFace model filename for aesthetic scorer model weights"""
+    use_lora: bool = True
+    """Whether to use LoRA."""
 
     ddpo_config: DDPOConfig = field(
         default_factory=lambda: DDPOConfig(
@@ -193,7 +195,7 @@ if __name__ == "__main__":
     args = tyro.cli(ScriptArguments)
 
     pipeline = DefaultDDPOStableDiffusionPipeline(
-        args.pretrained_model, pretrained_model_revision=args.pretrained_revision, use_lora=True
+        args.pretrained_model, pretrained_model_revision=args.pretrained_revision, use_lora=args.use_lora
     )
 
     trainer = DDPOTrainer(
