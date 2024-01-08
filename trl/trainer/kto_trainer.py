@@ -232,7 +232,7 @@ class KTOTrainer(Trainer):
                 args.remove_unused_columns = False
                 # warn users
                 warnings.warn(
-                    "When using DPODataCollatorWithPadding, you should set `remove_unused_columns=False` in your TrainingArguments"
+                    "When using DPODataCollatorWithPadding, you should set `remove_unused_columns=False` in your KTOConfig"
                     " we have set it for you, but you should do it yourself in the future.",
                     UserWarning,
                 )
