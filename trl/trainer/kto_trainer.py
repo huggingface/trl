@@ -96,7 +96,7 @@ class KTOTrainer(Trainer):
         if model_init_kwargs is None:
             model_init_kwargs = {}
         elif not isinstance(model, str):
-            raise ValueError("You passed model_kwargs to the DPOTrainer. But your model is already instantiated.")
+            raise ValueError("You passed model_kwargs to the KTOTrainer. But your model is already instantiated.")
 
         if ref_model_init_kwargs is None:
             ref_model_init_kwargs = {}
