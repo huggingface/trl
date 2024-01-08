@@ -166,7 +166,7 @@ You have three main options (plus several variants) for how the reference model 
 
 ### Downsides to merging QLoRA before DPO (approach 2)
 
-As suggested by [Tim Dettmers](https://twitter.com/Tim_Dettmers/status/1694654191325573456), the best option for merging QLoRA adapters is to first quantize the base model, merge adapter, then convert back to bf16.  Something similar to [this script](https://github.com/jondurbin/qlora/blob/main/qmerge.py)
+As suggested by [Tim Dettmers](https://twitter.com/Tim_Dettmers/status/1694654191325573456), the best option for merging QLoRA adapters is to first quantize the base model, merge the adapter, then convert back to bf16.  Something similar to [this script](https://github.com/jondurbin/qlora/blob/main/qmerge.py)
 
 You can also just merge the adapters the standard way without quantizing the base model, but then you have 1-2% reduced performance (and evidently, more issues with empty responses).
 
