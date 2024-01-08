@@ -553,6 +553,13 @@ class KTOTrainer(Trainer):
                 raise ValueError(f"completion should be an str but got {type(completion)}")
             completion_tokens = self.build_tokenized_answer(prompt, completion)
 
+            # Last prompt token might get merged by tokenizer and
+            # it should not be included for generation if that happens
+            completion_prompt_len_input_ids = len(completion_tokens["prompt_input_ids"])
+
+            for k, v in prompt_tokens.items():
+                prompt_tokens[k] = v[:completion_prompt_len_input_ids]
+
             # add BOS token to head of prompt
             prompt_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + prompt_tokens["prompt_input_ids"]
             completion_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + completion_tokens[
