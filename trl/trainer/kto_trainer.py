@@ -201,7 +201,7 @@ class KTOTrainer(Trainer):
                 )
             if max_length is None:
                 warnings.warn(
-                    "When using DPODataCollatorWithPadding, you should set `max_length` in the DPOTrainer's init"
+                    "When using DPODataCollatorWithPadding, you should set `max_length` in the KTOTrainer's init"
                     " it will be set to `512` by default, but you should do it yourself in the future.",
                     UserWarning,
                 )
