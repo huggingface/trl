@@ -135,7 +135,7 @@ class KTOTrainer(Trainer):
                     inspect.signature(prepare_model_for_kbit_training).parameters
                 )
 
-                preprare_model_kwargs = {"use_gradient_checkpointing": args.gradient_checkpointing}
+                prepare_model_kwargs = {"use_gradient_checkpointing": args.gradient_checkpointing}
 
                 if _support_gc_kwargs:
                     preprare_model_kwargs["gradient_checkpointing_kwargs"] = args.gradient_checkpointing_kwargs
