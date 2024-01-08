@@ -45,6 +45,7 @@ from .dpo_trainer import DPOTrainer
 from .utils import (
     DPODataCollatorWithPadding,
     disable_dropout_in_model,
+    pad_to_length,
     peft_module_casting_to_bf16,
     trl_sanitze_kwargs_for_tagging,
 )
@@ -636,7 +637,7 @@ class KTOTrainer(Trainer):
         else:
             all_logits = model(batch["completion_input_ids"], attention_mask=batch["completion_attention_mask"]).logits
 
-        all_logps = DPOTrainer.get_batch_logps(
+        all_logps = self.get_batch_logps(
             all_logits,
             batch["completion_labels"],
             average_log_prob=False,
@@ -789,6 +790,47 @@ class KTOTrainer(Trainer):
         if self.train_dataset is None or not has_length(self.train_dataset):
             return None
         return SequentialSampler(self.train_dataset)
+
+    def get_batch_samples(self, model, batch: Dict[str, torch.LongTensor]) -> Tuple[str, str]:
+        """Generate samples from the model and reference model for the given batch of inputs."""
+
+        policy_output = model.generate(
+            input_ids=batch["prompt_input_ids"],
+            attention_mask=batch["prompt_attention_mask"],
+            max_length=self.max_length,
+            do_sample=True,
+            pad_token_id=self.tokenizer.pad_token_id,
+        )
+
+        # if reference_output in batch use that otherwise use the reference model
+        if "reference_output" in batch:
+            reference_output = batch["reference_output"]
+        else:
+            if self.ref_model is None:
+                with self.accelerator.unwrap_model(self.model).disable_adapter():
+                    reference_output = self.model.generate(
+                        input_ids=batch["prompt_input_ids"],
+                        attention_mask=batch["prompt_attention_mask"],
+                        max_length=self.max_length,
+                        do_sample=True,
+                        pad_token_id=self.tokenizer.pad_token_id,
+                    )
+            else:
+                reference_output = self.ref_model.generate(
+                    input_ids=batch["prompt_input_ids"],
+                    attention_mask=batch["prompt_attention_mask"],
+                    max_length=self.max_length,
+                    do_sample=True,
+                    pad_token_id=self.tokenizer.pad_token_id,
+                )
+
+        policy_output = pad_to_length(policy_output, self.max_length, self.tokenizer.pad_token_id)
+        policy_output_decoded = self.tokenizer.batch_decode(policy_output, skip_special_tokens=True)
+
+        reference_output = pad_to_length(reference_output, self.max_length, self.tokenizer.pad_token_id)
+        reference_output_decoded = self.tokenizer.batch_decode(reference_output, skip_special_tokens=True)
+
+        return policy_output_decoded, reference_output_decoded
 
     def prediction_step(
         self,
