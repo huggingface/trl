@@ -42,6 +42,7 @@ from transformers.trainer_utils import EvalLoopOutput, has_length
 from ..import_utils import is_peft_available, is_wandb_available
 from ..models import PreTrainedModelWrapper, create_reference_model
 from .dpo_trainer import DPOTrainer
+from .training_configs import KTOConfig
 from .utils import (
     DPODataCollatorWithPadding,
     disable_dropout_in_model,
@@ -69,8 +70,7 @@ class KTOTrainer(Trainer):
         self,
         model: Union[PreTrainedModel, nn.Module, str] = None,
         ref_model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
-        beta: float = 0.1,
-        args: TrainingArguments = None,
+        args: KTOConfig = None,
         data_collator: Optional[DataCollator] = None,
         label_pad_token_id: int = -100,
         padding_value: int = None,
@@ -82,9 +82,6 @@ class KTOTrainer(Trainer):
         callbacks: Optional[List[TrainerCallback]] = None,
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        max_length: Optional[int] = None,
-        max_prompt_length: Optional[int] = None,
-        max_target_length: Optional[int] = None,
         peft_config: Optional[Dict] = None,
         is_encoder_decoder: Optional[bool] = None,
         disable_dropout: bool = True,
@@ -95,6 +92,9 @@ class KTOTrainer(Trainer):
         ref_model_init_kwargs: Optional[Dict] = None,
         seed: Optional[int] = None,
     ):
+        if type(args) == TrainingArguments:
+            raise ValueError("Please use `KTOConfig` instead TrainingArguments.")
+
         if model_init_kwargs is None:
             model_init_kwargs = {}
         elif not isinstance(model, str):
@@ -201,28 +201,35 @@ class KTOTrainer(Trainer):
                 raise ValueError(
                     "max_length or a tokenizer must be specified when using the default DPODataCollatorWithPadding"
                 )
-            if max_length is None:
+            if args.max_length is None:
                 warnings.warn(
                     "When using DPODataCollatorWithPadding, you should set `max_length` in the KTOTrainer's init"
                     " it will be set to `512` by default, but you should do it yourself in the future.",
                     UserWarning,
                 )
                 max_length = 512
-            if max_prompt_length is None:
+            if args.max_length is not None:
+                max_length = args.max_length
+
+            if args.max_prompt_length is None:
                 warnings.warn(
                     "When using DPODataCollatorWithPadding, you should set `max_prompt_length` in the KTOTrainer's init"
                     " it will be set to `128` by default, but you should do it yourself in the future.",
                     UserWarning,
                 )
                 max_prompt_length = 128
+            if args.max_prompt_length is not None:
+                max_prompt_length = args.max_prompt_length
 
-            if max_target_length is None and self.is_encoder_decoder:
+            if args.max_target_length is None and self.is_encoder_decoder:
                 warnings.warn(
                     "When using DPODataCollatorWithPadding with an encoder decoder architecture, you should set `max_target_length` in the KTOTrainer's init"
                     " it will be set to `128` by default, but you should do it yourself in the future.",
                     UserWarning,
                 )
                 max_target_length = 128
+            if args.max_target_length is not None:
+                max_target_length = args.max_target_length
 
             data_collator = DPODataCollatorWithPadding(
                 pad_token_id=tokenizer.pad_token_id,
@@ -267,7 +274,7 @@ class KTOTrainer(Trainer):
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
         # KTO parameter
-        self.beta = beta
+        self.beta = args.beta
 
         # tokenize the dataset
         train_dataset = train_dataset.map(self.tokenize_row, fn_kwargs={"model": model})
