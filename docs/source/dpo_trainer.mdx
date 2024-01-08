@@ -177,7 +177,7 @@ If you use the recommended approach, which quantizes the model, you're now in a 
 To avoid the downsides with option 2, at the expensive of slightly increased VRAM, you can load your fine-tuned adapter into the model twice, with different names, and set the model/ref adapter names in DPOTrainer.
 
 For example:
-```
+```python
 # Load the base model.
 bnb_config = BitsAndBytesConfig(
     load_in_4bit=True,
