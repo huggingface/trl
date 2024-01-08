@@ -170,7 +170,7 @@ As suggested by [Tim Dettmers](https://twitter.com/Tim_Dettmers/status/169465419
 
 You can also just merge the adapters the standard way without quantizing the base model, but then you have 1-2% reduced performance (and evidently, more issues with empty responses).
 
-If you use the recommended approach, which quantizes the model, you're now in a situation where to use QLoRA for DPO, you will need to re-quantize the merged model again, or use an unquantized merge with lower overall performance.
+If you use the recommended approach, which quantizes the model, you're now in a situation where to use QLoRA for DPO, you will need to re-quantize the merged model again or use an unquantized merge with lower overall performance.
 
 ### Using option 3 - load the adapter twice
 
