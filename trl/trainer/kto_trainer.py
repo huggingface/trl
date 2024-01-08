@@ -174,7 +174,7 @@ class KTOTrainer(Trainer):
         if generate_during_eval and not is_wandb_available():
             raise ValueError(
                 "`generate_during_eval=True` requires Weights and Biases to be installed."
-                " Please install `wandb` to resolve."
+                " Please install with `pip install wandb` to resolve."
             )
 
         if model is not None:
