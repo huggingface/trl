@@ -107,7 +107,7 @@ class KTOTrainer(Trainer):
 
         if isinstance(model, str):
             warnings.warn(
-                "You passed a model_id to the DPOTrainer. This will automatically create an "
+                "You passed a model_id to the KTOTrainer. This will automatically create an "
                 "`AutoModelForCausalLM` or a `PeftModel` (if you passed a `peft_config`) for you."
             )
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
