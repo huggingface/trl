@@ -216,7 +216,7 @@ class KTOTrainer(Trainer):
 
             if max_target_length is None and self.is_encoder_decoder:
                 warnings.warn(
-                    "When using DPODataCollatorWithPadding with an encoder decoder architecture, you should set `max_target_length` in the DPOTrainer's init"
+                    "When using DPODataCollatorWithPadding with an encoder decoder architecture, you should set `max_target_length` in the KTOTrainer's init"
                     " it will be set to `128` by default, but you should do it yourself in the future.",
                     UserWarning,
                 )
