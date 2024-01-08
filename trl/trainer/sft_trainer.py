@@ -258,6 +258,7 @@ class SFTTrainer(Trainer):
                 formatting_func,
                 num_of_sequences,
                 chars_per_token,
+                remove_unused_columns=args.remove_unused_columns if args is not None else True,
                 **dataset_kwargs,
             )
         if eval_dataset is not None:
@@ -273,6 +274,7 @@ class SFTTrainer(Trainer):
                     formatting_func,
                     num_of_sequences,
                     chars_per_token,
+                    remove_unused_columns=args.remove_unused_columns if args is not None else True,
                     **dataset_kwargs,
                 )
             if not _multiple:
@@ -348,6 +350,7 @@ class SFTTrainer(Trainer):
         formatting_func,
         num_of_sequences,
         chars_per_token,
+        remove_unused_columns=True,
         append_concat_token=True,
         add_special_tokens=True,
     ):
@@ -360,7 +363,13 @@ class SFTTrainer(Trainer):
 
         if not packing:
             return self._prepare_non_packed_dataloader(
-                tokenizer, dataset, dataset_text_field, max_seq_length, formatting_func, add_special_tokens
+                tokenizer,
+                dataset,
+                dataset_text_field,
+                max_seq_length,
+                formatting_func,
+                add_special_tokens,
+                remove_unused_columns,
             )
 
         else:
@@ -377,7 +386,14 @@ class SFTTrainer(Trainer):
             )
 
     def _prepare_non_packed_dataloader(
-        self, tokenizer, dataset, dataset_text_field, max_seq_length, formatting_func=None, add_special_tokens=True
+        self,
+        tokenizer,
+        dataset,
+        dataset_text_field,
+        max_seq_length,
+        formatting_func=None,
+        add_special_tokens=True,
+        remove_unused_columns=True,
     ):
         use_formatting_func = formatting_func is not None and dataset_text_field is None
         self._dataset_sanity_checked = False
@@ -411,7 +427,7 @@ class SFTTrainer(Trainer):
         tokenized_dataset = dataset.map(
             tokenize,
             batched=True,
-            remove_columns=dataset.column_names,
+            remove_columns=dataset.column_names if remove_unused_columns else None,
             num_proc=self.dataset_num_proc,
             batch_size=self.dataset_batch_size,
         )
