@@ -637,7 +637,7 @@ class KTOTrainer(Trainer):
         else:
             all_logits = model(batch["completion_input_ids"], attention_mask=batch["completion_attention_mask"]).logits
 
-        all_logps = self.get_batch_logps(
+        all_logps = DPOTrainer.get_batch_logps(
             all_logits,
             batch["completion_labels"],
             average_log_prob=False,
