@@ -18,9 +18,9 @@ import torch
 from datasets import Dataset
 from parameterized import parameterized
 from pytest import mark
-from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer, TrainingArguments
+from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
-from trl import KTOTrainer
+from trl import KTOTrainer, KTOConfig
 
 from .testing_utils import require_no_wandb, require_peft
 
@@ -84,7 +84,7 @@ class KTOTrainerTester(unittest.TestCase):
     )
     def test_kto_trainer(self, name, pre_compute):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = KTOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -92,6 +92,7 @@ class KTOTrainerTester(unittest.TestCase):
                 gradient_accumulation_steps=1,
                 learning_rate=9e-1,
                 evaluation_strategy="steps",
+                beta=0.1
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -108,7 +109,6 @@ class KTOTrainerTester(unittest.TestCase):
             trainer = KTOTrainer(
                 model=model,
                 ref_model=ref_model,
-                beta=0.1,
                 args=training_args,
                 tokenizer=tokenizer,
                 train_dataset=dummy_dataset,
@@ -131,7 +131,7 @@ class KTOTrainerTester(unittest.TestCase):
 
     def test_kto_trainer_without_providing_ref_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = KTOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -139,6 +139,7 @@ class KTOTrainerTester(unittest.TestCase):
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
                 evaluation_strategy="steps",
+                beta=0.1
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -146,7 +147,6 @@ class KTOTrainerTester(unittest.TestCase):
             trainer = KTOTrainer(
                 model=self.model,
                 ref_model=None,
-                beta=0.1,
                 args=training_args,
                 tokenizer=self.tokenizer,
                 train_dataset=dummy_dataset,
@@ -180,7 +180,7 @@ class KTOTrainerTester(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = KTOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -188,6 +188,7 @@ class KTOTrainerTester(unittest.TestCase):
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
                 evaluation_strategy="steps",
+                beta=0.1
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -195,7 +196,6 @@ class KTOTrainerTester(unittest.TestCase):
             trainer = KTOTrainer(
                 model=self.model,
                 ref_model=None,
-                beta=0.1,
                 args=training_args,
                 tokenizer=self.tokenizer,
                 train_dataset=dummy_dataset,
@@ -220,7 +220,7 @@ class KTOTrainerTester(unittest.TestCase):
     @require_no_wandb
     def test_kto_trainer_generate_during_eval_no_wandb(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = KTOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -228,6 +228,7 @@ class KTOTrainerTester(unittest.TestCase):
                 gradient_accumulation_steps=1,
                 learning_rate=9e-1,
                 evaluation_strategy="steps",
+                beta=0.1
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -240,7 +241,6 @@ class KTOTrainerTester(unittest.TestCase):
                 KTOTrainer(
                     model=self.model,
                     ref_model=None,
-                    beta=0.1,
                     args=training_args,
                     tokenizer=self.tokenizer,
                     train_dataset=dummy_dataset,
@@ -266,7 +266,7 @@ class KTOTrainerTester(unittest.TestCase):
         model_peft = get_peft_model(model, lora_config)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = KTOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -274,6 +274,7 @@ class KTOTrainerTester(unittest.TestCase):
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
                 evaluation_strategy="steps",
+                beta=0.1
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -282,7 +283,6 @@ class KTOTrainerTester(unittest.TestCase):
             trainer = KTOTrainer(
                 model=model_peft,
                 ref_model=None,
-                beta=0.1,
                 args=training_args,
                 tokenizer=self.tokenizer,
                 train_dataset=dummy_dataset,

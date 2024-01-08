@@ -221,6 +221,7 @@ class KTOTrainer(Trainer):
             if args.max_prompt_length is not None:
                 max_prompt_length = args.max_prompt_length
 
+            max_target_length = None
             if args.max_target_length is None and self.is_encoder_decoder:
                 warnings.warn(
                     "When using DPODataCollatorWithPadding with an encoder decoder architecture, you should set `max_target_length` in the KTOTrainer's init"
@@ -228,7 +229,7 @@ class KTOTrainer(Trainer):
                     UserWarning,
                 )
                 max_target_length = 128
-            if args.max_target_length is not None:
+            if args.max_target_length is not None and self.is_encoder_decoder:
                 max_target_length = args.max_target_length
 
             data_collator = DPODataCollatorWithPadding(
