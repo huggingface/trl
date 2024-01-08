@@ -404,7 +404,7 @@ class SFTTrainer(Trainer):
                 element[dataset_text_field] if not use_formatting_func else formatting_func(element),
                 add_special_tokens=add_special_tokens,
                 truncation=True,
-                padding=False,
+                padding=True,
                 max_length=max_seq_length,
                 return_overflowing_tokens=False,
                 return_length=False,
