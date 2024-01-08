@@ -402,7 +402,11 @@ class SFTTrainer(Trainer):
                 else:
                     self._dataset_sanity_checked = True
 
-            return {"input_ids": outputs["input_ids"], "attention_mask": outputs["attention_mask"]}
+            return {
+                "input_ids": outputs["input_ids"],
+                "labels": outputs["input_ids"],
+                "attention_mask": outputs["attention_mask"],
+            }
 
         tokenized_dataset = dataset.map(
             tokenize,
