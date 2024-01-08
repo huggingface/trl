@@ -204,7 +204,7 @@ model = PeftModel.from_pretrained(
     is_trainable=True,
     adapter_name="train",
 )
-# Load the adapter a second time, with a differet name, which will be our reference model.
+# Load the adapter a second time, with a different name, which will be our reference model.
 model.load_adapter("/path/to/peft", adapter_name="reference")
 
 # Initialize the trainer, without a ref_model param.
