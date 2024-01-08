@@ -275,16 +275,16 @@ class KTOTrainer(Trainer):
         # split the dataset and interleave them together with equal probability of choosing chosen or rejected
         interleaved_train_dataset = interleave_datasets(
             [
-                train_dataset.filter(lambda x: x["chosen"]).shuffle(seed=seed),
-                train_dataset.filter(lambda x: not x["chosen"]).shuffle(seed=seed),
+                train_dataset.filter(lambda x: x["label"]).shuffle(seed=seed),
+                train_dataset.filter(lambda x: not x["label"]).shuffle(seed=seed),
             ],
         )
 
         if eval_dataset is not None:
             interleaved_eval_dataset = interleave_datasets(
                 [
-                    eval_dataset.filter(lambda x: x["chosen"]),
-                    eval_dataset.filter(lambda x: not x["chosen"]),
+                    eval_dataset.filter(lambda x: x["label"]),
+                    eval_dataset.filter(lambda x: not x["label"]),
                 ],
             )
         else:
@@ -442,30 +442,30 @@ class KTOTrainer(Trainer):
                         all_logits = self.model(
                             padded_batch["prompt_input_ids"],
                             attention_mask=padded_batch["prompt_attention_mask"],
-                            decoder_input_ids=padded_batch["generation_decoder_input_ids"],
-                            labels=padded_batch["generation_labels"],
+                            decoder_input_ids=padded_batch["completion_decoder_input_ids"],
+                            labels=padded_batch["completion_labels"],
                         ).logits
                     else:
                         all_logits = self.model(
-                            padded_batch["generation_input_ids"],
-                            attention_mask=padded_batch["generation_attention_mask"],
+                            padded_batch["completion_input_ids"],
+                            attention_mask=padded_batch["completion_attention_mask"],
                         ).logits
             else:
                 if self.is_encoder_decoder:
                     all_logits = self.ref_model(
                         padded_batch["prompt_input_ids"],
                         attention_mask=padded_batch["prompt_attention_mask"],
-                        decoder_input_ids=padded_batch["generation_decoder_input_ids"],
-                        labels=padded_batch["generation_labels"],
+                        decoder_input_ids=padded_batch["completion_decoder_input_ids"],
+                        labels=padded_batch["completion_labels"],
                     ).logits
                 else:
                     all_logits = self.ref_model(
-                        padded_batch["generation_input_ids"], attention_mask=padded_batch["generation_attention_mask"]
+                        padded_batch["completion_input_ids"], attention_mask=padded_batch["completion_attention_mask"]
                     ).logits
 
         return self.get_batch_logps(
             all_logits,
-            padded_batch["generation_labels"],
+            padded_batch["completion_labels"],
             average_log_prob=False,
             is_encoder_decoder=self.is_encoder_decoder,
             label_pad_token_id=self.label_pad_token_id,
@@ -525,16 +525,16 @@ class KTOTrainer(Trainer):
         """Tokenize a single row from a KTO specific dataset.
 
         At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
-        in case the prompt + chosen or prompt + rejected responses is/are too long. First
-            we truncate the prompt; if we're still too long, we truncate the chosen/rejected.
+        in case the prompt + completion responses is/are too long. First
+            we truncate the prompt; if we're still too long, we truncate the completion.
 
-        We also create the labels for the chosen/rejected responses, which are of length equal to
-            the sum of the length of the prompt and the chosen/rejected response, with
+        We also create the labels for the completion responses, which are of length equal to
+            the sum of the length of the prompt and the completion response, with
             label_pad_token_id  for the prompt tokens.
         """
         batch = {}
         prompt = feature["prompt"]
-        generation = feature["generation"]
+        completion = feature["completion"]
 
         if not self.is_encoder_decoder:
             # Check issues below for more details
@@ -547,27 +547,27 @@ class KTOTrainer(Trainer):
             prompt_tokens = self.tokenizer(prompt, add_special_tokens=False)
             prompt_tokens = {f"prompt_{k}": v for k, v in prompt_tokens.items()}
 
-            if not isinstance(generation, str):
-                raise ValueError(f"generation should be an str but got {type(generation)}")
-            generation_tokens = self.build_tokenized_answer(prompt, generation)
+            if not isinstance(completion, str):
+                raise ValueError(f"completion should be an str but got {type(completion)}")
+            completion_tokens = self.build_tokenized_answer(prompt, completion)
 
             # add BOS token to head of prompt
             prompt_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + prompt_tokens["prompt_input_ids"]
-            generation_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + generation_tokens[
+            completion_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + completion_tokens[
                 "prompt_input_ids"
             ]
 
             prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens["prompt_attention_mask"]
-            generation_tokens["prompt_attention_mask"] = [1] + generation_tokens["prompt_attention_mask"]
+            completion_tokens["prompt_attention_mask"] = [1] + completion_tokens["prompt_attention_mask"]
 
             # add EOS token to end of answer
-            generation_tokens["input_ids"].append(self.tokenizer.eos_token_id)
-            generation_tokens["attention_mask"].append(1)
+            completion_tokens["input_ids"].append(self.tokenizer.eos_token_id)
+            completion_tokens["attention_mask"].append(1)
 
-            response_length = len(generation_tokens["input_ids"])
+            response_length = len(completion_tokens["input_ids"])
 
             # if combined sequence is too long, truncate the prompt
-            for answer_tokens in [generation_tokens, prompt_tokens]:
+            for answer_tokens in [completion_tokens, prompt_tokens]:
                 if len(answer_tokens["prompt_input_ids"]) + response_length > self.max_length:
                     if self.truncation_mode == "keep_start":
                         for k in ["prompt_input_ids", "prompt_attention_mask"]:
@@ -579,22 +579,22 @@ class KTOTrainer(Trainer):
                         raise ValueError(f"Unknown truncation mode: {self.truncation_mode}")
 
             # if that's still too long, truncate the response
-            if len(generation_tokens["prompt_input_ids"]) + response_length > self.max_length:
+            if len(completion_tokens["prompt_input_ids"]) + response_length > self.max_length:
                 for k in ["input_ids", "attention_mask"]:
-                    generation_tokens[k] = generation_tokens[k][: self.max_length - self.max_prompt_length]
+                    completion_tokens[k] = completion_tokens[k][: self.max_length - self.max_prompt_length]
 
             # Create labels
-            generation_sequence_tokens = {
-                k: generation_tokens[f"prompt_{k}"] + generation_tokens[k] for k in ["input_ids", "attention_mask"]
+            completion_sequence_tokens = {
+                k: completion_tokens[f"prompt_{k}"] + completion_tokens[k] for k in ["input_ids", "attention_mask"]
             }
 
-            generation_sequence_tokens["labels"] = generation_sequence_tokens["input_ids"][:]
-            generation_sequence_tokens["labels"][: len(generation_tokens["prompt_input_ids"])] = [
+            completion_sequence_tokens["labels"] = completion_sequence_tokens["input_ids"][:]
+            completion_sequence_tokens["labels"][: len(completion_tokens["prompt_input_ids"])] = [
                 self.label_pad_token_id
-            ] * len(generation_tokens["prompt_input_ids"])
+            ] * len(completion_tokens["prompt_input_ids"])
 
             for k, toks in {
-                "generation_": generation_sequence_tokens,
+                "completion_": completion_sequence_tokens,
                 "": prompt_tokens,
             }.items():
                 for type_key, tokens in toks.items():
@@ -603,8 +603,8 @@ class KTOTrainer(Trainer):
                     batch[f"{k}{type_key}"] = tokens
 
         else:
-            generation_tokens = self.tokenizer(
-                generation, truncation=True, max_length=self.max_target_length, add_special_tokens=True
+            completion_tokens = self.tokenizer(
+                completion, truncation=True, max_length=self.max_target_length, add_special_tokens=True
             )
             prompt_tokens = self.tokenizer(
                 prompt, truncation=True, max_length=self.max_prompt_length, add_special_tokens=True
@@ -613,11 +613,11 @@ class KTOTrainer(Trainer):
             batch["prompt_input_ids"] = prompt_tokens["input_ids"]
             batch["prompt_attention_mask"] = prompt_tokens["attention_mask"]
 
-            batch["generation_labels"] = generation_tokens["input_ids"]
-            batch["generation_attention_mask"] = generation_tokens["attention_mask"]
+            batch["completion_labels"] = completion_tokens["input_ids"]
+            batch["completion_attention_mask"] = completion_tokens["attention_mask"]
             if model is not None and hasattr(model, "prepare_decoder_input_ids_from_labels"):
-                batch["generation_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
-                    labels=torch.tensor(batch["generation_labels"])
+                batch["completion_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
+                    labels=torch.tensor(batch["completion_labels"])
                 )
 
         return batch
@@ -665,22 +665,22 @@ class KTOTrainer(Trainer):
             all_logits = model(
                 batch["prompt_input_ids"],
                 attention_mask=batch["prompt_attention_mask"],
-                decoder_input_ids=batch["generation_decoder_input_ids"],
-                labels=batch["generation_labels"],
+                decoder_input_ids=batch["completion_decoder_input_ids"],
+                labels=batch["completion_labels"],
             ).logits
         else:
-            all_logits = model(batch["generation_input_ids"], attention_mask=batch["generation_attention_mask"]).logits
+            all_logits = model(batch["completion_input_ids"], attention_mask=batch["completion_attention_mask"]).logits
 
         all_logps = self.get_batch_logps(
             all_logits,
-            batch["generation_labels"],
+            batch["completion_labels"],
             average_log_prob=False,
             is_encoder_decoder=self.is_encoder_decoder,
             label_pad_token_id=self.label_pad_token_id,
         )
 
-        chosen_idx = [i for i in range(all_logps.shape[0]) if batch["chosen"][i] is True]
-        rejected_idx = [i for i in range(all_logps.shape[0]) if batch["chosen"][i] is False]
+        chosen_idx = [i for i in range(all_logps.shape[0]) if batch["label"][i] is True]
+        rejected_idx = [i for i in range(all_logps.shape[0]) if batch["label"][i] is False]
 
         chosen_logps = all_logps[chosen_idx, ...]
         rejected_logps = all_logps[rejected_idx, ...]
@@ -750,8 +750,8 @@ class KTOTrainer(Trainer):
 
         # if reference_logps in batch use them, otherwise use the reference model
         if "reference_logps" in batch:
-            chosen_idx = [i for i in range(batch["reference_logps"].shape[0]) if batch["chosen"][i] is True]
-            rejected_idx = [i for i in range(batch["reference_logps"].shape[0]) if batch["chosen"][i] is False]
+            chosen_idx = [i for i in range(batch["reference_logps"].shape[0]) if batch["label"][i] is True]
+            rejected_idx = [i for i in range(batch["reference_logps"].shape[0]) if batch["label"][i] is False]
 
             reference_chosen_logps = batch["reference_logps"][chosen_idx, ...]
             reference_rejected_logps = batch["reference_logps"][rejected_idx, ...]

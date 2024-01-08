@@ -23,7 +23,7 @@ kto_dataset_dict = {
         "Which is the best programming language?",
         "Which is the best programming language?",
     ],
-    "generation": [
+    "completion": [
         "hi nice to meet you",
         "leave me alone",
         "I don't have a name",
@@ -32,7 +32,7 @@ kto_dataset_dict = {
         "C++",
         "Java",
     ],
-    "chosen": [
+    "label": [
         True,
         False,
         False,
@@ -44,7 +44,7 @@ kto_dataset_dict = {
 }
 ```
 
-where the `prompt` contains the context inputs, `generation` contains the corresponding  responses and `chosen` contains the corresponding flag that indicates if the generation is preferred or unprepared. As can be seen a prompt can have multiple responses and this is reflected in the entries being repeated in the dictionary's value arrays.
+where the `prompt` contains the context inputs, `completion` contains the corresponding responses and `label` contains the corresponding flag that indicates if the generated completion is preferred or unprepared. As can be seen a prompt can have multiple responses and this is reflected in the entries being repeated in the dictionary's value arrays.
 
 ## Expected model format
 The KTO trainer expects a model of `AutoModelForCausalLM`, compared to PPO that expects `AutoModelForCausalLMWithValueHead` for the value function.

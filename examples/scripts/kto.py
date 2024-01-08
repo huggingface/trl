@@ -99,8 +99,8 @@ def get_hh(split: str, sanity_check: bool = False, silent: bool = False, cache_d
     The dataset is converted to a dictionary with the following structure:
     {
         'prompt': List[str],
-        'generation': List[str],
-        'chosen': List[bool],
+        'completion': List[str],
+        'label': List[bool],
     }
 
     Prompts should be structured as follows:
@@ -113,17 +113,17 @@ def get_hh(split: str, sanity_check: bool = False, silent: bool = False, cache_d
 
     flat_data = {
         "prompt": [],
-        "generation": [],
-        "chosen": [],
+        "completion": [],
+        "label": [],
     }
     for sample in dataset:
         prompt = extract_anthropic_prompt(sample["chosen"])
         flat_data["prompt"].append(prompt)
-        flat_data["generation"].append(sample["chosen"][len(prompt) :])
-        flat_data["chosen"].append(True)
+        flat_data["completion"].append(sample["chosen"][len(prompt) :])
+        flat_data["label"].append(True)
         flat_data["prompt"].append(prompt)
-        flat_data["generation"].append(sample["rejected"][len(prompt) :])
-        flat_data["chosen"].append(False)
+        flat_data["completion"].append(sample["rejected"][len(prompt) :])
+        flat_data["label"].append(False)
 
     return dataset.from_dict(flat_data)
 

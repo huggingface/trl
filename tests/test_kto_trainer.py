@@ -52,7 +52,7 @@ class KTOTrainerTester(unittest.TestCase):
                 "Which is the best programming language?",
                 "Which is the best programming language?",
             ],
-            "generation": [
+            "completion": [
                 "hi nice to meet you",
                 "leave me alone",
                 "I don't have a name",
@@ -61,7 +61,7 @@ class KTOTrainerTester(unittest.TestCase):
                 "C++",
                 "Java",
             ],
-            "chosen": [
+            "label": [
                 True,
                 False,
                 False,
