@@ -143,6 +143,7 @@ class SFTTrainer(Trainer):
         neftune_noise_alpha: Optional[float] = None,
         model_init_kwargs: Optional[Dict] = None,
         dataset_kwargs: Optional[Dict] = None,
+        **kwargs
     ):
         if model_init_kwargs is None:
             model_init_kwargs = {}
