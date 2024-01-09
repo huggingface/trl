@@ -368,9 +368,6 @@ class DPOTrainerTester(unittest.TestCase):
             # save peft adapter
             trainer.save_model()
 
-    @require_peft
-    @require_bitsandbytes
-    @mark.peft_test
     @parameterized.expand(
         [
             ["gpt2", "sigmoid", False, False],
@@ -387,6 +384,9 @@ class DPOTrainerTester(unittest.TestCase):
             ["gpt2", "kto_pair", True, True],
         ]
     )
+    @require_bitsandbytes
+    @require_peft
+    @mark.peft_test
     def test_dpo_lora_bf16_autocast(self, name, loss_type, pre_compute, gen_during_eval):
         # Note this test only works on compute capability > 7 GPU devices
         from peft import LoraConfig
