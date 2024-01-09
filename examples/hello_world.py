@@ -12,7 +12,7 @@ tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
 tokenizer.pad_token = tokenizer.eos_token
 
 # 2. initialize trainer
-ppo_config = {"batch_size": 1}
+ppo_config = {"mini_batch_size": 1, "batch_size": 1}
 config = PPOConfig(**ppo_config)
 ppo_trainer = PPOTrainer(config, model, model_ref, tokenizer)
 
