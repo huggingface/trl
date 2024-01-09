@@ -76,4 +76,4 @@ def get_formatting_func_from_dataset(
         else:
             logging.warning("Could not find a formatting function for the dataset. Please check the dataset format.")
 
-        return None
+    return None
