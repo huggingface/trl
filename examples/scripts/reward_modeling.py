@@ -47,9 +47,7 @@ class ScriptArguments:
     model_name: str = field(default="facebook/opt-350m", metadata={"help": "the model name"})
     dataset_name: str = field(default="Anthropic/hh-rlhf", metadata={"help": "the dataset name"})
     dataset_text_field: str = field(default="text", metadata={"help": "the text field of the dataset"})
-    eval_split: str = field(
-        default="none", metadata={"help": "the dataset split to evaluate on; default to 'none' (no evaluation)"}
-    )
+    eval_split: str = field(default="none", metadata={"help": "the dataset split to evaluate on; default to 'none' (no evaluation)"})
     load_in_8bit: bool = field(default=False, metadata={"help": "load the model in 8 bits precision"})
     load_in_4bit: bool = field(default=False, metadata={"help": "load the model in 4 bits precision"})
     trust_remote_code: bool = field(default=True, metadata={"help": "Enable `trust_remote_code`"})
