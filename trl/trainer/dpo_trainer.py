@@ -193,6 +193,10 @@ class DPOTrainer(Trainer):
             )
             ref_model = AutoModelForCausalLM.from_pretrained(ref_model, **ref_model_init_kwargs)
 
+        # Initialize this variable to False. This helps tracking the case when `peft_module_casting_to_bf16`
+        # has been called in order to properly call autocast if needed.
+        self._peft_has_been_casted_to_bf16 = False
+
         if not is_peft_available() and peft_config is not None:
             raise ValueError(
                 "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
@@ -230,6 +234,8 @@ class DPOTrainer(Trainer):
             model = get_peft_model(model, peft_config)
             if args.bf16 and getattr(model, "is_loaded_in_4bit", False):
                 peft_module_casting_to_bf16(model)
+                # If args.bf16 we need to explicitly call `generate` with torch amp autocast context manager
+                self._peft_has_been_casted_to_bf16 = True
 
         # For models that use gradient_checkpoiting, we need to attach a hook that enables input
         # to explicitly have `requires_grad=True`, otherwise training will either silently
@@ -726,8 +732,10 @@ class DPOTrainer(Trainer):
 
     def compute_reference_log_probs(self, padded_batch: Dict) -> Dict:
         """Computes log probabilities of the reference model for a single padded batch of a DPO specific dataset."""
+        compte_ref_context_manager = torch.cuda.amp.autocast if self._peft_has_been_casted_to_bf16 else nullcontext
+
         # compute reference logps
-        with torch.no_grad():
+        with torch.no_grad(), compte_ref_context_manager():
             if self.ref_model is None:
                 with self.null_ref_context():
                     (
@@ -1040,7 +1048,11 @@ class DPOTrainer(Trainer):
                 "compute_loss is only implemented for DPODataCollatorWithPadding, and you passed a datacollator that is different than "
                 "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
             )
-        loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="train")
+
+        compute_loss_context_manager = torch.cuda.amp.autocast if self._peft_has_been_casted_to_bf16 else nullcontext
+
+        with compute_loss_context_manager():
+            loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="train")
 
         # force log the metrics
         if self.accelerator.is_main_process:
@@ -1053,35 +1065,40 @@ class DPOTrainer(Trainer):
     def get_batch_samples(self, model, batch: Dict[str, torch.LongTensor]) -> Tuple[str, str]:
         """Generate samples from the model and reference model for the given batch of inputs."""
 
-        policy_output = model.generate(
-            input_ids=batch["prompt_input_ids"],
-            attention_mask=batch["prompt_attention_mask"],
-            max_length=self.max_length,
-            do_sample=True,
-            pad_token_id=self.tokenizer.pad_token_id,
-        )
+        # If one uses `generate_during_eval` with peft + bf16, we need to explictly call generate with
+        # the torch cuda amp context manager as some hidden states are silently casted to full precision.
+        generate_context_manager = nullcontext if not self._peft_has_been_casted_to_bf16 else torch.cuda.amp.autocast
 
-        # if reference_output in batch use that otherwise use the reference model
-        if "reference_output" in batch:
-            reference_output = batch["reference_output"]
-        else:
-            if self.ref_model is None:
-                with self.null_ref_context():
-                    reference_output = self.model.generate(
+        with generate_context_manager():
+            policy_output = model.generate(
+                input_ids=batch["prompt_input_ids"],
+                attention_mask=batch["prompt_attention_mask"],
+                max_length=self.max_length,
+                do_sample=True,
+                pad_token_id=self.tokenizer.pad_token_id,
+            )
+
+            # if reference_output in batch use that otherwise use the reference model
+            if "reference_output" in batch:
+                reference_output = batch["reference_output"]
+            else:
+                if self.ref_model is None:
+                    with self.null_ref_context():
+                        reference_output = self.model.generate(
+                            input_ids=batch["prompt_input_ids"],
+                            attention_mask=batch["prompt_attention_mask"],
+                            max_length=self.max_length,
+                            do_sample=True,
+                            pad_token_id=self.tokenizer.pad_token_id,
+                        )
+                else:
+                    reference_output = self.ref_model.generate(
                         input_ids=batch["prompt_input_ids"],
                         attention_mask=batch["prompt_attention_mask"],
                         max_length=self.max_length,
                         do_sample=True,
                         pad_token_id=self.tokenizer.pad_token_id,
                     )
-            else:
-                reference_output = self.ref_model.generate(
-                    input_ids=batch["prompt_input_ids"],
-                    attention_mask=batch["prompt_attention_mask"],
-                    max_length=self.max_length,
-                    do_sample=True,
-                    pad_token_id=self.tokenizer.pad_token_id,
-                )
 
         policy_output = pad_to_length(policy_output, self.max_length, self.tokenizer.pad_token_id)
         policy_output_decoded = self.tokenizer.batch_decode(policy_output, skip_special_tokens=True)
@@ -1109,7 +1126,9 @@ class DPOTrainer(Trainer):
             else:
                 ignore_keys = []
 
-        with torch.no_grad():
+        prediction_context_manager = torch.cuda.amp.autocast if self._peft_has_been_casted_to_bf16 else nullcontext
+
+        with torch.no_grad(), prediction_context_manager():
             loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="eval")
 
         # force log the metrics
