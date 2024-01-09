@@ -57,12 +57,10 @@ def get_formatting_func_from_dataset(
 
     Args:
         dataset (Dataset): User dataset
+        tokenizer (AutoTokenizer): Tokenizer used for formatting
 
     Returns:
         Callable: Formatting function if the dataset format is supported else None
-
-    Raises:
-        ValueError: If the dataset is format is not supported
     """
     if isinstance(dataset, Dataset):
         if "messages" in dataset.features:
