@@ -41,7 +41,7 @@ from transformers.trainer_utils import EvalLoopOutput, has_length
 
 from ..import_utils import is_peft_available, is_wandb_available
 from ..models import PreTrainedModelWrapper, create_reference_model
-from .training_configs import KTOConfig
+from .kto_config import KTOConfig
 from .utils import (
     DPODataCollatorWithPadding,
     disable_dropout_in_model,

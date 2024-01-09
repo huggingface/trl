@@ -1,5 +1,3 @@
-# coding=utf-8
-# coding=utf-8
 # Copyright 2023 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,9 +18,9 @@ from transformers import TrainingArguments
 
 
 @dataclass
-class RewardConfig(TrainingArguments):
+class KTOConfig(TrainingArguments):
     """
-    RewardConfig collects all training arguments related to the [`RewardTrainer`] class.
+    KTOConfig collects all training arguments related to the [`KTOTrainer`] class.
 
     Using [`HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
@@ -31,13 +29,19 @@ class RewardConfig(TrainingArguments):
     Parameters:
         max_length (`int`, *optional*, defaults to `None`):
             The maximum length of the sequences in the batch. This argument is required if you want to use the default data collator.
-        gradient_checkpointing (`bool`, *optional*, defaults to `True`):
-                If True, use gradient checkpointing to save memory at the expense of slower backward pass.
+        max_prompt_length (`int`, *optional*, defaults to `None`):
+            The maximum length of the prompt. This argument is required if you want to use the default data collator.
+        max_completion_length (`int`, *optional*, defaults to `None`):
+            The maximum length of the target. This argument is required if you want to use the default data collator and your model is an encoder-decoder.
+        beta (`float`, defaults to 0.1):
+            The beta factor in KTO loss. Higher beta means less divergence from the initial policy.
     """
 
     max_length: Optional[int] = None
     """The maximum length of the sequences in the batch. This argument is required if you want to use the default data collator."""
-    gradient_checkpointing: Optional[bool] = True
-    """If True, use gradient checkpointing to save memory at the expense of slower backward pass."""
-    gradient_checkpointing_kwargs: Optional[dict] = None
-    """Keyword arguments to pass to the gradient checkpointing function."""
+    max_prompt_length: Optional[int] = None
+    """The maximum length of the prompt. This argument is required if you want to use the default data collator."""
+    max_completion_length: Optional[int] = None
+    """The maximum length of the target. This argument is required if you want to use the default data collator and your model is an encoder-decoder."""
+    beta: float = 0.1
+    """The beta factor in KTO loss. Higher beta means less divergence from the initial policy."""
