@@ -25,7 +25,7 @@ from datasets import Dataset, load_dataset
 from peft import LoraConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
-from trl import KTOTrainer, KTOConfig
+from trl import KTOConfig, KTOTrainer
 
 
 # Define and parse arguments.
@@ -191,7 +191,7 @@ if __name__ == "__main__":
 
     # 5. initialize the KTO trainer
     kto_trainer = KTOTrainer(
-        model,        
+        model,
         model_ref,
         args=training_args,
         train_dataset=train_dataset,
