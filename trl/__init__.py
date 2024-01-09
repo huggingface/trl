@@ -11,6 +11,7 @@ from .import_utils import (
     is_peft_available,
     is_wandb_available,
     is_xpu_available,
+    is_bitsandbytes_available,
 )
 from .models import (
     AutoModelForCausalLMWithValueHead,
