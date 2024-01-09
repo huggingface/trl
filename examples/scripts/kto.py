@@ -130,7 +130,7 @@ def get_hh(split: str, sanity_check: bool = False, silent: bool = False, cache_d
 
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments, KTOConfig)
-    script_args = parser.parse_args_into_dataclasses()[0]
+    script_args, kto_config = parser.parse_args_into_dataclasses()[0]
 
     # 1. load a pretrained model
     model = AutoModelForCausalLM.from_pretrained(script_args.model_name_or_path)
