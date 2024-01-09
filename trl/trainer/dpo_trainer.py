@@ -732,7 +732,7 @@ class DPOTrainer(Trainer):
 
     def compute_reference_log_probs(self, padded_batch: Dict) -> Dict:
         """Computes log probabilities of the reference model for a single padded batch of a DPO specific dataset."""
-        compte_ref_context_manager = torch.cuda.amp.autocast if self._peft_has_been_casted_to_bf16 else nullcontext()
+        compte_ref_context_manager = torch.cuda.amp.autocast if self._peft_has_been_casted_to_bf16 else nullcontext
 
         # compute reference logps
         with torch.no_grad(), compte_ref_context_manager():
