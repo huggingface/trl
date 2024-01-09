@@ -13,15 +13,15 @@
 # limitations under the License.
 """
 python examples/scripts/ddpo.py \
-    --num_epochs=200
-    --train_gradient_accumulation_steps=1
-    --sample_num_steps=50
-    --sample_batch_size=6
-    --train_batch_size=3
-    --sample_num_batches_per_epoch=4
-    --per_prompt_stat_tracking=True
-    --per_prompt_stat_tracking_buffer_size=32
-    --tracker_project_name="stable_diffusion_training"
+    --num_epochs=200 \
+    --train_gradient_accumulation_steps=1 \
+    --sample_num_steps=50 \
+    --sample_batch_size=6 \
+    --train_batch_size=3 \
+    --sample_num_batches_per_epoch=4 \
+    --per_prompt_stat_tracking=True \
+    --per_prompt_stat_tracking_buffer_size=32 \
+    --tracker_project_name="stable_diffusion_training" \
     --log_with="wandb"
 """
 import os
@@ -45,6 +45,7 @@ class ScriptArguments:
     hf_hub_model_id: str = field(default="ddpo-finetuned-stable-diffusion", metadata={"help": "HuggingFace repo to save model weights to"})
     hf_hub_aesthetic_model_id: str = field(default="trl-lib/ddpo-aesthetic-predictor", metadata={"help": "HuggingFace model ID for aesthetic scorer model weights"})
     hf_hub_aesthetic_model_filename: str = field(default="aesthetic-model.pth", metadata={"help": "HuggingFace model filename for aesthetic scorer model weights"})
+    use_lora: bool = field(default=True, metadata={"help": "Whether to use LoRA."})
 
 
 class MLP(nn.Module):
