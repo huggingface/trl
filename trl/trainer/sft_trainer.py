@@ -143,7 +143,7 @@ class SFTTrainer(Trainer):
         neftune_noise_alpha: Optional[float] = None,
         model_init_kwargs: Optional[Dict] = None,
         dataset_kwargs: Optional[Dict] = None,
-        **kwargs
+        trainer_kwargs: Optional[Dict] = None,
     ):
         if model_init_kwargs is None:
             model_init_kwargs = {}
@@ -288,6 +288,7 @@ class SFTTrainer(Trainer):
             )
 
         super().__init__(
+            **trainer_kwargs,
             model=model,
             args=args,
             data_collator=data_collator,
@@ -299,7 +300,6 @@ class SFTTrainer(Trainer):
             callbacks=callbacks,
             optimizers=optimizers,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
-            **kwargs
         )
 
         if self.args.max_steps > 0 and packing:
