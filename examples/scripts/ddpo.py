@@ -40,11 +40,21 @@ from trl.import_utils import is_npu_available, is_xpu_available
 
 @dataclass
 class ScriptArguments:
-    pretrained_model: str = field(default="runwayml/stable-diffusion-v1-5", metadata={"help": "the pretrained model to use"})
+    pretrained_model: str = field(
+        default="runwayml/stable-diffusion-v1-5", metadata={"help": "the pretrained model to use"}
+    )
     pretrained_revision: str = field(default="main", metadata={"help": "the pretrained model revision to use"})
-    hf_hub_model_id: str = field(default="ddpo-finetuned-stable-diffusion", metadata={"help": "HuggingFace repo to save model weights to"})
-    hf_hub_aesthetic_model_id: str = field(default="trl-lib/ddpo-aesthetic-predictor", metadata={"help": "HuggingFace model ID for aesthetic scorer model weights"})
-    hf_hub_aesthetic_model_filename: str = field(default="aesthetic-model.pth", metadata={"help": "HuggingFace model filename for aesthetic scorer model weights"})
+    hf_hub_model_id: str = field(
+        default="ddpo-finetuned-stable-diffusion", metadata={"help": "HuggingFace repo to save model weights to"}
+    )
+    hf_hub_aesthetic_model_id: str = field(
+        default="trl-lib/ddpo-aesthetic-predictor",
+        metadata={"help": "HuggingFace model ID for aesthetic scorer model weights"},
+    )
+    hf_hub_aesthetic_model_filename: str = field(
+        default="aesthetic-model.pth",
+        metadata={"help": "HuggingFace model filename for aesthetic scorer model weights"},
+    )
     use_lora: bool = field(default=True, metadata={"help": "Whether to use LoRA."})
 
 
@@ -176,6 +186,12 @@ def image_outputs_logger(image_data, global_step, accelerate_logger):
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, DDPOConfig))
     args, ddpo_config = parser.parse_args_into_dataclasses()
+    ddpo_config.project_kwargs = {
+        "logging_dir": "./logs",
+        "automatic_checkpoint_naming": True,
+        "total_limit": 5,
+        "project_dir": "./save",
+    }
 
     pipeline = DefaultDDPOStableDiffusionPipeline(
         args.pretrained_model, pretrained_model_revision=args.pretrained_revision, use_lora=args.use_lora
