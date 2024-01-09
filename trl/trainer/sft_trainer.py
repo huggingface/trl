@@ -37,7 +37,6 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 
 from ..extras.dataset_formatting import get_formatting_func_from_dataset
-
 from ..import_utils import is_peft_available
 from .utils import (
     ConstantLengthDataset,
@@ -252,7 +251,6 @@ class SFTTrainer(Trainer):
             if data_collator is None:
                 data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
-        
         if dataset_kwargs is None:
             dataset_kwargs = {}
         if train_dataset is not None:
