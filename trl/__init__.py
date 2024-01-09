@@ -6,12 +6,12 @@ from .core import set_seed
 from .environment import TextEnvironment, TextHistory
 from .extras import BestOfNSampler
 from .import_utils import (
+    is_bitsandbytes_available,
     is_diffusers_available,
     is_npu_available,
     is_peft_available,
     is_wandb_available,
     is_xpu_available,
-    is_bitsandbytes_available,
 )
 from .models import (
     AutoModelForCausalLMWithValueHead,
