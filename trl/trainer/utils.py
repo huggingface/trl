@@ -176,6 +176,13 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                     )
                     batch["labels"][i, :] = self.ignore_index
 
+                if (
+                    len(human_token_ids_idxs) > 0
+                    and len(response_token_ids_idxs) > 0
+                    and human_token_ids_idxs[0] > response_token_ids_idxs[0]
+                ):
+                    human_token_ids_idxs = [0] + human_token_ids_idxs
+
                 for idx, (start, end) in enumerate(zip(human_token_ids_idxs, response_token_ids_idxs)):
                     # Make pytorch loss function ignore all non response tokens
                     if idx != 0:
