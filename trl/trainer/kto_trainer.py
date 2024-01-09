@@ -221,16 +221,16 @@ class KTOTrainer(Trainer):
             if args.max_prompt_length is not None:
                 max_prompt_length = args.max_prompt_length
 
-            max_target_length = None
-            if args.max_target_length is None and self.is_encoder_decoder:
+            max_completion_length = None
+            if args.max_completion_length is None and self.is_encoder_decoder:
                 warnings.warn(
-                    "When using DPODataCollatorWithPadding with an encoder decoder architecture, you should set `max_target_length` in the KTOTrainer's init"
+                    "When using DPODataCollatorWithPadding with an encoder decoder architecture, you should set `max_completion_length` in the KTOTrainer's init"
                     " it will be set to `128` by default, but you should do it yourself in the future.",
                     UserWarning,
                 )
-                max_target_length = 128
-            if args.max_target_length is not None and self.is_encoder_decoder:
-                max_target_length = args.max_target_length
+                max_completion_length = 128
+            if args.max_completion_length is not None and self.is_encoder_decoder:
+                max_completion_length = args.max_completion_length
 
             data_collator = DPODataCollatorWithPadding(
                 pad_token_id=tokenizer.pad_token_id,
@@ -262,7 +262,7 @@ class KTOTrainer(Trainer):
         self.padding_value = padding_value if padding_value is not None else tokenizer.pad_token_id
         self.max_prompt_length = max_prompt_length
         self.truncation_mode = truncation_mode
-        self.max_target_length = max_target_length
+        self.max_completion_length = max_completion_length
         self.tokenizer = tokenizer
         self.precompute_ref_log_probs = precompute_ref_log_probs
 
@@ -621,7 +621,7 @@ class KTOTrainer(Trainer):
 
         else:
             completion_tokens = self.tokenizer(
-                completion, truncation=True, max_length=self.max_target_length, add_special_tokens=True
+                completion, truncation=True, max_length=self.max_completion_length, add_special_tokens=True
             )
             prompt_tokens = self.tokenizer(
                 prompt, truncation=True, max_length=self.max_prompt_length, add_special_tokens=True
