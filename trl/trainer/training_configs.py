@@ -67,7 +67,7 @@ class KTOConfig(TrainingArguments):
     """The maximum length of the sequences in the batch. This argument is required if you want to use the default data collator."""
     max_prompt_length: Optional[int] = None
     """The maximum length of the prompt. This argument is required if you want to use the default data collator."""
-    max_target_length: Optional[int] = None
+    max_completion_length: Optional[int] = None
     """The maximum length of the target. This argument is required if you want to use the default data collator and your model is an encoder-decoder."""
     beta: float = 0.1
     """The beta factor in KTO loss. Higher beta means less divergence from the initial policy."""
