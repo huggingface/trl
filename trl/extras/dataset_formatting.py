@@ -13,7 +13,7 @@ FORMAT_MAPPING = {
 }
 
 
-def conversations_formatting_function(tokenizer: AutoTokenizer, messages_field: Literal["messages", "instructions"]):
+def conversations_formatting_function(tokenizer: AutoTokenizer, messages_field: Literal["messages", "conversations"]):
     r"""
     return a callable function that takes in a "messages" dataset and returns a formatted dataset, based on the tokenizer
     apply chat template to the dataset
