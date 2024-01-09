@@ -239,7 +239,8 @@ class SFTTrainer(Trainer):
             self.neftune_noise_alpha = neftune_noise_alpha
 
         if formatting_func is None and dataset_text_field is None:
-            # check if dataset has ChatML format or instruction format
+            # check if dataset has ChatML format or instruction format and is supported
+            # if not stays #None
             formatting_func = get_formatting_func_from_dataset(train_dataset, tokenizer)
 
         if not packing:
