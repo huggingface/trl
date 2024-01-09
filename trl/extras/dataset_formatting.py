@@ -1,8 +1,10 @@
 import logging
-from typing import Callable, Literal, Optional
+from typing import Callable, Literal, Optional, Union
 
 from datasets import Dataset, Value
 from transformers import AutoTokenizer
+
+from ..trainer.utils import ConstantLengthDataset
 
 
 FORMAT_MAPPING = {
@@ -45,7 +47,9 @@ def instructions_formatting_function(tokenizer: AutoTokenizer):
     return format_dataset
 
 
-def get_formatting_func_from_dataset(dataset: Dataset, tokenizer: AutoTokenizer) -> Optional[Callable]:
+def get_formatting_func_from_dataset(
+    dataset: Union[Dataset, ConstantLengthDataset], tokenizer: AutoTokenizer
+) -> Optional[Callable]:
     r"""
     Finds the correct formatting function based on the dataset structure. Currently supported datasets are:
     - `ChatML` with [{"role": str, "content": str}]
@@ -60,14 +64,16 @@ def get_formatting_func_from_dataset(dataset: Dataset, tokenizer: AutoTokenizer)
     Raises:
         ValueError: If the dataset is format is not supported
     """
-    if "messages" in dataset.features:
-        if dataset.features["messages"] == FORMAT_MAPPING["chatml"]:
-            return conversations_formatting_function(tokenizer, "messages")
-    if "conversations" in dataset.features:
-        if dataset.features["conversations"] == FORMAT_MAPPING["chatml"]:
-            return conversations_formatting_function(tokenizer, "conversations")
-    elif dataset.features == FORMAT_MAPPING["instruction"]:
-        return instructions_formatting_function
-    else:
-        logging.warning("Could not find a formatting function for the dataset. Please check the dataset format.")
+    if isinstance(dataset, Dataset):
+        if "messages" in dataset.features:
+            if dataset.features["messages"] == FORMAT_MAPPING["chatml"]:
+                return conversations_formatting_function(tokenizer, "messages")
+        if "conversations" in dataset.features:
+            if dataset.features["conversations"] == FORMAT_MAPPING["chatml"]:
+                return conversations_formatting_function(tokenizer, "conversations")
+        elif dataset.features == FORMAT_MAPPING["instruction"]:
+            return instructions_formatting_function
+        else:
+            logging.warning("Could not find a formatting function for the dataset. Please check the dataset format.")
+
         return None
