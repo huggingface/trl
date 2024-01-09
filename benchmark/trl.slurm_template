@@ -7,6 +7,9 @@
 #SBATCH --output=slurm/logs/%x_%j.out
 #SBATCH --array={{array}}
 ##SBATCH --exclude=ip-26-0-149-199
+
+module load cuda/12.1
+
 {{nodes}}
 
 seeds={{seeds}}
