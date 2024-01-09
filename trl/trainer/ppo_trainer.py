@@ -733,11 +733,11 @@ class PPOTrainer(BaseTrainer):
                 active_full_logprobs = logprobs_from_logits(logits_or_none, None, gather=False)
                 ref_full_logprobs = logprobs_from_logits(ref_logits_or_none, None, gather=False)
 
-                rewards, non_score_reward = self.compute_rewards(
+                rewards, non_score_reward, kls = self.compute_rewards(
                     scores, active_full_logprobs, ref_full_logprobs, masks
                 )
             else:
-                rewards, non_score_reward = self.compute_rewards(scores, all_logprobs, ref_logprobs, masks)
+                rewards, non_score_reward, kls = self.compute_rewards(scores, all_logprobs, ref_logprobs, masks)
             timing["time/ppo/compute_rewards"] = time.time() - t
 
             t = time.time()
@@ -831,6 +831,7 @@ class PPOTrainer(BaseTrainer):
             masks=masks,
             queries=queries,
             responses=responses,
+            kls=kls,
         )
         # Gather/Reduce stats from all processes
         if self.is_distributed:
@@ -1091,11 +1092,17 @@ class PPOTrainer(BaseTrainer):
                 Log probabilities of the model, shape (`batch_size`, `response_length`)
             ref_logprobs (`torch.FloatTensor`):
                 Log probabilities of the reference model, shape (`batch_size`, `response_length`)
+
+        Returns:
+            `torch.FloatTensor`: Per token rewards, shape (`batch_size`, `response_length`)
+            `torch.FloatTensor`: Non score rewards, shape (`batch_size`, `response_length`)
+            `torch.FloatTensor`: KL penalty, shape (`batch_size`, `response_length`)
         """
-        rewards, non_score_rewards = [], []
+        rewards, non_score_rewards, kls = [], [], []
         for score, logprob, ref_logprob, mask in zip(scores, logprobs, ref_logprobs, masks):
             # compute KL penalty (from difference in logprobs)
             kl = self._kl_penalty(logprob, ref_logprob)
+            kls.append(kl)
             non_score_reward = -self.kl_ctl.value * kl
             non_score_rewards.append(non_score_reward)
             reward = non_score_reward.clone()
@@ -1104,7 +1111,7 @@ class PPOTrainer(BaseTrainer):
             # reward is preference model score + KL penalty
             reward[last_non_masked_index] += score
             rewards.append(reward)
-        return torch.stack(rewards), torch.stack(non_score_rewards)
+        return torch.stack(rewards), torch.stack(non_score_rewards), torch.stack(kls)
 
     def _kl_penalty(self, logprob: torch.FloatTensor, ref_logprob: torch.FloatTensor) -> torch.FloatTensor:
         if self.config.kl_penalty == "kl":
@@ -1256,7 +1263,8 @@ class PPOTrainer(BaseTrainer):
         """
         mask = data.pop("masks")
 
-        kl_list = ((data["logprobs"] - data["ref_logprobs"]) * mask).sum(axis=-1)
+        kls = data.pop("kls")
+        kl_list = ((kls) * mask).sum(axis=-1)
         mean_kl = kl_list.mean()
         mean_entropy = (-data["logprobs"] * mask).sum(axis=-1).mean()
 
