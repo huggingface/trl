@@ -299,6 +299,7 @@ class SFTTrainer(Trainer):
             callbacks=callbacks,
             optimizers=optimizers,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
+            **kwargs
         )
 
         if self.args.max_steps > 0 and packing:
