@@ -271,28 +271,26 @@ class DPOTrainer(Trainer):
             self.ref_model = create_reference_model(model)
 
         if tokenizer is None:
-            raise ValueError(
-                "max_length or a tokenizer must be specified when using the default DPODataCollatorWithPadding"
-            )
+            raise ValueError("tokenizer must be specified to tokenize a DPO dataset.")
         if max_length is None:
             warnings.warn(
-                "When using DPODataCollatorWithPadding, you should set `max_length` in the DPOTrainer's init"
-                " it will be set to `512` by default, but you should do it yourself in the future.",
+                "`max_length` is not set in the DPOTrainer's init"
+                " it will default to `512` by default, but you should do it yourself in the future.",
                 UserWarning,
             )
             max_length = 512
         if max_prompt_length is None:
             warnings.warn(
-                "When using DPODataCollatorWithPadding, you should set `max_prompt_length` in the DPOTrainer's init"
-                " it will be set to `128` by default, but you should do it yourself in the future.",
+                "`max_prompt_length` is not set in the DPOTrainer's init"
+                " it will default to `128` by default, but you should do it yourself in the future.",
                 UserWarning,
             )
             max_prompt_length = 128
 
         if max_target_length is None and self.is_encoder_decoder:
             warnings.warn(
-                "When using DPODataCollatorWithPadding with an encoder decoder architecture, you should set `max_target_length` in the DPOTrainer's init"
-                " it will be set to `128` by default, but you should do it yourself in the future.",
+                "When using an encoder decoder architecture, you should set `max_target_length` in the DPOTrainer's init"
+                " it will default to `128` by default, but you should do it yourself in the future.",
                 UserWarning,
             )
             max_target_length = 128
