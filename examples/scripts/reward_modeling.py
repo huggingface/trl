@@ -28,7 +28,6 @@ python examples/scripts/reward_modeling.py \
     --max_length=512 \
 """
 from dataclasses import dataclass, field
-from typing import Optional
 
 from accelerate import Accelerator
 from datasets import load_dataset
@@ -56,8 +55,8 @@ class ScriptArguments:
 
     # LoraConfig
     use_peft: bool = field(default=False, metadata={"help": "whether to use peft"})
-    lora_alpha: Optional[float] = field(default=16, metadata={"help": "the lora alpha parameter"})
-    lora_r: Optional[int] = field(default=16, metadata={"help": "the lora r parameter"})
+    peft_lora_r: int = field(default=16, metadata={"help": "the r parameter of the LoRA adapters"})
+    peft_lora_alpha: int = field(default=16, metadata={"help": "the alpha parameter of the LoRA adapters"})
 
 
 parser = HfArgumentParser((ScriptArguments, RewardConfig))
@@ -145,8 +144,8 @@ else:
 # Step 4: Define the LoraConfig
 if args.use_peft:
     peft_config = LoraConfig(
-        r=args.lora_r,
-        lora_alpha=args.lora_alpha,
+        r=args.peft_lora_r,
+        lora_alpha=args.peft_lora_alpha,
         bias="none",
         task_type="SEQ_CLS",
         modules_to_save=["scores"],
