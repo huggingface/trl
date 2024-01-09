@@ -165,7 +165,7 @@ if __name__ == "__main__":
         logging_steps=10,  # match results in blog post
         eval_steps=500,
         output_dir="./test",
-        optim="rmsprop",
+        optim="adamw_torch",
         warmup_steps=150,
         report_to=script_args.report_to,
         # bf16=True,
