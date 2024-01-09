@@ -85,6 +85,20 @@ class SFTTrainerTester(unittest.TestCase):
                 ],
             }
         )
+        cls.dummy_chatml_dataset = Dataset.from_dict({
+            "messages": [
+                [{"role": "user", "content": "Hello"},{"role": "assistant", "content": "Hi, how can I help you?"}],
+                [{"role": "user", "content": "Hello"},{"role": "assistant", "content": "Hi, how can I help you?"}],
+                [{"role": "user", "content": "Hello"},{"role": "assistant", "content": "Hi, how can I help you?"}],
+                [{"role": "user", "content": "Hello"},{"role": "assistant", "content": "Hi, how can I help you?"}],
+                [{"role": "user", "content": "Hello"},{"role": "assistant", "content": "Hi, how can I help you?"}],
+                [{"role": "user", "content": "Hello"},{"role": "assistant", "content": "Hi, how can I help you?"}],
+                [{"role": "user", "content": "Hello"},{"role": "assistant", "content": "Hi, how can I help you?"}],
+                [{"role": "user", "content": "Hello"},{"role": "assistant", "content": "Hi, how can I help you?"}],
+                [{"role": "user", "content": "Hello"},{"role": "assistant", "content": "Hi, how can I help you?"}],
+                [{"role": "user", "content": "Hello"},{"role": "assistant", "content": "Hi, how can I help you?"}],
+            ]
+        })
 
         cls.train_dataset = ConstantLengthDataset(
             cls.tokenizer,
@@ -171,6 +185,15 @@ class SFTTrainerTester(unittest.TestCase):
                     train_dataset=self.dummy_dataset,
                     packing=True,
                 )
+            # this should work since the dummy chatml include the correct format
+            _ = SFTTrainer(
+                model=self.model,
+                args=training_args,
+                train_dataset=self.dummy_chatml_dataset,
+                max_seq_length=32,  # make sure there is at least 1 packed sequence
+                packing=True,
+            )
+
 
             # This should work
             _ = SFTTrainer(
