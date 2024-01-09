@@ -23,9 +23,9 @@ from typing import Optional
 import torch
 from datasets import Dataset, load_dataset
 from peft import LoraConfig
-from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, TrainingArguments
+from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
-from trl import KTOTrainer
+from trl import KTOTrainer, KTOConfig
 
 
 # Define and parse arguments.
@@ -154,7 +154,7 @@ if __name__ == "__main__":
     eval_dataset = get_hh("test", sanity_check=script_args.sanity_check)
 
     # 4. initialize training arguments:
-    training_args = TrainingArguments(
+    training_args = KTOConfig(
         per_device_train_batch_size=script_args.per_device_train_batch_size,
         max_steps=script_args.max_steps,
         remove_unused_columns=False,
@@ -172,6 +172,11 @@ if __name__ == "__main__":
         gradient_checkpointing=script_args.gradient_checkpointing,
         # TODO: uncomment that on the next transformers release
         # gradient_checkpointing_kwargs=script_args.gradient_checkpointing_kwargs,
+        # KTO
+        beta=script_args.beta,
+        max_length=script_args.max_length,
+        max_target_length=script_args.max_target_length,
+        max_prompt_length=script_args.max_prompt_length,
     )
 
     if script_args.use_peft:
@@ -186,16 +191,12 @@ if __name__ == "__main__":
 
     # 5. initialize the KTO trainer
     kto_trainer = KTOTrainer(
-        model,
+        model,        
         model_ref,
         args=training_args,
-        beta=script_args.beta,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         tokenizer=tokenizer,
-        max_length=script_args.max_length,
-        max_target_length=script_args.max_target_length,
-        max_prompt_length=script_args.max_prompt_length,
         generate_during_eval=True,
         peft_config=peft_config,
     )
