@@ -641,7 +641,7 @@ def peft_module_casting_to_bf16(model):
     for name, module in model.named_modules():
         if isinstance(module, BaseTunerLayer):
             module = module.to(torch.bfloat16)
-        elif isinstance(module, torch.nn.LayerNorm):
+        elif isinstance(module, torch.nn.LayerNorm) or "norm" in name:
             module = module.to(torch.float32)
         elif any(x in name for x in ["lm_head", "embed_tokens", "wte", "wpe"]):
             if hasattr(module, "weight"):
