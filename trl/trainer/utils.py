@@ -65,7 +65,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
             '### Response:\n'. It can also be passed as tokenized ids, which can be useful when using a tokenizer that encodes the response
             differently if it does not have proper context.
         instruction_template (`Union[str, List[int]]`): the template form that indicates the start of the human instruction, typically something like
-            '### Human:\n'. Useful for assistant-style conversation datasets.
+            '### Human:\n'. Useful for assistant-style conversation datasets. It can also be passed as tokenized ids.
         mlm (`bool`, *optional*, defaults to `False`): Whether or not to use masked language modeling in the underlying
             `DataCollatorForLanguageModeling` class. Note that this option currently has no effect but is present
              for flexibility and backwards-compatibility.
