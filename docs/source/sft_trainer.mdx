@@ -156,7 +156,7 @@ data_collator = DataCollatorForCompletionOnlyLM(response_template_ids, tokenizer
 
 ### Dataset format support
 
-The [`SFTTrainer`] supports popular dataset formats. This allows you to directly pass the dataset to the trainer without any pre-processing. The following formats are supported:
+The [`SFTTrainer`] supports popular dataset formats. This allows you to pass the dataset to the trainer without any pre-processing directly. The following formats are supported:
 * conversational format
 ```json
 {"messages": [{"role": "system", "content": "You are helpful"}, {"role": "user", "content": "What's the capital of France?"}, {"role": "assistant", "content": "..."}]}
@@ -170,9 +170,8 @@ The [`SFTTrainer`] supports popular dataset formats. This allows you to directly
 {"prompt": "<prompt text>", "completion": "<ideal generated text>"}
 ```
 
-If your dataset is using one of the above formats, you can directly pass it to the trainer without any pre-processing. The [`SFTTrainer`] will then format the dataset for you using the defined format from the models tokenizer with the [apply_chat_template](https://huggingface.co/docs/transformers/main/en/chat_templating#templates-for-chat-models) method. 
+If your dataset uses one of the above formats, you can directly pass it to the trainer without pre-processing. The [`SFTTrainer`] will then format the dataset for you using the defined format from the model's tokenizer with the [apply_chat_template](https://huggingface.co/docs/transformers/main/en/chat_templating#templates-for-chat-models) method. 
 
-```python
 
 ```python
 from datasets import load_dataset
