@@ -195,42 +195,42 @@ class KTOTrainer(Trainer):
         else:
             self.ref_model = create_reference_model(model)
 
-        if data_collator is None:
-            if tokenizer is None:
-                raise ValueError(
-                    "max_length or a tokenizer must be specified when using the default DPODataCollatorWithPadding"
-                )
-            if args.max_length is None:
-                warnings.warn(
-                    "When using DPODataCollatorWithPadding, you should set `max_length` in the KTOTrainer's init"
-                    " it will be set to `512` by default, but you should do it yourself in the future.",
-                    UserWarning,
-                )
-                max_length = 512
-            if args.max_length is not None:
-                max_length = args.max_length
+        if tokenizer is None:
+            raise ValueError(
+                "max_length or a tokenizer must be specified when using the default DPODataCollatorWithPadding"
+            )
+        if args.max_length is None:
+            warnings.warn(
+                "When using DPODataCollatorWithPadding, you should set `max_length` in the KTOTrainer's init"
+                " it will be set to `512` by default, but you should do it yourself in the future.",
+                UserWarning,
+            )
+            max_length = 512
+        if args.max_length is not None:
+            max_length = args.max_length
 
-            if args.max_prompt_length is None:
-                warnings.warn(
-                    "When using DPODataCollatorWithPadding, you should set `max_prompt_length` in the KTOTrainer's init"
-                    " it will be set to `128` by default, but you should do it yourself in the future.",
-                    UserWarning,
-                )
-                max_prompt_length = 128
-            if args.max_prompt_length is not None:
-                max_prompt_length = args.max_prompt_length
+        if args.max_prompt_length is None:
+            warnings.warn(
+                "When using DPODataCollatorWithPadding, you should set `max_prompt_length` in the KTOTrainer's init"
+                " it will be set to `128` by default, but you should do it yourself in the future.",
+                UserWarning,
+            )
+            max_prompt_length = 128
+        if args.max_prompt_length is not None:
+            max_prompt_length = args.max_prompt_length
 
-            max_completion_length = None
-            if args.max_completion_length is None and self.is_encoder_decoder:
-                warnings.warn(
-                    "When using DPODataCollatorWithPadding with an encoder decoder architecture, you should set `max_completion_length` in the KTOTrainer's init"
-                    " it will be set to `128` by default, but you should do it yourself in the future.",
-                    UserWarning,
-                )
-                max_completion_length = 128
-            if args.max_completion_length is not None and self.is_encoder_decoder:
-                max_completion_length = args.max_completion_length
+        max_completion_length = None
+        if args.max_completion_length is None and self.is_encoder_decoder:
+            warnings.warn(
+                "When using DPODataCollatorWithPadding with an encoder decoder architecture, you should set `max_completion_length` in the KTOTrainer's init"
+                " it will be set to `128` by default, but you should do it yourself in the future.",
+                UserWarning,
+            )
+            max_completion_length = 128
+        if args.max_completion_length is not None and self.is_encoder_decoder:
+            max_completion_length = args.max_completion_length
 
+        if data_collator is None:      
             data_collator = DPODataCollatorWithPadding(
                 pad_token_id=tokenizer.pad_token_id,
                 label_pad_token_id=label_pad_token_id,
