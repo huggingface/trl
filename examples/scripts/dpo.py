@@ -15,6 +15,7 @@
 """
 # regular:
 python examples/scripts/dpo.py \
+    --model_name_or_path=gpt2 \
     --per_device_train_batch_size 4 \
     --max_steps 1000 \
     --learning_rate 1e-3 \
@@ -31,6 +32,7 @@ python examples/scripts/dpo.py \
 
 # peft:
 python examples/scripts/dpo.py \
+    --model_name_or_path=gpt2 \
     --per_device_train_batch_size 4 \
     --max_steps 1000 \
     --learning_rate 1e-3 \
@@ -121,24 +123,9 @@ if __name__ == "__main__":
     ################
     # Model & Tokenizer
     ################
-    torch_dtype = (
-        model_config.torch_dtype
-        if model_config.torch_dtype in ["auto", None]
-        else getattr(torch, model_config.torch_dtype)
-    )
-    quantization_config = get_quantization_config(model_config)
-    model_kwargs = dict(
-        revision=model_config.model_revision,
-        trust_remote_code=model_config.trust_remote_code,
-        use_flash_attention_2=model_config.use_flash_attention_2,
-        torch_dtype=torch_dtype,
-        use_cache=False if training_args.gradient_checkpointing else True,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
-        quantization_config=quantization_config,
-    )
     tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path, use_fast=True)
-    model = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, *model_kwargs)
-    model_ref = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, *model_kwargs)
+    model = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path)
+    model_ref = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path)
     tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
