@@ -28,7 +28,7 @@ python examples/scripts/sft.py \
     --save_total_limit=10 \
     --push_to_hub \
     --gradient_checkpointing \
-    
+
 # peft:
 python examples/scripts/sft.py \
     --model_name_or_path="facebook/opt-350m" \

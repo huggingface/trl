@@ -74,6 +74,7 @@ if __name__ == "__main__":
     raw_datasets = load_dataset("Anthropic/hh-rlhf")
     # Tokenize chosen/rejected pairs of inputs
     # Adapt this section to your needs for custom datasets
+
     def preprocess_function(examples):
         new_examples = {
             "input_ids_chosen": [],
