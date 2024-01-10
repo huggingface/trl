@@ -57,7 +57,7 @@ import torch
 from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, TrainingArguments
 
-from trl import DPOTrainer, ModelConfig, get_peft_config
+from trl import DPOTrainer, ModelConfig, get_kbit_device_map, get_peft_config, get_quantization_config
 
 
 @dataclass
@@ -123,9 +123,24 @@ if __name__ == "__main__":
     ################
     # Model & Tokenizer
     ################
+    torch_dtype = (
+        model_config.torch_dtype
+        if model_config.torch_dtype in ["auto", None]
+        else getattr(torch, model_config.torch_dtype)
+    )
+    quantization_config = get_quantization_config(model_config)
+    model_kwargs = dict(
+        revision=model_config.model_revision,
+        trust_remote_code=model_config.trust_remote_code,
+        use_flash_attention_2=model_config.use_flash_attention_2,
+        torch_dtype=torch_dtype,
+        use_cache=False if training_args.gradient_checkpointing else True,
+        device_map=get_kbit_device_map() if quantization_config is not None else None,
+        quantization_config=quantization_config,
+    )
     tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path, use_fast=True)
-    model = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path)
-    model_ref = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path)
+    model = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, **model_kwargs)
+    model_ref = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, **model_kwargs)
     tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token

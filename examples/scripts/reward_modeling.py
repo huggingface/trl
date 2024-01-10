@@ -57,15 +57,12 @@ if __name__ == "__main__":
     model_kwargs = dict(
         revision=model_config.model_revision,
         trust_remote_code=model_config.trust_remote_code,
-        use_flash_attention_2=model_config.use_flash_attention_2,
-        torch_dtype=torch_dtype,
-        use_cache=False if reward_config.gradient_checkpointing else True,
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
     tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path, use_fast=True)
     model = AutoModelForSequenceClassification.from_pretrained(
-        model_config.model_name_or_path, num_labels=1, *model_kwargs
+        model_config.model_name_or_path, num_labels=1, **model_kwargs
     )
 
     ################
