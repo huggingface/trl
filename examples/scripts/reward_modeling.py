@@ -14,6 +14,7 @@
 # limitations under the License.
 """
 python examples/scripts/reward_modeling.py \
+    --model_name_or_path=facebook/opt-350m \
     --output_dir="output" \
     --per_device_train_batch_size=64 \
     --num_train_epochs=1 \
@@ -24,143 +25,96 @@ python examples/scripts/reward_modeling.py \
     --remove_unused_columns=False \
     --optim="adamw_torch" \
     --logging_steps=10 \
-    --evaluation_strategy="no" \
+    --evaluation_strategy="steps" \
     --max_length=512 \
 """
-from dataclasses import dataclass, field
 
-from accelerate import Accelerator
+import torch
 from datasets import load_dataset
-from peft import LoraConfig
 from tqdm import tqdm
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, BitsAndBytesConfig, HfArgumentParser
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, HfArgumentParser
 
-from trl import RewardConfig, RewardTrainer, is_xpu_available
+from trl import ModelConfig, RewardConfig, RewardTrainer, get_kbit_device_map, get_peft_config, get_quantization_config
 
 
 tqdm.pandas()
 
 
-@dataclass
-class ScriptArguments:
-    model_name: str = field(default="facebook/opt-350m", metadata={"help": "the model name"})
-    dataset_name: str = field(default="Anthropic/hh-rlhf", metadata={"help": "the dataset name"})
-    dataset_text_field: str = field(default="text", metadata={"help": "the text field of the dataset"})
-    eval_split: str = field(
-        default="none", metadata={"help": "the dataset split to evaluate on; default to 'none' (no evaluation)"}
+if __name__ == "__main__":
+    parser = HfArgumentParser((RewardConfig, ModelConfig))
+    reward_config, model_config = parser.parse_args_into_dataclasses()
+    reward_config.gradient_checkpointing_kwargs = dict(use_reentrant=False)
+
+    ################
+    # Model & Tokenizer
+    ################
+    torch_dtype = (
+        model_config.torch_dtype
+        if model_config.torch_dtype in ["auto", None]
+        else getattr(torch, model_config.torch_dtype)
     )
-    load_in_8bit: bool = field(default=False, metadata={"help": "load the model in 8 bits precision"})
-    load_in_4bit: bool = field(default=False, metadata={"help": "load the model in 4 bits precision"})
-    trust_remote_code: bool = field(default=True, metadata={"help": "Enable `trust_remote_code`"})
-
-    # LoraConfig
-    use_peft: bool = field(default=False, metadata={"help": "whether to use peft"})
-    peft_lora_r: int = field(default=16, metadata={"help": "the r parameter of the LoRA adapters"})
-    peft_lora_alpha: int = field(default=16, metadata={"help": "the alpha parameter of the LoRA adapters"})
-
-
-parser = HfArgumentParser((ScriptArguments, RewardConfig))
-args, reward_config = parser.parse_args_into_dataclasses()
-reward_config.gradient_checkpointing_kwargs = dict(use_reentrant=False)
-reward_config.evaluation_strategy = "steps" if args.eval_split != "none" else "no"
-
-
-# Step 1: Load the model
-if args.load_in_8bit and args.load_in_4bit:
-    raise ValueError("You can't load the model in 8 bits and 4 bits at the same time")
-elif args.load_in_8bit or args.load_in_4bit:
-    quantization_config = BitsAndBytesConfig(load_in_8bit=args.load_in_8bit, load_in_4bit=args.load_in_4bit)
-    # Copy the model to each device
-    device_map = (
-        {"": f"xpu:{Accelerator().local_process_index}"}
-        if is_xpu_available()
-        else {"": Accelerator().local_process_index}
+    quantization_config = get_quantization_config(model_config)
+    model_kwargs = dict(
+        revision=model_config.model_revision,
+        trust_remote_code=model_config.trust_remote_code,
+        use_flash_attention_2=model_config.use_flash_attention_2,
+        torch_dtype=torch_dtype,
+        use_cache=False if reward_config.gradient_checkpointing else True,
+        device_map=get_kbit_device_map() if quantization_config is not None else None,
+        quantization_config=quantization_config,
     )
-else:
-    device_map = None
-    quantization_config = None
+    tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path, use_fast=True)
+    model = AutoModelForSequenceClassification.from_pretrained(
+        model_config.model_name_or_path, num_labels=1, *model_kwargs
+    )
 
-model = AutoModelForSequenceClassification.from_pretrained(
-    args.model_name,
-    quantization_config=quantization_config,
-    device_map=device_map,
-    trust_remote_code=args.trust_remote_code,
-    num_labels=1,
-)
+    ################
+    # Dataset
+    ################
+    raw_datasets = load_dataset("Anthropic/hh-rlhf")
+    # Tokenize chosen/rejected pairs of inputs
+    # Adapt this section to your needs for custom datasets
+    def preprocess_function(examples):
+        new_examples = {
+            "input_ids_chosen": [],
+            "attention_mask_chosen": [],
+            "input_ids_rejected": [],
+            "attention_mask_rejected": [],
+        }
+        for chosen, rejected in zip(examples["chosen"], examples["rejected"]):
+            tokenized_chosen = tokenizer(chosen)
+            tokenized_rejected = tokenizer(rejected)
 
-# Step 2: Load the dataset and pre-process it
-tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-train_dataset = load_dataset(args.dataset_name, split="train")
+            new_examples["input_ids_chosen"].append(tokenized_chosen["input_ids"])
+            new_examples["attention_mask_chosen"].append(tokenized_chosen["attention_mask"])
+            new_examples["input_ids_rejected"].append(tokenized_rejected["input_ids"])
+            new_examples["attention_mask_rejected"].append(tokenized_rejected["attention_mask"])
 
+        return new_examples
 
-# Tokenize chosen/rejected pairs of inputs
-# Adapt this section to your needs for custom datasets
-def preprocess_function(examples):
-    new_examples = {
-        "input_ids_chosen": [],
-        "attention_mask_chosen": [],
-        "input_ids_rejected": [],
-        "attention_mask_rejected": [],
-    }
-    for chosen, rejected in zip(examples["chosen"], examples["rejected"]):
-        tokenized_chosen = tokenizer(chosen)
-        tokenized_rejected = tokenizer(rejected)
-
-        new_examples["input_ids_chosen"].append(tokenized_chosen["input_ids"])
-        new_examples["attention_mask_chosen"].append(tokenized_chosen["attention_mask"])
-        new_examples["input_ids_rejected"].append(tokenized_rejected["input_ids"])
-        new_examples["attention_mask_rejected"].append(tokenized_rejected["attention_mask"])
-
-    return new_examples
-
-
-# Preprocess the dataset and filter out examples that are longer than args.max_length
-train_dataset = train_dataset.map(
-    preprocess_function,
-    batched=True,
-    num_proc=4,
-)
-train_dataset = train_dataset.filter(
-    lambda x: len(x["input_ids_chosen"]) <= reward_config.max_length
-    and len(x["input_ids_rejected"]) <= reward_config.max_length
-)
-
-if args.eval_split == "none":
-    eval_dataset = None
-else:
-    eval_dataset = load_dataset(args.dataset_name, split=args.eval_split)
-
-    eval_dataset = eval_dataset.map(
+    # Preprocess the dataset and filter out examples that are longer than args.max_length
+    raw_datasets = raw_datasets.map(
         preprocess_function,
         batched=True,
         num_proc=4,
     )
-    eval_dataset = eval_dataset.filter(
+    raw_datasets = raw_datasets.filter(
         lambda x: len(x["input_ids_chosen"]) <= reward_config.max_length
         and len(x["input_ids_rejected"]) <= reward_config.max_length
     )
+    train_dataset = raw_datasets["train"]
+    eval_dataset = raw_datasets["test"]
 
-
-# Step 4: Define the LoraConfig
-if args.use_peft:
-    peft_config = LoraConfig(
-        r=args.peft_lora_r,
-        lora_alpha=args.peft_lora_alpha,
-        bias="none",
-        task_type="SEQ_CLS",
-        modules_to_save=["scores"],
+    ################
+    # Training
+    ################
+    trainer = RewardTrainer(
+        model=model,
+        tokenizer=tokenizer,
+        args=reward_config,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
+        peft_config=get_peft_config(model_config),
     )
-else:
-    peft_config = None
-
-# Step 5: Define the Trainer
-trainer = RewardTrainer(
-    model=model,
-    tokenizer=tokenizer,
-    args=reward_config,
-    train_dataset=train_dataset,
-    eval_dataset=eval_dataset,
-    peft_config=peft_config,
-)
-
-trainer.train()
+    trainer.train()
+    trainer.save_model(reward_config.output_dir)

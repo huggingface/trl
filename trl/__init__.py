@@ -2,6 +2,8 @@
 
 __version__ = "0.7.8.dev0"
 
+from trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config
+
 from .core import set_seed
 from .environment import TextEnvironment, TextHistory
 from .extras import BestOfNSampler
@@ -22,6 +24,7 @@ from .trainer import (
     DataCollatorForCompletionOnlyLM,
     DPOTrainer,
     IterativeSFTTrainer,
+    ModelConfig,
     PPOConfig,
     PPOTrainer,
     RewardConfig,

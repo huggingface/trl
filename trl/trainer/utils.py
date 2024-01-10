@@ -19,11 +19,14 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
+from accelerate import Accelerator
+from peft import LoraConfig, PeftConfig
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import IterableDataset
-from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizerBase
+from transformers import BitsAndBytesConfig, DataCollatorForLanguageModeling, PreTrainedTokenizerBase
 
 from ..import_utils import is_unsloth_available
+from . import ModelConfig, is_xpu_available
 
 
 class AdaptiveKLController:
@@ -657,3 +660,47 @@ def trl_sanitze_kwargs_for_tagging(model, tag_names, kwargs=None):
             tag_names.append(kwargs["tags"])
             kwargs["tags"] = tag_names
     return kwargs
+
+
+def get_quantization_config(model_config: ModelConfig) -> BitsAndBytesConfig | None:
+    if model_config.load_in_4bit:
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.float16,  # For consistency with model weights, we use the same value as `torch_dtype` which is float16 for PEFT models
+            bnb_4bit_quant_type=model_config.bnb_4bit_quant_type,
+            bnb_4bit_use_double_quant=model_config.use_bnb_nested_quant,
+        )
+    elif model_config.load_in_8bit:
+        quantization_config = BitsAndBytesConfig(
+            load_in_8bit=True,
+        )
+    else:
+        quantization_config = None
+
+    return quantization_config
+
+
+def get_kbit_device_map() -> Dict[str, int] | None:
+    if is_xpu_available():
+        return {"": f"xpu:{Accelerator().local_process_index}"}
+    elif torch.cuda.is_available():
+        return {"": Accelerator().local_process_index}
+    else:
+        return None
+
+
+def get_peft_config(model_config: ModelConfig) -> PeftConfig | None:
+    if model_config.use_peft is False:
+        return None
+
+    peft_config = LoraConfig(
+        r=model_config.lora_r,
+        lora_alpha=model_config.lora_alpha,
+        lora_dropout=model_config.lora_dropout,
+        bias="none",
+        task_type="CAUSAL_LM",
+        target_modules=model_config.lora_target_modules,
+        modules_to_save=model_config.lora_modules_to_save,
+    )
+
+    return peft_config
