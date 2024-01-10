@@ -105,10 +105,10 @@ While training and evaluating we record the following reward metrics:
 
 You can further accelerate QLoRA / LoRA (2x faster, 60% less memory) using the [`unsloth`](https://github.com/unslothai/unsloth) library that is fully compatible with `SFTTrainer`. Currently `unsloth` supports only Llama (Yi, TinyLlama, Qwen, Deepseek etc) and Mistral architectures. Some benchmarks for DPO listed below:
 
-|  GPU     | Model           | Dataset   | 🤗  | 🤗 + Flash Attention | 🦥 Unsloth     | 🦥 VRAM saved  |
-|----------|-----------------|-----------|------|----------------------|-----------------|----------------|
-| A100 40G | Zephyr 7b       | Ultra Chat| 1x   | 1.24x                | **1.88x**       | -11.6%         |
-| Tesla T4 | Zephyr 7b       | Ultra Chat| 1x   | 1.09x                | **1.55x**       | -18.6%         |
+|  GPU     | Model           | Dataset   | 🤗  | 🤗 + Flash Attention 2 | 🦥 Unsloth     | 🦥 VRAM saved  |
+|----------|-----------------|-----------|------|------------------------|-----------------|----------------|
+| A100 40G | Zephyr 7b       | Ultra Chat| 1x   | 1.24x                  | **1.88x**       | -11.6%         |
+| Tesla T4 | Zephyr 7b       | Ultra Chat| 1x   | 1.09x                  | **1.55x**       | -18.6%         |
 
 First install `unsloth` according to the [official documentation](https://github.com/unslothai/unsloth). Once installed, you can incorporate unsloth into your workflow in a very simple manner; instead of loading `AutoModelForCausalLM`, you just need to load a `FastLanguageModel` as follows:
 
