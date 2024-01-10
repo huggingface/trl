@@ -230,7 +230,7 @@ class KTOTrainer(Trainer):
         if args.max_completion_length is not None and self.is_encoder_decoder:
             max_completion_length = args.max_completion_length
 
-        if data_collator is None:      
+        if data_collator is None:
             data_collator = DPODataCollatorWithPadding(
                 pad_token_id=tokenizer.pad_token_id,
                 label_pad_token_id=label_pad_token_id,
