@@ -25,8 +25,8 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import IterableDataset
 from transformers import BitsAndBytesConfig, DataCollatorForLanguageModeling, PreTrainedTokenizerBase
 
-from ..import_utils import is_unsloth_available
-from . import ModelConfig, is_xpu_available
+from ..import_utils import is_unsloth_available, is_xpu_available
+from ..trainer.model_config import ModelConfig
 
 
 class AdaptiveKLController:

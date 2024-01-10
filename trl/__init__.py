@@ -2,18 +2,10 @@
 
 __version__ = "0.7.8.dev0"
 
-from trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config
-
 from .core import set_seed
 from .environment import TextEnvironment, TextHistory
 from .extras import BestOfNSampler
-from .import_utils import (
-    is_diffusers_available,
-    is_npu_available,
-    is_peft_available,
-    is_wandb_available,
-    is_xpu_available,
-)
+from .import_utils import is_diffusers_available, is_npu_available, is_peft_available, is_wandb_available
 from .models import (
     AutoModelForCausalLMWithValueHead,
     AutoModelForSeq2SeqLMWithValueHead,
@@ -31,6 +23,7 @@ from .trainer import (
     RewardTrainer,
     SFTTrainer,
 )
+from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config
 
 
 if is_diffusers_available():
