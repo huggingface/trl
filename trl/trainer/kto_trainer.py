@@ -662,6 +662,10 @@ class KTOTrainer(Trainer):
         if not is_encoder_decoder:
             labels = labels[:, 1:].clone()
             logits = logits[:, :-1, :]
+        else:
+            # Fixes end-dec RuntimeError
+            labels = labels.clone()
+
         loss_mask = labels != label_pad_token_id
 
         # dummy token; we'll ignore the losses on these tokens later
