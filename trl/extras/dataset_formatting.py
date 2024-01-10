@@ -65,13 +65,14 @@ def get_formatting_func_from_dataset(
     if isinstance(dataset, Dataset):
         if "messages" in dataset.features:
             if dataset.features["messages"] == FORMAT_MAPPING["chatml"]:
+                logging.info("Formatting dataset with chatml format")
                 return conversations_formatting_function(tokenizer, "messages")
         if "conversations" in dataset.features:
             if dataset.features["conversations"] == FORMAT_MAPPING["chatml"]:
+                logging.info("Formatting dataset with chatml format")
                 return conversations_formatting_function(tokenizer, "conversations")
         elif dataset.features == FORMAT_MAPPING["instruction"]:
+            logging.info("Formatting dataset with instruction format")
             return instructions_formatting_function
-        else:
-            logging.warning("Could not find a formatting function for the dataset. Please check the dataset format.")
 
     return None
