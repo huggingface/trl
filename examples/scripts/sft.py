@@ -20,7 +20,7 @@ python examples/scripts/sft.py \
     --learning_rate=1.41e-5 \
     --per_device_train_batch_size=64 \
     --gradient_accumulation_steps=16 \
-    --output_dir="output/sft_openassistant-guanaco" \
+    --output_dir="sft_openassistant-guanaco" \
     --logging_steps=1 \
     --num_train_epochs=3 \
     --max_steps=-1 \
@@ -34,7 +34,7 @@ python examples/scripts/sft.py \
     --learning_rate=1.41e-5 \
     --per_device_train_batch_size=64 \
     --gradient_accumulation_steps=16 \
-    --output_dir="output/sft_openassistant-guanaco" \
+    --output_dir="sft_openassistant-guanaco" \
     --logging_steps=1 \
     --num_train_epochs=3 \
     --max_steps=-1 \
