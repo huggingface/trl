@@ -63,6 +63,8 @@ class ScriptArguments:
     )
     save_total_limit: Optional[int] = field(default=10, metadata={"help": "Limits total number of checkpoints."})
     push_to_hub: Optional[bool] = field(default=False, metadata={"help": "Push the model to HF Hub"})
+    fp16: Optional[bool] = field(default=False, metadata={"help": "Whether to activate fp16 mixed precision"})
+    bf16: Optional[bool] = field(default=False, metadata={"help": "Whether to activate bf16 mixed precision"})
     gradient_checkpointing: Optional[bool] = field(
         default=False, metadata={"help": "Whether to use gradient checkpointing or no"}
     )
@@ -115,7 +117,6 @@ dataset = load_dataset(script_args.dataset_name, split="train")
 training_args = TrainingArguments(
     output_dir=script_args.output_dir,
     per_device_train_batch_size=script_args.batch_size,
-    gradient_accumulation_steps=script_args.gradient_accumulation_steps,
     learning_rate=script_args.learning_rate,
     logging_steps=script_args.logging_steps,
     num_train_epochs=script_args.num_train_epochs,
@@ -126,6 +127,8 @@ training_args = TrainingArguments(
     push_to_hub=script_args.push_to_hub,
     hub_model_id=script_args.hub_model_id,
     gradient_checkpointing=script_args.gradient_checkpointing,
+    fp16=script_args.fp16,
+    bf16=script_args.bf16,
     # TODO: uncomment that on the next release
     # gradient_checkpointing_kwargs=script_args.gradient_checkpointing_kwargs,
 )

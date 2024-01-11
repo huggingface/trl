@@ -2,6 +2,9 @@
 
 check_dirs := examples tests trl
 
+ACCELERATE_CONFIG_PATH = `pwd`/examples/accelerate_configs
+COMMAND_FILES_PATH = `pwd`/commands
+
 test:
 	python -m pytest -n auto --dist=loadfile -s -v ./tests/
 
@@ -27,3 +30,10 @@ slow_tests_single_gpu:
 slow_tests_multi_gpu:
 	CUDA_VISIBLE_DEVICES=0,1 python -m pytest tests/slow/test_sft_slow.py $(if $(IS_GITHUB_CI),--report-log "sft_slow_multi.log",)
 	CUDA_VISIBLE_DEVICES=0,1 python -m pytest tests/slow/test_dpo_slow.py $(if $(IS_GITHUB_CI),--report-log "dpo_slow_multi.log",)
+
+run_sft_examples:
+	touch results_sft_tests.txt
+	for file in $(ACCELERATE_CONFIG_PATH)/*.yaml; do \
+		TRL_ACCELERATE_CONFIG=$${file} bash $(COMMAND_FILES_PATH)/run_sft.sh; \
+		echo $$? ',' $${file} \\n >> results_sft_tests.txt; \
+	done
