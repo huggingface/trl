@@ -35,5 +35,5 @@ run_sft_examples:
 	touch results_sft_tests.txt
 	for file in $(ACCELERATE_CONFIG_PATH)/*.yaml; do \
 		TRL_ACCELERATE_CONFIG=$${file} bash $(COMMAND_FILES_PATH)/run_sft.sh; \
-		echo $$? ',' $${file} \\n >> results_sft_tests.txt; \
+		echo $$? ',' $${file} >> results_sft_tests.txt; \
 	done
