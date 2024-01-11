@@ -1,4 +1,5 @@
 export WANDB_ENTITY=huggingface
+export WANDB_PROJECT=trl
 bash $BENCHMARK_SCRIPT > output.txt
 
 # Extract Job IDs into an array
