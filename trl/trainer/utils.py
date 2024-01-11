@@ -503,6 +503,20 @@ class RunningMoments:
 
 @dataclass
 class PtxData:
+    r"""
+    Data class to store input data for ppo_ptx loss calculation.
+    Args:
+        input_ids (List[`torch.LongTensor`]):
+            List of tensors containing the input_ids (if not provided, text will be used)
+        attention_mask (List[`torch.LongTensor`], , *optional*, default to 'None'):
+            List of tensors containing the attention_mask
+        labels (List[`torch.FloatTensor`], *optional*, default to 'None'):
+            List of tensors containing the labels (if set to None, will default to input_ids)
+        texts (List[`str`], *optional*, default to 'None'):
+            List of strings containing the text input (if not provided, input_ids will directly be used)
+        texts_labels (List[`str`], *optional*, default to 'None'):
+            List of strings containing the text labels (if set to None, will default to text)
+    """
     input_ids: List[torch.LongTensor]
     attention_mask: Optional[List[torch.LongTensor]] = None
     labels: Optional[List[torch.LongTensor]] = None
@@ -512,12 +526,26 @@ class PtxData:
 
 @dataclass
 class PtxDataArgs:
+    """
+    Dataclass for storing parameters for ppo_ptx input data preparation.
+    Argss:
+        max_length (int, *optional*, default to 'None'):
+            Maximum length of the input sequence. If None, will default to the model's max_length
+        truncation_mode (str, *optional*, default to 'keep_end'):
+            Truncation mode to use. Can be one of 'keep_end', 'keep_start'
+    """
     max_length: Optional[int] = None
     truncation_mode: Optional[str] = "keep_end"
 
 
 @dataclass
 class PtxLossArgs:
+    """
+    Dataclass for storing parameters for ppo_ptx loss calculation
+    Args:
+        ptx_coef (float, *optional*, default to '0.0'):
+            Coefficient for the ptx loss
+    """
     ptx_coef: Optional[float] = 0.0
 
 

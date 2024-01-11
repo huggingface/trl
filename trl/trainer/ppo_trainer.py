@@ -652,7 +652,7 @@ class PPOTrainer(BaseTrainer):
         responses: List[torch.LongTensor],
         scores: List[torch.FloatTensor],
         response_masks: Optional[List[torch.LongTensor]] = None,
-        ptx_data: Optional[PtxData] = None
+        ptx_data: Optional[PtxData] = None,
     ):
         """
         Run a PPO optimisation step given a list of queries, model responses, and rewards.
@@ -666,7 +666,8 @@ class PPOTrainer(BaseTrainer):
                 List of tensors containing the scores.
             response_masks (List[`torch.FloatTensor`], *optional*)):
                 List of tensors containing masks of the response tokens.
-
+            ptx_data (PtxData, *optional*)):
+                Data instance for ppo_ptx loss modeling.
         Returns:
             `dict[str, Any]`: A summary of the training statistics
         """
@@ -1001,7 +1002,20 @@ class PPOTrainer(BaseTrainer):
         input_data.pop("labels", None)  # we don't want to compute LM losses
         return input_data
 
-    def preprocess_ptx_data(self, ptx_data: PtxData):
+    def preprocess_ptx_data(self, ptx_data: Optional[PtxData] = None):
+        """
+        Pre-process ppo_ptx data instance, including:
+            1) Tokenize texts and texts_labels if they are not None
+            2) Safety check
+
+        Args:
+            ptx_data (PtxData, *optional*)):
+                ppo_ptx data instance
+
+        Returns:
+            ptx_data (PtxData, *optional*)):
+                The same ppo_ptx data instance
+        """
         if ptx_data is None:
             return
 
@@ -1033,6 +1047,16 @@ class PPOTrainer(BaseTrainer):
         )
 
     def prepare_ptx_model_inputs(self, ptx_data: Optional[PtxData] = None):
+        """
+        Convert ppo_ptx data instance into model inputs via data collator and optional truncation.
+
+        Args:
+            ptx_data (PtxData, *optional*)):
+                ppo_ptx data instance
+
+        Returns:
+            'Dict[string, any]': A dictionary of model inputs after data collator and optional truncation.
+        """
         if ptx_data is None:
             return None
 
@@ -1190,7 +1214,8 @@ class PPOTrainer(BaseTrainer):
                 Encoded responses, shape [mini_batch_size, response_length]
             model_input (`torch.LongTensor`):
                 Concatenated queries and responses, shape [mini_batch_size, query_length+response_length]
-
+            ptx_model_inputs (`Dict[string, Any]`):
+                Inputs for ptx loss (e.g. `input_ids`, `attention_mask`, `labels`) from prepare_ptx_model_inputs
         Returns:
             train_stats (dict[str, `torch.Tensor`]):
                 Dictionary of training statistics
