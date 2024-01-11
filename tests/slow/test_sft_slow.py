@@ -63,6 +63,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
             args = TrainingArguments(
                 output_dir=tmp_dir,
                 logging_strategy="no",
+                report_to="none",
                 per_device_train_batch_size=2,
                 max_steps=10,
                 remove_unused_columns=remove_unused_columns,
@@ -90,6 +91,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
             args = TrainingArguments(
                 output_dir=tmp_dir,
                 logging_strategy="no",
+                report_to="none",
                 per_device_train_batch_size=2,
                 max_steps=10,
             )
@@ -123,6 +125,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
             args = TrainingArguments(
                 output_dir=tmp_dir,
                 logging_strategy="no",
+                report_to="none",
                 per_device_train_batch_size=2,
                 max_steps=10,
                 fp16=True,
@@ -159,6 +162,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
             args = TrainingArguments(
                 output_dir=tmp_dir,
                 logging_strategy="no",
+                report_to="none",
                 per_device_train_batch_size=2,
                 max_steps=10,
                 fp16=True,  # this is sufficient to enable amp
@@ -192,6 +196,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
             args = TrainingArguments(
                 output_dir=tmp_dir,
                 logging_strategy="no",
+                report_to="none",
                 per_device_train_batch_size=2,
                 max_steps=10,
                 fp16=True,  # this is sufficient to enable amp
@@ -228,6 +233,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
             args = TrainingArguments(
                 output_dir=tmp_dir,
                 logging_strategy="no",
+                report_to="none",
                 per_device_train_batch_size=2,
                 max_steps=10,
                 fp16=True,  # this is sufficient to enable amp
@@ -271,6 +277,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
             args = TrainingArguments(
                 output_dir=tmp_dir,
                 logging_strategy="no",
+                report_to="none",
                 per_device_train_batch_size=2,
                 max_steps=10,
                 fp16=True,  # this is sufficient to enable amp
@@ -308,6 +315,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
             args = TrainingArguments(
                 output_dir=tmp_dir,
                 logging_strategy="no",
+                report_to="none",
                 per_device_train_batch_size=2,
                 max_steps=10,
                 fp16=True,  # this is sufficient to enable amp

@@ -78,6 +78,7 @@ class DPOTrainerSlowTester(unittest.TestCase):
                 evaluation_strategy="steps",
                 fp16=True,
                 logging_strategy="no",
+                report_to="none",
             )
 
             # dpo train lora model
@@ -135,6 +136,7 @@ class DPOTrainerSlowTester(unittest.TestCase):
                 evaluation_strategy="steps",
                 fp16=True,
                 logging_strategy="no",
+                report_to="none",
                 gradient_checkpointing=True,
                 gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
             )
@@ -201,6 +203,7 @@ class DPOTrainerSlowTester(unittest.TestCase):
                 evaluation_strategy="steps",
                 fp16=True,
                 logging_strategy="no",
+                report_to="none",
                 gradient_checkpointing=True,
                 gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
             )
