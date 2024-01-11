@@ -501,6 +501,25 @@ class RunningMoments:
 
         return xs_mean.item(), (xs_var * xs_count / (xs_count - 1)).float().sqrt().item()
 
+@dataclass
+class PtxData:
+    input_ids: List[torch.LongTensor]
+    attention_mask: Optional[List[torch.LongTensor]] = None
+    labels: Optional[List[torch.LongTensor]] = None
+    texts: Optional[List[str]] = None
+    texts_labels: Optional[List[str]] = None
+
+
+@dataclass
+class PtxDataArgs:
+    max_length: Optional[int] = None
+    truncation_mode: Optional[str] = "keep_end"
+
+
+@dataclass
+class PtxLossArgs:
+    ptx_coef: Optional[float] = 0.0
+
 
 @torch.no_grad()
 def get_global_statistics(accelerator, xs: torch.Tensor, mask=None, device="cpu") -> Tuple[float, float, int]:
