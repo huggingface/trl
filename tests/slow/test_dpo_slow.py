@@ -23,7 +23,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 from trl import DPOTrainer, is_peft_available
 
-from ..testing_utils import require_peft, require_torch_gpu
+from ..testing_utils import require_bitsandbytes, require_peft, require_torch_gpu
 from .testing_constants import (
     DPO_GEN_DURING_EVAL,
     DPO_LOSS_TYPES,
@@ -172,6 +172,7 @@ class DPOTrainerSlowTester(unittest.TestCase):
             )
         )
     )
+    @require_bitsandbytes
     @require_peft
     def test_dpo_peft_model_qlora(
         self, model_id, loss_type, gen_during_eval, pre_compute_logits, gradient_checkpointing_kwargs
