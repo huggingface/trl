@@ -15,7 +15,7 @@
 """
 python examples/scripts/reward_modeling.py \
     --model_name_or_path=facebook/opt-350m \
-    --output_dir="output" \
+    --output_dir="reward_modeling_opt_350m" \
     --per_device_train_batch_size=64 \
     --num_train_epochs=1 \
     --gradient_accumulation_steps=16 \

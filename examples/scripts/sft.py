@@ -20,12 +20,10 @@ python examples/scripts/sft.py \
     --learning_rate=1.41e-5 \
     --per_device_train_batch_size=64 \
     --gradient_accumulation_steps=16 \
-    --output_dir="output" \
+    --output_dir="sft_opt_350m" \
     --logging_steps=1 \
     --num_train_epochs=3 \
     --max_steps=-1 \
-    --save_steps=100 \
-    --save_total_limit=10 \
     --push_to_hub \
     --gradient_checkpointing \
 
@@ -36,12 +34,10 @@ python examples/scripts/sft.py \
     --learning_rate=1.41e-5 \
     --per_device_train_batch_size=64 \
     --gradient_accumulation_steps=16 \
-    --output_dir="output" \
+    --output_dir="sft_opt_350m" \
     --logging_steps=1 \
     --num_train_epochs=3 \
     --max_steps=-1 \
-    --save_steps=100 \
-    --save_total_limit=10 \
     --push_to_hub \
     --gradient_checkpointing \
     --use_peft \
