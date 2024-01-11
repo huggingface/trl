@@ -190,6 +190,12 @@ class PPOTrainer(BaseTrainer):
                 used only if `ref_model` is `None`.
             lr_scheduler (Optional[`torch.optim.lr_scheduler`]):
                 Learning rate scheduler used for training.
+            ptx_data_collator (Optional[function]):
+                Data collator function for ppo_ptx model input data.
+            ptx_data_args (Optional[PtxDataArgs]):
+                Input data instance for ppo_ptx.
+            ptx_loss_args (Optional[PtxLossArgs]):
+                Parameters for ppo_ptx loss calculation.
         """
         super().__init__(config)
 
@@ -667,7 +673,7 @@ class PPOTrainer(BaseTrainer):
             response_masks (List[`torch.FloatTensor`], *optional*)):
                 List of tensors containing masks of the response tokens.
             ptx_data (PtxData, *optional*)):
-                Data instance for ppo_ptx loss modeling.
+                Data instance for ppo_ptx loss calculation.
         Returns:
             `dict[str, Any]`: A summary of the training statistics
         """
@@ -1011,10 +1017,6 @@ class PPOTrainer(BaseTrainer):
         Args:
             ptx_data (PtxData, *optional*)):
                 ppo_ptx data instance
-
-        Returns:
-            ptx_data (PtxData, *optional*)):
-                The same ppo_ptx data instance
         """
         if ptx_data is None:
             return
@@ -1215,7 +1217,7 @@ class PPOTrainer(BaseTrainer):
             model_input (`torch.LongTensor`):
                 Concatenated queries and responses, shape [mini_batch_size, query_length+response_length]
             ptx_model_inputs (`Dict[string, Any]`):
-                Inputs for ptx loss (e.g. `input_ids`, `attention_mask`, `labels`) from prepare_ptx_model_inputs
+                Inputs for ptx loss (e.g. `input_ids`, `attention_mask`, `labels`) from prepare_ptx_model_inputs()
         Returns:
             train_stats (dict[str, `torch.Tensor`]):
                 Dictionary of training statistics

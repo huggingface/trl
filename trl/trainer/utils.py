@@ -526,7 +526,7 @@ class PtxData:
 
 @dataclass
 class PtxDataArgs:
-    """
+    r"""
     Dataclass for storing parameters for ppo_ptx input data preparation.
     Argss:
         max_length (int, *optional*, default to 'None'):
@@ -540,7 +540,7 @@ class PtxDataArgs:
 
 @dataclass
 class PtxLossArgs:
-    """
+    r"""
     Dataclass for storing parameters for ppo_ptx loss calculation
     Args:
         ptx_coef (float, *optional*, default to '0.0'):
