@@ -1,0 +1,162 @@
+# Copyright 2024 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+import gc
+import itertools
+import tempfile
+import unittest
+
+import torch
+from datasets import load_dataset
+from parameterized import parameterized
+from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
+
+from trl import DPOTrainer, is_peft_available
+
+from ..testing_utils import require_peft, require_torch_gpu
+from .testing_constants import (
+    DPO_GEN_DURING_EVAL,
+    DPO_LOSS_TYPES,
+    DPO_PRECOMPUTE_LOGITS,
+    GRADIENT_CHECKPOINTING_KWARGS,
+    MODELS_TO_TEST,
+)
+
+
+if is_peft_available():
+    from peft import LoraConfig, PeftModel
+
+
+@require_torch_gpu
+class DPOTrainerSlowTester(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.dataset = load_dataset("trl-internal-testing/mlabonne-chatml-dpo-pairs-copy", split="train[:10%]")
+        cls.peft_config = LoraConfig(
+            lora_alpha=16,
+            lora_dropout=0.1,
+            r=8,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+        cls.max_length = 128
+
+    def tearDown(self):
+        gc.collect()
+        torch.cuda.empty_cache()
+        gc.collect()
+
+    @parameterized.expand(
+        list(itertools.product(MODELS_TO_TEST, DPO_LOSS_TYPES, DPO_GEN_DURING_EVAL, DPO_PRECOMPUTE_LOGITS))
+    )
+    def test_dpo_bare_model(self, model_id, loss_type, gen_during_eval, pre_compute_logits):
+        """
+        A test that tests the simple usage of `DPOTrainer` using a bare model in full precision.
+        """
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=2,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=2,
+                learning_rate=9e-1,
+                evaluation_strategy="steps",
+                fp16=True,
+                logging_strategy="no",
+            )
+
+            # dpo train lora model
+            trainer = DPOTrainer(
+                model=model,
+                ref_model=None,
+                beta=0.1,
+                args=training_args,
+                tokenizer=tokenizer,
+                train_dataset=self.dataset,
+                eval_dataset=self.dataset,
+                generate_during_eval=gen_during_eval,
+                loss_type=loss_type,
+                precompute_ref_log_probs=pre_compute_logits,
+                max_length=self.max_length,
+            )
+
+            # train the model
+            trainer.train()
+
+            # save trained model or adapter
+            trainer.save_model()
+
+    @parameterized.expand(
+        list(
+            itertools.product(
+                MODELS_TO_TEST,
+                DPO_LOSS_TYPES,
+                DPO_GEN_DURING_EVAL,
+                DPO_PRECOMPUTE_LOGITS,
+                GRADIENT_CHECKPOINTING_KWARGS,
+            )
+        )
+    )
+    @require_peft
+    def test_dpo_peft_model(
+        self, model_id, loss_type, gen_during_eval, pre_compute_logits, gradient_checkpointing_kwargs
+    ):
+        """
+        A test that tests the simple usage of `DPOTrainer` using a peft model in full precision + different scenarios of gradient checkpointing.
+        """
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=2,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=2,
+                learning_rate=9e-1,
+                evaluation_strategy="steps",
+                fp16=True,
+                logging_strategy="no",
+                gradient_checkpointing=True,
+                gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
+            )
+
+            # dpo train lora model
+            trainer = DPOTrainer(
+                model=model,
+                ref_model=None,
+                beta=0.1,
+                args=training_args,
+                tokenizer=tokenizer,
+                train_dataset=self.dataset,
+                eval_dataset=self.dataset,
+                generate_during_eval=gen_during_eval,
+                loss_type=loss_type,
+                precompute_ref_log_probs=pre_compute_logits,
+                peft_config=self.peft_config,
+                max_length=self.max_length,
+            )
+
+            self.assertTrue(isinstance(trainer.model, PeftModel))
+            self.assertTrue(trainer.ref_model is None)
+
+            # train the model
+            trainer.train()
+
+            # save trained model or adapter
+            trainer.save_model()
