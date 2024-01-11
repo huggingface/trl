@@ -32,8 +32,8 @@ slow_tests_multi_gpu:
 	CUDA_VISIBLE_DEVICES=0,1 python -m pytest tests/slow/test_dpo_slow.py $(if $(IS_GITHUB_CI),--report-log "dpo_slow_multi.log",)
 
 run_sft_examples:
-	touch results_sft_tests.txt
+	touch temp_results_sft_tests.txt
 	for file in $(ACCELERATE_CONFIG_PATH)/*.yaml; do \
 		TRL_ACCELERATE_CONFIG=$${file} bash $(COMMAND_FILES_PATH)/run_sft.sh; \
-		echo $$? ',' $${file} >> results_sft_tests.txt; \
+		echo $$?','$${file} >> temp_results_sft_tests.txt; \
 	done
