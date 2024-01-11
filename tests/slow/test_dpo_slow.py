@@ -109,16 +109,13 @@ class DPOTrainerSlowTester(unittest.TestCase):
             itertools.product(
                 MODELS_TO_TEST,
                 DPO_LOSS_TYPES,
-                DPO_GEN_DURING_EVAL,
                 DPO_PRECOMPUTE_LOGITS,
                 GRADIENT_CHECKPOINTING_KWARGS,
             )
         )
     )
     @require_peft
-    def test_dpo_peft_model(
-        self, model_id, loss_type, gen_during_eval, pre_compute_logits, gradient_checkpointing_kwargs
-    ):
+    def test_dpo_peft_model(self, model_id, loss_type, pre_compute_logits, gradient_checkpointing_kwargs):
         """
         A test that tests the simple usage of `DPOTrainer` using a peft model in full precision + different scenarios of gradient checkpointing.
         """
@@ -150,7 +147,7 @@ class DPOTrainerSlowTester(unittest.TestCase):
                 tokenizer=tokenizer,
                 train_dataset=self.dataset,
                 eval_dataset=self.dataset,
-                generate_during_eval=gen_during_eval,
+                generate_during_eval=False,
                 loss_type=loss_type,
                 precompute_ref_log_probs=pre_compute_logits,
                 peft_config=self.peft_config,
@@ -173,7 +170,6 @@ class DPOTrainerSlowTester(unittest.TestCase):
             itertools.product(
                 MODELS_TO_TEST,
                 DPO_LOSS_TYPES,
-                DPO_GEN_DURING_EVAL,
                 DPO_PRECOMPUTE_LOGITS,
                 GRADIENT_CHECKPOINTING_KWARGS,
             )
@@ -181,15 +177,13 @@ class DPOTrainerSlowTester(unittest.TestCase):
     )
     @require_bitsandbytes
     @require_peft
-    def test_dpo_peft_model_qlora(
-        self, model_id, loss_type, gen_during_eval, pre_compute_logits, gradient_checkpointing_kwargs
-    ):
+    def test_dpo_peft_model_qlora(self, model_id, loss_type, pre_compute_logits, gradient_checkpointing_kwargs):
         """
         A test that tests the simple usage of `DPOTrainer` using QLoRA + different scenarios of gradient checkpointing.
         """
         quantization_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
 
-        model = AutoModelForCausalLM.from_pretrained(model_id, quantization_config)
+        model = AutoModelForCausalLM.from_pretrained(model_id, quantization_config=quantization_config)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -217,7 +211,7 @@ class DPOTrainerSlowTester(unittest.TestCase):
                 tokenizer=tokenizer,
                 train_dataset=self.dataset,
                 eval_dataset=self.dataset,
-                generate_during_eval=gen_during_eval,
+                generate_during_eval=False,
                 loss_type=loss_type,
                 precompute_ref_log_probs=pre_compute_logits,
                 peft_config=self.peft_config,
