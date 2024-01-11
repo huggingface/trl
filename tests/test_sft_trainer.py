@@ -89,47 +89,31 @@ class SFTTrainerTester(unittest.TestCase):
             {
                 "messages": [
                     [
+                        {"role": "system", "content": "You are helpful"},
                         {"role": "user", "content": "Hello"},
                         {"role": "assistant", "content": "Hi, how can I help you?"},
+                        {"role": "user", "content": "What is 2+2?"},
+                        {"role": "assistant", "content": "4"},
                     ],
                     [
+                        {"role": "system", "content": "You are helpful"},
                         {"role": "user", "content": "Hello"},
                         {"role": "assistant", "content": "Hi, how can I help you?"},
-                    ],
-                    [
-                        {"role": "user", "content": "Hello"},
-                        {"role": "assistant", "content": "Hi, how can I help you?"},
-                    ],
-                    [
-                        {"role": "user", "content": "Hello"},
-                        {"role": "assistant", "content": "Hi, how can I help you?"},
-                    ],
-                    [
-                        {"role": "user", "content": "Hello"},
-                        {"role": "assistant", "content": "Hi, how can I help you?"},
-                    ],
-                    [
-                        {"role": "user", "content": "Hello"},
-                        {"role": "assistant", "content": "Hi, how can I help you?"},
-                    ],
-                    [
-                        {"role": "user", "content": "Hello"},
-                        {"role": "assistant", "content": "Hi, how can I help you?"},
-                    ],
-                    [
-                        {"role": "user", "content": "Hello"},
-                        {"role": "assistant", "content": "Hi, how can I help you?"},
-                    ],
-                    [
-                        {"role": "user", "content": "Hello"},
-                        {"role": "assistant", "content": "Hi, how can I help you?"},
-                    ],
-                    [
-                        {"role": "user", "content": "Hello"},
-                        {"role": "assistant", "content": "Hi, how can I help you?"},
+                        {"role": "user", "content": "What is 2+2?"},
+                        {"role": "assistant", "content": "4"},
                     ],
                 ]
             }
+        )
+        cls.dummy_instruction_dataset = Dataset.from_list(
+            [
+                {"prompt": "What is 2+2?", "completion": "4"},
+                {"prompt": "What is 3+3?", "completion": "6"},
+                {"prompt": "What is 4+4?", "completion": "8"},
+                {"prompt": "What is 2+2?", "completion": "4"},
+                {"prompt": "What is 3+3?", "completion": "6"},
+                {"prompt": "What is 4+4?", "completion": "8"},
+            ]
         )
 
         cls.train_dataset = ConstantLengthDataset(
@@ -222,6 +206,14 @@ class SFTTrainerTester(unittest.TestCase):
                 model=self.model,
                 args=training_args,
                 train_dataset=self.dummy_chatml_dataset,
+                max_seq_length=32,  # make sure there is at least 1 packed sequence
+                packing=True,
+            )
+            # this should work since the dummy instruction dataset is the correct format
+            _ = SFTTrainer(
+                model=self.model,
+                args=training_args,
+                train_dataset=self.dummy_instruction_dataset,
                 max_seq_length=32,  # make sure there is at least 1 packed sequence
                 packing=True,
             )
