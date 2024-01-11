@@ -115,22 +115,22 @@ We can then loop over all examples in the dataset and generate a response for ea
 
 ```py
 from tqdm import tqdm
-
-for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
-    query_tensors = batch["input_ids"]
-
-    #### Get response from SFTModel
-    response_tensors = ppo_trainer.generate(query_tensors, **generation_kwargs)
-    batch["response"] = [tokenizer.decode(r.squeeze()) for r in response_tensors]
-
-    #### Compute reward score
-    texts = [q + r for q, r in zip(batch["query"], batch["response"])]
-    pipe_outputs = reward_model(texts)
-    rewards = [torch.tensor(output[1]["score"]) for output in pipe_outputs]
-
-    #### Run PPO step
-    stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
-    ppo_trainer.log_stats(stats, batch, rewards)
+for epoch in tqdm(range(ppo_trainer.config.ppo_epochs), "epoch: "):
+    for batch in tqdm(ppo_trainer.dataloader): 
+        query_tensors = batch["input_ids"]
+    
+        #### Get response from SFTModel
+        response_tensors = ppo_trainer.generate(query_tensors, **generation_kwargs)
+        batch["response"] = [tokenizer.decode(r.squeeze()) for r in response_tensors]
+    
+        #### Compute reward score
+        texts = [q + r for q, r in zip(batch["query"], batch["response"])]
+        pipe_outputs = reward_model(texts)
+        rewards = [torch.tensor(output[1]["score"]) for output in pipe_outputs]
+    
+        #### Run PPO step
+        stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
+        ppo_trainer.log_stats(stats, batch, rewards)
 
 #### Save model
 ppo_trainer.save_model("my_ppo_model")

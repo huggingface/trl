@@ -63,7 +63,10 @@ def is_diffusers_available() -> bool:
 
 
 def is_bitsandbytes_available() -> bool:
-    return importlib.util.find_spec("bitsandbytes") is not None
+    import torch
+
+    # bnb can be imported without GPU but is not usable.
+    return importlib.util.find_spec("bitsandbytes") is not None and torch.cuda.is_available()
 
 
 def is_torchvision_available() -> bool:

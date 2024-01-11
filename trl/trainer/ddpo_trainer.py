@@ -343,11 +343,11 @@ class DDPOTrainer(BaseTrainer):
 
         Args:
             latents (torch.Tensor):
-                The latents sampled from the diffusion model, shape: [batch_size, num_steps, ...]
+                The latents sampled from the diffusion model, shape: [batch_size, num_channels_latents, height, width]
             timesteps (torch.Tensor):
                 The timesteps sampled from the diffusion model, shape: [batch_size]
             next_latents (torch.Tensor):
-                The next latents sampled from the diffusion model, shape: [batch_size, num_steps, ...]
+                The next latents sampled from the diffusion model, shape: [batch_size, num_channels_latents, height, width]
             log_probs (torch.Tensor):
                 The log probabilities of the latents, shape: [batch_size]
             advantages (torch.Tensor):

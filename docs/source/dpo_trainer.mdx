@@ -101,7 +101,7 @@ While training and evaluating we record the following reward metrics:
 * `rewards/accuracies`: mean of how often the chosen rewards are > than the corresponding rejected rewards
 * `rewards/margins`: the mean difference between the chosen and corresponding rejected rewards
 
-### Accelerate DPO fine-tuning using `unsloth`
+## Accelerate DPO fine-tuning using `unsloth`
 
 You can further accelerate QLoRA / LoRA (2x faster, 60% less memory) and even full-finetuning (1.1x faster) using the [`unsloth`](https://github.com/unslothai/unsloth) library that is compatible with `DPOTrainer`. Currently `unsloth` supports only Llama (Yi, TinyLlama as well) and Mistral architectures.
 First install `unsloth` according to the [official documentation](https://github.com/unslothai/unsloth#installation-instructions---conda). Once installed, you can incorporate unsloth into your workflow in a very simple manner; instead of loading `AutoModelForCausalLM`, you just need to load a `FastLlamaModel` or `FastMistralModel` as follows:
@@ -155,6 +155,66 @@ dpo_trainer.train()
 ```
 
 The saved model is fully compatible with Hugging Face's transformers library. Learn more about unsloth in their [official repository](https://github.com/unslothai/unsloth).
+
+## Reference model considerations with PEFT
+
+You have three main options (plus several variants) for how the reference model works when using PEFT, assuming the model that you would like to further enhance with DPO was tuned using (Q)LoRA.
+
+1. Simply create two instances of the model, each loading your adapter - works fine but is very inefficient.
+2. Merge the adapter into the base model, create another adapter on top, then leave the `model_ref` param null, in which case DPOTrainer will unload the adapter for reference inference - efficient, but has potential downsides discussed below.
+3. Load the adapter twice with different names, then use `set_adapter` during training to swap between the adapter being DPO'd and the reference adapter - slightly less efficient compared to 2 (~adapter size VRAM overhead), but avoids the pitfalls.
+
+### Downsides to merging QLoRA before DPO (approach 2)
+
+As suggested by [Tim Dettmers](https://twitter.com/Tim_Dettmers/status/1694654191325573456), the best option for merging QLoRA adapters is to first quantize the base model, merge the adapter, then convert back to bf16.  Something similar to [this script](https://github.com/jondurbin/qlora/blob/main/qmerge.py)
+
+You can also just merge the adapters the standard way without quantizing the base model, but then you have 1-2% reduced performance (and evidently, more issues with empty responses).
+
+If you use the recommended approach, which quantizes the model, you're now in a situation where to use QLoRA for DPO, you will need to re-quantize the merged model again or use an unquantized merge with lower overall performance.
+
+### Using option 3 - load the adapter twice
+
+To avoid the downsides with option 2, at the expense of slightly increased VRAM, you can load your fine-tuned adapter into the model twice, with different names, and set the model/ref adapter names in DPOTrainer.
+
+For example:
+```python
+# Load the base model.
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    llm_int8_threshold=6.0,
+    llm_int8_has_fp16_weight=False,
+    bnb_4bit_compute_dtype=torch.bfloat16,
+    bnb_4bit_use_double_quant=True,
+    bnb_4bit_quant_type="nf4",
+)
+model = AutoModelForCausalLM.from_pretrained(
+    "mistralai/mixtral-8x7b-v0.1",
+    load_in_4bit=True,
+    quantization_config=bnb_config,
+    attn_implementation="flash_attention_2",
+    torch_dtype=torch.bfloat16,
+    device_map="auto",
+)
+model.config.use_cache = False
+
+# Load the adapter.
+model = PeftModel.from_pretrained(
+    model,
+    "/path/to/peft",
+    is_trainable=True,
+    adapter_name="train",
+)
+# Load the adapter a second time, with a different name, which will be our reference model.
+model.load_adapter("/path/to/peft", adapter_name="reference")
+
+# Initialize the trainer, without a ref_model param.
+dpo_trainer = DPOTrainer(
+    model,
+    ...
+    model_adapter_name="train",
+    ref_adapter_name="reference",
+)
+```
 
 ## DPOTrainer
 

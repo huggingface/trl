@@ -176,6 +176,13 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                     )
                     batch["labels"][i, :] = self.ignore_index
 
+                if (
+                    len(human_token_ids_idxs) > 0
+                    and len(response_token_ids_idxs) > 0
+                    and human_token_ids_idxs[0] > response_token_ids_idxs[0]
+                ):
+                    human_token_ids_idxs = [0] + human_token_ids_idxs
+
                 for idx, (start, end) in enumerate(zip(human_token_ids_idxs, response_token_ids_idxs)):
                     # Make pytorch loss function ignore all non response tokens
                     if idx != 0:
@@ -633,9 +640,9 @@ def peft_module_casting_to_bf16(model):
     for name, module in model.named_modules():
         if isinstance(module, BaseTunerLayer):
             module = module.to(torch.bfloat16)
-        if "norm" in name:
+        elif isinstance(module, torch.nn.LayerNorm) or "norm" in name:
             module = module.to(torch.float32)
-        if any(x in name for x in ["lm_head", "embed_tokens", "wte", "wpe"]):
+        elif any(x in name for x in ["lm_head", "embed_tokens", "wte", "wpe"]):
             if hasattr(module, "weight"):
                 if module.weight.dtype == torch.float32:
                     module = module.to(torch.bfloat16)
