@@ -579,7 +579,7 @@ class PPOTrainerTester(unittest.TestCase):
         logits = torch.exp(all_logprobs)
         vpreds = values + 0.1
 
-        score, non_score = ppo_trainer.compute_rewards(dummy_scores, all_logprobs, ref_logprobs, mask)
+        score, non_score, kls = ppo_trainer.compute_rewards(dummy_scores, all_logprobs, ref_logprobs, mask)
         values, advantages, returns = ppo_trainer.compute_advantages(values, score, mask)
 
         # just make sure a dummy loss is computed
