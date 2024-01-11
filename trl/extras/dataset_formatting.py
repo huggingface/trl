@@ -20,10 +20,13 @@ def conversations_formatting_function(tokenizer: AutoTokenizer, messages_field: 
     """
 
     def format_dataset(examples):
-        output_texts = []
-        for i in range(len(examples[messages_field])):
-            output_texts.append(tokenizer.apply_chat_template(examples[messages_field][i], tokenize=False))
-        return output_texts
+        if isinstance(examples[messages_field][0], list):
+            output_texts = [] 
+            for i in range(len(examples[messages_field])):
+                output_texts.append(tokenizer.apply_chat_template(examples[messages_field][i], tokenize=False))
+            return output_texts
+        else:
+            return tokenizer.apply_chat_template(examples[messages_field], tokenize=False)
 
     return format_dataset
 
@@ -35,14 +38,21 @@ def instructions_formatting_function(tokenizer: AutoTokenizer):
     """
 
     def format_dataset(examples):
-        output_texts = []
-        for i in range(len(examples)):
+        if isinstance(examples["prompt"], list):
+            output_texts = [] 
+            for i in range(len(examples["prompt"])):
+                converted_sample = [
+                    {"role": "user", "content": examples["prompt"][i]},
+                    {"role": "assistant", "content": examples["completion"][i]},
+                ]
+                output_texts.append(tokenizer.apply_chat_template(converted_sample, tokenize=False))
+            return output_texts
+        else:
             converted_sample = [
-                {"role": "user", "content": examples[i]["prompt"]},
-                {"role": "assistant", "content": examples[i]["completion"]},
-            ]
-            output_texts.append(tokenizer.apply_chat_template(converted_sample, tokenize=False))
-        return output_texts
+                    {"role": "user", "content": examples["prompt"]},
+                    {"role": "assistant", "content": examples["completion"]},
+                ]
+            return tokenizer.apply_chat_template(converted_sample, tokenize=False)
 
     return format_dataset
 
@@ -73,6 +83,6 @@ def get_formatting_func_from_dataset(
                 return conversations_formatting_function(tokenizer, "conversations")
         elif dataset.features == FORMAT_MAPPING["instruction"]:
             logging.info("Formatting dataset with instruction format")
-            return instructions_formatting_function
+            return instructions_formatting_function(tokenizer)
 
     return None

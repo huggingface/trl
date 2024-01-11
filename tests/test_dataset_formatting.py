@@ -28,7 +28,12 @@ class DatasetFormattingTestCase(unittest.TestCase):
         # Llama tokenizer
         formatting_func = get_formatting_func_from_dataset(dataset, self.llama_tokenizer)
         self.assertTrue(isinstance(formatting_func, Callable))
-        formatted_text = formatting_func(dataset)
+        formatted_text = formatting_func(dataset[0])
+        self.assertEqual(
+            formatted_text,
+            "<s>[INST] <<SYS>>\nYou are helpful\n<</SYS>>\n\nHello [/INST] Hi, how can I help you? </s>",
+        )
+        formatted_text = formatting_func(dataset[0:1])
         self.assertEqual(
             formatted_text,
             ["<s>[INST] <<SYS>>\nYou are helpful\n<</SYS>>\n\nHello [/INST] Hi, how can I help you? </s>"],
@@ -36,12 +41,15 @@ class DatasetFormattingTestCase(unittest.TestCase):
 
         # ChatML tokenizer
         formatting_func = get_formatting_func_from_dataset(dataset, self.chatml_tokenizer)
-        formatted_text = formatting_func(dataset)
+        formatted_text = formatting_func(dataset[0])
         self.assertEqual(
             formatted_text,
-            [
-                "<|im_start|>system\nYou are helpful<|im_end|>\n<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\nHi, how can I help you?<|im_end|>\n"
-            ],
+            "<|im_start|>system\nYou are helpful<|im_end|>\n<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\nHi, how can I help you?<|im_end|>\n",
+        )
+        formatted_text = formatting_func(dataset[0:1])
+        self.assertEqual(
+            formatted_text,
+            ["<|im_start|>system\nYou are helpful<|im_end|>\n<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\nHi, how can I help you?<|im_end|>\n"],
         )
 
     def test_get_formatting_func_from_dataset_with_chatml_conversations(self):
@@ -59,21 +67,31 @@ class DatasetFormattingTestCase(unittest.TestCase):
         # Llama tokenizer
         formatting_func = get_formatting_func_from_dataset(dataset, self.llama_tokenizer)
         self.assertTrue(isinstance(formatting_func, Callable))
-        formatted_text = formatting_func(dataset)
+        formatted_text = formatting_func(dataset[0])
         self.assertEqual(
             formatted_text,
-            ["<s>[INST] <<SYS>>\nYou are helpful\n<</SYS>>\n\nHello [/INST] Hi, how can I help you? </s>"],
+            "<s>[INST] <<SYS>>\nYou are helpful\n<</SYS>>\n\nHello [/INST] Hi, how can I help you? </s>",
         )
+        formatted_text = formatting_func(dataset[0:1])
+        self.assertEqual(
+            formatted_text,
+           [ "<s>[INST] <<SYS>>\nYou are helpful\n<</SYS>>\n\nHello [/INST] Hi, how can I help you? </s>"],
+        )
+
 
         # ChatML tokenizer
         formatting_func = get_formatting_func_from_dataset(dataset, self.chatml_tokenizer)
-        formatted_text = formatting_func(dataset)
+        formatted_text = formatting_func(dataset[0])
         self.assertEqual(
             formatted_text,
-            [
-                "<|im_start|>system\nYou are helpful<|im_end|>\n<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\nHi, how can I help you?<|im_end|>\n"
-            ],
+            "<|im_start|>system\nYou are helpful<|im_end|>\n<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\nHi, how can I help you?<|im_end|>\n",
         )
+        formatted_text = formatting_func(dataset[0:1])
+        self.assertEqual(
+            formatted_text,
+            ["<|im_start|>system\nYou are helpful<|im_end|>\n<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\nHi, how can I help you?<|im_end|>\n"],
+        )
+
 
     def test_get_formatting_func_from_dataset_with_instruction(self):
         dataset = Dataset.from_list(
@@ -82,6 +100,16 @@ class DatasetFormattingTestCase(unittest.TestCase):
         formatting_func = get_formatting_func_from_dataset(dataset, self.llama_tokenizer)
         self.assertIsNotNone(formatting_func)
         self.assertTrue(isinstance(formatting_func, Callable))
+        formatted_text = formatting_func(dataset[0])
+        self.assertEqual(
+            formatted_text,
+            '<s>[INST] What is 2+2? [/INST] 4 </s>'
+        )
+        formatted_text = formatting_func(dataset[0:1])
+        self.assertEqual(
+            formatted_text,
+            ['<s>[INST] What is 2+2? [/INST] 4 </s>']
+        )
 
     def test_get_formatting_func_from_dataset_from_hub(self):
         ds_1 = load_dataset("philschmid/trl-test-instruction", split="train")
