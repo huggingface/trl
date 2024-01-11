@@ -17,6 +17,7 @@ import tempfile
 import unittest
 
 import torch
+from accelerate.utils.memory import release_memory
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TrainingArguments
@@ -100,6 +101,8 @@ class DPOTrainerSlowTester(unittest.TestCase):
             # save trained model or adapter
             trainer.save_model()
 
+        release_memory(model, trainer)
+
     @parameterized.expand(
         list(
             itertools.product(
@@ -160,6 +163,8 @@ class DPOTrainerSlowTester(unittest.TestCase):
 
             # save trained model or adapter
             trainer.save_model()
+
+        release_memory(model, trainer)
 
     @parameterized.expand(
         list(
@@ -224,3 +229,5 @@ class DPOTrainerSlowTester(unittest.TestCase):
 
             # save trained model or adapter
             trainer.save_model()
+
+        release_memory(model, trainer)

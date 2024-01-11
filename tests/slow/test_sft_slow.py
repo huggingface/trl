@@ -17,6 +17,7 @@ import tempfile
 import unittest
 
 import torch
+from accelerate.utils.memory import release_memory
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TrainingArguments
@@ -109,6 +110,8 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             trainer.train()
 
+        release_memory(model, trainer)
+
     @parameterized.expand(list(itertools.product(MODELS_TO_TEST, PACKING_OPTIONS)))
     @require_peft
     def test_sft_trainer_peft(self, model_name, packing):
@@ -144,6 +147,8 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             trainer.train()
 
+        release_memory(model, trainer)
+
     @parameterized.expand(list(itertools.product(MODELS_TO_TEST, PACKING_OPTIONS)))
     def test_sft_trainer_transformers_mp(self, model_name, packing):
         """
@@ -174,6 +179,8 @@ class SFTTrainerSlowTester(unittest.TestCase):
             )
 
             trainer.train()
+
+        release_memory(model, trainer)
 
     @parameterized.expand(list(itertools.product(MODELS_TO_TEST, PACKING_OPTIONS, GRADIENT_CHECKPOINTING_KWARGS)))
     def test_sft_trainer_transformers_mp_gc(self, model_name, packing, gradient_checkpointing_kwargs):
@@ -207,6 +214,8 @@ class SFTTrainerSlowTester(unittest.TestCase):
             )
 
             trainer.train()
+
+        release_memory(model, trainer)
 
     @parameterized.expand(list(itertools.product(MODELS_TO_TEST, PACKING_OPTIONS, GRADIENT_CHECKPOINTING_KWARGS)))
     @require_peft
@@ -245,6 +254,8 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             trainer.train()
 
+        release_memory(model, trainer)
+
     @parameterized.expand(
         list(itertools.product(MODELS_TO_TEST, PACKING_OPTIONS, GRADIENT_CHECKPOINTING_KWARGS, DEVICE_MAP_OPTIONS))
     )
@@ -282,6 +293,8 @@ class SFTTrainerSlowTester(unittest.TestCase):
             )
 
             trainer.train()
+
+        release_memory(model, trainer)
 
     @parameterized.expand(list(itertools.product(MODELS_TO_TEST, PACKING_OPTIONS, GRADIENT_CHECKPOINTING_KWARGS)))
     @require_peft
@@ -322,3 +335,5 @@ class SFTTrainerSlowTester(unittest.TestCase):
             self.assertTrue(isinstance(trainer.model, PeftModel))
 
             trainer.train()
+
+        release_memory(model, trainer)
