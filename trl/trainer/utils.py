@@ -669,7 +669,7 @@ def trl_sanitze_kwargs_for_tagging(model, tag_names, kwargs=None):
     return kwargs
 
 
-def get_quantization_config(model_config: ModelConfig) -> BitsAndBytesConfig | None:
+def get_quantization_config(model_config: ModelConfig) -> Optional[BitsAndBytesConfig]:
     if model_config.load_in_4bit:
         quantization_config = BitsAndBytesConfig(
             load_in_4bit=True,
@@ -687,7 +687,7 @@ def get_quantization_config(model_config: ModelConfig) -> BitsAndBytesConfig | N
     return quantization_config
 
 
-def get_kbit_device_map() -> Dict[str, int] | None:
+def get_kbit_device_map() -> Optional[Dict[str, int]]:
     if is_xpu_available():
         return {"": f"xpu:{Accelerator().local_process_index}"}
     elif torch.cuda.is_available():
@@ -696,7 +696,7 @@ def get_kbit_device_map() -> Dict[str, int] | None:
         return None
 
 
-def get_peft_config(model_config: ModelConfig) -> PeftConfig | None:
+def get_peft_config(model_config: ModelConfig) -> Optional[PeftConfig]:
     if model_config.use_peft is False:
         return None
 
