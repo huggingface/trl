@@ -1,6 +1,6 @@
 #!/bin/bash
-# This script runs an SFT example end-to-end on a tiny model using QLoRA & PEFT
-
+# This script runs an SFT example end-to-end on a tiny model using different possible configurations
+# but defaults to QLoRA + PEFT
 OUTPUT_DIR="test_sft/"
 MODEL_NAME="HuggingFaceM4/tiny-random-LlamaForCausalLM"
 DATASET_NAME="imdb"
