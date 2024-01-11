@@ -21,7 +21,7 @@ def conversations_formatting_function(tokenizer: AutoTokenizer, messages_field: 
 
     def format_dataset(examples):
         if isinstance(examples[messages_field][0], list):
-            output_texts = [] 
+            output_texts = []
             for i in range(len(examples[messages_field])):
                 output_texts.append(tokenizer.apply_chat_template(examples[messages_field][i], tokenize=False))
             return output_texts
@@ -39,7 +39,7 @@ def instructions_formatting_function(tokenizer: AutoTokenizer):
 
     def format_dataset(examples):
         if isinstance(examples["prompt"], list):
-            output_texts = [] 
+            output_texts = []
             for i in range(len(examples["prompt"])):
                 converted_sample = [
                     {"role": "user", "content": examples["prompt"][i]},
@@ -49,9 +49,9 @@ def instructions_formatting_function(tokenizer: AutoTokenizer):
             return output_texts
         else:
             converted_sample = [
-                    {"role": "user", "content": examples["prompt"]},
-                    {"role": "assistant", "content": examples["completion"]},
-                ]
+                {"role": "user", "content": examples["prompt"]},
+                {"role": "assistant", "content": examples["completion"]},
+            ]
             return tokenizer.apply_chat_template(converted_sample, tokenize=False)
 
     return format_dataset
