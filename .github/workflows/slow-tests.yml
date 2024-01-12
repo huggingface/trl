@@ -30,7 +30,7 @@ jobs:
       - name: Pip install
         run: |
           source activate trl
-          pip install -e . --no-deps
+          pip install -e ".[test]" --no-deps
           pip install pytest-reportlog parameterized
       
       - name: Run common tests on single GPU
@@ -72,8 +72,8 @@ jobs:
       - name: Pip install
         run: |
           source activate trl
-          pip install -e . --no-deps
-          pip install pytest-reportlog
+          pip install -e ".[test]" --no-deps
+          pip install pytest-reportlog parameterized
       
       - name: Run common tests on single GPU
         if: always()  
