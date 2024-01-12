@@ -95,5 +95,6 @@ jobs:
         run: |
           pip install slack_sdk tabulate
           python scripts/log_reports.py >> $GITHUB_STEP_SUMMARY
-          python scripts/log_example_reports.py >> $GITHUB_STEP_SUMMARY
+          python scripts/log_example_reports.py --text_file_name temp_results_sft_tests.txt >> $GITHUB_STEP_SUMMARY
+          python scripts/log_example_reports.py --text_file_name temp_results_dpo_tests.txt >> $GITHUB_STEP_SUMMARY
           rm *.txt

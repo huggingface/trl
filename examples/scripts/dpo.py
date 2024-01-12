@@ -21,11 +21,12 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional
 
 import torch
+from accelerate import PartialState
 from datasets import Dataset, load_dataset
 from peft import LoraConfig
-from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, TrainingArguments
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, HfArgumentParser, TrainingArguments
 
-from trl import DPOTrainer
+from trl import DPOTrainer, is_xpu_available
 
 
 # Define and parse arguments.
@@ -45,6 +46,9 @@ class ScriptArguments:
     gradient_accumulation_steps: Optional[int] = field(
         default=1, metadata={"help": "the number of gradient accumulation steps"}
     )
+    output_dir: Optional[str] = field(default="output", metadata={"help": "the output directory"})
+    fp16: Optional[bool] = field(default=False, metadata={"help": "Whether to activate fp16 mixed precision"})
+    bf16: Optional[bool] = field(default=False, metadata={"help": "Whether to activate bf16 mixed precision"})
     max_length: Optional[int] = field(default=512, metadata={"help": "max length of each sample"})
     max_prompt_length: Optional[int] = field(default=128, metadata={"help": "max length of each sample's prompt"})
     max_target_length: Optional[int] = field(
@@ -83,6 +87,8 @@ class ScriptArguments:
             "help": "key word arguments to be passed along `torch.utils.checkpoint.checkpoint` method - e.g. `use_reentrant=False`"
         },
     )
+    load_in_8bit: Optional[bool] = field(default=False, metadata={"help": "load the model in 8 bits precision"})
+    load_in_4bit: Optional[bool] = field(default=False, metadata={"help": "load the model in 4 bits precision"})
 
 
 def extract_anthropic_prompt(prompt_and_response):
@@ -126,8 +132,31 @@ if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
     script_args = parser.parse_args_into_dataclasses()[0]
 
+    if script_args.load_in_8bit and script_args.load_in_4bit:
+        raise ValueError("You can't load the model in 8 bits and 4 bits at the same time")
+    elif script_args.load_in_8bit or script_args.load_in_4bit:
+        quantization_config = BitsAndBytesConfig(
+            load_in_8bit=script_args.load_in_8bit, load_in_4bit=script_args.load_in_4bit
+        )
+        # Copy the model to each device
+        device_map = (
+            {"": f"xpu:{PartialState().local_process_index}"}
+            if is_xpu_available()
+            else {"": PartialState().local_process_index}
+        )
+        torch_dtype = torch.bfloat16
+    else:
+        device_map = None
+        quantization_config = None
+        torch_dtype = None
+
     # 1. load a pretrained model
-    model = AutoModelForCausalLM.from_pretrained(script_args.model_name_or_path)
+    model = AutoModelForCausalLM.from_pretrained(
+        script_args.model_name_or_path,
+        device_map=device_map,
+        quantization_config=quantization_config,
+        torch_dtype=torch_dtype,
+    )
 
     if script_args.ignore_bias_buffers:
         # torch distributed hack
@@ -135,7 +164,11 @@ if __name__ == "__main__":
             name for name, buffer in model.named_buffers() if buffer.dtype == torch.bool
         ]
 
-    model_ref = AutoModelForCausalLM.from_pretrained(script_args.model_name_or_path)
+    if not script_args.use_peft:
+        model_ref = AutoModelForCausalLM.from_pretrained(script_args.model_name_or_path)
+    else:
+        # If one uses PEFT, there is no need to load a reference model
+        model_ref = None
 
     tokenizer = AutoTokenizer.from_pretrained(script_args.model_name_or_path)
     if tokenizer.pad_token is None:
@@ -158,11 +191,12 @@ if __name__ == "__main__":
         logging_first_step=True,
         logging_steps=10,  # match results in blog post
         eval_steps=500,
-        output_dir="./test",
+        output_dir=script_args.output_dir,
         optim="rmsprop",
         warmup_steps=150,
         report_to=script_args.report_to,
-        bf16=True,
+        bf16=script_args.bf16,
+        fp16=script_args.fp16,
         gradient_checkpointing=script_args.gradient_checkpointing,
         # TODO: uncomment that on the next transformers release
         # gradient_checkpointing_kwargs=script_args.gradient_checkpointing_kwargs,
