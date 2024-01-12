@@ -1229,16 +1229,12 @@ class PPOTrainer(BaseTrainer):
         loss = loss_p + loss_v
 
         # Pretrain data distribution loss
-        ptx_loss = 0
-        if ptx_model_inputs:
-            ptx_outputs = self.model(**ptx_model_inputs)
-            if isinstance(ptx_outputs, tuple) or isinstance(ptx_outputs, list):
-                ptx_loss = ptx_outputs[1] if len(ptx_outputs) > 1 else 0.0
-            elif isinstance(ptx_outputs, dict):
-                ptx_loss = ptx_outputs.get('loss', 0.0)
-            else:
-                ptx_loss = getattr(ptx_outputs, 'loss', 0.0)
-        loss += self.ptx_loss_args.ptx_coef * ptx_loss
+        ptx_loss = self.compute_ptx_loss(ptx_model_inputs)
+        if torch.is_tensor(ptx_loss):
+            loss += self.ptx_loss_args.ptx_coef * ptx_loss
+        else:
+            ptx_loss = torch.zeros_like(loss)
+        train_stats['loss/ptx'] = ptx_loss.detach()
 
         self.accelerator.backward(loss)
         if self.config.max_grad_norm is not None:
@@ -1420,6 +1416,18 @@ class PPOTrainer(BaseTrainer):
             ),
         )
         return pg_loss, self.config.vf_coef * vf_loss, flatten_dict(stats)
+
+    def compute_ptx_loss(self, ptx_model_inputs: Dict[str, Any]):
+        ptx_loss = None
+        if self.ptx_loss_args.ptx_coef > 0 and ptx_model_inputs:
+            ptx_outputs = self.model(**ptx_model_inputs)
+            if isinstance(ptx_outputs, tuple) or isinstance(ptx_outputs, list) and len(ptx_outputs) > 1:
+                ptx_loss = ptx_outputs[1]
+            elif isinstance(ptx_outputs, dict):
+                ptx_loss = ptx_outputs.get('loss')
+            elif hasattr(ptx_outputs, 'loss'):
+                ptx_loss = getattr(ptx_outputs, 'loss')
+        return ptx_loss
 
     def record_step_stats(self, kl_coef: float, **data):
         """
