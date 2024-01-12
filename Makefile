@@ -18,7 +18,7 @@ benchmark_aux:
 	bash ./benchmark/benchmark_aux.sh
 
 tests_common_gpu:
-	python -m pytest tests/test_sft_trainer.py $(if $(IS_GITHUB_CI),--report-log "common_tests.log",)
+	python -m pytest tests/test_* $(if $(IS_GITHUB_CI),--report-log "common_tests.log",)
 
 slow_sft_tests:
 	python -m pytest tests/slow/test_sft_slow.py $(if $(IS_GITHUB_CI),--report-log "sft_slow.log",)

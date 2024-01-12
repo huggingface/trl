@@ -21,31 +21,11 @@ from tabulate import tabulate
 MAX_LEN_MESSAGE = 2900  # slack endpoint has a limit of 3001 characters
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--slack_channel_name", default="trl-push-ci")
+parser.add_argument("--slack_channel_name", default="trl-push-examples-ci")
 parser.add_argument("--text_file_name", required=True)
 
 
 def main(text_file_name, slack_channel_name=None):
-    final_results = {}
-
-    file = open(text_file_name, "r")
-    lines = file.readlines()
-    for line in lines:
-        result, config_name = line.split(",")
-        config_name = config_name.split("/")[-1].split(".yaml")[0]
-        final_results[config_name] = int(result)
-
-    no_error_payload = {
-        "type": "section",
-        "text": {
-            "type": "plain_text",
-            "text": "🌞 There were no failures on the example tests!"
-            if not len(final_results) == 0
-            else "Something went wrong there is at least one empty file - please check GH action results.",
-            "emoji": True,
-        },
-    }
-
     message = ""
     payload = [
         {
@@ -57,7 +37,40 @@ def main(text_file_name, slack_channel_name=None):
         },
     ]
 
-    total_num_failed = sum(final_results.values())
+    if os.path.isfile(text_file_name):
+        final_results = {}
+
+        file = open(text_file_name, "r")
+        lines = file.readlines()
+        for line in lines:
+            result, config_name = line.split(",")
+            config_name = config_name.split("/")[-1].split(".yaml")[0]
+            final_results[config_name] = int(result)
+
+        no_error_payload = {
+            "type": "section",
+            "text": {
+                "type": "plain_text",
+                "text": "🌞 There were no failures on the example tests!"
+                if not len(final_results) == 0
+                else "Something went wrong there is at least one empty file - please check GH action results.",
+                "emoji": True,
+            },
+        }
+
+        total_num_failed = sum(final_results.values())
+    else:
+        no_error_payload = {
+            "type": "section",
+            "text": {
+                "type": "plain_text",
+                "text": "🔴 Something is wrong with the workflow please check ASAP!"
+                "Something went wrong there is no text file being produced. Please check ASAP.",
+                "emoji": True,
+            },
+        }
+
+        total_num_failed = 0
 
     if total_num_failed > 0:
         message += f"{total_num_failed} failed tests for example tests!"
