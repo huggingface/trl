@@ -93,6 +93,7 @@ class ScriptArguments:
     )
     load_in_8bit: Optional[bool] = field(default=False, metadata={"help": "load the model in 8 bits precision"})
     load_in_4bit: Optional[bool] = field(default=False, metadata={"help": "load the model in 4 bits precision"})
+    generate_during_eval: Optional[bool] = field(default=False, metadata={"help": "Generate during evaluation"})
 
 
 def extract_anthropic_prompt(prompt_and_response):
@@ -228,7 +229,7 @@ if __name__ == "__main__":
         max_length=script_args.max_length,
         max_target_length=script_args.max_target_length,
         max_prompt_length=script_args.max_prompt_length,
-        generate_during_eval=True,
+        generate_during_eval=script_args.generate_during_eval,
         peft_config=peft_config,
     )
 
