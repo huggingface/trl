@@ -22,7 +22,7 @@ jobs:
       CUDA_VISIBLE_DEVICES: "0"
       TEST_TYPE: "single_gpu_${{ matrix.docker-image-name }}"
     container:
-     image: ${{ matrix.docker-image-name }}
+      image: ${{ matrix.docker-image-name }}
       options: --gpus all --shm-size "16gb" -e NVIDIA_DISABLE_REQUIRE=true
     defaults:
       run:
@@ -62,7 +62,7 @@ jobs:
       CUDA_VISIBLE_DEVICES: "0,1"
       TEST_TYPE: "multi_gpu_${{ matrix.docker-image-name }}"
     container:
-     image: ${{ matrix.docker-image-name }}
+      image: ${{ matrix.docker-image-name }}
       options: --gpus all --shm-size "16gb" -e NVIDIA_DISABLE_REQUIRE=true
     defaults:
       run:
