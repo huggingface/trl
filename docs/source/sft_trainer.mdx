@@ -154,6 +154,49 @@ response_template_ids = tokenizer.encode(response_template_with_context, add_spe
 data_collator = DataCollatorForCompletionOnlyLM(response_template_ids, tokenizer=tokenizer)
 ```
 
+### Dataset format support
+
+The [`SFTTrainer`] supports popular dataset formats. This allows you to pass the dataset to the trainer without any pre-processing directly. The following formats are supported:
+* conversational format
+```json
+{"messages": [{"role": "system", "content": "You are helpful"}, {"role": "user", "content": "What's the capital of France?"}, {"role": "assistant", "content": "..."}]}
+{"messages": [{"role": "system", "content": "You are helpful"}, {"role": "user", "content": "Who wrote 'Romeo and Juliet'?"}, {"role": "assistant", "content": "..."}]}
+{"messages": [{"role": "system", "content": "You are helpful"}, {"role": "user", "content": "How far is the Moon from Earth?"}, {"role": "assistant", "content": "..."}]}
+```
+* instruction format
+```json
+{"prompt": "<prompt text>", "completion": "<ideal generated text>"}
+{"prompt": "<prompt text>", "completion": "<ideal generated text>"}
+{"prompt": "<prompt text>", "completion": "<ideal generated text>"}
+```
+
+If your dataset uses one of the above formats, you can directly pass it to the trainer without pre-processing. The [`SFTTrainer`] will then format the dataset for you using the defined format from the model's tokenizer with the [apply_chat_template](https://huggingface.co/docs/transformers/main/en/chat_templating#templates-for-chat-models) method. 
+
+
+```python
+from datasets import load_dataset
+from trl import SFTTrainer
+
+...
+
+# load jsonl dataset
+dataset = load_dataset("json", data_files="path/to/dataset.jsonl", split="train")
+# load dataset from the HuggingFace Hub
+dataset = load_dataset("philschmid/dolly-15k-oai-style", split="train")
+
+...
+
+trainer = SFTTrainer(
+    "facebook/opt-350m",
+    args=training_args,
+    train_dataset=dataset,
+    packing=True,
+)
+```
+
+If the dataset is not in one those format you can either preprocess the dataset to match the formatting or pass a formatting function to the SFTTrainer to do it for you. Let's have a look.
+
+
 ### Format your input prompts
 
 For instruction fine-tuning, it is quite common to have two columns inside the dataset: one for the prompt & the other for the response.
@@ -346,11 +389,11 @@ Note that you cannot train your model using Flash Attention 1 on an arbitrary da
 Below are some numbers you can get in terms of speedup and memory efficiency, using Flash Attention 1, on a single NVIDIA-T4 16GB.
 
 | use_flash_attn_1 | model_name        | max_seq_len | batch_size | time per training step |
-|----------------|-------------------|-------------|------------|------------------------|
-| x              | facebook/opt-350m | 2048        | 8          | ~59.1s                 |
-|                | facebook/opt-350m | 2048        | 8          | **OOM**                |
-| x              | facebook/opt-350m | 2048        | 4          | ~30.3s                 |
-|                | facebook/opt-350m | 2048        | 4          | ~148.9s                |
+| ---------------- | ----------------- | ----------- | ---------- | ---------------------- |
+| x                | facebook/opt-350m | 2048        | 8          | ~59.1s                 |
+|                  | facebook/opt-350m | 2048        | 8          | **OOM**                |
+| x                | facebook/opt-350m | 2048        | 4          | ~30.3s                 |
+|                  | facebook/opt-350m | 2048        | 4          | ~148.9s                |
 
 ### Using Flash Attention-2
 

@@ -36,6 +36,7 @@ from transformers.modeling_utils import unwrap_model
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 
+from ..extras.dataset_formatting import get_formatting_func_from_dataset
 from ..import_utils import is_peft_available
 from .utils import (
     ConstantLengthDataset,
@@ -236,6 +237,11 @@ class SFTTrainer(Trainer):
             # self.neftune_noise_alpha is done at Trainer level
         elif not self._trainer_supports_neftune:
             self.neftune_noise_alpha = neftune_noise_alpha
+
+        if formatting_func is None and dataset_text_field is None:
+            # check if dataset has ChatML format or instruction format and is supported
+            # if not stays #None
+            formatting_func = get_formatting_func_from_dataset(train_dataset, tokenizer)
 
         if not packing:
             if dataset_text_field is None and formatting_func is None:
