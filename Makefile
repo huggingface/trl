@@ -1,4 +1,4 @@
-.PHONY: test precommit benchmark_core benchmark_aux common_tests slow_tests_single_gpu slow_tests_multi_gpu
+.PHONY: test precommit benchmark_core benchmark_aux common_tests slow_tests_single_gpu slow_tests_multi_gpu run_sft_examples run_dpo_examples
 
 check_dirs := examples tests trl
 
