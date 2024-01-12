@@ -85,6 +85,42 @@ class SFTTrainerTester(unittest.TestCase):
                 ],
             }
         )
+        cls.dummy_chatml_dataset = Dataset.from_dict(
+            {
+                "messages": [
+                    [
+                        {"role": "system", "content": "You are helpful"},
+                        {"role": "user", "content": "Hello"},
+                        {"role": "assistant", "content": "Hi, how can I help you?"},
+                        {"role": "user", "content": "What is 2+2?"},
+                        {"role": "assistant", "content": "4"},
+                        {"role": "user", "content": "What is 3+3?"},
+                        {"role": "assistant", "content": "6"},
+                    ],
+                    [
+                        {"role": "system", "content": "You are helpful"},
+                        {"role": "user", "content": "Hello"},
+                        {"role": "assistant", "content": "Hi, how can I help you?"},
+                    ],
+                ]
+            }
+        )
+        cls.dummy_instruction_dataset = Dataset.from_list(
+            [
+                {"prompt": "What is 2+2?", "completion": "4"},
+                {"prompt": "What is 3+3?", "completion": "6"},
+                {"prompt": "What is 4+4?", "completion": "8"},
+                {"prompt": "What is 2+2?", "completion": "4"},
+                {"prompt": "What is 3+3?", "completion": "6"},
+                {"prompt": "What is 4+4?", "completion": "8"},
+                {"prompt": "What is 2+2?", "completion": "4"},
+                {"prompt": "What is 3+3?", "completion": "6"},
+                {"prompt": "What is 4+4?", "completion": "8"},
+                {"prompt": "What is 2+2?", "completion": "4"},
+                {"prompt": "What is 3+3?", "completion": "6"},
+                {"prompt": "What is 4+4?", "completion": "8"},
+            ]
+        )
 
         cls.train_dataset = ConstantLengthDataset(
             cls.tokenizer,
@@ -171,7 +207,35 @@ class SFTTrainerTester(unittest.TestCase):
                     train_dataset=self.dummy_dataset,
                     packing=True,
                 )
-
+            # this should work since the dummy chatml include the correct format
+            _ = SFTTrainer(
+                model=self.model,
+                args=training_args,
+                train_dataset=self.dummy_chatml_dataset,
+                max_seq_length=32,  # make sure there is at least 1 packed sequence
+                num_of_sequences=32,
+                packing=True,
+            )
+            _ = SFTTrainer(
+                model=self.model,
+                args=training_args,
+                train_dataset=self.dummy_chatml_dataset,
+                packing=False,
+            )
+            # this should work since the dummy instruction dataset is the correct format
+            _ = SFTTrainer(
+                model=self.model,
+                args=training_args,
+                train_dataset=self.dummy_instruction_dataset,
+                max_seq_length=16,  # make sure there is at least 1 packed sequence
+                packing=True,
+            )
+            _ = SFTTrainer(
+                model=self.model,
+                args=training_args,
+                train_dataset=self.dummy_instruction_dataset,
+                packing=False,
+            )
             # This should work
             _ = SFTTrainer(
                 model=self.model,
