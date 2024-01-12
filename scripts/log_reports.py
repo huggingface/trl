@@ -91,7 +91,7 @@ def main(slack_channel_name=None):
                 for test in failed_tests:
                     failed_report = test[0].split("::")
                     # Truncate the last string as some test names might be long
-                    failed_report[-1] = failed_report[-1][:15] + ".."
+                    failed_report[-1] = failed_report[-1][:30] + ".."
                     failed_table.append(failed_report)
                 failed_table = tabulate(
                     failed_table,
