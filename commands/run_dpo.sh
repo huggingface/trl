@@ -14,8 +14,7 @@ EXTRA_TRAINING_ARGS="""--use_peft \
 """
 
 # This is a hack to get the number of available GPUs
-mapfile -t num_gpus < <(nvidia-smi --format=csv --query-gpu=index | tail -n+2 | wc -l)
-NUM_GPUS=${num_gpus[0]}
+NUM_GPUS=2
 
 if [[ "${TRL_ACCELERATE_CONFIG}" == "" ]]; then
   EXTRA_ACCELERATE_ARGS=""
