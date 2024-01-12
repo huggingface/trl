@@ -7,7 +7,7 @@ from ..core import flatten_dict
 @dataclass
 class ModelConfig:
     """
-    Arguments pertaining to which model/config/tokenizer we are going to fine-tune.
+    Arguments which define the model and tokenizer to load.
     """
 
     base_model_revision: Optional[str] = field(
