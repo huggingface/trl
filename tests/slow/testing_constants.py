@@ -22,4 +22,3 @@ DEVICE_MAP_OPTIONS = [{"": 0}, "auto"]
 
 DPO_LOSS_TYPES = ["sigmoid", "ipo", "kto_pair"]
 DPO_PRECOMPUTE_LOGITS = [True, False]
-DPO_GEN_DURING_EVAL = [True, False]

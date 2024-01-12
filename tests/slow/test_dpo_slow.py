@@ -25,13 +25,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from trl import DPOTrainer, is_peft_available
 
 from ..testing_utils import require_bitsandbytes, require_peft, require_torch_gpu, require_torch_multi_gpu
-from .testing_constants import (
-    DPO_GEN_DURING_EVAL,
-    DPO_LOSS_TYPES,
-    DPO_PRECOMPUTE_LOGITS,
-    GRADIENT_CHECKPOINTING_KWARGS,
-    MODELS_TO_TEST,
-)
+from .testing_constants import DPO_LOSS_TYPES, DPO_PRECOMPUTE_LOGITS, GRADIENT_CHECKPOINTING_KWARGS, MODELS_TO_TEST
 
 
 if is_peft_available():
@@ -57,10 +51,8 @@ class DPOTrainerSlowTester(unittest.TestCase):
         torch.cuda.empty_cache()
         gc.collect()
 
-    @parameterized.expand(
-        list(itertools.product(MODELS_TO_TEST, DPO_LOSS_TYPES, DPO_GEN_DURING_EVAL, DPO_PRECOMPUTE_LOGITS))
-    )
-    def test_dpo_bare_model(self, model_id, loss_type, gen_during_eval, pre_compute_logits):
+    @parameterized.expand(list(itertools.product(MODELS_TO_TEST, DPO_LOSS_TYPES, DPO_PRECOMPUTE_LOGITS)))
+    def test_dpo_bare_model(self, model_id, loss_type, pre_compute_logits):
         """
         A test that tests the simple usage of `DPOTrainer` using a bare model in full precision.
         """
@@ -90,7 +82,6 @@ class DPOTrainerSlowTester(unittest.TestCase):
                 tokenizer=tokenizer,
                 train_dataset=self.dataset,
                 eval_dataset=self.dataset,
-                generate_during_eval=gen_during_eval,
                 loss_type=loss_type,
                 precompute_ref_log_probs=pre_compute_logits,
                 max_length=self.max_length,

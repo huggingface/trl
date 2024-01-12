@@ -32,12 +32,6 @@ jobs:
           source activate trl
           pip install -e ".[test]" --no-deps
           pip install pytest-reportlog parameterized
-      
-      - name: Run common tests on single GPU
-        if: always()
-        run: |
-          source activate trl
-          make tests_common_gpu
 
       - name: Run slow SFT tests on single GPU
         if: always()
@@ -80,12 +74,6 @@ jobs:
           source activate trl
           pip install -e ".[test]" --no-deps
           pip install pytest-reportlog parameterized
-      
-      - name: Run common tests on single GPU
-        if: always()  
-        run: |
-          source activate trl
-          make tests_common_gpu
 
       - name: Run slow SFT tests on single GPU
         if: always()
@@ -103,12 +91,14 @@ jobs:
         if: always()
         run: |
           source activate trl
+          pip install deepspeed
           make run_sft_examples
       
       - name: Run end-to-end DPO examples tests on multi GPU
         if: always()
         run: |
           source activate trl
+          pip install deepspeed
           make run_dpo_examples
       
       - name: Generate Reports

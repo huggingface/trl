@@ -109,8 +109,7 @@ def main(slack_channel_name=None):
         from slack_sdk import WebClient
 
         if len(message) > MAX_LEN_MESSAGE:
-            print(f"Truncating long message from {len(message)} to {MAX_LEN_MESSAGE}")
-            message = message[:MAX_LEN_MESSAGE] + "..."
+            message = f"There are {total_num_failed} failed tests in total ! Cannot display the entire summary - please check the action results directly"
 
         if len(message) != 0:
             md_report = {
