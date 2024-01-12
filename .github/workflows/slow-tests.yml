@@ -6,6 +6,7 @@ on:
 env:
   RUN_SLOW: "yes"
   IS_GITHUB_CI: "1"
+  CUDA_LAUNCH_BLOCKING: "1"
   SLACK_API_TOKEN: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
 
