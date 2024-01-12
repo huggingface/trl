@@ -3,11 +3,6 @@ name: Slow tests (on push)
 on:
   push:
     branches: [ add-slow-tests ]
-    paths:
-      # Run only when python files are modified
-      - "trl/**.py"
-      - "examples/**.py"
-      - "tests/**.py"
 env:
   RUN_SLOW: "yes"
   IS_GITHUB_CI: "1"
@@ -36,14 +31,16 @@ jobs:
         run: |
           source activate trl
           pip install -e . --no-deps
-          pip install pytest-reportlog
+          pip install pytest-reportlog parameterized
       
       - name: Run common tests on single GPU
+        if: always()
         run: |
           source activate trl
           make tests_common_gpu
 
       - name: Run slow tests on single GPU
+        if: always()
         run: |
           source activate trl
           make slow_tests_single_gpu
@@ -79,16 +76,19 @@ jobs:
           pip install pytest-reportlog
       
       - name: Run common tests on single GPU
+        if: always()  
         run: |
           source activate trl
           make tests_common_gpu
 
       - name: Run slow tests on multi GPU
+        if: always()
         run: |
           source activate trl
           make slow_tests_multi_gpu
 
       - name: Run end-to-end SFT examples tests on multi GPU
+        if: always()
         run: |
           source activate trl
           make run_sft_examples
