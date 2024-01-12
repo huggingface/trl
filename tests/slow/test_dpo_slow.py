@@ -222,7 +222,24 @@ class DPOTrainerSlowTester(unittest.TestCase):
 
 
 @require_torch_multi_gpu
-class DPOTrainerSlowTesterMultiGPU(DPOTrainerSlowTester):
+class DPOTrainerSlowTesterMultiGPU(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.dataset = load_dataset("trl-internal-testing/mlabonne-chatml-dpo-pairs-copy", split="train[:10%]")
+        cls.peft_config = LoraConfig(
+            lora_alpha=16,
+            lora_dropout=0.1,
+            r=8,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+        cls.max_length = 128
+
+    def tearDown(self):
+        gc.collect()
+        torch.cuda.empty_cache()
+        gc.collect()
+
     @parameterized.expand(
         list(
             itertools.product(
