@@ -47,8 +47,12 @@ class ScriptArguments:
         default=1, metadata={"help": "the number of gradient accumulation steps"}
     )
     output_dir: Optional[str] = field(default="output", metadata={"help": "the output directory"})
-    fp16: Optional[bool] = field(default=False, metadata={"help": "Whether to activate fp16 mixed precision"})
-    bf16: Optional[bool] = field(default=False, metadata={"help": "Whether to activate bf16 mixed precision"})
+    fp16: Optional[bool] = field(
+        default=False, metadata={"help": "Whether to activate fp16 mixed precision during training"}
+    )
+    bf16: Optional[bool] = field(
+        default=False, metadata={"help": "Whether to activate bf16 mixed precision during training"}
+    )
     max_length: Optional[int] = field(default=512, metadata={"help": "max length of each sample"})
     max_prompt_length: Optional[int] = field(default=128, metadata={"help": "max length of each sample's prompt"})
     max_target_length: Optional[int] = field(

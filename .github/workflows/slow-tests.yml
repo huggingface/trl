@@ -7,6 +7,7 @@ on:
       # Run only when python files are modified
       - "trl/**.py"
       - "examples/**.py"
+      - "tests/**.py"
 env:
   RUN_SLOW: "yes"
   IS_GITHUB_CI: "1"
