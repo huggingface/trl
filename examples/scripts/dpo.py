@@ -47,7 +47,7 @@ python examples/scripts/dpo.py \
     --logging_first_step \
     --no_remove_unused_columns \
     --use_peft \
-    --lora_r=64 \
+    --lora_r=16 \
     --lora_alpha=16
 """
 from dataclasses import dataclass, field
