@@ -8,6 +8,7 @@ MAX_STEPS=5
 BATCH_SIZE=2
 SEQ_LEN=128
 
+
 # Handle extra arguments in case one passes accelerate configs.
 EXTRA_ACCELERATE_ARGS=""
 EXTRA_TRAINING_ARGS="""--use_peft \
