@@ -39,11 +39,17 @@ jobs:
           source activate trl
           make tests_common_gpu
 
-      - name: Run slow tests on single GPU
+      - name: Run slow SFT tests on single GPU
         if: always()
         run: |
           source activate trl
-          make slow_tests_single_gpu
+          make slow_sft_tests
+
+      - name: Run slow DPO tests on single GPU
+        if: always()
+        run: |
+          source activate trl
+          make slow_dpo_tests
       
       - name: Generate Report
         if: always()
@@ -81,17 +87,29 @@ jobs:
           source activate trl
           make tests_common_gpu
 
-      - name: Run slow tests on multi GPU
+      - name: Run slow SFT tests on single GPU
         if: always()
         run: |
           source activate trl
-          make slow_tests_multi_gpu
+          make slow_sft_tests
+
+      - name: Run slow DPO tests on single GPU
+        if: always()
+        run: |
+          source activate trl
+          make slow_dpo_tests
 
       - name: Run end-to-end SFT examples tests on multi GPU
         if: always()
         run: |
           source activate trl
           make run_sft_examples
+      
+      - name: Run end-to-end DPO examples tests on multi GPU
+        if: always()
+        run: |
+          source activate trl
+          make run_dpo_examples
       
       - name: Generate Reports
         if: always()
