@@ -27,15 +27,6 @@ parser.add_argument("--text_file_name", required=True)
 
 def main(text_file_name, slack_channel_name=None):
     message = ""
-    payload = [
-        {
-            "type": "header",
-            "text": {
-                "type": "plain_text",
-                "text": "🤗 Results of the {} TRL example tests.".format(os.environ.get("TEST_TYPE", "")),
-            },
-        },
-    ]
 
     if os.path.isfile(text_file_name):
         final_results = {}
@@ -71,6 +62,20 @@ def main(text_file_name, slack_channel_name=None):
         }
 
         total_num_failed = 0
+
+    test_type_name = text_file_name.replace(".txt", "").replace("temp_results_", "").replace("_", " ").title()
+
+    payload = [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": "🤗 Results of the {} TRL {} example tests.".format(
+                    os.environ.get("TEST_TYPE", ""), test_type_name
+                ),
+            },
+        },
+    ]
 
     if total_num_failed > 0:
         message += f"{total_num_failed} failed tests for example tests!"
@@ -113,14 +118,12 @@ def main(text_file_name, slack_channel_name=None):
             }
             payload.append(action_button)
 
-        test_type_name = text_file_name.replace(".txt", "").replace("temp_results_", "")
-
         date_report = {
             "type": "context",
             "elements": [
                 {
                     "type": "plain_text",
-                    "text": f"Nightly {os.environ.get('TEST_TYPE') + test_type_name} test results for {date.today()}",
+                    "text": f"On Push - main {os.environ.get('TEST_TYPE')} test results for {date.today()}",
                 },
             ],
         }

@@ -89,7 +89,10 @@ def main(slack_channel_name=None):
                     message += f"*{name}: {num_failed} failed tests*\n"
                 failed_table = []
                 for test in failed_tests:
-                    failed_table.append(test[0].split("::"))
+                    failed_report = test[0].split("::")
+                    # Truncate the last string as some test names might be long
+                    failed_report[-1] = failed_report[-1][:15] + ".."
+                    failed_table.append(failed_report)
                 failed_table = tabulate(
                     failed_table,
                     headers=["Test Location", "Test Case", "Test Name"],
@@ -133,7 +136,7 @@ def main(slack_channel_name=None):
             "elements": [
                 {
                     "type": "plain_text",
-                    "text": f"Nightly {os.environ.get('TEST_TYPE')} test results for {date.today()}",
+                    "text": f"On Push main {os.environ.get('TEST_TYPE')} test results for {date.today()}",
                 },
             ],
         }
