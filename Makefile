@@ -29,13 +29,13 @@ slow_dpo_tests:
 run_sft_examples:
 	touch temp_results_sft_tests.txt
 	for file in $(ACCELERATE_CONFIG_PATH)/*.yaml; do \
-		CUDA_LAUNCH_BLOCKING=1 TRL_ACCELERATE_CONFIG=$${file} bash $(COMMAND_FILES_PATH)/run_sft.sh; \
+		TRL_ACCELERATE_CONFIG=$${file} bash $(COMMAND_FILES_PATH)/run_sft.sh; \
 		echo $$?','$${file} >> temp_results_sft_tests.txt; \
 	done
 
 run_dpo_examples:
 	touch temp_results_dpo_tests.txt
 	for file in $(ACCELERATE_CONFIG_PATH)/*.yaml; do \
-		CUDA_LAUNCH_BLOCKING=1 TRL_ACCELERATE_CONFIG=$${file} bash $(COMMAND_FILES_PATH)/run_dpo.sh; \
+		TRL_ACCELERATE_CONFIG=$${file} bash $(COMMAND_FILES_PATH)/run_dpo.sh; \
 		echo $$?','$${file} >> temp_results_dpo_tests.txt; \
 	done
