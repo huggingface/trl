@@ -2,7 +2,7 @@ name: Slow tests (on push)
 
 on:
   push:
-    branches: [ main ]
+    branches: [ add-slow-tests ]
     paths:
       # Run only when python files are modified
       - "trl/**.py"
