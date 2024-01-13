@@ -61,11 +61,11 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
     calculated on the completion made by the assistant.
 
     Args:
-        instruction_template (`Optional[str]`): the template form that indicates the start of the human instruction, typically something like
-            '### Human:\n'. Useful for assistant-style conversation datasets
         response_template (`Union[str, List[int]]`): the template form that indicates the start of the response, typically something like
             '### Response:\n'. It can also be passed as tokenized ids, which can be useful when using a tokenizer that encodes the response
             differently if it does not have proper context.
+        instruction_template (`Union[str, List[int]]`): the template form that indicates the start of the human instruction, typically something like
+            '### Human:\n'. Useful for assistant-style conversation datasets. It can also be passed as tokenized ids.
         mlm (`bool`, *optional*, defaults to `False`): Whether or not to use masked language modeling in the underlying
             `DataCollatorForLanguageModeling` class. Note that this option currently has no effect but is present
              for flexibility and backwards-compatibility.
@@ -175,6 +175,13 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                         f"Note, if this happens often, consider increasing the `max_seq_length`."
                     )
                     batch["labels"][i, :] = self.ignore_index
+
+                if (
+                    len(human_token_ids_idxs) > 0
+                    and len(response_token_ids_idxs) > 0
+                    and human_token_ids_idxs[0] > response_token_ids_idxs[0]
+                ):
+                    human_token_ids_idxs = [0] + human_token_ids_idxs
 
                 for idx, (start, end) in enumerate(zip(human_token_ids_idxs, response_token_ids_idxs)):
                     # Make pytorch loss function ignore all non response tokens
@@ -643,9 +650,9 @@ def peft_module_casting_to_bf16(model):
     for name, module in model.named_modules():
         if isinstance(module, BaseTunerLayer):
             module = module.to(torch.bfloat16)
-        if "norm" in name:
+        elif isinstance(module, torch.nn.LayerNorm) or "norm" in name:
             module = module.to(torch.float32)
-        if any(x in name for x in ["lm_head", "embed_tokens", "wte", "wpe"]):
+        elif any(x in name for x in ["lm_head", "embed_tokens", "wte", "wpe"]):
             if hasattr(module, "weight"):
                 if module.weight.dtype == torch.float32:
                     module = module.to(torch.bfloat16)

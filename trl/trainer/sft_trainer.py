@@ -36,6 +36,7 @@ from transformers.modeling_utils import unwrap_model
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 
+from ..extras.dataset_formatting import get_formatting_func_from_dataset
 from ..import_utils import is_peft_available
 from .utils import (
     ConstantLengthDataset,
@@ -91,7 +92,7 @@ class SFTTrainer(Trainer):
         formatting_func (`Optional[Callable]`):
             The formatting function to be used for creating the `ConstantLengthDataset`.
         max_seq_length (`Optional[int]`):
-            The maximum sequence length to use for the `ConstantLengthDataset` and for automaticallty creating the Dataset. Defaults to `512`.
+            The maximum sequence length to use for the `ConstantLengthDataset` and for automatically creating the Dataset. Defaults to `512`.
         infinite (`Optional[bool]`):
             Whether to use an infinite dataset or not. Defaults to `False`.
         num_of_sequences (`Optional[int]`):
@@ -108,7 +109,7 @@ class SFTTrainer(Trainer):
             The number of examples to tokenize per batch. If batch_size <= 0 or batch_size == None,
             tokenize the full dataset as a single batch. Defaults to 1000.
         neftune_noise_alpha (`Optional[float]`):
-            If not `None`, this will activate NEFTune noise embeddings. This has been proven to drastically improve model performances for instrcution
+            If not `None`, this will activate NEFTune noise embeddings. This has been proven to drastically improve model performances for instruction
             fine-tuning. Check out the original paper here: https://arxiv.org/abs/2310.05914 and the original code here: https://github.com/neelsjain/NEFTune
         model_init_kwargs: (`Optional[Dict]`, *optional*):
             Dict of Optional kwargs to pass when instantiating the model from a string
@@ -237,6 +238,11 @@ class SFTTrainer(Trainer):
         elif not self._trainer_supports_neftune:
             self.neftune_noise_alpha = neftune_noise_alpha
 
+        if formatting_func is None and dataset_text_field is None:
+            # check if dataset has ChatML format or instruction format and is supported
+            # if not stays #None
+            formatting_func = get_formatting_func_from_dataset(train_dataset, tokenizer)
+
         if not packing:
             if dataset_text_field is None and formatting_func is None:
                 raise ValueError(
@@ -258,6 +264,7 @@ class SFTTrainer(Trainer):
                 formatting_func,
                 num_of_sequences,
                 chars_per_token,
+                remove_unused_columns=args.remove_unused_columns if args is not None else True,
                 **dataset_kwargs,
             )
         if eval_dataset is not None:
@@ -273,6 +280,7 @@ class SFTTrainer(Trainer):
                     formatting_func,
                     num_of_sequences,
                     chars_per_token,
+                    remove_unused_columns=args.remove_unused_columns if args is not None else True,
                     **dataset_kwargs,
                 )
             if not _multiple:
@@ -348,6 +356,7 @@ class SFTTrainer(Trainer):
         formatting_func,
         num_of_sequences,
         chars_per_token,
+        remove_unused_columns=True,
         append_concat_token=True,
         add_special_tokens=True,
     ):
@@ -360,7 +369,13 @@ class SFTTrainer(Trainer):
 
         if not packing:
             return self._prepare_non_packed_dataloader(
-                tokenizer, dataset, dataset_text_field, max_seq_length, formatting_func, add_special_tokens
+                tokenizer,
+                dataset,
+                dataset_text_field,
+                max_seq_length,
+                formatting_func,
+                add_special_tokens,
+                remove_unused_columns,
             )
 
         else:
@@ -377,7 +392,14 @@ class SFTTrainer(Trainer):
             )
 
     def _prepare_non_packed_dataloader(
-        self, tokenizer, dataset, dataset_text_field, max_seq_length, formatting_func=None, add_special_tokens=True
+        self,
+        tokenizer,
+        dataset,
+        dataset_text_field,
+        max_seq_length,
+        formatting_func=None,
+        add_special_tokens=True,
+        remove_unused_columns=True,
     ):
         use_formatting_func = formatting_func is not None and dataset_text_field is None
         self._dataset_sanity_checked = False
@@ -407,7 +429,7 @@ class SFTTrainer(Trainer):
         tokenized_dataset = dataset.map(
             tokenize,
             batched=True,
-            remove_columns=dataset.column_names,
+            remove_columns=dataset.column_names if remove_unused_columns else None,
             num_proc=self.dataset_num_proc,
             batch_size=self.dataset_batch_size,
         )
