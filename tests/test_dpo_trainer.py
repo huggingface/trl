@@ -247,9 +247,9 @@ class DPOTrainerTester(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 ValueError,
-                expected_regex="Padding is enabled, but the tokenizer is not configured with a padding token."
-                    " Explicitly set `tokenizer.pad_token` \(e.g. `tokenizer.pad_token = tokenizer.eos_token`\)"
-                    " before calling the trainer.",
+                expected_regex=r"Padding is enabled, but the tokenizer is not configured with a padding token."
+                r" Explicitly set `tokenizer.pad_token` \(e.g. `tokenizer.pad_token = tokenizer.eos_token`\)"
+                r" before calling the trainer.",
             ):
                 trainer = DPOTrainer(
                     model=self.model,
@@ -261,8 +261,6 @@ class DPOTrainerTester(unittest.TestCase):
                     eval_dataset=dummy_dataset,
                     generate_during_eval=True,
                 )
-
-                previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
                 trainer.train()
 
