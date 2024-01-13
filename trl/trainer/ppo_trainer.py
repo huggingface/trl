@@ -1418,15 +1418,37 @@ class PPOTrainer(BaseTrainer):
         return pg_loss, self.config.vf_coef * vf_loss, flatten_dict(stats)
 
     def compute_ptx_loss(self, ptx_model_inputs: Dict[str, Any]):
+        """
+        Calculate ptx loss(loss of prediction in pretrained data distribution).
+
+        Args:
+            ptx_model_inputs (Dict[str, Any], *optional*)):
+               Input data to sft model to compute ptx loss
+
+        Returns:
+               torch.FloatTensor: ptx loss tensor OR None if no input data or ptx_loss coef is not above 0.
+        """
         ptx_loss = None
         if self.ptx_loss_args.ptx_coef > 0 and ptx_model_inputs:
             ptx_outputs = self.model(**ptx_model_inputs)
-            if isinstance(ptx_outputs, tuple) or isinstance(ptx_outputs, list) and len(ptx_outputs) > 1:
-                ptx_loss = ptx_outputs[1]
+            if isinstance(ptx_outputs, tuple) or isinstance(ptx_outputs, list):
+                # If output from model.forward() is a tuple or list, return loss from the 2nd element
+                if len(ptx_outputs) > 1:
+                    ptx_loss = ptx_outputs[1]
             elif isinstance(ptx_outputs, dict):
+                # If output from model.forward() is a dict, return loss from the key 'loss'
                 ptx_loss = ptx_outputs.get('loss')
             elif hasattr(ptx_outputs, 'loss'):
+                # If output from model.forward() is a class obj with 'loss' attribute, return loss from the attribute
                 ptx_loss = getattr(ptx_outputs, 'loss')
+            else:
+                # warn users
+                warnings.warn(
+                    f"The loss attribute is not found in the output from the model forward pass the pretrained data."
+                    "We support tuple | list | dict | class obj with 'loss' attribute as output from model forward pass."
+                    "Please check the model forward output class, otherwise we could not backprop from ptx loss."
+                    f"Current model forward output class is {type(ptx_outputs)}"
+                )
         return ptx_loss
 
     def record_step_stats(self, kl_coef: float, **data):
