@@ -1,11 +1,12 @@
 # flake8: noqa
 
-__version__ = "0.7.8.dev0"
+__version__ = "0.7.10.dev0"
 
 from .core import set_seed
 from .environment import TextEnvironment, TextHistory
 from .extras import BestOfNSampler
 from .import_utils import (
+    is_bitsandbytes_available,
     is_diffusers_available,
     is_npu_available,
     is_peft_available,

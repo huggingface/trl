@@ -15,7 +15,13 @@ import unittest
 
 import torch
 
-from trl import is_diffusers_available, is_peft_available, is_wandb_available, is_xpu_available
+from trl import (
+    is_bitsandbytes_available,
+    is_diffusers_available,
+    is_peft_available,
+    is_wandb_available,
+    is_xpu_available,
+)
 
 
 def require_peft(test_case):
@@ -24,6 +30,15 @@ def require_peft(test_case):
     """
     if not is_peft_available():
         test_case = unittest.skip("test requires peft")(test_case)
+    return test_case
+
+
+def require_bitsandbytes(test_case):
+    """
+    Decorator marking a test that requires bnb. Skips the test if bnb is not available.
+    """
+    if not is_bitsandbytes_available():
+        test_case = unittest.skip("test requires bnb")(test_case)
     return test_case
 
 
@@ -53,17 +68,6 @@ def require_no_wandb(test_case):
     Decorator marking a test that requires no wandb. Skips the test if wandb is available.
     """
     return require_wandb(test_case, required=False)
-
-
-def require_bitsandbytes(test_case):
-    """
-    Decorator marking a test that requires bitsandbytes. Skips the test if bitsandbytes is not available.
-    """
-    try:
-        import bitsandbytes  # noqa: F401
-    except ImportError:
-        test_case = unittest.skip("test requires bitsandbytes")(test_case)
-    return test_case
 
 
 def require_torch_multi_gpu(test_case):

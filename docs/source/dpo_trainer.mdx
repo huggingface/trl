@@ -103,41 +103,43 @@ While training and evaluating we record the following reward metrics:
 
 ## Accelerate DPO fine-tuning using `unsloth`
 
-You can further accelerate QLoRA / LoRA (2x faster, 60% less memory) and even full-finetuning (1.1x faster) using the [`unsloth`](https://github.com/unslothai/unsloth) library that is compatible with `DPOTrainer`. Currently `unsloth` supports only Llama (Yi, TinyLlama as well) and Mistral architectures.
-First install `unsloth` according to the [official documentation](https://github.com/unslothai/unsloth#installation-instructions---conda). Once installed, you can incorporate unsloth into your workflow in a very simple manner; instead of loading `AutoModelForCausalLM`, you just need to load a `FastLlamaModel` or `FastMistralModel` as follows:
+You can further accelerate QLoRA / LoRA (2x faster, 60% less memory) using the [`unsloth`](https://github.com/unslothai/unsloth) library that is fully compatible with `SFTTrainer`. Currently `unsloth` supports only Llama (Yi, TinyLlama, Qwen, Deepseek etc) and Mistral architectures. Some benchmarks for DPO listed below:
+
+|  GPU     | Model           | Dataset   | 🤗  | 🤗 + Flash Attention 2 | 🦥 Unsloth     | 🦥 VRAM saved  |
+|----------|-----------------|-----------|------|------------------------|-----------------|----------------|
+| A100 40G | Zephyr 7b       | Ultra Chat| 1x   | 1.24x                  | **1.88x**       | -11.6%         |
+| Tesla T4 | Zephyr 7b       | Ultra Chat| 1x   | 1.09x                  | **1.55x**       | -18.6%         |
+
+First install `unsloth` according to the [official documentation](https://github.com/unslothai/unsloth). Once installed, you can incorporate unsloth into your workflow in a very simple manner; instead of loading `AutoModelForCausalLM`, you just need to load a `FastLanguageModel` as follows:
 
 ```python
 import torch
-
 from transformers import TrainingArguments
 from trl import DPOTrainer
-from unsloth import FastLlamaModel, FastMistralModel
+from unsloth import FastLanguageModel
 
 max_seq_length = 2048 # Supports automatic RoPE Scaling, so choose any number.
-dtype = None # None for auto detection. Float16 for Tesla T4, V100, Bfloat16 for Ampere+
-load_in_4bit = True # Use 4bit quantization to reduce memory usage. Can be False.
 
-# Load Llama model
-model, tokenizer = FastLlamaModel.from_pretrained(
-    model_name = "unsloth/llama-2-7b", # Supports any llama model eg meta-llama/Llama-2-7b-hf
+# Load model
+model, tokenizer = FastLanguageModel.from_pretrained(
+    model_name = "unsloth/zephyr-sft",
     max_seq_length = max_seq_length,
-    dtype = dtype,
-    load_in_4bit = load_in_4bit,
+    dtype = None, # None for auto detection. Float16 for Tesla T4, V100, Bfloat16 for Ampere+
+    load_in_4bit = True, # Use 4bit quantization to reduce memory usage. Can be False.
     # token = "hf_...", # use one if using gated models like meta-llama/Llama-2-7b-hf
 )
 
 # Do model patching and add fast LoRA weights
-model = FastLlamaModel.get_peft_model(
+model = FastLanguageModel.get_peft_model(
     model,
     r = 16,
     target_modules = ["q_proj", "k_proj", "v_proj", "o_proj",
                       "gate_proj", "up_proj", "down_proj",],
     lora_alpha = 16,
-    lora_dropout = 0, # Currently only supports dropout = 0
-    bias = "none",    # Currently only supports bias = "none"
+    lora_dropout = 0, # Dropout = 0 is currently optimized
+    bias = "none",    # Bias = "none" is currently optimized
     use_gradient_checkpointing = True,
     random_state = 3407,
-    max_seq_length = max_seq_length,
 )
 
 args = TrainingArguments(output_dir="./output")
@@ -150,7 +152,6 @@ dpo_trainer = DPOTrainer(
     train_dataset=train_dataset,
     tokenizer=tokenizer,
 )
-
 dpo_trainer.train()
 ```
 

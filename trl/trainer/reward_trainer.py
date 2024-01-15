@@ -25,7 +25,7 @@ from transformers.trainer_pt_utils import nested_detach
 from transformers.trainer_utils import EvalPrediction
 
 from ..import_utils import is_peft_available
-from .training_configs import RewardConfig
+from .reward_config import RewardConfig
 from .utils import RewardDataCollatorWithPadding, compute_accuracy
 
 
@@ -220,11 +220,13 @@ class RewardTrainer(Trainer):
         rewards_chosen = model(
             input_ids=inputs["input_ids_chosen"],
             attention_mask=inputs["attention_mask_chosen"],
-        )[0]
+            return_dict=True,
+        )["logits"]
         rewards_rejected = model(
             input_ids=inputs["input_ids_rejected"],
             attention_mask=inputs["attention_mask_rejected"],
-        )[0]
+            return_dict=True,
+        )["logits"]
         # calculate loss, optionally modulate with margin
         if "margin" in inputs:
             loss = -nn.functional.logsigmoid(rewards_chosen - rewards_rejected - inputs["margin"]).mean()
