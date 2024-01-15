@@ -451,7 +451,7 @@ class KTOTrainer(Trainer):
                         all_logits = self.model(
                             padded_batch["prompt_input_ids"],
                             attention_mask=padded_batch["prompt_attention_mask"],
-                            decoder_input_ids=padded_batch["completion_decoder_input_ids"],
+                            decoder_input_ids=padded_batch.get("completion_decoder_input_ids"),
                             labels=padded_batch["completion_labels"],
                         ).logits
                     else:
@@ -464,7 +464,7 @@ class KTOTrainer(Trainer):
                     all_logits = self.ref_model(
                         padded_batch["prompt_input_ids"],
                         attention_mask=padded_batch["prompt_attention_mask"],
-                        decoder_input_ids=padded_batch["completion_decoder_input_ids"],
+                        decoder_input_ids=padded_batch.get("completion_decoder_input_ids"),
                         labels=padded_batch["completion_labels"],
                     ).logits
                 else:
@@ -685,7 +685,7 @@ class KTOTrainer(Trainer):
             all_logits = model(
                 batch["prompt_input_ids"],
                 attention_mask=batch["prompt_attention_mask"],
-                decoder_input_ids=batch["completion_decoder_input_ids"],
+                decoder_input_ids=batch.get("completion_decoder_input_ids"),
                 labels=batch["completion_labels"],
             ).logits
         else:
