@@ -1,4 +1,4 @@
-.PHONY: test precommit benchmark_core benchmark_aux common_tests slow_sft_tests slow_dpotests run_sft_examples run_dpo_examples
+.PHONY: test precommit benchmark_core benchmark_aux common_tests slow_tests test_examples
 
 check_dirs := examples tests trl
 
@@ -23,14 +23,13 @@ tests_common_gpu:
 slow_tests:
 	python -m pytest tests/slow/test_* $(if $(IS_GITHUB_CI),--report-log "slow_tests.log",)
 
-run_sft_examples:
+test_examples:
 	touch temp_results_sft_tests.txt
 	for file in $(ACCELERATE_CONFIG_PATH)/*.yaml; do \
 		TRL_ACCELERATE_CONFIG=$${file} bash $(COMMAND_FILES_PATH)/run_sft.sh; \
 		echo $$?','$${file} >> temp_results_sft_tests.txt; \
 	done
 
-run_dpo_examples:
 	touch temp_results_dpo_tests.txt
 	for file in $(ACCELERATE_CONFIG_PATH)/*.yaml; do \
 		TRL_ACCELERATE_CONFIG=$${file} bash $(COMMAND_FILES_PATH)/run_dpo.sh; \
