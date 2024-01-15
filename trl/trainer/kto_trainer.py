@@ -277,9 +277,9 @@ class KTOTrainer(Trainer):
         self.beta = args.beta
 
         # tokenize the dataset
-        train_dataset = train_dataset.map(self.tokenize_row, fn_kwargs={"model": model})
+        train_dataset = train_dataset.map(self.tokenize_row)
         if eval_dataset is not None:
-            eval_dataset = eval_dataset.map(self.tokenize_row, fn_kwargs={"model": model})
+            eval_dataset = eval_dataset.map(self.tokenize_row)
 
         # split the dataset and interleave them together with equal probability of choosing chosen or rejected
         interleaved_train_dataset = interleave_datasets(

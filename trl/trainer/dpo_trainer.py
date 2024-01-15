@@ -140,7 +140,7 @@ class DPOTrainer(Trainer):
         ref_model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
         beta: float = 0.1,
         label_smoothing: float = 0,
-        loss_type: Literal["sigmoid", "hinge", "ipo", "kto"] = "sigmoid",
+        loss_type: Literal["sigmoid", "hinge", "ipo", "kto_pair"] = "sigmoid",
         args: TrainingArguments = None,
         data_collator: Optional[DataCollator] = None,
         label_pad_token_id: int = -100,
@@ -353,9 +353,9 @@ class DPOTrainer(Trainer):
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
         # tokenize the dataset
-        train_dataset = train_dataset.map(self.tokenize_row, fn_kwargs={"model": model})
+        train_dataset = train_dataset.map(self.tokenize_row)
         if eval_dataset is not None:
-            eval_dataset = eval_dataset.map(self.tokenize_row, fn_kwargs={"model": model})
+            eval_dataset = eval_dataset.map(self.tokenize_row)
 
         super().__init__(
             model=model,
