@@ -37,13 +37,7 @@ jobs:
         if: always()
         run: |
           source activate trl
-          make slow_sft_tests
-
-      - name: Run slow DPO tests on single GPU
-        if: always()
-        run: |
-          source activate trl
-          make slow_dpo_tests
+          make slow_tests
       
       - name: Generate Report
         if: always()
@@ -79,13 +73,7 @@ jobs:
         if: always()
         run: |
           source activate trl
-          make slow_sft_tests
-
-      - name: Run slow DPO tests on Multi GPU
-        if: always()
-        run: |
-          source activate trl
-          make slow_dpo_tests
+          make slow_tests
 
       - name: Run end-to-end SFT examples tests on multi GPU
         if: always()

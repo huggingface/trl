@@ -20,11 +20,8 @@ benchmark_aux:
 tests_common_gpu:
 	python -m pytest tests/test_* $(if $(IS_GITHUB_CI),--report-log "common_tests.log",)
 
-slow_sft_tests:
-	python -m pytest tests/slow/test_sft_slow.py $(if $(IS_GITHUB_CI),--report-log "sft_slow.log",)
-
-slow_dpo_tests:
-	python -m pytest tests/slow/test_dpo_slow.py $(if $(IS_GITHUB_CI),--report-log "dpo_slow.log",)
+slow_tests:
+	python -m pytest tests/slow/test_* $(if $(IS_GITHUB_CI),--report-log "slow_tests.log",)
 
 run_sft_examples:
 	touch temp_results_sft_tests.txt

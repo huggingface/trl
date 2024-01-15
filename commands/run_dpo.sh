@@ -33,6 +33,7 @@ fi
 CMD="""
 accelerate launch $EXTRA_ACCELERATE_ARGS \
     --num_processes $NUM_GPUS \
+    --mixed_precision 'fp16' \
     `pwd`/examples/scripts/dpo.py \
     --model_name_or_path $MODEL_NAME \
     --output_dir $OUTPUT_DIR \
