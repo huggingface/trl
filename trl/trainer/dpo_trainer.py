@@ -1053,8 +1053,7 @@ class DPOTrainer(Trainer):
             loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="train")
 
         # force log the metrics
-        if self.accelerator.is_main_process:
-            self.store_metrics(metrics, train_eval="train")
+        self.store_metrics(metrics, train_eval="train")
 
         if return_outputs:
             return (loss, metrics)
@@ -1130,8 +1129,7 @@ class DPOTrainer(Trainer):
             loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="eval")
 
         # force log the metrics
-        if self.accelerator.is_main_process:
-            self.store_metrics(metrics, train_eval="eval")
+        self.store_metrics(metrics, train_eval="eval")
 
         if prediction_loss_only:
             return (loss.detach(), None, None)
