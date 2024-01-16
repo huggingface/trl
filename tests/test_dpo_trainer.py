@@ -259,7 +259,6 @@ class DPOTrainerTester(unittest.TestCase):
                     tokenizer=tokenizer,
                     train_dataset=dummy_dataset,
                     eval_dataset=dummy_dataset,
-                    generate_during_eval=True,
                 )
 
                 trainer.train()
