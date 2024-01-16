@@ -38,6 +38,7 @@ from transformers.trainer_utils import EvalPrediction
 
 from ..extras.dataset_formatting import get_formatting_func_from_dataset
 from ..import_utils import is_peft_available
+from .packed_dataset import PackedDataset
 from .utils import (
     ConstantLengthDataset,
     DataCollatorForCompletionOnlyLM,
@@ -103,6 +104,8 @@ class SFTTrainer(Trainer):
         packing (`Optional[bool]`):
             Used only in case `dataset_text_field` is passed. This argument is used by the `ConstantLengthDataset` to pack the sequences
             of the dataset.
+        non_contaminated_packing (`Optional[bool]`):
+            Use non contaminated packing from https://github.com/MeetKai/functionary/tree/main/functionary/train/packing
         dataset_num_proc (`Optional[int]`):
             The number of workers to use to tokenize the data. Only used when `packing=False`. Defaults to None.
         dataset_batch_size (`int`):
@@ -134,6 +137,7 @@ class SFTTrainer(Trainer):
         peft_config: Optional["PeftConfig"] = None,
         dataset_text_field: Optional[str] = None,
         packing: Optional[bool] = False,
+        non_contaminated_packing=False,
         formatting_func: Optional[Callable] = None,
         max_seq_length: Optional[int] = None,
         infinite: Optional[bool] = None,
@@ -162,7 +166,11 @@ class SFTTrainer(Trainer):
             )
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
 
-        if packing and data_collator is not None and isinstance(data_collator, DataCollatorForCompletionOnlyLM):
+        if (
+            (packing or non_contaminated_packing)
+            and data_collator is not None
+            and isinstance(data_collator, DataCollatorForCompletionOnlyLM)
+        ):
             raise ValueError(
                 "You passed a `DataCollatorForCompletionOnlyLM` to the SFTTrainer. This is not compatible with the `packing` argument."
             )
@@ -243,7 +251,7 @@ class SFTTrainer(Trainer):
             # if not stays #None
             formatting_func = get_formatting_func_from_dataset(train_dataset, tokenizer)
 
-        if not packing:
+        if not (packing or non_contaminated_packing):
             if dataset_text_field is None and formatting_func is None:
                 raise ValueError(
                     "You passed `packing=False` to the SFTTrainer, but you didn't pass a `dataset_text_field` or `formatting_func` argument."
@@ -259,6 +267,7 @@ class SFTTrainer(Trainer):
                 train_dataset,
                 tokenizer,
                 packing,
+                non_contaminated_packing,
                 dataset_text_field,
                 max_seq_length,
                 formatting_func,
@@ -275,6 +284,7 @@ class SFTTrainer(Trainer):
                     _eval_dataset,
                     tokenizer,
                     packing,
+                    non_contaminated_packing,
                     dataset_text_field,
                     max_seq_length,
                     formatting_func,
@@ -306,12 +316,12 @@ class SFTTrainer(Trainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
-        if self.args.max_steps > 0 and packing:
+        if self.args.max_steps > 0 and (packing or non_contaminated_packing):
             warnings.warn(
-                "You passed `packing=True` to the SFTTrainer, and you are training your model with `max_steps` strategy. The dataset will be iterated until the `max_steps` are reached."
+                "You passed `packing or non_contaminated_packing=True` to the SFTTrainer, and you are training your model with `max_steps` strategy. The dataset will be iterated until the `max_steps` are reached."
             )
             self.train_dataset.infinite = True
-        elif self.args.max_steps == -1 and packing:
+        elif self.args.max_steps == -1 and (packing or non_contaminated_packing):
             self.train_dataset.infinite = False
 
     @wraps(Trainer.train)
@@ -351,6 +361,7 @@ class SFTTrainer(Trainer):
         dataset,
         tokenizer,
         packing,
+        non_contaminated_packing,
         dataset_text_field,
         max_seq_length,
         formatting_func,
@@ -378,7 +389,7 @@ class SFTTrainer(Trainer):
                 remove_unused_columns,
             )
 
-        else:
+        elif packing:
             return self._prepare_packed_dataloader(
                 tokenizer,
                 dataset,
@@ -389,6 +400,10 @@ class SFTTrainer(Trainer):
                 formatting_func,
                 append_concat_token,
                 add_special_tokens,
+            )
+        elif non_contaminated_packing:
+            return self._prepare_non_contaminated_packed_dataloader(
+                tokenizer, dataset, dataset_text_field, max_seq_length, add_special_tokens
             )
 
     def _prepare_non_packed_dataloader(
@@ -482,6 +497,31 @@ class SFTTrainer(Trainer):
         else:
             raise ValueError(
                 "You need to pass a `dataset_text_field` or `formatting_func` argument to the SFTTrainer if you want to use the `ConstantLengthDataset`."
+            )
+
+    def _prepare_non_contaminated_packed_dataloader(
+        self, tokenizer, dataset, dataset_text_field, max_seq_length, add_special_tokens=True
+    ):
+        if dataset_text_field is not None:
+            if tokenizer is None:
+                raise ValueError("You need to pass a tokenizer when using `dataset_text_field` with `SFTTrainer`.")
+
+            try:
+
+                def tokenization(example):
+                    return tokenizer(example[dataset_text_field], add_special_tokens=add_special_tokens)
+
+                dataset = dataset.map(tokenization)
+                dataset.set_format("torch")
+                packed_dataset = PackedDataset(dataset, tokenizer, max_seq_length)
+            except (DatasetGenerationError, SchemaInferenceError):
+                raise ValueError(
+                    "Error occurred while packing the dataset. Make sure that your dataset has enough samples to at least yield one packed sequence."
+                )
+            return packed_dataset
+        else:
+            raise ValueError(
+                "You need to pass a `dataset_text_field` argument to the SFTTrainer if you want to use the `PackedDataset`."
             )
 
     def _trl_activate_neftune(self, model):
