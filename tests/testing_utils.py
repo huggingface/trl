@@ -79,6 +79,15 @@ def require_torch_multi_gpu(test_case):
     return test_case
 
 
+def require_torch_gpu(test_case):
+    """
+    Decorator marking a test that requires GPUs. Skips the test if there is no GPU.
+    """
+    if not torch.cuda.is_available():
+        test_case = unittest.skip("test requires GPU")(test_case)
+    return test_case
+
+
 def require_torch_multi_xpu(test_case):
     """
     Decorator marking a test that requires multiple XPUs. Skips the test if there aren't enough XPUs.
