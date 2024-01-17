@@ -228,6 +228,41 @@ class DPOTrainerTester(unittest.TestCase):
                     if param.sum() != 0:
                         self.assertFalse(torch.equal(param, new_param))
 
+    def test_dpo_trainer_padding_token_is_none(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=1,
+                learning_rate=9e-1,
+                evaluation_strategy="steps",
+            )
+
+            dummy_dataset = self._init_dummy_dataset()
+
+            tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+            tokenizer.pad_token = None
+
+            with self.assertRaisesRegex(
+                ValueError,
+                expected_regex=r"Padding is enabled, but the tokenizer is not configured with a padding token."
+                r" Explicitly set `tokenizer.pad_token` \(e.g. `tokenizer.pad_token = tokenizer.eos_token`\)"
+                r" before calling the trainer.",
+            ):
+                trainer = DPOTrainer(
+                    model=self.model,
+                    ref_model=None,
+                    beta=0.1,
+                    args=training_args,
+                    tokenizer=tokenizer,
+                    train_dataset=dummy_dataset,
+                    eval_dataset=dummy_dataset,
+                )
+
+                trainer.train()
+
     @require_no_wandb
     def test_dpo_trainer_generate_during_eval_no_wandb(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
