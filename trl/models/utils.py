@@ -3,6 +3,7 @@ from typing import Literal, Optional, Tuple
 
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
+
 # TODO: Add Abstract Base Class if more formats are added
 @dataclass
 class ChatMlSpecialTokens:
