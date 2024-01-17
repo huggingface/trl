@@ -228,6 +228,7 @@ class SFTTrainer(Trainer):
         self.dataset_batch_size = dataset_batch_size
 
         self._trainer_supports_neftune = hasattr(args, "neftune_noise_alpha")
+        self._signature_columns = None
 
         if neftune_noise_alpha is not None and self._trainer_supports_neftune:
             args.neftune_noise_alpha = neftune_noise_alpha
