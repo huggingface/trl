@@ -422,6 +422,7 @@ class DPOTrainerTester(unittest.TestCase):
     @require_bitsandbytes
     @require_peft
     @mark.peft_test
+    @unittest.skip("You need a GPU with bf16 support in order to run these tests")
     def test_dpo_lora_bf16_autocast(self, name, loss_type, pre_compute, gen_during_eval):
         # Note this test only works on compute capability > 7 GPU devices
         from peft import LoraConfig
