@@ -424,7 +424,21 @@ class SFTTrainer(Trainer):
                 else:
                     self._dataset_sanity_checked = True
 
-            return {"input_ids": outputs["input_ids"], "attention_mask": outputs["attention_mask"]}
+            return {
+                "input_ids": outputs["input_ids"],
+                "labels": outputs["input_ids"],
+                "attention_mask": outputs["attention_mask"],
+            }
+
+        signature_columns = ["input_ids", "labels", "attention_mask"]
+
+        extra_colmuns = list(set(dataset.column_names) - set(signature_columns))
+
+        if not remove_unused_columns and len(extra_colmuns) > 0:
+            warnings.warn(
+                "You passed `remove_unused_columns=False` on a non-packed dataset. This might create some issues with the default collator and yield to errors. If you want to "
+                f"inspect dataset other columns (in this case {extra_colmuns}), you can subclass `DataCollatorForLanguageModeling` in case you used the default collator and create your own data collator in order to inspect the unused dataset columns."
+            )
 
         tokenized_dataset = dataset.map(
             tokenize,
