@@ -38,7 +38,7 @@ FORMAT_MAPPING = {
   }
 
 
-def setup_chat_format(model: AutoModel, tokenizer: AutoTokenizer, format: Literal["chatml"]="chatml", resize_to_multiple_of_32=True) -> Tuple[AutoModel, AutoTokenizer]: 
+def setup_chat_format(model: AutoModel, tokenizer: AutoTokenizer, format: Literal["chatml"]="chatml", resize_to_multiple_of_64=True) -> Tuple[AutoModel, AutoTokenizer]: 
     """
     Setup chat format by adding special tokens to the tokenizer, setting the correct format, and extending the embedding layer of the model based on the new special tokens.
 
@@ -64,8 +64,8 @@ def setup_chat_format(model: AutoModel, tokenizer: AutoTokenizer, format: Litera
     # set chat format for tokenizer
     tokenizer.chat_template = chat_format.chat_template
 
-    # resize embedding layer
-    new_embedding_len = math.ceil(len(tokenizer) / 32) * 32 if resize_to_multiple_of_32 else len(tokenizer) 
+    # resize embedding layer to a multiple of 64, https://x.com/karpathy/status/1621578354024677377
+    new_embedding_len = math.ceil(len(tokenizer) / 64) * 64 if resize_to_multiple_of_64 else len(tokenizer) 
     model.resize_token_embeddings(new_embedding_len)
 
     return model, tokenizer
