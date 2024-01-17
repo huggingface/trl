@@ -57,7 +57,10 @@ def setup_chat_format(
       model (AutoModel): The modified model.
       tokenizer (AutoTokenizer): The modified tokenizer.
     """
-    # get correct format
+    # check if format available and retrieve
+    if format not in FORMAT_MAPPING:
+        raise ValueError(f"Format {format} not available. Please use one of {FORMAT_MAPPING.keys()}")
+
     chat_format = FORMAT_MAPPING[format]()
 
     # set special tokens and them
