@@ -15,6 +15,7 @@
 # limitations under the License.
 from .modeling_base import PreTrainedModelWrapper, create_reference_model
 from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
+from .utils import setup_chat_format
 
 
 SUPPORTED_ARCHITECTURES = (
