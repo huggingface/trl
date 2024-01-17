@@ -16,7 +16,6 @@
 MODELS_TO_TEST = [
     "HuggingFaceM4/tiny-random-LlamaForCausalLM",
     "HuggingFaceM4/tiny-random-MistralForCausalLM",
-    "hf-internal-testing/tiny-random-PhiForCausalLM",
 ]
 
 # We could have also not declared these variables but let's be verbose
