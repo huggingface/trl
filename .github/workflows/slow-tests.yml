@@ -10,7 +10,7 @@ on:
 env:
   RUN_SLOW: "yes"
   IS_GITHUB_CI: "1"
-  SLACK_API_TOKEN: ${{ secrets.SLACK_API_TOKEN }}
+  SLACK_API_TOKEN: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
 
 jobs:
@@ -34,18 +34,14 @@ jobs:
       - name: Pip install
         run: |
           source activate trl
-          pip install -e . --no-deps
-          pip install pytest-reportlog
-      
-      - name: Run common tests on single GPU
-        run: |
-          source activate trl
-          make tests_common_gpu
+          pip install -e ".[test]" --no-deps
+          pip install pytest-reportlog parameterized
 
-      - name: Run slow tests on single GPU
+      - name: Run slow SFT tests on single GPU
+        if: always()
         run: |
           source activate trl
-          make slow_tests_single_gpu
+          make slow_tests
       
       - name: Generate Report
         if: always()
@@ -74,23 +70,21 @@ jobs:
       - name: Pip install
         run: |
           source activate trl
-          pip install -e . --no-deps
-          pip install pytest-reportlog
-      
-      - name: Run common tests on single GPU
-        run: |
-          source activate trl
-          make tests_common_gpu
+          pip install -e ".[test]" --no-deps
+          pip install pytest-reportlog parameterized
 
-      - name: Run slow tests on multi GPU
+      - name: Run slow SFT tests on Multi GPU
+        if: always()
         run: |
           source activate trl
-          make slow_tests_multi_gpu
+          make slow_tests
 
-      - name: Run end-to-end SFT examples tests on multi GPU
+      - name: Run end-to-end examples tests on multi GPU
+        if: always()
         run: |
           source activate trl
-          make run_sft_examples
+          pip install deepspeed
+          make test_examples
       
       - name: Generate Reports
         if: always()
