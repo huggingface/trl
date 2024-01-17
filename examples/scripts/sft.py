@@ -45,7 +45,7 @@ class ScriptArguments:
     batch_size: Optional[int] = field(default=64, metadata={"help": "the batch size"})
     seq_length: Optional[int] = field(default=512, metadata={"help": "Input sequence length"})
     gradient_accumulation_steps: Optional[int] = field(
-        default=16, metadata={"help": "the number of gradient accumulation steps"}
+        default=1, metadata={"help": "the number of gradient accumulation steps"}
     )
     load_in_8bit: Optional[bool] = field(default=False, metadata={"help": "load the model in 8 bits precision"})
     load_in_4bit: Optional[bool] = field(default=False, metadata={"help": "load the model in 4 bits precision"})
@@ -117,6 +117,7 @@ dataset = load_dataset(script_args.dataset_name, split="train")
 training_args = TrainingArguments(
     output_dir=script_args.output_dir,
     per_device_train_batch_size=script_args.batch_size,
+    gradient_accumulation_steps=script_args.gradient_accumulation_steps,
     learning_rate=script_args.learning_rate,
     logging_steps=script_args.logging_steps,
     num_train_epochs=script_args.num_train_epochs,
