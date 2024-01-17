@@ -1,44 +1,50 @@
-import math
 from dataclasses import dataclass
-from typing import Tuple, Literal
-from transformers import PreTrainedTokenizer, PreTrainedModel
+from typing import Literal, Tuple
+
+from transformers import PreTrainedModel, PreTrainedTokenizer
+
 
 @dataclass
 class ChatMlSpecialTokens:
-  """Dataclass for special tokens used in ChatML, including system, user, assistant, bos, eos, and pad tokens."""
-  bos_token: str = "<|im_start|>"
-  eos_token: str = "<|im_end|>"
-  pad_token: str = "<|im_end|>"
-  
-  @property
-  def system(self):
-    return f'{self.bos_token}system'
-  
-  @property
-  def user(self):
-    return f'{self.bos_token}user'
+    """Dataclass for special tokens used in ChatML, including system, user, assistant, bos, eos, and pad tokens."""
 
-  @property
-  def assistant(self):
-    return f'{self.bos_token}assistant'
+    bos_token: str = "<|im_start|>"
+    eos_token: str = "<|im_end|>"
+    pad_token: str = "<|im_end|>"
 
-  @property
-  def chat_template(self):
-    return (
-    "{% for message in messages %}"
-    f"{{'{self.bos_token}' + message['role'] + '\n' + message['content'] + eos_token + '\n'}}"
-    "{% endfor %}"
-    "{% if add_generation_prompt %}"
-    f"{{ '{self.assistant}\n' }}"
-    "{% endif %}"
-)
-    
-FORMAT_MAPPING = {
-  "chatml": ChatMlSpecialTokens
-  }
+    @property
+    def system(self):
+        return f"{self.bos_token}system"
+
+    @property
+    def user(self):
+        return f"{self.bos_token}user"
+
+    @property
+    def assistant(self):
+        return f"{self.bos_token}assistant"
+
+    @property
+    def chat_template(self):
+        return (
+            "{% for message in messages %}"
+            f"{{'{self.bos_token}' + message['role'] + '\n' + message['content'] + eos_token + '\n'}}"
+            "{% endfor %}"
+            "{% if add_generation_prompt %}"
+            f"{{ '{self.assistant}\n' }}"
+            "{% endif %}"
+        )
 
 
-def setup_chat_format(model: PreTrainedModel, tokenizer: PreTrainedTokenizer, format: Literal["chatml"]="chatml", resize_to_multiple_of=None) -> Tuple[PreTrainedModel, PreTrainedTokenizer]: 
+FORMAT_MAPPING = {"chatml": ChatMlSpecialTokens}
+
+
+def setup_chat_format(
+    model: PreTrainedModel,
+    tokenizer: PreTrainedTokenizer,
+    format: Literal["chatml"] = "chatml",
+    resize_to_multiple_of=None,
+) -> Tuple[PreTrainedModel, PreTrainedTokenizer]:
     """
     Setup chat format by adding special tokens to the tokenizer, setting the correct format, and extending the embedding layer of the model based on the new special tokens.
 
@@ -54,17 +60,17 @@ def setup_chat_format(model: PreTrainedModel, tokenizer: PreTrainedTokenizer, fo
     # get correct format
     chat_format = FORMAT_MAPPING[format]()
 
-    # set special tokens and them 
+    # set special tokens and them
     tokenizer.eos_token = chat_format.eos_token
     tokenizer.pad_token = chat_format.pad_token
     tokenizer.bos_token = chat_format.bos_token
-    tokenizer.add_special_tokens(
-            {"additional_special_tokens": [chat_format.bos_token, chat_format.eos_token]}
-        )
+    tokenizer.add_special_tokens({"additional_special_tokens": [chat_format.bos_token, chat_format.eos_token]})
     # set chat format for tokenizer
     tokenizer.chat_template = chat_format.chat_template
 
     # resize embedding layer to a multiple of 64, https://x.com/karpathy/status/1621578354024677377
-    model.resize_token_embeddings(len(tokenizer), pad_to_multiple_of=resize_to_multiple_of if resize_to_multiple_of is not None else None)
+    model.resize_token_embeddings(
+        len(tokenizer), pad_to_multiple_of=resize_to_multiple_of if resize_to_multiple_of is not None else None
+    )
 
     return model, tokenizer

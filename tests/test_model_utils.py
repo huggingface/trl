@@ -1,8 +1,8 @@
 import unittest
 
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from trl.models.utils import setup_chat_format,ChatMlSpecialTokens
+from trl.models.utils import ChatMlSpecialTokens, setup_chat_format
 
 
 class SetupChatFormatTestCase(unittest.TestCase):
@@ -12,7 +12,9 @@ class SetupChatFormatTestCase(unittest.TestCase):
 
     def test_setup_chat_format(self):
         original_tokenizer_len = len(self.tokenizer)
-        modified_model, modified_tokenizer = setup_chat_format(self.model, self.tokenizer, format="chatml", resize_to_multiple_of=64)
+        modified_model, modified_tokenizer = setup_chat_format(
+            self.model, self.tokenizer, format="chatml", resize_to_multiple_of=64
+        )
 
         _chatml = ChatMlSpecialTokens()
         # Check if special tokens are correctly set
