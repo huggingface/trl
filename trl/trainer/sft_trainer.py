@@ -243,10 +243,6 @@ class SFTTrainer(Trainer):
             # if not stays #None
             formatting_func = get_formatting_func_from_dataset(train_dataset, tokenizer)
 
-        # This variable is used to check later on if one has loaded `SFTtrainer` with the
-        # default collator or not.
-        use_default_collator = True
-
         if not packing:
             if dataset_text_field is None and formatting_func is None:
                 raise ValueError(
@@ -255,8 +251,6 @@ class SFTTrainer(Trainer):
 
             if data_collator is None:
                 data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
-            else:
-                use_default_collator = False
 
         if dataset_kwargs is None:
             dataset_kwargs = {}
@@ -271,7 +265,6 @@ class SFTTrainer(Trainer):
                 num_of_sequences,
                 chars_per_token,
                 remove_unused_columns=args.remove_unused_columns if args is not None else True,
-                use_default_collator=use_default_collator,
                 **dataset_kwargs,
             )
         if eval_dataset is not None:
@@ -366,7 +359,6 @@ class SFTTrainer(Trainer):
         remove_unused_columns=True,
         append_concat_token=True,
         add_special_tokens=True,
-        use_default_collator=True,
     ):
         if dataset is None:
             raise ValueError("The dataset should not be None")
@@ -384,7 +376,6 @@ class SFTTrainer(Trainer):
                 formatting_func,
                 add_special_tokens,
                 remove_unused_columns,
-                use_default_collator,
             )
 
         else:
@@ -409,7 +400,6 @@ class SFTTrainer(Trainer):
         formatting_func=None,
         add_special_tokens=True,
         remove_unused_columns=True,
-        use_default_collator=True,
     ):
         use_formatting_func = formatting_func is not None and dataset_text_field is None
         self._dataset_sanity_checked = False
@@ -440,12 +430,16 @@ class SFTTrainer(Trainer):
                 "attention_mask": outputs["attention_mask"],
             }
 
-        if not remove_unused_columns and use_default_collator:
+        self._set_signature_columns_if_needed()
+        signature_columns = self._signature_columns
+
+        extra_colmuns = list(set(dataset.column_names) - set(signature_columns))
+
+        if not remove_unused_columns and len(extra_colmuns) > 0:
             warnings.warn(
-                "You passed `remove_unused_columns=False` on a non-packed dataset while using `DataCollatorForLanguageModeling`. This might create some issues with the default collator. If you want to "
-                "inspect dataset other columns, you can subclass `DataCollatorForLanguageModeling` and create your own data collator in order to inspect the unused dataset columns."
+                "You passed `remove_unused_columns=False` on a non-packed dataset. This might create some issues with the default collator and yield to errors. If you want to "
+                f"inspect dataset other columns (in this case {extra_colmuns}), you can subclass `DataCollatorForLanguageModeling` in case you used the default collator and create your own data collator in order to inspect the unused dataset columns."
             )
-            remove_unused_columns = True
 
         tokenized_dataset = dataset.map(
             tokenize,
