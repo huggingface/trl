@@ -228,7 +228,6 @@ class SFTTrainer(Trainer):
         self.dataset_batch_size = dataset_batch_size
 
         self._trainer_supports_neftune = hasattr(args, "neftune_noise_alpha")
-        self._signature_columns = None
 
         if neftune_noise_alpha is not None and self._trainer_supports_neftune:
             args.neftune_noise_alpha = neftune_noise_alpha
@@ -431,8 +430,7 @@ class SFTTrainer(Trainer):
                 "attention_mask": outputs["attention_mask"],
             }
 
-        self._set_signature_columns_if_needed()
-        signature_columns = self._signature_columns
+        signature_columns = ["input_ids", "labels", "attention_mask"]
 
         extra_colmuns = list(set(dataset.column_names) - set(signature_columns))
 

@@ -53,8 +53,8 @@ class SFTTrainerSlowTester(unittest.TestCase):
         torch.cuda.empty_cache()
         gc.collect()
 
-    @parameterized.expand(list(itertools.product(MODELS_TO_TEST, PACKING_OPTIONS, PACKING_OPTIONS)))
-    def test_sft_trainer_str(self, model_name, packing, remove_unused_columns):
+    @parameterized.expand(list(itertools.product(MODELS_TO_TEST, PACKING_OPTIONS)))
+    def test_sft_trainer_str(self, model_name, packing):
         """
         Simply tests if passing a simple str to `SFTTrainer` loads and runs the trainer
         as expected.
@@ -66,7 +66,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 report_to="none",
                 per_device_train_batch_size=2,
                 max_steps=10,
-                remove_unused_columns=remove_unused_columns,
             )
 
             trainer = SFTTrainer(
