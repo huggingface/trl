@@ -38,7 +38,7 @@ FORMAT_MAPPING = {
   }
 
 
-def setup_chat_format(model: PreTrainedModel, tokenizer: PreTrainedTokenizer, format: Literal["chatml"]="chatml", resize_to_multiple_of=2) -> Tuple[PreTrainedModel, PreTrainedTokenizer]: 
+def setup_chat_format(model: PreTrainedModel, tokenizer: PreTrainedTokenizer, format: Literal["chatml"]="chatml", resize_to_multiple_of=None) -> Tuple[PreTrainedModel, PreTrainedTokenizer]: 
     """
     Setup chat format by adding special tokens to the tokenizer, setting the correct format, and extending the embedding layer of the model based on the new special tokens.
 
@@ -46,7 +46,7 @@ def setup_chat_format(model: PreTrainedModel, tokenizer: PreTrainedTokenizer, fo
       model (AutoModel): The model to be modified.
       tokenizer (AutoTokenizer): The tokenizer to be modified.
       format (Literal["chatml"], optional): The format to be set. Defaults to "chatml".
-      resize_to_multiple_of (int, optional): Number to resize the embedding layer to. Defaults to 2.
+      resize_to_multiple_of (int, optional): Number to resize the embedding layer to. Defaults to None.
     Returns:
       model (AutoModel): The modified model.
       tokenizer (AutoTokenizer): The modified tokenizer.
@@ -65,6 +65,6 @@ def setup_chat_format(model: PreTrainedModel, tokenizer: PreTrainedTokenizer, fo
     tokenizer.chat_template = chat_format.chat_template
 
     # resize embedding layer to a multiple of 64, https://x.com/karpathy/status/1621578354024677377
-    model.resize_token_embeddings(len(tokenizer), pad_to_multiple_of=resize_to_multiple_of)
+    model.resize_token_embeddings(len(tokenizer), pad_to_multiple_of=resize_to_multiple_of if resize_to_multiple_of is not None else None)
 
     return model, tokenizer
