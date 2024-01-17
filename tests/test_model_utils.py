@@ -18,12 +18,12 @@ class SetupChatFormatTestCase(unittest.TestCase):
 
         _chatml = ChatMlSpecialTokens()
         # Check if special tokens are correctly set
-        assert modified_tokenizer.eos_token == "<|im_end|>"
-        assert modified_tokenizer.pad_token == "<|im_end|>"
-        assert modified_tokenizer.bos_token == "<|im_start|>"
-        assert modified_tokenizer.eos_token == _chatml.eos_token
-        assert modified_tokenizer.pad_token == _chatml.pad_token
-        assert modified_tokenizer.bos_token == _chatml.bos_token
-        assert len(modified_tokenizer) == original_tokenizer_len + 2
-        assert self.model.get_input_embeddings().weight.shape[0] % 64 == 0
-        assert self.model.get_input_embeddings().weight.shape[0] == original_tokenizer_len + 64
+        self.assertTrue(modified_tokenizer.eos_token == "<|im_end|>")
+        self.assertTrue(modified_tokenizer.pad_token == "<|im_end|>")
+        self.asserTrue(modified_tokenizer.bos_token == "<|im_start|>")
+        self.assertTrue(modified_tokenizer.eos_token == _chatml.eos_token)
+        self.asserTrue(modified_tokenizer.pad_token == _chatml.pad_token)
+        self.assertTrue(modified_tokenizer.bos_token == _chatml.bos_token)
+        self.assertTrue(len(modified_tokenizer) == original_tokenizer_len + 2)
+        self.assertTrue(self.model.get_input_embeddings().weight.shape[0] % 64 == 0)
+        self.assertTrue(self.model.get_input_embeddings().weight.shape[0] == original_tokenizer_len + 64)
