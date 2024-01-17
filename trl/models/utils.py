@@ -1,7 +1,7 @@
 import math
 from dataclasses import dataclass
 from typing import Tuple, Literal
-from transformers import AutoModel, AutoTokenizer
+from transformers import PreTrainedTokenizer, PreTrainedModel
 
 @dataclass
 class ChatMlSpecialTokens:
@@ -38,7 +38,7 @@ FORMAT_MAPPING = {
   }
 
 
-def setup_chat_format(model: AutoModel, tokenizer: AutoTokenizer, format: Literal["chatml"]="chatml", resize_to_multiple_of_64=True) -> Tuple[AutoModel, AutoTokenizer]: 
+def setup_chat_format(model: PreTrainedModel, tokenizer: PreTrainedTokenizer, format: Literal["chatml"]="chatml", resize_to_multiple_of=2) -> Tuple[PreTrainedModel, PreTrainedTokenizer]: 
     """
     Setup chat format by adding special tokens to the tokenizer, setting the correct format, and extending the embedding layer of the model based on the new special tokens.
 
@@ -46,7 +46,7 @@ def setup_chat_format(model: AutoModel, tokenizer: AutoTokenizer, format: Litera
       model (AutoModel): The model to be modified.
       tokenizer (AutoTokenizer): The tokenizer to be modified.
       format (Literal["chatml"], optional): The format to be set. Defaults to "chatml".
-      resize_to_multiple_of_32 (bool, optional): Whether to resize the model's input to a multiple of 32. Defaults to True.
+      resize_to_multiple_of (int, optional): Number to resize the embedding layer to. Defaults to 2.
     Returns:
       model (AutoModel): The modified model.
       tokenizer (AutoTokenizer): The modified tokenizer.
@@ -65,7 +65,6 @@ def setup_chat_format(model: AutoModel, tokenizer: AutoTokenizer, format: Litera
     tokenizer.chat_template = chat_format.chat_template
 
     # resize embedding layer to a multiple of 64, https://x.com/karpathy/status/1621578354024677377
-    new_embedding_len = math.ceil(len(tokenizer) / 64) * 64 if resize_to_multiple_of_64 else len(tokenizer) 
-    model.resize_token_embeddings(new_embedding_len)
+    model.resize_token_embeddings(len(tokenizer), pad_to_multiple_of=resize_to_multiple_of)
 
     return model, tokenizer
