@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Literal, Tuple
+from typing import Literal, Optional, Tuple
 
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
@@ -42,20 +42,20 @@ FORMAT_MAPPING = {"chatml": ChatMlSpecialTokens}
 def setup_chat_format(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizer,
-    format: Literal["chatml"] = "chatml",
-    resize_to_multiple_of=None,
+    format: Optional[Literal["chatml"]] = "chatml",
+    resize_to_multiple_of: Optional[int] = None,
 ) -> Tuple[PreTrainedModel, PreTrainedTokenizer]:
     """
     Setup chat format by adding special tokens to the tokenizer, setting the correct format, and extending the embedding layer of the model based on the new special tokens.
 
     Args:
-      model (AutoModel): The model to be modified.
-      tokenizer (AutoTokenizer): The tokenizer to be modified.
-      format (Literal["chatml"], optional): The format to be set. Defaults to "chatml".
-      resize_to_multiple_of (int, optional): Number to resize the embedding layer to. Defaults to None.
+      model (`transformers.PreTrainedModel`): The model to be modified.
+      tokenizer (`transformers.PreTrainedTokenizer`): The tokenizer to be modified.
+      format (`Optional[Literal["chatml"]]`): The format to be set. Defaults to "chatml".
+      resize_to_multiple_of (`Optional[int]`): Number to resize the embedding layer to. Defaults to None.
     Returns:
-      model (AutoModel): The modified model.
-      tokenizer (AutoTokenizer): The modified tokenizer.
+      model (`transformers.PreTrainedModel`): The modified model.
+      tokenizer (`transformers.PreTrainedTokenizer`): The modified tokenizer.
     """
     # check if format available and retrieve
     if format not in FORMAT_MAPPING:
