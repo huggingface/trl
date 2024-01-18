@@ -161,7 +161,7 @@ The [`setup_chat_format`] function in `trl` easily sets up a model and tokenizer
 - Adds special tokens to the tokenizer, e.g. `<|im_start|>` and `<|im_end|>`, to indicate the start and end of a conversation.
 - Resizes the model’s embedding layer to accommodate the new tokens.
 - Sets the `chat_template` of the tokenizer, which is used to format the input data into a chat-like format. The default is `chatml` from OpenAI.
-- _optionally_ you can pass `resize_to_multiple_of` to resize the embedding layer to a multiple of the `resize_to_multiple_of` argument, e.g. 64. 
+- _optionally_ you can pass `resize_to_multiple_of` to resize the embedding layer to a multiple of the `resize_to_multiple_of` argument, e.g. 64. If you want to see more formats being supported in the future, please open a GitHub issue on [trl](https://github.com/huggingface/trl)
 
 ```python
 from transformers import AutoModelForCausalLM, AutoTokenizer
