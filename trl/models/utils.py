@@ -29,10 +29,10 @@ class ChatMlSpecialTokens:
     def chat_template(self):
         return (
             "{% for message in messages %}"
-            f"{{'{self.bos_token}' + message['role'] + '\n' + message['content'] + eos_token + '\n'}}"
+            f"{{{{'{self.bos_token}' + message['role'] + '\n' + message['content'] + '{self.eos_token}' + '\n'}}}}"
             "{% endfor %}"
             "{% if add_generation_prompt %}"
-            f"{{ '{self.assistant}\n' }}"
+            f"{{{{ '{self.assistant}\n' }}}}"
             "{% endif %}"
         )
 
