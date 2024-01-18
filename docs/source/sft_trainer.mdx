@@ -154,6 +154,29 @@ response_template_ids = tokenizer.encode(response_template_with_context, add_spe
 data_collator = DataCollatorForCompletionOnlyLM(response_template_ids, tokenizer=tokenizer)
 ```
 
+### Add Special Tokens for Chat Format
+
+Adding special tokens to a language model is crucial for training chat models. These tokens are added between the different roles in a conversation, such as the user, assistant, and system and help the model recognize the structure and flow of a conversation. This setup is essential for enabling the model to generate coherent and contextually appropriate responses in a chat environment. 
+The [`setup_chat_format`] function in `trl` easily sets up a model and tokenizer for conversational AI tasks. This function:
+- Adds special tokens to the tokenizer, e.g. `<|im_start|>` and `<|im_end|>`, to indicate the start and end of a conversation.
+- Resizes the model’s embedding layer to accommodate the new tokens.
+- Sets the `chat_template` of the tokenizer, which is used to format the input data into a chat-like format. The default is `chatml` from OpenAI.
+- _optionally_ you can pass `resize_to_multiple_of` to resize the embedding layer to a multiple of the `resize_to_multiple_of` argument, e.g. 64. If you want to see more formats being supported in the future, please open a GitHub issue on [trl](https://github.com/huggingface/trl)
+
+```python
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+# Load model and tokenizer
+model = AutoModelForCausalLM.from_pretrained("facebook/opt-350m")
+tokenizer = AutoTokenizer.from_pretrained("facebook/opt-350m")
+
+# Set up the chat format with default 'chatml' format
+model, tokenizer = setup_chat_format(model, tokenizer)
+
+```
+
+With our model and tokenizer set up, we can now fine-tune our model on a conversational dataset. Below is an example of how a dataset can be formatted for fine-tuning. 
+
 ### Dataset format support
 
 The [`SFTTrainer`] supports popular dataset formats. This allows you to pass the dataset to the trainer without any pre-processing directly. The following formats are supported:
