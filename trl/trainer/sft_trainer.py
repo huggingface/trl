@@ -524,6 +524,7 @@ class SFTTrainer(Trainer):
                 dataset = dataset.map(tokenization)
                 dataset.set_format("torch")
                 packed_dataset = PackedDataset(dataset, tokenizer, max_seq_length)
+                packed_dataset.stat()
             except (DatasetGenerationError, SchemaInferenceError):
                 raise ValueError(
                     "Error occurred while packing the dataset. Make sure that your dataset has enough samples to at least yield one packed sequence."
