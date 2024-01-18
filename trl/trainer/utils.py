@@ -549,6 +549,60 @@ class PtxLossArgs:
     ptx_coef: Optional[float] = 0.0
 
 
+class MiniBatchCycleIter:
+    """
+        Cycle sliding window iterator on batch data.
+
+            Args:
+                b_sliding_wsize (`int`, *optional*, defaults to `0`):
+                    The number of samples to include in a ptx data mini batch.
+                b_data_dict (`Dict[str, torch.Tensor]`, *optional*, defaults to None):
+                    Batch data dict
+                b_shuffle (`bool`, *optional*, defaults to False):
+                    Whether to shuffle the batch data indices
+        """
+    def __init__(
+            self,
+            b_sliding_wsize: Optional[int] = 0,
+            b_data_dict: Optional[Dict[str, torch.Tensor]] = None,
+            b_shuffle: Optional[bool] = True,
+    ):
+        self.b_data_dict = b_data_dict
+        self.b_data_keys = list(b_data_dict.keys()) if b_data_dict is not None else []
+        self.b_sliding_wsize = b_sliding_wsize
+        self.b_shuffle = b_shuffle
+        self.b_w_inds = np.array([])
+        self.b_w_start_idx = 0
+
+    def __next__(self):
+        if not self.b_data_dict:
+            return {}
+
+        if self.b_w_start_idx >= len(self.b_w_inds):
+            self.reset()
+
+        b_mini_bch_data_dict = {}
+
+        mini_batch_w_inds = self.b_w_inds[self.b_w_start_idx:self.b_w_start_idx + self.b_sliding_wsize]
+        self.b_w_start_idx += self.b_sliding_wsize
+        if len(mini_batch_w_inds) > 0:
+            for k in self.b_data_keys:
+                b_mini_bch_data_dict[k] = self.b_data_dict[k][mini_batch_w_inds]
+
+        return b_mini_bch_data_dict
+
+    def __iter__(self):
+        self.b_w_inds = np.array([])
+        self.b_w_start_idx = 0
+        return self
+
+    def reset(self):
+        # Reset the start index of the sliding window and recreate the sliding window indices
+        self.b_w_start_idx = 0
+        batch_size = self.b_data_dict[self.b_data_keys[0]].shape[0]
+        self.b_w_inds = np.random.permutation(batch_size) if self.b_shuffle else np.arange(batch_size)
+
+
 @torch.no_grad()
 def get_global_statistics(accelerator, xs: torch.Tensor, mask=None, device="cpu") -> Tuple[float, float, int]:
     """

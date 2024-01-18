@@ -65,6 +65,7 @@ from . import (
     PtxData,
     PtxDataArgs,
     PtxLossArgs,
+    MiniBatchCycleIter,
 )
 
 if is_deepspeed_available():
@@ -763,7 +764,6 @@ class PPOTrainer(BaseTrainer):
                 )
 
         model_inputs_names = list(model_inputs.keys())
-        ptx_model_inputs_names = list(ptx_model_inputs.keys()) if ptx_model_inputs is not None else []
 
         full_kl_penalty = self.config.kl_penalty == "full"
 
@@ -822,6 +822,14 @@ class PPOTrainer(BaseTrainer):
         t = time.time()
         all_stats = []
         early_stop = False
+        # Mini batch iterator on ptx data in a cycling fashion
+        ptx_mini_batch_iterator = iter(
+            MiniBatchCycleIter(
+                self.config.ptx_mini_batch_size,
+                b_data_dict=batch_dict['ptx_model_inputs'],
+            )
+        )
+
         for _ in range(self.config.ppo_epochs):
             if early_stop:
                 break
@@ -846,11 +854,10 @@ class PPOTrainer(BaseTrainer):
                     }
                     for k in model_inputs_names:
                         mini_batch_dict[k] = batch_dict[k][mini_batch_inds]
-                    for k in ptx_model_inputs_names:
-                        ptx_model_input_bch_data = batch_dict['ptx_model_inputs'][k]
-                        valid_mini_batch_inds = mini_batch_inds[mini_batch_inds < ptx_model_input_bch_data.shape[0]]
-                        if len(valid_mini_batch_inds) > 0:
-                            mini_batch_dict['ptx_model_inputs'][k] = ptx_model_input_bch_data[valid_mini_batch_inds]
+
+                    ptx_mini_batch_dict = next(ptx_mini_batch_iterator)
+                    mini_batch_dict['ptx_model_inputs'].update(ptx_mini_batch_dict)
+
                     with self.accelerator.accumulate(self.model):
                         model_inputs = {k: mini_batch_dict[k] for k in model_inputs_names}
 
@@ -1200,7 +1207,7 @@ class PPOTrainer(BaseTrainer):
         mask: torch.LongTensor,
         advantages: torch.FloatTensor,
         returns: torch.FloatTensor,
-        ptx_model_inputs: Dict[str, Any],
+        ptx_model_inputs: Optional[Dict[str, torch.Tensor]] = None,
     ):
         """
         Train one PPO minibatch
@@ -1216,8 +1223,8 @@ class PPOTrainer(BaseTrainer):
                 Encoded responses, shape [mini_batch_size, response_length]
             model_input (`torch.LongTensor`):
                 Concatenated queries and responses, shape [mini_batch_size, query_length+response_length]
-            ptx_model_inputs (`Dict[string, Any]`):
-                Inputs for ptx loss (e.g. `input_ids`, `attention_mask`, `labels`) from prepare_ptx_model_inputs()
+            ptx_model_inputs (`Dict[string, torch.Tensor]`, *optional*, defaults to `None`):
+                Inputs data for ptx loss (e.g. `input_ids`, `attention_mask`, `labels`) from prepare_ptx_model_inputs()
         Returns:
             train_stats (dict[str, `torch.Tensor`]):
                 Dictionary of training statistics
@@ -1417,13 +1424,13 @@ class PPOTrainer(BaseTrainer):
         )
         return pg_loss, self.config.vf_coef * vf_loss, flatten_dict(stats)
 
-    def compute_ptx_loss(self, ptx_model_inputs: Dict[str, Any]):
+    def compute_ptx_loss(self, ptx_model_inputs: Optional[Dict[str, torch.Tensor]] = None):
         """
         Calculate ptx loss(loss of prediction in pretrained data distribution).
 
         Args:
-            ptx_model_inputs (Dict[str, Any], *optional*)):
-               Input data to sft model to compute ptx loss
+            ptx_model_inputs (Dict[str, torch.Tensor], *optional*, defaults to 'None' )):
+               Input data to self.model to compute ptx loss
 
         Returns:
                torch.FloatTensor: ptx loss tensor OR None if no input data or ptx_loss coef is not above 0.
