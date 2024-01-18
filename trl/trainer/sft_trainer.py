@@ -377,6 +377,11 @@ class SFTTrainer(Trainer):
         # check if torch dataset / dataloader and do nothing
         if isinstance(dataset, (torch.utils.data.IterableDataset, torch.utils.data.Dataset, ConstantLengthDataset)):
             return dataset
+        
+        if non_contaminated_packing:
+            return self._prepare_non_contaminated_packed_dataloader(
+                tokenizer, dataset, dataset_text_field, max_seq_length, add_special_tokens
+            )
 
         if not packing:
             return self._prepare_non_packed_dataloader(
@@ -389,7 +394,7 @@ class SFTTrainer(Trainer):
                 remove_unused_columns,
             )
 
-        elif packing:
+        else:
             return self._prepare_packed_dataloader(
                 tokenizer,
                 dataset,
@@ -400,10 +405,6 @@ class SFTTrainer(Trainer):
                 formatting_func,
                 append_concat_token,
                 add_special_tokens,
-            )
-        elif non_contaminated_packing:
-            return self._prepare_non_contaminated_packed_dataloader(
-                tokenizer, dataset, dataset_text_field, max_seq_length, add_special_tokens
             )
 
     def _prepare_non_packed_dataloader(
