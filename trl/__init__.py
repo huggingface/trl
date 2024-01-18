@@ -18,6 +18,7 @@ from .models import (
     AutoModelForSeq2SeqLMWithValueHead,
     PreTrainedModelWrapper,
     create_reference_model,
+    setup_chat_format,
 )
 from .trainer import (
     DataCollatorForCompletionOnlyLM,
