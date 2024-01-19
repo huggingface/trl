@@ -271,7 +271,7 @@ class SFTTrainer(Trainer):
                 remove_unused_columns=args.remove_unused_columns if args is not None else True,
                 **dataset_kwargs,
             )
-        if eval_dataset is not None and PartialState().is_main_process:
+        if eval_dataset is not None and is_main_process:
             _multiple = isinstance(eval_dataset, dict)
             _eval_datasets = eval_dataset if _multiple else {"singleton": eval_dataset}
             for _eval_dataset_name, _eval_dataset in _eval_datasets.items():
