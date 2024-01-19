@@ -253,6 +253,9 @@ class SFTTrainer(Trainer):
             if data_collator is None:
                 data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
+        # Avoid processing the dataset on all processes for multi-GPU training
+        is_main_process = PartialState().is_main_process
+        
         if dataset_kwargs is None:
             dataset_kwargs = {}
         if train_dataset is not None and PartialState().is_main_process:
