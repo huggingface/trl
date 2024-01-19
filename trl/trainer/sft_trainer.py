@@ -116,6 +116,7 @@ class SFTTrainer(Trainer):
         dataset_kwargs: (`Optional[Dict]`, *optional*):
             Dict of Optional kwargs to pass when creating packed or non-packed datasets
     """
+
     _tag_names = ["trl", "sft"]
 
     def __init__(
@@ -208,8 +209,8 @@ class SFTTrainer(Trainer):
                         model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
 
                 model = get_peft_model(model, peft_config)
-                if args.bf16 and getattr(model, "is_loaded_in_4bit", False):
-                    peft_module_casting_to_bf16(model)
+                # if args.bf16 and getattr(model, "is_loaded_in_4bit", False):
+                #     peft_module_casting_to_bf16(model)
 
         if tokenizer is None:
             tokenizer = AutoTokenizer.from_pretrained(model.config._name_or_path)
