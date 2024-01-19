@@ -258,7 +258,7 @@ class SFTTrainer(Trainer):
         
         if dataset_kwargs is None:
             dataset_kwargs = {}
-        if train_dataset is not None and PartialState().is_main_process:
+        if train_dataset is not None and is_main_process:
             train_dataset = self._prepare_dataset(
                 train_dataset,
                 tokenizer,
