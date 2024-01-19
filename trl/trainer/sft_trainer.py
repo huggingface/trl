@@ -35,6 +35,7 @@ from transformers import (
 from transformers.modeling_utils import unwrap_model
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
+from accelerate import PartialState
 
 from ..extras.dataset_formatting import get_formatting_func_from_dataset
 from ..import_utils import is_peft_available
@@ -254,7 +255,7 @@ class SFTTrainer(Trainer):
 
         if dataset_kwargs is None:
             dataset_kwargs = {}
-        if train_dataset is not None:
+        if train_dataset is not None and PartialState().is_main_process:
             train_dataset = self._prepare_dataset(
                 train_dataset,
                 tokenizer,
@@ -267,7 +268,7 @@ class SFTTrainer(Trainer):
                 remove_unused_columns=args.remove_unused_columns if args is not None else True,
                 **dataset_kwargs,
             )
-        if eval_dataset is not None:
+        if eval_dataset is not None and PartialState().is_main_process:
             _multiple = isinstance(eval_dataset, dict)
             _eval_datasets = eval_dataset if _multiple else {"singleton": eval_dataset}
             for _eval_dataset_name, _eval_dataset in _eval_datasets.items():
