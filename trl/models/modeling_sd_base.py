@@ -21,11 +21,16 @@ from typing import Any, Callable, Dict, List, Optional, Union
 import numpy as np
 import torch
 from diffusers import DDIMScheduler, StableDiffusionPipeline, UNet2DConditionModel
-from diffusers.loaders import AttnProcsLayers
-from diffusers.models.attention_processor import LoRAAttnProcessor
 from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import rescale_noise_cfg
+from diffusers.utils import convert_state_dict_to_diffusers
 
 from ..core import randn_tensor
+from ..import_utils import is_peft_available
+
+
+if is_peft_available():
+    from peft import LoraConfig
+    from peft.utils import get_peft_model_state_dict
 
 
 @dataclass
@@ -534,7 +539,11 @@ class DefaultDDPOStableDiffusionPipeline(DDPOStableDiffusionPipeline):
         self.pretrained_revision = pretrained_model_revision
 
         try:
-            self.sd_pipeline.unet.load_attn_procs(pretrained_model_name, revision=pretrained_model_revision)
+            self.sd_pipeline.load_lora_weights(
+                pretrained_model_name,
+                weight_name="pytorch_lora_weights.safetensors",
+                revision=pretrained_model_revision,
+            )
             self.use_lora = True
         except OSError:
             if use_lora:
@@ -583,7 +592,8 @@ class DefaultDDPOStableDiffusionPipeline(DDPOStableDiffusionPipeline):
 
     def save_pretrained(self, output_dir):
         if self.use_lora:
-            self.sd_pipeline.unet.save_attn_procs(output_dir)
+            state_dict = convert_state_dict_to_diffusers(get_peft_model_state_dict(self.sd_pipeline.unet))
+            self.sd_pipeline.save_lora_weights(save_directory=output_dir, unet_lora_layers=state_dict)
         self.sd_pipeline.save_pretrained(output_dir)
 
     def set_progress_bar_config(self, *args, **kwargs):
@@ -591,34 +601,29 @@ class DefaultDDPOStableDiffusionPipeline(DDPOStableDiffusionPipeline):
 
     def get_trainable_layers(self):
         if self.use_lora:
-            # Set correct lora layers
-            lora_attn_procs = {}
-            for name in self.sd_pipeline.unet.attn_processors.keys():
-                cross_attention_dim = (
-                    None if name.endswith("attn1.processor") else self.sd_pipeline.unet.config.cross_attention_dim
-                )
-                if name.startswith("mid_block"):
-                    hidden_size = self.sd_pipeline.unet.config.block_out_channels[-1]
-                elif name.startswith("up_blocks"):
-                    block_id = int(name[len("up_blocks.")])
-                    hidden_size = list(reversed(self.sd_pipeline.unet.config.block_out_channels))[block_id]
-                elif name.startswith("down_blocks"):
-                    block_id = int(name[len("down_blocks.")])
-                    hidden_size = self.sd_pipeline.unet.config.block_out_channels[block_id]
+            lora_config = LoraConfig(
+                r=4,
+                lora_alpha=4,
+                init_lora_weights="gaussian",
+                target_modules=["to_k", "to_q", "to_v", "to_out.0"],
+            )
+            self.sd_pipeline.unet.add_adapter(lora_config)
 
-                lora_attn_procs[name] = LoRAAttnProcessor(
-                    hidden_size=hidden_size, cross_attention_dim=cross_attention_dim
-                )
-            self.sd_pipeline.unet.set_attn_processor(lora_attn_procs)
-            return AttnProcsLayers(self.sd_pipeline.unet.attn_processors)
+            # To avoid accelerate unscaling problems in FP16.
+            for param in self.sd_pipeline.unet.parameters():
+                # only upcast trainable parameters (LoRA) into fp32
+                if param.requires_grad:
+                    param.data = param.to(torch.float32)
+            return self.sd_pipeline.unet
         else:
             return self.sd_pipeline.unet
 
     def save_checkpoint(self, models, weights, output_dir):
         if len(models) != 1:
             raise ValueError("Given how the trainable params were set, this should be of length 1")
-        if self.use_lora and isinstance(models[0], AttnProcsLayers):
-            self.sd_pipeline.unet.save_attn_procs(output_dir)
+        if self.use_lora and hasattr(models[0], "peft_config") and getattr(models[0], "peft_config", None) is not None:
+            state_dict = convert_state_dict_to_diffusers(get_peft_model_state_dict(models[0]))
+            self.sd_pipeline.save_lora_weights(save_directory=output_dir, unet_lora_layers=state_dict)
         elif not self.use_lora and isinstance(models[0], UNet2DConditionModel):
             models[0].save_pretrained(os.path.join(output_dir, "unet"))
         else:
@@ -627,15 +632,12 @@ class DefaultDDPOStableDiffusionPipeline(DDPOStableDiffusionPipeline):
     def load_checkpoint(self, models, input_dir):
         if len(models) != 1:
             raise ValueError("Given how the trainable params were set, this should be of length 1")
-        if self.use_lora and isinstance(models[0], AttnProcsLayers):
-            tmp_unet = UNet2DConditionModel.from_pretrained(
-                self.pretrained_model,
-                revision=self.pretrained_revision,
-                subfolder="unet",
+        if self.use_lora:
+            lora_state_dict, network_alphas = self.sd_pipeline.lora_state_dict(
+                input_dir, weight_name="pytorch_lora_weights.safetensors"
             )
-            tmp_unet.load_attn_procs(input_dir)
-            models[0].load_state_dict(AttnProcsLayers(tmp_unet.attn_processors).state_dict())
-            del tmp_unet
+            self.sd_pipeline.load_lora_into_unet(lora_state_dict, network_alphas=network_alphas, unet=models[0])
+
         elif not self.use_lora and isinstance(models[0], UNet2DConditionModel):
             load_model = UNet2DConditionModel.from_pretrained(input_dir, subfolder="unet")
             models[0].register_to_config(**load_model.config)

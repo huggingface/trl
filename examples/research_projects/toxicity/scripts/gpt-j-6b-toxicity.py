@@ -59,7 +59,7 @@ tqdm.pandas()
 @dataclass
 class ScriptArguments:
     """
-    The name of the Casual LM model we wish to fine with PPO
+    The name of the Casual LM model we wish to fine-tune with PPO
     """
 
     # NOTE: gpt2 models use Conv1D instead of Linear layers which are not yet supported in 8 bit mode

@@ -23,6 +23,8 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import IterableDataset
 from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizerBase
 
+from ..import_utils import is_unsloth_available
+
 
 class AdaptiveKLController:
     """
@@ -59,11 +61,11 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
     calculated on the completion made by the assistant.
 
     Args:
-        instruction_template (`Optional[str]`): the template form that indicates the start of the human instruction, typically something like
-            '### Human:\n'. Useful for assistant-style conversation datasets
         response_template (`Union[str, List[int]]`): the template form that indicates the start of the response, typically something like
             '### Response:\n'. It can also be passed as tokenized ids, which can be useful when using a tokenizer that encodes the response
             differently if it does not have proper context.
+        instruction_template (`Union[str, List[int]]`): the template form that indicates the start of the human instruction, typically something like
+            '### Human:\n'. Useful for assistant-style conversation datasets. It can also be passed as tokenized ids.
         mlm (`bool`, *optional*, defaults to `False`): Whether or not to use masked language modeling in the underlying
             `DataCollatorForLanguageModeling` class. Note that this option currently has no effect but is present
              for flexibility and backwards-compatibility.
@@ -173,6 +175,13 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                         f"Note, if this happens often, consider increasing the `max_seq_length`."
                     )
                     batch["labels"][i, :] = self.ignore_index
+
+                if (
+                    len(human_token_ids_idxs) > 0
+                    and len(response_token_ids_idxs) > 0
+                    and human_token_ids_idxs[0] > response_token_ids_idxs[0]
+                ):
+                    human_token_ids_idxs = [0] + human_token_ids_idxs
 
                 for idx, (start, end) in enumerate(zip(human_token_ids_idxs, response_token_ids_idxs)):
                     # Make pytorch loss function ignore all non response tokens
@@ -295,6 +304,12 @@ class DPODataCollatorWithPadding:
                     to_pad = [torch.LongTensor(ex[k]) for ex in features]
 
                     if (k.startswith("prompt")) and (k.endswith("input_ids")):
+                        if self.pad_token_id is None:
+                            raise ValueError(
+                                "Padding is enabled, but the tokenizer is not configured with a padding token."
+                                " Explicitly set `tokenizer.pad_token` (e.g. `tokenizer.pad_token = tokenizer.eos_token`)"
+                                " before calling the trainer."
+                            )
                         padding_value = self.pad_token_id
                     elif k.endswith("_attention_mask"):
                         padding_value = 0
@@ -310,6 +325,12 @@ class DPODataCollatorWithPadding:
                     else:
                         to_pad = [torch.LongTensor(ex[k]) for ex in features]
                     if k.endswith("_input_ids"):
+                        if self.pad_token_id is None:
+                            raise ValueError(
+                                "Padding is enabled, but the tokenizer is not configured with a padding token."
+                                " Explicitly set `tokenizer.pad_token` (e.g. `tokenizer.pad_token = tokenizer.eos_token`)"
+                                " before calling the trainer."
+                            )
                         padding_value = self.pad_token_id
                     elif k.endswith("_labels"):
                         padding_value = self.label_pad_token_id
@@ -346,7 +367,7 @@ class ConstantLengthDataset(IterableDataset):
                 Name of the field in the dataset that contains the text. Used only if `formatting_func` is `None`.
             formatting_func (`Callable`, **optional**):
                 Function that formats the text before tokenization. Usually it is recommended to have follows a certain
-                pattern such as `"### Question: {question}\n ### Answer: {answer}\n"`
+                pattern such as `"### Question: {question} ### Answer: {answer}"`
             infinite (`bool`, *optional*, defaults to `False`):
                 If True the iterator is reset after dataset reaches end else stops.
             seq_length (`int`, *optional*, defaults to `1024`):
@@ -631,17 +652,20 @@ def peft_module_casting_to_bf16(model):
     for name, module in model.named_modules():
         if isinstance(module, BaseTunerLayer):
             module = module.to(torch.bfloat16)
-        if "norm" in name:
+        elif isinstance(module, torch.nn.LayerNorm) or "norm" in name:
             module = module.to(torch.float32)
-        if any(x in name for x in ["lm_head", "embed_tokens", "wte", "wpe"]):
+        elif any(x in name for x in ["lm_head", "embed_tokens", "wte", "wpe"]):
             if hasattr(module, "weight"):
                 if module.weight.dtype == torch.float32:
                     module = module.to(torch.bfloat16)
 
 
-def trl_sanitze_kwargs_for_tagging(tag_names, kwargs=None):
-    if isinstance(tag_names, str):
-        tag_names = [tag_names]
+def trl_sanitze_kwargs_for_tagging(model, tag_names, kwargs=None):
+    if is_unsloth_available():
+        # Unsloth adds a new attribute in the model config `unsloth_version`
+        # to keep track of models that have been patched with unsloth.
+        if hasattr(model, "config") and getattr(model.config, "unsloth_version", None) is not None:
+            tag_names.append("unsloth")
 
     if kwargs is not None:
         if "tags" not in kwargs:
