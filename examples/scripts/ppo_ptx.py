@@ -299,5 +299,5 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
         stats,
         batch,
         rewards,
-        columns_to_log=["query", "response", "ref_response", "ref_rewards", 'loss']
+        columns_to_log=["query", "response", "ref_response", "ref_rewards"]
     )
