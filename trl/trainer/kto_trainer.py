@@ -277,8 +277,17 @@ class KTOTrainer(Trainer):
         self.beta = args.beta
 
         # tokenize the dataset
+        train_dataset = train_dataset.shuffle(seed=seed)
+        train_dataset = train_dataset.map(self.shuffle_completion, batched=True, batch_size=64)
         train_dataset = train_dataset.map(self.tokenize_row)
+
         if eval_dataset is not None:
+            eval_dataset = eval_dataset.shuffle(seed=seed)
+            eval_dataset = eval_dataset.map(
+                self.shuffle_completion,
+                batched=True,
+                batch_size=64,
+            )
             eval_dataset = eval_dataset.map(self.tokenize_row)
 
         # split the dataset and interleave them together with equal probability of choosing chosen or rejected
@@ -298,6 +307,9 @@ class KTOTrainer(Trainer):
             )
         else:
             interleaved_eval_dataset = None
+
+        args.per_device_train_batch_size = args.per_device_train_batch_size * 2
+        args.per_device_eval_batch_size = args.per_device_eval_batch_size * 2
 
         super().__init__(
             model=model,
@@ -530,6 +542,13 @@ class KTOTrainer(Trainer):
             attention_mask=answer_attention_mask,
         )
 
+    def shuffle_completion(self, batch) -> Dict:
+        batch["kl"] = [False] * len(batch["prompt"]) + [True] * len(batch["prompt"])
+        batch["prompt"] = batch["prompt"] + batch["prompt"]
+        batch["completion"] = batch["completion"] + random.sample(batch["completion"], len(batch["completion"]))
+        batch["label"] = batch["label"] + batch["label"]
+        return batch
+
     def tokenize_row(self, feature, model: Union[PreTrainedModel, nn.Module] = None) -> Dict:
         """Tokenize a single row from a KTO specific dataset.
 
@@ -681,26 +700,36 @@ class KTOTrainer(Trainer):
     def forward(
         self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+        train_indicies = [i for i in range(len(batch["kl"])) if batch["kl"][i] is False]
         if self.is_encoder_decoder:
             all_logits = model(
-                batch["prompt_input_ids"],
-                attention_mask=batch["prompt_attention_mask"],
+                batch["prompt_input_ids"][train_indicies],
+                attention_mask=batch["prompt_attention_mask"][train_indicies],
                 decoder_input_ids=batch.get("completion_decoder_input_ids"),
-                labels=batch["completion_labels"],
+                labels=batch["completion_labels"][train_indicies],
             ).logits
         else:
-            all_logits = model(batch["completion_input_ids"], attention_mask=batch["completion_attention_mask"]).logits
+            all_logits = model(
+                batch["completion_input_ids"][train_indicies],
+                attention_mask=batch["completion_attention_mask"][train_indicies],
+            ).logits
 
         all_logps = self.get_batch_logps(
             all_logits,
-            batch["completion_labels"],
+            batch["completion_labels"][train_indicies],
             average_log_prob=False,
             is_encoder_decoder=self.is_encoder_decoder,
             label_pad_token_id=self.label_pad_token_id,
         )
 
-        chosen_idx = [i for i in range(all_logps.shape[0]) if batch["label"][i] is True]
-        rejected_idx = [i for i in range(all_logps.shape[0]) if batch["label"][i] is False]
+        train_label = [batch["label"][i] for i in train_indicies]
+
+        chosen_idx = [i for i in range(all_logps.shape[0]) if train_label is True]
+        rejected_idx = [i for i in range(all_logps.shape[0]) if train_label is False]
+
+        import pdb
+
+        pdb.set_trace()
 
         chosen_logps = all_logps[chosen_idx, ...]
         rejected_logps = all_logps[rejected_idx, ...]
