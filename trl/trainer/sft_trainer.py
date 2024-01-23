@@ -253,27 +253,13 @@ class SFTTrainer(Trainer):
             if data_collator is None:
                 data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
-        if dataset_kwargs is None:
-            dataset_kwargs = {}
-        if train_dataset is not None:
-            train_dataset = self._prepare_dataset(
-                train_dataset,
-                tokenizer,
-                packing,
-                dataset_text_field,
-                max_seq_length,
-                formatting_func,
-                num_of_sequences,
-                chars_per_token,
-                remove_unused_columns=args.remove_unused_columns if args is not None else True,
-                **dataset_kwargs,
-            )
-        if eval_dataset is not None:
-            _multiple = isinstance(eval_dataset, dict)
-            _eval_datasets = eval_dataset if _multiple else {"singleton": eval_dataset}
-            for _eval_dataset_name, _eval_dataset in _eval_datasets.items():
-                _eval_datasets[_eval_dataset_name] = self._prepare_dataset(
-                    _eval_dataset,
+        # Pre-process the datasets only once per node. The remaining processes will use the cache.
+        with PartialState().main_process_first():
+            if dataset_kwargs is None:
+                dataset_kwargs = {}
+            if train_dataset is not None:
+                train_dataset = self._prepare_dataset(
+                    train_dataset,
                     tokenizer,
                     packing,
                     dataset_text_field,
@@ -284,8 +270,24 @@ class SFTTrainer(Trainer):
                     remove_unused_columns=args.remove_unused_columns if args is not None else True,
                     **dataset_kwargs,
                 )
-            if not _multiple:
-                eval_dataset = _eval_datasets["singleton"]
+            if eval_dataset is not None:
+                _multiple = isinstance(eval_dataset, dict)
+                _eval_datasets = eval_dataset if _multiple else {"singleton": eval_dataset}
+                for _eval_dataset_name, _eval_dataset in _eval_datasets.items():
+                    _eval_datasets[_eval_dataset_name] = self._prepare_dataset(
+                        _eval_dataset,
+                        tokenizer,
+                        packing,
+                        dataset_text_field,
+                        max_seq_length,
+                        formatting_func,
+                        num_of_sequences,
+                        chars_per_token,
+                        remove_unused_columns=args.remove_unused_columns if args is not None else True,
+                        **dataset_kwargs,
+                    )
+                if not _multiple:
+                    eval_dataset = _eval_datasets["singleton"]
 
         if tokenizer.padding_side is not None and tokenizer.padding_side != "right":
             warnings.warn(
@@ -347,7 +349,6 @@ class SFTTrainer(Trainer):
 
         return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)
 
-    @PartialState().main_process_first()
     def _prepare_dataset(
         self,
         dataset,
