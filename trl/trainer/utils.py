@@ -711,7 +711,7 @@ def get_kbit_device_map() -> Optional[Dict[str, int]]:
         return None
 
 
-def get_peft_config(model_config: ModelConfig) -> Optional[PeftConfig]:
+def get_peft_config(model_config: ModelConfig) -> "Optional[PeftConfig]":
     if model_config.use_peft is False:
         return None
 
