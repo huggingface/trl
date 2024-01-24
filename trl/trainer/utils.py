@@ -310,6 +310,12 @@ class DPODataCollatorWithPadding:
                     to_pad = [torch.LongTensor(ex[k]) for ex in features]
 
                     if (k.startswith("prompt")) and (k.endswith("input_ids")):
+                        if self.pad_token_id is None:
+                            raise ValueError(
+                                "Padding is enabled, but the tokenizer is not configured with a padding token."
+                                " Explicitly set `tokenizer.pad_token` (e.g. `tokenizer.pad_token = tokenizer.eos_token`)"
+                                " before calling the trainer."
+                            )
                         padding_value = self.pad_token_id
                     elif k.endswith("_attention_mask"):
                         padding_value = 0
@@ -325,6 +331,12 @@ class DPODataCollatorWithPadding:
                     else:
                         to_pad = [torch.LongTensor(ex[k]) for ex in features]
                     if k.endswith("_input_ids"):
+                        if self.pad_token_id is None:
+                            raise ValueError(
+                                "Padding is enabled, but the tokenizer is not configured with a padding token."
+                                " Explicitly set `tokenizer.pad_token` (e.g. `tokenizer.pad_token = tokenizer.eos_token`)"
+                                " before calling the trainer."
+                            )
                         padding_value = self.pad_token_id
                     elif k.endswith("_labels"):
                         padding_value = self.label_pad_token_id
@@ -361,7 +373,7 @@ class ConstantLengthDataset(IterableDataset):
                 Name of the field in the dataset that contains the text. Used only if `formatting_func` is `None`.
             formatting_func (`Callable`, **optional**):
                 Function that formats the text before tokenization. Usually it is recommended to have follows a certain
-                pattern such as `"### Question: {question}\n ### Answer: {answer}\n"`
+                pattern such as `"### Question: {question} ### Answer: {answer}"`
             infinite (`bool`, *optional*, defaults to `False`):
                 If True the iterator is reset after dataset reaches end else stops.
             seq_length (`int`, *optional*, defaults to `1024`):

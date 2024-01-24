@@ -77,6 +77,7 @@ class ScriptArguments:
             "https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992"
         },
     )
+    generate_during_eval: bool = field(default=False, metadata={"help": "Generate during evaluation"})
 
 
 def extract_anthropic_prompt(prompt_and_response):
@@ -170,7 +171,7 @@ if __name__ == "__main__":
         max_length=args.max_length,
         max_target_length=args.max_target_length,
         max_prompt_length=args.max_prompt_length,
-        generate_during_eval=True,
+        generate_during_eval=args.generate_during_eval,
         peft_config=get_peft_config(model_config),
     )
     trainer.train()

@@ -36,6 +36,7 @@ from transformers.modeling_utils import unwrap_model
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 
+from ..extras.dataset_formatting import get_formatting_func_from_dataset
 from ..import_utils import is_peft_available
 from .utils import (
     ConstantLengthDataset,
@@ -237,6 +238,11 @@ class SFTTrainer(Trainer):
         elif not self._trainer_supports_neftune:
             self.neftune_noise_alpha = neftune_noise_alpha
 
+        if formatting_func is None and dataset_text_field is None:
+            # check if dataset has ChatML format or instruction format and is supported
+            # if not stays #None
+            formatting_func = get_formatting_func_from_dataset(train_dataset, tokenizer)
+
         if not packing:
             if dataset_text_field is None and formatting_func is None:
                 raise ValueError(
@@ -419,6 +425,16 @@ class SFTTrainer(Trainer):
                     self._dataset_sanity_checked = True
 
             return {"input_ids": outputs["input_ids"], "attention_mask": outputs["attention_mask"]}
+
+        signature_columns = ["input_ids", "labels", "attention_mask"]
+
+        extra_columns = list(set(dataset.column_names) - set(signature_columns))
+
+        if not remove_unused_columns and len(extra_columns) > 0:
+            warnings.warn(
+                "You passed `remove_unused_columns=False` on a non-packed dataset. This might create some issues with the default collator and yield to errors. If you want to "
+                f"inspect dataset other columns (in this case {extra_columns}), you can subclass `DataCollatorForLanguageModeling` in case you used the default collator and create your own data collator in order to inspect the unused dataset columns."
+            )
 
         tokenized_dataset = dataset.map(
             tokenize,

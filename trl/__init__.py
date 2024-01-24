@@ -1,6 +1,6 @@
 # flake8: noqa
 
-__version__ = "0.7.10.dev0"
+__version__ = "0.7.11.dev0"
 
 from .core import set_seed
 from .environment import TextEnvironment, TextHistory
@@ -18,6 +18,7 @@ from .models import (
     AutoModelForSeq2SeqLMWithValueHead,
     PreTrainedModelWrapper,
     create_reference_model,
+    setup_chat_format,
 )
 from .trainer import (
     DataCollatorForCompletionOnlyLM,

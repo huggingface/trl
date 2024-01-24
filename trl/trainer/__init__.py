@@ -41,6 +41,6 @@ from .iterative_sft_trainer import IterativeSFTTrainer
 from .model_config import ModelConfig
 from .ppo_config import PPOConfig
 from .ppo_trainer import PPOTrainer
+from .reward_config import RewardConfig
 from .reward_trainer import RewardTrainer, compute_accuracy
 from .sft_trainer import SFTTrainer
-from .training_configs import RewardConfig
