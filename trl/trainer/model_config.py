@@ -9,13 +9,10 @@ class ModelConfig:
     """
     Arguments which define the model and tokenizer to load.
     """
+
     model_name_or_path: Optional[str] = field(
         default=None,
-        metadata={
-            "help": (
-                "The model checkpoint for weights initialization."
-            )
-        },
+        metadata={"help": ("The model checkpoint for weights initialization.")},
     )
     model_revision: str = field(
         default="main",

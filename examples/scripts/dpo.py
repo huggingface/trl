@@ -23,7 +23,6 @@ python examples/scripts/dpo.py \
     --logging_steps 10 \
     --eval_steps 500 \
     --output_dir="dpo_anthropic_hh" \
-    --optim rmsprop \
     --warmup_steps 150 \
     --report_to wandb \
     --bf16 \
