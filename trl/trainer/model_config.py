@@ -9,11 +9,6 @@ class ModelConfig:
     """
     Arguments which define the model and tokenizer to load.
     """
-
-    base_model_revision: Optional[str] = field(
-        default=None,
-        metadata={"help": ("The base model checkpoint for weights initialization with PEFT adatpers.")},
-    )
     model_name_or_path: Optional[str] = field(
         default=None,
         metadata={
@@ -26,7 +21,6 @@ class ModelConfig:
         default="main",
         metadata={"help": "The specific model version to use (can be a branch name, tag name or commit id)."},
     )
-    model_code_revision: str = field(default=None, metadata={"help": "The branch of the IFT model"})
     torch_dtype: Optional[str] = field(
         default=None,
         metadata={
@@ -38,11 +32,11 @@ class ModelConfig:
         },
     )
     trust_remote_code: bool = field(default=False, metadata={"help": "Trust remote code when loading a model."})
-    use_flash_attention_2: bool = field(
-        default=False,
+    attn_implementation: Optional[str] = field(
+        default=None,
         metadata={
             "help": (
-                "Whether to use flash attention 2. You must install this manually by running `pip install flash-attn --no-build-isolation`"
+                "Which attention implementation to use; you can run --attn_implementation=flash_attention_2, in which case you must install this manually by running `pip install flash-attn --no-build-isolation`"
             )
         },
     )

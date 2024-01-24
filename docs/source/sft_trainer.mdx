@@ -426,13 +426,13 @@ To use Flash Attention 2, first install the latest `flash-attn` package:
 pip install -U flash-attn
 ```
 
-And add `use_flash_attention_2=True` when calling `from_pretrained`:
+And add `attn_implementation="flash_attention_2"` when calling `from_pretrained`:
 
 ```python
 model = AutoModelForCausalLM.from_pretrained(
     model_id,
     load_in_4bit=True,
-    use_flash_attention_2=True
+    attn_implementation="flash_attention_2"
 )
 ```
 
