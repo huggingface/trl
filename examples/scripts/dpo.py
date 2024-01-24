@@ -138,7 +138,6 @@ if __name__ == "__main__":
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
-    tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path, use_fast=True)
     model = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, **model_kwargs)
     model_ref = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, **model_kwargs)
     tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path)
