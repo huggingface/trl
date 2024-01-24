@@ -254,7 +254,7 @@ class SFTTrainer(Trainer):
                 data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
         # Pre-process the datasets only once per node. The remaining processes will use the cache.
-        with PartialState().is_local_main_process():
+        with PartialState().is_local_main_process:
             if dataset_kwargs is None:
                 dataset_kwargs = {}
             if train_dataset is not None:
