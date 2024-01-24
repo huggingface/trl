@@ -66,6 +66,7 @@ REQUIRED_PKGS = [
     "accelerate",
     "datasets",
     "tyro>=0.5.11",
+    "peft>=0.4.0",
 ]
 EXTRAS = {
     "test": ["parameterized", "pytest", "pytest-xdist", "accelerate", "pytest-cov", "pytest-xdist"],
