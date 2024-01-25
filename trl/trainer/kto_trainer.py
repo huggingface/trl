@@ -731,8 +731,8 @@ class KTOTrainer(Trainer):
 
         train_label = [batch["label"][i] for i in target_indicies]
 
-        chosen_idx = [i for i in range(target_logps.shape[0]) if train_label is True]
-        rejected_idx = [i for i in range(target_logps.shape[0]) if train_label is False]
+        chosen_idx = [i for i in range(target_logps.shape[0]) if train_label[i] is True]
+        rejected_idx = [i for i in range(target_logps.shape[0]) if train_label[i] is False]
 
         chosen_logps = target_logps[chosen_idx, ...]
         rejected_logps = target_logps[rejected_idx, ...]
@@ -773,26 +773,21 @@ class KTOTrainer(Trainer):
             chosen_losses = 1 - F.sigmoid(self.beta * (chosen_logratios - KL))
             chosen_rewards = self.beta * chosen_logratios.detach()
         else:
-            chosen_losses = torch.empty_like(policy_rejected_logps)
-            chosen_rewards = torch.empty_like(policy_rejected_logps)
+            chosen_losses = torch.Tensor([]).to(self.accelerator.device)
+            chosen_rewards = torch.Tensor([]).to(self.accelerator.device)
 
         if policy_rejected_logps.shape[0] != 0:
             rejected_logratios = policy_rejected_logps - reference_rejected_logps
             rejected_losses = 1 - F.sigmoid(self.beta * (KL - rejected_logratios))
             rejected_rewards = self.beta * rejected_logratios.detach()
         else:
-            rejected_losses = torch.empty_like(policy_chosen_logps)
-            rejected_rewards = torch.empty_like(policy_chosen_logps)
+            rejected_losses = torch.Tensor([]).to(self.accelerator.device)
+            rejected_rewards = torch.Tensor([]).to(self.accelerator.device)
 
         losses = torch.cat(
             (self.desirable_weight * chosen_losses, self.undesirable_weight * rejected_losses),
             0,
         )
-
-        import pdb
-
-        pdb.set_trace()
-
         return losses, chosen_rewards, rejected_rewards, KL
 
     def get_batch_loss_metrics(
@@ -847,13 +842,13 @@ class KTOTrainer(Trainer):
             reference_rejected_logps,
             reference_KL_logps,
         )
-        reward_accuracies = (chosen_rewards > rejected_rewards).float()
+        # reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
         prefix = "eval_" if train_eval == "eval" else ""
         metrics[f"{prefix}rewards/chosen"] = chosen_rewards.mean().cpu()
         metrics[f"{prefix}rewards/rejected"] = rejected_rewards.mean().cpu()
-        metrics[f"{prefix}rewards/accuracies"] = reward_accuracies.mean().cpu()
-        metrics[f"{prefix}rewards/margins"] = (chosen_rewards - rejected_rewards).mean().cpu()
+        # metrics[f"{prefix}rewards/accuracies"] = reward_accuracies.mean().cpu()
+        # metrics[f"{prefix}rewards/margins"] = (chosen_rewards - rejected_rewards).mean().cpu()
         metrics[f"{prefix}logps/rejected"] = policy_rejected_logps.detach().mean().cpu()
         metrics[f"{prefix}logps/chosen"] = policy_chosen_logps.detach().mean().cpu()
         metrics[f"{prefix}logits/rejected"] = policy_rejected_logits.detach().mean().cpu()
