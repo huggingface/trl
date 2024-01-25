@@ -858,7 +858,8 @@ class KTOTrainer(Trainer):
         metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.detach().mean().cpu()
         metrics[f"{prefix}kl"] = kl.item()
 
-        return losses.mean(), metrics
+        loss = losses.mean() if losses.shape[0] != 0 else None
+        return loss, metrics
 
     def compute_loss(
         self,
