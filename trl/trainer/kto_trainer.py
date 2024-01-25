@@ -858,7 +858,11 @@ class KTOTrainer(Trainer):
         metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.detach().mean().cpu()
         metrics[f"{prefix}kl"] = kl.item()
 
-        loss = losses.mean() if losses.shape[0] != 0 else None
+        loss = (
+            losses.mean()
+            if losses.shape[0] != 0
+            else torch.tensor(float("nan"), requires_grad=True).to(self.accelerator.device)
+        )
         return loss, metrics
 
     def compute_loss(
