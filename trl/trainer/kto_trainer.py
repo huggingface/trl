@@ -275,6 +275,8 @@ class KTOTrainer(Trainer):
 
         # KTO parameter
         self.beta = args.beta
+        self.desirable_weight = args.desirable_weight
+        self.undesirable_weight = args.undesirable_weight
 
         # tokenize the dataset
         train_dataset = train_dataset.shuffle(seed=seed)
@@ -700,51 +702,54 @@ class KTOTrainer(Trainer):
     def forward(
         self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
-        train_indicies = [i for i in range(len(batch["kl"])) if batch["kl"][i] is False]
+        target_indicies = [i for i in range(len(batch["kl"])) if batch["kl"][i] is False]
+        kl_indicies = [i for i in range(len(batch["kl"])) if batch["kl"][i] is True]
+
         if self.is_encoder_decoder:
             all_logits = model(
-                batch["prompt_input_ids"][train_indicies],
-                attention_mask=batch["prompt_attention_mask"][train_indicies],
+                batch["prompt_input_ids"],
+                attention_mask=batch["prompt_attention_mask"],
                 decoder_input_ids=batch.get("completion_decoder_input_ids"),
-                labels=batch["completion_labels"][train_indicies],
+                labels=batch["completion_labels"],
             ).logits
         else:
             all_logits = model(
-                batch["completion_input_ids"][train_indicies],
-                attention_mask=batch["completion_attention_mask"][train_indicies],
+                batch["completion_input_ids"],
+                attention_mask=batch["completion_attention_mask"],
             ).logits
 
         all_logps = self.get_batch_logps(
             all_logits,
-            batch["completion_labels"][train_indicies],
+            batch["completion_labels"],
             average_log_prob=False,
             is_encoder_decoder=self.is_encoder_decoder,
             label_pad_token_id=self.label_pad_token_id,
         )
 
-        train_label = [batch["label"][i] for i in train_indicies]
+        target_logps = all_logps[target_indicies, ...]
+        kl_logps = all_logps[kl_indicies, ...]
 
-        chosen_idx = [i for i in range(all_logps.shape[0]) if train_label is True]
-        rejected_idx = [i for i in range(all_logps.shape[0]) if train_label is False]
+        train_label = [batch["label"][i] for i in target_indicies]
 
-        import pdb
+        chosen_idx = [i for i in range(target_logps.shape[0]) if train_label is True]
+        rejected_idx = [i for i in range(target_logps.shape[0]) if train_label is False]
 
-        pdb.set_trace()
+        chosen_logps = target_logps[chosen_idx, ...]
+        rejected_logps = target_logps[rejected_idx, ...]
 
-        chosen_logps = all_logps[chosen_idx, ...]
-        rejected_logps = all_logps[rejected_idx, ...]
+        chosen_logits = target_logps[chosen_idx, ...]
+        rejected_logits = target_logps[rejected_idx, ...]
 
-        chosen_logits = all_logits[chosen_idx, ...]
-        rejected_logits = all_logits[rejected_idx, ...]
-
-        return (chosen_logps, rejected_logps, chosen_logits, rejected_logits)
+        return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, kl_logps)
 
     def kto_loss(
         self,
         policy_chosen_logps: torch.FloatTensor,
         policy_rejected_logps: torch.FloatTensor,
+        policy_KL_logps: torch.FloatTensor,
         reference_chosen_logps: torch.FloatTensor,
         reference_rejected_logps: torch.FloatTensor,
+        reference_KL_logps: torch.FloatTensor,
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         """Compute the KTO loss for a batch of policy and reference model log probabilities.
 
@@ -760,26 +765,35 @@ class KTOTrainer(Trainer):
             The losses tensor contains the DPO loss for each example in the batch.
             The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
         """
-        # eqn (7) of the HALOs paper
-        chosen_KL = (policy_chosen_logps - reference_chosen_logps).mean().clamp(min=0)
-        rejected_KL = (policy_rejected_logps - reference_rejected_logps).mean().clamp(min=0)
+        KL = (policy_KL_logps - reference_KL_logps).mean().detach()
+        KL = self.accelerator.gather(KL).mean().clamp(min=0)
 
-        chosen_logratios = policy_chosen_logps - reference_chosen_logps
-        rejected_logratios = policy_rejected_logps - reference_rejected_logps
-        # As described in the KTO report, the KL term for chosen (/rejected) is estimated using the rejected (/chosen) half.
+        if policy_chosen_logps.shape[0] != 0:
+            chosen_logratios = policy_chosen_logps - reference_chosen_logps
+            chosen_losses = 1 - F.sigmoid(self.beta * (chosen_logratios - KL))
+            chosen_rewards = self.beta * chosen_logratios.detach()
+        else:
+            chosen_losses = torch.empty_like(policy_rejected_logps)
+            chosen_rewards = torch.empty_like(policy_rejected_logps)
+
+        if policy_rejected_logps.shape[0] != 0:
+            rejected_logratios = policy_rejected_logps - reference_rejected_logps
+            rejected_losses = 1 - F.sigmoid(self.beta * (KL - rejected_logratios))
+            rejected_rewards = self.beta * rejected_logratios.detach()
+        else:
+            rejected_losses = torch.empty_like(policy_chosen_logps)
+            rejected_rewards = torch.empty_like(policy_chosen_logps)
+
         losses = torch.cat(
-            (
-                1 - F.sigmoid(self.beta * (chosen_logratios - rejected_KL)),
-                1 - F.sigmoid(self.beta * (chosen_KL - rejected_logratios)),
-            ),
+            (self.desirable_weight * chosen_losses, self.undesirable_weight * rejected_losses),
             0,
         )
 
-        # implicit rewards
-        chosen_rewards = self.beta * (policy_chosen_logps - reference_chosen_logps).detach()
-        rejected_rewards = self.beta * (policy_rejected_logps - reference_rejected_logps).detach()
+        import pdb
 
-        return losses, chosen_rewards, rejected_rewards
+        pdb.set_trace()
+
+        return losses, chosen_rewards, rejected_rewards, KL
 
     def get_batch_loss_metrics(
         self,
@@ -795,6 +809,7 @@ class KTOTrainer(Trainer):
             policy_rejected_logps,
             policy_chosen_logits,
             policy_rejected_logits,
+            policy_KL_logps,
         ) = self.forward(model, batch)
 
         # if reference_logps in batch use them, otherwise use the reference model
@@ -813,6 +828,7 @@ class KTOTrainer(Trainer):
                             reference_rejected_logps,
                             _,
                             _,
+                            reference_KL_logps,
                         ) = self.forward(self.model, batch)
                 else:
                     (
@@ -820,13 +836,16 @@ class KTOTrainer(Trainer):
                         reference_rejected_logps,
                         _,
                         _,
+                        reference_KL_logps,
                     ) = self.forward(self.ref_model, batch)
 
-        losses, chosen_rewards, rejected_rewards = self.kto_loss(
+        losses, chosen_rewards, rejected_rewards, kl = self.kto_loss(
             policy_chosen_logps,
             policy_rejected_logps,
+            policy_KL_logps,
             reference_chosen_logps,
             reference_rejected_logps,
+            reference_KL_logps,
         )
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
@@ -839,6 +858,7 @@ class KTOTrainer(Trainer):
         metrics[f"{prefix}logps/chosen"] = policy_chosen_logps.detach().mean().cpu()
         metrics[f"{prefix}logits/rejected"] = policy_rejected_logits.detach().mean().cpu()
         metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.detach().mean().cpu()
+        metrics[f"{prefix}kl"] = kl.detach().cpu()
 
         return losses.mean(), metrics
 

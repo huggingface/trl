@@ -45,3 +45,9 @@ class KTOConfig(TrainingArguments):
     """The maximum length of the target. This argument is required if you want to use the default data collator and your model is an encoder-decoder."""
     beta: float = 0.1
     """The beta factor in KTO loss. Higher beta means less divergence from the initial policy."""
+
+    desirable_weight: Optional[float] = 1.0
+    """The desirable losses are weighed by this factor."""
+
+    undesirable_weight: Optional[float] = 1.0
+    """The undesirable losses are weighed by this factor."""
