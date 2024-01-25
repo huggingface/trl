@@ -91,7 +91,6 @@ trl_model_class = AutoModelForCausalLMWithValueHead if not args.use_seq2seq else
 def build_dataset(
         tokenizer,
         query_dataset,
-        query_dataset_revision='1.1.3',
         input_min_text_length=2,
         input_max_text_length=8
 ):
@@ -102,14 +101,12 @@ def build_dataset(
     Args:
         query_dataset (`str`):
             The name of the dataset to be loaded.
-        query_dataset_revision (`str`):
-            The revision of the dataset to be loaded.
     Returns:
         dataloader (`torch.utils.data.DataLoader`):
             The dataloader for the dataset.
     """
     # load imdb with datasets
-    ds = load_dataset(query_dataset, split="train", revision=query_dataset_revision)
+    ds = load_dataset(query_dataset, split="train")
     ds = ds.rename_columns({"text": "review"})
     ds = ds.filter(lambda x: len(x["review"]) > 200, batched=False)
 
