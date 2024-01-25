@@ -762,7 +762,7 @@ class KTOTrainer(Trainer):
             reference_KL_logps: Log probabilities of the reference model for the KL responses. Shape: (batch_size,)
 
         Returns:
-            A tuple of three tensors: (losses, chosen_rewards, rejected_rewards, KL).
+            A tuple of four tensors: (losses, chosen_rewards, rejected_rewards, KL).
             The losses tensor contains the KTO loss for each example in the batch.
             The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
             The KL tensor contains the detached KL divergence estimate between the policy and reference models.
