@@ -120,6 +120,10 @@ class KTOTrainer(Trainer):
             )
             ref_model = AutoModelForCausalLM.from_pretrained(ref_model, **ref_model_init_kwargs)
 
+        # Initialize this variable to False. This helps tracking the case when `peft_module_casting_to_bf16`
+        # has been called in order to properly call autocast if needed.
+        self._peft_has_been_casted_to_bf16 = False
+
         if not is_peft_available() and peft_config is not None:
             raise ValueError(
                 "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it with `pip install peft` to use the PEFT models"
@@ -157,6 +161,8 @@ class KTOTrainer(Trainer):
             model = get_peft_model(model, peft_config)
             if args.bf16 and getattr(model, "is_loaded_in_4bit", False):
                 peft_module_casting_to_bf16(model)
+                # If args.bf16 we need to explicitly call `generate` with torch amp autocast context manager
+                self._peft_has_been_casted_to_bf16 = True
 
         # For models that use gradient_checkpointing, we need to attach a hook that enables input
         # to explicitly have `requires_grad=True`, otherwise training will either silently
@@ -184,7 +190,7 @@ class KTOTrainer(Trainer):
             raise ValueError("When no model is provided, you need to pass the parameter is_encoder_decoder.")
         else:
             self.is_encoder_decoder = is_encoder_decoder
-
+        
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
 
         if ref_model:
@@ -727,6 +733,7 @@ class KTOTrainer(Trainer):
         )
 
         target_logps = all_logps[target_indicies, ...]
+        target_logits = all_logits[target_indicies, ...]
         kl_logps = all_logps[kl_indicies, ...]
 
         train_label = [batch["label"][i] for i in target_indicies]
@@ -737,8 +744,8 @@ class KTOTrainer(Trainer):
         chosen_logps = target_logps[chosen_idx, ...]
         rejected_logps = target_logps[rejected_idx, ...]
 
-        chosen_logits = target_logps[chosen_idx, ...]
-        rejected_logits = target_logps[rejected_idx, ...]
+        chosen_logits = target_logits[chosen_idx, ...]
+        rejected_logits = target_logits[rejected_idx, ...]
 
         return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, kl_logps)
 
@@ -907,35 +914,40 @@ class KTOTrainer(Trainer):
     def get_batch_samples(self, model, batch: Dict[str, torch.LongTensor]) -> Tuple[str, str]:
         """Generate samples from the model and reference model for the given batch of inputs."""
 
-        policy_output = model.generate(
-            input_ids=batch["prompt_input_ids"],
-            attention_mask=batch["prompt_attention_mask"],
-            max_length=self.max_length,
-            do_sample=True,
-            pad_token_id=self.tokenizer.pad_token_id,
-        )
+        # If one uses `generate_during_eval` with peft + bf16, we need to explictly call generate with
+        # the torch cuda amp context manager as some hidden states are silently casted to full precision.
+        generate_context_manager = nullcontext if not self._peft_has_been_casted_to_bf16 else torch.cuda.amp.autocast
 
-        # if reference_output in batch use that otherwise use the reference model
-        if "reference_output" in batch:
-            reference_output = batch["reference_output"]
-        else:
-            if self.ref_model is None:
-                with self.accelerator.unwrap_model(self.model).disable_adapter():
-                    reference_output = self.model.generate(
+        with generate_context_manager():
+            policy_output = model.generate(
+                input_ids=batch["prompt_input_ids"],
+                attention_mask=batch["prompt_attention_mask"],
+                max_length=self.max_length,
+                do_sample=True,
+                pad_token_id=self.tokenizer.pad_token_id,
+            )
+
+            # if reference_output in batch use that otherwise use the reference model
+            if "reference_output" in batch:
+                reference_output = batch["reference_output"]
+            else:
+                if self.ref_model is None:
+                    with self.null_ref_context():
+                        reference_output = self.model.generate(
+                            input_ids=batch["prompt_input_ids"],
+                            attention_mask=batch["prompt_attention_mask"],
+                            max_length=self.max_length,
+                            do_sample=True,
+                            pad_token_id=self.tokenizer.pad_token_id,
+                        )
+                else:
+                    reference_output = self.ref_model.generate(
                         input_ids=batch["prompt_input_ids"],
                         attention_mask=batch["prompt_attention_mask"],
                         max_length=self.max_length,
                         do_sample=True,
                         pad_token_id=self.tokenizer.pad_token_id,
                     )
-            else:
-                reference_output = self.ref_model.generate(
-                    input_ids=batch["prompt_input_ids"],
-                    attention_mask=batch["prompt_attention_mask"],
-                    max_length=self.max_length,
-                    do_sample=True,
-                    pad_token_id=self.tokenizer.pad_token_id,
-                )
 
         policy_output = pad_to_length(policy_output, self.max_length, self.tokenizer.pad_token_id)
         policy_output_decoded = self.tokenizer.batch_decode(policy_output, skip_special_tokens=True)
@@ -963,7 +975,8 @@ class KTOTrainer(Trainer):
             else:
                 ignore_keys = []
 
-        with torch.no_grad():
+        prediction_context_manager = torch.cuda.amp.autocast if self._peft_has_been_casted_to_bf16 else nullcontext
+        with torch.no_grad(), prediction_context_manager():
             loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="eval")
 
         # force log the metrics
