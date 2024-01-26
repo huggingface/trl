@@ -12,16 +12,19 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+"""
+python examples/scripts/ppo.py \
+    --log_with=wandb
+"""
 from dataclasses import dataclass, field
 from typing import Optional
 
 import torch
-import tyro
 from accelerate import Accelerator
 from datasets import load_dataset
 from peft import LoraConfig
 from tqdm import tqdm
-from transformers import AutoTokenizer, pipeline
+from transformers import AutoTokenizer, HfArgumentParser, pipeline
 
 from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead, PPOConfig, PPOTrainer, set_seed
 from trl.core import LengthSampler
@@ -33,42 +36,17 @@ tqdm.pandas()
 
 @dataclass
 class ScriptArguments:
-    ppo_config: PPOConfig = field(
-        default_factory=lambda: PPOConfig(
-            model_name="lvwerra/gpt2-imdb",
-            query_dataset="imdb",
-            reward_model="sentiment-analysis:lvwerra/distilbert-imdb",
-            learning_rate=1.41e-5,
-            log_with=None,
-            mini_batch_size=128,
-            batch_size=128,
-            gradient_accumulation_steps=1,
-            early_stopping=False,
-            target_kl=6.0,
-            kl_penalty="kl",
-            seed=0,
-            use_score_scaling=False,
-            use_score_norm=False,
-            score_clip=None,
-        )
-    )
-    use_seq2seq: bool = False
-    """whether to use seq2seq models"""
-    use_peft: bool = False
-    """whether to use peft"""
-    peft_config: Optional[LoraConfig] = field(
-        default_factory=lambda: LoraConfig(
-            r=16,
-            lora_alpha=16,
-            bias="none",
-            task_type="CAUSAL_LM",
-        ),
-    )
+    use_seq2seq: bool = field(default=False, metadata={"help": "whether to use seq2seq"})
     trust_remote_code: bool = field(default=False, metadata={"help": "Enable `trust_remote_code`"})
 
+    # LoraConfig
+    use_peft: bool = field(default=False, metadata={"help": "whether to use peft"})
+    lora_alpha: Optional[float] = field(default=16, metadata={"help": "the lora alpha parameter"})
+    lora_r: Optional[int] = field(default=16, metadata={"help": "the lora r parameter"})
 
-args = tyro.cli(ScriptArguments)
 
+parser = HfArgumentParser((ScriptArguments, PPOConfig))
+args, ppo_config = parser.parse_args_into_dataclasses()
 
 # We then define the arguments to pass to the sentiment analysis pipeline.
 # We set `return_all_scores` to True to get the sentiment score for each token.
@@ -113,7 +91,7 @@ def build_dataset(config, query_dataset, input_min_text_length=2, input_max_text
 
 
 # We retrieve the dataloader by calling the `build_dataset` function.
-dataset = build_dataset(args.ppo_config, args.ppo_config.query_dataset)
+dataset = build_dataset(ppo_config, ppo_config.query_dataset)
 
 
 def collator(data):
@@ -121,34 +99,39 @@ def collator(data):
 
 
 # set seed before initializing value head for deterministic eval
-set_seed(args.ppo_config.seed)
+set_seed(ppo_config.seed)
 
 # Now let's build the model, the reference model, and the tokenizer.
 if not args.use_peft:
-    ref_model = trl_model_class.from_pretrained(args.ppo_config.model_name, trust_remote_code=args.trust_remote_code)
+    ref_model = trl_model_class.from_pretrained(ppo_config.model_name, trust_remote_code=args.trust_remote_code)
     device_map = None
     peft_config = None
 else:
-    peft_config = args.peft_config
+    peft_config = LoraConfig(
+        r=args.lora_r,
+        lora_alpha=args.lora_alpha,
+        bias="none",
+        task_type="CAUSAL_LM",
+    )
     ref_model = None
     # Copy the model to each device
     device_map = {"": Accelerator().local_process_index}
 
 model = trl_model_class.from_pretrained(
-    args.ppo_config.model_name,
+    ppo_config.model_name,
     trust_remote_code=args.trust_remote_code,
     device_map=device_map,
     peft_config=peft_config,
 )
 
 
-tokenizer = AutoTokenizer.from_pretrained(args.ppo_config.model_name)
+tokenizer = AutoTokenizer.from_pretrained(ppo_config.model_name)
 
 # Some tokenizers like GPT-2's don't have a padding token by default, so we set one here.
 tokenizer.pad_token_id = tokenizer.eos_token_id
 
 # We then build the PPOTrainer, passing the model, the reference model, the tokenizer
-ppo_trainer = PPOTrainer(args.ppo_config, model, ref_model, tokenizer, dataset=dataset, data_collator=collator)
+ppo_trainer = PPOTrainer(ppo_config, model, ref_model, tokenizer, dataset=dataset, data_collator=collator)
 
 # We then build the sentiment analysis pipeline, passing the model name and the
 # sentiment analysis pipeline arguments. Let's also make sure to set the device
@@ -162,7 +145,7 @@ if ppo_trainer.accelerator.num_processes == 1:
     else:
         device = 0 if torch.cuda.is_available() else "cpu"  # to avoid a `pipeline` bug
 ds_plugin = ppo_trainer.accelerator.state.deepspeed_plugin
-task, model_name = args.ppo_config.reward_model.split(":")
+task, model_name = ppo_config.reward_model.split(":")
 if ds_plugin is not None and ds_plugin.is_zero3_init_enabled():
     with ds_plugin.zero3_init_context_manager(enable=False):
         sentiment_pipe = pipeline(task, model=model_name, device=device)

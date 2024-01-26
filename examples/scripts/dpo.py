@@ -12,88 +12,71 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+"""
+# regular:
+python examples/scripts/dpo.py \
+    --model_name_or_path=gpt2 \
+    --per_device_train_batch_size 4 \
+    --max_steps 1000 \
+    --learning_rate 1e-3 \
+    --gradient_accumulation_steps 1 \
+    --logging_steps 10 \
+    --eval_steps 500 \
+    --output_dir="dpo_anthropic_hh" \
+    --warmup_steps 150 \
+    --report_to wandb \
+    --bf16 \
+    --logging_first_step \
+    --no_remove_unused_columns
 
-# Note: you need to install transformers from main to run this script. See https://huggingface.co/docs/transformers/installation#install-from-source
-# TODO: bump transformers version in requirements at next release.
-
-# 0. imports
+# peft:
+python examples/scripts/dpo.py \
+    --model_name_or_path=gpt2 \
+    --per_device_train_batch_size 4 \
+    --max_steps 1000 \
+    --learning_rate 1e-3 \
+    --gradient_accumulation_steps 1 \
+    --logging_steps 10 \
+    --eval_steps 500 \
+    --output_dir="dpo_anthropic_hh" \
+    --optim rmsprop \
+    --warmup_steps 150 \
+    --report_to wandb \
+    --bf16 \
+    --logging_first_step \
+    --no_remove_unused_columns \
+    --use_peft \
+    --lora_r=16 \
+    --lora_alpha=16
+"""
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Dict
 
 import torch
-from accelerate import PartialState
 from datasets import Dataset, load_dataset
-from peft import LoraConfig
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, HfArgumentParser, TrainingArguments
+from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, TrainingArguments
 
-from trl import DPOTrainer, is_xpu_available
+from trl import DPOTrainer, ModelConfig, get_kbit_device_map, get_peft_config, get_quantization_config
 
 
-# Define and parse arguments.
 @dataclass
 class ScriptArguments:
-    """
-    The arguments for the DPO training script.
-    """
-
-    # data parameters
-    beta: Optional[float] = field(default=0.1, metadata={"help": "the beta parameter for DPO loss"})
-
-    # training parameters
-    model_name_or_path: Optional[str] = field(default="gpt2", metadata={"help": "the model name"})
-    learning_rate: Optional[float] = field(default=1e-3, metadata={"help": "optimizer learning rate"})
-    per_device_train_batch_size: Optional[int] = field(default=4, metadata={"help": "batch size per device"})
-    gradient_accumulation_steps: Optional[int] = field(
-        default=1, metadata={"help": "the number of gradient accumulation steps"}
-    )
-    output_dir: Optional[str] = field(default="output", metadata={"help": "the output directory"})
-    fp16: Optional[bool] = field(
-        default=False, metadata={"help": "Whether to activate fp16 mixed precision during training"}
-    )
-    bf16: Optional[bool] = field(
-        default=False, metadata={"help": "Whether to activate bf16 mixed precision during training"}
-    )
-    max_length: Optional[int] = field(default=512, metadata={"help": "max length of each sample"})
-    max_prompt_length: Optional[int] = field(default=128, metadata={"help": "max length of each sample's prompt"})
-    max_target_length: Optional[int] = field(
+    beta: float = field(default=0.1, metadata={"help": "the beta parameter for DPO loss"})
+    max_length: int = field(default=512, metadata={"help": "max length of each sample"})
+    max_prompt_length: int = field(default=128, metadata={"help": "max length of each sample's prompt"})
+    max_target_length: int = field(
         default=128, metadata={"help": "Only used for encoder decoder model. Max target of each sample's prompt"}
     )
-    label_pad_token_id: Optional[int] = field(default=-100, metadata={"help": "label for non response tokens"})
-    max_steps: Optional[int] = field(default=1000, metadata={"help": "max number of training steps"})
-    # lora parameters
-    use_peft: Optional[bool] = field(default=True, metadata={"help": "Wether to use PEFT or not to train adapters"})
-    peft_lora_r: Optional[int] = field(default=64, metadata={"help": "the r parameter of the LoRA adapters"})
-    peft_lora_alpha: Optional[int] = field(default=16, metadata={"help": "the alpha parameter of the LoRA adapters"})
-    # instrumentation
-    sanity_check: Optional[bool] = field(default=True, metadata={"help": "only train on 1000 samples"})
-    report_to: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": 'The list of integrations to report the results and logs to. Supported platforms are `"azure_ml"`,'
-            '`"comet_ml"`, `"mlflow"`, `"neptune"`, `"tensorboard"`,`"clearml"` and `"wandb"`. '
-            'Use `"all"` to report to all integrations installed, `"none"` for no integrations.'
-        },
-    )
-    # debug argument for distributed training
-    ignore_bias_buffers: Optional[bool] = field(
+    sanity_check: bool = field(default=True, metadata={"help": "only train on 1000 samples"})
+    ignore_bias_buffers: bool = field(
         default=False,
         metadata={
-            "help": "fix for DDP issues with LM bias/mask buffers - invalid scalar type,`inplace operation. See"
+            "help": "debug argument for distributed training;"
+            "fix for DDP issues with LM bias/mask buffers - invalid scalar type,`inplace operation. See"
             "https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992"
         },
     )
-    gradient_checkpointing: Optional[bool] = field(
-        default=False, metadata={"help": "Whether to use gradient checkpointing or no"}
-    )
-    gradient_checkpointing_kwargs: Optional[dict] = field(
-        default=None,
-        metadata={
-            "help": "key word arguments to be passed along `torch.utils.checkpoint.checkpoint` method - e.g. `use_reentrant=False`"
-        },
-    )
-    load_in_8bit: Optional[bool] = field(default=False, metadata={"help": "load the model in 8 bits precision"})
-    load_in_4bit: Optional[bool] = field(default=False, metadata={"help": "load the model in 4 bits precision"})
-    generate_during_eval: Optional[bool] = field(default=False, metadata={"help": "Generate during evaluation"})
+    generate_during_eval: bool = field(default=False, metadata={"help": "Generate during evaluation"})
 
 
 def extract_anthropic_prompt(prompt_and_response):
@@ -134,104 +117,60 @@ def get_hh(split: str, sanity_check: bool = False, silent: bool = False, cache_d
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser(ScriptArguments)
-    script_args = parser.parse_args_into_dataclasses()[0]
+    parser = HfArgumentParser((ScriptArguments, TrainingArguments, ModelConfig))
+    args, training_args, model_config = parser.parse_args_into_dataclasses()
 
-    if script_args.load_in_8bit and script_args.load_in_4bit:
-        raise ValueError("You can't load the model in 8 bits and 4 bits at the same time")
-    elif script_args.load_in_8bit or script_args.load_in_4bit:
-        quantization_config = BitsAndBytesConfig(
-            load_in_8bit=script_args.load_in_8bit, load_in_4bit=script_args.load_in_4bit
-        )
-        # Copy the model to each device
-        device_map = (
-            {"": f"xpu:{PartialState().local_process_index}"}
-            if is_xpu_available()
-            else {"": PartialState().local_process_index}
-        )
-        torch_dtype = torch.bfloat16
-    else:
-        device_map = None
-        quantization_config = None
-        torch_dtype = None
-
-    # 1. load a pretrained model
-    model = AutoModelForCausalLM.from_pretrained(
-        script_args.model_name_or_path,
-        device_map=device_map,
-        quantization_config=quantization_config,
-        torch_dtype=torch_dtype,
+    ################
+    # Model & Tokenizer
+    ################
+    torch_dtype = (
+        model_config.torch_dtype
+        if model_config.torch_dtype in ["auto", None]
+        else getattr(torch, model_config.torch_dtype)
     )
-
-    if script_args.ignore_bias_buffers:
+    quantization_config = get_quantization_config(model_config)
+    model_kwargs = dict(
+        revision=model_config.model_revision,
+        trust_remote_code=model_config.trust_remote_code,
+        attn_implementation=model_config.attn_implementation,
+        torch_dtype=torch_dtype,
+        use_cache=False if training_args.gradient_checkpointing else True,
+        device_map=get_kbit_device_map() if quantization_config is not None else None,
+        quantization_config=quantization_config,
+    )
+    model = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, **model_kwargs)
+    model_ref = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, **model_kwargs)
+    tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    if args.ignore_bias_buffers:
         # torch distributed hack
         model._ddp_params_and_buffers_to_ignore = [
             name for name, buffer in model.named_buffers() if buffer.dtype == torch.bool
         ]
 
-    if not script_args.use_peft:
-        model_ref = AutoModelForCausalLM.from_pretrained(script_args.model_name_or_path)
-    else:
-        # If one uses PEFT, there is no need to load a reference model
-        model_ref = None
+    ################
+    # Dataset
+    ################
+    train_dataset = get_hh("train", sanity_check=args.sanity_check)
+    eval_dataset = get_hh("test", sanity_check=args.sanity_check)
 
-    tokenizer = AutoTokenizer.from_pretrained(script_args.model_name_or_path)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    # 2. Load the Anthropic Helpful-Harmless dataset
-    train_dataset = get_hh("train", sanity_check=script_args.sanity_check)
-
-    # 3. Load evaluation dataset
-    eval_dataset = get_hh("test", sanity_check=script_args.sanity_check)
-
-    # 4. initialize training arguments:
-    training_args = TrainingArguments(
-        per_device_train_batch_size=script_args.per_device_train_batch_size,
-        max_steps=script_args.max_steps,
-        remove_unused_columns=False,
-        gradient_accumulation_steps=script_args.gradient_accumulation_steps,
-        learning_rate=script_args.learning_rate,
-        evaluation_strategy="steps",
-        logging_first_step=True,
-        logging_steps=10,  # match results in blog post
-        eval_steps=500,
-        output_dir=script_args.output_dir,
-        optim="rmsprop",
-        warmup_steps=150,
-        report_to=script_args.report_to,
-        bf16=script_args.bf16,
-        fp16=script_args.fp16,
-        gradient_checkpointing=script_args.gradient_checkpointing,
-        # TODO: uncomment that on the next transformers release
-        # gradient_checkpointing_kwargs=script_args.gradient_checkpointing_kwargs,
-    )
-
-    if script_args.use_peft:
-        peft_config = LoraConfig(
-            r=script_args.peft_lora_r,
-            lora_alpha=script_args.peft_lora_alpha,
-            bias="none",
-            task_type="CAUSAL_LM",
-        )
-    else:
-        peft_config = None
-
-    # 5. initialize the DPO trainer
-    dpo_trainer = DPOTrainer(
+    ################
+    # Training
+    ################
+    trainer = DPOTrainer(
         model,
         model_ref,
         args=training_args,
-        beta=script_args.beta,
+        beta=args.beta,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         tokenizer=tokenizer,
-        max_length=script_args.max_length,
-        max_target_length=script_args.max_target_length,
-        max_prompt_length=script_args.max_prompt_length,
-        generate_during_eval=script_args.generate_during_eval,
-        peft_config=peft_config,
+        max_length=args.max_length,
+        max_target_length=args.max_target_length,
+        max_prompt_length=args.max_prompt_length,
+        generate_during_eval=args.generate_during_eval,
+        peft_config=get_peft_config(model_config),
     )
-
-    # 6. train
-    dpo_trainer.train()
+    trainer.train()
+    trainer.save_model(training_args.output_dir)
