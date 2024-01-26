@@ -42,7 +42,7 @@ accelerate launch $EXTRA_ACCELERATE_ARGS \
     --output_dir $OUTPUT_DIR \
     --max_steps $MAX_STEPS \
     --per_device_train_batch_size $BATCH_SIZE \
-    --seq_length $SEQ_LEN \
+    --max_seq_length $SEQ_LEN \
     $EXTRA_TRAINING_ARGS
 """
 
