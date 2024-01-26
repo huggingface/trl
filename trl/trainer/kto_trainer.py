@@ -811,11 +811,18 @@ class KTOTrainer(Trainer):
 
         # if reference_logps in batch use them, otherwise use the reference model
         if "reference_logps" in batch:
-            chosen_idx = [i for i in range(batch["reference_logps"].shape[0]) if batch["label"][i] is True]
-            rejected_idx = [i for i in range(batch["reference_logps"].shape[0]) if batch["label"][i] is False]
+            kl_indicies = [i for i in range(len(batch["kl"])) if batch["kl"][i] is True]
+            reference_KL_logps = batch["reference_logps"][kl_indicies, ...]
 
-            reference_chosen_logps = batch["reference_logps"][chosen_idx, ...]
-            reference_rejected_logps = batch["reference_logps"][rejected_idx, ...]
+            target_indicies = [i for i in range(len(batch["kl"])) if batch["kl"][i] is False]
+            target_logps = batch["reference_logps"][target_indicies, ...]
+            target_labels = [batch["label"][i] for i in target_indicies]
+
+            chosen_idx = [i for i in range(target_logps.shape[0]) if target_labels[i] is True]
+            rejected_idx = [i for i in range(target_logps.shape[0]) if target_labels[i] is False]
+
+            reference_chosen_logps = target_logps[chosen_idx, ...]
+            reference_rejected_logps = target_logps[rejected_idx, ...]
         else:
             with torch.no_grad():
                 if self.ref_model is None:
