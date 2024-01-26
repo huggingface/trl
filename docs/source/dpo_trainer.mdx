@@ -142,7 +142,7 @@ model = FastLanguageModel.get_peft_model(
     random_state = 3407,
 )
 
-args = TrainingArguments(output_dir="./output")
+training_args = TrainingArguments(output_dir="./output")
 
 dpo_trainer = DPOTrainer(
     model,
