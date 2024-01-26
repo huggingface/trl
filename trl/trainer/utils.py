@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
-from accelerate import Accelerator
+from accelerate import PartialState
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import IterableDataset
 from transformers import BitsAndBytesConfig, DataCollatorForLanguageModeling, PreTrainedTokenizerBase
