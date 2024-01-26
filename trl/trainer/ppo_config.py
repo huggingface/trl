@@ -46,16 +46,16 @@ class PPOConfig:
     """Log with either 'wandb' or 'tensorboard', check  https://huggingface.co/docs/accelerate/usage_guides/tracking for more details"""
     task_name: Optional[str] = None
     """Name of task to use - used only for tracking purposes"""
-    model_name: Optional[str] = None
+    model_name: Optional[str] = "gpt2"
     """Name of model to use - used only for tracking purposes"""
-    query_dataset: Optional[str] = None
+    query_dataset: Optional[str] = "imdb"
     """Name of dataset to query - used only for tracking purposes"""
-    reward_model: Optional[str] = None
+    reward_model: Optional[str] = "sentiment-analysis:lvwerra/distilbert-imdb"
     """The reward model to use - used only for tracking purposes"""
     remove_unused_columns: bool = True
     """Remove unused columns from the dataset if `datasets.Dataset` is used"""
     tracker_kwargs: JSONDict = field(default_factory=dict)
-    """Keyword arguments for the tracker (e.g. python ppo.py --ppo_config.tracker_kwargs='{"wandb": {"entity": "my_wandb_entity", "name": "my_exp_name"}}'"""
+    """Keyword arguments for the tracker (e.g. python ppo.py --tracker_kwargs='{"wandb": {"entity": "my_wandb_entity", "name": "my_exp_name"}}'"""
     accelerator_kwargs: JSONDict = field(default_factory=dict)
     """Keyword arguments for the accelerator"""
     project_kwargs: JSONDict = field(default_factory=dict)
@@ -68,7 +68,7 @@ class PPOConfig:
     # hyperparameters
     steps: int = 20000
     """Number of training steps"""
-    learning_rate: float = 1e-5
+    learning_rate: float = 1.41e-5
     """Adam learning rate"""
     adap_kl_ctrl: bool = True
     """Use adaptive KL control, otherwise linear"""
@@ -90,11 +90,11 @@ class PPOConfig:
     """Range for clipping values in loss calculation"""
     vf_coef: float = 0.1
     """Scaling factor for value loss"""
-    batch_size: int = 256
+    batch_size: int = 128
     """Number of samples per optimisation step"""
     forward_batch_size: Optional[int] = None
     """DEPRECATED: use `mini_batch_size` instead, which does the same thing."""
-    mini_batch_size: int = 1
+    mini_batch_size: int = 128
     """Number of samples optimized in each mini batch"""
     gradient_accumulation_steps: int = 1
     """The number of gradient accumulation steps"""

@@ -426,13 +426,13 @@ To use Flash Attention 2, first install the latest `flash-attn` package:
 pip install -U flash-attn
 ```
 
-And add `use_flash_attention_2=True` when calling `from_pretrained`:
+And add `attn_implementation="flash_attention_2"` when calling `from_pretrained`:
 
 ```python
 model = AutoModelForCausalLM.from_pretrained(
     model_id,
     load_in_4bit=True,
-    use_flash_attention_2=True
+    attn_implementation="flash_attention_2"
 )
 ```
 
@@ -440,6 +440,45 @@ If you don't use quantization, make sure your model is loaded in half-precision 
 After loading your model, you can either train it as it is, or attach adapters and train adapters on it in case your model is quantized.
 
 In contrary to Flash Attention 1, the integration makes it possible to train your model on an arbitrary dataset that also includes padding tokens.
+
+
+### Using model creation utility
+
+We included a utility function to create your model.
+
+[[autodoc]] ModelConfig
+
+```python
+from trl import ModelConfig, SFTTrainer, get_kbit_device_map, get_peft_config, get_quantization_config
+model_config = ModelConfig(
+    model_name_or_path="facebook/opt-350m"
+    attn_implementation=None, # or "flash_attention_2"
+)
+torch_dtype = (
+    model_config.torch_dtype
+    if model_config.torch_dtype in ["auto", None]
+    else getattr(torch, model_config.torch_dtype)
+)
+quantization_config = get_quantization_config(model_config)
+model_kwargs = dict(
+    revision=model_config.model_revision,
+    trust_remote_code=model_config.trust_remote_code,
+    attn_implementation=model_config.attn_implementation,
+    torch_dtype=torch_dtype,
+    use_cache=False if training_args.gradient_checkpointing else True,
+    device_map=get_kbit_device_map() if quantization_config is not None else None,
+    quantization_config=quantization_config,
+)
+model = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, **model_kwargs)
+trainer = SFTTrainer(
+    ...,
+    model=model_config.model_name_or_path,
+    peft_config=get_peft_config(model_config),
+)
+```
+
+
+
 
 ### Enhance model's performances using NEFTune
 

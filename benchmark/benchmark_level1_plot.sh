@@ -9,7 +9,37 @@ python -m openrlbenchmark.rlops_multi_metrics \
     --no-check-empty-runs \
     --pc.ncols 2 \
     --pc.ncols-legend 1 \
-    --output-filename benchmark/trl/$FOLDER_STRING/hello_world \
+    --output-filename benchmark/trl/$FOLDER_STRING/ppo \
+    --scan-history
+
+python -m openrlbenchmark.rlops_multi_metrics \
+    --filters '?we=huggingface&wpn=trl&xaxis=_step&ceik=output_dir&cen=_name_or_path&metrics=train/rewards/accuracies&metrics=train/loss' \
+        "gpt2$TAGS_STRING" \
+    --env-ids dpo_anthropic_hh \
+    --no-check-empty-runs \
+    --pc.ncols 2 \
+    --pc.ncols-legend 1 \
+    --output-filename benchmark/trl/$FOLDER_STRING/dpo \
+    --scan-history
+
+python -m openrlbenchmark.rlops_multi_metrics \
+    --filters '?we=huggingface&wpn=trl&xaxis=_step&ceik=output_dir&cen=_name_or_path&metrics=train/loss&metrics=eval/accuracy&metrics=eval/loss' \
+        "facebook/opt-350m$TAGS_STRING" \
+    --env-ids reward_modeling_anthropic_hh \
+    --no-check-empty-runs \
+    --pc.ncols 2 \
+    --pc.ncols-legend 1 \
+    --output-filename benchmark/trl/$FOLDER_STRING/reward_modeling \
+    --scan-history
+
+python -m openrlbenchmark.rlops_multi_metrics \
+    --filters '?we=huggingface&wpn=trl&xaxis=_step&ceik=output_dir&cen=_name_or_path&metrics=train/loss' \
+        "facebook/opt-350m$TAGS_STRING" \
+    --env-ids sft_openassistant-guanaco \
+    --no-check-empty-runs \
+    --pc.ncols 2 \
+    --pc.ncols-legend 1 \
+    --output-filename benchmark/trl/$FOLDER_STRING/sft \
     --scan-history
 
 python benchmark/upload_benchmark.py \
