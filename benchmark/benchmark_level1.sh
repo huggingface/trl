@@ -11,7 +11,7 @@ python benchmark/benchmark.py \
     --slurm-template-path benchmark/trl.slurm_template
 
 python benchmark/benchmark.py \
-    --command "python examples/scripts/dpo.py --model_name_or_path=gpt2 --per_device_train_batch_size 4 --max_steps 1000 --learning_rate 1e-3 --gradient_accumulation_steps 1 --logging_steps 10 --eval_steps 500 --output_dir="dpo_anthropic_hh" --optim rmsprop --warmup_steps 150 --report_to wandb --bf16 --logging_first_step --no_remove_unused_columns" \
+    --command "python examples/scripts/dpo.py --model_name_or_path=gpt2 --per_device_train_batch_size 4 --max_steps 1000 --learning_rate 1e-3 --gradient_accumulation_steps 1 --logging_steps 10 --eval_steps 500 --output_dir="dpo_anthropic_hh" --optim adamw_torch --warmup_steps 150 --report_to wandb --bf16 --logging_first_step --no_remove_unused_columns" \
     --num-seeds 3 \
     --start-seed 1 \
     --workers 10 \
