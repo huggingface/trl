@@ -61,8 +61,12 @@ class ModelConfig:
         default=None,
         metadata={"help": ("Model layers to unfreeze & train")},
     )
-    load_in_8bit: bool = field(default=False, metadata={"help": "use 8 bit precision for the base model - works only with LoRA"})
-    load_in_4bit: bool = field(default=False, metadata={"help": "use 4 bit precision for the base model - works only with LoRA"})
+    load_in_8bit: bool = field(
+        default=False, metadata={"help": "use 8 bit precision for the base model - works only with LoRA"}
+    )
+    load_in_4bit: bool = field(
+        default=False, metadata={"help": "use 4 bit precision for the base model - works only with LoRA"}
+    )
 
     bnb_4bit_quant_type: Optional[str] = field(
         default="nf4", metadata={"help": "precise the quantization type (fp4 or nf4)"}
