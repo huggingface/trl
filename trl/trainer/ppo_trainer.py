@@ -18,7 +18,7 @@ import time
 import typing
 import warnings
 from contextlib import nullcontext
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Callable, Dict, List, Optional, Union
 
 import datasets
 import numpy as np
@@ -59,14 +59,15 @@ from . import (
     AdaptiveKLController,
     BaseTrainer,
     FixedKLController,
-    PPOConfig,
-    RunningMoments,
     IterativeSFTTrainer,
+    MiniBatchCycleIter,
+    PPOConfig,
     PtxData,
     PtxDataArgs,
     PtxLossArgs,
-    MiniBatchCycleIter,
+    RunningMoments,
 )
+
 
 if is_deepspeed_available():
     import deepspeed
@@ -164,7 +165,7 @@ class PPOTrainer(BaseTrainer):
         lr_scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
         ptx_data_collator: Optional[typing.Callable] = None,
         ptx_data_args: Optional[PtxDataArgs] = None,
-        ptx_loss_args: Optional[PtxLossArgs] = None
+        ptx_loss_args: Optional[PtxLossArgs] = None,
     ):
         """
         Initialize PPOTrainer.
@@ -333,7 +334,9 @@ class PPOTrainer(BaseTrainer):
                     "No ptx data collator is provided. Using 'DataCollatorForSeq2Seq' with"
                     "'labels_pad_token_id' set to '-100' and 'pad_to_multiple_of' set to 8."
                 )
-                self.ptx_data_collator = DataCollatorForSeq2Seq(tokenizer, label_pad_token_id=-100, pad_to_multiple_of=8)
+                self.ptx_data_collator = DataCollatorForSeq2Seq(
+                    tokenizer, label_pad_token_id=-100, pad_to_multiple_of=8
+                )
             else:
                 warnings.warn("No ptx data collator is provided. Using 'DataCollatorForLanguageModeling'")
                 self.ptx_data_collator = self.data_collator
@@ -743,10 +746,7 @@ class PPOTrainer(BaseTrainer):
                     pad_first=pad_first,
                 )
                 ptx_model_inputs["attention_mask"] = self.accelerator.pad_across_processes(
-                    ptx_model_inputs["attention_mask"],
-                    dim=1,
-                    pad_index=0,
-                    pad_first=pad_first
+                    ptx_model_inputs["attention_mask"], dim=1, pad_index=0, pad_first=pad_first
                 )
 
             if self.is_encoder_decoder:
@@ -813,11 +813,11 @@ class PPOTrainer(BaseTrainer):
             "masks": masks,
             "advantages": advantages,
             "returns": returns,
-            "ptx_model_inputs": {}
+            "ptx_model_inputs": {},
         }
         batch_dict.update(model_inputs)
         if ptx_model_inputs is not None:
-            batch_dict['ptx_model_inputs'].update(ptx_model_inputs)
+            batch_dict["ptx_model_inputs"].update(ptx_model_inputs)
 
         t = time.time()
         all_stats = []
@@ -826,7 +826,7 @@ class PPOTrainer(BaseTrainer):
         ptx_mini_batch_iterator = iter(
             MiniBatchCycleIter(
                 self.config.ptx_mini_batch_size,
-                b_data_dict=batch_dict['ptx_model_inputs'],
+                b_data_dict=batch_dict["ptx_model_inputs"],
             )
         )
 
@@ -850,13 +850,13 @@ class PPOTrainer(BaseTrainer):
                         "responses": [batch_dict["responses"][i] for i in mini_batch_inds],
                         "advantages": batch_dict["advantages"][mini_batch_inds],
                         "returns": batch_dict["returns"][mini_batch_inds],
-                        "ptx_model_inputs": {}
+                        "ptx_model_inputs": {},
                     }
                     for k in model_inputs_names:
                         mini_batch_dict[k] = batch_dict[k][mini_batch_inds]
 
                     ptx_mini_batch_dict = next(ptx_mini_batch_iterator)
-                    mini_batch_dict['ptx_model_inputs'].update(ptx_mini_batch_dict)
+                    mini_batch_dict["ptx_model_inputs"].update(ptx_mini_batch_dict)
 
                     with self.accelerator.accumulate(self.model):
                         model_inputs = {k: mini_batch_dict[k] for k in model_inputs_names}
@@ -877,7 +877,7 @@ class PPOTrainer(BaseTrainer):
                             mini_batch_dict["masks"],
                             mini_batch_dict["advantages"],
                             mini_batch_dict["returns"],
-                            mini_batch_dict['ptx_model_inputs']
+                            mini_batch_dict["ptx_model_inputs"],
                         )
                         all_stats.append(train_stats)
 
@@ -1048,11 +1048,7 @@ class PPOTrainer(BaseTrainer):
             ptx_data.labels = ptx_data.input_ids
 
         IterativeSFTTrainer._step_safety_checker(
-            ptx_data.input_ids,
-            ptx_data.attention_mask,
-            ptx_data.labels,
-            ptx_data.texts,
-            ptx_data.texts_labels
+            ptx_data.input_ids, ptx_data.attention_mask, ptx_data.labels, ptx_data.texts, ptx_data.texts_labels
         )
 
     def prepare_ptx_model_inputs(self, ptx_data: Optional[PtxData] = None):
@@ -1096,14 +1092,13 @@ class PPOTrainer(BaseTrainer):
         # truncate in case the user has provided input_ids, attention_mask and labels
         if self.ptx_data_args.max_length is not None:
             if self.ptx_data_args.truncation_mode == "keep_start":
-                input_data = {k: v[:, :self.ptx_data_args.max_length] for k, v in input_data.items()}
+                input_data = {k: v[:, : self.ptx_data_args.max_length] for k, v in input_data.items()}
             elif self.ptx_data_args.truncation_mode == "keep_end":
-                input_data = {k: v[:, -self.ptx_data_args.max_length:] for k, v in input_data.items()}
+                input_data = {k: v[:, -self.ptx_data_args.max_length :] for k, v in input_data.items()}
             else:
                 raise ValueError(f"Unknown truncation mode: {self.ptx_data_args.truncation_mode}")
 
         return input_data
-
 
     @PPODecorators.empty_device_cache()
     def batched_forward_pass(
@@ -1241,7 +1236,7 @@ class PPOTrainer(BaseTrainer):
             loss += self.ptx_loss_args.ptx_coef * ptx_loss
         else:
             ptx_loss = torch.zeros_like(loss)
-        train_stats['loss/ptx'] = ptx_loss.detach()
+        train_stats["loss/ptx"] = ptx_loss.detach()
 
         self.accelerator.backward(loss)
         if self.config.max_grad_norm is not None:
@@ -1444,10 +1439,10 @@ class PPOTrainer(BaseTrainer):
                     ptx_loss = ptx_outputs[1]
             elif isinstance(ptx_outputs, dict):
                 # If output from model.forward() is a dict, return loss from the key 'loss'
-                ptx_loss = ptx_outputs.get('loss')
-            elif hasattr(ptx_outputs, 'loss'):
+                ptx_loss = ptx_outputs.get("loss")
+            elif hasattr(ptx_outputs, "loss"):
                 # If output from model.forward() is a class obj with 'loss' attribute, return loss from the attribute
-                ptx_loss = getattr(ptx_outputs, 'loss')
+                ptx_loss = getattr(ptx_outputs, "loss")
             else:
                 # warn users
                 warnings.warn(

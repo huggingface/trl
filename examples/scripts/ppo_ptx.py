@@ -72,7 +72,9 @@ class ScriptArguments:
     ptx_dataset_name: Optional[str] = field(
         default="timdettmers/openassistant-guanaco", metadata={"help": "the pretrained dataset name"}
     )
-    ptx_dataset_text_field: Optional[str] = field(default="text", metadata={"help": "the text field of the pretrained dataset"})
+    ptx_dataset_text_field: Optional[str] = field(
+        default="text", metadata={"help": "the text field of the pretrained dataset"}
+    )
 
 
 args = tyro.cli(ScriptArguments)
@@ -88,12 +90,7 @@ trl_model_class = AutoModelForCausalLMWithValueHead if not args.use_seq2seq else
 # Below is an example function to build the dataset. In our case, we use the IMDB dataset
 # from the `datasets` library. One should customize this function to train the model on
 # its own dataset.
-def build_dataset(
-        tokenizer,
-        query_dataset,
-        input_min_text_length=2,
-        input_max_text_length=8
-):
+def build_dataset(tokenizer, query_dataset, input_min_text_length=2, input_max_text_length=8):
     """
     Build dataset for training. This builds the dataset from `load_dataset`, one should
     customize this function to train the model on its own dataset.
@@ -123,29 +120,25 @@ def build_dataset(
 
 
 def build_ptx_dataset(
-        tokenizer,
-        ptx_dataset,
-        ptx_dataset_text_field='text',
-        input_min_text_length=2,
-        input_max_text_length=512
+    tokenizer, ptx_dataset, ptx_dataset_text_field="text", input_min_text_length=2, input_max_text_length=512
 ):
     """
-        Build pretrained dataset for ptx loss. This builds the dataset from `load_dataset`, one should
-        customize this function to train the model on its own dataset.
+    Build pretrained dataset for ptx loss. This builds the dataset from `load_dataset`, one should
+    customize this function to train the model on its own dataset.
 
-        Args:
-            ptx_dataset (`str`):
-                The name of the dataset to be loaded.
-            ptx_dataset_text_field (`str`):
-                The name of the dataset text field.
-            input_min_text_length (`int`):
-                The min input text length.
-            input_max_text_length (`int`):
-                The max input text length.
-        Returns:
-            dataloader (`torch.utils.data.DataLoader`):
-                The dataloader for the dataset.
-        """
+    Args:
+        ptx_dataset (`str`):
+            The name of the dataset to be loaded.
+        ptx_dataset_text_field (`str`):
+            The name of the dataset text field.
+        input_min_text_length (`int`):
+            The min input text length.
+        input_max_text_length (`int`):
+            The max input text length.
+    Returns:
+        dataloader (`torch.utils.data.DataLoader`):
+            The dataloader for the dataset.
+    """
     # load pretrained datasets
     ds = load_dataset(ptx_dataset, split="train")
     ds = ds.rename_columns({"text": ptx_dataset_text_field})
@@ -175,6 +168,7 @@ ptx_dataset = build_ptx_dataset(tokenizer, args.ptx_dataset_name, args.ptx_datas
 # Ptx loss related arguments
 ptx_data_args = PtxDataArgs(max_length=512, truncation_mode="keep_end")
 ptx_loss_args = PtxLossArgs(ptx_coef=0.01)
+
 
 def collator(data):
     return dict((key, [d[key] for d in data]) for key in data[0])
@@ -211,7 +205,7 @@ ppo_trainer = PPOTrainer(
     dataset=dataset,
     data_collator=collator,
     ptx_data_args=ptx_data_args,
-    ptx_loss_args=ptx_loss_args
+    ptx_loss_args=ptx_loss_args,
 )
 
 # We then build the sentiment analysis pipeline, passing the model name and the
@@ -290,11 +284,6 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     batch["ref_rewards"] = ref_rewards
 
     # Run PPO step
-    ptx_data = PtxData(input_ids=ptx_data_batch['input_ids'])
+    ptx_data = PtxData(input_ids=ptx_data_batch["input_ids"])
     stats = ppo_trainer.step(query_tensors, response_tensors, rewards, ptx_data=ptx_data)
-    ppo_trainer.log_stats(
-        stats,
-        batch,
-        rewards,
-        columns_to_log=["query", "response", "ref_response", "ref_rewards"]
-    )
+    ppo_trainer.log_stats(stats, batch, rewards, columns_to_log=["query", "response", "ref_response", "ref_rewards"])

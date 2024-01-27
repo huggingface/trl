@@ -157,9 +157,7 @@ class PPOConfig:
             self.mini_batch_size = self.forward_batch_size
 
         if self.ptx_batch_size is None:
-            warnings.warn(
-                f"Note that `ptx_batch_size` is not set, set to `batch_size` {self.batch_size} instead."
-            )
+            warnings.warn(f"Note that `ptx_batch_size` is not set, set to `batch_size` {self.batch_size} instead.")
             self.ptx_batch_size = self.batch_size
 
         if self.ptx_mini_batch_size is None:

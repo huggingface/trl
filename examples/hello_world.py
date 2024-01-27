@@ -5,6 +5,7 @@ from transformers import GPT2Tokenizer
 from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer
 from trl.trainer import PtxData, PtxDataArgs, PtxLossArgs
 
+
 # 1. load a pretrained model
 model = AutoModelForCausalLMWithValueHead.from_pretrained("gpt2")
 model_ref = AutoModelForCausalLMWithValueHead.from_pretrained("gpt2")
@@ -50,12 +51,7 @@ config = PPOConfig(**ppo_config)
 ptx_data_args = PtxDataArgs(max_length=5, truncation_mode="keep_end")
 ptx_loss_args = PtxLossArgs(ptx_coef=0.1)
 ppo_ptx_trainer = PPOTrainer(
-    config,
-    model,
-    model_ref,
-    tokenizer,
-    ptx_data_args=ptx_data_args,
-    ptx_loss_args=ptx_loss_args
+    config, model, model_ref, tokenizer, ptx_data_args=ptx_data_args, ptx_loss_args=ptx_loss_args
 )
 
 # 8. Prepare data for ppo_ptx
@@ -65,7 +61,9 @@ query_txt = "This noon I plan to go to the "
 query_tensor_sec = tokenizer.encode(query_txt, return_tensors="pt").to(model.pretrained_model.device)
 
 # generate model response
-response_tensor_sec = ppo_trainer.generate([item for item in query_tensor_sec], return_prompt=False, **generation_kwargs)
+response_tensor_sec = ppo_trainer.generate(
+    [item for item in query_tensor_sec], return_prompt=False, **generation_kwargs
+)
 response_txt_sec = tokenizer.decode(response_tensor_sec[0])
 
 # encode a query
@@ -73,7 +71,9 @@ query_txt = "This afternoon I do not have time to go to the "
 query_tensor_thd = tokenizer.encode(query_txt, return_tensors="pt").to(model.pretrained_model.device)
 
 # generate model response
-response_tensor_thd = ppo_trainer.generate([item for item in query_tensor_thd], return_prompt=False, **generation_kwargs)
+response_tensor_thd = ppo_trainer.generate(
+    [item for item in query_tensor_thd], return_prompt=False, **generation_kwargs
+)
 response_txt_thd = tokenizer.decode(response_tensor_thd[0])
 
 # prepare pre-trained data
@@ -93,7 +93,9 @@ ptx_data = PtxData(input_ids=ptx_input_ids)
 rewards = reward + reward + reward
 
 # 9. train ppo_ptx model
-train_stats = ppo_ptx_trainer.step([query_tensor[0], query_tensor_sec[0], query_tensor_thd[0]],
-                                   [response_tensor[0], response_tensor_sec[0], response_tensor_thd[0]],
-                                   rewards,
-                                   ptx_data=ptx_data)
+train_stats = ppo_ptx_trainer.step(
+    [query_tensor[0], query_tensor_sec[0], query_tensor_thd[0]],
+    [response_tensor[0], response_tensor_sec[0], response_tensor_thd[0]],
+    rewards,
+    ptx_data=ptx_data,
+)

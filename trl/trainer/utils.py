@@ -501,6 +501,7 @@ class RunningMoments:
 
         return xs_mean.item(), (xs_var * xs_count / (xs_count - 1)).float().sqrt().item()
 
+
 @dataclass
 class PtxData:
     r"""
@@ -551,21 +552,22 @@ class PtxLossArgs:
 
 class MiniBatchCycleIter:
     """
-        Cycle sliding window iterator on batch data.
+    Cycle sliding window iterator on batch data.
 
-            Args:
-                b_sliding_wsize (`int`, *optional*, defaults to `0`):
-                    The number of samples to include in a ptx data mini batch.
-                b_data_dict (`Dict[str, torch.Tensor]`, *optional*, defaults to None):
-                    Batch data dict
-                b_shuffle (`bool`, *optional*, defaults to False):
-                    Whether to shuffle the batch data indices
-        """
+        Args:
+            b_sliding_wsize (`int`, *optional*, defaults to `0`):
+                The number of samples to include in a ptx data mini batch.
+            b_data_dict (`Dict[str, torch.Tensor]`, *optional*, defaults to None):
+                Batch data dict
+            b_shuffle (`bool`, *optional*, defaults to False):
+                Whether to shuffle the batch data indices
+    """
+
     def __init__(
-            self,
-            b_sliding_wsize: Optional[int] = 0,
-            b_data_dict: Optional[Dict[str, torch.Tensor]] = None,
-            b_shuffle: Optional[bool] = True,
+        self,
+        b_sliding_wsize: Optional[int] = 0,
+        b_data_dict: Optional[Dict[str, torch.Tensor]] = None,
+        b_shuffle: Optional[bool] = True,
     ):
         self.b_data_dict = b_data_dict
         self.b_data_keys = list(b_data_dict.keys()) if b_data_dict is not None else []
@@ -583,7 +585,7 @@ class MiniBatchCycleIter:
 
         b_mini_bch_data_dict = {}
 
-        mini_batch_w_inds = self.b_w_inds[self.b_w_start_idx:self.b_w_start_idx + self.b_sliding_wsize]
+        mini_batch_w_inds = self.b_w_inds[self.b_w_start_idx : self.b_w_start_idx + self.b_sliding_wsize]
         self.b_w_start_idx += self.b_sliding_wsize
         if len(mini_batch_w_inds) > 0:
             for k in self.b_data_keys:
