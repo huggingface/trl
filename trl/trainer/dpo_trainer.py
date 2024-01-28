@@ -13,7 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import inspect
-import random
 import warnings
 from collections import OrderedDict
 from copy import deepcopy
@@ -43,10 +42,6 @@ from .utils import DPODataCollatorWithPadding, disable_dropout_in_model, pad_to_
 
 if is_peft_available():
     from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
-
-
-if is_wandb_available():
-    import wandb
 
 
 if is_deepspeed_available():
@@ -656,34 +651,6 @@ class DPOTrainer(Trainer):
 
         Works both with or without labels.
         """
-
-        # Sample and save to game log if requested (for one batch to save time)
-        if self.generate_during_eval:
-            # Generate random indices within the range of the total number of samples
-            num_samples = len(dataloader.dataset)
-            random_indices = random.sample(range(num_samples), k=self.args.eval_batch_size)
-
-            # Use dataloader.dataset.select to get the random batch without iterating over the DataLoader
-            random_batch_dataset = dataloader.dataset.select(random_indices)
-            random_batch = self.data_collator(random_batch_dataset)
-            random_batch = self._prepare_inputs(random_batch)
-
-            policy_output_decoded, ref_output_decoded = self.get_batch_samples(self.model, random_batch)
-
-            self.log(
-                {
-                    "game_log": wandb.Table(
-                        columns=["Prompt", "Policy", "Ref Model"],
-                        rows=[
-                            [prompt, pol[len(prompt) :], ref[len(prompt) :]]
-                            for prompt, pol, ref in zip(
-                                random_batch["prompt"], policy_output_decoded, ref_output_decoded
-                            )
-                        ],
-                    )
-                }
-            )
-            self.state.log_history.pop()
 
         # Base evaluation
         initial_output = super().evaluation_loop(
