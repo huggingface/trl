@@ -406,6 +406,7 @@ class GoldModelRewardCallback(TrainerCallback):
         gold_reward_sum = 0.0
         nll_sum = 0.0
         total_samples = 0
+        sample_length_sum = 0.0
 
         if state.global_step == self.completed_step:
             return
@@ -445,6 +446,7 @@ class GoldModelRewardCallback(TrainerCallback):
                 nll_sum += nll_loss.sum().item()
                 gold_reward_sum += gold_rewards.sum().item()
                 total_samples += gold_rewards.size(0)
+                sample_length_sum += policy_output_attention_mask.sum().item()
 
                 # Sample and save to game log if requested (for one batch to save time)
                 for i, (prompt, pol, ref) in enumerate(
@@ -459,6 +461,7 @@ class GoldModelRewardCallback(TrainerCallback):
             gold_log = {
                 "eval/gold_rewards_mean": gold_reward_sum / total_samples,
                 "eval/perplexity": math.exp(nll_sum / total_samples),
+                "eval/gold_sample_length": sample_length_sum / total_samples,
             }
             for key, value in gold_log.items():
                 print(f"{key}: {value}")
