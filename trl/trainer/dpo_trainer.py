@@ -164,7 +164,7 @@ class DPOTrainer(Trainer):
         generate_during_eval: bool = False,
         compute_metrics: Optional[Callable[[EvalLoopOutput], Dict]] = None,
         precompute_ref_log_probs: bool = False,
-        dataset_num_proc = None,
+        dataset_num_proc: bool = None,
         model_init_kwargs: Optional[Dict] = None,
         ref_model_init_kwargs: Optional[Dict] = None,
         model_adapter_name: str = None,
