@@ -354,7 +354,7 @@ class DPOTrainer(Trainer):
         self.loss_type = loss_type
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
-        
+
         self.dataset_num_proc = dataset_num_proc
         # tokenize the dataset
         train_dataset = train_dataset.map(self.tokenize_row, num_proc=self.dataset_num_proc)
