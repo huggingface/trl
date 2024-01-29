@@ -263,7 +263,7 @@ class DPOTrainerTester(unittest.TestCase):
 
                 trainer.train()
 
-        def test_dpo_trainer_w_dataset_num_proc(self):
+    def test_dpo_trainer_w_dataset_num_proc(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
                 output_dir=tmp_dir,
