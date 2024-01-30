@@ -190,7 +190,7 @@ class KTOTrainer(Trainer):
             raise ValueError("When no model is provided, you need to pass the parameter is_encoder_decoder.")
         else:
             self.is_encoder_decoder = is_encoder_decoder
-        
+
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
 
         if ref_model:
@@ -285,17 +285,11 @@ class KTOTrainer(Trainer):
         self.undesirable_weight = args.undesirable_weight
 
         # tokenize the dataset
-        train_dataset = train_dataset.shuffle(seed=seed)
-        train_dataset = train_dataset.map(self.shuffle_completion, batched=True, batch_size=64)
+        train_dataset = train_dataset.map(self.shuffle_completion, batched=True, batch_size=128)
         train_dataset = train_dataset.map(self.tokenize_row)
 
         if eval_dataset is not None:
-            eval_dataset = eval_dataset.shuffle(seed=seed)
-            eval_dataset = eval_dataset.map(
-                self.shuffle_completion,
-                batched=True,
-                batch_size=64,
-            )
+            eval_dataset = eval_dataset.map(self.shuffle_completion, batched=True, batch_size=128)
             eval_dataset = eval_dataset.map(self.tokenize_row)
 
         # split the dataset and interleave them together with equal probability of choosing chosen or rejected
@@ -777,7 +771,7 @@ class KTOTrainer(Trainer):
         KL = (policy_KL_logps - reference_KL_logps).mean().detach()
         KL = self.accelerator.gather(KL).mean().clamp(min=0)
 
-        if policy_chosen_logps.shape[0] != 0:
+        if policy_chosen_logps.shape[0] != 0 or reference_chosen_logps.shape[0] != 0:
             chosen_logratios = policy_chosen_logps - reference_chosen_logps
             chosen_losses = 1 - F.sigmoid(self.beta * (chosen_logratios - KL))
             chosen_rewards = self.beta * chosen_logratios.detach()
@@ -785,7 +779,7 @@ class KTOTrainer(Trainer):
             chosen_losses = torch.Tensor([]).to(self.accelerator.device)
             chosen_rewards = torch.Tensor([]).to(self.accelerator.device)
 
-        if policy_rejected_logps.shape[0] != 0:
+        if policy_rejected_logps.shape[0] != 0 or reference_rejected_logps.shape[0] != 0:
             rejected_logratios = policy_rejected_logps - reference_rejected_logps
             rejected_losses = 1 - F.sigmoid(self.beta * (KL - rejected_logratios))
             rejected_rewards = self.beta * rejected_logratios.detach()

@@ -40,8 +40,8 @@ class ScriptArguments:
 
     # training parameters
     model_name_or_path: Optional[str] = field(default="gpt2", metadata={"help": "the model name"})
-    learning_rate: Optional[float] = field(default=1e-3, metadata={"help": "optimizer learning rate"})
-    per_device_train_batch_size: Optional[int] = field(default=4, metadata={"help": "batch size per device"})
+    learning_rate: Optional[float] = field(default=1e-4, metadata={"help": "optimizer learning rate"})
+    per_device_train_batch_size: Optional[int] = field(default=8, metadata={"help": "batch size per device"})
     gradient_accumulation_steps: Optional[int] = field(
         default=1, metadata={"help": "the number of gradient accumulation steps"}
     )
