@@ -146,7 +146,7 @@ class DPOTrainer(Trainer):
         args: TrainingArguments = None,
         data_collator: Optional[DataCollator] = None,
         label_pad_token_id: int = -100,
-        padding_value: int = 0,
+        padding_value: Optional[int] = None,
         truncation_mode: str = "keep_end",
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
