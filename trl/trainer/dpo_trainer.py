@@ -122,6 +122,8 @@ class DPOTrainer(Trainer):
         precompute_ref_log_probs (`bool`, defaults to `False`):
             Flag to precompute reference model log probabilities and evaluation datasets. This is useful if you want to train
             without the reference model and reduce the total GPU memory needed.
+        dataset_num_proc (`Optional[int]`):
+            The number of workers to use to tokenize the data. Defaults to None.
         model_init_kwargs: (`Optional[Dict]`, *optional*):
             Dict of Optional kwargs to pass when instantiating the model from a string
         ref_model_init_kwargs: (`Optional[Dict]`, *optional*):
@@ -162,6 +164,7 @@ class DPOTrainer(Trainer):
         generate_during_eval: bool = False,
         compute_metrics: Optional[Callable[[EvalLoopOutput], Dict]] = None,
         precompute_ref_log_probs: bool = False,
+        dataset_num_proc: int = None,
         model_init_kwargs: Optional[Dict] = None,
         ref_model_init_kwargs: Optional[Dict] = None,
         model_adapter_name: str = None,
@@ -352,8 +355,9 @@ class DPOTrainer(Trainer):
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
+        self.dataset_num_proc = dataset_num_proc
         # tokenize the dataset
-        train_dataset = train_dataset.map(self.tokenize_row)
+        train_dataset = train_dataset.map(self.tokenize_row, num_proc=self.dataset_num_proc)
         if eval_dataset is not None:
             eval_dataset = eval_dataset.map(self.tokenize_row)
 
