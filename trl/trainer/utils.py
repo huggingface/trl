@@ -19,11 +19,17 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
+from accelerate import PartialState
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import IterableDataset
-from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizerBase
+from transformers import BitsAndBytesConfig, DataCollatorForLanguageModeling, PreTrainedTokenizerBase
 
-from ..import_utils import is_unsloth_available
+from ..import_utils import is_peft_available, is_unsloth_available, is_xpu_available
+from ..trainer.model_config import ModelConfig
+
+
+if is_peft_available():
+    from peft import LoraConfig, PeftConfig
 
 
 class AdaptiveKLController:
@@ -61,11 +67,11 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
     calculated on the completion made by the assistant.
 
     Args:
-        instruction_template (`Optional[str]`): the template form that indicates the start of the human instruction, typically something like
-            '### Human:\n'. Useful for assistant-style conversation datasets
         response_template (`Union[str, List[int]]`): the template form that indicates the start of the response, typically something like
             '### Response:\n'. It can also be passed as tokenized ids, which can be useful when using a tokenizer that encodes the response
             differently if it does not have proper context.
+        instruction_template (`Union[str, List[int]]`): the template form that indicates the start of the human instruction, typically something like
+            '### Human:\n'. Useful for assistant-style conversation datasets. It can also be passed as tokenized ids.
         mlm (`bool`, *optional*, defaults to `False`): Whether or not to use masked language modeling in the underlying
             `DataCollatorForLanguageModeling` class. Note that this option currently has no effect but is present
              for flexibility and backwards-compatibility.
@@ -304,6 +310,12 @@ class DPODataCollatorWithPadding:
                     to_pad = [torch.LongTensor(ex[k]) for ex in features]
 
                     if (k.startswith("prompt")) and (k.endswith("input_ids")):
+                        if self.pad_token_id is None:
+                            raise ValueError(
+                                "Padding is enabled, but the tokenizer is not configured with a padding token."
+                                " Explicitly set `tokenizer.pad_token` (e.g. `tokenizer.pad_token = tokenizer.eos_token`)"
+                                " before calling the trainer."
+                            )
                         padding_value = self.pad_token_id
                     elif k.endswith("_attention_mask"):
                         padding_value = 0
@@ -319,6 +331,12 @@ class DPODataCollatorWithPadding:
                     else:
                         to_pad = [torch.LongTensor(ex[k]) for ex in features]
                     if k.endswith("_input_ids"):
+                        if self.pad_token_id is None:
+                            raise ValueError(
+                                "Padding is enabled, but the tokenizer is not configured with a padding token."
+                                " Explicitly set `tokenizer.pad_token` (e.g. `tokenizer.pad_token = tokenizer.eos_token`)"
+                                " before calling the trainer."
+                            )
                         padding_value = self.pad_token_id
                     elif k.endswith("_labels"):
                         padding_value = self.label_pad_token_id
@@ -355,7 +373,7 @@ class ConstantLengthDataset(IterableDataset):
                 Name of the field in the dataset that contains the text. Used only if `formatting_func` is `None`.
             formatting_func (`Callable`, **optional**):
                 Function that formats the text before tokenization. Usually it is recommended to have follows a certain
-                pattern such as `"### Question: {question}\n ### Answer: {answer}\n"`
+                pattern such as `"### Question: {question} ### Answer: {answer}"`
             infinite (`bool`, *optional*, defaults to `False`):
                 If True the iterator is reset after dataset reaches end else stops.
             seq_length (`int`, *optional*, defaults to `1024`):
@@ -664,3 +682,47 @@ def trl_sanitze_kwargs_for_tagging(model, tag_names, kwargs=None):
             tag_names.append(kwargs["tags"])
             kwargs["tags"] = tag_names
     return kwargs
+
+
+def get_quantization_config(model_config: ModelConfig) -> Optional[BitsAndBytesConfig]:
+    if model_config.load_in_4bit:
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=model_config.torch_dtype,  # For consistency with model weights, we use the same value as `torch_dtype`
+            bnb_4bit_quant_type=model_config.bnb_4bit_quant_type,
+            bnb_4bit_use_double_quant=model_config.use_bnb_nested_quant,
+        )
+    elif model_config.load_in_8bit:
+        quantization_config = BitsAndBytesConfig(
+            load_in_8bit=True,
+        )
+    else:
+        quantization_config = None
+
+    return quantization_config
+
+
+def get_kbit_device_map() -> Optional[Dict[str, int]]:
+    if is_xpu_available():
+        return {"": f"xpu:{PartialState().local_process_index}"}
+    elif torch.cuda.is_available():
+        return {"": PartialState().local_process_index}
+    else:
+        return None
+
+
+def get_peft_config(model_config: ModelConfig) -> "Optional[PeftConfig]":
+    if model_config.use_peft is False:
+        return None
+
+    peft_config = LoraConfig(
+        r=model_config.lora_r,
+        lora_alpha=model_config.lora_alpha,
+        lora_dropout=model_config.lora_dropout,
+        bias="none",
+        task_type="CAUSAL_LM",
+        target_modules=model_config.lora_target_modules,
+        modules_to_save=model_config.lora_modules_to_save,
+    )
+
+    return peft_config

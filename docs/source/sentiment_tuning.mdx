@@ -25,7 +25,7 @@ accelerate launch examples/scripts/ppo.py # launches training
 # 3. get help text and documentation
 python examples/scripts/ppo.py --help
 # 4. configure logging with wandb and, say, mini_batch_size=1 and gradient_accumulation_steps=16
-python examples/scripts/ppo.py --ppo_config.log_with wandb --ppo_config.mini_batch_size 1 --ppo_config.gradient_accumulation_steps 16
+python examples/scripts/ppo.py --log_with wandb --mini_batch_size 1 --gradient_accumulation_steps 16
 ```
 
 Note: if you don't want to log with `wandb` remove `log_with="wandb"` in the scripts/notebooks. You can also replace it with your favourite experiment tracker that's [supported by `accelerate`](https://huggingface.co/docs/accelerate/usage_guides/tracking).
@@ -42,7 +42,7 @@ Below are some benchmark results for `examples/scripts/ppo.py`. To reproduce loc
 
 ```bash
 python benchmark/benchmark.py \
-    --command "python examples/scripts/ppo.py --ppo_config.log_with wandb" \
+    --command "python examples/scripts/ppo.py --log_with wandb" \
     --num-seeds 5 \
     --start-seed 1 \
     --workers 10 \
@@ -61,7 +61,7 @@ python benchmark/benchmark.py \
 
 ```bash
 python benchmark/benchmark.py \
-    --command "python examples/scripts/ppo.py --ppo_config.exp_name sentiment_tuning_step_grad_accu --ppo_config.mini_batch_size 1 --ppo_config.gradient_accumulation_steps 128 --ppo_config.log_with wandb" \
+    --command "python examples/scripts/ppo.py --exp_name sentiment_tuning_step_grad_accu --mini_batch_size 1 --gradient_accumulation_steps 128 --log_with wandb" \
     --num-seeds 5 \
     --start-seed 1 \
     --workers 10 \
@@ -79,7 +79,7 @@ python benchmark/benchmark.py \
 
 ```bash
 python benchmark/benchmark.py \
-    --command "python examples/scripts/ppo.py --ppo_config.exp_name sentiment_tuning_gpt2 --ppo_config.log_with wandb" \
+    --command "python examples/scripts/ppo.py --exp_name sentiment_tuning_gpt2 --log_with wandb" \
     --num-seeds 5 \
     --start-seed 1 \
     --workers 10 \
@@ -89,7 +89,7 @@ python benchmark/benchmark.py \
     --slurm-total-cpus 12 \
     --slurm-template-path benchmark/trl.slurm_template
 python benchmark/benchmark.py \
-    --command "python examples/scripts/ppo.py --ppo_config.exp_name sentiment_tuning_gpt2xl_grad_accu --ppo_config.model_name gpt2-xl --ppo_config.mini_batch_size 16 --ppo_config.gradient_accumulation_steps 8 --ppo_config.log_with wandb" \
+    --command "python examples/scripts/ppo.py --exp_name sentiment_tuning_gpt2xl_grad_accu --model_name gpt2-xl --mini_batch_size 16 --gradient_accumulation_steps 8 --log_with wandb" \
     --num-seeds 5 \
     --start-seed 1 \
     --workers 10 \
@@ -99,7 +99,7 @@ python benchmark/benchmark.py \
     --slurm-total-cpus 12 \
     --slurm-template-path benchmark/trl.slurm_template
 python benchmark/benchmark.py \
-    --command "python examples/scripts/ppo.py --ppo_config.exp_name sentiment_tuning_falcon_rw_1b --ppo_config.model_name tiiuae/falcon-rw-1b --ppo_config.log_with wandb" \
+    --command "python examples/scripts/ppo.py --exp_name sentiment_tuning_falcon_rw_1b --model_name tiiuae/falcon-rw-1b --log_with wandb" \
     --num-seeds 5 \
     --start-seed 1 \
     --workers 10 \
@@ -116,7 +116,7 @@ python benchmark/benchmark.py \
 
 ```
 python benchmark/benchmark.py \
-    --command "python examples/scripts/ppo.py --ppo_config.exp_name sentiment_tuning_peft --use_peft --ppo_config.log_with wandb" \
+    --command "python examples/scripts/ppo.py --exp_name sentiment_tuning_peft --use_peft --log_with wandb" \
     --num-seeds 5 \
     --start-seed 1 \
     --workers 10 \
