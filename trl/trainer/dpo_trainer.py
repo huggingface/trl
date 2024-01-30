@@ -970,6 +970,7 @@ class DPOTrainer(Trainer):
         all_logits = model(
             concatenated_batch["concatenated_input_ids"],
             attention_mask=concatenated_batch["concatenated_attention_mask"],
+            use_cache=False,
             **model_kwargs,
         ).logits
 
