@@ -139,7 +139,11 @@ if __name__ == "__main__":
         quantization_config=quantization_config,
     )
     model = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, **model_kwargs)
-    model_ref = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, **model_kwargs)
+    peft_config = get_peft_config(model_config)
+    if peft_config is None:
+        model_ref = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, **model_kwargs)
+    else:
+        model_ref = None
     tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
