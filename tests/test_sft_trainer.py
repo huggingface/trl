@@ -17,6 +17,7 @@ import tempfile
 import unittest
 
 import numpy as np
+import pytest
 import torch
 from datasets import Dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
@@ -148,18 +149,18 @@ class SFTTrainerTester(unittest.TestCase):
             formatting_func=formatting_prompts_func,
         )
 
-        self.assertTrue(len(formatted_dataset) == len(self.dummy_dataset))
-        self.assertTrue(len(formatted_dataset) > 0)
+        assert len(formatted_dataset) == len(self.dummy_dataset)
+        assert len(formatted_dataset) > 0
 
         for example in formatted_dataset:
-            self.assertTrue("input_ids" in example)
-            self.assertTrue("labels" in example)
+            assert "input_ids" in example
+            assert "labels" in example
 
-            self.assertTrue(len(example["input_ids"]) == formatted_dataset.seq_length)
-            self.assertTrue(len(example["labels"]) == formatted_dataset.seq_length)
+            assert len(example["input_ids"]) == formatted_dataset.seq_length
+            assert len(example["labels"]) == formatted_dataset.seq_length
 
             decoded_text = self.tokenizer.decode(example["input_ids"])
-            self.assertTrue(("Question" in decoded_text) and ("Answer" in decoded_text))
+            assert ("Question" in decoded_text) and ("Answer" in decoded_text)
 
     def test_sft_trainer(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -183,10 +184,10 @@ class SFTTrainerTester(unittest.TestCase):
 
             trainer.train()
 
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-            self.assertIsNotNone(trainer.state.log_history[0]["eval_loss"])
+            assert trainer.state.log_history[(-1)]["train_loss"] is not None
+            assert trainer.state.log_history[0]["eval_loss"] is not None
 
-            self.assertTrue("model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2"))
+            assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2")
 
     def test_sft_trainer_uncorrect_data(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -200,7 +201,7 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
             )
 
-            with self.assertRaises(ValueError):
+            with pytest.raises(ValueError):
                 _ = SFTTrainer(
                     model=self.model,
                     args=training_args,
@@ -246,7 +247,7 @@ class SFTTrainerTester(unittest.TestCase):
                 packing=True,
             )
 
-            with self.assertRaises(ValueError):
+            with pytest.raises(ValueError):
                 # This should not work because not enough data for one sample
                 _ = SFTTrainer(
                     model=self.model,
@@ -258,7 +259,7 @@ class SFTTrainerTester(unittest.TestCase):
                 )
 
             # This should not work as well
-            with self.assertRaises(ValueError):
+            with pytest.raises(ValueError):
                 _ = SFTTrainer(
                     model=self.model,
                     args=training_args,
@@ -299,10 +300,10 @@ class SFTTrainerTester(unittest.TestCase):
 
             trainer.train()
 
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-            self.assertIsNotNone(trainer.state.log_history[0]["eval_loss"])
+            assert trainer.state.log_history[(-1)]["train_loss"] is not None
+            assert trainer.state.log_history[0]["eval_loss"] is not None
 
-            self.assertTrue("model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2"))
+            assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
@@ -327,9 +328,9 @@ class SFTTrainerTester(unittest.TestCase):
 
             trainer.train()
 
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+            assert trainer.state.log_history[(-1)]["train_loss"] is not None
 
-            self.assertTrue("model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2"))
+            assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
@@ -352,9 +353,9 @@ class SFTTrainerTester(unittest.TestCase):
 
             trainer.train()
 
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+            assert trainer.state.log_history[(-1)]["train_loss"] is not None
 
-            self.assertTrue("model.safetensors" in os.listdir(tmp_dir + "/checkpoint-1"))
+            assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-1")
 
     def test_sft_trainer_with_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -378,10 +379,10 @@ class SFTTrainerTester(unittest.TestCase):
 
             trainer.train()
 
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-            self.assertIsNotNone(trainer.state.log_history[0]["eval_loss"])
+            assert trainer.state.log_history[(-1)]["train_loss"] is not None
+            assert trainer.state.log_history[0]["eval_loss"] is not None
 
-            self.assertTrue("model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2"))
+            assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
@@ -405,9 +406,9 @@ class SFTTrainerTester(unittest.TestCase):
 
             trainer.train()
 
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+            assert trainer.state.log_history[(-1)]["train_loss"] is not None
 
-            self.assertTrue("model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2"))
+            assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2")
 
         # with formatting_func + packed
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -432,9 +433,9 @@ class SFTTrainerTester(unittest.TestCase):
 
             trainer.train()
 
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+            assert trainer.state.log_history[(-1)]["train_loss"] is not None
 
-            self.assertTrue("model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2"))
+            assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2")
 
         # with formatting_func + packed
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -457,9 +458,9 @@ class SFTTrainerTester(unittest.TestCase):
 
             trainer.train()
 
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+            assert trainer.state.log_history[(-1)]["train_loss"] is not None
 
-            self.assertTrue("model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2"))
+            assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
@@ -481,9 +482,9 @@ class SFTTrainerTester(unittest.TestCase):
 
             trainer.train()
 
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+            assert trainer.state.log_history[(-1)]["train_loss"] is not None
 
-            self.assertTrue("model.safetensors" in os.listdir(tmp_dir + "/checkpoint-1"))
+            assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-1")
 
     def test_sft_trainer_with_multiple_eval_datasets(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -510,11 +511,11 @@ class SFTTrainerTester(unittest.TestCase):
 
             trainer.train()
 
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-            self.assertIsNotNone(trainer.state.log_history[0]["eval_data1_loss"])
-            self.assertIsNotNone(trainer.state.log_history[1]["eval_data2_loss"])
+            assert trainer.state.log_history[(-1)]["train_loss"] is not None
+            assert trainer.state.log_history[0]["eval_data1_loss"] is not None
+            assert trainer.state.log_history[1]["eval_data2_loss"] is not None
 
-            self.assertTrue("model.safetensors" in os.listdir(tmp_dir + "/checkpoint-1"))
+            assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-1")
 
     def test_data_collator_completion_lm(self):
         response_template = "### Response:\n"
@@ -529,7 +530,7 @@ class SFTTrainerTester(unittest.TestCase):
         labels = batch["labels"]
         last_pad_idx = np.where(labels == -100)[1][-1]
         result_text = self.tokenizer.decode(batch["input_ids"][0, last_pad_idx + 1 :])
-        self.assertEqual(result_text, "I have not been masked correctly.")
+        assert result_text == "I have not been masked correctly."
 
     def test_data_collator_completion_lm_with_multiple_text(self):
         tokenizer = copy.deepcopy(self.tokenizer)
@@ -552,7 +553,7 @@ class SFTTrainerTester(unittest.TestCase):
             labels = batch["labels"][i]
             last_pad_idx = np.where(labels == -100)[0][-1]
             result_text = tokenizer.decode(batch["input_ids"][i, last_pad_idx + 1 :])
-            self.assertEqual(result_text, "I have not been masked correctly.")
+            assert result_text == "I have not been masked correctly."
 
     def test_data_collator_chat_completion_lm(self):
         instruction_template = "### Human:"
@@ -573,7 +574,7 @@ class SFTTrainerTester(unittest.TestCase):
         labels = batch["labels"]
         non_masked_tokens = batch["input_ids"][labels != -100]
         result_text = self.tokenizer.decode(non_masked_tokens)
-        self.assertEqual(result_text, " I should not be masked. I should not be masked too.")
+        assert result_text == " I should not be masked. I should not be masked too."
 
     def test_data_collator_chat_completion_lm_with_multiple_text(self):
         tokenizer = copy.deepcopy(self.tokenizer)
@@ -601,11 +602,11 @@ class SFTTrainerTester(unittest.TestCase):
 
         non_masked_tokens1 = input_ids[0][labels[0] != -100]
         result_text1 = tokenizer.decode(non_masked_tokens1)
-        self.assertEqual(result_text1, " I should not be masked.")
+        assert result_text1 == " I should not be masked."
 
         non_masked_tokens2 = input_ids[1][labels[1] != -100]
         result_text2 = tokenizer.decode(non_masked_tokens2)
-        self.assertEqual(result_text2, " I should not be masked. I should not be masked too.")
+        assert result_text2 == " I should not be masked. I should not be masked too."
 
     def test_sft_trainer_infinite_with_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -628,15 +629,15 @@ class SFTTrainerTester(unittest.TestCase):
                 max_seq_length=500,
             )
 
-            self.assertTrue(trainer.train_dataset.infinite)
+            assert trainer.train_dataset.infinite
 
             trainer.train()
 
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-            self.assertIsNotNone(trainer.state.log_history[0]["eval_loss"])
+            assert trainer.state.log_history[(-1)]["train_loss"] is not None
+            assert trainer.state.log_history[0]["eval_loss"] is not None
 
             # make sure the trainer did 5 steps
-            self.assertTrue("model.safetensors" in os.listdir(tmp_dir + "/checkpoint-5"))
+            assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-5")
 
     def test_sft_trainer_infinite_with_model_epochs(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -657,14 +658,14 @@ class SFTTrainerTester(unittest.TestCase):
                 max_seq_length=500,
             )
 
-            self.assertFalse(trainer.train_dataset.infinite)
+            assert not trainer.train_dataset.infinite
 
             trainer.train()
 
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+            assert trainer.state.log_history[(-1)]["train_loss"] is not None
 
             # make sure the trainer did 5 steps
-            self.assertTrue("model.safetensors" in os.listdir(tmp_dir + "/checkpoint-4"))
+            assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-4")
 
     def test_sft_trainer_with_model_neftune(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -698,8 +699,8 @@ class SFTTrainerTester(unittest.TestCase):
             torch.random.manual_seed(24)
             embeds_neftune_2 = trainer.model.get_input_embeddings()(torch.LongTensor([[1, 0, 1]]).to(device))
 
-            self.assertFalse(torch.allclose(embeds_neftune, embeds_neftune_2))
-            self.assertTrue(len(trainer.model.get_input_embeddings()._forward_hooks) > 0)
+            assert not torch.allclose(embeds_neftune, embeds_neftune_2)
+            assert len(trainer.model.get_input_embeddings()._forward_hooks) > 0
 
             trainer.neftune_hook_handle.remove()
 
@@ -707,7 +708,7 @@ class SFTTrainerTester(unittest.TestCase):
 
             # Make sure forward pass works fine
             _ = trainer.model(torch.LongTensor([[1, 0, 1]]).to(device))
-            self.assertTrue(len(trainer.model.get_input_embeddings()._forward_hooks) == 0)
+            assert len(trainer.model.get_input_embeddings()._forward_hooks) == 0
 
     @require_peft
     def test_peft_sft_trainer_str(self):
@@ -758,16 +759,16 @@ class SFTTrainerTester(unittest.TestCase):
                 packing=True,
             )
 
-            self.assertTrue(isinstance(trainer.model, PeftModel))
+            assert isinstance(trainer.model, PeftModel)
 
             trainer.train()
 
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-            self.assertIsNotNone(trainer.state.log_history[0]["eval_loss"])
+            assert trainer.state.log_history[(-1)]["train_loss"] is not None
+            assert trainer.state.log_history[0]["eval_loss"] is not None
 
-            self.assertTrue("adapter_model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2"))
-            self.assertTrue("adapter_config.json" in os.listdir(tmp_dir + "/checkpoint-2"))
-            self.assertTrue("model.safetensors" not in os.listdir(tmp_dir + "/checkpoint-2"))
+            assert "adapter_model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2")
+            assert "adapter_config.json" in os.listdir(tmp_dir + "/checkpoint-2")
+            assert "model.safetensors" not in os.listdir(tmp_dir + "/checkpoint-2")
 
     @require_peft
     def test_peft_sft_trainer_gc(self):
@@ -800,16 +801,16 @@ class SFTTrainerTester(unittest.TestCase):
                 packing=True,
             )
 
-            self.assertTrue(isinstance(trainer.model, PeftModel))
+            assert isinstance(trainer.model, PeftModel)
 
             trainer.train()
 
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-            self.assertIsNotNone(trainer.state.log_history[0]["eval_loss"])
+            assert trainer.state.log_history[(-1)]["train_loss"] is not None
+            assert trainer.state.log_history[0]["eval_loss"] is not None
 
-            self.assertTrue("adapter_model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2"))
-            self.assertTrue("adapter_config.json" in os.listdir(tmp_dir + "/checkpoint-2"))
-            self.assertTrue("model.safetensors" not in os.listdir(tmp_dir + "/checkpoint-2"))
+            assert "adapter_model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2")
+            assert "adapter_config.json" in os.listdir(tmp_dir + "/checkpoint-2")
+            assert "model.safetensors" not in os.listdir(tmp_dir + "/checkpoint-2")
 
     @require_peft
     def test_peft_sft_trainer_neftune(self):
@@ -844,7 +845,7 @@ class SFTTrainerTester(unittest.TestCase):
 
             trainer.model = trainer._trl_activate_neftune(trainer.model)
 
-            self.assertTrue(isinstance(trainer.model, PeftModel))
+            assert isinstance(trainer.model, PeftModel)
 
             device = trainer.model.get_input_embeddings().weight.device
             trainer.model.train()
@@ -855,20 +856,20 @@ class SFTTrainerTester(unittest.TestCase):
             torch.random.manual_seed(24)
             embeds_neftune_2 = trainer.model.get_input_embeddings()(torch.LongTensor([[1, 0, 1]]).to(device))
 
-            self.assertFalse(torch.allclose(embeds_neftune, embeds_neftune_2))
-            self.assertTrue(len(trainer.model.get_input_embeddings()._forward_hooks) > 0)
+            assert not torch.allclose(embeds_neftune, embeds_neftune_2)
+            assert len(trainer.model.get_input_embeddings()._forward_hooks) > 0
 
             trainer.neftune_hook_handle.remove()
 
             trainer.train()
 
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-            self.assertIsNotNone(trainer.state.log_history[0]["eval_loss"])
+            assert trainer.state.log_history[(-1)]["train_loss"] is not None
+            assert trainer.state.log_history[0]["eval_loss"] is not None
 
-            self.assertTrue("adapter_model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2"))
-            self.assertTrue("adapter_config.json" in os.listdir(tmp_dir + "/checkpoint-2"))
-            self.assertTrue("model.safetensors" not in os.listdir(tmp_dir + "/checkpoint-2"))
+            assert "adapter_model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2")
+            assert "adapter_config.json" in os.listdir(tmp_dir + "/checkpoint-2")
+            assert "model.safetensors" not in os.listdir(tmp_dir + "/checkpoint-2")
 
             # Make sure forward pass works fine to check if embeddings forward is not broken.
             _ = trainer.model(torch.LongTensor([[1, 0, 1]]).to(device))
-            self.assertTrue(len(trainer.model.get_input_embeddings()._forward_hooks) == 0)
+            assert len(trainer.model.get_input_embeddings()._forward_hooks) == 0

@@ -45,7 +45,7 @@ class DataCollatorForCompletionOnlyLMTester(unittest.TestCase):
         self.tokenized_response_w_context = self.tokenizer.encode(self.response_template, add_special_tokens=False)[2:]
 
         # Plain check on string
-        self.assertIn(self.response_template, self.instruction)
+        assert self.response_template in self.instruction
         self.tokenized_instruction = self.tokenizer.encode(self.instruction, add_special_tokens=False)
 
         # Test the fix for #598
@@ -80,7 +80,7 @@ class DataCollatorForCompletionOnlyLMTester(unittest.TestCase):
             collator_output["labels"][torch.where(collator_output["labels"] != -100)]
         )
         expected_text = " First response\n\n Second response" ""
-        self.assertEqual(collator_text, expected_text)
+        assert collator_text == expected_text
 
     def test_data_collator_handling_of_long_sequences(self):
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/dummy-GPT2-correct-vocab")
@@ -94,7 +94,7 @@ class DataCollatorForCompletionOnlyLMTester(unittest.TestCase):
         self.collator = DataCollatorForCompletionOnlyLM(self.response_template, tokenizer=self.tokenizer)
         encoded_instance = self.collator.torch_call([self.tokenized_instruction])
         result = torch.all(encoded_instance["labels"] == -100)
-        self.assertTrue(result, "Not all values in the tensor are -100.")
+        assert result, "Not all values in the tensor are -100."
 
         # check DataCollatorForCompletionOnlyLM using response template and instruction template
         self.instruction_template = "\n### User:"
@@ -103,4 +103,4 @@ class DataCollatorForCompletionOnlyLMTester(unittest.TestCase):
         )
         encoded_instance = self.collator.torch_call([self.tokenized_instruction])
         result = torch.all(encoded_instance["labels"] == -100)
-        self.assertTrue(result, "Not all values in the tensor are -100.")
+        assert result, "Not all values in the tensor are -100."
