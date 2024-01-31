@@ -710,6 +710,25 @@ class SFTTrainerTester(unittest.TestCase):
             self.assertTrue(len(trainer.model.get_input_embeddings()._forward_hooks) == 0)
 
     @require_peft
+    def test_peft_sft_trainer_str(self):
+        peft_config = LoraConfig(
+            r=16,
+            lora_alpha=32,
+            lora_dropout=0.05,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+
+        _ = SFTTrainer(
+            model=self.model_id,
+            args=None,
+            train_dataset=self.train_dataset,
+            eval_dataset=self.eval_dataset,
+            peft_config=peft_config,
+            packing=True,
+        )
+
+    @require_peft
     def test_peft_sft_trainer(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
