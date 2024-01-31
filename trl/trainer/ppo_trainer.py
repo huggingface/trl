@@ -854,7 +854,9 @@ class PPOTrainer(BaseTrainer):
         train_stats["policy/advantages"] = torch.nan_to_num(train_stats["policy/advantages"], WANDB_PADDING)
         train_stats["policy/ratio"] = torch.flatten(train_stats["policy/ratio"]).unsqueeze(0)
 
-        total_scores = torch.tensor([score[score != padding_value].sum() for score in scores]).to(self.current_device)
+        total_scores = torch.tensor([score[score != padding_value].sum() for score in padded_scores]).to(
+            self.current_device
+        )
 
         stats = self.record_step_stats(
             scores=total_scores,
