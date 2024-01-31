@@ -4,8 +4,14 @@ ignore = [
     "B028", # warning without explicit stacklevel
     "E501",
 ]
-extend-select = ["E", "F", "I", "W", "UP", "B"]
+extend-select = ["E", "F", "I", "W", "UP", "B", "T"]
 line-length = 119
+
+[tool.ruff.per-file-ignores]
+# Allow prints in auxiliary scripts
+"benchmark/**.py" = ["T201"]
+"examples/**.py" = ["T201"]
+"scripts/**.py" = ["T201"]
 
 [tool.ruff.isort]
 lines-after-imports = 2
