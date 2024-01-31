@@ -459,7 +459,6 @@ class PPOTrainerTester(unittest.TestCase):
         for query_tensor, response_tensor in dummy_dataloader:
             # define a reward for response
             # (this could be any reward such as human feedback or output from another model)
-            # reward = [torch.tensor([[1.0]]), torch.tensor([[0.0]])]
             reward = [torch.tensor([1.0, 2.0, 3.0]), torch.tensor([[0.0, 1.0]])]
             # train model - this should raise an error
             with self.assertRaises(ValueError):
@@ -575,7 +574,6 @@ class PPOTrainerTester(unittest.TestCase):
 
         dummy_queries = [torch.tensor([1, 2, 3, 4]), torch.tensor([1, 2, 3, 4, 5, 6, 7])]
         dummy_responses = [torch.tensor([5, 6, 7, 8, 9]), torch.tensor([8, 9, 10, 11, 12, 13])]
-        # dummy_scores = torch.Tensor([1, 2])
         dummy_scores = [
             torch.tensor([0, 0, 0, 0, 1], device=ppo_trainer.current_device),
             torch.tensor([0, 0, 0, 0, 0, 2], device=ppo_trainer.current_device),
