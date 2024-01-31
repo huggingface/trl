@@ -123,11 +123,11 @@ class DPOTrainer(Trainer):
         precompute_ref_log_probs (`bool`, defaults to `False`):
             Flag to precompute reference model log probabilities and evaluation datasets. This is useful if you want to train
             without the reference model and reduce the total GPU memory needed.
-        dataset_num_proc (`Optional[int]`):
+        dataset_num_proc (`Optional[int]`, *optional*):
             The number of workers to use to tokenize the data. Defaults to None.
-        model_init_kwargs: (`Optional[Dict]`, *optional*):
+        model_init_kwargs (`Optional[Dict]`, *optional*):
             Dict of Optional kwargs to pass when instantiating the model from a string
-        ref_model_init_kwargs: (`Optional[Dict]`, *optional*):
+        ref_model_init_kwargs (`Optional[Dict]`, *optional*):
             Dict of Optional kwargs to pass when instantiating the ref model from a string
         model_adapter_name (`str`, defaults to `None`):
             Name of the train target PEFT adapter, when using LoRA with multiple adapters.
