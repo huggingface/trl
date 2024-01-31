@@ -141,7 +141,7 @@ class TestPeftDependancy(unittest.TestCase):
                 # (this could be any reward such as human feedback or output from another model)
                 reward = [torch.tensor(1.0), torch.tensor(0.0)]
                 # train model
-                train_stats = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+                train_stats = ppo_trainer.step(list(query_tensor), list(response_tensor), reward)
                 break
 
             # check gradients are not None

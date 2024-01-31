@@ -384,7 +384,7 @@ class PreTrainedModelWrapper(nn.Module):
                 # check filename with `v_head` or any known extra module:
                 files_to_download = set()
                 for k, v in index["weight_map"].items():
-                    if any([module in k for module in cls.supported_modules]):
+                    if any(module in k for module in cls.supported_modules):
                         files_to_download.add(v)
                 is_sharded = True
 
@@ -487,7 +487,7 @@ class PreTrainedModelWrapper(nn.Module):
         adapter_state_dict = loading_func(local_filename, **load_kwargs)
 
         for score_name_candidate in cls.supported_rm_modules:
-            if any([score_name_candidate in name for name in adapter_state_dict.keys()]):
+            if any(score_name_candidate in name for name in adapter_state_dict.keys()):
                 score_name = score_name_candidate
                 # we have found the correct head name and can break
                 break
@@ -500,7 +500,7 @@ class PreTrainedModelWrapper(nn.Module):
                 score_dict[key_name] = param.to(cls._get_current_device())
 
         num_labels, hidden_dim = score_dict["weight"].shape
-        has_bias = any(["bias" in name for name in adapter_state_dict.keys()])
+        has_bias = any("bias" in name for name in adapter_state_dict.keys())
 
         score = nn.Linear(hidden_dim, num_labels, bias=has_bias).to(
             device=cls._get_current_device(),
@@ -638,7 +638,7 @@ def create_reference_model(
     else:
         for pattern_candidate in LAYER_PATTERNS:
             pattern_candidate = pattern_candidate.format(layer=num_shared_layers)
-            if any([pattern_candidate in name for name in parameter_names]):
+            if any(pattern_candidate in name for name in parameter_names):
                 pattern = pattern_candidate
                 break
 

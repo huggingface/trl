@@ -80,7 +80,7 @@ def stack_dicts(stats_dicts: List[Dict]) -> Dict:
 
 def add_suffix(input_dict: Dict, suffix: str) -> Dict:
     """Add suffix to dict keys."""
-    return dict((k + suffix, v) for k, v in input_dict.items())
+    return {k + suffix: v for k, v in input_dict.items()}
 
 
 def pad_to_size(tensor: torch.Tensor, size: int, dim: int = 1, padding: int = 50256) -> torch.Tensor:

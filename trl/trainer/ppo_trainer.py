@@ -1337,7 +1337,7 @@ class PPOTrainer(BaseTrainer):
         if self.config.log_with == "wandb":
             import wandb
 
-            if any([column_to_log not in batch.keys() for column_to_log in columns_to_log]):
+            if any(column_to_log not in batch.keys() for column_to_log in columns_to_log):
                 raise ValueError(f"Columns to log {columns_to_log} are not present in the batch {batch.keys()}.")
 
             batch_list = [batch[column_to_log] for column_to_log in columns_to_log]

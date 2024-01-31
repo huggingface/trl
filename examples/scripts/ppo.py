@@ -94,7 +94,7 @@ dataset = build_dataset(ppo_config, ppo_config.query_dataset)
 
 
 def collator(data):
-    return dict((key, [d[key] for d in data]) for key in data[0])
+    return {key: [d[key] for d in data] for key in data[0]}
 
 
 # set seed before initializing value head for deterministic eval

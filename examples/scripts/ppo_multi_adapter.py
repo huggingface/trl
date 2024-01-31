@@ -96,7 +96,7 @@ dataset = create_and_prepare_dataset(tokenizer)
 
 
 def collator(data):
-    return dict((key, [d[key] for d in data]) for key in data[0])
+    return {key: [d[key] for d in data] for key in data[0]}
 
 
 config = PPOConfig(
