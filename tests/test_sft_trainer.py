@@ -725,6 +725,7 @@ class SFTTrainerTester(unittest.TestCase):
             train_dataset=self.train_dataset,
             eval_dataset=self.eval_dataset,
             peft_config=peft_config,
+            packing=True,
         )
 
     @require_peft
