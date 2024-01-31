@@ -613,7 +613,7 @@ class DDPOTrainer(BaseTrainer):
         try:
             user = whoami()["name"]
         # handle the offline case
-        except:  # noqa
+        except Exception:
             warnings.warn("Cannot retrieve user information assuming you are running in offline mode.")
             return
 

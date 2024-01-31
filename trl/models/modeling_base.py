@@ -461,7 +461,7 @@ class PreTrainedModelWrapper(nn.Module):
                     "adapter_model.bin",
                     token=token,
                 )
-            except:  # noqa
+            except Exception:
                 filename = os.path.join(adapter_model_id, "adapter_model.safetensors")
                 safe_loading = True
                 if not os.path.exists(filename):
@@ -471,7 +471,7 @@ class PreTrainedModelWrapper(nn.Module):
                             "adapter_model.safetensors",
                             token=token,
                         )
-                    except:  # noqa
+                    except Exception:
                         raise ValueError(
                             "Could not find adapter model in the Hub, make sure you have the correct adapter model id."
                         )

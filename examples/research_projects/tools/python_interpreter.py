@@ -63,7 +63,7 @@ def exact_match_reward(responses, answers=None):
             if predicted_number is not None:
                 if np.abs((predicted_number - float(answer))) < 0.1:
                     reward += 1.0
-        except:  # noqa
+        except Exception:
             pass
         rewards.append(torch.tensor(reward))
     return rewards
