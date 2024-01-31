@@ -143,10 +143,14 @@ def exact_match_reward(responses, answers=None):
     return rewards
 
 
+def tool_fn(x):
+    # limit the amount of tokens
+    return tool(x).split("\n")[1][:600]
+
+
 # text env
 tool = load_tool("vwxyzjn/pyserini-wikipedia-kilt-doc")
-# limit the amount if tokens
-tool_fn = lambda x: tool(x).split("\n")[1][:600]  # noqa
+
 text_env = TextEnvironment(
     model,
     tokenizer,

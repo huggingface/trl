@@ -218,7 +218,7 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
         response_tensors.append(response.squeeze()[-gen_len:])
     batch["response"] = [tokenizer.decode(r.squeeze()) for r in response_tensors]
 
-    # Compute sentiment score # noqa
+    # Compute sentiment score
     texts = batch["response"]
     toxicity_inputs = toxicity_tokenizer(texts, padding=True, truncation=True, return_tensors="pt").to(
         ppo_trainer.accelerator.device

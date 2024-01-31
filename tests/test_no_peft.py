@@ -95,14 +95,14 @@ class TestPeftDependancy(unittest.TestCase):
 
             # Check that loading a model with `peft` will raise an error
             with pytest.raises(ModuleNotFoundError):
-                import peft  # noqa
+                import peft  # noqa: F401
 
-            trl_model = AutoModelForCausalLMWithValueHead.from_pretrained(self.causal_lm_model_id)  # noqa
-            trl_seq2seq_model = AutoModelForSeq2SeqLMWithValueHead.from_pretrained(self.seq_to_seq_model_id)  # noqa
+            _trl_model = AutoModelForCausalLMWithValueHead.from_pretrained(self.causal_lm_model_id)
+            _trl_seq2seq_model = AutoModelForSeq2SeqLMWithValueHead.from_pretrained(self.seq_to_seq_model_id)
 
     def test_imports_no_peft(self):
         with patch.dict(sys.modules, {"peft": None}):
-            from trl import (  # noqa
+            from trl import (  # noqa: F401
                 AutoModelForCausalLMWithValueHead,
                 AutoModelForSeq2SeqLMWithValueHead,
                 PPOConfig,
