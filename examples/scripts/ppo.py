@@ -170,7 +170,7 @@ generation_kwargs = {
     "max_new_tokens": 32,
 }
 
-for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
+for _epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     query_tensors = batch["input_ids"]
 
     # Get response from gpt2

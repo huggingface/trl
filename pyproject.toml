@@ -1,7 +1,10 @@
 [tool.ruff]
 target-version = "py37"
-ignore = ["E501"]
-extend-select = ["E", "F", "I", "W", "UP"]
+ignore = [
+    "B028", # warning without explicit stacklevel
+    "E501",
+]
+extend-select = ["E", "F", "I", "W", "UP", "B"]
 line-length = 119
 
 [tool.ruff.isort]

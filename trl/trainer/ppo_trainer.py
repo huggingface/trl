@@ -1315,7 +1315,7 @@ class PPOTrainer(BaseTrainer):
         stats: dict,
         batch: dict,
         rewards: List[torch.FloatTensor],
-        columns_to_log: List[str] = ["query", "response"],
+        columns_to_log: typing.Iterable[str] = ("query", "response"),
     ):
         """
         A function that logs all the training stats. Call it at the end of each epoch.
@@ -1415,7 +1415,7 @@ class PPOTrainer(BaseTrainer):
 
         text = Text()
 
-        for i, (token, mask) in enumerate(zip(tokens, masks)):
+        for _i, (token, mask) in enumerate(zip(tokens, masks)):
             if mask == 1:
                 text.append(self.tokenizer.decode(token.item()), style="black on deep_sky_blue1")
                 text.append(" ")

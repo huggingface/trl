@@ -471,10 +471,11 @@ class PreTrainedModelWrapper(nn.Module):
                             "adapter_model.safetensors",
                             token=token,
                         )
-                    except Exception:
+                    except Exception as exc:
                         raise ValueError(
-                            "Could not find adapter model in the Hub, make sure you have the correct adapter model id."
-                        )
+                            "Could not find adapter model in the Hub, "
+                            "make sure you have the correct adapter model id."
+                        ) from exc
                 else:
                     local_filename = filename
         else:
@@ -649,7 +650,7 @@ def create_reference_model(
     unshared_param_list = []
 
     shared_parameter = True
-    for name, param in model.named_parameters():
+    for name, _param in model.named_parameters():
         if pattern in name:
             shared_parameter = False
         if shared_parameter:

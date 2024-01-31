@@ -122,7 +122,7 @@ gen = iter(gen)
 
 def generate_data(n):
     tasks, answers = [], []
-    for i in range(n):
+    for _i in range(n):
         q, a = next(gen)
         tasks.append(q)
         answers.append(a)

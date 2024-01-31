@@ -194,7 +194,7 @@ def respond_to_batch(
 ) -> torch.LongTensor:
     """Sample text from language model."""
     input_ids = queries
-    for i in range(txt_len):
+    for _i in range(txt_len):
         # Get Logits
         outputs = model(input_ids)
         next_token_logits = outputs[0][:, -1, :]

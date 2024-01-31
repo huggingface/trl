@@ -130,7 +130,7 @@ generation_kwargs = {
     "max_new_tokens": 32,
 }
 
-for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
+for _epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     question_tensors = batch["input_ids"]
 
     response_tensors = ppo_trainer.generate(

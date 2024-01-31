@@ -106,7 +106,7 @@ text_env = TextEnvironment(
 )
 
 # main training loop
-for step in range(100):
+for _step in range(100):
     tasks, answers = generate_data(ppo_config.batch_size)
     queries, responses, masks, rewards, histories = text_env.run(tasks, answers=answers)
     train_stats = ppo_trainer.step(queries, responses, rewards, masks)
