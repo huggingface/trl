@@ -55,7 +55,7 @@ class RewardTrainer(Trainer):
 
     def __init__(
         self,
-        model: Union[PreTrainedModel, nn.Module] = None,
+        model: Optional[Union[PreTrainedModel, nn.Module]] = None,
         args: Optional[RewardConfig] = None,
         data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Dataset] = None,

@@ -139,12 +139,12 @@ class DPOTrainer(Trainer):
 
     def __init__(
         self,
-        model: Union[PreTrainedModel, nn.Module, str] = None,
+        model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
         ref_model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
         beta: float = 0.1,
         label_smoothing: float = 0,
         loss_type: Literal["sigmoid", "hinge", "ipo", "kto_pair"] = "sigmoid",
-        args: TrainingArguments = None,
+        args: Optional[TrainingArguments] = None,
         data_collator: Optional[DataCollator] = None,
         label_pad_token_id: int = -100,
         padding_value: Optional[int] = None,
@@ -165,11 +165,11 @@ class DPOTrainer(Trainer):
         generate_during_eval: bool = False,
         compute_metrics: Optional[Callable[[EvalLoopOutput], Dict]] = None,
         precompute_ref_log_probs: bool = False,
-        dataset_num_proc: int = None,
+        dataset_num_proc: Optional[int] = None,
         model_init_kwargs: Optional[Dict] = None,
         ref_model_init_kwargs: Optional[Dict] = None,
-        model_adapter_name: str = None,
-        ref_adapter_name: str = None,
+        model_adapter_name: Optional[str] = None,
+        ref_adapter_name: Optional[str] = None,
     ):
         if model_init_kwargs is None:
             model_init_kwargs = {}
@@ -585,7 +585,7 @@ class DPOTrainer(Trainer):
             attention_mask=answer_attention_mask,
         )
 
-    def tokenize_row(self, feature, model: Union[PreTrainedModel, nn.Module] = None) -> Dict:
+    def tokenize_row(self, feature, model: Optional[Union[PreTrainedModel, nn.Module]] = None) -> Dict:
         """Tokenize a single row from a DPO specific dataset.
 
         At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation

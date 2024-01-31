@@ -82,7 +82,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
     def __init__(
         self,
         response_template: Union[str, List[int]],
-        instruction_template: Union[str, List[int]] = None,
+        instruction_template: Optional[Union[str, List[int]]] = None,
         *args,
         mlm: bool = False,
         ignore_index: int = -100,
