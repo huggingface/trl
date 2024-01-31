@@ -117,6 +117,7 @@ class SFTTrainer(Trainer):
         dataset_kwargs: (`Optional[Dict]`, *optional*):
             Dict of Optional kwargs to pass when creating packed or non-packed datasets
     """
+
     _tag_names = ["trl", "sft"]
 
     def __init__(

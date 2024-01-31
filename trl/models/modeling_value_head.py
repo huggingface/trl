@@ -85,6 +85,7 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
                 - **"normal"** -- Initializes the weights of the `ValueHead` with a normal distribution.
 
     """
+
     transformers_parent_class = AutoModelForCausalLM
     lm_head_namings = ["lm_head", "embed_out"]
     supported_args = (
@@ -276,6 +277,7 @@ class AutoModelForSeq2SeqLMWithValueHead(PreTrainedModelWrapper):
         kwargs:
             Additional keyword arguments passed along to the `ValueHead` class.
     """
+
     transformers_parent_class = AutoModelForSeq2SeqLM
     lm_head_namings = ["lm_head", "embed_out", "output_projection"]
     supported_args = (

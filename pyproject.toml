@@ -1,15 +1,8 @@
-[tool.black]
-line-length = 119
-target-version = ['py38']
-
 [tool.ruff]
-ignore = ["E501", "E741", "W605"]
-select = ["E", "F", "I", "W"]
+target-version = "py37"
+ignore = ["E501"]
+extend-select = ["E", "F", "I", "W"]
 line-length = 119
-
-# Ignore import violations in all `__init__.py` files.
-[tool.ruff.per-file-ignores]
-"__init__.py" = ["E402", "F401", "F403", "F811"]
 
 [tool.ruff.isort]
 lines-after-imports = 2
