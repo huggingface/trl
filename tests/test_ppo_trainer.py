@@ -151,7 +151,9 @@ class PPOTrainerTester(unittest.TestCase):
     def _init_dummy_dataset(self):
         # encode a query
         query_txt = "This morning I went to the "
-        query_tensor = self.gpt2_tokenizer.encode(query_txt, return_tensors="pt")
+        query_tensor = self.gpt2_tokenizer.encode(query_txt, return_tensors="pt").to(
+            self.gpt2_model.pretrained_model.device
+        )
         assert query_tensor.shape == (1, 7)
         # get model response
         response_tensor = respond_to_batch(self.gpt2_model, query_tensor)
@@ -457,12 +459,18 @@ class PPOTrainerTester(unittest.TestCase):
         for query_tensor, response_tensor in dummy_dataloader:
             # define a reward for response
             # (this could be any reward such as human feedback or output from another model)
-            reward = [torch.tensor([[1.0]]), torch.tensor([[0.0]])]
+            # reward = [torch.tensor([[1.0]]), torch.tensor([[0.0]])]
+            reward = [torch.tensor([1.0, 2.0, 3.0]), torch.tensor([[0.0, 1.0]])]
             # train model - this should raise an error
             with self.assertRaises(ValueError):
                 _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
 
             reward = [torch.tensor([1.0]), torch.tensor([0.0])]
+            # train model - this should work
+            _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+
+            # token-level rewards
+            reward = [torch.tensor([1.0] * 7), torch.tensor([0.0] * 7)]
             # train model - this should work
             _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
             break
@@ -498,7 +506,7 @@ class PPOTrainerTester(unittest.TestCase):
             # train model - this should raise an error
             bs = ppo_trainer.config.batch_size
 
-            queries, responses, _, _ = ppo_trainer._step_safety_checker(
+            queries, responses, _, _, _ = ppo_trainer._step_safety_checker(
                 bs, [q for q in query_tensor], [r for r in response_tensor], reward
             )
 
@@ -516,7 +524,9 @@ class PPOTrainerTester(unittest.TestCase):
         Test if the training loop works fine without passing a dataset
         """
         query_txt = "This morning I went to the "
-        query_tensor = self.gpt2_tokenizer.encode(query_txt, return_tensors="pt")
+        query_tensor = self.gpt2_tokenizer.encode(query_txt, return_tensors="pt").to(
+            self.gpt2_model.pretrained_model.device
+        )
         self.ppo_config.batch_size = 1
 
         response_tensor = respond_to_batch(self.gpt2_model, query_tensor)
@@ -565,7 +575,11 @@ class PPOTrainerTester(unittest.TestCase):
 
         dummy_queries = [torch.tensor([1, 2, 3, 4]), torch.tensor([1, 2, 3, 4, 5, 6, 7])]
         dummy_responses = [torch.tensor([5, 6, 7, 8, 9]), torch.tensor([8, 9, 10, 11, 12, 13])]
-        dummy_scores = torch.Tensor([1, 2])
+        # dummy_scores = torch.Tensor([1, 2])
+        dummy_scores = [
+            torch.tensor([0, 0, 0, 0, 1], device=ppo_trainer.current_device),
+            torch.tensor([0, 0, 0, 0, 0, 2], device=ppo_trainer.current_device),
+        ]
 
         ppo_trainer.config.mini_batch_size = 1
         ppo_trainer.config.batch_size = 1
@@ -989,9 +1003,11 @@ class PPOTrainerTester(unittest.TestCase):
                 _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
                 break
 
-            new_logits = ppo_trainer.model.compute_reward_score(dummy_inputs)
-            self.assertTrue(not torch.allclose(previous_rm_logits, new_logits[:, -1, :]))
-            self.assertTrue(torch.allclose(original_rm_logits, new_logits[:, -1, :]))
+            new_logits = ppo_trainer.model.compute_reward_score(
+                dummy_inputs.to(ppo_trainer.model.pretrained_model.device)
+            )
+            self.assertTrue(not torch.allclose(previous_rm_logits, new_logits[:, -1, :].to(previous_rm_logits.device)))
+            self.assertTrue(torch.allclose(original_rm_logits, new_logits[:, -1, :].to(original_rm_logits.device)))
 
             # check gradients
             for name, param in model.named_parameters():
@@ -1126,7 +1142,10 @@ class PPOTrainerTester(unittest.TestCase):
 
         tokenizer.pad_token = tokenizer.eos_token
 
-        model_inputs = [tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts]
+        model_inputs = [
+            tokenizer(txt, return_tensors="pt").to(model.pretrained_model.device).input_ids.squeeze()
+            for txt in input_texts
+        ]
 
         generations_batched = ppo_trainer.generate(model_inputs, batch_size=2, **generation_kwargs)
         generations_batched = tokenizer.batch_decode(generations_batched)
