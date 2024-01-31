@@ -113,7 +113,7 @@ def whiten(values: torch.Tensor, shift_mean: bool = True) -> torch.Tensor:
     return whitened
 
 
-def masked_mean(values: torch.Tensor, mask: torch.Tensor, axis: bool = None) -> torch.Tensor:
+def masked_mean(values: torch.Tensor, mask: torch.Tensor, axis: Optional[bool] = None) -> torch.Tensor:
     """Compute mean of tensor with a masked values."""
     if axis is not None:
         return (values * mask).sum(axis=axis) / mask.sum(axis=axis)

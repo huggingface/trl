@@ -14,6 +14,7 @@
 
 import re
 import warnings
+from typing import Optional
 
 import torch
 from accelerate.utils import extract_model_from_parallel
@@ -416,7 +417,7 @@ class TextEnvironment:
         self,
         query_tensors,
         batch_size: int = 16,
-        pad_to_multiple_of: int = None,
+        pad_to_multiple_of: Optional[int] = None,
     ):
         """
         Generate responses for a list of query tensors.

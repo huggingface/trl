@@ -142,10 +142,10 @@ class PPOTrainer(BaseTrainer):
 
     def __init__(
         self,
-        config: PPOConfig = None,
-        model: PreTrainedModelWrapper = None,
+        config: Optional[PPOConfig] = None,
+        model: Optional[PreTrainedModelWrapper] = None,
         ref_model: Optional[PreTrainedModelWrapper] = None,
-        tokenizer: PreTrainedTokenizerBase = None,
+        tokenizer: Optional[PreTrainedTokenizerBase] = None,
         dataset: Optional[Union[torch.utils.data.Dataset, Dataset]] = None,
         optimizer: Optional[torch.optim.Optimizer] = None,
         data_collator: Optional[typing.Callable] = None,
@@ -431,7 +431,7 @@ class PPOTrainer(BaseTrainer):
     def generate(
         self,
         query_tensor: Union[torch.Tensor, List[torch.Tensor]],
-        length_sampler: Callable = None,
+        length_sampler: Optional[Callable] = None,
         batch_size: int = 4,
         return_prompt: bool = True,
         generate_ref_response: bool = False,
@@ -508,10 +508,10 @@ class PPOTrainer(BaseTrainer):
         self,
         model: PreTrainedModelWrapper,
         query_tensors: List[torch.Tensor],
-        length_sampler: Callable = None,
+        length_sampler: Optional[Callable] = None,
         batch_size: int = 4,
         return_prompt: bool = True,
-        pad_to_multiple_of: int = None,
+        pad_to_multiple_of: Optional[int] = None,
         remove_padding: bool = True,
         **generation_kwargs,
     ):
