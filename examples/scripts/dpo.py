@@ -50,7 +50,7 @@ python examples/scripts/dpo.py \
     --lora_alpha=16
 """
 from dataclasses import dataclass, field
-from typing import Dict
+from typing import Dict, Optional
 
 import torch
 from datasets import Dataset, load_dataset
@@ -87,7 +87,7 @@ def extract_anthropic_prompt(prompt_and_response):
     return prompt_and_response[: search_term_idx + len(search_term)]
 
 
-def get_hh(split: str, sanity_check: bool = False, silent: bool = False, cache_dir: str = None) -> Dataset:
+def get_hh(split: str, sanity_check: bool = False, silent: bool = False, cache_dir: Optional[str] = None) -> Dataset:
     """Load the Anthropic Helpful-Harmless dataset from Hugging Face and convert it to the necessary format.
 
     The dataset is converted to a dictionary with the following structure:

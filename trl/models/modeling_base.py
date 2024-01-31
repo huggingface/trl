@@ -15,6 +15,7 @@ import json
 import logging
 import os
 from copy import deepcopy
+from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -600,7 +601,7 @@ class PreTrainedModelWrapper(nn.Module):
 
 
 def create_reference_model(
-    model: PreTrainedModelWrapper, num_shared_layers: int = None, pattern: str = None
+    model: PreTrainedModelWrapper, num_shared_layers: Optional[int] = None, pattern: Optional[str] = None
 ) -> PreTrainedModelWrapper:
     """
     Creates a static reference copy of a model. Note that model will be in `.eval()` mode.

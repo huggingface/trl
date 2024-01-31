@@ -60,9 +60,9 @@ class IterativeSFTTrainer(Trainer):
 
     def __init__(
         self,
-        model: PreTrainedModel = None,
-        args: TrainingArguments = None,
-        tokenizer: PreTrainedTokenizerBase = None,
+        model: Optional[PreTrainedModel] = None,
+        args: Optional[TrainingArguments] = None,
+        tokenizer: Optional[PreTrainedTokenizerBase] = None,
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (
             None,
             None,

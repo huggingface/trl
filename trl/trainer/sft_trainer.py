@@ -121,8 +121,8 @@ class SFTTrainer(Trainer):
 
     def __init__(
         self,
-        model: Union[PreTrainedModel, nn.Module, str] = None,
-        args: TrainingArguments = None,
+        model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
+        args: Optional[TrainingArguments] = None,
         data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
