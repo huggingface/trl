@@ -30,7 +30,7 @@ from .import_utils import is_npu_available, is_xpu_available
 try:
     from collections.abc import Mapping
 except ImportError:
-    from collections import Mapping
+    from collections.abc import Mapping
 
 
 WANDB_PADDING = -1
@@ -236,7 +236,7 @@ class LengthSampler:
         return np.random.choice(self.values)
 
 
-class PPODecorators(object):
+class PPODecorators:
     optimize_device_cache = False
 
     @classmethod

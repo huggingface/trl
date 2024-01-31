@@ -31,7 +31,7 @@ def main(text_file_name, slack_channel_name=None):
     if os.path.isfile(text_file_name):
         final_results = {}
 
-        file = open(text_file_name, "r")
+        file = open(text_file_name)
         lines = file.readlines()
         for line in lines:
             result, config_name = line.split(",")

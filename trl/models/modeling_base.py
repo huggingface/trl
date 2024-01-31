@@ -379,7 +379,7 @@ class PreTrainedModelWrapper(nn.Module):
                     )
             # load json
             if is_resuming_training:
-                with open(index_file_name, "r") as f:
+                with open(index_file_name) as f:
                     index = json.load(f)
                 # check filename with `v_head` or any known extra module:
                 files_to_download = set()
