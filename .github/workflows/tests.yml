@@ -5,6 +5,13 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+    paths:
+      # Run only when relevant files are modified
+      - "trl/**.py"
+      - "examples/**.py"
+      - "scripts/**.py"
+      - ".github/**.yml"
+      - "tests/**.py"
 
 jobs:
   check_code_quality:
