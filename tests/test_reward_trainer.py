@@ -52,9 +52,9 @@ class RewardTrainerTester(unittest.TestCase):
             # fmt: off
             dummy_dataset_dict = {
                 "input_ids_chosen": [
-                    torch.LongTensor([0, 1, 2,]),
+                    torch.LongTensor([0, 1, 2]),
                     torch.LongTensor([1, 2]),
-                    torch.LongTensor([0, 1, 2,]),
+                    torch.LongTensor([0, 1, 2]),
                     torch.LongTensor([1, 2]),
                 ],
                 "attention_mask_chosen": [
@@ -64,9 +64,9 @@ class RewardTrainerTester(unittest.TestCase):
                     torch.LongTensor([1, 0]),
                 ],
                 "input_ids_rejected": [
-                    torch.LongTensor([0, 2,]),
+                    torch.LongTensor([0, 2]),
                     torch.LongTensor([1, 2, 0]),
-                    torch.LongTensor([0, 2,]),
+                    torch.LongTensor([0, 2]),
                     torch.LongTensor([1, 2, 0]),
                 ],
                 "attention_mask_rejected": [
@@ -132,9 +132,9 @@ class RewardTrainerTester(unittest.TestCase):
             # fmt: off
             dummy_dataset_dict = {
                 "input_ids_chosen": [
-                    torch.LongTensor([0, 1, 2,]),
+                    torch.LongTensor([0, 1, 2]),
                     torch.LongTensor([1, 2]),
-                    torch.LongTensor([0, 1, 2,]),
+                    torch.LongTensor([0, 1, 2]),
                     torch.LongTensor([1, 2]),
                 ],
                 "attention_mask_chosen": [
@@ -144,9 +144,9 @@ class RewardTrainerTester(unittest.TestCase):
                     torch.LongTensor([1, 0]),
                 ],
                 "input_ids_rejected": [
-                    torch.LongTensor([0, 2,]),
+                    torch.LongTensor([0, 2]),
                     torch.LongTensor([1, 2, 0]),
-                    torch.LongTensor([0, 2,]),
+                    torch.LongTensor([0, 2]),
                     torch.LongTensor([1, 2, 0]),
                 ],
                 "attention_mask_rejected": [
@@ -206,12 +206,12 @@ class RewardTrainerTester(unittest.TestCase):
                 remove_unused_columns=False,
             )
 
+            # fmt: off
             dummy_dataset_dict = {
-                # fmt: off
                 "input_ids_b": [
-                    torch.LongTensor([0, 1, 2,]),
+                    torch.LongTensor([0, 1, 2]),
                     torch.LongTensor([1, 2]),
-                    torch.LongTensor([0, 1, 2,]),
+                    torch.LongTensor([0, 1, 2]),
                     torch.LongTensor([1, 2]),
                 ],
                 "attention_mask_c": [
@@ -221,9 +221,9 @@ class RewardTrainerTester(unittest.TestCase):
                     torch.LongTensor([1, 0]),
                 ],
                 "input_ids_f": [
-                    torch.LongTensor([0, 2,]),
+                    torch.LongTensor([0, 2]),
                     torch.LongTensor([1, 2, 0]),
-                    torch.LongTensor([0, 2,]),
+                    torch.LongTensor([0, 2]),
                     torch.LongTensor([1, 2, 0]),
                 ],
                 "attention_mask_g": [
@@ -232,8 +232,8 @@ class RewardTrainerTester(unittest.TestCase):
                     torch.LongTensor([1, 1]),
                     torch.LongTensor([1, 1, 1]),
                 ],
-                # fmt: on
             }
+            # fmt: on
             dummy_dataset = Dataset.from_dict(dummy_dataset_dict)
 
             trainer = RewardTrainer(
@@ -276,13 +276,13 @@ class RewardTrainerTester(unittest.TestCase):
             # fmt: off
             dummy_dataset_dict = {
                 "input_ids_chosen": [
-                    torch.LongTensor([0, 1, 2,]),
+                    torch.LongTensor([0, 1, 2]),
                 ],
                 "attention_mask_chosen": [
                     torch.LongTensor([1, 1, 1]),
                 ],
                 "input_ids_rejected": [
-                    torch.LongTensor([0, 2,]),
+                    torch.LongTensor([0, 2]),
                 ],
                 "attention_mask_rejected": [
                     torch.LongTensor([1, 1]),
