@@ -854,7 +854,11 @@ class PPOTrainer(BaseTrainer):
         train_stats["policy/advantages"] = torch.nan_to_num(train_stats["policy/advantages"], WANDB_PADDING)
         train_stats["policy/ratio"] = torch.flatten(train_stats["policy/ratio"]).unsqueeze(0)
 
-        total_scores = torch.tensor([score[score != padding_value].sum() for score in padded_scores]).to(
+        discount = torch.tensor(
+            [self.config.gamma**i for i in range(padded_scores.shape[1])], device=padded_scores.device
+        ).unsqueeze(0)
+        discounted_scores = padded_scores * discount
+        total_scores = torch.tensor([score[score != padding_value].sum() for score in discounted_scores]).to(
             self.current_device
         )
 
