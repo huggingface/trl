@@ -370,7 +370,7 @@ class DPOTrainer(Trainer):
             # tokenize the dataset
             train_dataset = train_dataset.map(self.tokenize_row, num_proc=self.dataset_num_proc)
             if eval_dataset is not None:
-                eval_dataset = eval_dataset.map(self.tokenize_row)
+                eval_dataset = eval_dataset.map(self.tokenize_row, num_proc=self.dataset_num_proc)
 
         super().__init__(
             model=model,
