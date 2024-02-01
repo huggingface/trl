@@ -10,7 +10,7 @@ on:
       - "trl/**.py"
       - "examples/**.py"
       - "scripts/**.py"
-      - ".github/**yml"
+      - ".github/**.yml"
       - "tests/**.py"
 
 jobs:
