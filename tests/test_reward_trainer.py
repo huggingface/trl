@@ -307,15 +307,8 @@ class RewardTrainerTester(unittest.TestCase):
             batch = trainer.data_collator(batch)
             loss, outputs = trainer.compute_loss(trainer.model, batch, return_outputs=True)
 
-            assert (
-                round(
-                    loss
-                    - (
-                        -torch.nn.functional.logsigmoid(
-                            (outputs["rewards_chosen"] - outputs["rewards_rejected"]) - batch["margin"]
-                        ).mean()
-                    ),
-                    7,
-                )
-                >= 0
-            )
+            l_val = -torch.nn.functional.logsigmoid(
+                outputs["rewards_chosen"] - outputs["rewards_rejected"] - batch["margin"]
+            ).mean()
+
+            assert abs(loss - l_val) < 1e-6

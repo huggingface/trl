@@ -39,4 +39,4 @@ class CoreTester(unittest.TestCase):
         whiten_unmasked = whiten(self.test_input_unmasked)
         whiten_masked = masked_whiten(self.test_input, self.test_mask)[1:3]
         diffs = (whiten_unmasked - whiten_masked).sum()
-        assert round(diffs - 0, 7) >= 0
+        assert abs(diffs.item()) < 0.00001
