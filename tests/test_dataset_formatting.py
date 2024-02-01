@@ -30,26 +30,18 @@ class DatasetFormattingTestCase(unittest.TestCase):
         formatting_func = get_formatting_func_from_dataset(dataset, self.llama_tokenizer)
         assert isinstance(formatting_func, Callable)
         formatted_text = formatting_func(dataset[0])
-        assert (
-            formatted_text
-            == "<s>[INST] <<SYS>>\nYou are helpful\n<</SYS>>\n\nHello [/INST] Hi, how can I help you? </s>"
-        )
+        expected = "<s>[INST] <<SYS>>\nYou are helpful\n<</SYS>>\n\nHello [/INST] Hi, how can I help you? </s>"
+        assert formatted_text == expected
         formatted_text = formatting_func(dataset[0:1])
-        assert formatted_text == [
-            "<s>[INST] <<SYS>>\nYou are helpful\n<</SYS>>\n\nHello [/INST] Hi, how can I help you? </s>"
-        ]
+        assert formatted_text == [expected]
 
         # ChatML tokenizer
         formatting_func = get_formatting_func_from_dataset(dataset, self.chatml_tokenizer)
         formatted_text = formatting_func(dataset[0])
-        assert (
-            formatted_text
-            == "<|im_start|>system\nYou are helpful<|im_end|>\n<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\nHi, how can I help you?<|im_end|>\n"
-        )
+        expected = "<|im_start|>system\nYou are helpful<|im_end|>\n<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\nHi, how can I help you?<|im_end|>\n"
+        assert formatted_text == expected
         formatted_text = formatting_func(dataset[0:1])
-        assert formatted_text == [
-            "<|im_start|>system\nYou are helpful<|im_end|>\n<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\nHi, how can I help you?<|im_end|>\n"
-        ]
+        assert formatted_text == [expected]
 
     def test_get_formatting_func_from_dataset_with_chatml_conversations(self):
         dataset = Dataset.from_dict(
@@ -67,26 +59,18 @@ class DatasetFormattingTestCase(unittest.TestCase):
         formatting_func = get_formatting_func_from_dataset(dataset, self.llama_tokenizer)
         assert isinstance(formatting_func, Callable)
         formatted_text = formatting_func(dataset[0])
-        assert (
-            formatted_text
-            == "<s>[INST] <<SYS>>\nYou are helpful\n<</SYS>>\n\nHello [/INST] Hi, how can I help you? </s>"
-        )
+        expected = "<s>[INST] <<SYS>>\nYou are helpful\n<</SYS>>\n\nHello [/INST] Hi, how can I help you? </s>"
+        assert formatted_text == expected
         formatted_text = formatting_func(dataset[0:1])
-        assert formatted_text == [
-            "<s>[INST] <<SYS>>\nYou are helpful\n<</SYS>>\n\nHello [/INST] Hi, how can I help you? </s>"
-        ]
+        assert formatted_text == [expected]
 
         # ChatML tokenizer
         formatting_func = get_formatting_func_from_dataset(dataset, self.chatml_tokenizer)
         formatted_text = formatting_func(dataset[0])
-        assert (
-            formatted_text
-            == "<|im_start|>system\nYou are helpful<|im_end|>\n<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\nHi, how can I help you?<|im_end|>\n"
-        )
+        expected = "<|im_start|>system\nYou are helpful<|im_end|>\n<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\nHi, how can I help you?<|im_end|>\n"
+        assert formatted_text == expected
         formatted_text = formatting_func(dataset[0:1])
-        assert formatted_text == [
-            "<|im_start|>system\nYou are helpful<|im_end|>\n<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\nHi, how can I help you?<|im_end|>\n"
-        ]
+        assert formatted_text == [expected]
 
     def test_get_formatting_func_from_dataset_with_instruction(self):
         dataset = Dataset.from_list(
