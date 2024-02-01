@@ -30,13 +30,13 @@ class CoreTester(unittest.TestCase):
         cls.test_input_unmasked = cls.test_input[1:3]
 
     def test_masked_mean(self):
-        self.assertEqual(torch.mean(self.test_input_unmasked), masked_mean(self.test_input, self.test_mask))
+        assert torch.mean(self.test_input_unmasked) == masked_mean(self.test_input, self.test_mask)
 
     def test_masked_var(self):
-        self.assertEqual(torch.var(self.test_input_unmasked), masked_var(self.test_input, self.test_mask))
+        assert torch.var(self.test_input_unmasked) == masked_var(self.test_input, self.test_mask)
 
     def test_masked_whiten(self):
         whiten_unmasked = whiten(self.test_input_unmasked)
         whiten_masked = masked_whiten(self.test_input, self.test_mask)[1:3]
         diffs = (whiten_unmasked - whiten_masked).sum()
-        self.assertAlmostEqual(diffs, 0)
+        assert abs(diffs.item()) < 0.00001

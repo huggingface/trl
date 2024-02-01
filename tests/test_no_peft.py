@@ -15,6 +15,7 @@ import sys
 import unittest
 from unittest.mock import patch
 
+import pytest
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -93,7 +94,7 @@ class TestPeftDependancy(unittest.TestCase):
             from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
 
             # Check that loading a model with `peft` will raise an error
-            with self.assertRaises(ModuleNotFoundError):
+            with pytest.raises(ModuleNotFoundError):
                 import peft  # noqa
 
             trl_model = AutoModelForCausalLMWithValueHead.from_pretrained(self.causal_lm_model_id)  # noqa
@@ -146,8 +147,8 @@ class TestPeftDependancy(unittest.TestCase):
             # check gradients are not None
             for _, param in trl_model.named_parameters():
                 if param.requires_grad:
-                    self.assertIsNotNone(param.grad)
+                    assert param.grad is not None
 
             # check expected stats
             for stat in EXPECTED_STATS:
-                self.assertIn(stat, train_stats)
+                assert stat in train_stats
