@@ -145,8 +145,8 @@ class DPOTrainerSlowTester(unittest.TestCase):
                 max_length=self.max_length,
             )
 
-            self.assertTrue(isinstance(trainer.model, PeftModel))
-            self.assertTrue(trainer.ref_model is None)
+            assert isinstance(trainer.model, PeftModel)
+            assert trainer.ref_model is None
 
             # train the model
             trainer.train()
@@ -209,8 +209,8 @@ class DPOTrainerSlowTester(unittest.TestCase):
                 max_length=self.max_length,
             )
 
-            self.assertTrue(isinstance(trainer.model, PeftModel))
-            self.assertTrue(trainer.ref_model is None)
+            assert isinstance(trainer.model, PeftModel)
+            assert trainer.ref_model is None
 
             # train the model
             trainer.train()
