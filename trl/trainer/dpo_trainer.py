@@ -133,6 +133,8 @@ class DPOTrainer(Trainer):
             Name of the train target PEFT adapter, when using LoRA with multiple adapters.
         ref_adapter_name (`str`, defaults to `None`):
             Name of the reference PEFT adapter, when using LoRA with multiple adapters.
+        reference_free (`bool`):
+            If True, we ignore the _provided_ reference model and implicitly use a reference model that assigns equal probability to all responses.
     """
 
     _tag_names = ["trl", "dpo"]
@@ -170,6 +172,7 @@ class DPOTrainer(Trainer):
         ref_model_init_kwargs: Optional[Dict] = None,
         model_adapter_name: Optional[str] = None,
         ref_adapter_name: Optional[str] = None,
+        reference_free: bool = False,
     ):
         if model_init_kwargs is None:
             model_init_kwargs = {}
@@ -277,6 +280,7 @@ class DPOTrainer(Trainer):
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
         self.model_adapter_name = model_adapter_name
         self.ref_adapter_name = ref_adapter_name
+        self.reference_free = reference_free
 
         if ref_model:
             self.ref_model = ref_model
@@ -835,7 +839,6 @@ class DPOTrainer(Trainer):
         policy_rejected_logps: torch.FloatTensor,
         reference_chosen_logps: torch.FloatTensor,
         reference_rejected_logps: torch.FloatTensor,
-        reference_free: bool = False,
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         """Compute the DPO loss for a batch of policy and reference model log probabilities.
 
@@ -844,7 +847,6 @@ class DPOTrainer(Trainer):
             policy_rejected_logps: Log probabilities of the policy model for the rejected responses. Shape: (batch_size,)
             reference_chosen_logps: Log probabilities of the reference model for the chosen responses. Shape: (batch_size,)
             reference_rejected_logps: Log probabilities of the reference model for the rejected responses. Shape: (batch_size,)
-            reference_free: If True, we ignore the _provided_ reference model and implicitly use a reference model that assigns equal probability to all responses.
 
         Returns:
             A tuple of three tensors: (losses, chosen_rewards, rejected_rewards).
@@ -852,8 +854,8 @@ class DPOTrainer(Trainer):
             The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
         """
         pi_logratios = policy_chosen_logps - policy_rejected_logps
-        if reference_free:
-            ref_logratios = 0
+        if self.reference_free:
+            ref_logratios = torch.tensor([0], dtype=pi_logratios.dtype, device=pi_logratios.device)
         else:
             ref_logratios = reference_chosen_logps - reference_rejected_logps
 
