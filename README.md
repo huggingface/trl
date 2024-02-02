@@ -168,7 +168,7 @@ train_stats = ppo_trainer.step([query_tensor[0]], [response_tensor[0]], reward)
 The PPO implementation largely follows the structure introduced in the paper **"Fine-Tuning Language Models from Human Preferences"** by D. Ziegler et al. \[[paper](https://arxiv.org/pdf/1909.08593.pdf), [code](https://github.com/openai/lm-human-preferences)].
 
 ### Language models
-The language models utilize the `transformers` library by 🤗 Hugging Face.
+The language models utilize the `transformers` library by 🤗 Hugging Face.  Currently, `trl` only supports `transformers` models **for text**.
 
 ## Citation
 
