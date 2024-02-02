@@ -25,9 +25,7 @@ class StateDictType(enum.Enum):
     """
 
     DIFFUSERS_OLD = "diffusers_old"
-    KOHYA_SS = "kohya_ss"
     PEFT = "peft"
-    DIFFUSERS = "diffusers"
 
 
 PEFT_TO_DIFFUSERS = {
