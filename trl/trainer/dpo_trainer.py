@@ -133,7 +133,7 @@ class DPOTrainer(Trainer):
             Name of the train target PEFT adapter, when using LoRA with multiple adapters.
         ref_adapter_name (`str`, defaults to `None`):
             Name of the reference PEFT adapter, when using LoRA with multiple adapters.
-        reference_free` (`bool`):
+        reference_free (`bool`):
             If True, we ignore the _provided_ reference model and implicitly use a reference model that assigns equal probability to all responses.
     """
 
@@ -855,7 +855,7 @@ class DPOTrainer(Trainer):
         """
         pi_logratios = policy_chosen_logps - policy_rejected_logps
         if self.reference_free:
-            ref_logratios = torch.tensor([0], dtype=pi_logratios.dtype)
+            ref_logratios = torch.tensor([0], dtype=pi_logratios.dtype, device=pi_logratios.device)
         else:
             ref_logratios = reference_chosen_logps - reference_rejected_logps
 
