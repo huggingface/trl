@@ -1,0 +1,6 @@
+model_name: /home/toolkit/huggingface/tldr_sft_pythia7b_trainall_4V100
+split: test
+use_peft: False
+load_in_8bit: False
+batch_size: 8
+fp16: True

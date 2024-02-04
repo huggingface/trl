@@ -1,0 +1,13 @@
+model_name: "EleutherAI/pythia-6.9b-deduped"
+log_with: "wandb"
+lr_scheduler_type: cosine
+num_warmup_steps: 100
+weight_decay: 0.05
+load_in_8bit: True
+use_peft: True
+lora_r: 8
+lora_alpha: 16
+lora_dropout: 0.05
+bf16: False
+streaming: False
+gradient_accumulation_steps: 4

@@ -1,0 +1,8 @@
+output_dir: test_ds
+model_name: /home/toolkit/huggingface/tldr_gptrm_sft_pythia7b_4V100_seq560_fp16_3epochs_loralinear
+train_split: train
+eval_split: test[:5000]
+load_in_8bit: False
+fp16: True
+batch_size: 16
+seq_length: 560

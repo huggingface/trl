@@ -1,0 +1,10 @@
+output_dir: compare_test
+# output_dir: openai_summarize_generated_20k_vllm_pythia410m_dpo1
+model_name: mnoukhov/pythia410m-tldrprompt-dpo1b
+dataset_name: arianhosseini/openai_summarize_unlabelled
+train_split: train[:20000]
+batch_size: 4
+seq_length: 512
+max_new_tokens: 48
+temperature: 0.7
+top_p: 1.0

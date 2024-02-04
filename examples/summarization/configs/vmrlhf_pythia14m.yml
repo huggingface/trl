@@ -1,0 +1,13 @@
+dataset_name: CarperAI/openai_summarize_tldr
+model_name: /home/toolkit/huggingface/tldr_sft_pythia14m_fp32
+reward_model_name: /home/toolkit/huggingface/tldr_gptrm_sft_pythia14m_fp32_2epochs
+gold_reward_model_name: /home/toolkit/huggingface/tldr_gptrm_sft_pythia410m_amp16_lr5e-6_1epoch
+steps: 2000
+load_in_8bit: False
+bf16: False
+fp16: False
+batch_size: 128
+mini_batch_size: 32
+gradient_accumulation_steps: 1
+learning_rate: 1e-6
+eval_freq: 1

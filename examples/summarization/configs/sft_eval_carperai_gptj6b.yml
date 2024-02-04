@@ -1,0 +1,11 @@
+model_name: "CarperAI/openai_summarize_tldr_sft"
+tokenizer_name: "EleutherAI/gpt-j-6b"
+log_with: "wandb"
+load_in_8bit: False
+use_peft: False
+bf16: False
+streaming: False
+per_device_eval_batch_size: 1
+just_eval: True
+train_completions: True
+seq_length: 550

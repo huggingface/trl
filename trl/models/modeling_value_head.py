@@ -104,7 +104,7 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
             kwargs (`dict`, `optional`):
                 Additional keyword arguments, that are passed to the `ValueHead` class.
         """
-        super().__init__(pretrained_model)
+        super().__init__(pretrained_model, **kwargs)
         v_head_kwargs, _, _ = self._split_kwargs(kwargs)
 
         if not any(hasattr(self.pretrained_model, attribute) for attribute in self.lm_head_namings):
@@ -142,6 +142,7 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
         input_ids=None,
         past_key_values=None,
         attention_mask=None,
+        use_score=False,
         **kwargs,
     ):
         r"""
@@ -179,11 +180,32 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
         if last_hidden_state.device != self.v_head.summary.weight.device:
             last_hidden_state = last_hidden_state.to(self.v_head.summary.weight.device)
 
-        value = self.v_head(last_hidden_state).squeeze(-1)
+        if not use_score:
+            value = self.v_head(last_hidden_state).squeeze(-1)
+        else:
+            value_logits = self.score(last_hidden_state).squeeze(-1)
+            batch_size = input_ids.shape[0]
+
+            if self.config.pad_token_id is None and batch_size != 1:
+                raise ValueError("Cannot handle batch sizes > 1 if no padding token is defined.")
+            if self.config.pad_token_id is None:
+                sequence_lengths = -1
+            else:
+                if input_ids is not None:
+                    sequence_lengths = (torch.ne(input_ids, self.config.pad_token_id).sum(-1) - 1).to(
+                        value_logits.device
+                    )
+                else:
+                    sequence_lengths = -1
+
+            value = value_logits[torch.arange(batch_size, device=value_logits.device), sequence_lengths]
 
         # force upcast in fp32 if logits are in half-precision
         if lm_logits.dtype != torch.float32:
             lm_logits = lm_logits.float()
+
+        if value.dtype != torch.float32:
+            value = value.float()
 
         return (lm_logits, loss, value)
 
@@ -215,6 +237,12 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
         v_head_state_dict = self.v_head.state_dict(*args, **kwargs)
         for k, v in v_head_state_dict.items():
             pretrained_model_state_dict[f"v_head.{k}"] = v
+
+        if self.supports_rm_adapter:
+            score_state_dict = self.score.state_dict(*args, **kwargs)
+            for k, v in score_state_dict.items():
+                pretrained_model_state_dict[f"score.{k}"] = v
+
         return pretrained_model_state_dict
 
     def push_to_hub(self, *args, **kwargs):

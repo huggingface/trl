@@ -1,0 +1,6 @@
+model_name: /home/toolkit/trl/results/d31ad1f5a2ea94087cf49d8046228e62/code/results/checkpoint-1000
+split: test
+use_peft: False
+load_in_8bit: False
+batch_size: 8
+fp16: True

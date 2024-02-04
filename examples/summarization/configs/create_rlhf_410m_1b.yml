@@ -1,0 +1,11 @@
+output_dir: /home/toolkit/huggingface/openai_summarize_tldr_grbaseline
+train_split: train
+eval_split: valid[:2000]
+###
+model_name: mnoukhov/pythia1b-sft-rm-tldrprompt
+new_column_name: gold_reward_baseline
+dataset_name: mnoukhov/openai_summarize_tldr_rbaseline
+load_in_8bit: False
+fp16: True
+batch_size: 32
+max_length: 560

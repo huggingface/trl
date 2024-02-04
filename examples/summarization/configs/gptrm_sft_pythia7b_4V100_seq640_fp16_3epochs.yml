@@ -1,0 +1,12 @@
+model_name: /home/toolkit/huggingface/tldr_sft_pythia7b_4V100_seq550
+load_in_8bit: False
+bf16: False
+fp16: True
+per_device_train_batch_size: 1
+per_device_eval_batch_size: 2
+gradient_accumulation_steps: 32
+gradient_checkpointing: False
+learning_rate: 1e-5
+optimizer_type: paged_adamw_32bit
+num_train_epochs: 3
+seq_length: 640

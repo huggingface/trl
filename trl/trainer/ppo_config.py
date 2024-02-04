@@ -104,7 +104,7 @@ class PPOConfig:
     """Number of optimisation epochs per batch of samples"""
     max_grad_norm: Optional[float] = None
     """Maximum gradient norm for gradient clipping"""
-    optimize_cuda_cache: bool = False
+    optimize_cuda_cache: Optional[bool] = None
     """DEPRECATED: use `optimize_device_cache` instead, which does the same thing."""
     optimize_device_cache: Optional[bool] = False
     """Optimize device cache for slightly more memory-efficient training"""

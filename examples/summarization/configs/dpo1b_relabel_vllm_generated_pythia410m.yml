@@ -1,0 +1,12 @@
+output_dir: openai_summarize_vllm_generated_20k_label410m
+mode: relabel
+model_name: mnoukhov/pythia410m-tldrprompt-dpo1b-adapter
+dataset_name: mnoukhov/openai_summarize_vllm_generated_20k
+eval_split: train
+use_peft: False
+beta: 0.5
+load_in_8bit: False
+bf16: False
+fp16: True
+per_device_eval_batch_size: 8
+warmup_steps: 150

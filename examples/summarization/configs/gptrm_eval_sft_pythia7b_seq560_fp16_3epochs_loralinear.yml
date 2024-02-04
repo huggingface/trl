@@ -1,0 +1,10 @@
+model_name: /home/toolkit/huggingface/tldr_gptrm_sft_pythia7b_4V100_seq560_fp16_3epochs_loralinear
+train_split: train[:1]
+eval_split: test[:5000]
+just_eval: True
+use_lora: False
+load_in_8bit: False
+bf16: False
+fp16: True
+per_device_eval_batch_size: 4
+seq_length: 560

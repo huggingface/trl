@@ -1,0 +1,9 @@
+output_dir: /home/toolkit/huggingface/openai_summarize_comparisons_tldrprompt_relabel1b
+model_name: mnoukhov/pythia1b-sft-rm-tldrprompt
+dataset_name: mnoukhov/openai_summarize_comparisons_tldrprompt
+train_split: train
+eval_split: test[:5000]
+load_in_8bit: False
+fp16: True
+batch_size: 16
+seq_length: 560

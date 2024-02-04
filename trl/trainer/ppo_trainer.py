@@ -1069,6 +1069,39 @@ class PPOTrainer(BaseTrainer):
         self.optimizer.zero_grad()
         return train_stats
 
+    @PPODecorators.empty_device_cache()
+    def compute_reward_model_score(
+        self, input_ids: torch.FloatTensor, attention_mask: torch.FloatTensor = None, **kwargs
+    ):
+        r"""
+        Computes the reward score for a given input for a model with a reward modelling adapter. The method has first to enable the adapter
+        and then compute the reward score. After that the model disables the reward modeling
+        adapter and enables the default ppo adapter again.
+        """
+        unwrap_model = self.accelerator.unwrap_model(self.model)
+        if not unwrap_model.supports_rm_adapter:
+            raise ValueError(
+                "This model does not support reward modeling adapter, you must compute reward scores with another method."
+            )
+
+        # enable rm adapter
+        unwrap_model.pretrained_model.set_adapter(unwrap_model.rm_adapter_name)
+        # TODO check
+        # self.model.eval()
+
+        with torch.no_grad():
+            _, _, scores = self.model(
+                use_score=True,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                **kwargs,
+            )
+
+        unwrap_model.pretrained_model.set_adapter(unwrap_model.policy_adapter_name)
+        # self.model.train()
+
+        return scores
+
     def compute_rewards(
         self,
         scores: torch.FloatTensor,
@@ -1302,6 +1335,7 @@ class PPOTrainer(BaseTrainer):
         stats: dict,
         batch: dict,
         rewards: List[torch.FloatTensor],
+        gold_rewards: List[torch.FloatTensor] = None,
         columns_to_log: List[str] = ["query", "response"],
     ):
         """
@@ -1358,6 +1392,15 @@ class PPOTrainer(BaseTrainer):
             logs["env/reward_mean"] = torch.mean(rewards).cpu().numpy().item()
             logs["env/reward_std"] = torch.std(rewards).cpu().numpy().item()
             logs["env/reward_dist"] = rewards.cpu().numpy()
+
+            # gold reward stuff
+            if gold_rewards is not None:
+                if not isinstance(gold_rewards, torch.Tensor):
+                    gold_rewards = torch.tensor(gold_rewards).to(self.current_device)
+
+                logs["eval/gold_reward_mean"] = torch.mean(gold_rewards).cpu().numpy().item()
+                logs["eval/gold_reward_std"] = torch.std(gold_rewards).cpu().numpy().item()
+                logs["eval/gold_reward_dist"] = gold_rewards.cpu().numpy()
 
             if self.config.log_with == "tensorboard":
                 # update the current step

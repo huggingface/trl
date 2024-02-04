@@ -1,0 +1,5 @@
+model_name: /home/toolkit/huggingface/tldr_sft_pythia410m_fp32
+split: test[:100]
+use_peft: False
+load_in_8bit: False
+batch_size: 32

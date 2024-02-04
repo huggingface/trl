@@ -15,11 +15,13 @@
 # limitations under the License.
 from .modeling_base import PreTrainedModelWrapper, create_reference_model
 from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
+from .modeling_value_model import AutoModelForCausalLMWithValueModel
 
 
 SUPPORTED_ARCHITECTURES = (
     AutoModelForCausalLMWithValueHead,
     AutoModelForSeq2SeqLMWithValueHead,
+    AutoModelForCausalLMWithValueModel,
 )
 
 from ..import_utils import is_diffusers_available

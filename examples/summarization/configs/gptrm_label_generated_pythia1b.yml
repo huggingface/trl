@@ -1,0 +1,12 @@
+mode: relabel
+output_dir: /home/toolkit/huggingface/openai_summarize_generated_20k_relabel_1b
+model_name: mnoukhov/pythia1b-sft-rm-tldrprompt
+dataset_name: mnoukhov/openai_summarize_generated_20k
+train_split: train
+eval_split: null
+load_in_8bit: False
+bf16: False
+fp16: True
+use_lora: False
+per_device_eval_batch_size: 8
+padding: do_not_pad

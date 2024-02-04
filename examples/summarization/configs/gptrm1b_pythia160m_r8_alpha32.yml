@@ -1,0 +1,16 @@
+dataset_name: mnoukhov/openai_summarize_comparisons_relabel_pythia1b
+model_name: /home/toolkit/huggingface/tldr_sft_pythia160m_fp32
+load_in_8bit: False
+bf16: False
+fp16: True
+per_device_train_batch_size: 16
+per_device_eval_batch_size: 16
+gradient_accumulation_steps: 2
+gradient_checkpointing: False
+learning_rate: 1e-5
+optimizer_type: adamw_torch
+num_train_epochs: 3
+use_lora: True
+lora_all_linear: True
+lora_r: 8
+lora_alpha: 32

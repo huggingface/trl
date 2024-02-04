@@ -1,0 +1,6 @@
+model_name: CarperAI/openai_summarize_tldr_sft
+tokenizer_name: EleutherAI/gpt-j-6b
+split: test
+use_peft: False
+load_in_8bit: False
+num_logged_samples: 100

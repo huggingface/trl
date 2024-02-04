@@ -1,0 +1,12 @@
+model_name: /home/toolkit/huggingface/tldr_sft_pythia7b
+train_split: train
+eval_split: test
+load_in_8bit: False
+bf16: True
+per_device_train_batch_size: 32
+gradient_accumulation_steps: 1
+gradient_checkpointing: True
+learning_rate: 1e-4
+optimizer_type: paged_adamw_32bit
+lora_alpha: 32
+

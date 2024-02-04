@@ -1,0 +1,11 @@
+# model_name: /home/toolkit/huggingface/tldr_sft_pythia1b_fp16_trainall_3epochs
+# model_name: /home/toolkit/trl/results/c99dab82e83e9c00d8a8618014d64ed5/code/results/final_model
+model_name: /home/toolkit/trl/results/c99dab82e83e9c00d8a8618014d64ed5/code/results/final_model
+split: test[:10]
+use_peft: False
+load_in_8bit: False
+batch_size: 8
+fp16: True
+log_with: None
+num_logged_samples: 10
+
