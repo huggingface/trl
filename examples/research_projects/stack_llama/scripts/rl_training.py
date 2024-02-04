@@ -67,7 +67,6 @@ class ScriptArguments:
     )
 
     adap_kl_ctrl: Optional[bool] = field(default=True, metadata={"help": "Use adaptive KL control, otherwise linear"})
-    infinite_gen: Optional[bool] = field(default=True, metadata={"help": "Use adaptive KL control, otherwise linear"})
 
 
 parser = HfArgumentParser(ScriptArguments)
@@ -233,11 +232,8 @@ generation_kwargs = {
     "top_p": 1.0,
     "do_sample": True,
     "pad_token_id": tokenizer.pad_token_id,
+    "eos_token_id": 100_000,
 }
-
-if script_args.infinite_gen:
-    generation_kwargs["eos_token_id"] = (100_000,)
-
 output_min_length = 32
 output_max_length = script_args.output_max_length
 output_length_sampler = LengthSampler(output_min_length, output_max_length)

@@ -1,21 +1,22 @@
-import logging
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Dict, List, Optional, Union
 
+import evaluate
+import numpy as np
 import torch
-from accelerate import Accelerator
+import torch.nn as nn
 from datasets import load_dataset
-from peft import LoraConfig, PeftModel, TaskType, get_peft_model, prepare_model_for_kbit_training
-from peft.tuners.lora import LoraLayer
+from peft import LoraConfig, TaskType, get_peft_model
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
     HfArgumentParser,
+    PreTrainedTokenizerBase,
+    Trainer,
     TrainerCallback,
     TrainingArguments,
 )
-
-from trl import RewardTrainer
+from transformers.utils import PaddingStrategy
 
 
 # Define and parse arguments.
@@ -42,13 +43,13 @@ class ScriptArguments:
     learning_rate: Optional[float] = field(default=2e-5)
     weight_decay: Optional[float] = field(default=0.001)
     model_name: Optional[str] = field(
-        default="huggyllama/llama-7b",
+        default="gpt2",
         metadata={
             "help": "The model that you want to train from the Hugging Face hub. E.g. gpt2, gpt2-xl, bert, etc."
         },
     )
     tokenizer_name: Optional[str] = field(
-        default="huggyllama/llama-7b",
+        default=None,
         metadata={
             "help": "The tokenizer for your model, if left empty will use the default for your model",
         },
@@ -87,20 +88,6 @@ class ScriptArguments:
     eval_first_step: Optional[bool] = field(
         default=False,
         metadata={"help": "Whether to run eval after the first step"},
-    )
-    load_in_8bit: Optional[bool] = field(
-        default=False,
-        metadata={"help": "Load base model in 8 bit"},
-    )
-    just_eval: Optional[bool] = field(
-        default=False,
-        metadata={"help": "Just evaluate, don't train"},
-    )
-    checkpoint_name: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "The model that you want to train from the Hugging Face hub. E.g. gpt2, gpt2-xl, bert, etc."
-        },
     )
 
 
@@ -142,7 +129,6 @@ training_args = TrainingArguments(
     logging_steps=10,
     optim=script_args.optim,
     lr_scheduler_type=script_args.lr_scheduler_type,
-    ddp_find_unused_parameters=True,
 )
 # Load the value-head model and tokenizer.
 tokenizer_name = script_args.tokenizer_name if script_args.tokenizer_name is not None else script_args.model_name
@@ -150,61 +136,19 @@ tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_auth_token=True)
 tokenizer.pad_token = tokenizer.eos_token
 
 
-current_device = Accelerator().local_process_index
+peft_config = LoraConfig(
+    task_type=TaskType.SEQ_CLS,
+    inference_mode=False,
+    r=8,
+    lora_alpha=32,
+    lora_dropout=0.1,
+)
 
-if script_args.load_in_8bit:
-    model = AutoModelForSequenceClassification.from_pretrained(
-        script_args.model_name,
-        num_labels=1,
-        load_in_8bit=True,
-        device_map={"": current_device},
-        torch_dtype=(torch.float32 if not script_args.bf16 else torch.bfloat16),
-    )
-
-    # gradient checkpointing does not work with int8 for some reason
-    if script_args.gradient_checkpointing is True:
-        logging.warn(
-            "There is currently an issue and this code cannot be run with int8, gradient checkpointing, and multi-gpu."
-            "You are currently using int8 and gradient checkpointing, if you wish to do both then make sure you are "
-            "running on a single gpu. Otherwise, disable gradient checkpointing"
-        )
-    model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=script_args.gradient_checkpointing)
-else:
-    model = AutoModelForSequenceClassification.from_pretrained(
-        script_args.model_name, num_labels=1, torch_dtype=torch.bfloat16
-    )
-
-
-if script_args.checkpoint_name is not None:
-    model = PeftModel.from_pretrained(model, script_args.checkpoint_name, is_trainable=True)
-else:
-    peft_config = LoraConfig(
-        task_type=TaskType.SEQ_CLS,
-        inference_mode=False,
-        r=8,
-        lora_alpha=32,
-        lora_dropout=0.1,
-        bias="none",
-        modules_to_save=["score"],
-    )
-
-    model = get_peft_model(model, peft_config)
-
-# correctly set LoRA weights to bfloat16 when using int8
-# modified from QLoRA https://github.com/artidoro/qlora/blob/main/qlora.py#L334
-if script_args.load_in_8bit and script_args.bf16:
-    for name, module in model.named_modules():
-        if isinstance(module, LoraLayer):
-            module = module.to(torch.bfloat16)
-        if "norm" in name:
-            module = module.to(torch.float32)
-        if "score" in name or "embed_tokens" in name:
-            if hasattr(module, "weight") and module.weight.dtype == torch.float32:
-                module = module.to(torch.bfloat16)
-
-
+model = AutoModelForSequenceClassification.from_pretrained(
+    script_args.model_name, num_labels=1, torch_dtype=torch.bfloat16
+)
+model = get_peft_model(model, peft_config)
 model.print_trainable_parameters()
-
 
 # Need to do this for gpt2, because it doesn't have an official pad token.
 tokenizer.pad_token = tokenizer.eos_token
@@ -218,19 +162,19 @@ original_columns = train_dataset.column_names
 # Then tokenize the dataset.
 def preprocess_function(examples):
     new_examples = {
-        "input_ids_chosen": [],
-        "attention_mask_chosen": [],
-        "input_ids_rejected": [],
-        "attention_mask_rejected": [],
+        "input_ids_j": [],
+        "attention_mask_j": [],
+        "input_ids_k": [],
+        "attention_mask_k": [],
     }
     for question, response_j, response_k in zip(examples["question"], examples["response_j"], examples["response_k"]):
         tokenized_j = tokenizer("Question: " + question + "\n\nAnswer: " + response_j, truncation=True)
         tokenized_k = tokenizer("Question: " + question + "\n\nAnswer: " + response_k, truncation=True)
 
-        new_examples["input_ids_chosen"].append(tokenized_j["input_ids"])
-        new_examples["attention_mask_chosen"].append(tokenized_j["attention_mask"])
-        new_examples["input_ids_rejected"].append(tokenized_k["input_ids"])
-        new_examples["attention_mask_rejected"].append(tokenized_k["attention_mask"])
+        new_examples["input_ids_j"].append(tokenized_j["input_ids"])
+        new_examples["attention_mask_j"].append(tokenized_j["attention_mask"])
+        new_examples["input_ids_k"].append(tokenized_k["input_ids"])
+        new_examples["attention_mask_k"].append(tokenized_k["attention_mask"])
 
     return new_examples
 
@@ -243,8 +187,7 @@ train_dataset = train_dataset.map(
     remove_columns=original_columns,
 )
 train_dataset = train_dataset.filter(
-    lambda x: len(x["input_ids_chosen"]) <= script_args.max_length
-    and len(x["input_ids_rejected"]) <= script_args.max_length
+    lambda x: len(x["input_ids_j"]) <= script_args.max_length and len(x["input_ids_k"]) <= script_args.max_length
 )
 
 eval_dataset = eval_dataset.map(
@@ -254,18 +197,91 @@ eval_dataset = eval_dataset.map(
     remove_columns=original_columns,
 )
 eval_dataset = eval_dataset.filter(
-    lambda x: len(x["input_ids_chosen"]) <= script_args.max_length
-    and len(x["input_ids_rejected"]) <= script_args.max_length
+    lambda x: len(x["input_ids_j"]) <= script_args.max_length and len(x["input_ids_k"]) <= script_args.max_length
 )
+
+
+# We need to define a special data collator that batches the data in our j vs k format.
+@dataclass
+class RewardDataCollatorWithPadding:
+    tokenizer: PreTrainedTokenizerBase
+    padding: Union[bool, str, PaddingStrategy] = True
+    max_length: Optional[int] = None
+    pad_to_multiple_of: Optional[int] = None
+    return_tensors: str = "pt"
+
+    def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
+        features_j = []
+        features_k = []
+        for feature in features:
+            features_j.append(
+                {
+                    "input_ids": feature["input_ids_j"],
+                    "attention_mask": feature["attention_mask_j"],
+                }
+            )
+            features_k.append(
+                {
+                    "input_ids": feature["input_ids_k"],
+                    "attention_mask": feature["attention_mask_k"],
+                }
+            )
+        batch_j = self.tokenizer.pad(
+            features_j,
+            padding=self.padding,
+            max_length=self.max_length,
+            pad_to_multiple_of=self.pad_to_multiple_of,
+            return_tensors=self.return_tensors,
+        )
+        batch_k = self.tokenizer.pad(
+            features_k,
+            padding=self.padding,
+            max_length=self.max_length,
+            pad_to_multiple_of=self.pad_to_multiple_of,
+            return_tensors=self.return_tensors,
+        )
+        batch = {
+            "input_ids_j": batch_j["input_ids"],
+            "attention_mask_j": batch_j["attention_mask"],
+            "input_ids_k": batch_k["input_ids"],
+            "attention_mask_k": batch_k["attention_mask"],
+            "return_loss": True,
+        }
+        return batch
+
+
+# Define the metric that we'll use for validation.
+accuracy = evaluate.load("accuracy")
+
+
+def compute_metrics(eval_pred):
+    predictions, _ = eval_pred
+    # Here, predictions is rewards_j and rewards_k.
+    # We want to see how much of the time rewards_j > rewards_k.
+    predictions = np.argmax(predictions, axis=0)
+    labels = np.zeros(predictions.shape)
+    return accuracy.compute(predictions=predictions, references=labels)
+
+
+class RewardTrainer(Trainer):
+    # Define how to compute the reward loss. We use the InstructGPT pairwise logloss: https://arxiv.org/abs/2203.02155
+    def compute_loss(self, model, inputs, return_outputs=False):
+        rewards_j = model(input_ids=inputs["input_ids_j"], attention_mask=inputs["attention_mask_j"])[0]
+        rewards_k = model(input_ids=inputs["input_ids_k"], attention_mask=inputs["attention_mask_k"])[0]
+        loss = -nn.functional.logsigmoid(rewards_j - rewards_k).mean()
+        if return_outputs:
+            return loss, {"rewards_j": rewards_j, "rewards_k": rewards_k}
+        return loss
 
 
 # Train the model, woohoo.
 trainer = RewardTrainer(
     model=model,
     args=training_args,
-    tokenizer=tokenizer,
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
+    compute_metrics=compute_metrics,
+    data_collator=RewardDataCollatorWithPadding(tokenizer=tokenizer, max_length=script_args.max_length),
 )
 
 
@@ -278,11 +294,7 @@ if script_args.eval_first_step:
 
     trainer.add_callback(EvaluateFirstStepCallback())
 
+trainer.train(script_args.resume_from_checkpoint)
 
-if script_args.just_eval:
-    trainer.evaluate()
-else:
-    trainer.train(script_args.resume_from_checkpoint)
-
-    print("Saving last checkpoint of the model")
-    model.save_pretrained(output_name + "_peft_last_checkpoint")
+print("Saving last checkpoint of the model")
+model.save_pretrained(output_name + "_peft_last_checkpoint")
