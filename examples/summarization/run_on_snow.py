@@ -6,6 +6,7 @@ from copy import deepcopy
 
 import yaml
 from accelerate.commands import launch
+from generate_vllm import generate_vllm_args_dict
 from haven import haven_wizard as hw
 
 
@@ -49,6 +50,10 @@ def run_exp(exp_dict, savedir, args):
     elif exp_name.startswith("create_rlhf"):
         exp_dict.pop("save_strategy", None)
         accelerate_launch("create_rlhf_dataset.py", exp_dict, args)
+    elif exp_name.startswith("vllm"):
+        exp_dict.pop("save_strategy", None)
+        exp_dict["num_gpus"] = args.gpus
+        generate_vllm_args_dict(exp_dict)
     else:
         raise Exception(f"Config file {exp_name} does not start with one of the correct prefixes")
 
