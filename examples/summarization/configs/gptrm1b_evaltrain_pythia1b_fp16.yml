@@ -1,4 +1,4 @@
-dataset_name: mnoukhov/openai_summarize_generated_20k_relabel_410m_dpo1
+dataset_name: mnoukhov/openai_summarize_comparisons_tldrprompt_relabel1b
 model_name: mnoukhov/pythia1b-sft-rm-tldrprompt
 just_eval: True
 use_lora: False

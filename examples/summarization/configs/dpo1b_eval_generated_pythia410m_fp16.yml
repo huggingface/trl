@@ -1,5 +1,5 @@
 model_name: mnoukhov/pythia410m-tldrprompt-dpo1b-adapter
-dataset_name: mnoukhov/openai_summarize_generated_20k
+dataset_name: mnoukhov/openai_summarize_generated_20k_relabelled
 eval_split: train
 use_peft: False
 beta: 0.5
@@ -8,4 +8,4 @@ bf16: False
 fp16: True
 per_device_eval_batch_size: 8
 warmup_steps: 150
-just_eval: True
+mode: eval
