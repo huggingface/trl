@@ -19,6 +19,7 @@ from collections import defaultdict
 from contextlib import nullcontext
 from copy import deepcopy
 from functools import wraps
+from operator import itemgetter
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
@@ -1017,7 +1018,13 @@ class KTOTrainer(Trainer):
             random_batch = self.data_collator(random_batch_dataset)
             random_batch = self._prepare_inputs(random_batch)
 
-            policy_output_decoded, ref_output_decoded = self.get_batch_samples(self.model, random_batch)
+            target_indicies = [i for i in range(len(random_batch["kl"])) if random_batch["kl"][i] is False]
+            target_batch = {
+                "prompt_input_ids": itemgetter(*target_indicies)(random_batch["prompt_input_ids"]),
+                "prompt_attention_mask": itemgetter(*target_indicies)(random_batch["prompt_attention_mask"]),
+                "prompt": itemgetter(*target_indicies)(random_batch["prompt"]),
+            }
+            policy_output_decoded, ref_output_decoded = self.get_batch_samples(self.model, target_batch)
 
             self.log(
                 {
@@ -1026,7 +1033,7 @@ class KTOTrainer(Trainer):
                         rows=[
                             [prompt, pol[len(prompt) :], ref[len(prompt) :]]
                             for prompt, pol, ref in zip(
-                                random_batch["prompt"], policy_output_decoded, ref_output_decoded
+                                target_batch["prompt"], policy_output_decoded, ref_output_decoded
                             )
                         ],
                     )
