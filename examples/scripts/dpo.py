@@ -56,7 +56,7 @@ import torch
 from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, TrainingArguments
 
-from trl import DPOTrainer, ModelConfig, get_kbit_device_map, get_peft_config, get_quantization_config
+from trl import DPOConfig, DPOTrainer, ModelConfig, get_kbit_device_map, get_peft_config, get_quantization_config
 
 
 @dataclass
@@ -117,7 +117,7 @@ def get_hh(split: str, sanity_check: bool = False, silent: bool = False, cache_d
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser((ScriptArguments, TrainingArguments, ModelConfig))
+    parser = HfArgumentParser((ScriptArguments, DPOConfig, ModelConfig))
     args, training_args, model_config = parser.parse_args_into_dataclasses()
 
     ################

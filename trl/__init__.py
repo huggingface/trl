@@ -22,7 +22,10 @@ from .models import (
 )
 from .trainer import (
     DataCollatorForCompletionOnlyLM,
+    DPOConfig,
     DPOTrainer,
+    FDivergenceConstants,
+    FDivergenceType,
     IterativeSFTTrainer,
     ModelConfig,
     PPOConfig,

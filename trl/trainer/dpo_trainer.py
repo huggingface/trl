@@ -41,6 +41,7 @@ from transformers.trainer_utils import EvalLoopOutput
 
 from ..import_utils import is_peft_available, is_wandb_available
 from ..models import PreTrainedModelWrapper, create_reference_model
+from .dpo_config import DPOConfig, FDivergenceConstants, FDivergenceType
 from .utils import (
     DPODataCollatorWithPadding,
     disable_dropout_in_model,
@@ -77,7 +78,7 @@ class DPOTrainer(Trainer):
             The robust DPO label smoothing parameter from the [cDPO](https://ericmitchell.ai/cdpo.pdf) report that should be between 0 and 0.5.
         loss_type (`str`, defaults to `"sigmoid"`):
             The type of DPO loss to use. Either `"sigmoid"` the default DPO loss,`"hinge"` loss from [SLiC](https://arxiv.org/abs/2305.10425) paper, `"ipo"` from [IPO](https://arxiv.org/abs/2310.12036) paper, or `"kto"` from the HALOs [report](https://github.com/ContextualAI/HALOs/blob/main/assets/report.pdf).
-        args (`transformers.TrainingArguments`):
+        args (`DPOConfig`):
             The arguments to use for training.
         data_collator (`transformers.DataCollator`):
             The data collator to use for training. If None is specified, the default data collator (`DPODataCollatorWithPadding`) will be used
@@ -141,7 +142,7 @@ class DPOTrainer(Trainer):
         beta: float = 0.1,
         label_smoothing: float = 0,
         loss_type: Literal["sigmoid", "hinge", "ipo", "kto_pair"] = "sigmoid",
-        args: TrainingArguments = None,
+        args: DPOConfig = None,
         data_collator: Optional[DataCollator] = None,
         label_pad_token_id: int = -100,
         padding_value: int = 0,
@@ -167,6 +168,8 @@ class DPOTrainer(Trainer):
         model_adapter_name: str = None,
         ref_adapter_name: str = None,
     ):
+        if type(args) == TrainingArguments:
+            raise ValueError("Please use `DPOConfig` instead of TrainingArguments.")
         if model_init_kwargs is None:
             model_init_kwargs = {}
         elif not isinstance(model, str):
@@ -351,6 +354,12 @@ class DPOTrainer(Trainer):
         self.loss_type = loss_type
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
+
+        # DPO-specific parameters
+        self.f_divergence_type = args.f_divergence_type
+        self.f_divergence_params = {
+            FDivergenceConstants.ALPHA_DIVERGENCE_COEF_KEY: args.f_alpha_divergence_coef
+        }
 
         # tokenize the dataset
         train_dataset = train_dataset.map(self.tokenize_row)
@@ -836,15 +845,30 @@ class DPOTrainer(Trainer):
             The losses tensor contains the DPO loss for each example in the batch.
             The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
         """
-        pi_logratios = policy_chosen_logps - policy_rejected_logps
-        if reference_free:
-            ref_logratios = 0
-        else:
-            ref_logratios = reference_chosen_logps - reference_rejected_logps
+        chosen_rewards = policy_chosen_logps.to(self.accelerator.device) - (
+            not reference_free) * reference_chosen_logps.to(self.accelerator.device)
+        rejected_rewards = policy_rejected_logps.to(self.accelerator.device) - (
+            not reference_free) * reference_rejected_logps.to(self.accelerator.device)
 
-        pi_logratios = pi_logratios.to(self.accelerator.device)
-        ref_logratios = ref_logratios.to(self.accelerator.device)
-        logits = pi_logratios - ref_logratios
+        if self.f_divergence_type == FDivergenceType.ALPHA_DIVERGENCE.value:
+            alpha_coef = FDivergenceConstants.ALPHA_DIVERGENCE_COEF_DEFAULT
+            if self.f_divergence_params and FDivergenceConstants.ALPHA_DIVERGENCE_COEF_KEY in self.f_divergence_params:
+                alpha_coef = float(self.f_divergence_params[FDivergenceConstants.ALPHA_DIVERGENCE_COEF_KEY])
+            alpha_coef = torch.tensor(alpha_coef, device=self.accelerator.device).to(dtype=chosen_rewards.dtype)
+            logits = (torch.exp(rejected_rewards * -alpha_coef) - torch.exp(chosen_rewards * -alpha_coef)) / alpha_coef
+        else:
+            pi_logratios = policy_chosen_logps - policy_rejected_logps
+            if reference_free:
+                ref_logratios = 0
+            else:
+                ref_logratios = reference_chosen_logps - reference_rejected_logps
+
+            pi_logratios = pi_logratios.to(self.accelerator.device)
+            ref_logratios = ref_logratios.to(self.accelerator.device)
+            logits = pi_logratios - ref_logratios
+
+            if self.f_divergence_type == FDivergenceType.JS_DIVERGENCE.value:
+                logits -= (torch.log1p(torch.exp(chosen_rewards)) - torch.log1p(torch.exp(rejected_rewards)))
 
         # The beta is a temperature parameter for the DPO loss, typically something in the range of 0.1 to 0.5.
         # We ignore the reference model as beta -> 0. The label_smoothing parameter encodes our uncertainty about the labels and
