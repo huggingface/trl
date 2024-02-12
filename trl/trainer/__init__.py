@@ -31,7 +31,7 @@ from .utils import (
 from ..import_utils import is_diffusers_available
 from .base import BaseTrainer
 from .ddpo_config import DDPOConfig
-
+from .spin_config import SPINConfig
 
 if is_diffusers_available():
     from .ddpo_trainer import DDPOTrainer
@@ -44,3 +44,4 @@ from .ppo_trainer import PPOTrainer
 from .reward_config import RewardConfig
 from .reward_trainer import RewardTrainer, compute_accuracy
 from .sft_trainer import SFTTrainer
+from .spin_trainer import SPINTrainer

@@ -57,7 +57,10 @@ from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, TrainingArguments
 
 from trl import DPOTrainer, ModelConfig, get_kbit_device_map, get_peft_config, get_quantization_config
+import time
 
+import datasets
+datasets.disable_caching()
 
 @dataclass
 class ScriptArguments:
@@ -101,9 +104,9 @@ def get_hh(split: str, sanity_check: bool = False, silent: bool = False, cache_d
       \n\nHuman: <prompt>\n\nAssistant:
     Multiple turns are allowed, but the prompt should always start with \n\nHuman: and end with \n\nAssistant:.
     """
-    dataset = load_dataset("Anthropic/hh-rlhf", split=split, cache_dir=cache_dir)
+    dataset = load_dataset("Anthropic/hh-rlhf", split=split, cache_dir="/fsx/lewis/.cache/")
     if sanity_check:
-        dataset = dataset.select(range(min(len(dataset), 1000)))
+        dataset = dataset.select(range(min(len(dataset), 100_000)))
 
     def split_prompt_and_responses(sample) -> Dict[str, str]:
         prompt = extract_anthropic_prompt(sample["chosen"])
@@ -113,7 +116,7 @@ def get_hh(split: str, sanity_check: bool = False, silent: bool = False, cache_d
             "rejected": sample["rejected"][len(prompt) :],
         }
 
-    return dataset.map(split_prompt_and_responses)
+    return dataset.map(split_prompt_and_responses, num_proc=16)
 
 
 if __name__ == "__main__":
@@ -162,6 +165,8 @@ if __name__ == "__main__":
     ################
     # Training
     ################
+    print(f"Training on {len(train_dataset)} samples")
+    start_time = time.time()
     trainer = DPOTrainer(
         model,
         model_ref,
@@ -175,6 +180,9 @@ if __name__ == "__main__":
         max_prompt_length=args.max_prompt_length,
         generate_during_eval=args.generate_during_eval,
         peft_config=get_peft_config(model_config),
+        dataset_num_proc=4,
     )
-    trainer.train()
-    trainer.save_model(training_args.output_dir)
+    end_time = time.time()
+    print(f"Time taken to initialize trainer: {end_time - start_time} seconds")
+    # trainer.train()
+    # trainer.save_model(training_args.output_dir)
