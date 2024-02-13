@@ -33,9 +33,11 @@ from .base import BaseTrainer
 from .ddpo_config import DDPOConfig
 from .spin_config import SPINConfig
 
+
 if is_diffusers_available():
     from .ddpo_trainer import DDPOTrainer
 
+from .callbacks import TextGenerationCallback
 from .dpo_trainer import DPOTrainer
 from .iterative_sft_trainer import IterativeSFTTrainer
 from .model_config import ModelConfig

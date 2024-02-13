@@ -49,18 +49,20 @@ python examples/scripts/dpo.py \
     --lora_r=16 \
     --lora_alpha=16
 """
+import time
 from dataclasses import dataclass, field
 from typing import Dict, Optional
 
+import datasets
 import torch
 from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, TrainingArguments
 
 from trl import DPOTrainer, ModelConfig, get_kbit_device_map, get_peft_config, get_quantization_config
-import time
 
-import datasets
+
 datasets.disable_caching()
+
 
 @dataclass
 class ScriptArguments:

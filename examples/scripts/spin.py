@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2023 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,57 +16,40 @@
 # Adapted from https://github.com/uclaml/SPIN/blob/main/spin/run_spin.py
 """
 # regular:
-python examples/scripts/spin.py \
+accelerate launch --config_file=examples/accelerate_configs/deepspeed_zero3.yaml examples/scripts/spin.py \
     --model_name_or_path="alignment-handbook/zephyr-7b-sft-full" \
+    --torch_dtype=bfloat16 \
     --report_to="wandb" \
     --learning_rate=5.0e-7 \
     --beta=0.1 \
+    --bf16=true \
     --per_device_train_batch_size=8 \
     --per_device_train_batch_size=8 \
     --gradient_accumulation_steps=1 \
     --output_dir="spin-model" \
-    --logging_steps=1 \
-    --num_train_epochs=3 \
-    --max_steps=-1 \
+    --logging_steps=10 \
+    --num_train_epochs=2 \
     --gradient_checkpointing \
     --max_length=1024 \
     --max_prompt_length=512 \
-    --warmup_ratio=0.1
-
-# peft:
-python examples/scripts/spin.py \
-    --model_name_or_path="facebook/opt-350m" \
-    --report_to="wandb" \
-    --learning_rate=1.41e-5 \
-    --per_device_train_batch_size=64 \
-    --gradient_accumulation_steps=16 \
-    --output_dir="sft_openassistant-guanaco" \
-    --logging_steps=1 \
-    --num_train_epochs=3 \
-    --max_steps=-1 \
-    --push_to_hub \
-    --gradient_checkpointing \
-    --use_peft \
-    --lora_r=64 \
-    --lora_alpha=16
-"""
-import logging
-import sys
+    --warmup_ratio=0.1 \
+    --attn_implementation=flash_attention_2 \
+    --push_to_hub=true \
+    --hub_model_id="lewtun/zephyr-spin-iter0-v0" \
+    --hub_private_repo=true \
+    --max_steps=-1
+    """
+import re
 from dataclasses import dataclass, field
-from datasets import load_dataset
 
 import torch
-import transformers
-from transformers import set_seed
-from transformers import AutoTokenizer, HfArgumentParser
+from datasets import load_dataset
+from transformers import AutoTokenizer, HfArgumentParser, set_seed
 
-from accelerate import Accelerator
-from trl import SPINTrainer, ModelConfig, SPINConfig, get_kbit_device_map, get_peft_config, get_quantization_config
-import re
+from trl import ModelConfig, SPINConfig, SPINTrainer, get_kbit_device_map, get_peft_config, get_quantization_config
 
-def apply_chat_template(
-    example, tokenizer, task, assistant_prefix="<|assistant|>\n"
-):
+
+def apply_chat_template(example, tokenizer, task, assistant_prefix="<|assistant|>\n"):
     def _strip_prefix(s, pattern):
         # Use re.escape to escape any special characters in the pattern
         return re.sub(f"^{re.escape(pattern)}", "", s)
@@ -90,62 +73,37 @@ def apply_chat_template(
         example["text_real"] = _strip_prefix(example["text_real"], assistant_prefix)
         example["text_generated"] = _strip_prefix(example["text_generated"], assistant_prefix)
     else:
-        raise ValueError(
-            f"Require `[real, generated]` keys but found {list(example.keys())}"
-            )
+        raise ValueError(f"Require `[real, generated]` keys but found {list(example.keys())}")
     return example
 
-logger = logging.getLogger(__name__)
 
 @dataclass
 class ScriptArguments:
     dataset_name: str = field(default="UCLA-AGI/SPIN_iter0", metadata={"help": "the dataset name"})
     max_seq_length: int = field(default=512, metadata={"help": "The maximum sequence length for SFT Trainer"})
-    preprocessing_num_workers: int = field(default=12, metadata={"help": "The number of processes to use for the preprocessing."})
+    preprocessing_num_workers: int = field(
+        default=12, metadata={"help": "The number of processes to use for the preprocessing."}
+    )
+
 
 def main():
     parser = HfArgumentParser((ModelConfig, ScriptArguments, SPINConfig))
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
-
-    #######
-    # Setup
-    #######
-    logging.basicConfig(
-        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        handlers=[logging.StreamHandler(sys.stdout)],
-    )
-    log_level = training_args.get_process_log_level()
-    logger.setLevel(log_level)
-    transformers.utils.logging.set_verbosity(log_level)
-    transformers.utils.logging.enable_default_handler()
-    transformers.utils.logging.enable_explicit_format()
-
-    # Log on each process the small summary:
-    logger.info(f"Model parameters {model_args}")
-    logger.info(f"Data parameters {data_args}")
-    logger.info(f"Training/evaluation parameters {training_args}")
+    training_args.gradient_checkpointing_kwargs = dict(use_reentrant=True)
 
     # Set seed for reproducibility
     set_seed(training_args.seed)
-
-    # Increase distributed timeout to 3h to enable push to Hub to complete
-    accelerator = Accelerator()
 
     ###############
     # Load datasets
     ###############
     raw_datasets = load_dataset(data_args.dataset_name)
-    logger.info(
-        f"Training on the following splits: {[split + ' : ' + str(dset.num_rows) for split, dset in raw_datasets.items()]}"
-    )
     column_names = list(raw_datasets["train"].features)
 
     #####################################
     # Load tokenizer and process datasets
     #####################################
-    data_args.truncation_side = "left"  # Truncate from left to ensure we don't lose labels in final turn
-    tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
+    tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path, truncation_side="left")
 
     #####################
     # Apply chat template
@@ -211,38 +169,11 @@ def main():
     ###############
     train_result = spin_trainer.train()
     metrics = train_result.metrics
-    max_train_samples = (
-        data_args.max_train_samples if data_args.max_train_samples is not None else len(raw_datasets["train"])
-    )
-    metrics["train_samples"] = min(max_train_samples, len(raw_datasets["train"]))
     spin_trainer.log_metrics("train", metrics)
     spin_trainer.save_metrics("train", metrics)
     spin_trainer.save_state()
-
-    logger.info("*** Training complete ***")
-
-    ##################################
-    # Save model and create model card
-    ##################################
     spin_trainer.save_model(training_args.output_dir)
-    # Save everything else on main process
-    if accelerator.is_main_process:
-        kwargs = {
-            "finetuned_from": model_args.model_name_or_path,
-            "dataset": list(data_args.dataset_mixer.keys()),
-            "dataset_tags": list(data_args.dataset_mixer.keys()),
-            "tags": ["alignment-handbook"],
-        }
-        spin_trainer.create_model_card(**kwargs)
-        # Restore k,v cache for fast inference
-        spin_trainer.model.config.use_cache = True
-        spin_trainer.model.config.save_pretrained(training_args.output_dir)
-
-    # Ensure we don't timeout on model save / push to Hub
-    logger.info("*** Waiting for all processes to finish ***")
-    accelerator.wait_for_everyone()
-
-    logger.info("*** Run complete! ***")
+    spin_trainer.push_to_hub()
 
 
 if __name__ == "__main__":

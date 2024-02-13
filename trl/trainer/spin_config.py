@@ -1,6 +1,8 @@
-from typing import Optional
 from dataclasses import dataclass, field
+from typing import Optional
+
 import transformers
+
 
 @dataclass
 class SPINConfig(transformers.TrainingArguments):

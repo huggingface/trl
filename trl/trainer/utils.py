@@ -22,7 +22,7 @@ import torch
 from accelerate import PartialState
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import IterableDataset
-from transformers import BitsAndBytesConfig, DataCollatorForLanguageModeling, PreTrainedTokenizerBase, PreTrainedModel
+from transformers import BitsAndBytesConfig, DataCollatorForLanguageModeling, PreTrainedModel, PreTrainedTokenizerBase
 
 from ..import_utils import is_peft_available, is_unsloth_available, is_xpu_available
 from ..trainer.model_config import ModelConfig
@@ -574,7 +574,6 @@ class SPINDataCollatorWithPadding:
 
         # return collated batch
         return self.collate(tokenized_batch)
-
 
 
 class ConstantLengthDataset(IterableDataset):

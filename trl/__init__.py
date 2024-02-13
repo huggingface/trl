@@ -31,7 +31,7 @@ from .trainer import (
     RewardTrainer,
     SFTTrainer,
     SPINConfig,
-    SPINTrainer
+    SPINTrainer,
 )
 from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config
 

@@ -15,11 +15,11 @@
 #
 # Adapted from https://github.com/uclaml/SPIN/blob/main/spin/alignment/trainer.py
 import inspect
+import random
 import warnings
 from collections import defaultdict
 from copy import deepcopy
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
-import random
 
 import torch
 import torch.nn as nn
@@ -35,12 +35,15 @@ from transformers import (
     Trainer,
     TrainingArguments,
 )
+from transformers.modeling_utils import unwrap_model
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
 
-from trl.import_utils import is_peft_available, is_wandb_available
-from trl.models import PreTrainedModelWrapper, create_reference_model
-from trl.trainer.utils import disable_dropout_in_model, pad_to_length, SPINDataCollatorWithPadding
+from ..import_utils import is_peft_available, is_wandb_available
+from ..models import PreTrainedModelWrapper, create_reference_model
+from .callbacks import TextGenerationCallback
+from .utils import SPINDataCollatorWithPadding, disable_dropout_in_model, pad_to_length
+
 
 if is_peft_available():
     from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
@@ -166,7 +169,6 @@ class SPINTrainer(Trainer):
                 "`AutoModelForCausalLM` or a `PeftModel` (if you passed a `peft_config`) for you."
             )
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
-
         if isinstance(ref_model, str):
             warnings.warn(
                 "You passed a ref model_id to the SPINTrainer. This will automatically create an "
@@ -311,6 +313,19 @@ class SPINTrainer(Trainer):
 
         self.beta = beta
         self.loss_type = loss_type
+
+        callbacks = [
+            TextGenerationCallback(
+                unwrap_model(model),
+                tokenizer,
+                messages=[
+                    {"role": "user", "content": "What is the meaning of life?"},
+                    {"role": "user", "content": "What is 1+1?"},
+                    {"role": "user", "content": "Why is the sky blue?"},
+                ],
+                output_dataset_name="spin_output",
+            )
+        ]
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
