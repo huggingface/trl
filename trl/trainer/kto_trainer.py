@@ -29,14 +29,7 @@ import torch.nn.functional as F
 from accelerate.utils import is_deepspeed_available, tqdm
 from datasets import Dataset, interleave_datasets
 from torch.utils.data import DataLoader, SequentialSampler
-from transformers import (
-    AutoModelForCausalLM,
-    DataCollator,
-    PreTrainedModel,
-    PreTrainedTokenizerBase,
-    Trainer,
-    TrainingArguments,
-)
+from transformers import AutoModelForCausalLM, PreTrainedModel, PreTrainedTokenizerBase, Trainer, TrainingArguments
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput, has_length
 
@@ -71,10 +64,6 @@ class KTOTrainer(Trainer):
         model: Union[PreTrainedModel, nn.Module, str] = None,
         ref_model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
         args: KTOConfig = None,
-        data_collator: Optional[DataCollator] = None,
-        label_pad_token_id: int = -100,
-        padding_value: int = None,
-        truncation_mode: str = "keep_end",
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
         tokenizer: Optional[PreTrainedTokenizerBase] = None,
@@ -236,10 +225,10 @@ class KTOTrainer(Trainer):
         if args.max_completion_length is not None and self.is_encoder_decoder:
             max_completion_length = args.max_completion_length
 
-        if data_collator is None:
+        if args.data_collator is None:
             data_collator = DPODataCollatorWithPadding(
                 pad_token_id=tokenizer.pad_token_id,
-                label_pad_token_id=label_pad_token_id,
+                label_pad_token_id=args.label_pad_token_id,
                 is_encoder_decoder=self.is_encoder_decoder,
             )
 
@@ -263,10 +252,10 @@ class KTOTrainer(Trainer):
 
         self.max_length = max_length
         self.generate_during_eval = generate_during_eval
-        self.label_pad_token_id = label_pad_token_id
-        self.padding_value = padding_value if padding_value is not None else tokenizer.pad_token_id
+        self.label_pad_token_id = args.label_pad_token_id
+        self.padding_value = args.padding_value if args.padding_value is not None else tokenizer.pad_token_id
         self.max_prompt_length = max_prompt_length
-        self.truncation_mode = truncation_mode
+        self.truncation_mode = args.truncation_mode
         self.max_completion_length = max_completion_length
         self.tokenizer = tokenizer
         self.precompute_ref_log_probs = precompute_ref_log_probs

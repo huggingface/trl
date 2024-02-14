@@ -14,7 +14,7 @@
 from dataclasses import dataclass
 from typing import Optional
 
-from transformers import TrainingArguments
+from transformers import DataCollator, TrainingArguments
 
 
 @dataclass
@@ -39,6 +39,14 @@ class KTOConfig(TrainingArguments):
             The desirable losses are weighed by this factor to counter unequal number of desirable and undesirable paris.
         undesirable_weight (`float`, *optional*, defaults to 1.0):
             The undesirable losses are weighed by this factor to counter unequal number of desirable and undesirable pairs.
+        data_collator (`DataCollator`, *optional*, defaults to `None`):
+            The data collator to use. If `None`, a default data collator will be created.
+        label_pad_token_id (`int`, defaults to -100):
+            The label for non response tokens.
+        padding_value (`int`, *optional*, defaults to `None`):
+            The padding value to use if the data collator is not specified.
+        truncation_mode (`str`, defaults to "keep_end"):
+            The truncation mode to use when the combined sequence is too long, truncate the prompt (keep start) or the completion (keep end).
     """
 
     max_length: Optional[int] = None
@@ -53,3 +61,8 @@ class KTOConfig(TrainingArguments):
     """The desirable losses are weighed by this factor."""
     undesirable_weight: Optional[float] = 1.0
     """The undesirable losses are weighed by this factor."""
+
+    data_collator: Optional[DataCollator] = None
+    label_pad_token_id: int = -100
+    padding_value: int = None
+    truncation_mode: str = "keep_end"
