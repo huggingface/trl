@@ -64,14 +64,7 @@ class ScriptArguments:
             'Use `"all"` to report to all integrations installed, `"none"` for no integrations.'
         },
     )
-    # debug argument for distributed training
-    ignore_bias_buffers: Optional[bool] = field(
-        default=False,
-        metadata={
-            "help": "fix for DDP issues with LM bias/mask buffers - invalid scalar type,`inplace operation. See"
-            "https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992"
-        },
-    )
+
     gradient_checkpointing: Optional[bool] = field(
         default=False, metadata={"help": "Whether to use gradient checkpointing or no"}
     )
@@ -132,13 +125,6 @@ if __name__ == "__main__":
 
     # 1. load a pretrained model
     model = AutoModelForCausalLM.from_pretrained(script_args.model_name_or_path)
-
-    if script_args.ignore_bias_buffers:
-        # torch distributed hack
-        model._ddp_params_and_buffers_to_ignore = [
-            name for name, buffer in model.named_buffers() if buffer.dtype == torch.bool
-        ]
-
     model_ref = AutoModelForCausalLM.from_pretrained(script_args.model_name_or_path)
 
     tokenizer = AutoTokenizer.from_pretrained(script_args.model_name_or_path)
