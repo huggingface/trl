@@ -1,4 +1,4 @@
-# KTO Authors: Kawin Ethayarajh, Winnie Xu, Dan Jurafsky, and Douwe Kiela
+# KTO Authors: Kawin Ethayarajh, Winnie Xu, Niklas Muennighoff, Dan Jurafsky, and Douwe Kiela
 # Copyright 2023 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
