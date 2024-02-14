@@ -18,7 +18,6 @@
 from dataclasses import dataclass, field
 from typing import Optional
 
-import torch
 from datasets import Dataset, load_dataset
 from peft import LoraConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
