@@ -57,6 +57,63 @@ if is_deepspeed_available():
 
 
 class KTOTrainer(Trainer):
+    r"""
+    Initialize KTOTrainer.
+
+    Args:
+        model (`transformers.PreTrainedModel`):
+            The model to train, preferably an `AutoModelForSequenceClassification`.
+        ref_model (`PreTrainedModelWrapper`):
+            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation and loss. If no
+            reference model is provided, the trainer will create a reference model with the same architecture as the model to be optimized.
+        args (`KTOConfig`):
+            The arguments to use for training.
+        data_collator (`transformers.DataCollator`):
+            The data collator to use for training. If None is specified, the default data collator (`DPODataCollatorWithPadding`) will be used
+            which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
+        label_pad_token_id (`int`, defaults to `-100`):
+            The label pad token id. This argument is required if you want to use the default data collator.
+        padding_value (`int`, defaults to `0`):
+            The padding value if it is different to the tokenizer's pad_token_id.
+        truncation_mode (`str`, defaults to `keep_end`):
+            The truncation mode to use, either `keep_end` or `keep_start`. This argument is required if you want to use the default data collator.
+        train_dataset (`datasets.Dataset`):
+            The dataset to use for training.
+        eval_dataset (`datasets.Dataset`):
+            The dataset to use for evaluation.
+        tokenizer (`transformers.PreTrainedTokenizerBase`):
+            The tokenizer to use for training. This argument is required if you want to use the default data collator.
+        model_init (`Callable[[], transformers.PreTrainedModel]`):
+            The model initializer to use for training. If None is specified, the default model initializer will be used.
+        callbacks (`List[transformers.TrainerCallback]`):
+            The callbacks to use for training.
+        optimizers (`Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
+            The optimizer and scheduler to use for training.
+        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
+            The function to use to preprocess the logits before computing the metrics.
+        peft_config (`Dict`, defaults to `None`):
+            The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
+        is_encoder_decoder (`Optional[bool]`, `optional`, defaults to `None`):
+            If no model is provided, we need to know if the model_init returns an encoder-decoder.
+        disable_dropout (`bool`, defaults to `True`):
+            Whether or not to disable dropouts in `model` and `ref_model`.
+        generate_during_eval (`bool`, defaults to `False`):
+            Whether to sample and log generations during evaluation step.
+        compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
+            The function to use to compute the metrics. Must take a `EvalPrediction` and return
+            a dictionary string to metric values.
+        precompute_ref_log_probs (`bool`, defaults to `False`):
+            Flag to precompute reference model log probabilities and evaluation datasets. This is useful if you want to train
+            without the reference model and reduce the total GPU memory needed.
+        model_init_kwargs: (`Optional[Dict]`, *optional*):
+            Dict of Optional kwargs to pass when instantiating the model from a string.
+        ref_model_init_kwargs: (`Optional[Dict]`, *optional*):
+            Dict of Optional kwargs to pass when instantiating the ref model from a string.
+        seed (`Optional[int]`, *optional*):
+            Seed used to shuffle training dataset prior to interleaving chosen and rejected.
+    """
+
+    _tag_names = ["trl", "dpo"]
     _tag_names = ["trl", "kto"]
 
     def __init__(
