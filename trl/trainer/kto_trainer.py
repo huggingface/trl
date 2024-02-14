@@ -84,7 +84,6 @@ class KTOTrainer(Trainer):
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         peft_config: Optional[Dict] = None,
         is_encoder_decoder: Optional[bool] = None,
-        disable_dropout: bool = True,
         generate_during_eval: bool = False,
         compute_metrics: Optional[Callable[[EvalLoopOutput], Dict]] = None,
         precompute_ref_log_probs: bool = False,
@@ -257,10 +256,10 @@ class KTOTrainer(Trainer):
         else:
             self.use_dpo_data_collator = False
 
-        if disable_dropout:
-            disable_dropout_in_model(model)
-            if self.ref_model is not None:
-                disable_dropout_in_model(self.ref_model)
+        # disable dropout in the model and reference model
+        disable_dropout_in_model(model)
+        if self.ref_model is not None:
+            disable_dropout_in_model(self.ref_model)
 
         self.max_length = max_length
         self.generate_during_eval = generate_during_eval
