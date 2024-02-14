@@ -13,7 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Note: you need to install transformers from main to run this script. See https://huggingface.co/docs/transformers/installation#install-from-source
 
 # 0. imports
 from dataclasses import dataclass, field
