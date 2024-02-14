@@ -184,7 +184,7 @@ def main():
         )
         prompts_ds = raw_datasets["train"].map(lambda x: {"prompt": x["real"][0]})
         text_generation_callback = TextGenerationCallback(
-            prompt_dataset=prompts_ds.select(range(8)),
+            prompt_dataset=prompts_ds,  # .select(range(8)),
             prompt_column="prompt",
             generation_config=generation_config,
         )
