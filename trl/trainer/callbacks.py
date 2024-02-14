@@ -1,17 +1,17 @@
 import torch.distributed as dist
 from accelerate import PartialState
+from datasets import Dataset
 from tqdm.auto import tqdm
-from transformers import TrainerCallback
+from transformers import GenerationConfig, TrainerCallback
 from transformers.trainer_callback import TrainerControl, TrainerState
 from transformers.training_args import TrainingArguments
 
 
 class TextGenerationCallback(TrainerCallback):
-    def __init__(self, messages, output_dataset_name: str, push_to_hub: bool = False):
-        self.messages = messages
+    def __init__(self, prompt_dataset: Dataset, prompt_column: str, generation_config: GenerationConfig):
+        self.prompts = prompt_dataset[prompt_column]
+        self.generation_config = generation_config
         self.completions = []
-        self.output_dataset_name = output_dataset_name
-        self.push_to_hub = push_to_hub
 
     def on_train_end(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         model = kwargs["model"]
@@ -20,15 +20,12 @@ class TextGenerationCallback(TrainerCallback):
         model.to(distributed_state.device)
         model.eval()  # Set model to evaluation mode
         completions_per_process = []
-        with distributed_state.split_between_processes(self.messages, apply_padding=True) as messages:
-            for message in tqdm(messages, desc="Generating completions"):
-                print(f"\nGenerating text for message: {message} on device: {model.device}")
+        with distributed_state.split_between_processes(self.prompts, apply_padding=True) as prompts:
+            for message in tqdm(prompts, desc="Generating completions"):
                 tokenized_message = tokenizer.apply_chat_template(
                     [message], tokenize=True, add_generation_prompt=True, return_tensors="pt"
                 ).to(model.device)
-                output = model.generate(
-                    tokenized_message, max_new_tokens=32, do_sample=True, temperature=0.7, synced_gpus=True
-                )
+                output = model.generate(tokenized_message, self.generation_config)
                 # Slice out prompt tokens and decode
                 generated_text = tokenizer.decode(output[0][tokenized_message.shape[-1] :], skip_special_tokens=True)
                 completions_per_process.append(generated_text)
@@ -39,5 +36,4 @@ class TextGenerationCallback(TrainerCallback):
         # Flatten data
         completions = [msg for sublist in completions_gather for msg in sublist]
         # Drop duplicates produced by padding
-        self.completions = completions[: len(self.messages)]
-        print(f"Generated {len(completions)} completions: {completions}\n\n")
+        self.completions = completions[: len(self.prompts)]

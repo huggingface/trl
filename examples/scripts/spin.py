@@ -44,7 +44,7 @@ from dataclasses import dataclass, field
 
 import torch
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, set_seed
+from transformers import AutoTokenizer, GenerationConfig, HfArgumentParser, set_seed
 
 from trl import (
     ModelConfig,
@@ -93,11 +93,13 @@ class ScriptArguments:
         default=12, metadata={"help": "The number of processes to use for the preprocessing."}
     )
     do_generate: bool = field(default=False, metadata={"help": "Whether to generate text after training"})
+    temperature: float = field(default=1.0, metadata={"help": "The temperature for text generation"})
+    max_new_tokens: int = field(default=64, metadata={"help": "The maximum number of tokens to generate"})
 
 
 def main():
     parser = HfArgumentParser((ModelConfig, ScriptArguments, SPINConfig))
-    model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+    model_args, script_args, training_args = parser.parse_args_into_dataclasses()
     training_args.gradient_checkpointing_kwargs = dict(use_reentrant=True)
 
     # Set seed for reproducibility
@@ -106,7 +108,7 @@ def main():
     ###############
     # Load datasets
     ###############
-    raw_datasets = load_dataset(data_args.dataset_name)
+    raw_datasets = load_dataset(script_args.dataset_name)
     column_names = list(raw_datasets["train"].features)
 
     #####################################
@@ -117,17 +119,17 @@ def main():
     #####################
     # Apply chat template
     #####################
-    raw_datasets = raw_datasets.map(
+    processed_datasets = raw_datasets.map(
         apply_chat_template,
         fn_kwargs={"tokenizer": tokenizer, "task": "spin"},
-        num_proc=data_args.preprocessing_num_workers,
+        num_proc=script_args.preprocessing_num_workers,
         remove_columns=column_names,
         desc="Formatting comparisons with prompt template",
     )
 
     # Replace column names with what TRL needs, text_real -> real and text_generated -> generated
     for split in ["train", "test"]:
-        raw_datasets[split] = raw_datasets[split].rename_columns(
+        processed_datasets[split] = processed_datasets[split].rename_columns(
             {"text_prompt": "prompt", "text_real": "real", "text_generated": "generated"}
         )
 
@@ -165,25 +167,27 @@ def main():
         ref_model_init_kwargs=ref_model_kwargs,
         args=training_args,
         beta=training_args.beta,
-        train_dataset=raw_datasets["train"],
-        eval_dataset=raw_datasets["test"],
+        train_dataset=processed_datasets["train"],
+        eval_dataset=processed_datasets["test"],
         tokenizer=tokenizer,
         max_length=training_args.max_length,
         max_prompt_length=training_args.max_prompt_length,
         peft_config=get_peft_config(model_args),
     )
 
-    if data_args.do_generate:
-        text_generation_callback = TextGenerationCallback(
-            messages=[
-                {"role": "user", "content": "What is the meaning of life?"},
-                {"role": "user", "content": "What is 1+1?"},
-                {"role": "user", "content": "Why is the sky blue?"},
-                {"role": "user", "content": "Hello!"},
-            ],
-            output_dataset_name="spin_output",
+    if script_args.do_generate:
+        generation_config = GenerationConfig(
+            do_sample=True,
+            temperature=script_args.temperature,
+            max_new_tokens=script_args.max_new_tokens,
+            pad_token_id=tokenizer.eos_token_id,
         )
-
+        prompts_ds = raw_datasets["train"].map(lambda x: {"prompt": x["real"][0]})
+        text_generation_callback = TextGenerationCallback(
+            prompt_dataset=prompts_ds.select(range(8)),
+            prompt_column="prompt",
+            generation_config=generation_config,
+        )
         spin_trainer.add_callback(text_generation_callback)
 
     ###############
@@ -197,7 +201,10 @@ def main():
     spin_trainer.save_model(training_args.output_dir)
     # spin_trainer.push_to_hub()
 
-    print(f"Completions after training: {text_generation_callback.completions}")
+    with training_args.main_process_first():
+        print(
+            f"Generated {len(text_generation_callback.completions)} completions after training: {text_generation_callback.completions}"
+        )
 
 
 if __name__ == "__main__":
