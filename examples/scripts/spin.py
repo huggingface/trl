@@ -44,9 +44,17 @@ from dataclasses import dataclass, field
 
 import torch
 from datasets import load_dataset
-from transformers import AutoTokenizer, HfArgumentParser, set_seed
+from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, set_seed
 
-from trl import ModelConfig, SPINConfig, SPINTrainer, get_kbit_device_map, get_peft_config, get_quantization_config
+from trl import (
+    ModelConfig,
+    SPINConfig,
+    SPINTrainer,
+    TextGenerationCallback,
+    get_kbit_device_map,
+    get_peft_config,
+    get_quantization_config,
+)
 
 
 def apply_chat_template(example, tokenizer, task, assistant_prefix="<|assistant|>\n"):
@@ -84,6 +92,7 @@ class ScriptArguments:
     preprocessing_num_workers: int = field(
         default=12, metadata={"help": "The number of processes to use for the preprocessing."}
     )
+    do_generate: bool = field(default=False, metadata={"help": "Whether to generate text after training"})
 
 
 def main():
@@ -137,14 +146,12 @@ def main():
         quantization_config=quantization_config,
     )
 
-    model = model_args.model_name_or_path
-
-    ref_model = model
-    ref_model_kwargs = model_kwargs
+    model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
 
     if model_args.use_peft is True:
         ref_model = None
-        ref_model_kwargs = None
+    else:
+        ref_model = model
 
     #########################
     # Instantiate spin trainer
@@ -152,8 +159,6 @@ def main():
     spin_trainer = SPINTrainer(
         model,
         ref_model,
-        model_init_kwargs=model_kwargs,
-        ref_model_init_kwargs=ref_model_kwargs,
         args=training_args,
         beta=training_args.beta,
         train_dataset=raw_datasets["train"],
@@ -164,6 +169,21 @@ def main():
         peft_config=get_peft_config(model_args),
     )
 
+    if data_args.do_generate:
+        text_generation_callback = TextGenerationCallback(
+            model,
+            tokenizer,
+            messages=[
+                {"role": "user", "content": "What is the meaning of life?"},
+                {"role": "user", "content": "What is 1+1?"},
+                {"role": "user", "content": "Why is the sky blue?"},
+                {"role": "user", "content": "Hello!"},
+            ],
+            output_dataset_name="spin_output",
+        )
+
+        spin_trainer.add_callback(text_generation_callback)
+
     ###############
     # Training loop
     ###############
@@ -173,7 +193,7 @@ def main():
     spin_trainer.save_metrics("train", metrics)
     spin_trainer.save_state()
     spin_trainer.save_model(training_args.output_dir)
-    spin_trainer.push_to_hub()
+    # spin_trainer.push_to_hub()
 
 
 if __name__ == "__main__":

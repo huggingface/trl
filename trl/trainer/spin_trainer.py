@@ -35,13 +35,11 @@ from transformers import (
     Trainer,
     TrainingArguments,
 )
-from transformers.modeling_utils import unwrap_model
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
 
 from ..import_utils import is_peft_available, is_wandb_available
 from ..models import PreTrainedModelWrapper, create_reference_model
-from .callbacks import TextGenerationCallback
 from .utils import SPINDataCollatorWithPadding, disable_dropout_in_model, pad_to_length
 
 
@@ -313,19 +311,6 @@ class SPINTrainer(Trainer):
 
         self.beta = beta
         self.loss_type = loss_type
-
-        callbacks = [
-            TextGenerationCallback(
-                unwrap_model(model),
-                tokenizer,
-                messages=[
-                    {"role": "user", "content": "What is the meaning of life?"},
-                    {"role": "user", "content": "What is 1+1?"},
-                    {"role": "user", "content": "Why is the sky blue?"},
-                ],
-                output_dataset_name="spin_output",
-            )
-        ]
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
