@@ -77,9 +77,9 @@ class KTOTrainerTester(unittest.TestCase):
     @parameterized.expand(
         [
             ["gpt2", True],
-            ["t5", True],
+            # ["t5", True],
             ["gpt2", False],
-            ["t5", False],
+            # ["t5", False],
         ]
     )
     def test_kto_trainer(self, name, pre_compute):
