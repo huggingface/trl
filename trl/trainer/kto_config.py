@@ -39,9 +39,6 @@ class KTOConfig(TrainingArguments):
             The desirable losses are weighed by this factor to counter unequal number of desirable and undesirable paris.
         undesirable_weight (`float`, *optional*, defaults to 1.0):
             The undesirable losses are weighed by this factor to counter unequal number of desirable and undesirable pairs.
-        data_collator (`transformers.DataCollator`, *optional*, defaults to `None`):
-            The data collator to use for training. If None is specified, the default data collator (`DPODataCollatorWithPadding`) will be used
-            which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
         label_pad_token_id (`int`, defaults to `-100`):
             The label pad token id. This argument is required if you want to use the default data collator.
         padding_value (`int`, defaults to `0`):
@@ -62,8 +59,7 @@ class KTOConfig(TrainingArguments):
     """The desirable losses are weighed by this factor."""
     undesirable_weight: Optional[float] = 1.0
     """The undesirable losses are weighed by this factor."""
-
-    data_collator: Optional[DataCollator] = None
+    
     label_pad_token_id: int = -100
     padding_value: int = None
     truncation_mode: str = "keep_end"

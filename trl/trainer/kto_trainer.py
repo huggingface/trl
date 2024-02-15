@@ -74,6 +74,9 @@ class KTOTrainer(Trainer):
             The dataset to use for evaluation.
         tokenizer (`transformers.PreTrainedTokenizerBase`):
             The tokenizer to use for training. This argument is required if you want to use the default data collator.
+        data_collator (`transformers.DataCollator`, *optional*, defaults to `None`):
+            The data collator to use for training. If None is specified, the default data collator (`DPODataCollatorWithPadding`) will be used
+            which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.       
         model_init (`Callable[[], transformers.PreTrainedModel]`):
             The model initializer to use for training. If None is specified, the default model initializer will be used.
         callbacks (`List[transformers.TrainerCallback]`):
@@ -101,7 +104,7 @@ class KTOTrainer(Trainer):
         ref_model_init_kwargs: (`Optional[Dict]`, *optional*):
             Dict of Optional kwargs to pass when instantiating the ref model from a string.
         seed (`Optional[int]`, *optional*):
-            Seed used to shuffle training dataset prior to interleaving chosen and rejected.
+            Seed used to shuffle training dataset prior to interleaving chosen and rejected. 
     """
 
     _tag_names = ["trl", "kto"]
@@ -114,6 +117,7 @@ class KTOTrainer(Trainer):
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
         tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        data_collator: Optional[DataCollator] = None
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
