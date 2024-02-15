@@ -1,4 +1,3 @@
-# coding=utf-8
 # Copyright 2022 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -163,7 +162,7 @@ dataset = build_dataset(tokenizer)
 
 
 def collator(data):
-    return dict((key, [d[key] for d in data]) for key in data[0])
+    return {key: [d[key] for d in data] for key in data[0]}
 
 
 # set seed before initializing value head for deterministic eval

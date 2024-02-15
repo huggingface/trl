@@ -117,6 +117,7 @@ class SFTTrainer(Trainer):
         dataset_kwargs: (`Optional[Dict]`, *optional*):
             Dict of Optional kwargs to pass when creating packed or non-packed datasets
     """
+
     _tag_names = ["trl", "sft"]
 
     def __init__(
@@ -480,17 +481,17 @@ class SFTTrainer(Trainer):
             )
 
             def data_generator(constant_length_iterator):
-                for i in constant_length_iterator:
-                    yield i
+                yield from constant_length_iterator
 
             try:
                 packed_dataset = Dataset.from_generator(
                     data_generator, gen_kwargs={"constant_length_iterator": constant_length_iterator}
                 )
-            except (DatasetGenerationError, SchemaInferenceError):
+            except (DatasetGenerationError, SchemaInferenceError) as exc:
                 raise ValueError(
-                    "Error occurred while packing the dataset. Make sure that your dataset has enough samples to at least yield one packed sequence."
-                )
+                    "Error occurred while packing the dataset. "
+                    "Make sure that your dataset has enough samples to at least yield one packed sequence."
+                ) from exc
             return packed_dataset
         else:
             raise ValueError(
