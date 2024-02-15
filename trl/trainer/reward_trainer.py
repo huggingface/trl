@@ -53,6 +53,8 @@ class RewardTrainer(Trainer):
     If you don't pass a margin, no margin will be used.
     """
 
+    _tag_names = ["trl", "reward-trainer"]
+
     def __init__(
         self,
         model: Optional[Union[PreTrainedModel, nn.Module]] = None,
@@ -206,6 +208,9 @@ class RewardTrainer(Trainer):
             optimizers,
             preprocess_logits_for_metrics,
         )
+
+        if hasattr(self.model, "add_model_tags"):
+            self.model.add_model_tags(self._tag_names)
 
     def compute_loss(
         self,

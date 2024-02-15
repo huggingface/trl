@@ -312,3 +312,55 @@ class RewardTrainerTester(unittest.TestCase):
             ).mean()
 
             assert abs(loss - l_val) < 1e-6
+
+    def test_reward_trainer_tags(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = RewardConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=4,
+                learning_rate=9e-1,
+                evaluation_strategy="steps",
+            )
+
+            # fmt: off
+            dummy_dataset_dict = {
+                "input_ids_chosen": [
+                    torch.LongTensor([0, 1, 2]),
+                    torch.LongTensor([1, 2]),
+                    torch.LongTensor([0, 1, 2]),
+                    torch.LongTensor([1, 2]),
+                ],
+                "attention_mask_chosen": [
+                    torch.LongTensor([1, 1, 1]),
+                    torch.LongTensor([1, 0]),
+                    torch.LongTensor([1, 1, 1]),
+                    torch.LongTensor([1, 0]),
+                ],
+                "input_ids_rejected": [
+                    torch.LongTensor([0, 2]),
+                    torch.LongTensor([1, 2, 0]),
+                    torch.LongTensor([0, 2]),
+                    torch.LongTensor([1, 2, 0]),
+                ],
+                "attention_mask_rejected": [
+                    torch.LongTensor([1, 1]),
+                    torch.LongTensor([1, 1, 0]),
+                    torch.LongTensor([1, 1]),
+                    torch.LongTensor([1, 1, 1]),
+                ],
+            }
+            # fmt: on
+            dummy_dataset = Dataset.from_dict(dummy_dataset_dict)
+
+            trainer = RewardTrainer(
+                model=self.model,
+                args=training_args,
+                tokenizer=self.tokenizer,
+                train_dataset=dummy_dataset,
+                eval_dataset=dummy_dataset,
+            )
+
+            assert trainer.model.model_tags == trainer._tag_names

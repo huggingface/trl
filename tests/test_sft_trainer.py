@@ -873,3 +873,60 @@ class SFTTrainerTester(unittest.TestCase):
             # Make sure forward pass works fine to check if embeddings forward is not broken.
             _ = trainer.model(torch.LongTensor([[1, 0, 1]]).to(device))
             assert len(trainer.model.get_input_embeddings()._forward_hooks) == 0
+
+    @require_peft
+    def test_peft_sft_trainer_tag(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                evaluation_strategy="steps",
+                max_steps=4,
+                eval_steps=2,
+                save_steps=2,
+                per_device_train_batch_size=2,
+                gradient_checkpointing=True,
+            )
+
+            peft_config = LoraConfig(
+                r=16,
+                lora_alpha=32,
+                lora_dropout=0.05,
+                bias="none",
+                task_type="CAUSAL_LM",
+            )
+
+            trainer = SFTTrainer(
+                model=self.model_id,
+                args=training_args,
+                train_dataset=self.train_dataset,
+                eval_dataset=self.eval_dataset,
+                peft_config=peft_config,
+                packing=True,
+            )
+
+            assert trainer.model.model_tags == trainer._tag_names
+
+    @require_peft
+    def test_sft_trainer_tag(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                evaluation_strategy="steps",
+                max_steps=4,
+                eval_steps=2,
+                save_steps=2,
+                per_device_train_batch_size=2,
+                gradient_checkpointing=True,
+            )
+
+            trainer = SFTTrainer(
+                model=self.model_id,
+                args=training_args,
+                train_dataset=self.train_dataset,
+                eval_dataset=self.eval_dataset,
+                packing=True,
+            )
+
+            assert trainer.model.model_tags == trainer._tag_names
