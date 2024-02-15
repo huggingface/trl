@@ -749,6 +749,7 @@ class PPOTrainer(BaseTrainer):
             "queries": queries,
             "responses": responses,
             "logprobs": all_logprobs.to(torch.float32),
+            "ref_logprobs": ref_logprobs.to(torch.float32),
             "values": values.to(torch.float32),
             "masks": masks,
             "advantages": advantages,
@@ -772,6 +773,7 @@ class PPOTrainer(BaseTrainer):
                     mini_batch_inds = backward_batch_inds[mini_batch_start:mini_batch_end]
                     mini_batch_dict = {
                         "logprobs": batch_dict["logprobs"][mini_batch_inds],
+                        "ref_logprobs": batch_dict["ref_logprobs"][mini_batch_inds],
                         "values": batch_dict["values"][mini_batch_inds],
                         "masks": batch_dict["masks"][mini_batch_inds],
                         # hacks: the queries and responses are ragged.
@@ -794,6 +796,7 @@ class PPOTrainer(BaseTrainer):
                         )
                         train_stats = self.train_minibatch(
                             mini_batch_dict["logprobs"],
+                            mini_batch_dict["ref_logprobs"],
                             mini_batch_dict["values"],
                             logprobs,
                             logits,
@@ -1033,6 +1036,7 @@ class PPOTrainer(BaseTrainer):
     def train_minibatch(
         self,
         old_logprobs: torch.FloatTensor,
+        ref_logprobs: torch.FloatTensor,
         values: torch.FloatTensor,
         logprobs: torch.FloatTensor,
         logits: torch.FloatTensor,
@@ -1064,7 +1068,8 @@ class PPOTrainer(BaseTrainer):
         loss_p, loss_v, train_stats = self.loss(
             old_logprobs, values, logits, vpreds, logprobs, mask, advantages, returns
         )
-        loss = loss_p + loss_v
+        loss_kl = masked_mean(ref_logprobs - logprobs, mask)
+        loss = loss_p + loss_v + self.config.kl_loss_coef * loss_kl
         self.accelerator.backward(loss)
         if self.config.max_grad_norm is not None:
             if self.accelerator.sync_gradients:

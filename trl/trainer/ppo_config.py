@@ -89,6 +89,8 @@ class PPOConfig:
     cliprange_value: float = 0.2
     """Range for clipping values in loss calculation"""
     vf_coef: float = 0.1
+    """KL loss between policy and reference in loss computation"""
+    kl_loss_coef: float = 0
     """Scaling factor for value loss"""
     batch_size: int = 256
     """Number of samples per optimisation step"""
