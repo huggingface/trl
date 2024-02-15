@@ -508,3 +508,82 @@ class DPOTrainerTester(unittest.TestCase):
 
             # save peft adapter
             trainer.save_model()
+
+    @require_peft
+    def test_dpo_lora_tags(self):
+        from peft import LoraConfig
+
+        model_id = "HuggingFaceM4/tiny-random-LlamaForCausalLM"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        lora_config = LoraConfig(
+            r=16,
+            lora_alpha=32,
+            lora_dropout=0.05,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+
+        # lora model
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=4,
+                learning_rate=9e-1,
+                evaluation_strategy="steps",
+            )
+
+            dummy_dataset = self._init_dummy_dataset()
+
+            # dpo train lora model with a lora config
+            trainer = DPOTrainer(
+                model=model,
+                ref_model=None,
+                beta=0.1,
+                args=training_args,
+                tokenizer=tokenizer,
+                train_dataset=dummy_dataset,
+                eval_dataset=dummy_dataset,
+                peft_config=lora_config,
+            )
+
+            assert trainer.model.model_tags == trainer._tag_names
+
+    @require_peft
+    def test_dpo_tags(self):
+        model_id = "HuggingFaceM4/tiny-random-LlamaForCausalLM"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        # lora model
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=4,
+                learning_rate=9e-1,
+                evaluation_strategy="steps",
+            )
+
+            dummy_dataset = self._init_dummy_dataset()
+
+            # dpo train lora model with a lora config
+            trainer = DPOTrainer(
+                model=model,
+                ref_model=None,
+                beta=0.1,
+                args=training_args,
+                tokenizer=tokenizer,
+                train_dataset=dummy_dataset,
+                eval_dataset=dummy_dataset,
+            )
+
+            assert trainer.model.model_tags == trainer._tag_names
