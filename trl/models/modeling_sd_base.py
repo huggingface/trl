@@ -34,7 +34,7 @@ if is_peft_available():
 
 
 @dataclass
-class DDPOPipelineOutput(object):
+class DDPOPipelineOutput:
     """
     Output class for the diffusers pipeline to be finetuned with the DDPO trainer
 
@@ -54,7 +54,7 @@ class DDPOPipelineOutput(object):
 
 
 @dataclass
-class DDPOSchedulerOutput(object):
+class DDPOSchedulerOutput:
     """
     Output class for the diffusers scheduler to be finetuned with the DDPO trainer
 
@@ -69,7 +69,7 @@ class DDPOSchedulerOutput(object):
     log_probs: torch.Tensor
 
 
-class DDPOStableDiffusionPipeline(object):
+class DDPOStableDiffusionPipeline:
     """
     Main class for the diffusers pipeline to be finetuned with the DDPO trainer
     """

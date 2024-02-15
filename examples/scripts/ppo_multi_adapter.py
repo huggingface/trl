@@ -1,4 +1,3 @@
-# coding=utf-8
 # Copyright 2023 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -97,7 +96,7 @@ dataset = create_and_prepare_dataset(tokenizer)
 
 
 def collator(data):
-    return dict((key, [d[key] for d in data]) for key in data[0])
+    return {key: [d[key] for d in data] for key in data[0]}
 
 
 config = PPOConfig(
@@ -131,7 +130,7 @@ generation_kwargs = {
     "max_new_tokens": 32,
 }
 
-for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
+for _epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     question_tensors = batch["input_ids"]
 
     response_tensors = ppo_trainer.generate(

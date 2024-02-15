@@ -85,6 +85,7 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
                 - **"normal"** -- Initializes the weights of the `ValueHead` with a normal distribution.
 
     """
+
     transformers_parent_class = AutoModelForCausalLM
     lm_head_namings = ["lm_head", "embed_out"]
     supported_args = (
@@ -218,7 +219,7 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
         return pretrained_model_state_dict
 
     def push_to_hub(self, *args, **kwargs):
-        setattr(self.pretrained_model, "v_head", self.v_head)
+        self.pretrained_model.v_head = self.v_head
 
         return self.pretrained_model.push_to_hub(*args, **kwargs)
 
@@ -276,6 +277,7 @@ class AutoModelForSeq2SeqLMWithValueHead(PreTrainedModelWrapper):
         kwargs:
             Additional keyword arguments passed along to the `ValueHead` class.
     """
+
     transformers_parent_class = AutoModelForSeq2SeqLM
     lm_head_namings = ["lm_head", "embed_out", "output_projection"]
     supported_args = (
@@ -298,7 +300,7 @@ class AutoModelForSeq2SeqLMWithValueHead(PreTrainedModelWrapper):
 
     def _has_lm_head(self):
         # check module names of all modules inside `pretrained_model` to find the language model head
-        for name, module in self.pretrained_model.named_modules():
+        for name, _module in self.pretrained_model.named_modules():
             if any(attribute in name for attribute in self.lm_head_namings):
                 return True
         return False
@@ -374,7 +376,7 @@ class AutoModelForSeq2SeqLMWithValueHead(PreTrainedModelWrapper):
         return pretrained_model_state_dict
 
     def push_to_hub(self, *args, **kwargs):
-        setattr(self.pretrained_model, "v_head", self.v_head)
+        self.pretrained_model.v_head = self.v_head
 
         return self.pretrained_model.push_to_hub(*args, **kwargs)
 

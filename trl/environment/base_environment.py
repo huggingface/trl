@@ -46,7 +46,7 @@ class StringStoppingCriteria(StoppingCriteria):
         done = []
 
         for i, decoded_generation in enumerate(decoded_generations):
-            sequence_complete = any([stop_string in decoded_generation for stop_string in self.stop_strings])
+            sequence_complete = any(stop_string in decoded_generation for stop_string in self.stop_strings)
             done.append(sequence_complete)
             if not sequence_complete:
                 self.generated_tokens[i] += 1
@@ -243,7 +243,7 @@ class TextEnvironment:
         if isinstance(tools, dict):
             self.tools = tools
         else:
-            self.tools = dict([(tool.__class__.__name__, tool) for tool in tools])
+            self.tools = {tool.__class__.__name__: tool for tool in tools}
         self.reward_fn = reward_fn
         self.max_length = max_length
         self.request_token = "<request>"
@@ -278,7 +278,7 @@ class TextEnvironment:
 
         histories = [TextHistory(q, qt, system=True) for q, qt in zip(queries, queries_tokens)]
 
-        while any([not history.completed for history in histories]) and turns < self.max_turns:
+        while any(not history.completed for history in histories) and turns < self.max_turns:
             histories = self.generate(histories)
             histories = self.tasks_end_check(histories)
             # TODO: make this parallel rather than for-loop
