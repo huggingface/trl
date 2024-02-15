@@ -525,7 +525,7 @@ class DPOTrainerTester(unittest.TestCase):
         )
 
         # lora model
-        model = AutoModelForCausalLM.from_pretrained(model_id, load_in_4bit=True)
+        model = AutoModelForCausalLM.from_pretrained(model_id)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
@@ -536,7 +536,6 @@ class DPOTrainerTester(unittest.TestCase):
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
                 evaluation_strategy="steps",
-                bf16=True,
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -551,7 +550,6 @@ class DPOTrainerTester(unittest.TestCase):
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
                 peft_config=lora_config,
-                generate_during_eval=True,
             )
 
             assert trainer.model.model_tags == trainer._tag_names
@@ -573,7 +571,6 @@ class DPOTrainerTester(unittest.TestCase):
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
                 evaluation_strategy="steps",
-                bf16=True,
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -587,7 +584,6 @@ class DPOTrainerTester(unittest.TestCase):
                 tokenizer=tokenizer,
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
-                generate_during_eval=True,
             )
 
             assert trainer.model.model_tags == trainer._tag_names
