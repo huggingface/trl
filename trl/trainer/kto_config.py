@@ -19,7 +19,7 @@ from transformers import DataCollator, TrainingArguments
 
 @dataclass
 class KTOConfig(TrainingArguments):
-    """
+    r"""
     KTOConfig collects all training arguments related to the [`KTOTrainer`] class.
 
     Using [`HfArgumentParser`] we can turn this class into
@@ -39,14 +39,15 @@ class KTOConfig(TrainingArguments):
             The desirable losses are weighed by this factor to counter unequal number of desirable and undesirable paris.
         undesirable_weight (`float`, *optional*, defaults to 1.0):
             The undesirable losses are weighed by this factor to counter unequal number of desirable and undesirable pairs.
-        data_collator (`DataCollator`, *optional*, defaults to `None`):
-            The data collator to use. If `None`, a default data collator will be created.
-        label_pad_token_id (`int`, defaults to -100):
-            The label for non response tokens.
-        padding_value (`int`, *optional*, defaults to `None`):
-            The padding value to use if the data collator is not specified.
-        truncation_mode (`str`, defaults to "keep_end"):
-            The truncation mode to use when the combined sequence is too long, truncate the prompt (keep start) or the completion (keep end).
+        data_collator (`transformers.DataCollator`, *optional*, defaults to `None`):
+            The data collator to use for training. If None is specified, the default data collator (`DPODataCollatorWithPadding`) will be used
+            which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
+        label_pad_token_id (`int`, defaults to `-100`):
+            The label pad token id. This argument is required if you want to use the default data collator.
+        padding_value (`int`, defaults to `0`):
+            The padding value if it is different to the tokenizer's pad_token_id.
+        truncation_mode (`str`, defaults to `keep_end`):
+            The truncation mode to use, either `keep_end` or `keep_start`. This argument is required if you want to use the default data collator.
     """
 
     max_length: Optional[int] = None

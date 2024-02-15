@@ -68,15 +68,6 @@ class KTOTrainer(Trainer):
             reference model is provided, the trainer will create a reference model with the same architecture as the model to be optimized.
         args (`KTOConfig`):
             The arguments to use for training.
-        data_collator (`transformers.DataCollator`):
-            The data collator to use for training. If None is specified, the default data collator (`DPODataCollatorWithPadding`) will be used
-            which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
-        label_pad_token_id (`int`, defaults to `-100`):
-            The label pad token id. This argument is required if you want to use the default data collator.
-        padding_value (`int`, defaults to `0`):
-            The padding value if it is different to the tokenizer's pad_token_id.
-        truncation_mode (`str`, defaults to `keep_end`):
-            The truncation mode to use, either `keep_end` or `keep_start`. This argument is required if you want to use the default data collator.
         train_dataset (`datasets.Dataset`):
             The dataset to use for training.
         eval_dataset (`datasets.Dataset`):
@@ -113,7 +104,6 @@ class KTOTrainer(Trainer):
             Seed used to shuffle training dataset prior to interleaving chosen and rejected.
     """
 
-    _tag_names = ["trl", "dpo"]
     _tag_names = ["trl", "kto"]
 
     def __init__(
