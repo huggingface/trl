@@ -152,13 +152,12 @@ if __name__ == "__main__":
         optim="adamw_torch",
         warmup_steps=150,
         report_to=script_args.report_to,
-        # bf16=True,
+        bf16=True,
         gradient_checkpointing=script_args.gradient_checkpointing,
-        # TODO: uncomment that on the next transformers release
-        # gradient_checkpointing_kwargs=script_args.gradient_checkpointing_kwargs,
-        # KTO
+        gradient_checkpointing_kwargs=script_args.gradient_checkpointing_kwargs,
+        # KTO hyperparams
         beta=script_args.beta,
-        max_length=script_args.max_length,
+        max_length=script_args.max_length,  
         max_completion_length=script_args.max_completion_length,
         max_prompt_length=script_args.max_prompt_length,
     )
