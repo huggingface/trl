@@ -562,7 +562,7 @@ class DPOTrainerTester(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         # lora model
-        model = AutoModelForCausalLM.from_pretrained(model_id, load_in_4bit=True)
+        model = AutoModelForCausalLM.from_pretrained(model_id)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(

@@ -1226,16 +1226,3 @@ class PPOTrainerTester(unittest.TestCase):
     def test_batch_size_check(self):
         with pytest.raises(ValueError):
             PPOConfig(batch_size=2, mini_batch_size=2, gradient_accumulation_steps=2)
-
-    def test_ppo_trainer_tags(self):
-        dummy_dataset = self._init_dummy_dataset()
-
-        ppo_trainer = PPOTrainer(
-            config=self.ppo_config,
-            model=self.gpt2_model,
-            ref_model=None,
-            tokenizer=self.gpt2_tokenizer,
-            dataset=dummy_dataset,
-        )
-
-        assert ppo_trainer.model.model_tags == ppo_trainer._tag_names

@@ -307,10 +307,6 @@ class PPOTrainer(BaseTrainer):
             self.accelerator.state, "deepspeed_plugin"
         )
 
-        # Add tags for models that have been loaded with the correct transformers version
-        if hasattr(self.model, "add_model_tags"):
-            self.model.add_model_tags(self._tag_names)
-
         (
             self.model,
             self.optimizer,
