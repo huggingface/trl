@@ -200,7 +200,7 @@ class PPOTrainerTester(unittest.TestCase):
             # (this could be any reward such as human feedback or output from another model)
             reward = [torch.tensor(1.0), torch.tensor(0.0)]
             # train model
-            train_stats = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+            train_stats = ppo_trainer.step(list(query_tensor), list(response_tensor), reward)
             break
 
         for param in ppo_trainer.model.parameters():
@@ -230,9 +230,7 @@ class PPOTrainerTester(unittest.TestCase):
             response_mask = [torch.ones_like(r) for r in response_tensor]
 
             # train model
-            train_stats = ppo_trainer.step(
-                [q for q in query_tensor], [r for r in response_tensor], reward, response_mask
-            )
+            train_stats = ppo_trainer.step(list(query_tensor), list(response_tensor), reward, response_mask)
             break
 
         for param in ppo_trainer.model.parameters():
@@ -264,7 +262,7 @@ class PPOTrainerTester(unittest.TestCase):
             # (this could be any reward such as human feedback or output from another model)
             reward = [torch.tensor(1.0), torch.tensor(0.0)]
             # train model
-            train_stats = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+            train_stats = ppo_trainer.step(list(query_tensor), list(response_tensor), reward)
             break
 
         for name, param in ppo_trainer.model.named_parameters():
@@ -304,8 +302,8 @@ class PPOTrainerTester(unittest.TestCase):
             # (this could be any reward such as human feedback or output from another model)
             reward = [torch.tensor(1.0), torch.tensor(0.0)]
             # train model
-            _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
-            train_stats = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+            _ = ppo_trainer.step(list(query_tensor), list(response_tensor), reward)
+            train_stats = ppo_trainer.step(list(query_tensor), list(response_tensor), reward)
             break
 
         for name, param in ppo_trainer.model.named_parameters():
@@ -341,7 +339,7 @@ class PPOTrainerTester(unittest.TestCase):
             # (this could be any reward such as human feedback or output from another model)
             reward = [torch.tensor(1.0), torch.tensor(0.0)]
             # train model
-            train_stats = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+            train_stats = ppo_trainer.step(list(query_tensor), list(response_tensor), reward)
             break
 
         for name, param in ppo_trainer.model.named_parameters():
@@ -391,7 +389,7 @@ class PPOTrainerTester(unittest.TestCase):
             # (this could be any reward such as human feedback or output from another model)
             reward = [torch.tensor(1.0), torch.tensor(0.0)]
             # train model
-            train_stats = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+            train_stats = ppo_trainer.step(list(query_tensor), list(response_tensor), reward)
             break
 
         pattern = r".*transformer\.h\.(\d+)\..*"
@@ -404,7 +402,7 @@ class PPOTrainerTester(unittest.TestCase):
                     assert param.grad is None, f"Parameter {name} has a gradient"
                 else:
                     assert param.grad is not None, f"Parameter {name} has no gradient"
-            elif any([layer in name for layer in final_layers]):
+            elif any(layer in name for layer in final_layers):
                 assert param.grad is not None, f"Parameter {name} has no gradient"
 
         # ref model should not be trained
@@ -459,11 +457,11 @@ class PPOTrainerTester(unittest.TestCase):
             reward = [torch.tensor([[1.0]]), torch.tensor([[0.0]])]
             # train model - this should raise an error
             with pytest.raises(ValueError):
-                _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+                _ = ppo_trainer.step(list(query_tensor), list(response_tensor), reward)
 
             reward = [torch.tensor([1.0]), torch.tensor([0.0])]
             # train model - this should work
-            _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+            _ = ppo_trainer.step(list(query_tensor), list(response_tensor), reward)
             break
 
         # check if the gradients are computed for the model
@@ -498,7 +496,7 @@ class PPOTrainerTester(unittest.TestCase):
             bs = ppo_trainer.config.batch_size
 
             queries, responses, _, _ = ppo_trainer._step_safety_checker(
-                bs, [q for q in query_tensor], [r for r in response_tensor], reward
+                bs, list(query_tensor), list(response_tensor), reward
             )
 
             assert isinstance(queries, list), f"queries should be a list, got {type(queries)}"
@@ -703,7 +701,7 @@ class PPOTrainerTester(unittest.TestCase):
             # (this could be any reward such as human feedback or output from another model)
             reward = [torch.tensor(1.0), torch.tensor(0.0)]
             # train model
-            _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+            _ = ppo_trainer.step(list(query_tensor), list(response_tensor), reward)
             break
 
         # check gradients
@@ -892,11 +890,11 @@ class PPOTrainerTester(unittest.TestCase):
             # (this could be any reward such as human feedback or output from another model)
             reward = [torch.tensor(1.0), torch.tensor(0.0)]
             # train model by running a step twice
-            _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+            _ = ppo_trainer.step(list(query_tensor), list(response_tensor), reward)
 
             ppo_trainer.model.train()
             ppo_trainer.model.gradient_checkpointing_enable()
-            _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+            _ = ppo_trainer.step(list(query_tensor), list(response_tensor), reward)
             break
 
         # check gradients
@@ -980,11 +978,11 @@ class PPOTrainerTester(unittest.TestCase):
                 # (this could be any reward such as human feedback or output from another model)
                 reward = [torch.tensor(1.0), torch.tensor(0.0)]
                 # train model by running a step twice
-                _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+                _ = ppo_trainer.step(list(query_tensor), list(response_tensor), reward)
 
                 ppo_trainer.model.train()
                 ppo_trainer.model.gradient_checkpointing_enable()
-                _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+                _ = ppo_trainer.step(list(query_tensor), list(response_tensor), reward)
                 break
 
             new_logits = ppo_trainer.model.compute_reward_score(dummy_inputs)
@@ -1090,11 +1088,11 @@ class PPOTrainerTester(unittest.TestCase):
             # (this could be any reward such as human feedback or output from another model)
             reward = [torch.tensor(1.0), torch.tensor(0.0)]
             # train model by running a step twice
-            _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+            _ = ppo_trainer.step(list(query_tensor), list(response_tensor), reward)
 
             ppo_trainer.model.train()
             ppo_trainer.model.gradient_checkpointing_enable()
-            _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+            _ = ppo_trainer.step(list(query_tensor), list(response_tensor), reward)
             break
 
         # check gradients
@@ -1160,7 +1158,7 @@ class PPOTrainerTester(unittest.TestCase):
             # (this could be any reward such as human feedback or output from another model)
             reward = [torch.tensor(1.0), torch.tensor(1.0)]
             # train model by running a step twice
-            _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+            _ = ppo_trainer.step(list(query_tensor), list(response_tensor), reward)
             break
 
         model_grad = gpt2_model.v_head.summary.weight
@@ -1184,7 +1182,7 @@ class PPOTrainerTester(unittest.TestCase):
             # (this could be any reward such as human feedback or output from another model)
             reward = [torch.tensor(1.0), torch.tensor(1.0)]
             # train model by running a step twice
-            _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+            _ = ppo_trainer.step(list(query_tensor), list(response_tensor), reward)
             break
 
         model_grad_acc = gpt2_model_clone.v_head.summary.weight
@@ -1222,7 +1220,7 @@ class PPOTrainerTester(unittest.TestCase):
             # (this could be any reward such as human feedback or output from another model)
             reward = [torch.tensor(1.0), torch.tensor(0.0)]
             # train model
-            _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+            _ = ppo_trainer.step(list(query_tensor), list(response_tensor), reward)
             break
 
     def test_batch_size_check(self):

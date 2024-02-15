@@ -30,7 +30,7 @@ from .import_utils import is_npu_available, is_xpu_available
 try:
     from collections.abc import Mapping
 except ImportError:
-    from collections import Mapping
+    from collections.abc import Mapping
 
 
 WANDB_PADDING = -1
@@ -80,7 +80,7 @@ def stack_dicts(stats_dicts: List[Dict]) -> Dict:
 
 def add_suffix(input_dict: Dict, suffix: str) -> Dict:
     """Add suffix to dict keys."""
-    return dict((k + suffix, v) for k, v in input_dict.items())
+    return {k + suffix: v for k, v in input_dict.items()}
 
 
 def pad_to_size(tensor: torch.Tensor, size: int, dim: int = 1, padding: int = 50256) -> torch.Tensor:
@@ -194,7 +194,7 @@ def respond_to_batch(
 ) -> torch.LongTensor:
     """Sample text from language model."""
     input_ids = queries
-    for i in range(txt_len):
+    for _i in range(txt_len):
         # Get Logits
         outputs = model(input_ids)
         next_token_logits = outputs[0][:, -1, :]
@@ -236,7 +236,7 @@ class LengthSampler:
         return np.random.choice(self.values)
 
 
-class PPODecorators(object):
+class PPODecorators:
     optimize_device_cache = False
 
     @classmethod

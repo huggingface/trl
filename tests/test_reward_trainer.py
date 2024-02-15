@@ -176,7 +176,7 @@ class RewardTrainerTester(unittest.TestCase):
 
             # check gradients are not None
             for n, param in trainer.model.named_parameters():
-                if any([t in n for t in trainable_params_name]):
+                if any(t in n for t in trainable_params_name):
                     previous_trainable_params[n] = param.clone()
                 else:
                     previous_non_trainable_params[n] = param.clone()
