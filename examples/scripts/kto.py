@@ -157,7 +157,7 @@ if __name__ == "__main__":
         gradient_checkpointing_kwargs=script_args.gradient_checkpointing_kwargs,
         # KTO hyperparams
         beta=script_args.beta,
-        max_length=script_args.max_length,  
+        max_length=script_args.max_length,
         max_completion_length=script_args.max_completion_length,
         max_prompt_length=script_args.max_prompt_length,
     )
