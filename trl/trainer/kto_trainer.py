@@ -630,14 +630,9 @@ class KTOTrainer(Trainer):
 
             # add BOS token to head of prompt
             prompt_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + prompt_tokens["prompt_input_ids"]
-            completion_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + completion_tokens[
-                "prompt_input_ids"
-            ]
-
             prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens["prompt_attention_mask"]
-            completion_tokens["prompt_attention_mask"] = [1] + completion_tokens["prompt_attention_mask"]
 
-            # add EOS token to end of answer
+            # add EOS token to end of completion
             completion_tokens["input_ids"].append(self.tokenizer.eos_token_id)
             completion_tokens["attention_mask"].append(1)
 
