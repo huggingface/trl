@@ -246,10 +246,10 @@ class SFTTrainer(Trainer):
             formatting_func = get_formatting_func_from_dataset(train_dataset, tokenizer)
 
         if not packing:
-            if dataset_text_field is None and formatting_func is None:
-                raise ValueError(
-                    "You passed `packing=False` to the SFTTrainer, but you didn't pass a `dataset_text_field` or `formatting_func` argument."
-                )
+            # if dataset_text_field is None and formatting_func is None:
+            #     raise ValueError(
+            #         "You passed `packing=False` to the SFTTrainer, but you didn't pass a `dataset_text_field` or `formatting_func` argument."
+            #     )
 
             if data_collator is None:
                 data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
@@ -475,8 +475,13 @@ class SFTTrainer(Trainer):
                 f"inspect dataset other columns (in this case {extra_columns}), you can subclass `DataCollatorForLanguageModeling` in case you used the default collator and create your own data collator in order to inspect the unused dataset columns."
             )
 
+        if 'input' in dataset.column_names['train'] and 'output' in dataset.column_names['train']:
+            tokenize_func= tokenize_input_output
+        else:
+            tokenize_func = tokenize
+
         tokenized_dataset = dataset.map(
-            tokenize,
+            tokenize_func,
             batched=True,
             remove_columns=dataset.column_names if remove_unused_columns else None,
             num_proc=self.dataset_num_proc,
