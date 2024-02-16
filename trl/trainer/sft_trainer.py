@@ -412,6 +412,37 @@ class SFTTrainer(Trainer):
         use_formatting_func = formatting_func is not None and dataset_text_field is None
         self._dataset_sanity_checked = False
 
+        # Inspired from https://github.com/allenai/open-instruct/blob/main/open_instruct/finetune.py#L266
+        def tokenize_input_output(element):
+
+            eos_token = None
+            if add_special_tokens:
+                eos_token = tokenizer.eos_token
+            tokenizer.eos_token=None
+
+            new_source = []
+            for (input_element, output_element)  in zip(element['input'], element['output']): 
+                if not input_element.endswith((' ', '\n', '\t')) and not output_element.startswith((' ', '\n', '\t')):
+                    new_source.append(input_element + ' ' + output_element + eos_token)
+                else:
+                    new_source.append(input_element + output_element + eos_token)
+
+            tokenized_example = tokenizer(new_source, max_length=max_seq_length, truncation=True, padding=False, add_special_tokens=add_special_tokens)
+            input_ids = tokenized_example.input_ids
+            labels = input_ids
+            
+            # mask the prompt part for avoiding loss
+            tokenized_prompt = tokenizer(element['input'], max_length=max_seq_length, truncation=True, add_special_tokens=add_special_tokens)
+
+            new_labels = [([-100] * len(tokenized_instance)) + label_instance[len(tokenized_instance):] for tokenized_instance,label_instance in zip(tokenized_prompt.input_ids, labels) ] 
+            attention_mask = tokenized_example.attention_mask
+
+            return {
+                'input_ids': input_ids,
+                'labels': new_labels,
+                'attention_mask': attention_mask,
+            }
+    
         # Inspired from: https://huggingface.co/learn/nlp-course/chapter7/6?fw=pt
         def tokenize(element):
             outputs = tokenizer(
