@@ -1069,6 +1069,7 @@ class PPOTrainer(BaseTrainer):
             old_logprobs, values, logits, vpreds, logprobs, mask, advantages, returns
         )
         loss_kl = masked_mean(ref_logprobs - logprobs, mask)
+        train_stats["loss/kl"] = loss_kl.detach()
         loss = loss_p + loss_v + self.config.kl_loss_coef * loss_kl
         self.accelerator.backward(loss)
         if self.config.max_grad_norm is not None:
