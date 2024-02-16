@@ -14,7 +14,7 @@
 from dataclasses import dataclass
 from typing import Optional
 
-from transformers import DataCollator, TrainingArguments
+from transformers import TrainingArguments
 
 
 @dataclass
@@ -59,7 +59,7 @@ class KTOConfig(TrainingArguments):
     """The desirable losses are weighed by this factor."""
     undesirable_weight: Optional[float] = 1.0
     """The undesirable losses are weighed by this factor."""
-    
+
     label_pad_token_id: int = -100
     padding_value: int = None
     truncation_mode: str = "keep_end"
