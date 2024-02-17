@@ -93,6 +93,7 @@ class KTOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 evaluation_strategy="steps",
                 beta=0.1,
+                precompute_ref_log_probs=pre_compute,
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -113,7 +114,6 @@ class KTOTrainerTester(unittest.TestCase):
                 tokenizer=tokenizer,
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
-                precompute_ref_log_probs=pre_compute,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}

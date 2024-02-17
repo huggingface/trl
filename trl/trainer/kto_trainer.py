@@ -94,24 +94,11 @@ class KTOTrainer(Trainer):
             The function to use to preprocess the logits before computing the metrics.
         peft_config (`Dict`, defaults to `None`):
             The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
-        is_encoder_decoder (`Optional[bool]`, `optional`, defaults to `None`):
-            If no model is provided, we need to know if the model_init returns an encoder-decoder.
         disable_dropout (`bool`, defaults to `True`):
             Whether or not to disable dropouts in `model` and `ref_model`.
-        generate_during_eval (`bool`, defaults to `False`):
-            Whether to sample and log generations during evaluation step.
         compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return
             a dictionary string to metric values.
-        precompute_ref_log_probs (`bool`, defaults to `False`):
-            Flag to precompute reference model log probabilities and evaluation datasets. This is useful if you want to train
-            without the reference model and reduce the total GPU memory needed.
-        model_init_kwargs: (`Optional[Dict]`, *optional*):
-            Dict of Optional kwargs to pass when instantiating the model from a string.
-        ref_model_init_kwargs: (`Optional[Dict]`, *optional*):
-            Dict of Optional kwargs to pass when instantiating the ref model from a string.
-        seed (`Optional[int]`, *optional*):
-            Seed used to shuffle training dataset prior to interleaving chosen and rejected.
     """
 
     _tag_names = ["trl", "kto"]
@@ -130,23 +117,17 @@ class KTOTrainer(Trainer):
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         peft_config: Optional[Dict] = None,
-        is_encoder_decoder: Optional[bool] = None,
-        generate_during_eval: bool = False,
         compute_metrics: Optional[Callable[[EvalLoopOutput], Dict]] = None,
-        precompute_ref_log_probs: bool = False,
-        model_init_kwargs: Optional[Dict] = None,
-        ref_model_init_kwargs: Optional[Dict] = None,
-        seed: Optional[int] = None,
     ):
         if type(args) == TrainingArguments:
             raise ValueError("Please use `KTOConfig` instead TrainingArguments.")
 
-        if model_init_kwargs is None:
+        if args.model_init_kwargs is None:
             model_init_kwargs = {}
         elif not isinstance(model, str):
             raise ValueError("You passed model_kwargs to the KTOTrainer. But your model is already instantiated.")
 
-        if ref_model_init_kwargs is None:
+        if args.ref_model_init_kwargs is None:
             ref_model_init_kwargs = {}
         elif not isinstance(ref_model, str):
             raise ValueError(
@@ -225,7 +206,7 @@ class KTOTrainer(Trainer):
 
                 model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
 
-        if generate_during_eval and not is_wandb_available():
+        if args.generate_during_eval and not is_wandb_available():
             raise ValueError(
                 "`generate_during_eval=True` requires Weights and Biases to be installed."
                 " Please install with `pip install wandb` to resolve."
@@ -233,16 +214,16 @@ class KTOTrainer(Trainer):
 
         if model is not None:
             self.is_encoder_decoder = model.config.is_encoder_decoder
-        elif is_encoder_decoder is None:
+        elif args.is_encoder_decoder is None:
             raise ValueError("When no model is provided, you need to pass the parameter is_encoder_decoder.")
         else:
-            self.is_encoder_decoder = is_encoder_decoder
+            self.is_encoder_decoder = args.is_encoder_decoder
 
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
 
         if ref_model:
             self.ref_model = ref_model
-        elif self.is_peft_model or precompute_ref_log_probs:
+        elif self.is_peft_model or args.precompute_ref_log_probs:
             # The `model` with adapters turned off will be used as the reference model
             self.ref_model = None
         else:
@@ -309,14 +290,14 @@ class KTOTrainer(Trainer):
             disable_dropout_in_model(self.ref_model)
 
         self.max_length = max_length
-        self.generate_during_eval = generate_during_eval
+        self.generate_during_eval = args.generate_during_eval
         self.label_pad_token_id = args.label_pad_token_id
         self.padding_value = args.padding_value if args.padding_value is not None else tokenizer.pad_token_id
         self.max_prompt_length = max_prompt_length
         self.truncation_mode = args.truncation_mode
         self.max_completion_length = max_completion_length
         self.tokenizer = tokenizer
-        self.precompute_ref_log_probs = precompute_ref_log_probs
+        self.precompute_ref_log_probs = args.precompute_ref_log_probs
 
         # Since ref_logs are precomputed on the first call to get_train/eval_dataloader
         # keep track of first called to avoid computation of future calls
@@ -350,8 +331,8 @@ class KTOTrainer(Trainer):
         # split the dataset and interleave them together with equal probability of choosing chosen or rejected
         interleaved_train_dataset = interleave_datasets(
             [
-                train_dataset.filter(lambda x: x["label"]).shuffle(seed=seed),
-                train_dataset.filter(lambda x: not x["label"]).shuffle(seed=seed),
+                train_dataset.filter(lambda x: x["label"]).shuffle(seed=args.data_seed),
+                train_dataset.filter(lambda x: not x["label"]).shuffle(seed=args.data_seed),
             ],
         )
 

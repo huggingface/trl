@@ -158,6 +158,7 @@ if __name__ == "__main__":
         max_length=script_args.max_length,
         max_completion_length=script_args.max_completion_length,
         max_prompt_length=script_args.max_prompt_length,
+        generate_during_eval=True,
     )
 
     if script_args.use_peft:
@@ -178,7 +179,6 @@ if __name__ == "__main__":
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         tokenizer=tokenizer,
-        generate_during_eval=True,
         peft_config=peft_config,
     )
 
