@@ -332,14 +332,18 @@ class KTOTrainer(Trainer):
         self.undesirable_weight = args.undesirable_weight
 
         # tokenize the dataset
+        columns_to_remove = [col for col in train_dataset.column_names if col not in ["prompt", "completion", "label"]]
         train_dataset = train_dataset.map(
-            self.shuffle_completion, batched=True, batch_size=128, input_columns=["prompt", "completion", "label"]
+            self.shuffle_completion, batched=True, batch_size=128, remove_columns=columns_to_remove
         )
         train_dataset = train_dataset.map(self.tokenize_row)
 
         if eval_dataset is not None:
+            columns_to_remove = [
+                col for col in eval_dataset.column_names if col not in ["prompt", "completion", "label"]
+            ]
             eval_dataset = eval_dataset.map(
-                self.shuffle_completion, batched=True, batch_size=128, input_columns=["prompt", "completion", "label"]
+                self.shuffle_completion, batched=True, batch_size=128, remove_columns=columns_to_remove
             )
             eval_dataset = eval_dataset.map(self.tokenize_row)
 
@@ -599,12 +603,11 @@ class KTOTrainer(Trainer):
             attention_mask=answer_attention_mask,
         )
 
-    def shuffle_completion(self, prompt, completion, label) -> Dict:
-        batch = {}
-        batch["kl"] = [False] * len(prompt) + [True] * len(prompt)
-        batch["prompt"] = prompt + prompt
-        batch["completion"] = completion + random.sample(completion, len(completion))
-        batch["label"] = label + label
+    def shuffle_completion(self, batch) -> Dict:
+        batch["kl"] = [False] * len(batch["prompt"]) + [True] * len(batch["prompt"])
+        batch["prompt"] = batch["prompt"] + batch["prompt"]
+        batch["completion"] = batch["completion"] + random.sample(batch["completion"], len(batch["completion"]))
+        batch["label"] = batch["label"] + batch["label"]
         return batch
 
     def tokenize_row(self, feature, model: Union[PreTrainedModel, nn.Module] = None) -> Dict:
