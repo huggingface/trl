@@ -229,6 +229,7 @@ class KTOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 evaluation_strategy="steps",
                 beta=0.1,
+                generate_during_eval=True,
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -245,7 +246,6 @@ class KTOTrainerTester(unittest.TestCase):
                     tokenizer=self.tokenizer,
                     train_dataset=dummy_dataset,
                     eval_dataset=dummy_dataset,
-                    generate_during_eval=True,
                 )
 
     @require_peft

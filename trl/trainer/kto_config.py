@@ -50,7 +50,7 @@ class KTOConfig(TrainingArguments):
         is_encoder_decoder (`Optional[bool]`, `optional`, defaults to `None`):
             If no model is provided, we need to know if the model_init returns an encoder-decoder.
         precompute_ref_log_probs (`bool`, defaults to `False`):
-            Flag to precompute reference model log probabilities from training and evaluation datasets. This is useful if you want to train
+            Flag to precompute reference model log probabilities for training and evaluation datasets. This is useful if you want to train
             without the reference model and reduce the total GPU memory needed.
         model_init_kwargs: (`Optional[Dict]`, *optional*):
             Dict of Optional kwargs to pass when instantiating the model from a string.
