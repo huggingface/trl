@@ -138,12 +138,6 @@ if __name__ == "__main__":
             name for name, buffer in model.named_buffers() if buffer.dtype == torch.bool
         ]
 
-    model_ref = AutoModelForCausalLM.from_pretrained(
-        script_args.model_name_or_path,
-        low_cpu_mem_usage=True,
-        torch_dtype=torch.float16,
-        load_in_4bit=True,
-    )
     tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf")
     tokenizer.pad_token = tokenizer.eos_token
 
@@ -203,7 +197,7 @@ if __name__ == "__main__":
     # 5. initialize the DPO trainer
     dpo_trainer = DPOTrainer(
         model,
-        model_ref,
+        ref_model=None,
         args=training_args,
         beta=script_args.beta,
         train_dataset=train_dataset,
