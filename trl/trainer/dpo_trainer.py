@@ -48,6 +48,7 @@ from .utils import (
     pad_to_length,
     peft_module_casting_to_bf16,
     trl_sanitze_kwargs_for_tagging,
+    cap_exp,
 )
 
 
@@ -845,17 +846,22 @@ class DPOTrainer(Trainer):
             The losses tensor contains the DPO loss for each example in the batch.
             The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
         """
-        chosen_rewards = policy_chosen_logps.to(self.accelerator.device) - (
+        chosen_logratios = policy_chosen_logps.to(self.accelerator.device) - (
             not reference_free) * reference_chosen_logps.to(self.accelerator.device)
-        rejected_rewards = policy_rejected_logps.to(self.accelerator.device) - (
+        rejected_logratios = policy_rejected_logps.to(self.accelerator.device) - (
             not reference_free) * reference_rejected_logps.to(self.accelerator.device)
 
         if self.f_divergence_type == FDivergenceType.ALPHA_DIVERGENCE.value:
+            # The alpha-divergence formula: (1 - u^-alpha) / alpha
+            # The divergence difference between the chosen and rejected sample is:
+            #     (1 - u[w]^-alpha) / alpha - (1 - u[l]^-alpha) / alpha
+            #        =
+            # where u[w] and u[l] are the policy/reference probability ratios
+            # for the chosen and rejected samples, respectively.
             alpha_coef = FDivergenceConstants.ALPHA_DIVERGENCE_COEF_DEFAULT
             if self.f_divergence_params and FDivergenceConstants.ALPHA_DIVERGENCE_COEF_KEY in self.f_divergence_params:
                 alpha_coef = float(self.f_divergence_params[FDivergenceConstants.ALPHA_DIVERGENCE_COEF_KEY])
-            alpha_coef = torch.tensor(alpha_coef, device=self.accelerator.device).to(dtype=chosen_rewards.dtype)
-            logits = (torch.exp(rejected_rewards * -alpha_coef) - torch.exp(chosen_rewards * -alpha_coef)) / alpha_coef
+            logits = (cap_exp(rejected_logratios * -alpha_coef) - cap_exp(chosen_logratios * -alpha_coef)) / alpha_coef
         else:
             pi_logratios = policy_chosen_logps - policy_rejected_logps
             if reference_free:
@@ -868,7 +874,13 @@ class DPOTrainer(Trainer):
             logits = pi_logratios - ref_logratios
 
             if self.f_divergence_type == FDivergenceType.JS_DIVERGENCE.value:
-                logits -= (torch.log1p(torch.exp(chosen_rewards)) - torch.log1p(torch.exp(rejected_rewards)))
+                # The js-divergence formula: log(2 * u / (1 + u))
+                # The divergence difference between the chosen and rejected sample is:
+                #     log(2 * u[w] / (1 + u[w])) - log(2 * u[l] / (1 + u[l]))
+                #       = log(u[w]) - log(u[l]) - (log(1 + u[w]) - log(1 + u[l]))
+                # where u[w] and u[l] are the policy/reference probability ratios
+                # for the chosen and rejected samples, respectively.
+                logits -= (F.softplus(chosen_logratios) - F.softplus(rejected_logratios))
 
         # The beta is a temperature parameter for the DPO loss, typically something in the range of 0.1 to 0.5.
         # We ignore the reference model as beta -> 0. The label_smoothing parameter encodes our uncertainty about the labels and
