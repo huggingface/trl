@@ -24,6 +24,8 @@ from .trainer import (
     DataCollatorForCompletionOnlyLM,
     DPOTrainer,
     IterativeSFTTrainer,
+    KTOConfig,
+    KTOTrainer,
     ModelConfig,
     PPOConfig,
     PPOTrainer,

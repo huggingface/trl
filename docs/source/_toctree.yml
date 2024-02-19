@@ -35,6 +35,8 @@
     title: Iterative Supervised Fine-Tuning
   - local: text_environments
     title: Text Environments
+  - local: kto_trainer
+    title: KTO Trainer
   title: API
 - sections:
   - local: example_overview
