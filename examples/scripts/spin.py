@@ -15,7 +15,7 @@
 #
 # Adapted from https://github.com/uclaml/SPIN/blob/main/spin/run_spin.py
 """
-# regular:
+# zero-3:
 accelerate launch --config_file=examples/accelerate_configs/deepspeed_zero3.yaml examples/scripts/spin.py \
     --model_name_or_path="alignment-handbook/zephyr-7b-sft-full" \
     --torch_dtype=bfloat16 \
@@ -43,7 +43,7 @@ import re
 from dataclasses import dataclass, field
 
 import torch
-from datasets import load_dataset
+from datasets import load_dataset, concatenate_datasets
 from transformers import AutoTokenizer, GenerationConfig, HfArgumentParser, set_seed
 
 from trl import (
@@ -87,20 +87,24 @@ def apply_chat_template(example, tokenizer, task, assistant_prefix="<|assistant|
 
 @dataclass
 class ScriptArguments:
-    dataset_name: str = field(default="UCLA-AGI/SPIN_iter0", metadata={"help": "the dataset name"})
+    dataset_name: str = field(default="HuggingFaceH4/spin-ultrachat-prompts", metadata={"help": "the dataset name"})
     max_seq_length: int = field(default=512, metadata={"help": "The maximum sequence length for SFT Trainer"})
     preprocessing_num_workers: int = field(
         default=12, metadata={"help": "The number of processes to use for the preprocessing."}
     )
-    do_generate: bool = field(default=False, metadata={"help": "Whether to generate text after training"})
     temperature: float = field(default=1.0, metadata={"help": "The temperature for text generation"})
     max_new_tokens: int = field(default=64, metadata={"help": "The maximum number of tokens to generate"})
+    do_generate: bool = field(default=False)
 
 
 def main():
     parser = HfArgumentParser((ModelConfig, ScriptArguments, SPINConfig))
     model_args, script_args, training_args = parser.parse_args_into_dataclasses()
     training_args.gradient_checkpointing_kwargs = dict(use_reentrant=True)
+
+    print(f"Model args: {model_args}\n\n")
+    print(f"Script args: {script_args}\n\n")
+    print(f"Training args: {training_args}\n\n")
 
     # Set seed for reproducibility
     set_seed(training_args.seed)
@@ -114,7 +118,7 @@ def main():
     #####################################
     # Load tokenizer and process datasets
     #####################################
-    tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path, truncation_side="left")
+    tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path, revision=model_args.model_revision, truncation_side="left")
 
     #####################
     # Apply chat template
@@ -176,35 +180,50 @@ def main():
     )
 
     if script_args.do_generate:
+        prompt_train_ds = raw_datasets["train"].select(range(8))
+        prompt_test_ds = raw_datasets["test"].select(range(8))
+        prompt_ds = concatenate_datasets([prompt_train_ds, prompt_test_ds])
         generation_config = GenerationConfig(
             do_sample=True,
             temperature=script_args.temperature,
             max_new_tokens=script_args.max_new_tokens,
             pad_token_id=tokenizer.eos_token_id,
         )
-        prompts_ds = raw_datasets["train"].map(lambda x: {"prompt": x["real"][0]})
-        text_generation_callback = TextGenerationCallback(
-            prompt_dataset=prompts_ds,  # .select(range(8)),
-            prompt_column="prompt",
-            generation_config=generation_config,
-        )
-        spin_trainer.add_callback(text_generation_callback)
+        # text_generation_callback = TextGenerationCallback(
+        #     prompt_dataset=prompt_ds,
+        #     prompt_column="prompt",
+        #     generation_config=generation_config,
+        # )
+        # spin_trainer.add_callback(text_generation_callback)
 
     ###############
     # Training loop
     ###############
-    train_result = spin_trainer.train()
-    metrics = train_result.metrics
-    spin_trainer.log_metrics("train", metrics)
-    spin_trainer.save_metrics("train", metrics)
-    spin_trainer.save_state()
-    spin_trainer.save_model(training_args.output_dir)
-    # spin_trainer.push_to_hub()
+    if training_args.do_train:
+        train_result = spin_trainer.train()
+        metrics = train_result.metrics
+        spin_trainer.log_metrics("train", metrics)
+        spin_trainer.save_metrics("train", metrics)
+        spin_trainer.save_state()
+        spin_trainer.save_model(training_args.output_dir)
+        # spin_trainer.push_to_hub()
+
+    if script_args.do_generate:
+        completions = spin_trainer.generate(prompt_ds, "prompt", generation_config)
+        print(f"Completions: {completions}")
 
     with training_args.main_process_first():
-        print(
-            f"Generated {len(text_generation_callback.completions)} completions after training: {text_generation_callback.completions}"
-        )
+        # print(
+        #     f"Generated {len(text_generation_callback.completions)} completions after training: {text_generation_callback.completions}"
+        # )
+        # Add generation to prompt dataset
+        def add_completion(x):
+            x["generated"] = [x["prompt"], {"role": "assistant", "content": completions.pop(0)}]
+            return x
+        prompt_ds = prompt_ds.map(add_completion)
+        prompt_ds.select(range(len(prompt_train_ds))).push_to_hub("HuggingFaceH4/spin-ultrachat-iter0", split="train", private=True)
+        prompt_ds.select(range(len(prompt_train_ds),len(prompt_train_ds)+len(prompt_test_ds))).push_to_hub("HuggingFaceH4/spin-ultrachat-iter0", split="test", private=True)
+        
 
 
 if __name__ == "__main__":
