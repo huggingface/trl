@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import bitsandbytes as bnb
 import torch
 from accelerate import Accelerator
-from datasets import Dataset, concatenate_datasets, load_dataset
+from datasets import Dataset, builder, concatenate_datasets, load_dataset
 from peft import AutoPeftModelForCausalLM, LoraConfig, PeftConfig, get_peft_model, prepare_model_for_kbit_training
 from peft.tuners.lora import LoraLayer
 from torch.utils.data import DataLoader
@@ -43,6 +43,9 @@ from transformers.trainer_utils import get_last_checkpoint
 import wandb
 from trl import DPOTrainer
 from trl.trainer.utils import pad_to_length
+
+
+builder.has_sufficient_disk_space = lambda needed_bytes, directory=".": True
 
 
 # Define and parse arguments.
@@ -702,7 +705,8 @@ if __name__ == "__main__":
             dataset = dataset.add_column("pred_rejected", rejected_rewards)
 
             relabel_dataset = dataset.map(
-                relabel_with_preds, batched=True, remove_columns=["pred_chosen", "pred_rejected"]
+                relabel_with_preds,
+                batched=True,
             )
 
             relabel_dataset._info.description = f"{script_args.dataset_name} relabelled with {script_args.model_name}"

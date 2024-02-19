@@ -84,6 +84,7 @@ class GPTRewardDataCollatorWithPadding:
         return_tensors (`str`, `optional`, defaults to `"pt"`):
             The tensor type to use.
     """
+
     tokenizer: PreTrainedTokenizerBase
     padding: Union[bool, str] = True
     max_length: Optional[int] = None
@@ -451,7 +452,7 @@ elif script_args.mode == "relabel":
             dataset = dataset.add_column("pred_chosen", preds[:, 0])
             dataset = dataset.add_column("pred_rejected", preds[:, 1])
 
-            dataset = dataset.map(relabel_with_preds, batched=True, remove_columns=["pred_chosen", "pred_rejected"])
+            dataset = dataset.map(relabel_with_preds, batched=True)
 
             dataset._info.description = f"{script_args.dataset_name} relabelled with {script_args.model_name}"
             relabel_dataset[split] = dataset
