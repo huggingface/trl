@@ -184,14 +184,14 @@ class SFTTrainer(Trainer):
                 )
                 gradient_checkpointing_kwargs = getattr(args, "gradient_checkpointing_kwargs", None) or {}
                 if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
-                    preprare_model_kwargs = {
+                    prepare_model_kwargs = {
                         "use_gradient_checkpointing": getattr(args, "gradient_checkpointing", False)
                     }
 
                     if _support_gc_kwargs:
-                        preprare_model_kwargs["gradient_checkpointing_kwargs"] = gradient_checkpointing_kwargs
+                        prepare_model_kwargs["gradient_checkpointing_kwargs"] = gradient_checkpointing_kwargs
 
-                    model = prepare_model_for_kbit_training(model, **preprare_model_kwargs)
+                    model = prepare_model_for_kbit_training(model, **prepare_model_kwargs)
 
                     if args is not None:
                         args = dataclasses.replace(args, gradient_checkpointing=False)

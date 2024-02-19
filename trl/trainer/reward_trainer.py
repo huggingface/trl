@@ -137,7 +137,7 @@ class RewardTrainer(Trainer):
                         inspect.signature(prepare_model_for_kbit_training).parameters
                     )
 
-                    preprare_model_kwargs = {"use_gradient_checkpointing": args.gradient_checkpointing}
+                    prepare_model_kwargs = {"use_gradient_checkpointing": args.gradient_checkpointing}
 
                     if not _supports_gc_kwargs and args.gradient_checkpointing_kwargs is not None:
                         warnings.warn(
@@ -145,9 +145,9 @@ class RewardTrainer(Trainer):
                             "please update to the latest version of peft to use `gradient_checkpointing_kwargs`."
                         )
                     elif _supports_gc_kwargs and args.gradient_checkpointing_kwargs is not None:
-                        preprare_model_kwargs["gradient_checkpointing_kwargs"] = args.gradient_checkpointing_kwargs
+                        prepare_model_kwargs["gradient_checkpointing_kwargs"] = args.gradient_checkpointing_kwargs
 
-                    model = prepare_model_for_kbit_training(model, **preprare_model_kwargs)
+                    model = prepare_model_for_kbit_training(model, **prepare_model_kwargs)
 
                 model = get_peft_model(model, peft_config)
 

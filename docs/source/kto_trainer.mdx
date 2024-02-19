@@ -1,0 +1,81 @@
+# KTO Trainer
+
+TRL supports the Kahneman-Tversky Optimization (KTO) Trainer for training language models from unpaired preference data, as described in the [report](https://arxiv.org/abs/2402.01306) by Kawin Ethayarajh, Winnie Xu, Niklas Muennighoff, Dan Jurafsky, and Douwe Kiela.
+
+## Expected dataset format
+
+The KTO trainer expects a very specific format for the dataset as it does not require pairwise preferences. Since the model will be trained to directly optimize examples that consist of a prompt, model completion, and a label to indicate whether the completion is "good" or "bad", we expect a dataset with the following columns:
+
+- `prompt`
+- `completion`
+- `label`
+
+for example:
+
+```
+kto_dataset_dict = {
+    "prompt": [
+        "Hey, hello",
+        "How are you",
+        "What is your name?",
+        "What is your name?",
+        "Which is the best programming language?",
+        "Which is the best programming language?",
+        "Which is the best programming language?",
+    ],
+    "completion": [
+        "hi nice to meet you",
+        "leave me alone",
+        "I don't have a name",
+        "My name is Mary",
+        "Python",
+        "C++",
+        "Java",
+    ],
+    "label": [
+        True,
+        False,
+        False,
+        True,
+        True,
+        False,
+        False,
+    ],
+}
+```
+
+where the `prompt` contains the context inputs, `completion` contains the corresponding responses and `label` contains the corresponding flag that indicates if the generated completion is desired or undesired. As can be seen a prompt can have multiple responses and this is reflected in the entries being repeated in the dictionary's value arrays.
+
+## Expected model format
+The KTO trainer expects a model of `AutoModelForCausalLM`, compared to PPO that expects `AutoModelForCausalLMWithValueHead` for the value function.
+
+## Using the `KTOTrainer`
+
+For a detailed example have a look at the `examples/scripts/kto.py` script. At a high level we need to initialize the `KTOTrainer` with a `model` we wish to train, a reference `ref_model` which we will use to calculate the implicit rewards of the preferred and rejected response, the `beta` refers to the hyperparameter of the implicit reward, and the dataset contains the 3 entries listed above. Note that the `model` and `ref_model` need to have the same architecture (ie decoder only or encoder-decoder).
+
+```py
+training_args = KTOConfig(
+    beta=0.1,
+)
+
+kto_trainer = KTOTrainer(
+    model,
+    model_ref,
+    args=training_args,
+    train_dataset=train_dataset,
+    tokenizer=tokenizer,
+)
+```
+After this one can then call:
+
+```py
+kto_trainer.train()
+```
+
+## KTOTrainer
+
+[[autodoc]] KTOTrainer
+
+## KTOConfig
+
+[[autodoc]] KTOConfig
