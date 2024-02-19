@@ -12,6 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Run the KTO training script with the following command with some example arguments:
+
+python examples/scripts/kto.py \
+    --per_device_train_batch_size 8 \
+    --gradient_accumulation_steps 2 \
+    --learning_rate 1e-4 \
+    --max_steps 1000 \
+    --report_to "wandb" \
+    --gradient_checkpointing True  \
+    --output_dir="./test" \
+    --use_peft True \
+    --peft_lora_r 64 \
+    --peft_lora_alpha 16 \
+    --evaluation_strategy "steps" \
+    --logging_first_step True \
+    --logging_steps 10 \
+    --eval_steps 500
+"""
 
 from dataclasses import dataclass, field
 from typing import Optional
@@ -30,47 +49,14 @@ class ScriptArguments:
     The arguments for the KTO training script.
     """
 
-    # data parameters
-    beta: Optional[float] = field(default=0.1, metadata={"help": "the beta parameter for KTO loss"})
-
     # training parameters
     model_name_or_path: Optional[str] = field(default="gpt2", metadata={"help": "the model name"})
-    learning_rate: Optional[float] = field(default=1e-4, metadata={"help": "optimizer learning rate"})
-    per_device_train_batch_size: Optional[int] = field(default=8, metadata={"help": "batch size per device"})
-    gradient_accumulation_steps: Optional[int] = field(
-        default=1, metadata={"help": "the number of gradient accumulation steps"}
-    )
-    max_length: Optional[int] = field(default=512, metadata={"help": "max length of each sample"})
-    max_prompt_length: Optional[int] = field(default=128, metadata={"help": "max length of each sample's prompt"})
-    max_completion_length: Optional[int] = field(
-        default=128, metadata={"help": "Only used for encoder decoder model. Max completion of each sample's prompt"}
-    )
-    label_pad_token_id: Optional[int] = field(default=-100, metadata={"help": "label for non response tokens"})
-    max_steps: Optional[int] = field(default=1000, metadata={"help": "max number of training steps"})
-    # lora parameters
     use_peft: Optional[bool] = field(default=True, metadata={"help": "Wether to use PEFT or not to train adapters"})
     peft_lora_r: Optional[int] = field(default=64, metadata={"help": "the r parameter of the LoRA adapters"})
     peft_lora_alpha: Optional[int] = field(default=16, metadata={"help": "the alpha parameter of the LoRA adapters"})
-    # instrumentation
-    sanity_check: Optional[bool] = field(default=True, metadata={"help": "only train on 1000 samples"})
-    report_to: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": 'The list of integrations to report the results and logs to. Supported platforms are `"azure_ml"`,'
-            '`"comet_ml"`, `"mlflow"`, `"neptune"`, `"tensorboard"`,`"clearml"` and `"wandb"`. '
-            'Use `"all"` to report to all integrations installed, `"none"` for no integrations.'
-        },
-    )
 
-    gradient_checkpointing: Optional[bool] = field(
-        default=False, metadata={"help": "Whether to use gradient checkpointing or no"}
-    )
-    gradient_checkpointing_kwargs: Optional[dict] = field(
-        default=None,
-        metadata={
-            "help": "key word arguments to be passed along `torch.utils.checkpoint.checkpoint` method - e.g. `use_reentrant=False`"
-        },
-    )
+    # debugging
+    sanity_check: Optional[bool] = field(default=True, metadata={"help": "only train on 1000 samples"})
 
 
 def extract_anthropic_prompt(prompt_and_response):
@@ -117,8 +103,8 @@ def get_hh(split: str, sanity_check: bool = False, silent: bool = False, cache_d
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser(ScriptArguments)
-    script_args = parser.parse_args_into_dataclasses()[0]
+    parser = HfArgumentParser((ScriptArguments, KTOConfig))
+    script_args, kto_args = parser.parse_args_into_dataclasses()
 
     # 1. load a pretrained model
     model = AutoModelForCausalLM.from_pretrained(script_args.model_name_or_path)
@@ -134,33 +120,7 @@ if __name__ == "__main__":
     # 3. Load evaluation dataset
     eval_dataset = get_hh("test", sanity_check=script_args.sanity_check)
 
-    # 4. initialize training arguments:
-    training_args = KTOConfig(
-        label_pad_token_id=script_args.label_pad_token_id,
-        per_device_train_batch_size=script_args.per_device_train_batch_size,
-        max_steps=script_args.max_steps,
-        remove_unused_columns=False,
-        gradient_accumulation_steps=script_args.gradient_accumulation_steps,
-        learning_rate=script_args.learning_rate,
-        evaluation_strategy="steps",
-        logging_first_step=True,
-        logging_steps=10,  # match results in blog post
-        eval_steps=500,
-        output_dir="./test",
-        optim="adamw_torch",
-        warmup_steps=150,
-        report_to=script_args.report_to,
-        bf16=True,
-        gradient_checkpointing=script_args.gradient_checkpointing,
-        gradient_checkpointing_kwargs=script_args.gradient_checkpointing_kwargs,
-        # KTO hyperparams
-        beta=script_args.beta,
-        max_length=script_args.max_length,
-        max_completion_length=script_args.max_completion_length,
-        max_prompt_length=script_args.max_prompt_length,
-        generate_during_eval=True,
-    )
-
+    # 4. initialize peft config:
     if script_args.use_peft:
         peft_config = LoraConfig(
             r=script_args.peft_lora_r,
@@ -175,7 +135,7 @@ if __name__ == "__main__":
     kto_trainer = KTOTrainer(
         model,
         model_ref,
-        args=training_args,
+        args=kto_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         tokenizer=tokenizer,
