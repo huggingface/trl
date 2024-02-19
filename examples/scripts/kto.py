@@ -16,6 +16,7 @@
 Run the KTO training script with the following command with some example arguments:
 
 python examples/scripts/kto.py \
+    --model_name_or_path "gpt2" \
     --per_device_train_batch_size 8 \
     --gradient_accumulation_steps 2 \
     --learning_rate 1e-4 \
@@ -24,8 +25,8 @@ python examples/scripts/kto.py \
     --gradient_checkpointing True  \
     --output_dir="./test" \
     --use_peft True \
-    --peft_lora_r 64 \
-    --peft_lora_alpha 16 \
+    --lora_r 64 \
+    --lora_alpha 16 \
     --evaluation_strategy "steps" \
     --logging_first_step True \
     --logging_steps 10 \
@@ -36,10 +37,9 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from datasets import Dataset, load_dataset
-from peft import LoraConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
-from trl import KTOConfig, KTOTrainer
+from trl import KTOConfig, KTOTrainer, ModelConfig, get_peft_config
 
 
 # Define and parse arguments.
@@ -48,12 +48,6 @@ class ScriptArguments:
     """
     The arguments for the KTO training script.
     """
-
-    # training parameters
-    model_name_or_path: Optional[str] = field(default="gpt2", metadata={"help": "the model name"})
-    use_peft: Optional[bool] = field(default=True, metadata={"help": "Wether to use PEFT or not to train adapters"})
-    peft_lora_r: Optional[int] = field(default=64, metadata={"help": "the r parameter of the LoRA adapters"})
-    peft_lora_alpha: Optional[int] = field(default=16, metadata={"help": "the alpha parameter of the LoRA adapters"})
 
     # debugging
     sanity_check: Optional[bool] = field(default=True, metadata={"help": "only train on 1000 samples"})
@@ -103,14 +97,14 @@ def get_hh(split: str, sanity_check: bool = False, silent: bool = False, cache_d
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser((ScriptArguments, KTOConfig))
-    script_args, kto_args = parser.parse_args_into_dataclasses()
+    parser = HfArgumentParser((ScriptArguments, KTOConfig, ModelConfig))
+    script_args, kto_args, model_args = parser.parse_args_into_dataclasses()
 
     # 1. load a pretrained model
-    model = AutoModelForCausalLM.from_pretrained(script_args.model_name_or_path)
-    model_ref = AutoModelForCausalLM.from_pretrained(script_args.model_name_or_path)
+    model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path)
+    model_ref = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path)
 
-    tokenizer = AutoTokenizer.from_pretrained(script_args.model_name_or_path)
+    tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -120,18 +114,7 @@ if __name__ == "__main__":
     # 3. Load evaluation dataset
     eval_dataset = get_hh("test", sanity_check=script_args.sanity_check)
 
-    # 4. initialize peft config:
-    if script_args.use_peft:
-        peft_config = LoraConfig(
-            r=script_args.peft_lora_r,
-            lora_alpha=script_args.peft_lora_alpha,
-            bias="none",
-            task_type="CAUSAL_LM",
-        )
-    else:
-        peft_config = None
-
-    # 5. initialize the KTO trainer
+    # 4. initialize the KTO trainer
     kto_trainer = KTOTrainer(
         model,
         model_ref,
@@ -139,8 +122,8 @@ if __name__ == "__main__":
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         tokenizer=tokenizer,
-        peft_config=peft_config,
+        peft_config=get_peft_config(model_args),
     )
 
-    # 6. train
+    # 5. train
     kto_trainer.train()
