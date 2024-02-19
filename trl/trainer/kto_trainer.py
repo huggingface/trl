@@ -330,22 +330,20 @@ class KTOTrainer(Trainer):
 
         # split the dataset and interleave them together with equal probability of choosing chosen or rejected
         interleaved_train_dataset = interleave_datasets(
-            [
-                train_dataset.filter(lambda x: x["label"]).shuffle(seed=args.data_seed),
-                train_dataset.filter(lambda x: not x["label"]).shuffle(seed=args.data_seed),
-            ],
+            [train_dataset.filter(lambda x: x["label"]), train_dataset.filter(lambda x: not x["label"])],
+            stopping_strategy="all_exhausted",
         )
+        interleaved_train_dataset = interleaved_train_dataset.shuffle(seed=args.data_seed)
 
         if eval_dataset is not None:
             interleaved_eval_dataset = interleave_datasets(
-                [
-                    eval_dataset.filter(lambda x: x["label"]),
-                    eval_dataset.filter(lambda x: not x["label"]),
-                ],
+                [eval_dataset.filter(lambda x: x["label"]), eval_dataset.filter(lambda x: not x["label"])],
+                stopping_strategy="all_exhausted",
             )
         else:
             interleaved_eval_dataset = None
 
+        # Increase the effective batch size by 2x to account for the detached KL terms
         args.per_device_train_batch_size = args.per_device_train_batch_size * 2
         args.per_device_eval_batch_size = args.per_device_eval_batch_size * 2
 
