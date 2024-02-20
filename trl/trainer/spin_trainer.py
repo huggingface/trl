@@ -742,34 +742,45 @@ class SPINTrainer(Trainer):
         return super().log(logs)
 
     def generate(
-        self, prompt_dataset: Dataset, prompt_column: str, generation_config: GenerationConfig, batch_size: int = 1
+        self,
+        prompt_dataset: Dataset,
+        prompt_column: str,
+        generation_config: GenerationConfig,
+        batch_size: int = 4,
+        pad_to_multiple_of: int = 8,
     ) -> List[str]:
-        # Pad from the left for generation
+        print(f"Model: {self.model.__class__.__name__}")
         padding_side_default = self.tokenizer.padding_side
         if not self.is_encoder_decoder:
             self.tokenizer.padding_side = "left"
+
         prompts = prompt_dataset[prompt_column]
+        # In case we have fewer examples than bs
+        batch_size = min(len(prompts), batch_size)
+        # TODO: Add warning if no chat template found
         formatted_prompts = [
             self.tokenizer.apply_chat_template([prompt], tokenize=False, add_generation_prompt=True)
             for prompt in prompts
         ]
-        batched_prompts = [formatted_prompts[i : i + batch_size] for i in range(0, len(formatted_prompts), batch_size)]
+        formatted_prompts = [
+            formatted_prompts[i : i + batch_size] for i in range(0, len(formatted_prompts), batch_size)
+        ]
         tokenized_prompts = [
-            self.tokenizer(tokenized_prompt, pad_to_multiple_of=8, padding=True, return_tensors="pt").to(
-                self.accelerator.device
-            )
-            for tokenized_prompt in batched_prompts
+            self.tokenizer(
+                formatted_prompt, pad_to_multiple_of=pad_to_multiple_of, padding=True, return_tensors="pt"
+            ).to(self.accelerator.device)
+            for formatted_prompt in formatted_prompts
         ]
 
         self.model.to(self.accelerator.device)
         self.model.eval()
         completions_per_process = []
-        with self.accelerator.split_between_processes(tokenized_prompts, apply_padding=True) as prompts_batch:
-            for message in tqdm(prompts_batch, desc=f"Generating completions on device {self.accelerator.device}"):
-                output = self.model.generate(**message, generation_config=generation_config)
+        with self.accelerator.split_between_processes(tokenized_prompts, apply_padding=True) as batched_prompts:
+            for batch in tqdm(batched_prompts, desc=f"Generating completions on device {self.accelerator.device}"):
+                outputs = self.model.generate(**batch, generation_config=generation_config)
                 # Slice out prompt tokens and decode
-                output = [tok_out[len(tok_in) :] for tok_in, tok_out in zip(message["input_ids"], output)]
-                generated_text = self.tokenizer.batch_decode(output, skip_special_tokens=True)
+                outputs = [output[len(prompt) :] for prompt, output in zip(batch["input_ids"], outputs)]
+                generated_text = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
                 completions_per_process.extend(generated_text)
 
         # Gather completions across all processes
