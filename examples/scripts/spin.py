@@ -174,8 +174,8 @@ def main():
     )
 
     if script_args.do_generate:
-        prompt_train_ds = raw_datasets["train"].select(range(9))
-        prompt_test_ds = raw_datasets["test"].select(range(3))
+        prompt_train_ds = raw_datasets["train"].select(range(64))
+        prompt_test_ds = raw_datasets["test"].select(range(64))
         generation_config = GenerationConfig(
             do_sample=True,
             temperature=script_args.temperature,
