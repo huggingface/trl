@@ -21,21 +21,21 @@ from collections import defaultdict
 from copy import deepcopy
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
-import torch.distributed as dist
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from accelerate.utils import is_deepspeed_available, gather_object, recursively_apply
+from accelerate.utils import gather_object, is_deepspeed_available
 from datasets import Dataset
 from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
 from transformers import (
     AutoModelForCausalLM,
     DataCollator,
+    GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
     Trainer,
     TrainingArguments,
-    GenerationConfig
 )
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
@@ -43,8 +43,6 @@ from transformers.trainer_utils import EvalLoopOutput
 from ..import_utils import is_peft_available, is_wandb_available
 from ..models import PreTrainedModelWrapper, create_reference_model
 from .utils import SPINDataCollatorWithPadding, disable_dropout_in_model, pad_to_length
-
-from tqdm.auto import tqdm
 
 
 if is_peft_available():
@@ -743,26 +741,25 @@ class SPINTrainer(Trainer):
         del self._stored_metrics[train_eval]
         return super().log(logs)
 
-    def generate(self, prompt_dataset: Dataset, prompt_column: str, generation_config: GenerationConfig):
+    def generate(self, prompt_dataset: Dataset, prompt_column: str, generation_config: GenerationConfig) -> List[str]:
         prompts = prompt_dataset[prompt_column]
-        # Unwrap model for Zero-3?
         self.model.to(self.accelerator.device)
-        self.model.eval()  # Set model to evaluation mode
+        self.model.eval()
         completions_per_process = []
         with self.accelerator.split_between_processes(prompts, apply_padding=True) as prompts_batch:
             for message in tqdm(prompts_batch, desc=f"Generating completions on device {self.accelerator.device}"):
                 tokenized_message = self.tokenizer.apply_chat_template(
                     [message], tokenize=True, add_generation_prompt=True, return_tensors="pt"
                 ).to(self.model.device)
-                output = self.model.generate(tokenized_message, generation_config)
+                output = self.model.generate(tokenized_message, generation_config, synced_gpus=True)
                 # Slice out prompt tokens and decode
-                generated_text = self.tokenizer.decode(output[0][tokenized_message.shape[-1] :], skip_special_tokens=True)
+                generated_text = self.tokenizer.decode(
+                    output[0][tokenized_message.shape[-1] :], skip_special_tokens=True
+                )
                 completions_per_process.extend([generated_text])
 
         # Gather completions across all processes
         completions_gather = gather_object(completions_per_process)
-        # completions = [c for c in completions_gather]
         # Drop duplicates produced by padding
-        completions = completions_gather[:len(prompts)]
-        print(f"Completions after remove padding: {(len(completions))}")
+        completions = completions_gather[: len(prompts)]
         return completions

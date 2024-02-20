@@ -43,18 +43,10 @@ import re
 from dataclasses import dataclass, field
 
 import torch
-from datasets import load_dataset, concatenate_datasets
+from datasets import load_dataset
 from transformers import AutoTokenizer, GenerationConfig, HfArgumentParser, set_seed
 
-from trl import (
-    ModelConfig,
-    SPINConfig,
-    SPINTrainer,
-    TextGenerationCallback,
-    get_kbit_device_map,
-    get_peft_config,
-    get_quantization_config,
-)
+from trl import ModelConfig, SPINConfig, SPINTrainer, get_kbit_device_map, get_peft_config, get_quantization_config
 
 
 def apply_chat_template(example, tokenizer, task, assistant_prefix="<|assistant|>\n"):
@@ -118,7 +110,9 @@ def main():
     #####################################
     # Load tokenizer and process datasets
     #####################################
-    tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path, revision=model_args.model_revision, truncation_side="left")
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_args.model_name_or_path, revision=model_args.model_revision, truncation_side="left"
+    )
 
     #####################
     # Apply chat template
@@ -180,9 +174,8 @@ def main():
     )
 
     if script_args.do_generate:
-        prompt_train_ds = raw_datasets["train"].select(range(8))
-        prompt_test_ds = raw_datasets["test"].select(range(8))
-        prompt_ds = concatenate_datasets([prompt_train_ds, prompt_test_ds])
+        prompt_train_ds = raw_datasets["train"].select(range(9))
+        prompt_test_ds = raw_datasets["test"].select(range(3))
         generation_config = GenerationConfig(
             do_sample=True,
             temperature=script_args.temperature,
@@ -209,21 +202,21 @@ def main():
         # spin_trainer.push_to_hub()
 
     if script_args.do_generate:
-        completions = spin_trainer.generate(prompt_ds, "prompt", generation_config)
-        print(f"Completions: {completions}")
+        train_completions = spin_trainer.generate(prompt_train_ds, "prompt", generation_config)
+        test_completions = spin_trainer.generate(prompt_test_ds, "prompt", generation_config)
+        assert len(train_completions) == len(prompt_train_ds)
+        assert len(test_completions) == len(prompt_test_ds)
 
-    with training_args.main_process_first():
-        # print(
-        #     f"Generated {len(text_generation_callback.completions)} completions after training: {text_generation_callback.completions}"
-        # )
-        # Add generation to prompt dataset
-        def add_completion(x):
+    if spin_trainer.accelerator.is_main_process:
+
+        def add_completion(x, completions):
             x["generated"] = [x["prompt"], {"role": "assistant", "content": completions.pop(0)}]
             return x
-        prompt_ds = prompt_ds.map(add_completion)
-        prompt_ds.select(range(len(prompt_train_ds))).push_to_hub("HuggingFaceH4/spin-ultrachat-iter0", split="train", private=True)
-        prompt_ds.select(range(len(prompt_train_ds),len(prompt_train_ds)+len(prompt_test_ds))).push_to_hub("HuggingFaceH4/spin-ultrachat-iter0", split="test", private=True)
-        
+
+        train_ds = prompt_train_ds.map(add_completion, fn_kwargs={"completions": train_completions})
+        test_ds = prompt_test_ds.map(add_completion, fn_kwargs={"completions": test_completions})
+        train_ds.push_to_hub("HuggingFaceH4/spin-ultrachat-iter0", split="train", private=True)
+        test_ds.push_to_hub("HuggingFaceH4/spin-ultrachat-iter0", split="test", private=True)
 
 
 if __name__ == "__main__":
