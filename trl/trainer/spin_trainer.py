@@ -37,6 +37,7 @@ from transformers import (
     Trainer,
     TrainingArguments,
 )
+from transformers.integrations.deepspeed import deepspeed_init
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
 
@@ -749,6 +750,27 @@ class SPINTrainer(Trainer):
         batch_size: int = 4,
         pad_to_multiple_of: int = 8,
     ) -> List[str]:
+
+        # If generate is called w/o train, handle model prep here
+        if self.is_deepspeed_enabled and self.deepspeed is None:
+            _, _ = deepspeed_init(self, num_training_steps=0, inference=True)
+
+        model = self._wrap_model(self.model, training=False, dataloader=None)
+
+        if len(self.accelerator._models) == 0 and model is self.model:
+            model = (
+                self.accelerator.prepare(model)
+                if self.is_deepspeed_enabled
+                else self.accelerator.prepare_model(model, evaluation_mode=True)
+            )
+
+            if self.is_fsdp_enabled:
+                self.model = model
+
+            # for the rest of this function `model` is the outside model, whether it was wrapped or not
+            if model is not self.model:
+                self.model_wrapped = model
+
         padding_side_default = self.tokenizer.padding_side
         if not self.is_encoder_decoder:
             self.tokenizer.padding_side = "left"
@@ -775,12 +797,11 @@ class SPINTrainer(Trainer):
             for formatted_prompt in formatted_prompts
         ]
 
-        self.model.to(self.accelerator.device)
-        self.model.eval()
+        model.eval()
         completions_per_process = []
         with self.accelerator.split_between_processes(tokenized_prompts, apply_padding=True) as batched_prompts:
             for batch in tqdm(batched_prompts, desc=f"Generating completions on device {self.accelerator.device}"):
-                outputs = self.model.generate(**batch, generation_config=generation_config)
+                outputs = model.generate(**batch, generation_config=generation_config)
                 # Slice out prompt tokens and decode
                 outputs = [output[len(prompt) :] for prompt, output in zip(batch["input_ids"], outputs)]
                 generated_text = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
