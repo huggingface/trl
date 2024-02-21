@@ -749,7 +749,6 @@ class SPINTrainer(Trainer):
         batch_size: int = 4,
         pad_to_multiple_of: int = 8,
     ) -> List[str]:
-        print(f"Model: {self.model.__class__.__name__}")
         padding_side_default = self.tokenizer.padding_side
         if not self.is_encoder_decoder:
             self.tokenizer.padding_side = "left"
@@ -767,7 +766,11 @@ class SPINTrainer(Trainer):
         ]
         tokenized_prompts = [
             self.tokenizer(
-                formatted_prompt, pad_to_multiple_of=pad_to_multiple_of, padding=True, return_tensors="pt"
+                formatted_prompt,
+                pad_to_multiple_of=pad_to_multiple_of,
+                padding=True,
+                truncation=True,
+                return_tensors="pt",
             ).to(self.accelerator.device)
             for formatted_prompt in formatted_prompts
         ]
