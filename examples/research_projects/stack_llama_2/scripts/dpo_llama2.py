@@ -4,12 +4,12 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional
 
 import torch
+from accelerate import Accelerator
 from datasets import Dataset, load_dataset
 from peft import LoraConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, TrainingArguments
 
 from trl import DPOTrainer
-from accelerate import Accelerator
 
 
 # Define and parse arguments.
@@ -79,7 +79,6 @@ class ScriptArguments:
         },
     )
 
-    
 
 def get_stack_exchange_paired(
     data_dir: str = "data/rl",
@@ -182,9 +181,8 @@ if __name__ == "__main__":
         bf16=True,
         remove_unused_columns=False,
         run_name="dpo_llama2",
-        gradient_checkpointing_kwargs = dict(use_reentrant=script_args.gradient_checkpointing_use_reentrant),
+        gradient_checkpointing_kwargs=dict(use_reentrant=script_args.gradient_checkpointing_use_reentrant),
     )
-
 
     peft_config = LoraConfig(
         r=script_args.lora_r,
