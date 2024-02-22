@@ -42,6 +42,10 @@ class ScriptArguments:
         default=True, metadata={"help": "whether to use gradient checkpointing"}
     )
 
+    gradient_checkpointing_use_reentrant: Optional[bool] = field(
+        default=True, metadata={"help": "whether to use reentrant for gradient checkpointing"}
+    )
+
     lora_alpha: Optional[float] = field(default=16, metadata={"help": "the lora alpha parameter"})
     lora_dropout: Optional[float] = field(default=0.05, metadata={"help": "the lora dropout parameter"})
     lora_r: Optional[int] = field(default=8, metadata={"help": "the lora r parameter"})
@@ -186,9 +190,9 @@ if __name__ == "__main__":
         bf16=True,
         remove_unused_columns=False,
         run_name="dpo_llama2",
+        gradient_checkpointing_kwargs = dict(use_reentrant=script_args.gradient_checkpointing_use_reentrant),
     )
 
-    training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
 
     peft_config = LoraConfig(
         r=script_args.lora_r,
