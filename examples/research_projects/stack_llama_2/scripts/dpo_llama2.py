@@ -9,7 +9,7 @@ from peft import LoraConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, TrainingArguments
 
 from trl import DPOTrainer
-
+from accelerate import Accelerator
 
 # Define and parse arguments.
 @dataclass
