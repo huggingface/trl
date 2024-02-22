@@ -79,10 +79,6 @@ class ScriptArguments:
         },
     )
 
-    device_map_local_process_idx: Optional[bool] = field(
-        default=True, metadata={"help": "whether to device map model to local process index, see "
-                                "https://github.com/huggingface/trl/issues/1348"}
-    )
     
 
 def get_stack_exchange_paired(
@@ -134,16 +130,12 @@ if __name__ == "__main__":
     script_args = parser.parse_args_into_dataclasses()[0]
 
     # 1. load a pretrained model
-    device_map_args = {}
-    if script_args.device_map_local_process_idx:
-        device_map_args = {"device_map": {"": Accelerator().local_process_index}} 
-
     model = AutoModelForCausalLM.from_pretrained(
         script_args.model_name_or_path,
         low_cpu_mem_usage=True,
         torch_dtype=torch.float16,
         load_in_4bit=True,
-        **device_map_args,
+        device_map={"": Accelerator().local_process_index},
     )
     model.config.use_cache = False
 
