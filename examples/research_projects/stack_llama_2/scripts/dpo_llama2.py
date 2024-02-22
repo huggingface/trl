@@ -129,6 +129,7 @@ if __name__ == "__main__":
         low_cpu_mem_usage=True,
         torch_dtype=torch.float16,
         load_in_4bit=True,
+        device_map={"": Accelerator().local_process_index}
     )
     model.config.use_cache = False
 
@@ -176,6 +177,7 @@ if __name__ == "__main__":
         remove_unused_columns=False,
         run_name="dpo_llama2",
     )
+    training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
 
     peft_config = LoraConfig(
         r=script_args.lora_r,
