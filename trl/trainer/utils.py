@@ -715,6 +715,12 @@ def get_peft_config(model_config: ModelConfig) -> "Optional[PeftConfig]":
     if model_config.use_peft is False:
         return None
 
+    if not is_peft_available():
+        raise ValueError(
+            "You need to have PEFT library installed in your environment, make sure to install `peft`. "
+            "Make sure to run `pip install -U peft`."
+        )
+
     peft_config = LoraConfig(
         r=model_config.lora_r,
         lora_alpha=model_config.lora_alpha,
