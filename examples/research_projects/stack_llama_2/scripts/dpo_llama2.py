@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional
 
 import torch
+from accelerate import Accelerator
 from datasets import Dataset, load_dataset
 from peft import LoraConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, TrainingArguments
@@ -39,6 +40,10 @@ class ScriptArguments:
     )
     gradient_checkpointing: Optional[bool] = field(
         default=True, metadata={"help": "whether to use gradient checkpointing"}
+    )
+
+    gradient_checkpointing_use_reentrant: Optional[bool] = field(
+        default=True, metadata={"help": "whether to use reentrant for gradient checkpointing"}
     )
 
     lora_alpha: Optional[float] = field(default=16, metadata={"help": "the lora alpha parameter"})
@@ -129,6 +134,7 @@ if __name__ == "__main__":
         low_cpu_mem_usage=True,
         torch_dtype=torch.float16,
         load_in_4bit=True,
+        device_map={"": Accelerator().local_process_index},
     )
     model.config.use_cache = False
 
@@ -175,6 +181,7 @@ if __name__ == "__main__":
         bf16=True,
         remove_unused_columns=False,
         run_name="dpo_llama2",
+        gradient_checkpointing_kwargs=dict(use_reentrant=script_args.gradient_checkpointing_use_reentrant),
     )
 
     peft_config = LoraConfig(
