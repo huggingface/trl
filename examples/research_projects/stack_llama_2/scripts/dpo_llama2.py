@@ -7,7 +7,7 @@ import torch
 from accelerate import Accelerator
 from datasets import Dataset, load_dataset
 from peft import LoraConfig
-from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, TrainingArguments
+from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, TrainingArguments, set_seed
 
 from trl import DPOTrainer
 
@@ -78,6 +78,9 @@ class ScriptArguments:
             "https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992"
         },
     )
+    seed: Optional[int] = field(
+        default=0, metadata={"help": "Random seed that will be set at the beginning of training."}
+    )
 
 
 def get_stack_exchange_paired(
@@ -127,6 +130,8 @@ def get_stack_exchange_paired(
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
     script_args = parser.parse_args_into_dataclasses()[0]
+
+    set_seed(script_args.seed)
 
     # 1. load a pretrained model
     model = AutoModelForCausalLM.from_pretrained(
@@ -182,6 +187,7 @@ if __name__ == "__main__":
         remove_unused_columns=False,
         run_name="dpo_llama2",
         gradient_checkpointing_kwargs=dict(use_reentrant=script_args.gradient_checkpointing_use_reentrant),
+        seed=script_args.seed,
     )
 
     peft_config = LoraConfig(
