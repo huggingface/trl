@@ -38,12 +38,12 @@ class TextHistoryTest(unittest.TestCase):
         tokens = torch.tensor([1, 2, 3])
 
         history = TextHistory(text, tokens)
-        self.assertEqual(history.text, text)
-        self.assertTrue(torch.equal(history.tokens, tokens))
-        self.assertTrue(torch.equal(history.token_masks, torch.zeros_like(tokens)))
+        assert history.text == text
+        assert torch.equal(history.tokens, tokens)
+        assert torch.equal(history.token_masks, torch.zeros_like(tokens))
 
         history = TextHistory(text, tokens, system=False)
-        self.assertTrue(torch.equal(history.token_masks, torch.ones_like(tokens)))
+        assert torch.equal(history.token_masks, torch.ones_like(tokens))
 
     def test_text_history_append_segment(self):
         text = "Hello there!"
@@ -51,26 +51,26 @@ class TextHistoryTest(unittest.TestCase):
 
         history = TextHistory(text, tokens)
         history.append_segment("General Kenobi!", torch.tensor([4, 5, 6]), system=False)
-        self.assertEqual(history.text, text + "General Kenobi!")
-        self.assertTrue(torch.equal(history.tokens, torch.tensor([1, 2, 3, 4, 5, 6])))
-        self.assertTrue(torch.equal(history.token_masks, torch.tensor([0, 0, 0, 1, 1, 1])))
+        assert history.text == (text + "General Kenobi!")
+        assert torch.equal(history.tokens, torch.tensor([1, 2, 3, 4, 5, 6]))
+        assert torch.equal(history.token_masks, torch.tensor([0, 0, 0, 1, 1, 1]))
 
         history.append_segment("You are a bold one!", torch.tensor([7, 8, 9]))
-        self.assertEqual(history.text, text + "General Kenobi!" + "You are a bold one!")
-        self.assertTrue(torch.equal(history.tokens, torch.tensor([1, 2, 3, 4, 5, 6, 7, 8, 9])))
-        self.assertTrue(torch.equal(history.token_masks, torch.tensor([0, 0, 0, 1, 1, 1, 0, 0, 0])))
+        assert history.text == ((text + "General Kenobi!") + "You are a bold one!")
+        assert torch.equal(history.tokens, torch.tensor([1, 2, 3, 4, 5, 6, 7, 8, 9]))
+        assert torch.equal(history.token_masks, torch.tensor([0, 0, 0, 1, 1, 1, 0, 0, 0]))
 
     def test_text_history_complete(self):
         text = "Hello there!"
         tokens = torch.tensor([1, 2, 3])
         history = TextHistory(text, tokens)
         history.complete()
-        self.assertTrue(history.completed)
-        self.assertFalse(history.truncated)
+        assert history.completed
+        assert not history.truncated
 
         history.complete(truncated=True)
-        self.assertTrue(history.completed)
-        self.assertTrue(history.truncated)
+        assert history.completed
+        assert history.truncated
 
     def test_text_history_last_segment(self):
         text = "Hello there!"
@@ -78,7 +78,7 @@ class TextHistoryTest(unittest.TestCase):
         history = TextHistory(text, tokens)
         history.append_segment("General Kenobi!", torch.tensor([4, 5, 6]))
         history.append_segment("You are a bold one!", torch.tensor([7, 8, 9]))
-        self.assertEqual(history.last_text_segment, "You are a bold one!")
+        assert history.last_text_segment == "You are a bold one!"
 
     def test_text_history_split_query_response(self):
         text = "Hello there!"
@@ -88,9 +88,9 @@ class TextHistoryTest(unittest.TestCase):
         history.append_segment("You are a bold one!", torch.tensor([7, 8, 9]), system=True)
         query, response, mask = history.split_query_response_tokens()
 
-        self.assertTrue(torch.equal(query, torch.tensor([1, 2, 3])))
-        self.assertTrue(torch.equal(response, torch.tensor([4, 5, 6, 7, 8, 9])))
-        self.assertTrue(torch.equal(mask, torch.tensor([1, 1, 1, 0, 0, 0])))
+        assert torch.equal(query, torch.tensor([1, 2, 3]))
+        assert torch.equal(response, torch.tensor([4, 5, 6, 7, 8, 9]))
+        assert torch.equal(mask, torch.tensor([1, 1, 1, 0, 0, 0]))
 
 
 class TextEnvironmentTester(unittest.TestCase):
@@ -112,10 +112,10 @@ class TextEnvironmentTester(unittest.TestCase):
             reward_fn=lambda x: torch.tensor(1),
             prompt="I am a prompt!\n",
         )
-        self.assertEqual(env.prompt, "I am a prompt!\n")
-        self.assertEqual(list(env.tools.keys()), ["DummyTool"])
-        self.assertTrue(isinstance(env.tools["DummyTool"], DummyTool))
-        self.assertEqual(env.reward_fn("Hello there!"), 1)
+        assert env.prompt == "I am a prompt!\n"
+        assert list(env.tools.keys()) == ["DummyTool"]
+        assert isinstance(env.tools["DummyTool"], DummyTool)
+        assert env.reward_fn("Hello there!") == 1
 
     def test_text_environment_generate(self):
         generation_kwargs = {"do_sample": False, "max_new_tokens": 4, "pad_token_id": self.gpt2_tokenizer.eos_token_id}
@@ -138,7 +138,7 @@ class TextEnvironmentTester(unittest.TestCase):
         generations_single = [env._generate_batched([inputs], batch_size=1)[0] for inputs in model_inputs]
         generations_single = self.gpt2_tokenizer.batch_decode(generations_single)
 
-        self.assertEqual(generations_single, generations_batched)
+        assert generations_single == generations_batched
 
     def test_text_environment_tool_call_parsing(self):
         string_valid = "Something something <request><Tool1>Hello there!<call>"
@@ -155,24 +155,24 @@ class TextEnvironmentTester(unittest.TestCase):
             prompt="I am a prompt!\n",
         )
         tool, response = env.parse_tool_call(string_valid)
-        self.assertEqual(tool, "Tool1")
-        self.assertEqual(response, "Hello there!")
+        assert tool == "Tool1"
+        assert response == "Hello there!"
 
         tool, response = env.parse_tool_call(string_invalid_request)
-        self.assertEqual(tool, None)
-        self.assertEqual(response, None)
+        assert tool is None
+        assert response is None
 
         tool, response = env.parse_tool_call(string_invalid_call)
-        self.assertEqual(tool, None)
-        self.assertEqual(response, None)
+        assert tool is None
+        assert response is None
 
         tool, response = env.parse_tool_call(string_invalid_tool)
-        self.assertEqual(tool, None)
-        self.assertEqual(response, None)
+        assert tool is None
+        assert response is None
 
         tool, response = env.parse_tool_call(string_invalid_random)
-        self.assertEqual(tool, None)
-        self.assertEqual(response, None)
+        assert tool is None
+        assert response is None
 
     def test_text_environment_tool_truncation(self):
         env = TextEnvironment(
@@ -185,19 +185,19 @@ class TextEnvironmentTester(unittest.TestCase):
 
         env.max_tool_response = 100
         history = env.step(TextHistory("<request><dummy>Hello there!<call>", torch.tensor([1, 2, 3])))
-        self.assertEqual(len(history.last_text_segment) - len(env.response_token), 100)
+        assert (len(history.last_text_segment) - len(env.response_token)) == 100
 
         env.max_tool_response = 500
         history = env.step(TextHistory("<request><dummy>Hello there!<call>", torch.tensor([1, 2, 3])))
-        self.assertEqual(len(history.last_text_segment) - len(env.response_token), 500)
+        assert (len(history.last_text_segment) - len(env.response_token)) == 500
 
         env.max_tool_response = 1001
         history = env.step(TextHistory("<request><dummy>Hello there!<call>", torch.tensor([1, 2, 3])))
-        self.assertEqual(len(history.last_text_segment) - len(env.response_token), 1000)
+        assert (len(history.last_text_segment) - len(env.response_token)) == 1000
 
         env.max_tool_response = 2000
         history = env.step(TextHistory("<request><dummy>Hello there!<call>", torch.tensor([1, 2, 3])))
-        self.assertEqual(len(history.last_text_segment) - len(env.response_token), 1000)
+        assert (len(history.last_text_segment) - len(env.response_token)) == 1000
 
     @patch.object(TextEnvironment, "generate", side_effect=dummy_generate)
     def test_text_environment_max_calls(self, mock_generate):
@@ -211,20 +211,20 @@ class TextEnvironmentTester(unittest.TestCase):
 
         env.max_turns = 1
         _, _, _, _, histories = env.run(["test"])
-        self.assertEqual(
-            histories[0].text, "I am a prompt!\n" + "test" + 1 * "<request><DummyTool>test<call>test<response>"
+        assert histories[0].text == (
+            ("I am a prompt!\n" + "test") + (1 * "<request><DummyTool>test<call>test<response>")
         )
 
         env.max_turns = 2
         _, _, _, _, histories = env.run(["test"])
-        self.assertEqual(
-            histories[0].text, "I am a prompt!\n" + "test" + 2 * "<request><DummyTool>test<call>test<response>"
+        assert histories[0].text == (
+            ("I am a prompt!\n" + "test") + (2 * "<request><DummyTool>test<call>test<response>")
         )
 
         env.max_turns = 4
         _, _, _, _, histories = env.run(["test"])
-        self.assertEqual(
-            histories[0].text, "I am a prompt!\n" + "test" + 4 * "<request><DummyTool>test<call>test<response>"
+        assert histories[0].text == (
+            ("I am a prompt!\n" + "test") + (4 * "<request><DummyTool>test<call>test<response>")
         )
 
     def test_text_environment_compute_rewards(self):
@@ -240,7 +240,7 @@ class TextEnvironmentTester(unittest.TestCase):
         histories = env.compute_reward(histories)
 
         for i in range(8):
-            self.assertEqual(histories[i].reward, i)
+            assert histories[i].reward == i
 
     @patch.object(TextEnvironment, "generate", side_effect=dummy_generate)
     def test_text_environment_run(self, mock_generate):
@@ -256,18 +256,20 @@ class TextEnvironmentTester(unittest.TestCase):
         task_2 = "Hello there! General Kenobi!"
 
         query, response, response_mask, reward, histories = env.run([task_1, task_2])
-        self.assertEqual(len(query[0]), 9)
-        self.assertEqual(len(query[1]), 12)
-        self.assertEqual(len(response[0]), 14)
-        self.assertEqual(len(response[1]), 14)
-        self.assertEqual(response_mask[0].sum(), 2 * 3)  # mocked generate always adds 3 toknes
-        self.assertEqual(response_mask[1].sum(), 2 * 3)  # mocked generate always adds 3 toknes
-        self.assertEqual(reward[0], 0)
-        self.assertEqual(reward[1], 1)
-        self.assertEqual(
-            histories[0].text, "I am a prompt!\n" + "Hello there!" + 2 * "<request><DummyTool>test<call>test<response>"
+        assert len(query[0]) == 9
+        assert len(query[1]) == 12
+        assert len(response[0]) == 14
+        assert len(response[1]) == 14
+        assert response_mask[0].sum() == (2 * 3)
+        # mocked generate always adds 3 toknes
+        assert response_mask[1].sum() == (2 * 3)
+        # mocked generate always adds 3 toknes
+        assert reward[0] == 0
+        assert reward[1] == 1
+        assert histories[0].text == (
+            ("I am a prompt!\n" + "Hello there!") + (2 * "<request><DummyTool>test<call>test<response>")
         )
-        self.assertEqual(
-            histories[1].text,
-            "I am a prompt!\n" + "Hello there! General Kenobi!" + 2 * "<request><DummyTool>test<call>test<response>",
+        assert histories[1].text == (
+            ("I am a prompt!\n" + "Hello there! General Kenobi!")
+            + (2 * "<request><DummyTool>test<call>test<response>")
         )

@@ -82,7 +82,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
     def __init__(
         self,
         response_template: Union[str, List[int]],
-        instruction_template: Union[str, List[int]] = None,
+        instruction_template: Optional[Union[str, List[int]]] = None,
         *args,
         mlm: bool = False,
         ignore_index: int = -100,
@@ -319,7 +319,7 @@ class DPODataCollatorWithPadding:
                         padding_value = self.pad_token_id
                     elif k.endswith("_attention_mask"):
                         padding_value = 0
-                    elif (k.startswith("chosen")) or (k.startswith("rejected")) or ("decoder" in k):
+                    elif k.startswith(("chosen", "rejected", "completion")) or ("decoder" in k):
                         padding_value = self.label_pad_token_id
                     else:
                         raise ValueError(f"Unexpected key in batch '{k}'")
@@ -714,6 +714,12 @@ def get_kbit_device_map() -> Optional[Dict[str, int]]:
 def get_peft_config(model_config: ModelConfig) -> "Optional[PeftConfig]":
     if model_config.use_peft is False:
         return None
+
+    if not is_peft_available():
+        raise ValueError(
+            "You need to have PEFT library installed in your environment, make sure to install `peft`. "
+            "Make sure to run `pip install -U peft`."
+        )
 
     peft_config = LoraConfig(
         r=model_config.lora_r,

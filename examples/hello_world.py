@@ -29,7 +29,7 @@ generation_kwargs = {
     "pad_token_id": tokenizer.eos_token_id,
     "max_new_tokens": 20,
 }
-response_tensor = ppo_trainer.generate([item for item in query_tensor], return_prompt=False, **generation_kwargs)
+response_tensor = ppo_trainer.generate(list(query_tensor), return_prompt=False, **generation_kwargs)
 response_txt = tokenizer.decode(response_tensor[0])
 
 # 5. define a reward for response

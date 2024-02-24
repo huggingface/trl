@@ -15,6 +15,7 @@ import json
 import logging
 import os
 from copy import deepcopy
+from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -70,6 +71,7 @@ class PreTrainedModelWrapper(nn.Module):
         supported_args: (`list`)
             The list of arguments that are supported by the wrapper class.
     """
+
     transformers_parent_class = None
     supported_args = None
     supported_modules = ("v_head",)
@@ -377,12 +379,12 @@ class PreTrainedModelWrapper(nn.Module):
                     )
             # load json
             if is_resuming_training:
-                with open(index_file_name, "r") as f:
+                with open(index_file_name) as f:
                     index = json.load(f)
                 # check filename with `v_head` or any known extra module:
                 files_to_download = set()
                 for k, v in index["weight_map"].items():
-                    if any([module in k for module in cls.supported_modules]):
+                    if any(module in k for module in cls.supported_modules):
                         files_to_download.add(v)
                 is_sharded = True
 
@@ -459,7 +461,7 @@ class PreTrainedModelWrapper(nn.Module):
                     "adapter_model.bin",
                     token=token,
                 )
-            except:  # noqa
+            except Exception:
                 filename = os.path.join(adapter_model_id, "adapter_model.safetensors")
                 safe_loading = True
                 if not os.path.exists(filename):
@@ -469,10 +471,11 @@ class PreTrainedModelWrapper(nn.Module):
                             "adapter_model.safetensors",
                             token=token,
                         )
-                    except:  # noqa
+                    except Exception as exc:
                         raise ValueError(
-                            "Could not find adapter model in the Hub, make sure you have the correct adapter model id."
-                        )
+                            "Could not find adapter model in the Hub, "
+                            "make sure you have the correct adapter model id."
+                        ) from exc
                 else:
                     local_filename = filename
         else:
@@ -484,7 +487,7 @@ class PreTrainedModelWrapper(nn.Module):
         adapter_state_dict = loading_func(local_filename, **load_kwargs)
 
         for score_name_candidate in cls.supported_rm_modules:
-            if any([score_name_candidate in name for name in adapter_state_dict.keys()]):
+            if any(score_name_candidate in name for name in adapter_state_dict.keys()):
                 score_name = score_name_candidate
                 # we have found the correct head name and can break
                 break
@@ -497,7 +500,7 @@ class PreTrainedModelWrapper(nn.Module):
                 score_dict[key_name] = param.to(cls._get_current_device())
 
         num_labels, hidden_dim = score_dict["weight"].shape
-        has_bias = any(["bias" in name for name in adapter_state_dict.keys()])
+        has_bias = any("bias" in name for name in adapter_state_dict.keys())
 
         score = nn.Linear(hidden_dim, num_labels, bias=has_bias).to(
             device=cls._get_current_device(),
@@ -600,7 +603,7 @@ class PreTrainedModelWrapper(nn.Module):
 
 
 def create_reference_model(
-    model: PreTrainedModelWrapper, num_shared_layers: int = None, pattern: str = None
+    model: PreTrainedModelWrapper, num_shared_layers: Optional[int] = None, pattern: Optional[str] = None
 ) -> PreTrainedModelWrapper:
     """
     Creates a static reference copy of a model. Note that model will be in `.eval()` mode.
@@ -635,7 +638,7 @@ def create_reference_model(
     else:
         for pattern_candidate in LAYER_PATTERNS:
             pattern_candidate = pattern_candidate.format(layer=num_shared_layers)
-            if any([pattern_candidate in name for name in parameter_names]):
+            if any(pattern_candidate in name for name in parameter_names):
                 pattern = pattern_candidate
                 break
 
@@ -647,7 +650,7 @@ def create_reference_model(
     unshared_param_list = []
 
     shared_parameter = True
-    for name, param in model.named_parameters():
+    for name, _param in model.named_parameters():
         if pattern in name:
             shared_parameter = False
         if shared_parameter:
@@ -660,8 +663,7 @@ def create_reference_model(
         param = model.get_parameter(param_name)
         param.requires_grad = False
 
-        ref_param = ref_model.get_parameter(param_name)  # noqa
-        ref_param = param  # noqa
+        _ref_param = ref_model.get_parameter(param_name)
 
     # for all other parameters just make sure they don't use gradients
     for param_name in unshared_param_list:

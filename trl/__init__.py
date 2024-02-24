@@ -1,6 +1,6 @@
 # flake8: noqa
 
-__version__ = "0.7.11.dev0"
+__version__ = "0.7.12.dev0"
 
 from .core import set_seed
 from .environment import TextEnvironment, TextHistory
@@ -27,6 +27,8 @@ from .trainer import (
     FDivergenceConstants,
     FDivergenceType,
     IterativeSFTTrainer,
+    KTOConfig,
+    KTOTrainer,
     ModelConfig,
     PPOConfig,
     PPOTrainer,

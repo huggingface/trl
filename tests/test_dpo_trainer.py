@@ -129,14 +129,14 @@ class DPOTrainerTester(unittest.TestCase):
 
             trainer.train()
 
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+            assert trainer.state.log_history[-1]["train_loss"] is not None
 
             # check the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 # check the params have changed - ignore 0 biases
                 if param.sum() != 0:
-                    self.assertFalse(torch.equal(param, new_param))
+                    assert not torch.equal(param, new_param)
 
     def test_dpo_trainer_without_providing_ref_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -167,14 +167,14 @@ class DPOTrainerTester(unittest.TestCase):
 
             trainer.train()
 
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+            assert trainer.state.log_history[-1]["train_loss"] is not None
 
             # check the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 # check the params have changed - ignore 0 biases
                 if param.sum() != 0:
-                    self.assertFalse(torch.equal(param, new_param))
+                    assert not torch.equal(param, new_param)
 
     @require_peft
     @mark.peft_test
@@ -218,7 +218,7 @@ class DPOTrainerTester(unittest.TestCase):
 
             trainer.train()
 
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+            assert trainer.state.log_history[-1]["train_loss"] is not None
 
             # check the params have changed
             for n, param in previous_trainable_params.items():
@@ -226,7 +226,7 @@ class DPOTrainerTester(unittest.TestCase):
                     new_param = trainer.model.get_parameter(n)
                     # check the params have changed - ignore 0 biases
                     if param.sum() != 0:
-                        self.assertFalse(torch.equal(param, new_param))
+                        assert not torch.equal(param, new_param)
 
     def test_dpo_trainer_padding_token_is_none(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -259,6 +259,42 @@ class DPOTrainerTester(unittest.TestCase):
                     tokenizer=tokenizer,
                     train_dataset=dummy_dataset,
                     eval_dataset=dummy_dataset,
+                )
+
+                trainer.train()
+
+    def test_dpo_trainer_w_dataset_num_proc(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=1,
+                learning_rate=9e-1,
+                evaluation_strategy="steps",
+            )
+
+            dummy_dataset = self._init_dummy_dataset()
+
+            tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+            tokenizer.pad_token = None
+
+            with self.assertRaisesRegex(
+                ValueError,
+                expected_regex=r"Padding is enabled, but the tokenizer is not configured with a padding token."
+                r" Explicitly set `tokenizer.pad_token` \(e.g. `tokenizer.pad_token = tokenizer.eos_token`\)"
+                r" before calling the trainer.",
+            ):
+                trainer = DPOTrainer(
+                    model=self.model,
+                    ref_model=None,
+                    beta=0.1,
+                    args=training_args,
+                    tokenizer=tokenizer,
+                    train_dataset=dummy_dataset,
+                    eval_dataset=dummy_dataset,
+                    dataset_num_proc=5,
                 )
 
                 trainer.train()
@@ -472,3 +508,82 @@ class DPOTrainerTester(unittest.TestCase):
 
             # save peft adapter
             trainer.save_model()
+
+    @require_peft
+    def test_dpo_lora_tags(self):
+        from peft import LoraConfig
+
+        model_id = "HuggingFaceM4/tiny-random-LlamaForCausalLM"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        lora_config = LoraConfig(
+            r=16,
+            lora_alpha=32,
+            lora_dropout=0.05,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+
+        # lora model
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=4,
+                learning_rate=9e-1,
+                evaluation_strategy="steps",
+            )
+
+            dummy_dataset = self._init_dummy_dataset()
+
+            # dpo train lora model with a lora config
+            trainer = DPOTrainer(
+                model=model,
+                ref_model=None,
+                beta=0.1,
+                args=training_args,
+                tokenizer=tokenizer,
+                train_dataset=dummy_dataset,
+                eval_dataset=dummy_dataset,
+                peft_config=lora_config,
+            )
+
+            assert trainer.model.model_tags == trainer._tag_names
+
+    @require_peft
+    def test_dpo_tags(self):
+        model_id = "HuggingFaceM4/tiny-random-LlamaForCausalLM"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        # lora model
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=4,
+                learning_rate=9e-1,
+                evaluation_strategy="steps",
+            )
+
+            dummy_dataset = self._init_dummy_dataset()
+
+            # dpo train lora model with a lora config
+            trainer = DPOTrainer(
+                model=model,
+                ref_model=None,
+                beta=0.1,
+                args=training_args,
+                tokenizer=tokenizer,
+                train_dataset=dummy_dataset,
+                eval_dataset=dummy_dataset,
+            )
+
+            assert trainer.model.model_tags == trainer._tag_names

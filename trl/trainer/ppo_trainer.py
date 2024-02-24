@@ -142,10 +142,10 @@ class PPOTrainer(BaseTrainer):
 
     def __init__(
         self,
-        config: PPOConfig = None,
-        model: PreTrainedModelWrapper = None,
+        config: Optional[PPOConfig] = None,
+        model: Optional[PreTrainedModelWrapper] = None,
         ref_model: Optional[PreTrainedModelWrapper] = None,
-        tokenizer: PreTrainedTokenizerBase = None,
+        tokenizer: Optional[PreTrainedTokenizerBase] = None,
         dataset: Optional[Union[torch.utils.data.Dataset, Dataset]] = None,
         optimizer: Optional[torch.optim.Optimizer] = None,
         data_collator: Optional[typing.Callable] = None,
@@ -431,7 +431,7 @@ class PPOTrainer(BaseTrainer):
     def generate(
         self,
         query_tensor: Union[torch.Tensor, List[torch.Tensor]],
-        length_sampler: Callable = None,
+        length_sampler: Optional[Callable] = None,
         batch_size: int = 4,
         return_prompt: bool = True,
         generate_ref_response: bool = False,
@@ -508,10 +508,10 @@ class PPOTrainer(BaseTrainer):
         self,
         model: PreTrainedModelWrapper,
         query_tensors: List[torch.Tensor],
-        length_sampler: Callable = None,
+        length_sampler: Optional[Callable] = None,
         batch_size: int = 4,
         return_prompt: bool = True,
-        pad_to_multiple_of: int = None,
+        pad_to_multiple_of: Optional[int] = None,
         remove_padding: bool = True,
         **generation_kwargs,
     ):
@@ -1315,7 +1315,7 @@ class PPOTrainer(BaseTrainer):
         stats: dict,
         batch: dict,
         rewards: List[torch.FloatTensor],
-        columns_to_log: List[str] = ["query", "response"],
+        columns_to_log: typing.Iterable[str] = ("query", "response"),
     ):
         """
         A function that logs all the training stats. Call it at the end of each epoch.
@@ -1337,7 +1337,7 @@ class PPOTrainer(BaseTrainer):
         if self.config.log_with == "wandb":
             import wandb
 
-            if any([column_to_log not in batch.keys() for column_to_log in columns_to_log]):
+            if any(column_to_log not in batch.keys() for column_to_log in columns_to_log):
                 raise ValueError(f"Columns to log {columns_to_log} are not present in the batch {batch.keys()}.")
 
             batch_list = [batch[column_to_log] for column_to_log in columns_to_log]
@@ -1393,7 +1393,7 @@ class PPOTrainer(BaseTrainer):
         try:
             user = whoami()["name"]
         # handle the offline case
-        except:  # noqa
+        except Exception:
             warnings.warn("Cannot retrieve user information assuming you are running in offline mode.")
             return
 
@@ -1415,7 +1415,7 @@ class PPOTrainer(BaseTrainer):
 
         text = Text()
 
-        for i, (token, mask) in enumerate(zip(tokens, masks)):
+        for _i, (token, mask) in enumerate(zip(tokens, masks)):
             if mask == 1:
                 text.append(self.tokenizer.decode(token.item()), style="black on deep_sky_blue1")
                 text.append(" ")
