@@ -27,7 +27,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from accelerate.utils import is_deepspeed_available, tqdm
-from datasets import Dataset, interleave_datasets
+from datasets import Dataset, interleave_datasets, concatenate_datasets
 from torch.utils.data import DataLoader, SequentialSampler
 from transformers import (
     AutoModelForCausalLM,
@@ -312,21 +312,22 @@ class KTOTrainer(Trainer):
         self.desirable_weight = args.desirable_weight
         self.undesirable_weight = args.undesirable_weight
 
-        # tokenize the dataset
-        columns_to_remove = [col for col in train_dataset.column_names if col not in ["prompt", "completion", "label"]]
-        train_dataset = train_dataset.map(
-            self.shuffle_completion, batched=True, batch_size=128, remove_columns=columns_to_remove
-        )
-        train_dataset = train_dataset.map(self.tokenize_row)
-
+        # get KL datasets
+        train_KL_dataset = train_dataset.map(self.get_KL_dataset, batched=True)
         if eval_dataset is not None:
-            columns_to_remove = [
-                col for col in eval_dataset.column_names if col not in ["prompt", "completion", "label"]
-            ]
-            eval_dataset = eval_dataset.map(
-                self.shuffle_completion, batched=True, batch_size=128, remove_columns=columns_to_remove
-            )
-            eval_dataset = eval_dataset.map(self.tokenize_row)
+            eval_KL_dataset = eval_dataset.map(self.get_KL_dataset, batched=True)
+
+        # tokenize the datasets
+        train_dataset = train_dataset.map(lambda row: self.tokenize_row(row, prefix=""), remove_columns=train_dataset.column_names)
+        train_KL_dataset = train_KL_dataset.map(lambda row: self.tokenize_row(row, prefix="KL_"), remove_columns=train_KL_dataset.column_names)
+        
+        if eval_dataset is not None:
+            eval_dataset = eval_dataset.map(lambda row: self.tokenize_row(row, prefix=""), remove_columns=eval_dataset.column_names)
+            eval_KL_dataset = eval_KL_dataset.map(lambda row: self.tokenize_row(row, prefix="KL_"), remove_columns=eval_KL_dataset.column_names)
+
+        # merge the datasets
+        train_dataset = concatenate_datasets([train_dataset, train_KL_dataset], axis=1)
+        eval_dataset = concatenate_datasets([eval_dataset, eval_KL_dataset], axis=1)
 
         desirable = train_dataset.filter(lambda x: x["label"])
         undesirable = train_dataset.filter(lambda x: not x["label"])
@@ -341,7 +342,6 @@ class KTOTrainer(Trainer):
             und_weight_in_range = (und_weight_lower_bound <= self.undesirable_weight <= und_weight_upper_bound)
 
             if not (des_weight_in_range or und_weight_in_range):
-                print(len(desirable), len(undesirable))
                 warnings.warn(
                     f"""
                     You have different amounts of desirable/positive and undesirable/negative examples but the \
@@ -367,10 +367,6 @@ class KTOTrainer(Trainer):
             )
         else:
             interleaved_eval_dataset = None
-
-        # Increase the effective batch size by 2x to account for the detached KL terms
-        args.per_device_train_batch_size = args.per_device_train_batch_size * 2
-        args.per_device_eval_batch_size = args.per_device_eval_batch_size * 2
 
         super().__init__(
             model=model,
@@ -462,14 +458,24 @@ class KTOTrainer(Trainer):
 
             # prepare dataloader
             data_loader = self.accelerator.prepare(DataLoader(self.train_dataset, **dataloader_params))
-            reference_logps = []
-            for padded_batch in tqdm(iterable=data_loader, desc="Train dataset reference log probs"):
-                reference_logp = self.compute_reference_log_probs(padded_batch)
-                reference_logp = self.accelerator.gather_for_metrics(reference_logp)
-                reference_logps.append(reference_logp.cpu())
+            
+            reference_completion_logps = []
+            reference_KL_logps = []
 
-            all_reference_logps = torch.cat(reference_logps).float().numpy()
-            self.train_dataset = self.train_dataset.add_column(name="reference_logps", column=all_reference_logps)
+            for padded_batch in tqdm(iterable=data_loader, desc="Train dataset reference log probs"):
+                reference_completion_logp, reference_KL_logp = self.compute_reference_log_probs(padded_batch)
+
+                reference_completion_logp = self.accelerator.gather_for_metrics(reference_completion_logp)
+                reference_completion_logps.append(reference_completion_logp.cpu())
+
+                reference_KL_logp = self.accelerator.gather_for_metrics(reference_KL_logp)
+                reference_KL_logps.append(reference_KL_logp.cpu())
+
+            self.train_dataset = self.train_dataset.add_column(name="reference_logps", 
+                                                   column=torch.cat(reference_completion_logps).float().numpy())
+            self.train_dataset = self.train_dataset.add_column(name="reference_KL_logps", 
+                                                   column=torch.cat(reference_KL_logps).float().numpy())
+
             self._precomputed_train_ref_log_probs = True
 
         return super().get_train_dataloader()
@@ -501,14 +507,22 @@ class KTOTrainer(Trainer):
             # prepare dataloader
             data_loader = self.accelerator.prepare(DataLoader(eval_dataset, **dataloader_params))
 
-            reference_logps = []
-            for padded_batch in tqdm(iterable=data_loader, desc="Eval dataset reference log probs"):
-                reference_logp = self.compute_reference_log_probs(padded_batch)
-                reference_logp = self.accelerator.gather_for_metrics(reference_logp)
-                reference_logps.append(reference_logp.cpu())
+            reference_completion_logps = []
+            reference_KL_logps = []
 
-            all_reference_logps = torch.cat(reference_logps).float().numpy()
-            eval_dataset = eval_dataset.add_column(name="reference_logps", column=all_reference_logps)
+            for padded_batch in tqdm(iterable=data_loader, desc="Eval dataset reference log probs"):
+                reference_completion_logp, reference_KL_logp = self.compute_reference_log_probs(padded_batch)
+
+                reference_completion_logp = self.accelerator.gather_for_metrics(reference_completion_logp)
+                reference_completion_logps.append(reference_completion_logp.cpu())
+
+                reference_KL_logp = self.accelerator.gather_for_metrics(reference_KL_logp)
+                reference_KL_logps.append(reference_KL_logp.cpu())
+
+            eval_dataset = eval_dataset.add_column(name="reference_logps", 
+                                                   column=torch.cat(reference_completion_logps).float().numpy())
+            eval_dataset = eval_dataset.add_column(name="reference_KL_logps", 
+                                                   column=torch.cat(reference_KL_logps).float().numpy())
 
             # Save calculated reference_chosen_logps and reference_rejected_logps to the eval_dataset for subsequent runs
             if self.eval_dataset is not None:
@@ -525,37 +539,70 @@ class KTOTrainer(Trainer):
                     self.model
                 ).disable_adapter() if self.is_peft_model else nullcontext():
                     if self.is_encoder_decoder:
-                        all_logits = self.model(
+                        completion_logits = self.model(
                             padded_batch["prompt_input_ids"],
                             attention_mask=padded_batch["prompt_attention_mask"],
                             decoder_input_ids=padded_batch.get("completion_decoder_input_ids"),
                             labels=padded_batch["completion_labels"],
                         ).logits
+
+                        KL_logits = self.model(
+                            padded_batch["KL_prompt_input_ids"],
+                            attention_mask=padded_batch["KL_prompt_attention_mask"],
+                            decoder_input_ids=padded_batch.get("KL_completion_decoder_input_ids"),
+                            labels=padded_batch["KL_completion_labels"],
+                        ).logits
                     else:
-                        all_logits = self.model(
+                        completion_logits = self.model(
                             padded_batch["completion_input_ids"],
                             attention_mask=padded_batch["completion_attention_mask"],
                         ).logits
+
+                        KL_logits = self.model(
+                            padded_batch["KL_completion_input_ids"],
+                            attention_mask=padded_batch["KL_completion_attention_mask"],
+                        ).logits
             else:
                 if self.is_encoder_decoder:
-                    all_logits = self.ref_model(
+                    completion_logits = self.ref_model(
                         padded_batch["prompt_input_ids"],
                         attention_mask=padded_batch["prompt_attention_mask"],
                         decoder_input_ids=padded_batch.get("completion_decoder_input_ids"),
                         labels=padded_batch["completion_labels"],
                     ).logits
+
+                    KL_logits = self.ref_model(
+                        padded_batch["KL_prompt_input_ids"],
+                        attention_mask=padded_batch["KL_prompt_attention_mask"],
+                        decoder_input_ids=padded_batch.get("KL_completion_decoder_input_ids"),
+                        labels=padded_batch["KL_completion_labels"],
+                    ).logits
                 else:
-                    all_logits = self.ref_model(
+                    completion_logits = self.ref_model(
                         padded_batch["completion_input_ids"], attention_mask=padded_batch["completion_attention_mask"]
                     ).logits
 
-        return self.get_batch_logps(
-            all_logits,
+                    KL_logits = self.ref_model(
+                        padded_batch["KL_completion_input_ids"], attention_mask=padded_batch["KL_completion_attention_mask"]
+                    ).logits
+
+        completion_logps = self.get_batch_logps(
+            completion_logits,
             padded_batch["completion_labels"],
             average_log_prob=False,
             is_encoder_decoder=self.is_encoder_decoder,
             label_pad_token_id=self.label_pad_token_id,
         )
+
+        KL_logps = self.get_batch_logps(
+            KL_logits,
+            padded_batch["KL_completion_labels"],
+            average_log_prob=False,
+            is_encoder_decoder=self.is_encoder_decoder,
+            label_pad_token_id=self.label_pad_token_id,
+        )
+
+        return completion_logps, KL_logps
 
     def build_tokenized_answer(self, prompt, answer):
         """
@@ -607,14 +654,12 @@ class KTOTrainer(Trainer):
             attention_mask=answer_attention_mask,
         )
 
-    def shuffle_completion(self, batch) -> Dict:
-        batch["kl"] = [False] * len(batch["prompt"]) + [True] * len(batch["prompt"])
-        batch["prompt"] = batch["prompt"] + batch["prompt"]
-        batch["completion"] = batch["completion"] + random.sample(batch["completion"], len(batch["completion"]))
-        batch["label"] = batch["label"] + batch["label"]
+    def get_KL_dataset(self, batch) -> Dict:
+        """Creates mismatched pairs of prompts and completions for the KL dataset."""
+        batch["completion"] = random.sample(batch["completion"], len(batch["completion"]))
         return batch
 
-    def tokenize_row(self, feature, model: Union[PreTrainedModel, nn.Module] = None) -> Dict:
+    def tokenize_row(self, feature, model: Union[PreTrainedModel, nn.Module] = None, prefix="") -> Dict:
         """Tokenize a single row from a KTO specific dataset.
 
         At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
@@ -625,9 +670,14 @@ class KTOTrainer(Trainer):
             the sum of the length of the prompt and the completion response, with
             label_pad_token_id  for the prompt tokens.
         """
-        batch = {}
         prompt = feature["prompt"]
         completion = feature["completion"]
+
+        batch = {
+            f"{prefix}prompt": prompt,
+            f"{prefix}completion": completion,
+            f"{prefix}label": feature["label"],
+        }
 
         if not self.is_encoder_decoder:
             # Check issues below for more details
@@ -695,7 +745,7 @@ class KTOTrainer(Trainer):
                 for type_key, tokens in toks.items():
                     if type_key == "token_type_ids":
                         continue
-                    batch[f"{k}{type_key}"] = tokens
+                    batch[f"{prefix}{k}{type_key}"] = tokens
 
         else:
             completion_tokens = self.tokenizer(
@@ -705,13 +755,13 @@ class KTOTrainer(Trainer):
                 prompt, truncation=True, max_length=self.max_prompt_length, add_special_tokens=True
             )
 
-            batch["prompt_input_ids"] = prompt_tokens["input_ids"]
-            batch["prompt_attention_mask"] = prompt_tokens["attention_mask"]
+            batch[f"{prefix}prompt_input_ids"] = prompt_tokens["input_ids"]
+            batch[f"{prefix}prompt_attention_mask"] = prompt_tokens["attention_mask"]
 
-            batch["completion_labels"] = completion_tokens["input_ids"]
-            batch["completion_attention_mask"] = completion_tokens["attention_mask"]
+            batch[f"{prefix}completion_labels"] = completion_tokens["input_ids"]
+            batch[f"{prefix}completion_attention_mask"] = completion_tokens["attention_mask"]
             if model is not None and hasattr(model, "prepare_decoder_input_ids_from_labels"):
-                batch["completion_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
+                batch[f"{prefix}completion_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
                     labels=torch.tensor(batch["completion_labels"])
                 )
 
@@ -760,46 +810,60 @@ class KTOTrainer(Trainer):
     def forward(
         self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
-        target_indicies = [i for i in range(len(batch["kl"])) if batch["kl"][i] is False]
-        kl_indicies = [i for i in range(len(batch["kl"])) if batch["kl"][i] is True]
 
         if self.is_encoder_decoder:
-            all_logits = model(
+            completion_logits = model(
                 batch["prompt_input_ids"],
                 attention_mask=batch["prompt_attention_mask"],
                 decoder_input_ids=batch.get("completion_decoder_input_ids"),
                 labels=batch["completion_labels"],
             ).logits
+
+            KL_logits = model(
+                batch["KL_prompt_input_ids"],
+                attention_mask=batch["KL_prompt_attention_mask"],
+                decoder_input_ids=batch.get("KL_completion_decoder_input_ids"),
+                labels=batch["KL_completion_labels"],
+            ).logits
         else:
-            all_logits = model(
+            completion_logits = model(
                 batch["completion_input_ids"],
                 attention_mask=batch["completion_attention_mask"],
             ).logits
 
-        all_logps = self.get_batch_logps(
-            all_logits,
+            KL_logits = model(
+                batch["KL_completion_input_ids"],
+                attention_mask=batch["KL_completion_attention_mask"],
+            ).logits
+
+        completion_logps = self.get_batch_logps(
+            completion_logits,
             batch["completion_labels"],
             average_log_prob=False,
             is_encoder_decoder=self.is_encoder_decoder,
             label_pad_token_id=self.label_pad_token_id,
         )
 
-        target_logps = all_logps[target_indicies, ...]
-        target_logits = all_logits[target_indicies, ...]
-        kl_logps = all_logps[kl_indicies, ...]
+        KL_logps = self.get_batch_logps(
+            KL_logits,
+            batch["KL_completion_labels"],
+            average_log_prob=False,
+            is_encoder_decoder=self.is_encoder_decoder,
+            label_pad_token_id=self.label_pad_token_id,
+        )
 
-        train_label = [batch["label"][i] for i in target_indicies]
+        assert completion_logps.shape[0] == len(batch['label'])
 
-        chosen_idx = [i for i in range(target_logps.shape[0]) if train_label[i] is True]
-        rejected_idx = [i for i in range(target_logps.shape[0]) if train_label[i] is False]
+        chosen_idx = [i for i in range(completion_logps.shape[0]) if batch["label"][i] is True]
+        rejected_idx = [i for i in range(completion_logps.shape[0]) if batch["label"][i] is False]
 
-        chosen_logps = target_logps[chosen_idx, ...]
-        rejected_logps = target_logps[rejected_idx, ...]
+        chosen_logps = completion_logps[chosen_idx, ...]
+        rejected_logps = completion_logps[rejected_idx, ...]
 
-        chosen_logits = target_logits[chosen_idx, ...]
-        rejected_logits = target_logits[rejected_idx, ...]
+        chosen_logits = completion_logits[chosen_idx, ...]
+        rejected_logits = completion_logits[rejected_idx, ...]
 
-        return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, kl_logps)
+        return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, KL_logps)
 
     def kto_loss(
         self,
@@ -870,18 +934,12 @@ class KTOTrainer(Trainer):
 
         # if reference_logps in batch use them, otherwise use the reference model
         if "reference_logps" in batch:
-            kl_indicies = [i for i in range(len(batch["kl"])) if batch["kl"][i] is True]
-            reference_KL_logps = batch["reference_logps"][kl_indicies, ...]
+            chosen_idx = [i for i in range(batch["reference_logps"].shape[0]) if batch["label"][i] is True]
+            rejected_idx = [i for i in range(batch["reference_logps"].shape[0]) if batch["label"][i] is False]
 
-            target_indicies = [i for i in range(len(batch["kl"])) if batch["kl"][i] is False]
-            target_logps = batch["reference_logps"][target_indicies, ...]
-            target_labels = [batch["label"][i] for i in target_indicies]
-
-            chosen_idx = [i for i in range(target_logps.shape[0]) if target_labels[i] is True]
-            rejected_idx = [i for i in range(target_logps.shape[0]) if target_labels[i] is False]
-
-            reference_chosen_logps = target_logps[chosen_idx, ...]
-            reference_rejected_logps = target_logps[rejected_idx, ...]
+            reference_chosen_logps = batch["reference_logps"][chosen_idx, ...]
+            reference_rejected_logps = batch["reference_logps"][rejected_idx, ...]
+            reference_KL_logps = batch["reference_KL_logps"]
         else:
             with torch.no_grad():
                 if self.ref_model is None:
@@ -911,18 +969,18 @@ class KTOTrainer(Trainer):
             reference_KL_logps,
         )
 
-        reward_accuracies = (chosen_rewards.mean() > rejected_rewards.mean()).float()
+        all_chosen_rewards = self.accelerator.gather_for_metrics(chosen_rewards)
+        all_rejected_rewards = self.accelerator.gather_for_metrics(rejected_rewards)
+        all_chosen_logps = self.accelerator.gather_for_metrics(policy_chosen_logps)
+        all_rejected_logps = self.accelerator.gather_for_metrics(policy_rejected_logps)
 
         prefix = "eval_" if train_eval == "eval" else ""
-        metrics[f"{prefix}rewards/chosen"] = chosen_rewards.mean().cpu()
-        metrics[f"{prefix}rewards/rejected"] = rejected_rewards.mean().cpu()
-        metrics[f"{prefix}rewards/accuracies"] = reward_accuracies.cpu()
-        metrics[f"{prefix}rewards/margins"] = (chosen_rewards.mean() - rejected_rewards.mean()).cpu()
-        metrics[f"{prefix}logps/rejected"] = policy_rejected_logps.detach().mean().cpu()
-        metrics[f"{prefix}logps/chosen"] = policy_chosen_logps.detach().mean().cpu()
-        metrics[f"{prefix}logits/rejected"] = policy_rejected_logits.detach().mean().cpu()
-        metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.detach().mean().cpu()
-        metrics[f"{prefix}kl"] = kl.item()
+        metrics[f"{prefix}rewards/chosen"] = all_chosen_rewards.mean().cpu()
+        metrics[f"{prefix}rewards/rejected"] = all_rejected_rewards.mean().cpu()
+        metrics[f"{prefix}rewards/margins"] = (all_chosen_rewards.mean() - all_rejected_rewards.mean()).cpu()
+        metrics[f"{prefix}logps/chosen"] = all_chosen_logps.detach().mean().cpu()
+        metrics[f"{prefix}logps/rejected"] = all_rejected_logps.detach().mean().cpu()
+        metrics[f"{prefix}kl"] = kl.item() # has already been gathered in kto_loss
 
         loss = (
             losses.mean()
