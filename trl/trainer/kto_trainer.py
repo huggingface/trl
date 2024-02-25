@@ -313,9 +313,9 @@ class KTOTrainer(Trainer):
         self.undesirable_weight = args.undesirable_weight
 
         # get KL datasets
-        train_KL_dataset = train_dataset.map(self.get_KL_dataset, batched=True)
+        train_KL_dataset = train_dataset.map(self.get_KL_dataset, batched=True, batch_size=1000)
         if eval_dataset is not None:
-            eval_KL_dataset = eval_dataset.map(self.get_KL_dataset, batched=True)
+            eval_KL_dataset = eval_dataset.map(self.get_KL_dataset, batched=True, batch_size=1000)
 
         # tokenize the datasets
         train_dataset = train_dataset.map(lambda row: self.tokenize_row(row, prefix=""), remove_columns=train_dataset.column_names)
@@ -923,6 +923,7 @@ class KTOTrainer(Trainer):
     ):
         """Compute the KTO loss and other metrics for the given batch of inputs for train or test."""
         metrics = {}
+        batch = {k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in batch.items()}
 
         (
             policy_chosen_logps,
@@ -969,17 +970,10 @@ class KTOTrainer(Trainer):
             reference_KL_logps,
         )
 
-        all_chosen_rewards = self.accelerator.gather_for_metrics(chosen_rewards)
-        all_rejected_rewards = self.accelerator.gather_for_metrics(rejected_rewards)
-        all_chosen_logps = self.accelerator.gather_for_metrics(policy_chosen_logps)
-        all_rejected_logps = self.accelerator.gather_for_metrics(policy_rejected_logps)
-
         prefix = "eval_" if train_eval == "eval" else ""
-        metrics[f"{prefix}rewards/chosen"] = all_chosen_rewards.mean().cpu()
-        metrics[f"{prefix}rewards/rejected"] = all_rejected_rewards.mean().cpu()
-        metrics[f"{prefix}rewards/margins"] = (all_chosen_rewards.mean() - all_rejected_rewards.mean()).cpu()
-        metrics[f"{prefix}logps/chosen"] = all_chosen_logps.detach().mean().cpu()
-        metrics[f"{prefix}logps/rejected"] = all_rejected_logps.detach().mean().cpu()
+        metrics[f"{prefix}rewards/chosen"] = chosen_rewards.mean().cpu()
+        metrics[f"{prefix}rewards/rejected"] = rejected_rewards.mean().cpu()
+        metrics[f"{prefix}rewards/margins"] = (chosen_rewards.mean().nan_to_num(0) - rejected_rewards.mean().nan_to_num(0)).cpu()
         metrics[f"{prefix}kl"] = kl.item() # has already been gathered in kto_loss
 
         loss = (
