@@ -15,22 +15,41 @@
 """
 Run the KTO training script with the following command with some example arguments:
 
+# regular:
 python examples/scripts/kto.py \
-    --model_name_or_path "gpt2" \
-    --per_device_train_batch_size 8 \
-    --gradient_accumulation_steps 2 \
-    --learning_rate 1e-4 \
+    --model_name_or_path=gpt2 \
+    --per_device_train_batch_size 4 \
     --max_steps 1000 \
-    --report_to "wandb" \
-    --gradient_checkpointing True  \
-    --output_dir="./test" \
-    --use_peft True \
-    --lora_r 64 \
-    --lora_alpha 16 \
-    --evaluation_strategy "steps" \
-    --logging_first_step True \
+    --learning_rate 1e-3 \
+    --gradient_accumulation_steps 1 \
     --logging_steps 10 \
-    --eval_steps 500
+    --eval_steps 500 \
+    --output_dir="kto_anthropic_hh" \
+    --warmup_steps 150 \
+    --report_to wandb \
+    --bf16 \
+    --logging_first_step \
+    --no_remove_unused_columns
+
+# peft:
+python examples/scripts/kto.py \
+    --model_name_or_path=gpt2 \
+    --per_device_train_batch_size 4 \
+    --max_steps 1000 \
+    --learning_rate 1e-3 \
+    --gradient_accumulation_steps 1 \
+    --logging_steps 10 \
+    --eval_steps 500 \
+    --output_dir="kto_anthropic_hh" \
+    --optim rmsprop \
+    --warmup_steps 150 \
+    --report_to wandb \
+    --bf16 \
+    --logging_first_step \
+    --no_remove_unused_columns \
+    --use_peft \
+    --lora_r=16 \
+    --lora_alpha=16
 """
 
 from dataclasses import dataclass, field
