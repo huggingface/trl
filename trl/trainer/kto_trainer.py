@@ -328,9 +328,34 @@ class KTOTrainer(Trainer):
             )
             eval_dataset = eval_dataset.map(self.tokenize_row)
 
+        desirable = train_dataset.filter(lambda x: x["label"])
+        undesirable = train_dataset.filter(lambda x: not x["label"])
+
+        if (len(desirable) != len(undesirable)):
+            des_weight_lower_bound = (len(undesirable) * self.undesirable_weight / len(desirable)) * 1
+            des_weight_upper_bound = (len(undesirable) * self.undesirable_weight / len(desirable)) * 1.33
+            und_weight_lower_bound = (len(desirable) * self.desirable_weight / len(undesirable)) / 1.33
+            und_weight_upper_bound = (len(desirable) * self.desirable_weight / len(undesirable)) / 1
+
+            des_weight_in_range = (des_weight_lower_bound <= self.desirable_weight <= des_weight_upper_bound)
+            und_weight_in_range = (und_weight_lower_bound <= self.undesirable_weight <= und_weight_upper_bound)
+
+            if not (des_weight_in_range or und_weight_in_range):
+                print(len(desirable), len(undesirable))
+                warnings.warn(
+                    f"""
+                    You have different amounts of desirable/positive and undesirable/negative examples but the \
+                    weights on the desirable and undesirable losses don't seem to be in an ideal range. Based \
+                    on your data, we recommend EITHER desirable_weight in \
+                    [{des_weight_lower_bound}, {des_weight_upper_bound}] or undesirable_weight in \
+                    [{und_weight_lower_bound}, {und_weight_upper_bound}] (but NOT BOTH). See the documentation \
+                    on how to optimally set these weights.""",
+                    UserWarning,
+                )
+
         # split the dataset and interleave them together with equal probability of choosing chosen or rejected
         interleaved_train_dataset = interleave_datasets(
-            [train_dataset.filter(lambda x: x["label"]), train_dataset.filter(lambda x: not x["label"])],
+            [desirable, undesirable],
             stopping_strategy="all_exhausted",
         )
         interleaved_train_dataset = interleaved_train_dataset.shuffle(seed=args.data_seed)
