@@ -26,7 +26,6 @@ from datasets import Dataset, builder, concatenate_datasets, load_dataset
 
 # from huggingface_hub import DatasetCard
 from peft import AutoPeftModelForCausalLM, LoraConfig, PeftConfig, get_peft_model, prepare_model_for_kbit_training
-from peft.tuners.lora import LoraLayer
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import (
@@ -244,16 +243,6 @@ def create_and_prepare_model(args):
             target_module_found = any(key.endswith(target_key) for target_key in modules_to_save)
             if target_module_found:
                 model.get_submodule(key + ".original_module").requires_grad_(False)
-
-    if args.bf16:
-        for name, module in model.named_modules():
-            if isinstance(module, LoraLayer):
-                module = module.to(torch.bfloat16)
-            if "norm" in name:
-                module = module.to(torch.float32)
-            if "score" in name or "embed_tokens" in name:
-                if hasattr(module, "weight") and module.weight.dtype == torch.float32:
-                    module = module.to(torch.bfloat16)
 
     # tokenizer_name = script_args.model_name if script_args.tokenizer_name is None else script_args.tokenizer_name
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
