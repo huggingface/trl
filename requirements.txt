@@ -6,3 +6,5 @@ accelerate
 peft                                                                                                                                                     
 tyro>=0.5.7                                                                                                                                              
 vllm==0.3.2
+bitsandbytes==0.42.0
+wandb
