@@ -43,7 +43,7 @@ class ScriptArguments:
     )
 
     gradient_checkpointing_use_reentrant: Optional[bool] = field(
-        default=True, metadata={"help": "whether to use reentrant for gradient checkpointing"}
+        default=False, metadata={"help": "whether to use reentrant for gradient checkpointing"}
     )
 
     lora_alpha: Optional[float] = field(default=16, metadata={"help": "the lora alpha parameter"})
