@@ -26,7 +26,6 @@ from datasets import Dataset, builder, concatenate_datasets, load_dataset
 
 # from huggingface_hub import DatasetCard
 from peft import AutoPeftModelForCausalLM, LoraConfig, PeftConfig, get_peft_model, prepare_model_for_kbit_training
-from peft.tuners.lora import LoraLayer
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import (
@@ -72,6 +71,8 @@ class ScriptArguments:
 
     # model parameters
     model_name: Optional[str] = field(default="gpt2", metadata={"help": "the model name"})
+    model_revision: Optional[str] = field(default=None, metadata={"help": "the model name"})
+    tokenizer_name: Optional[str] = field(default=None, metadata={"help": "the model name"})
     bf16: Optional[bool] = field(
         default=False,
         metadata={
@@ -196,16 +197,21 @@ def create_and_prepare_model(args):
     else:
         dtype = torch.float32
 
+    tokenizer_name = args.tokenizer_name
+
     if "adapter" in args.model_name:
         model_cls = AutoPeftModelForCausalLM
         config = PeftConfig.from_pretrained(args.model_name)
-        tokenizer_name = config.base_model_name_or_path
+        if tokenizer_name is None:
+            tokenizer_name = config.base_model_name_or_path
     else:
         model_cls = AutoModelForCausalLM
-        tokenizer_name = args.model_name
+        if tokenizer_name is None:
+            tokenizer_name = args.model_name
 
     model = model_cls.from_pretrained(
         args.model_name,
+        revision=args.model_revision,
         quantization_config=quantization_config,
         device_map=device_map,
         torch_dtype=dtype,
@@ -245,24 +251,25 @@ def create_and_prepare_model(args):
             if target_module_found:
                 model.get_submodule(key + ".original_module").requires_grad_(False)
 
-    if args.bf16:
-        for name, module in model.named_modules():
-            if isinstance(module, LoraLayer):
-                module = module.to(torch.bfloat16)
-            if "norm" in name:
-                module = module.to(torch.float32)
-            if "score" in name or "embed_tokens" in name:
-                if hasattr(module, "weight") and module.weight.dtype == torch.float32:
-                    module = module.to(torch.bfloat16)
+    # if args.bf16:
+    #     for name, module in model.named_modules():
+    #         if isinstance(module, LoraLayer):
+    #             module = module.to(torch.bfloat16)
+    #         if "norm" in name:
+    #             module = module.to(torch.float32)
+    #         if "score" in name or "embed_tokens" in name:
+    #             if hasattr(module, "weight") and module.weight.dtype == torch.float32:
+    #                 module = module.to(torch.bfloat16)
 
     # tokenizer_name = script_args.model_name if script_args.tokenizer_name is None else script_args.tokenizer_name
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-    # tokenizer.truncation_side = "left"
-    if getattr(tokenizer, "pad_token", None) is None:
-        tokenizer.pad_token = tokenizer.eos_token
 
-    if getattr(model.config, "pad_token_id", None) is None:
-        model.config.pad_token_id = model.config.eos_token_id
+    if tokenizer_name.startswith("EleutherAI"):
+        tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+    elif getattr(tokenizer, "pad_token", None) is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    # if getattr(model.config, "pad_token_id", None) is None:
+    #     model.config.pad_token_id = model.config.eos_token_id
 
     return model, tokenizer
 
@@ -715,8 +722,8 @@ if __name__ == "__main__":
             relabel_dataset._info.description = description
 
         if dpo_trainer.accelerator.is_local_main_process:
-            print("Saving")
-            relabel_dataset.save_to_disk(script_args.output_dir)
+            # print("Saving")
+            # relabel_dataset.save_to_disk(script_args.output_dir)
             print("Pushing")
             # repo_id = f"MilaRLHF/{os.path.basename(script_args.output_dir)}"
             relabel_dataset.push_to_hub(os.path.basename(script_args.output_dir), split=script_args.eval_split)
@@ -743,13 +750,8 @@ if __name__ == "__main__":
             dataset = dataset.add_column(f"pred_chosen_{model_basename}", chosen_rewards)
             dataset = dataset.add_column(f"pred_rejected_{model_basename}", rejected_rewards)
 
-            relabel_dataset = dataset.map(
-                relabel_with_preds,
-                batched=True,
-            )
-
         if dpo_trainer.accelerator.is_local_main_process:
-            print("Saving")
-            relabel_dataset.save_to_disk(script_args.output_dir)
+            # print("Saving")
+            # relabel_dataset.save_to_disk(script_args.output_dir)
             print("Pushing")
-            relabel_dataset.push_to_hub(os.path.basename(script_args.output_dir), split=script_args.eval_split)
+            dataset.push_to_hub(os.path.basename(script_args.output_dir), split=script_args.eval_split)
