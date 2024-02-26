@@ -22,7 +22,9 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import bitsandbytes as bnb
 import torch
 from accelerate import Accelerator
-from datasets import Dataset, concatenate_datasets, load_dataset
+from datasets import Dataset, builder, concatenate_datasets, load_dataset
+
+# from huggingface_hub import DatasetCard
 from peft import AutoPeftModelForCausalLM, LoraConfig, PeftConfig, get_peft_model, prepare_model_for_kbit_training
 from peft.tuners.lora import LoraLayer
 from torch.utils.data import DataLoader
@@ -43,6 +45,9 @@ from transformers.trainer_utils import get_last_checkpoint
 import wandb
 from trl import DPOTrainer
 from trl.trainer.utils import pad_to_length
+
+
+builder.has_sufficient_disk_space = lambda needed_bytes, directory=".": True
 
 
 # Define and parse arguments.
@@ -702,10 +707,46 @@ if __name__ == "__main__":
             dataset = dataset.add_column("pred_rejected", rejected_rewards)
 
             relabel_dataset = dataset.map(
-                relabel_with_preds, batched=True, remove_columns=["pred_chosen", "pred_rejected"]
+                relabel_with_preds,
+                batched=True,
             )
 
-            relabel_dataset._info.description = f"{script_args.dataset_name} relabelled with {script_args.model_name}"
+            description = f"{script_args.dataset_name} relabelled with {script_args.model_name}"
+            relabel_dataset._info.description = description
+
+        if dpo_trainer.accelerator.is_local_main_process:
+            print("Saving")
+            relabel_dataset.save_to_disk(script_args.output_dir)
+            print("Pushing")
+            # repo_id = f"MilaRLHF/{os.path.basename(script_args.output_dir)}"
+            relabel_dataset.push_to_hub(os.path.basename(script_args.output_dir), split=script_args.eval_split)
+            # relabel_dataset_card = DatasetCard.load(repo_id)
+            # relabel_dataset_card.text = description
+            # relabel_dataset_card.push_to_hub(repo_id)
+    elif script_args.mode == "predict":
+        dpo_trainer.accelerator.print(f"Prediction {script_args.eval_split}")
+        preds, _, metrics = dpo_trainer.predict(eval_dataset)
+        (
+            chosen_rewards,
+            rejected_rewards,
+            policy_chosen_logps,
+            policy_rejected_logps,
+            reference_chosen_logps,
+            reference_rejected_logps,
+        ) = preds
+        dpo_trainer.accelerator.print(f"metrics {metrics}")
+
+        if dpo_trainer.accelerator.is_local_main_process:
+            print("Relabelling Dataset and Saving")
+            dataset = load_dataset(script_args.dataset_name, split=script_args.eval_split)
+            model_basename = script_args.model_name.rsplit("/", 1)[-1]
+            dataset = dataset.add_column(f"pred_chosen_{model_basename}", chosen_rewards)
+            dataset = dataset.add_column(f"pred_rejected_{model_basename}", rejected_rewards)
+
+            relabel_dataset = dataset.map(
+                relabel_with_preds,
+                batched=True,
+            )
 
         if dpo_trainer.accelerator.is_local_main_process:
             print("Saving")

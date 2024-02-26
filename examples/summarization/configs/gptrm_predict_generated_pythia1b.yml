@@ -1,4 +1,4 @@
-mode: relabel
+mode: predict
 output_dir: /home/toolkit/huggingface/openai_summarize_generated_20k_relabel_1b_margin
 model_name: mnoukhov/pythia1b-sft-rm-tldrprompt
 dataset_name: mnoukhov/openai_summarize_generated_20k

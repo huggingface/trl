@@ -1,5 +1,5 @@
 model_name: mnoukhov/pythia410m-tldrprompt-dpo1b-adapter
-dataset_name: mnoukhov/openai_summarize_generated_20k_relabelled
+dataset_name: mnoukhov/openai_comparisons_20k_regen_and_relabelled
 eval_split: train
 use_peft: False
 beta: 0.5

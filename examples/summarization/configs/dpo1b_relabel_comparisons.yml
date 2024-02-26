@@ -1,7 +1,7 @@
-output_dir: /home/toolkit/huggingface/openai_summarize_generated_20k_relabelled_margin
+output_dir: /home/toolkit/huggingface/openai_summarize_comparisons_relabelled_margin
 mode: relabel
 model_name: mnoukhov/pythia410m-tldrprompt-dpo1b-adapter
-dataset_name: mnoukhov/openai_summarize_generated_20k
+dataset_name: mnoukhov/openai_summarize_comparisons_tldrprompt
 eval_split: train
 use_peft: False
 beta: 0.5
