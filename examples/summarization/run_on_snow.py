@@ -7,8 +7,6 @@ from copy import deepcopy
 import yaml
 from accelerate.commands import launch
 from generate_vllm import generate_vllm_args_dict
-from haven import haven_wizard as hw
-
 
 def run_exp(exp_dict, savedir, args):
     exp_name = exp_dict.pop("name")
@@ -228,17 +226,22 @@ if __name__ == "__main__":
         exp_list[0]["save_strategy"] = "no"
 
     # Run experiments and create results file
-    hw.run_wizard(
-        func=run_exp,
-        exp_list=exp_list,
-        savedir_base=args.savedir_base,
-        reset=args.reset,
-        job_config=job_config,
-        job_scheduler=job_scheduler,
-        results_fname="results/notebook.ipynb",
-        python_binary_path=args.python_binary,
-        args=args,
-        use_threads=True,
-        save_logs=False,
-        # exp_id=args.exp_id,
-    )
+    if job_scheduler == "toolkit":
+        from haven import haven_wizard as hw
+
+        hw.run_wizard(
+            func=run_exp,
+            exp_list=exp_list,
+            savedir_base=args.savedir_base,
+            reset=args.reset,
+            job_config=job_config,
+            job_scheduler=job_scheduler,
+            results_fname="results/notebook.ipynb",
+            python_binary_path=args.python_binary,
+            args=args,
+            use_threads=True,
+            save_logs=False,
+            # exp_id=args.exp_id,
+        )
+    else:
+        run_exp(exp_list[0], "output", args)
