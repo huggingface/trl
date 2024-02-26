@@ -59,6 +59,9 @@ class ScriptArguments:
 
     output_dir: Optional[str] = field(default="./results", metadata={"help": "the output directory"})
     log_freq: Optional[int] = field(default=1, metadata={"help": "the logging frequency"})
+    load_in_4bit: Optional[bool] = field(
+        default=True, metadata={"help": "whether to load the model in 4bit"}
+    )
 
     # instrumentation
     sanity_check: Optional[bool] = field(default=False, metadata={"help": "only train on 1000 samples"})
@@ -138,7 +141,7 @@ if __name__ == "__main__":
         script_args.model_name_or_path,
         low_cpu_mem_usage=True,
         torch_dtype=torch.float16,
-        load_in_4bit=True,
+        load_in_4bit=script_args.load_in_4bit,
         device_map={"": Accelerator().local_process_index},
     )
     model.config.use_cache = False
