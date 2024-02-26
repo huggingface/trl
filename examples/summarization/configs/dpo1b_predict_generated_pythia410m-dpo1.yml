@@ -1,0 +1,11 @@
+output_dir: /home/toolkit/huggingface/openai_summarize_generated_20k_relabel_1b_predict_410m-dpo1
+mode: predict
+model_name: mnoukhov/pythia410m-tldrprompt-dpo1b-adapter
+dataset_name: mnoukhov/openai_summarize_generated_20k_relabel_1b_margin
+eval_split: train
+use_peft: False
+beta: 0.5
+load_in_8bit: False
+bf16: False
+fp16: True
+per_device_eval_batch_size: 8

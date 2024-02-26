@@ -1,5 +1,5 @@
-predict_relabel: True
-output_dir: /home/toolkit/huggingface/openai_summarize_comparisons_tldrprompt_relabel1b
+mode: relabel
+output_dir: /home/toolkit/huggingface/openai_summarize_comparisons_tldrprompt_relabel1b_margin
 model_name: mnoukhov/pythia1b-sft-rm-tldrprompt
 dataset_name: mnoukhov/openai_summarize_comparisons_tldrprompt
 train_split: train

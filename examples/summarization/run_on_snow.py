@@ -63,10 +63,10 @@ def accelerate_launch(training_file, training_args_dict, args):
     training_cmd_args = []
     if args.accelerate_config is not None and args.accelerate_config != "None":
         training_cmd_args.extend(["--config_file", args.accelerate_config])
-        training_cmd_args.extend(["--num_processes", str(args.gpus)])
-        training_cmd_args.extend(
-            ["--gradient_accumulation_steps", str(training_args_dict["gradient_accumulation_steps"])]
-        )
+        # training_cmd_args.extend(["--num_processes", str(args.gpus)])
+        # training_cmd_args.extend(
+        #     ["--gradient_accumulation_steps", str(training_args_dict["gradient_accumulation_steps"])]
+        # )
     elif args.gpus > 1:
         training_cmd_args.append("--multi_gpu")
 
@@ -203,6 +203,7 @@ if __name__ == "__main__":
                 "WANDB_RESUME=allow",
                 "WANDB__SERVICE_WAIT=300",
                 "WANDB_PROJECT=trl",
+                "WANDB_ENTITY=mila-language-drift",
             ],
             "restartable": True,
             "resources": {
