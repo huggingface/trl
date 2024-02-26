@@ -1,7 +1,8 @@
-datasets>=1.17.0
-torch>=1.4.0
-tqdm
-transformers
-accelerate
-peft>=0.3.0
-tyro>=0.5.7
+datasets                                                                                                                                                 
+torch==2.1.2                                                                                                                                             
+tqdm                                                                                                                                                     
+transformers==4.38.1                                                                                                                                     
+accelerate                                                                                                                                               
+peft                                                                                                                                                     
+tyro>=0.5.7                                                                                                                                              
+vllm==0.3.2
