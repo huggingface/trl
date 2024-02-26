@@ -2,12 +2,12 @@ import os
 from dataclasses import dataclass, field
 from typing import Optional
 
-from datasets import Dataset, DatasetInfo, load_dataset
-from transformers import (
-    AutoTokenizer,
-    HfArgumentParser,
-)
+from datasets import Dataset, DatasetInfo, builder, load_dataset
+from transformers import AutoTokenizer, HfArgumentParser
 from vllm import LLM, SamplingParams
+
+
+builder.has_sufficient_disk_space = lambda needed_bytes, directory=".": True
 
 
 @dataclass
@@ -18,6 +18,7 @@ class ScriptArguments:
     )
     num_gpus: Optional[int] = field(default=1)
     model_name: Optional[str] = field(default="EleutherAI/pythia-410m", metadata={"help": "the model name"})
+    revision: Optional[str] = field(default=None, metadata={"help": "the model revision"})
     tokenizer_name: Optional[str] = field(default=None, metadata={"help": "the tokenizer name"})
     dataset_name: Optional[str] = field(
         default="arianhosseini/openai_summarize_unlabelled", metadata={"help": "the dataset name"}
@@ -29,6 +30,7 @@ class ScriptArguments:
     temperature: Optional[float] = field(default=0.7, metadata={"help": "Gen temperature"})
     top_p: Optional[float] = field(default=1.0, metadata={"help": "Gen temperature"})
     max_new_tokens: Optional[int] = field(default=48, metadata={"help": "max new tokens"})
+    dtype: Optional[str] = field(default="auto")
 
 
 def prepare_vllm_model(script_args):
@@ -39,11 +41,15 @@ def prepare_vllm_model(script_args):
 
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
 
+    if tokenizer_name.startswith("EleutherAI"):
+        tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+
     tokenizer.padding_side = "left"
 
     llm = LLM(
         model=script_args.model_name,
-        dtype="auto",
+        revision=script_args.revision,
+        dtype=script_args.dtype,
         tokenizer=tokenizer_name,
         max_model_len=script_args.seq_length,
         tensor_parallel_size=script_args.num_gpus,
@@ -64,9 +70,11 @@ def generate_vllm(script_args):
     llm, _ = prepare_vllm_model(script_args)
 
     dataset = load_dataset(script_args.dataset_name, split=script_args.train_split)
-    dataset = dataset.map(strip_prompt, batched=True)
+    # dataset = dataset.map(strip_prompt, batched=True)
+    # prompts = dataset["prompt"]
 
-    prompts = dataset["prompt"]
+    # dataset = dataset.filter(lambda x: x["has_comparison"] is True)
+    prompts = dataset["query"]
 
     sampling_params = SamplingParams(
         temperature=script_args.temperature,
