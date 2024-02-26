@@ -462,6 +462,31 @@ elif script_args.mode == "relabel":
         relabel_dataset.save_to_disk(script_args.output_dir)
         print("Pushing")
         relabel_dataset.push_to_hub(os.path.basename(script_args.output_dir))
+elif script_args.mode == "predict":
+    relabel_dataset = DatasetDict()
+    for split, pred_dataset in [("train", train_dataset), ("test", eval_dataset)]:
+        if pred_dataset is None:
+            continue
+        trainer.accelerator.print(f"Prediction {split}")
+        preds, _, metrics = trainer.predict(pred_dataset)
+        trainer.accelerator.print(f"metrics {metrics}")
+
+        if trainer.accelerator.is_local_main_process:
+            print("Relabelling Dataset and Saving")
+            ds_split = script_args.train_split if split == "train" else script_args.eval_split
+            dataset = load_dataset(script_args.dataset_name, split=ds_split)
+            model_basename = script_args.model_name.rsplit("/", 1)[-1]
+            dataset = dataset.add_column(f"pred_chosen_{model_basename}", preds[:, 0])
+            dataset = dataset.add_column(f"pred_rejected_{model_basename}", preds[:, 1])
+
+            dataset._info.description = f"{script_args.dataset_name} relabelled with {script_args.model_name}"
+            relabel_dataset[split] = dataset
+
+    if trainer.accelerator.is_local_main_process:
+        print("Saving")
+        relabel_dataset.save_to_disk(script_args.output_dir)
+        print("Pushing")
+        relabel_dataset.push_to_hub(os.path.basename(script_args.output_dir))
 else:
     raise Exception(f"incorrect mode {script_args.mode}")
     # TODO this freezes for some reason
