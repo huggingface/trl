@@ -812,28 +812,30 @@ class KTOTrainer(Trainer):
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
 
         if self.is_encoder_decoder:
+            with torch.no_grad():
+                KL_logits = model(
+                    batch["KL_prompt_input_ids"],
+                    attention_mask=batch["KL_prompt_attention_mask"],
+                    decoder_input_ids=batch.get("KL_completion_decoder_input_ids"),
+                    labels=batch["KL_completion_labels"],
+                ).logits
+                            
             completion_logits = model(
                 batch["prompt_input_ids"],
                 attention_mask=batch["prompt_attention_mask"],
                 decoder_input_ids=batch.get("completion_decoder_input_ids"),
                 labels=batch["completion_labels"],
             ).logits
-
-            KL_logits = model(
-                batch["KL_prompt_input_ids"],
-                attention_mask=batch["KL_prompt_attention_mask"],
-                decoder_input_ids=batch.get("KL_completion_decoder_input_ids"),
-                labels=batch["KL_completion_labels"],
-            ).logits
         else:
+            with torch.no_grad():
+                KL_logits = model(
+                    batch["KL_completion_input_ids"],
+                    attention_mask=batch["KL_completion_attention_mask"],
+                ).logits
+
             completion_logits = model(
                 batch["completion_input_ids"],
                 attention_mask=batch["completion_attention_mask"],
-            ).logits
-
-            KL_logits = model(
-                batch["KL_completion_input_ids"],
-                attention_mask=batch["KL_completion_attention_mask"],
             ).logits
 
         completion_logps = self.get_batch_logps(
