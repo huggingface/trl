@@ -13,6 +13,7 @@ jobs:
       matrix:
         python-version: ['3.9', '3.10', '3.11']
         os: ['ubuntu-latest', 'windows-latest']
+        fail-fast: false
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v3
