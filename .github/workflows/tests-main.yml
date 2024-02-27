@@ -2,7 +2,7 @@ name: tests on transformers PEFT main
 
 on:
   push:
-    branches: [ younesbelkada-patch-2 ]
+    branches: [ main ]
 
 env:
   CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
