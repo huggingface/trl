@@ -1,0 +1,27 @@
+model_name: vwxyzjn/EleutherAI_pythia-1b-deduped__sft__tldr
+model_revision: sft__55513__1706646024
+dataset_name: vwxyzjn/summarize_from_feedback_oai_preprocessing_1706381144
+eval_split: validation
+tokenizer_name: EleutherAI/pythia-1b-deduped
+prompt_field: query
+gold_model_name: vwxyzjn/EleutherAI_pythia-6.9b-deduped__reward__tldr
+gold_model_revision: reward__55513__1706651113
+gold_prompt_field: query
+gold_eval_split: validation
+strip_prompt: False
+## training stuff
+beta: 0.5
+max_steps: 10000
+eval_steps: 1000
+load_in_8bit: False
+bf16: True
+fp16: False
+learning_rate: 1e-5
+use_peft: True
+lora_all_linear: True
+lora_r: 8
+lora_alpha: 32
+lora_dropout: 0.05
+gradient_accumulation_steps: 16
+per_device_train_batch_size: 4
+warmup_steps: 150

@@ -26,6 +26,7 @@ from datasets import Dataset, builder, concatenate_datasets, load_dataset
 
 # from huggingface_hub import DatasetCard
 from peft import AutoPeftModelForCausalLM, LoraConfig, PeftConfig, get_peft_model, prepare_model_for_kbit_training
+from scalar_rm_model import ScalarModel
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import (
@@ -68,6 +69,7 @@ class ScriptArguments:
 
     pseudo_dataset_name: Optional[str] = field(default=None, metadata={"help": "the dataset name"})
     pseudo_dataset_split: Optional[str] = field(default="train", metadata={"help": "the dataset name"})
+    prompt_field: Optional[str] = field(default="prompt")
 
     # model parameters
     model_name: Optional[str] = field(default="gpt2", metadata={"help": "the model name"})
@@ -146,6 +148,7 @@ class ScriptArguments:
 
     # gold model
     gold_model_name: str = field(default=None, metadata={"help": "the gold reward model name"})
+    gold_model_revision: Optional[str] = field(default=None, metadata={"help": "the model name"})
     gold_in_8bit: Optional[bool] = field(default=False, metadata={"help": "gold the model in 8 bits precision"})
     gold_in_4bit: Optional[bool] = field(default=False, metadata={"help": "gold the model in 4 bits precision"})
     gold_bf16: Optional[bool] = field(
@@ -159,8 +162,11 @@ class ScriptArguments:
         default="CarperAI/openai_summarize_tldr", metadata={"help": "the dataset name"}
     )
     gold_eval_split: Optional[str] = field(default="valid")
+    gold_prompt_field: Optional[str] = field(default="prompt")
+    gold_load_and_unload: Optional[str] = field(default=False)
     mode: Optional[str] = field(default="train")
     eval_first_step: Optional[bool] = field(default=True)
+    strip_prompt: Optional[bool] = field(default=True)
 
 
 def find_all_linear_names(args, model):
@@ -291,8 +297,14 @@ def create_and_prepare_gold_model(args):
     else:
         torch_dtype = torch.float32
 
-    gold_model = AutoModelForSequenceClassification.from_pretrained(
+    if script_args.gold_model_name.startswith("vwxyzjn"):
+        gold_model_cls = ScalarModel
+    else:
+        gold_model_cls = AutoModelForSequenceClassification
+
+    gold_model = gold_model_cls.from_pretrained(
         script_args.gold_model_name,
+        revision=script_args.gold_model_revision,
         quantization_config=gold_quantization_config,
         torch_dtype=torch_dtype,
         device_map=gold_device_map,
@@ -314,12 +326,17 @@ def create_and_prepare_dataset(args):
     train_dataset = load_dataset(args.dataset_name, split=args.train_split)
     eval_dataset = load_dataset(args.dataset_name, split=args.eval_split)
 
+    if args.prompt_field != "prompt":
+        train_dataset = train_dataset.rename_column(args.prompt_field, "prompt")
+        eval_dataset = eval_dataset.rename_column(args.prompt_field, "prompt")
+
     if args.pseudo_dataset_name is not None:
         all_train_datasets = [train_dataset]
         pseudo_dataset_names = args.pseudo_dataset_name.split(",")
         for ds_name in pseudo_dataset_names:
             dataset = load_dataset(ds_name, split=args.pseudo_dataset_split)
-            dataset = dataset.map(strip_prompt, batched=True)
+            if args.strip_prompt:
+                dataset = dataset.map(strip_prompt, batched=True)
             all_train_datasets.append(dataset)
 
         train_dataset = concatenate_datasets(all_train_datasets)
@@ -388,6 +405,8 @@ class GoldModelRewardCallback(TrainerCallback):
         accelerator,
         max_length,
         max_prompt_length,
+        prompt_field,
+        gold_load_and_unload=False,
         log_n_samples_during_eval=0,
         generation_config=None,
     ):
@@ -400,7 +419,7 @@ class GoldModelRewardCallback(TrainerCallback):
             tokenizer,
             max_prompt_length=max_prompt_length,
             max_length=max_length,
-            prompt_field="prompt",
+            prompt_field=prompt_field,
         )
         dataloader_params = {
             "batch_size": args.eval_batch_size,
@@ -409,9 +428,14 @@ class GoldModelRewardCallback(TrainerCallback):
             "pin_memory": args.dataloader_pin_memory,
         }
         dataloader = DataLoader(gold_eval_dataset, **dataloader_params)
-        self.gold_model, self.dataloader = accelerator.prepare(gold_model, dataloader)
+        self.dataloader = accelerator.prepare(dataloader)
         self.accelerator = accelerator
         self.completed_step = -1
+        self.gold_model = gold_model
+        self.gold_load_and_unload = gold_load_and_unload
+        # keep model on gpu the whole time
+        if not self.gold_load_and_unload:
+            self.gold_model = self.accelerator.prepare(self.gold_model)
 
     def on_evaluate(self, args, state, control, model, tokenizer, metrics, **kwargs):
         samples_to_log = []
@@ -419,6 +443,10 @@ class GoldModelRewardCallback(TrainerCallback):
         nll_sum = 0.0
         total_samples = 0
         sample_length_sum = 0.0
+
+        # load model onto gpu for inference then unload
+        if self.gold_load_and_unload:
+            self.gold_model = self.accelerator.prepare(self.gold_model)
 
         if state.global_step == self.completed_step:
             return
@@ -468,6 +496,10 @@ class GoldModelRewardCallback(TrainerCallback):
                         samples_to_log.append([prompt, pol[len(prompt) :], ref[len(prompt) :]])
                     else:
                         break
+
+        if self.gold_load_and_unload:
+            self.gold_model = self.gold_model.to("cpu")
+            torch.cuda.empty_cache()
 
         if state.is_world_process_zero:
             gold_log = {
@@ -619,7 +651,8 @@ if __name__ == "__main__":
             split=script_args.gold_eval_split,
         )
 
-        gold_eval_dataset = gold_eval_dataset.map(strip_prompt, batched=True)
+        if script_args.strip_prompt:
+            gold_eval_dataset = gold_eval_dataset.map(strip_prompt, batched=True)
 
         if script_args.generate_greedy:
             generation_config = GenerationConfig(
@@ -648,6 +681,8 @@ if __name__ == "__main__":
             dpo_trainer.accelerator,
             script_args.max_length,
             script_args.max_prompt_length,
+            script_args.gold_prompt_field,
+            script_args.gold_load_and_unload,
             script_args.log_n_samples_during_eval,
             generation_config,
         )
@@ -668,6 +703,7 @@ if __name__ == "__main__":
         last_checkpoint = get_last_checkpoint(script_args.output_dir)
         dpo_trainer.train(resume_from_checkpoint=last_checkpoint)
     elif script_args.mode == "eval":
+        print("evaluating")
         results = dpo_trainer.evaluate()
         print(results)
     elif script_args.mode == "relabel":
