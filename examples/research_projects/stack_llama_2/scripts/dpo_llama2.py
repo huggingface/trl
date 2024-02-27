@@ -59,10 +59,10 @@ class ScriptArguments:
 
     output_dir: Optional[str] = field(default="./results", metadata={"help": "the output directory"})
     log_freq: Optional[int] = field(default=1, metadata={"help": "the logging frequency"})
-    load_in_4bit: Optional[bool] = field(
-        default=True, metadata={"help": "whether to load the model in 4bit"}
+    load_in_4bit: Optional[bool] = field(default=True, metadata={"help": "whether to load the model in 4bit"})
+    model_dtype: Optional[str] = field(
+        default="float16", metadata={"help": "model_dtype[float16, bfloat16, float] for loading."}
     )
-    model_dtype: Optional[str] = field(default="float16", metadata={"help": "model_dtype[float16, bfloat16, float] for loading."})
 
     # instrumentation
     sanity_check: Optional[bool] = field(default=False, metadata={"help": "only train on 1000 samples"})
