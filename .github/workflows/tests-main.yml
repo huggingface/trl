@@ -13,7 +13,7 @@ jobs:
       matrix:
         python-version: ['3.9', '3.10', '3.11']
         os: ['ubuntu-latest', 'windows-latest']
-        fail-fast: false
+      fail-fast: false
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v3
@@ -37,6 +37,7 @@ jobs:
       run: |
         make test
     - name: Post to a Slack channel
+      if: always()
       id: slack
       #uses: slackapi/slack-github-action@v1.25.0
       uses: slackapi/slack-github-action@6c661ce58804a1a20f6dc5fbee7f0381b469e001
