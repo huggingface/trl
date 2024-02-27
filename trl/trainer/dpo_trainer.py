@@ -135,6 +135,8 @@ class DPOTrainer(Trainer):
             Name of the reference PEFT adapter, when using LoRA with multiple adapters.
         reference_free (`bool`):
             If True, we ignore the _provided_ reference model and implicitly use a reference model that assigns equal probability to all responses.
+        force_use_ref_model (`bool`, defaults to `False`):
+            In case one passes a PEFT model for the active model and you want to use a different model for the ref_model, set this flag to `True`.
     """
 
     _tag_names = ["trl", "dpo"]
@@ -173,6 +175,7 @@ class DPOTrainer(Trainer):
         model_adapter_name: Optional[str] = None,
         ref_adapter_name: Optional[str] = None,
         reference_free: bool = False,
+        force_use_ref_model: bool = False,
     ):
         if model_init_kwargs is None:
             model_init_kwargs = {}
@@ -213,10 +216,11 @@ class DPOTrainer(Trainer):
             if isinstance(model, PeftModel):
                 model = model.merge_and_unload()
 
-            if ref_model is not None:
+            if ref_model is not None and not force_use_ref_model:
                 raise ValueError(
                     "You passed both a ref_model and a peft_config. For training PEFT adapters with DPO there is no need to pass a reference"
-                    " model. Please pass `ref_model=None` in case you want to train PEFT adapters."
+                    " model. Please pass `ref_model=None` in case you want to train PEFT adapters, or pass a ref_model with `force_use_ref_model=True` in DPOTrainer's init."
+                    " if you want to use a different ref_model."
                 )
 
             if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
