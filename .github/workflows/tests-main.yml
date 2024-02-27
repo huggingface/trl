@@ -26,6 +26,7 @@ jobs:
             setup.py
             requirements.txt
     - name: Install dependencies
+      if: always()
       run: |
         python -m pip install --upgrade pip
         # install PEFT & transformers from source
