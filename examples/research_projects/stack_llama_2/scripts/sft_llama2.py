@@ -34,6 +34,7 @@ class ScriptArguments:
     seq_length: Optional[int] = field(default=1024, metadata={"help": "the sequence length"})
     num_workers: Optional[int] = field(default=4, metadata={"help": "the number of workers"})
     packing: Optional[bool] = field(default=True, metadata={"help": "whether to use packing for SFTTrainer"})
+    use_bnb: Optional[bool] = field(default=True, metadata={"help": "whether to use BitsAndBytes"})
 
     # LoraConfig
     lora_alpha: Optional[float] = field(default=16, metadata={"help": "the lora alpha parameter"})
@@ -142,11 +143,13 @@ def create_datasets(tokenizer, args, seed=None):
     return train_dataset, valid_dataset
 
 
-bnb_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_quant_type="nf4",
-    bnb_4bit_compute_dtype=torch.bfloat16,
-)
+bnb_config = None
+if script_args.use_bnb:
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.bfloat16,
+    )
 
 base_model = AutoModelForCausalLM.from_pretrained(
     script_args.model_name,
