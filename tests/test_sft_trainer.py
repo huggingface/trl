@@ -930,3 +930,53 @@ class SFTTrainerTester(unittest.TestCase):
             )
 
             assert trainer.model.model_tags == trainer._tag_names
+
+    def test_sft_trainer_eval_packing(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                evaluation_strategy="steps",
+                max_steps=4,
+                eval_steps=2,
+                save_steps=2,
+                per_device_train_batch_size=2,
+                gradient_checkpointing=True,
+            )
+
+            trainer = SFTTrainer(
+                model=self.model_id,
+                args=training_args,
+                train_dataset=self.dummy_chatml_dataset,
+                eval_dataset=self.dummy_chatml_dataset,
+                packing=True,
+                max_seq_length=32,  # make sure there is at least 1 packed sequence
+                eval_packing=False,
+            )
+
+            assert len(trainer.train_dataset["input_ids"]) == 1
+            assert len(trainer.eval_dataset["input_ids"]) != 1
+
+            trainer = SFTTrainer(
+                model=self.model_id,
+                args=training_args,
+                train_dataset=self.dummy_chatml_dataset,
+                eval_dataset=self.dummy_chatml_dataset,
+                max_seq_length=32,  # make sure there is at least 1 packed sequence
+                packing=True,
+            )
+
+            assert len(trainer.train_dataset["input_ids"]) == 1
+            assert len(trainer.eval_dataset["input_ids"]) == 1
+
+            trainer = SFTTrainer(
+                model=self.model_id,
+                args=training_args,
+                train_dataset=self.dummy_chatml_dataset,
+                eval_dataset=self.dummy_chatml_dataset,
+                max_seq_length=32,  # make sure there is at least 1 packed sequence
+                packing=False,
+            )
+
+            assert len(trainer.train_dataset["input_ids"]) != 1
+            assert len(trainer.eval_dataset["input_ids"]) != 1

@@ -116,6 +116,8 @@ class SFTTrainer(Trainer):
             Dict of Optional kwargs to pass when instantiating the model from a string
         dataset_kwargs: (`Optional[Dict]`, *optional*):
             Dict of Optional kwargs to pass when creating packed or non-packed datasets
+        eval_packing: (`Optional[bool]`, *optional*):
+            Whether to pack the eval dataset as well. Defaults to `packing` if `None` is passed.
     """
 
     _tag_names = ["trl", "sft"]
@@ -124,7 +126,7 @@ class SFTTrainer(Trainer):
         self,
         model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
         args: Optional[TrainingArguments] = None,
-        data_collator: Optional[DataCollator] = None,
+        data_collator: Optional[DataCollator] = None,  # type: ignore
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
         tokenizer: Optional[PreTrainedTokenizerBase] = None,
@@ -146,6 +148,7 @@ class SFTTrainer(Trainer):
         neftune_noise_alpha: Optional[float] = None,
         model_init_kwargs: Optional[Dict] = None,
         dataset_kwargs: Optional[Dict] = None,
+        eval_packing: Optional[bool] = None,
     ):
         if model_init_kwargs is None:
             model_init_kwargs = {}
@@ -274,11 +277,14 @@ class SFTTrainer(Trainer):
             if eval_dataset is not None:
                 _multiple = isinstance(eval_dataset, dict)
                 _eval_datasets = eval_dataset if _multiple else {"singleton": eval_dataset}
+
+                eval_packing = packing if eval_packing is None else eval_packing
+
                 for _eval_dataset_name, _eval_dataset in _eval_datasets.items():
                     _eval_datasets[_eval_dataset_name] = self._prepare_dataset(
                         _eval_dataset,
                         tokenizer,
-                        packing,
+                        eval_packing,
                         dataset_text_field,
                         max_seq_length,
                         formatting_func,
