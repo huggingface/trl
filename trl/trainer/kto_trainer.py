@@ -318,7 +318,9 @@ class KTOTrainer(Trainer):
             eval_KL_dataset = eval_dataset.map(self.get_KL_dataset, batched=True, batch_size=1000)
 
         # tokenize the datasets
-        train_dataset = train_dataset.map(lambda row: self.tokenize_row(row, prefix=""), remove_columns=train_dataset.column_names)
+        train_dataset = train_dataset.map(
+            lambda row: self.tokenize_row(row, prefix=""), remove_columns=train_dataset.column_names
+        )
         train_KL_dataset = train_KL_dataset.map(lambda row: self.tokenize_row(row, prefix="KL_"), remove_columns=train_KL_dataset.column_names)
         
         if eval_dataset is not None:
