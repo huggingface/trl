@@ -596,7 +596,8 @@ class KTOTrainer(Trainer):
                     ).logits
 
                     KL_logits = self.ref_model(
-                        padded_batch["KL_completion_input_ids"], attention_mask=padded_batch["KL_completion_attention_mask"]
+                        padded_batch["KL_completion_input_ids"],
+                        attention_mask=padded_batch["KL_completion_attention_mask"],
                     ).logits
 
         completion_logps = self.get_batch_logps(
