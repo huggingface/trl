@@ -458,7 +458,6 @@ class KTOTrainer(Trainer):
 
             # prepare dataloader
             data_loader = self.accelerator.prepare(DataLoader(self.train_dataset, **dataloader_params))
-            
             reference_completion_logps = []
             reference_KL_logps = []
 
