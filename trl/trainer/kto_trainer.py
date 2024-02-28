@@ -333,6 +333,7 @@ class KTOTrainer(Trainer):
         undesirable = train_dataset.filter(lambda x: not x["label"])
 
         if (len(desirable) != len(undesirable)):
+            # The lower and upper bounds come from Eq. (8) of https://arxiv.org/abs/2402.01306
             des_weight_lower_bound = (len(undesirable) * self.undesirable_weight / len(desirable)) * 1
             des_weight_upper_bound = (len(undesirable) * self.undesirable_weight / len(desirable)) * 1.33
             und_weight_lower_bound = (len(desirable) * self.desirable_weight / len(undesirable)) / 1.33
