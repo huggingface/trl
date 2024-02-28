@@ -326,8 +326,12 @@ class KTOTrainer(Trainer):
         )
         
         if eval_dataset is not None:
-            eval_dataset = eval_dataset.map(lambda row: self.tokenize_row(row, prefix=""), remove_columns=eval_dataset.column_names)
-            eval_KL_dataset = eval_KL_dataset.map(lambda row: self.tokenize_row(row, prefix="KL_"), remove_columns=eval_KL_dataset.column_names)
+            eval_dataset = eval_dataset.map(
+                lambda row: self.tokenize_row(row, prefix=""), remove_columns=eval_dataset.column_names
+            )
+            eval_KL_dataset = eval_KL_dataset.map(
+                lambda row: self.tokenize_row(row, prefix="KL_"), remove_columns=eval_KL_dataset.column_names
+            )
 
         # merge the datasets
         train_dataset = concatenate_datasets([train_dataset, train_KL_dataset], axis=1)
