@@ -347,8 +347,9 @@ class KTOTrainer(Trainer):
             und_weight_lower_bound = (len(desirable) * self.desirable_weight / len(undesirable)) / 1.33
             und_weight_upper_bound = (len(desirable) * self.desirable_weight / len(undesirable)) / 1
 
-            des_weight_in_range = (des_weight_lower_bound <= self.desirable_weight <= des_weight_upper_bound)
-            und_weight_in_range = (und_weight_lower_bound <= self.undesirable_weight <= und_weight_upper_bound)
+            des_weight_in_range = des_weight_lower_bound <= self.desirable_weight <= des_weight_upper_bound
+            und_weight_in_range = und_weight_lower_bound <= self.undesirable_weight <= und_weight_upper_bound
+
 
             if not (des_weight_in_range or und_weight_in_range):
                 warnings.warn(
