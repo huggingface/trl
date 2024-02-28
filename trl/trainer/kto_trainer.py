@@ -480,10 +480,12 @@ class KTOTrainer(Trainer):
                 reference_KL_logp = self.accelerator.gather_for_metrics(reference_KL_logp)
                 reference_KL_logps.append(reference_KL_logp.cpu())
 
-            self.train_dataset = self.train_dataset.add_column(name="reference_logps", 
-                                                   column=torch.cat(reference_completion_logps).float().numpy())
-            self.train_dataset = self.train_dataset.add_column(name="reference_KL_logps", 
-                                                   column=torch.cat(reference_KL_logps).float().numpy())
+            self.train_dataset = self.train_dataset.add_column(
+                name="reference_logps", column=torch.cat(reference_completion_logps).float().numpy()
+            )
+            self.train_dataset = self.train_dataset.add_column(
+                name="reference_KL_logps", column=torch.cat(reference_KL_logps).float().numpy()
+            )
 
             self._precomputed_train_ref_log_probs = True
 
