@@ -995,7 +995,7 @@ class KTOTrainer(Trainer):
         metrics[f"{prefix}logps/chosen"] = policy_chosen_logps.detach().mean().cpu()
         metrics[f"{prefix}logits/rejected"] = policy_rejected_logits.detach().mean().cpu()
         metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.detach().mean().cpu()
-        metrics[f"{prefix}kl"] = kl.item() # has already been gathered in kto_loss
+        metrics[f"{prefix}kl"] = kl.item()  # has already been gathered in kto_loss
 
         loss = (
             losses.mean()
