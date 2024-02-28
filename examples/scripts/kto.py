@@ -13,7 +13,8 @@
 # limitations under the License.
 
 """
-Run the KTO training script with the following command with some example arguments:
+Run the KTO training script with the following command with some example arguments.
+In general, the optimal configuration for KTO will be similar to that of DPO:
 
 # regular:
 python examples/scripts/kto.py \

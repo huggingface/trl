@@ -833,6 +833,7 @@ class KTOTrainer(Trainer):
                     decoder_input_ids=batch.get("KL_completion_decoder_input_ids"),
                     labels=batch["KL_completion_labels"],
                 ).logits
+
             completion_logits = model(
                 batch["prompt_input_ids"],
                 attention_mask=batch["prompt_attention_mask"],
@@ -867,7 +868,11 @@ class KTOTrainer(Trainer):
             label_pad_token_id=self.label_pad_token_id,
         )
 
-        assert completion_logps.shape[0] == len(batch['label'])
+        if completion_logps.shape[0] != len(batch['label']):
+            raise ValueError(
+                "There is a mismatch between the number of examples in this batch and the number of "
+                "examples for which an output sequence was predicted."
+            )
 
         chosen_idx = [i for i in range(completion_logps.shape[0]) if batch["label"][i] is True]
         rejected_idx = [i for i in range(completion_logps.shape[0]) if batch["label"][i] is False]
