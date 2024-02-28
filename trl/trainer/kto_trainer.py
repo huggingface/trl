@@ -818,7 +818,6 @@ class KTOTrainer(Trainer):
                     decoder_input_ids=batch.get("KL_completion_decoder_input_ids"),
                     labels=batch["KL_completion_labels"],
                 ).logits
-                            
             completion_logits = model(
                 batch["prompt_input_ids"],
                 attention_mask=batch["prompt_attention_mask"],
