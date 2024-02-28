@@ -27,7 +27,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from accelerate.utils import is_deepspeed_available, tqdm
-from datasets import Dataset, interleave_datasets, concatenate_datasets
+from datasets import Dataset, concatenate_datasets, interleave_datasets
 from torch.utils.data import DataLoader, SequentialSampler
 from transformers import (
     AutoModelForCausalLM,
