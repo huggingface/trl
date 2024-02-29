@@ -868,7 +868,7 @@ class KTOTrainer(Trainer):
             label_pad_token_id=self.label_pad_token_id,
         )
 
-        if completion_logps.shape[0] != len(batch['label']):
+        if completion_logps.shape[0] != len(batch["label"]):
             raise ValueError(
                 "There is a mismatch between the number of examples in this batch and the number of "
                 "examples for which an output sequence was predicted."
