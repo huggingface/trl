@@ -324,6 +324,8 @@ class KTOTrainer(Trainer):
         train_KL_dataset = train_KL_dataset.map(
             lambda row: self.tokenize_row(row, prefix="KL_"), remove_columns=train_KL_dataset.column_names
         )
+        # merge the datasets
+        train_dataset = concatenate_datasets([train_dataset, train_KL_dataset], axis=1)
 
         if eval_dataset is not None:
             eval_dataset = eval_dataset.map(
@@ -332,10 +334,8 @@ class KTOTrainer(Trainer):
             eval_KL_dataset = eval_KL_dataset.map(
                 lambda row: self.tokenize_row(row, prefix="KL_"), remove_columns=eval_KL_dataset.column_names
             )
-
-        # merge the datasets
-        train_dataset = concatenate_datasets([train_dataset, train_KL_dataset], axis=1)
-        eval_dataset = concatenate_datasets([eval_dataset, eval_KL_dataset], axis=1)
+            # merge the datasets
+            eval_dataset = concatenate_datasets([eval_dataset, eval_KL_dataset], axis=1)
 
         desirable = train_dataset.filter(lambda x: x["label"])
         undesirable = train_dataset.filter(lambda x: not x["label"])
