@@ -265,7 +265,7 @@ class DPOTrainerTester(unittest.TestCase):
 
     def test_dpo_trainer_w_dataset_num_proc(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = DPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -528,7 +528,7 @@ class DPOTrainerTester(unittest.TestCase):
         model = AutoModelForCausalLM.from_pretrained(model_id)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = DPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -563,7 +563,7 @@ class DPOTrainerTester(unittest.TestCase):
         model = AutoModelForCausalLM.from_pretrained(model_id)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = DPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,

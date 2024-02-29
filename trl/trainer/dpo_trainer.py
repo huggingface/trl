@@ -876,7 +876,7 @@ class DPOTrainer(Trainer):
             # The alpha-divergence formula: (1 - u^-alpha) / alpha
             # The divergence difference between the chosen and rejected sample is:
             #     (1 - u[w]^-alpha) / alpha - (1 - u[l]^-alpha) / alpha
-            #        =
+            #        = (u[l]^-alpha - u[w]^-alpha) / alpha
             # where u[w] and u[l] are the policy/reference probability ratios
             # for the chosen and rejected samples, respectively.
             alpha_coef = FDivergenceConstants.ALPHA_DIVERGENCE_COEF_DEFAULT
