@@ -77,10 +77,10 @@ def extract_anthropic_prompt(prompt_and_response):
     """Extract the anthropic prompt from a prompt and response pair."""
     search_term = "\n\nAssistant:"
     search_term_idx = prompt_and_response.rfind(search_term)
-    
+
     if search_term_idx == -1:
         raise ValueError(f"Prompt and response does not contain '{search_term}'")
-    
+
     return prompt_and_response[: search_term_idx + len(search_term)]
 
 

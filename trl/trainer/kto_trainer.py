@@ -324,7 +324,7 @@ class KTOTrainer(Trainer):
         train_KL_dataset = train_KL_dataset.map(
             lambda row: self.tokenize_row(row, prefix="KL_"), remove_columns=train_KL_dataset.column_names
         )
-        
+
         if eval_dataset is not None:
             eval_dataset = eval_dataset.map(
                 lambda row: self.tokenize_row(row, prefix=""), remove_columns=eval_dataset.column_names
@@ -349,7 +349,6 @@ class KTOTrainer(Trainer):
 
             des_weight_in_range = des_weight_lower_bound <= self.desirable_weight <= des_weight_upper_bound
             und_weight_in_range = und_weight_lower_bound <= self.undesirable_weight <= und_weight_upper_bound
-
 
             if not (des_weight_in_range or und_weight_in_range):
                 warnings.warn(
@@ -824,7 +823,6 @@ class KTOTrainer(Trainer):
     def forward(
         self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
-
         if self.is_encoder_decoder:
             with torch.no_grad():
                 KL_logits = model(
@@ -868,7 +866,7 @@ class KTOTrainer(Trainer):
             label_pad_token_id=self.label_pad_token_id,
         )
 
-        if completion_logps.shape[0] != len(batch['label']):
+        if completion_logps.shape[0] != len(batch["label"]):
             raise ValueError(
                 "There is a mismatch between the number of examples in this batch and the number of "
                 "examples for which an output sequence was predicted."
