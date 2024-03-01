@@ -36,7 +36,7 @@ from .ddpo_config import DDPOConfig
 if is_diffusers_available():
     from .ddpo_trainer import DDPOTrainer
 
-from .dpo_trainer import DPOTrainer
+from .dpo_trainer import DPOConfig, DPOTrainer, FDivergenceConstants, FDivergenceType
 from .iterative_sft_trainer import IterativeSFTTrainer
 from .kto_config import KTOConfig
 from .kto_trainer import KTOTrainer
