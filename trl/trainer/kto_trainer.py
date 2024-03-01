@@ -993,7 +993,7 @@ class KTOTrainer(Trainer):
         # lists can't be empty -- if they are, then accelerate.gather will hang
         if policy_chosen_logps.shape[0] == 0:
             policy_chosen_logps = torch.Tensor([torch.nan]).to(self.accelerator.device)
-        
+
         if policy_rejected_logps.shape[0] == 0:
             policy_rejected_logps = torch.Tensor([torch.nan]).to(self.accelerator.device)
 
