@@ -21,7 +21,7 @@ from typing import Dict, List, Optional
 import bitsandbytes as bnb
 import torch
 from accelerate import Accelerator
-from callbacks import GoldModelRewardCallback
+from callbacks import GoldModelRewardCallback, PerplexityGenCallback
 from datasets import Dataset, builder, concatenate_datasets, load_dataset
 from peft import AutoPeftModelForCausalLM, LoraConfig, PeftConfig, get_peft_model, prepare_model_for_kbit_training
 from scalar_rm_model import ScalarModel
@@ -422,11 +422,10 @@ if __name__ == "__main__":
         max_prompt_length=script_args.max_prompt_length,
     )
 
-    dpo_trainer.add_callback(EvaluateOnTrain(dpo_trainer))
+    # dpo_trainer.add_callback(EvaluateOnTrain(dpo_trainer))
 
     # Gold Eval
-    if script_args.gold_model_name is not None:
-        gold_model = create_and_prepare_gold_model(script_args)
+    if script_args.gold_dataset_name is not None:
         gold_eval_dataset = load_dataset(
             script_args.gold_dataset_name,
             split=script_args.gold_eval_split,
@@ -454,22 +453,38 @@ if __name__ == "__main__":
                 pad_token_id=tokenizer.eos_token_id,
             )
 
-        gold_eval_callback = GoldModelRewardCallback(
-            training_args,
-            gold_model,
-            gold_eval_dataset,
-            tokenizer,
-            dpo_trainer.accelerator,
-            script_args.max_length,
-            script_args.max_prompt_length,
-            script_args.gold_prompt_field,
-            script_args.gold_target_field,
-            script_args.gold_load_and_unload,
-            script_args.log_n_samples_during_eval,
-            generation_config,
-        )
+        if script_args.gold_model_name is not None:
+            gold_model = create_and_prepare_gold_model(script_args)
 
-        dpo_trainer.add_callback(gold_eval_callback)
+            callback = GoldModelRewardCallback(
+                training_args,
+                gold_model,
+                gold_eval_dataset,
+                tokenizer,
+                dpo_trainer.accelerator,
+                script_args.max_length,
+                script_args.max_prompt_length,
+                script_args.gold_prompt_field,
+                script_args.gold_target_field,
+                script_args.gold_load_and_unload,
+                script_args.log_n_samples_during_eval,
+                generation_config,
+            )
+        else:
+            callback = PerplexityGenCallback(
+                args=training_args,
+                dataset=gold_eval_dataset,
+                tokenizer=tokenizer,
+                accelerator=dpo_trainer.accelerator,
+                max_length=script_args.max_length,
+                max_prompt_length=script_args.max_prompt_length,
+                prompt_field=script_args.gold_prompt_field,
+                target_field=script_args.gold_target_field,
+                log_n_samples_during_eval=script_args.log_n_samples_during_eval,
+                generation_config=generation_config,
+            )
+
+        dpo_trainer.add_callback(callback)
 
     if script_args.eval_first_step:
 

@@ -224,3 +224,145 @@ class GoldModelRewardCallback(TrainerCallback):
             return policy_output_decoded, reference_output_decoded, policy_output
         else:
             return policy_output_decoded, reference_output_decoded
+
+
+class PerplexityGenCallback(TrainerCallback):
+    """Like GoldModelReward in that you generate and get ppl on dataset
+
+    But you don't run eval with the gold model
+    Useful when gold model is very larger and you want to run inference later
+    """
+
+    def __init__(
+        self,
+        args,
+        dataset,
+        tokenizer,
+        accelerator,
+        max_length,
+        max_prompt_length,
+        prompt_field,
+        target_field,
+        log_n_samples_during_eval=0,
+        generation_config=None,
+    ):
+        self.max_length = max_length
+        self.log_n_samples_during_eval = log_n_samples_during_eval
+        self.generation_config = generation_config
+
+        # data_collator = DataCollatorWithPadding(tokenizer)
+        data_collator = PromptAndTextCollator(
+            tokenizer,
+            max_prompt_length=max_prompt_length,
+            max_length=max_length,
+            prompt_field=prompt_field,
+            target_field=target_field,
+        )
+        dataloader_params = {
+            "batch_size": args.eval_batch_size,
+            "collate_fn": data_collator,
+            "num_workers": args.dataloader_num_workers,
+            "pin_memory": args.dataloader_pin_memory,
+        }
+        dataloader = DataLoader(dataset, **dataloader_params)
+        self.dataloader = accelerator.prepare(dataloader)
+        self.accelerator = accelerator
+        self.completed_step = -1
+
+    def on_evaluate(self, args, state, control, model, tokenizer, metrics, **kwargs):
+        generations = []
+        nll_sum = 0.0
+        total_samples = 0
+        sample_length_sum = 0.0
+
+        if state.global_step == self.completed_step:
+            return
+
+        for inputs in tqdm(
+            self.dataloader, desc="PPL and Gen Eval", dynamic_ncols=True, disable=not state.is_local_process_zero
+        ):
+            # get loss over true continuation i.e. ppl on dataset
+            with torch.no_grad():
+                nll_loss = model(
+                    input_ids=inputs["text_input_ids"],
+                    attention_mask=inputs["text_attention_mask"],
+                    labels=inputs["text_labels"],
+                ).loss
+
+            nll_loss = self.accelerator.gather_for_metrics(nll_loss)
+
+            # generate from model
+            policy_output_decoded, ref_output_decoded, policy_output_ids = self.get_batch_samples(
+                model,
+                tokenizer,
+                inputs["input_ids"],
+                inputs["attention_mask"],
+                return_ids=True,
+            )
+
+            generations.extend(policy_output_decoded)
+            policy_output_attention_mask = (policy_output_ids != tokenizer.pad_token_id).to(torch.int64)
+
+            if state.is_local_process_zero:
+                nll_sum += nll_loss.sum().item()
+                total_samples += policy_output_attention_mask.size(0)
+                sample_length_sum += policy_output_attention_mask.sum().item()
+
+        generations = self.accelerator.gather_for_metrics(generations)
+
+        if state.is_world_process_zero:
+            import pdb
+
+            pdb.set_trace()
+            gold_log = {
+                "eval/perplexity": math.exp(nll_sum / total_samples),
+                "eval/gold_sample_length": sample_length_sum / total_samples,
+            }
+            for key, value in gold_log.items():
+                print(f"{key}: {value}")
+            if state.epoch:
+                gold_log["epoch"] = round(state.epoch, 2)
+                gold_log["step"] = state.global_step
+            # if samples_to_log:
+            #     gold_log["gold_log"] = (
+            #         wandb.Table(
+            #             columns=["Prompt", "Policy", "Ref Model"],
+            #             rows=samples_to_log,
+            #         ),
+            #     )
+            wandb.log(gold_log)
+
+        self.completed_step = state.global_step
+
+    def get_batch_samples(self, model, tokenizer, input_ids, attention_mask, return_ids=False) -> Tuple[str, str]:
+        """Reduce inputs to unseen prompts, and maximum batch size if necessary
+        Generate samples from the model and reference model for the given batch of inputs."""
+        policy_output = model.generate(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            generation_config=self.generation_config,
+        )
+
+        # if self.ref_model is None:
+        with self.accelerator.unwrap_model(model).disable_adapter():
+            reference_output = model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                generation_config=self.generation_config,
+            )
+        # else:
+        #     reference_output = self.ref_model.generate(
+        #         **inputs,
+        #         generation_config=self.generation_config,
+        #     )
+
+        policy_output = pad_to_length(policy_output, self.max_length, tokenizer.pad_token_id)
+        policy_output_decoded = tokenizer.batch_decode(policy_output, skip_special_tokens=True)
+
+        reference_output = pad_to_length(reference_output, self.max_length, tokenizer.pad_token_id)
+        reference_output_decoded = tokenizer.batch_decode(reference_output, skip_special_tokens=True)
+
+        if return_ids:
+            return policy_output_decoded, reference_output_decoded, policy_output
+        else:
+            return policy_output_decoded, reference_output_decoded
