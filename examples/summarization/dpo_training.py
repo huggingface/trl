@@ -13,22 +13,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # import random
-import math
 import os
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional
 
 import bitsandbytes as bnb
 import torch
 from accelerate import Accelerator
+from callbacks import GoldModelRewardCallback
 from datasets import Dataset, builder, concatenate_datasets, load_dataset
-
-# from huggingface_hub import DatasetCard
 from peft import AutoPeftModelForCausalLM, LoraConfig, PeftConfig, get_peft_model, prepare_model_for_kbit_training
 from scalar_rm_model import ScalarModel
-from torch.utils.data import DataLoader
-from tqdm.auto import tqdm
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForSequenceClassification,
@@ -36,15 +32,12 @@ from transformers import (
     BitsAndBytesConfig,
     GenerationConfig,
     HfArgumentParser,
-    PreTrainedTokenizerBase,
     TrainerCallback,
     TrainingArguments,
 )
 from transformers.trainer_utils import get_last_checkpoint
 
-import wandb
 from trl import DPOTrainer
-from trl.trainer.utils import pad_to_length
 
 
 builder.has_sufficient_disk_space = lambda needed_bytes, directory=".": True
@@ -163,6 +156,7 @@ class ScriptArguments:
     )
     gold_eval_split: Optional[str] = field(default="valid")
     gold_prompt_field: Optional[str] = field(default="prompt")
+    gold_target_field: Optional[str] = field(default="label")
     gold_load_and_unload: Optional[str] = field(default=False)
     mode: Optional[str] = field(default="train")
     eval_first_step: Optional[bool] = field(default=True)
@@ -310,8 +304,8 @@ def create_and_prepare_gold_model(args):
         device_map=gold_device_map,
     )
 
-    if getattr(gold_model.config, "pad_token_id", None) is None:
-        gold_model.config.pad_token_id = gold_model.config.eos_token_id
+    # if getattr(gold_model.config, "pad_token_id", None) is None:
+    #     gold_model.config.pad_token_id = gold_model.config.eos_token_id
 
     return gold_model
 
@@ -342,219 +336,6 @@ def create_and_prepare_dataset(args):
         train_dataset = concatenate_datasets(all_train_datasets)
 
     return train_dataset, eval_dataset
-
-
-@dataclass
-class PromptAndTextCollator:
-    tokenizer: PreTrainedTokenizerBase
-    padding: Union[bool, str] = True
-    max_prompt_length: Optional[int] = None
-    max_length: Optional[int] = None
-    prompt_field: str = "prompt"
-    target_field: str = "label"
-    return_tensors: str = "pt"
-
-    def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
-        prompts = [feat[self.prompt_field] for feat in features]
-        texts = [feat[self.prompt_field] + " " + feat[self.target_field] for feat in features]
-
-        original_side = self.tokenizer.padding_side
-        self.tokenizer.padding_side = "left"
-
-        tokenized_batch = self.tokenizer(
-            prompts,
-            truncation=True,
-            padding=True,
-            max_length=self.max_prompt_length,
-            return_tensors=self.return_tensors,
-        )
-        tokenized_batch["prompt"] = prompts
-
-        self.tokenizer.padding_side = original_side
-
-        tokenized_texts = self.tokenizer(
-            texts,
-            truncation=True,
-            padding=True,
-            max_length=self.max_length,
-            return_tensors=self.return_tensors,
-        )
-
-        text_labels = tokenized_texts["input_ids"].clone()
-        if self.tokenizer.pad_token_id is not None:
-            text_labels[text_labels == self.tokenizer.pad_token_id] = -100
-
-        tokenized_batch.update(
-            {
-                "text_input_ids": tokenized_texts["input_ids"],
-                "text_attention_mask": tokenized_texts["attention_mask"],
-                "text_labels": text_labels,
-            }
-        )
-
-        return tokenized_batch
-
-
-class GoldModelRewardCallback(TrainerCallback):
-    def __init__(
-        self,
-        args,
-        gold_model,
-        gold_eval_dataset,
-        tokenizer,
-        accelerator,
-        max_length,
-        max_prompt_length,
-        prompt_field,
-        gold_load_and_unload=False,
-        log_n_samples_during_eval=0,
-        generation_config=None,
-    ):
-        self.max_length = max_length
-        self.log_n_samples_during_eval = log_n_samples_during_eval
-        self.generation_config = generation_config
-
-        # data_collator = DataCollatorWithPadding(tokenizer)
-        data_collator = PromptAndTextCollator(
-            tokenizer,
-            max_prompt_length=max_prompt_length,
-            max_length=max_length,
-            prompt_field=prompt_field,
-        )
-        dataloader_params = {
-            "batch_size": args.eval_batch_size,
-            "collate_fn": data_collator,
-            "num_workers": args.dataloader_num_workers,
-            "pin_memory": args.dataloader_pin_memory,
-        }
-        dataloader = DataLoader(gold_eval_dataset, **dataloader_params)
-        self.dataloader = accelerator.prepare(dataloader)
-        self.accelerator = accelerator
-        self.completed_step = -1
-        self.gold_model = gold_model
-        self.gold_load_and_unload = gold_load_and_unload
-        # keep model on gpu the whole time
-        if not self.gold_load_and_unload:
-            self.gold_model = self.accelerator.prepare(self.gold_model)
-
-    def on_evaluate(self, args, state, control, model, tokenizer, metrics, **kwargs):
-        samples_to_log = []
-        gold_reward_sum = 0.0
-        nll_sum = 0.0
-        total_samples = 0
-        sample_length_sum = 0.0
-
-        # load model onto gpu for inference then unload
-        if self.gold_load_and_unload:
-            self.gold_model = self.accelerator.prepare(self.gold_model)
-
-        if state.global_step == self.completed_step:
-            return
-
-        for inputs in tqdm(
-            self.dataloader, desc="Gold Eval", dynamic_ncols=True, disable=not state.is_local_process_zero
-        ):
-            # get loss over true continuation i.e. ppl on dataset
-            with torch.no_grad():
-                nll_loss = model(
-                    input_ids=inputs["text_input_ids"],
-                    attention_mask=inputs["text_attention_mask"],
-                    labels=inputs["text_labels"],
-                ).loss
-
-            nll_loss = self.accelerator.gather_for_metrics(nll_loss)
-
-            # generate from model
-            policy_output_decoded, ref_output_decoded, policy_output_ids = self.get_batch_samples(
-                model,
-                tokenizer,
-                inputs["input_ids"],
-                inputs["attention_mask"],
-                return_ids=True,
-            )
-
-            # gold reward
-            policy_output_attention_mask = (policy_output_ids != tokenizer.pad_token_id).to(torch.int64)
-            with torch.no_grad():
-                gold_rewards = self.gold_model(
-                    input_ids=policy_output_ids, attention_mask=policy_output_attention_mask
-                )[0]
-
-            gold_rewards = self.accelerator.gather_for_metrics(gold_rewards)
-
-            if state.is_local_process_zero:
-                nll_sum += nll_loss.sum().item()
-                gold_reward_sum += gold_rewards.sum().item()
-                total_samples += gold_rewards.size(0)
-                sample_length_sum += policy_output_attention_mask.sum().item()
-
-                # Sample and save to game log if requested (for one batch to save time)
-                for i, (prompt, pol, ref) in enumerate(
-                    zip(inputs["prompt"], policy_output_decoded, ref_output_decoded)
-                ):
-                    if len(samples_to_log) < self.log_n_samples_during_eval:
-                        samples_to_log.append([prompt, pol[len(prompt) :], ref[len(prompt) :]])
-                    else:
-                        break
-
-        if self.gold_load_and_unload:
-            self.gold_model = self.gold_model.to("cpu")
-            torch.cuda.empty_cache()
-
-        if state.is_world_process_zero:
-            gold_log = {
-                "eval/gold_rewards_mean": gold_reward_sum / total_samples,
-                "eval/perplexity": math.exp(nll_sum / total_samples),
-                "eval/gold_sample_length": sample_length_sum / total_samples,
-            }
-            for key, value in gold_log.items():
-                print(f"{key}: {value}")
-            if state.epoch:
-                gold_log["epoch"] = round(state.epoch, 2)
-                gold_log["step"] = state.global_step
-            if samples_to_log:
-                gold_log["gold_log"] = (
-                    wandb.Table(
-                        columns=["Prompt", "Policy", "Ref Model"],
-                        rows=samples_to_log,
-                    ),
-                )
-            wandb.log(gold_log)
-
-        self.completed_step = state.global_step
-
-    def get_batch_samples(self, model, tokenizer, input_ids, attention_mask, return_ids=False) -> Tuple[str, str]:
-        """Reduce inputs to unseen prompts, and maximum batch size if necessary
-        Generate samples from the model and reference model for the given batch of inputs."""
-        policy_output = model.generate(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            generation_config=self.generation_config,
-        )
-
-        # if self.ref_model is None:
-        with self.accelerator.unwrap_model(model).disable_adapter():
-            reference_output = model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                generation_config=self.generation_config,
-            )
-        # else:
-        #     reference_output = self.ref_model.generate(
-        #         **inputs,
-        #         generation_config=self.generation_config,
-        #     )
-
-        policy_output = pad_to_length(policy_output, self.max_length, tokenizer.pad_token_id)
-        policy_output_decoded = tokenizer.batch_decode(policy_output, skip_special_tokens=True)
-
-        reference_output = pad_to_length(reference_output, self.max_length, tokenizer.pad_token_id)
-        reference_output_decoded = tokenizer.batch_decode(reference_output, skip_special_tokens=True)
-
-        if return_ids:
-            return policy_output_decoded, reference_output_decoded, policy_output
-        else:
-            return policy_output_decoded, reference_output_decoded
 
 
 class EvaluateOnTrain(TrainerCallback):
@@ -682,6 +463,7 @@ if __name__ == "__main__":
             script_args.max_length,
             script_args.max_prompt_length,
             script_args.gold_prompt_field,
+            script_args.gold_target_field,
             script_args.gold_load_and_unload,
             script_args.log_n_samples_during_eval,
             generation_config,
