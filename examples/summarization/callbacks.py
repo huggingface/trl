@@ -2,7 +2,9 @@ import math
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import accelerate
 import torch
+from datasets import Dataset
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import PreTrainedTokenizerBase, TrainerCallback
@@ -245,6 +247,7 @@ class PerplexityGenCallback(TrainerCallback):
         target_field,
         log_n_samples_during_eval=0,
         generation_config=None,
+        hub_name="tmp",
     ):
         self.max_length = max_length
         self.log_n_samples_during_eval = log_n_samples_during_eval
@@ -268,9 +271,11 @@ class PerplexityGenCallback(TrainerCallback):
         self.dataloader = accelerator.prepare(dataloader)
         self.accelerator = accelerator
         self.completed_step = -1
+        self.hub_name = hub_name
 
     def on_evaluate(self, args, state, control, model, tokenizer, metrics, **kwargs):
-        generations = []
+        all_generations = []
+        all_prompts = []
         nll_sum = 0.0
         total_samples = 0
         sample_length_sum = 0.0
@@ -289,31 +294,33 @@ class PerplexityGenCallback(TrainerCallback):
                     labels=inputs["text_labels"],
                 ).loss
 
-            nll_loss = self.accelerator.gather_for_metrics(nll_loss)
-
             # generate from model
-            policy_output_decoded, ref_output_decoded, policy_output_ids = self.get_batch_samples(
-                model,
-                tokenizer,
-                inputs["input_ids"],
-                inputs["attention_mask"],
-                return_ids=True,
+            policy_output_ids = model.generate(
+                input_ids=inputs["input_ids"],
+                attention_mask=inputs["attention_mask"],
+                generation_config=self.generation_config,
+            )
+            policy_output_ids = pad_to_length(policy_output_ids, self.max_length, tokenizer.pad_token_id)
+
+            policy_output_attention_mask = (policy_output_ids != tokenizer.pad_token_id).to(torch.int64)
+            generation_sizes = policy_output_attention_mask.sum(dim=1)
+
+            (nll_loss, generation_ids, generation_sizes) = self.accelerator.gather_for_metrics(
+                (nll_loss, policy_output_ids, generation_sizes)
             )
 
-            generations.extend(policy_output_decoded)
-            policy_output_attention_mask = (policy_output_ids != tokenizer.pad_token_id).to(torch.int64)
+            prompts = accelerate.utils.gather_object(inputs["prompt"])
 
             if state.is_local_process_zero:
                 nll_sum += nll_loss.sum().item()
-                total_samples += policy_output_attention_mask.size(0)
-                sample_length_sum += policy_output_attention_mask.sum().item()
-
-        generations = self.accelerator.gather_for_metrics(generations)
+                total_samples += generation_sizes.size(0)
+                sample_length_sum += generation_sizes.sum().item()
+                generation_strs = tokenizer.batch_decode(generation_ids, skip_special_tokens=True)
+                all_prompts.extend(prompts)
+                all_generations.extend(generation_strs)
 
         if state.is_world_process_zero:
-            import pdb
-
-            pdb.set_trace()
+            # gather_for_metrics doesn't work for list of strings?
             gold_log = {
                 "eval/perplexity": math.exp(nll_sum / total_samples),
                 "eval/gold_sample_length": sample_length_sum / total_samples,
@@ -323,14 +330,25 @@ class PerplexityGenCallback(TrainerCallback):
             if state.epoch:
                 gold_log["epoch"] = round(state.epoch, 2)
                 gold_log["step"] = state.global_step
-            # if samples_to_log:
-            #     gold_log["gold_log"] = (
-            #         wandb.Table(
-            #             columns=["Prompt", "Policy", "Ref Model"],
-            #             rows=samples_to_log,
-            #         ),
-            #     )
+
             wandb.log(gold_log)
+            generation_ds = Dataset.from_dict({"generations": all_generations})
+            generation_ds.push_to_hub(f"{self.hub_name}_generations", revision=str(state.global_step))
+
+            if self.log_n_samples_during_eval:
+                samples_to_log = [
+                    [prompt, generation[len(prompt) :]]
+                    for prompt, generation in zip(
+                        all_prompts[: self.log_n_samples_during_eval],
+                        all_generations[: self.log_n_samples_during_eval],
+                    )
+                ]
+                gold_log["gold_log"] = (
+                    wandb.Table(
+                        columns=["Prompt", "Policy"],
+                        rows=samples_to_log,
+                    ),
+                )
 
         self.completed_step = state.global_step
 

@@ -482,6 +482,7 @@ if __name__ == "__main__":
                 target_field=script_args.gold_target_field,
                 log_n_samples_during_eval=script_args.log_n_samples_during_eval,
                 generation_config=generation_config,
+                hub_name=os.path.basename(script_args.output_dir),
             )
 
         dpo_trainer.add_callback(callback)
