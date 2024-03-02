@@ -422,7 +422,7 @@ if __name__ == "__main__":
         max_prompt_length=script_args.max_prompt_length,
     )
 
-    # dpo_trainer.add_callback(EvaluateOnTrain(dpo_trainer))
+    dpo_trainer.add_callback(EvaluateOnTrain(dpo_trainer))
 
     # Gold Eval
     if script_args.gold_dataset_name is not None:

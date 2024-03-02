@@ -331,10 +331,6 @@ class PerplexityGenCallback(TrainerCallback):
                 gold_log["epoch"] = round(state.epoch, 2)
                 gold_log["step"] = state.global_step
 
-            wandb.log(gold_log)
-            generation_ds = Dataset.from_dict({"generations": all_generations})
-            generation_ds.push_to_hub(f"{self.hub_name}_generations", revision=str(state.global_step))
-
             if self.log_n_samples_during_eval:
                 samples_to_log = [
                     [prompt, generation[len(prompt) :]]
@@ -349,6 +345,10 @@ class PerplexityGenCallback(TrainerCallback):
                         rows=samples_to_log,
                     ),
                 )
+
+            wandb.log(gold_log)
+            generation_ds = Dataset.from_dict({"generations": all_generations})
+            generation_ds.push_to_hub(f"{self.hub_name}_generations", revision=str(state.global_step))
 
         self.completed_step = state.global_step
 
