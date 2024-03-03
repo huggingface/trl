@@ -16,13 +16,13 @@ from transformers import TrainingArguments
 
 
 class FDivergenceType(Enum):
-    REVERSE_KL = 'reverse_kl'
-    JS_DIVERGENCE = 'js_divergence'
-    ALPHA_DIVERGENCE = 'alpha_divergence'
+    REVERSE_KL = "reverse_kl"
+    JS_DIVERGENCE = "js_divergence"
+    ALPHA_DIVERGENCE = "alpha_divergence"
 
 
 class FDivergenceConstants:
-    ALPHA_DIVERGENCE_COEF_KEY = 'alpha_divergence_coef'
+    ALPHA_DIVERGENCE_COEF_KEY = "alpha_divergence_coef"
     ALPHA_DIVERGENCE_COEF_DEFAULT = 1.0
 
 
