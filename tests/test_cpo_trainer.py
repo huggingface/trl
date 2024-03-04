@@ -22,7 +22,7 @@ from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokeni
 
 from trl import CPOTrainer
 
-from .testing_utils import require_bitsandbytes, require_no_wandb, require_peft
+from .testing_utils import require_peft
 
 
 class CPOTrainerTester(unittest.TestCase):

@@ -16,7 +16,7 @@ import inspect
 import random
 import warnings
 from collections import defaultdict
-from contextlib import contextmanager, nullcontext
+from contextlib import nullcontext
 from copy import deepcopy
 from functools import wraps
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
@@ -26,7 +26,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from accelerate import PartialState
-from accelerate.utils import is_deepspeed_available, tqdm
+from accelerate.utils import is_deepspeed_available
 from datasets import Dataset
 from torch.utils.data import DataLoader
 from transformers import (
@@ -375,7 +375,6 @@ class CPOTrainer(Trainer):
         model.eval()
         return model
 
-
     def build_tokenized_answer(self, prompt, answer):
         """
         Llama tokenizer does satisfy `enc(a + b) = enc(a) + enc(b)`.
@@ -572,7 +571,6 @@ class CPOTrainer(Trainer):
 
         return batch
 
-
     @staticmethod
     def concatenated_inputs(
         batch: Dict[str, Union[List, torch.LongTensor]],
@@ -671,18 +669,8 @@ class CPOTrainer(Trainer):
                 f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'kto_pair']"
             )
 
-        chosen_rewards = (
-            self.beta
-            * (
-                policy_chosen_logps.to(self.accelerator.device)
-            ).detach()
-        )
-        rejected_rewards = (
-            self.beta
-            * (
-                policy_rejected_logps.to(self.accelerator.device)
-            ).detach()
-        )
+        chosen_rewards = self.beta * (policy_chosen_logps.to(self.accelerator.device)).detach()
+        rejected_rewards = self.beta * (policy_rejected_logps.to(self.accelerator.device)).detach()
 
         return losses, chosen_rewards, rejected_rewards
 
@@ -768,7 +756,7 @@ class CPOTrainer(Trainer):
             shift_labels = shift_labels.to(shift_logits.device)
             loss = loss_fct(shift_logits, shift_labels)
             return loss
-        
+
         if isinstance(outputs, dict) and "loss" not in outputs:
             labels = concatenated_batch["concatenated_labels"]
             loss_chosen = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
@@ -953,9 +941,7 @@ class CPOTrainer(Trainer):
                         columns=["Prompt", "Policy"],
                         rows=[
                             [prompt, pol[len(prompt) :]]
-                            for prompt, pol in zip(
-                                random_batch["prompt"], policy_output_decoded
-                            )
+                            for prompt, pol in zip(random_batch["prompt"], policy_output_decoded)
                         ],
                     )
                 }
