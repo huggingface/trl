@@ -471,6 +471,8 @@ if __name__ == "__main__":
                 generation_config,
             )
         else:
+            run_name = os.getenv("WANDB_NAME", f"{script_args.model_name}_{script_args.gold_dataset_name}")
+            run_name += "_" + os.getenv("WANDB_RUN_ID", "xxxxx")[:5]
             callback = PerplexityGenCallback(
                 args=training_args,
                 dataset=gold_eval_dataset,
@@ -482,7 +484,7 @@ if __name__ == "__main__":
                 target_field=script_args.gold_target_field,
                 log_n_samples_during_eval=script_args.log_n_samples_during_eval,
                 generation_config=generation_config,
-                hub_name=os.path.basename(script_args.output_dir),
+                hub_name=run_name,
             )
 
         dpo_trainer.add_callback(callback)
