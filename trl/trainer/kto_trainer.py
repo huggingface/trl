@@ -313,9 +313,14 @@ class KTOTrainer(Trainer):
         self.undesirable_weight = args.undesirable_weight
 
         # get KL datasets
-        train_KL_dataset = train_dataset.map(self.get_KL_dataset, batched=True, batch_size=1000)
+        total_batch_size = torch.cuda.device_count() * args.per_device_train_batch_size
+        if total_batch_size <= 1:
+            raise ValueError("Batch size is 1 (too small). KTO will not work properly because the KL term will be equivalent to the implied reward.")
+        # note: for best results, mismatched outputs y' used to estimate the KL term for a batch should be the
+        # same as the matched outputs y used to estimate the rewards in that batch, just paired with different x
+        train_KL_dataset = train_dataset.map(self.get_KL_dataset, batched=True, batch_size=total_batch_size)
         if eval_dataset is not None:
-            eval_KL_dataset = eval_dataset.map(self.get_KL_dataset, batched=True, batch_size=1000)
+            eval_KL_dataset = eval_dataset.map(self.get_KL_dataset, batched=True, batch_size=total_batch_size)
 
         # tokenize the datasets
         train_dataset = train_dataset.map(
@@ -669,7 +674,7 @@ class KTOTrainer(Trainer):
 
     def get_KL_dataset(self, batch) -> Dict:
         """Creates mismatched pairs of prompts and completions for the KL dataset."""
-        batch["completion"] = random.sample(batch["completion"], len(batch["completion"]))
+        batch["completion"] = batch["completion"][::-1]
         return batch
 
     def tokenize_row(self, feature, model: Union[PreTrainedModel, nn.Module] = None, prefix="") -> Dict:
