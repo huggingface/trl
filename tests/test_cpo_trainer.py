@@ -80,13 +80,13 @@ class CPOTrainerTester(unittest.TestCase):
 
     @parameterized.expand(
         [
-            ["gpt2", "sigmoid", True],
-            ["t5", "hinge", False],
-            ["gpt2", "ipo", False],
-            ["t5", "ipo", True],
+            ["gpt2", "sigmoid"],
+            ["t5", "hinge"],
+            ["gpt2", "ipo"],
+            ["t5", "ipo"],
         ]
     )
-    def test_cpo_trainer(self, name, loss_type, pre_compute):
+    def test_cpo_trainer(self, name, loss_type):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
                 output_dir=tmp_dir,
@@ -115,7 +115,6 @@ class CPOTrainerTester(unittest.TestCase):
                 tokenizer=tokenizer,
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
-                precompute_ref_log_probs=pre_compute,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -165,7 +164,6 @@ class CPOTrainerTester(unittest.TestCase):
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
                 peft_config=lora_config,
-                precompute_ref_log_probs=True,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
