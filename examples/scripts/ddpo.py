@@ -175,7 +175,7 @@ def image_outputs_logger(image_data, global_step, accelerate_logger):
     for i, image in enumerate(images):
         prompt = prompts[i]
         reward = rewards[i].item()
-        result[f"{prompt:.25} | {reward:.2f}"] = image.unsqueeze(0)
+        result[f"{prompt:.25} | {reward:.2f}"] = image.unsqueeze(0).float()
 
     accelerate_logger.log_images(
         result,
