@@ -66,9 +66,8 @@ class ScriptArguments:
     )
 
     adap_kl_ctrl: Optional[bool] = field(default=True, metadata={"help": "Use adaptive KL control, otherwise linear"})
-    load_in_8bit: Optional[bool] = field(
-        default=True, metadata={"help": "whether to load the model in 8bit"}
-    )
+    load_in_8bit: Optional[bool] = field(default=True, metadata={"help": "whether to load the model in 8bit"})
+
 
 parser = HfArgumentParser(ScriptArguments)
 script_args: ScriptArguments = parser.parse_args_into_dataclasses()[0]
