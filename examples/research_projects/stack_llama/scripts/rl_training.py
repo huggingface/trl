@@ -221,7 +221,7 @@ sentiment_pipe = pipeline(
     return_token_type_ids=False,
 )
 
-if sentiment_pipe.model.config.pad_token_id == None:
+if sentiment_pipe.model.config.pad_token_id is None:
     sentiment_pipe.model.config.pad_token_id = sentiment_pipe.model.config.eos_token_id
 # We then define the arguments to pass to the `generate` function. These arguments
 # are passed to the `generate` function of the PPOTrainer, which is a wrapper around
