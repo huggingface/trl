@@ -752,7 +752,7 @@ def get_exp_cap(value, decimal=4):
             so we cap the exponent to 88.7228 to avoid overflow.
     """
     vdtype_max = torch.zeros([1]).to(value.dtype) + torch.finfo(value.dtype).max
-    vdtype_log_max = torch.log(vdtype_max)
+    vdtype_log_max = torch.log(vdtype_max).to(value.device)
     return torch.floor(vdtype_log_max * 10 ** decimal) / 10 ** decimal if decimal > 0 else vdtype_log_max
 
 
