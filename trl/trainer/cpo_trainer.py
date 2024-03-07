@@ -759,8 +759,7 @@ class CPOTrainer(Trainer):
 
         if isinstance(outputs, dict) and "loss" not in outputs:
             labels = concatenated_batch["concatenated_labels"]
-            loss_chosen = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
-            nll_loss = loss_chosen
+            nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
         else:
             nll_loss = outputs.loss
 
