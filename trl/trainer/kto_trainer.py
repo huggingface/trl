@@ -331,6 +331,8 @@ class KTOTrainer(Trainer):
         train_KL_dataset = train_KL_dataset.map(
             lambda row: self.tokenize_row(row, prefix="KL_"), remove_columns=train_KL_dataset.column_names
         )
+        # merge the datasets
+        train_dataset = concatenate_datasets([train_dataset, train_KL_dataset], axis=1)
 
         if eval_dataset is not None:
             eval_dataset = eval_dataset.map(
@@ -339,10 +341,8 @@ class KTOTrainer(Trainer):
             eval_KL_dataset = eval_KL_dataset.map(
                 lambda row: self.tokenize_row(row, prefix="KL_"), remove_columns=eval_KL_dataset.column_names
             )
-
-        # merge the datasets
-        train_dataset = concatenate_datasets([train_dataset, train_KL_dataset], axis=1)
-        eval_dataset = concatenate_datasets([eval_dataset, eval_KL_dataset], axis=1)
+            # merge the datasets
+            eval_dataset = concatenate_datasets([eval_dataset, eval_KL_dataset], axis=1)
 
         desirable = train_dataset.filter(lambda x: x["label"])
         undesirable = train_dataset.filter(lambda x: not x["label"])
@@ -923,16 +923,18 @@ class KTOTrainer(Trainer):
             chosen_losses = 1 - F.sigmoid(self.beta * (chosen_logratios - KL))
             chosen_rewards = self.beta * chosen_logratios.detach()
         else:
-            chosen_losses = torch.Tensor([]).to(self.accelerator.device)
-            chosen_rewards = torch.Tensor([]).to(self.accelerator.device)
+            # lists can't be empty -- if they are, then accelerate.gather will hang
+            chosen_losses = torch.Tensor([torch.nan]).to(self.accelerator.device)
+            chosen_rewards = torch.Tensor([torch.nan]).to(self.accelerator.device)
 
         if policy_rejected_logps.shape[0] != 0 or reference_rejected_logps.shape[0] != 0:
             rejected_logratios = policy_rejected_logps - reference_rejected_logps
             rejected_losses = 1 - F.sigmoid(self.beta * (KL - rejected_logratios))
             rejected_rewards = self.beta * rejected_logratios.detach()
         else:
-            rejected_losses = torch.Tensor([]).to(self.accelerator.device)
-            rejected_rewards = torch.Tensor([]).to(self.accelerator.device)
+            # lists can't be empty -- if they are, then accelerate.gather will hang
+            rejected_losses = torch.Tensor([torch.nan]).to(self.accelerator.device)
+            rejected_rewards = torch.Tensor([torch.nan]).to(self.accelerator.device)
 
         losses = torch.cat(
             (self.desirable_weight * chosen_losses, self.undesirable_weight * rejected_losses),
