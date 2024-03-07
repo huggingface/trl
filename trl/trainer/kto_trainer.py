@@ -315,7 +315,9 @@ class KTOTrainer(Trainer):
         # get KL datasets
         total_batch_size = torch.cuda.device_count() * args.per_device_train_batch_size
         if total_batch_size <= 1:
-            raise ValueError("Batch size is 1 (too small). KTO will not work properly because the KL term will be equivalent to the implied reward.")
+            raise ValueError(
+                "Batch size is 1 (too small). KTO will not work properly because the KL term will be equivalent to the implied reward."
+            )
         # note: for best results, mismatched outputs y' used to estimate the KL term for a batch should be the
         # same as the matched outputs y used to estimate the rewards in that batch, just paired with different x
         train_KL_dataset = train_dataset.map(self.get_KL_dataset, batched=True, batch_size=total_batch_size)
