@@ -726,7 +726,7 @@ def get_peft_config(model_config: ModelConfig) -> "Optional[PeftConfig]":
         lora_alpha=model_config.lora_alpha,
         lora_dropout=model_config.lora_dropout,
         bias="none",
-        task_type="CAUSAL_LM",
+        task_type=model_config.lora_task_type,
         target_modules=model_config.lora_target_modules,
         modules_to_save=model_config.lora_modules_to_save,
     )
