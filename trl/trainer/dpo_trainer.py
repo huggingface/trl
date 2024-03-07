@@ -254,7 +254,7 @@ class DPOTrainer(Trainer):
                 # If args.bf16 we need to explicitly call `generate` with torch amp autocast context manager
                 self._peft_has_been_casted_to_bf16 = True
 
-        # For models that use gradient_checkpoiting, we need to attach a hook that enables input
+        # For models that use gradient_checkpointing, we need to attach a hook that enables input
         # to explicitly have `requires_grad=True`, otherwise training will either silently
         # fail or completely fail.
         elif getattr(args, "gradient_checkpointing", False):
@@ -1090,7 +1090,7 @@ class DPOTrainer(Trainer):
     def get_batch_samples(self, model, batch: Dict[str, torch.LongTensor]) -> Tuple[str, str]:
         """Generate samples from the model and reference model for the given batch of inputs."""
 
-        # If one uses `generate_during_eval` with peft + bf16, we need to explictly call generate with
+        # If one uses `generate_during_eval` with peft + bf16, we need to explicitly call generate with
         # the torch cuda amp context manager as some hidden states are silently casted to full precision.
         generate_context_manager = nullcontext if not self._peft_has_been_casted_to_bf16 else torch.cuda.amp.autocast
 

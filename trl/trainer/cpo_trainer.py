@@ -213,7 +213,7 @@ class CPOTrainer(Trainer):
                 # If args.bf16 we need to explicitly call `generate` with torch amp autocast context manager
                 self._peft_has_been_casted_to_bf16 = True
 
-        # For models that use gradient_checkpoiting, we need to attach a hook that enables input
+        # For models that use gradient_checkpointing, we need to attach a hook that enables input
         # to explicitly have `requires_grad=True`, otherwise training will either silently
         # fail or completely fail.
         elif getattr(args, "gradient_checkpointing", False):
