@@ -314,8 +314,8 @@ class KTOTrainer(Trainer):
 
         # get KL datasets
         total_batch_size = (
-             torch.cuda.device_count() * args.per_device_train_batch_size * args.gradient_accumulation_steps
-         )
+            max(torch.cuda.device_count(), 1) * args.per_device_train_batch_size * args.gradient_accumulation_steps
+        )
         if total_batch_size <= 1:
             raise ValueError(
                 "Batch size is 1 (too small). KTO will not work properly because the KL term will be equivalent to the implied reward."
