@@ -313,9 +313,18 @@ class KTOTrainer(Trainer):
         self.undesirable_weight = args.undesirable_weight
 
         # get KL datasets
-        train_KL_dataset = train_dataset.map(self.get_KL_dataset, batched=True, batch_size=1000)
+        total_batch_size = (
+            max(torch.cuda.device_count(), 1) * args.per_device_train_batch_size * args.gradient_accumulation_steps
+        )
+        if total_batch_size <= 1:
+            raise ValueError(
+                "Batch size is 1 (too small). KTO will not work properly because the KL term will be equivalent to the implied reward."
+            )
+        # note: for best results, mismatched outputs y' used to estimate the KL term for a batch should be the
+        # same as the matched outputs y used to estimate the rewards in that batch, just paired with different x
+        train_KL_dataset = train_dataset.map(self.get_KL_dataset, batched=True, batch_size=total_batch_size)
         if eval_dataset is not None:
-            eval_KL_dataset = eval_dataset.map(self.get_KL_dataset, batched=True, batch_size=1000)
+            eval_KL_dataset = eval_dataset.map(self.get_KL_dataset, batched=True, batch_size=total_batch_size)
 
         # tokenize the datasets
         train_dataset = train_dataset.map(
@@ -669,7 +678,7 @@ class KTOTrainer(Trainer):
 
     def get_KL_dataset(self, batch) -> Dict:
         """Creates mismatched pairs of prompts and completions for the KL dataset."""
-        batch["completion"] = random.sample(batch["completion"], len(batch["completion"]))
+        batch["completion"] = batch["completion"][::-1]
         return batch
 
     def tokenize_row(self, feature, model: Union[PreTrainedModel, nn.Module] = None, prefix="") -> Dict:
@@ -933,6 +942,7 @@ class KTOTrainer(Trainer):
             (self.desirable_weight * chosen_losses, self.undesirable_weight * rejected_losses),
             0,
         )
+
         return losses, chosen_rewards, rejected_rewards, KL
 
     def get_batch_loss_metrics(
@@ -990,26 +1000,18 @@ class KTOTrainer(Trainer):
             reference_KL_logps,
         )
 
-        # lists can't be empty -- if they are, then accelerate.gather will hang
-        if policy_chosen_logps.shape[0] == 0:
-            policy_chosen_logps = torch.Tensor([torch.nan]).to(self.accelerator.device)
-
-        if policy_rejected_logps.shape[0] == 0:
-            policy_rejected_logps = torch.Tensor([torch.nan]).to(self.accelerator.device)
-
-        mean_chosen_reward = self.accelerator.gather(chosen_rewards.detach()).nanmean().nan_to_num(0)
-        mean_rejected_reward = self.accelerator.gather(rejected_rewards.detach()).nanmean().nan_to_num(0)
-        mean_margin = mean_chosen_reward - mean_rejected_reward
-        mean_logps_chosen = self.accelerator.gather(policy_chosen_logps.detach()).nanmean().nan_to_num(0)
-        mean_logps_rejected = self.accelerator.gather(policy_rejected_logps.detach()).nanmean().nan_to_num(0)
+        mean_chosen_reward = chosen_rewards.nanmean().detach()
+        mean_rejected_reward = rejected_rewards.nanmean().detach()
+        mean_chosen_logps = policy_chosen_logps.nanmean().detach()
+        mean_rejected_logps = policy_rejected_logps.nanmean().detach()
 
         prefix = "eval_" if train_eval == "eval" else ""
-        metrics[f"{prefix}rewards/chosen"] = mean_chosen_reward.cpu()
-        metrics[f"{prefix}rewards/rejected"] = mean_rejected_reward.cpu()
-        metrics[f"{prefix}rewards/margins"] = mean_margin.cpu()
+        metrics[f"{prefix}rewards/chosen"] = self.accelerator.gather(mean_chosen_reward).nanmean().cpu()
+        metrics[f"{prefix}rewards/rejected"] = self.accelerator.gather(mean_rejected_reward).nanmean().cpu()
+        metrics[f"{prefix}rewards/margins"] = metrics[f"{prefix}rewards/chosen"] - metrics[f"{prefix}rewards/rejected"]
         metrics[f"{prefix}kl"] = kl.item()  # has already been gathered in kto_loss
-        metrics[f"{prefix}logps/rejected"] = mean_logps_chosen.cpu()
-        metrics[f"{prefix}logps/chosen"] = mean_logps_rejected.cpu()
+        metrics[f"{prefix}logps/chosen"] = self.accelerator.gather(mean_chosen_logps).nanmean().cpu()
+        metrics[f"{prefix}logps/rejected"] = self.accelerator.gather(mean_rejected_logps).nanmean().cpu()
 
         loss = (
             losses.mean()
