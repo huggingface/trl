@@ -140,6 +140,7 @@ class ScriptArguments:
     )
 
     # gold model
+    gold_eval: bool = field(default=True)
     gold_model_name: str = field(default=None, metadata={"help": "the gold reward model name"})
     gold_model_revision: Optional[str] = field(default=None, metadata={"help": "the model name"})
     gold_in_8bit: Optional[bool] = field(default=False, metadata={"help": "gold the model in 8 bits precision"})
@@ -425,7 +426,7 @@ if __name__ == "__main__":
     dpo_trainer.add_callback(EvaluateOnTrain(dpo_trainer))
 
     # Gold Eval
-    if script_args.gold_dataset_name is not None:
+    if script_args.gold_eval:
         gold_eval_dataset = load_dataset(
             script_args.gold_dataset_name,
             split=script_args.gold_eval_split,
@@ -453,7 +454,7 @@ if __name__ == "__main__":
                 pad_token_id=tokenizer.eos_token_id,
             )
 
-        if script_args.gold_model_name is not None:
+        if script_args.gold_eval:
             gold_model = create_and_prepare_gold_model(script_args)
 
             callback = GoldModelRewardCallback(
