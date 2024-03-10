@@ -310,7 +310,6 @@ class SFTTrainer(Trainer):
                 print(f"check_dataset_labels:")
                 print(tokenizer.decode(input_ids[0]))
                 for token, label in zip(input_ids[0], labels[0]):
-                    logger.info(token.item(), f"'{tokenizer.decode(token)}'", label.item())
                     print(token.item(), f"'{tokenizer.decode(token)}'", label.item())
 
         super().__init__(
