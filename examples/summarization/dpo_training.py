@@ -14,7 +14,6 @@
 # limitations under the License.
 # import random
 import os
-from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
@@ -22,7 +21,7 @@ import bitsandbytes as bnb
 import torch
 from accelerate import Accelerator
 from callbacks import GoldModelRewardCallback, PerplexityGenCallback
-from datasets import Dataset, builder, concatenate_datasets, load_dataset
+from datasets import builder, concatenate_datasets, load_dataset
 from peft import AutoPeftModelForCausalLM, LoraConfig, PeftConfig, get_peft_model, prepare_model_for_kbit_training
 from scalar_rm_model import ScalarModel
 from transformers import (
@@ -119,7 +118,7 @@ class ScriptArguments:
     output_dir: Optional[str] = field(default="results", metadata={"help": "the output directory"})
     logging_steps: Optional[int] = field(default=100, metadata={"help": "the number of update steps between two logs"})
     log_n_samples_during_eval: Optional[int] = field(default=100)
-    eval_steps: Optional[int] = field(default=None, metadata={"help": "the number of steps to eval at"})
+    eval_steps: Optional[float] = field(default=None, metadata={"help": "the number of steps to eval at"})
     save_steps: Optional[int] = field(default=1000, metadata={"help": "the number of steps to save at"})
     save_strategy: Optional[str] = field(default="steps")
     report_to: Optional[str] = field(
@@ -339,37 +338,6 @@ def create_and_prepare_dataset(args):
     return train_dataset, eval_dataset
 
 
-class EvaluateOnTrain(TrainerCallback):
-    def __init__(self, trainer) -> None:
-        super().__init__()
-        self._trainer = trainer
-        self.completed_step = -1
-        self.train_eval_dataset = Dataset.from_dict(self._trainer.train_dataset[:5000])
-
-    def on_evaluate(self, args, state, control, **kwargs):
-        # stops recursion
-        if state.global_step == self.completed_step:
-            return
-
-        control_copy = deepcopy(control)
-        self.completed_step = state.global_step
-        self._trainer.evaluate(eval_dataset=self.train_eval_dataset, metric_key_prefix="train")
-        return control_copy
-
-    # def on_step_end(self, args, state, control, **kwargs):
-    #     if control.should_evaluate:
-    #         control_copy = deepcopy(control)
-    #         print("here epoch")
-    #         self._trainer.evaluate(eval_dataset=self._trainer.train_dataset, metric_key_prefix="train")
-    #         return control_copy
-    #
-    # def on_epoch_end(self, args, state, control, **kwargs):
-    #     if control.should_evaluate:
-    #         control_copy = deepcopy(control)
-    #         print("here epoch")
-    #         self._trainer.evaluate(eval_dataset=self._trainer.train_dataset, metric_key_prefix="train")
-    #         return control_copy
-
 
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
@@ -423,7 +391,6 @@ if __name__ == "__main__":
         max_prompt_length=script_args.max_prompt_length,
     )
 
-    dpo_trainer.add_callback(EvaluateOnTrain(dpo_trainer))
 
     # Gold Eval
     if script_args.gold_eval:
@@ -454,7 +421,7 @@ if __name__ == "__main__":
                 pad_token_id=tokenizer.eos_token_id,
             )
 
-        if script_args.gold_eval:
+        if script_args.gold_model_name:
             gold_model = create_and_prepare_gold_model(script_args)
 
             callback = GoldModelRewardCallback(

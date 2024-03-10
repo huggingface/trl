@@ -14,7 +14,7 @@
 # limitations under the License.
 import inspect
 import warnings
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from copy import deepcopy
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
@@ -34,11 +34,15 @@ from transformers import (
 )
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput, EvalPrediction
+from transformers.utils import is_apex_available, is_sagemaker_mp_enabled
 
 from ..import_utils import is_peft_available, is_wandb_available
 from ..models import PreTrainedModelWrapper, create_reference_model
 from .utils import DPODataCollatorWithPadding, disable_dropout_in_model, pad_to_length
 
+
+if is_apex_available():
+    from apex import amp
 
 if is_peft_available():
     from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
@@ -311,6 +315,8 @@ class DPOTrainer(Trainer):
 
         if compute_metrics is None:
             compute_metrics = compute_dpo_metrics
+
+        self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
         args.beta = beta
 
@@ -622,6 +628,54 @@ class DPOTrainer(Trainer):
 
         return policy_output_decoded, reference_output_decoded
 
+    def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
+        """
+        Perform a training step on a batch of inputs.
+
+        Subclass and override to inject custom behavior.
+
+        Args:
+            model (`nn.Module`):
+                The model to train.
+            inputs (`Dict[str, Union[torch.Tensor, Any]]`):
+                The inputs and targets of the model.
+
+                The dictionary will be unpacked before being fed to the model. Most models expect the targets under the
+                argument `labels`. Check your model's documentation for all accepted arguments.
+
+        Return:
+            `torch.Tensor`: The tensor with training loss on this batch.
+        """
+        model.train()
+        inputs = self._prepare_inputs(inputs)
+
+        if is_sagemaker_mp_enabled():
+            raise NotImplementedError
+            # loss_mb = smp_forward_backward(model, inputs, self.args.gradient_accumulation_steps)
+            # return loss_mb.reduce_mean().detach().to(self.args.device)
+
+        with self.compute_loss_context_manager():
+            loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
+
+        metrics = {}
+        for key, values in outputs.items():
+            if key == "loss":
+                continue
+            metrics[key] = self._nested_gather(values).mean().item()
+
+        self.store_metrics(metrics, train_eval="train")
+
+        if self.args.n_gpu > 1:
+            loss = loss.mean()  # mean() to average on multi-gpu parallel training
+
+        if self.use_apex:
+            with amp.scale_loss(loss, self.optimizer) as scaled_loss:
+                scaled_loss.backward()
+        else:
+            self.accelerator.backward(loss)
+
+        return loss.detach() / self.args.gradient_accumulation_steps
+
     def prediction_step(
         self,
         model: Union[PreTrainedModel, nn.Module],
@@ -658,6 +712,29 @@ class DPOTrainer(Trainer):
         )
 
         return initial_output
+
+    def store_metrics(self, metrics: Dict[str, float], train_eval: Literal["train", "eval"] = "train") -> None:
+        for key, value in metrics.items():
+            self._stored_metrics[train_eval][key].append(value)
+
+    def log(self, logs: Dict[str, float]) -> None:
+        """
+        Log `logs` on the various objects watching training, including stored metrics.
+
+        Args:
+            logs (`Dict[str, float]`):
+                The values to log.
+        """
+        # logs either has 'loss' or 'eval_loss'
+        train_eval = "train" if "loss" in logs else "eval"
+        # Add averaged stored metrics to logs
+        import pdb
+
+        pdb.set_trace()
+        for key, metrics in self._stored_metrics[train_eval].items():
+            logs[key] = torch.tensor(metrics).mean().item()
+        del self._stored_metrics[train_eval]
+        return super().log(logs)
 
 
 def compute_dpo_metrics(eval_preds: EvalPrediction):

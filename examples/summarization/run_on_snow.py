@@ -54,6 +54,9 @@ def run_exp(exp_dict, savedir, args):
         exp_dict.pop("save_strategy", None)
         exp_dict["num_gpus"] = args.gpus
         generate_vllm_args_dict(exp_dict)
+    elif exp_name.startswith("scalarrm"):
+        exp_dict.pop("save_strategy", None)
+        accelerate_launch("scalar_rm_model.py", exp_dict, args)
     else:
         raise Exception(f"Config file {exp_name} does not start with one of the correct prefixes")
 

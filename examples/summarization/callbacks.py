@@ -319,6 +319,8 @@ class PerplexityGenCallback(TrainerCallback):
                 all_prompts.extend(prompts)
                 all_generations.extend(generation_strs)
 
+            # self.accelerator.wait_for_everyone()
+
         if state.is_world_process_zero:
             # gather_for_metrics doesn't work for list of strings?
             gold_log = {
