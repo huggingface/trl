@@ -149,6 +149,7 @@ class SFTTrainer(Trainer):
         model_init_kwargs: Optional[Dict] = None,
         dataset_kwargs: Optional[Dict] = None,
         eval_packing: Optional[bool] = None,
+        check_dataset_labels: Optional[bool] = None,
     ):
         if model_init_kwargs is None:
             model_init_kwargs = {}
@@ -301,6 +302,16 @@ class SFTTrainer(Trainer):
                 "You passed a tokenizer with `padding_side` not equal to `right` to the SFTTrainer. This might lead to some unexpected behaviour due to "
                 "overflow issues when training a model in half-precision. You might consider adding `tokenizer.padding_side = 'right'` to your code."
             )
+
+        if check_dataset_labels:
+            if train_dataset is not None and len(train_dataset) > 0:
+                input_ids, attention_mask, labels = data_collator([train_dataset[0]]).values()
+                # print is obviously the wrong choice but no logger
+                print(f"check_dataset_labels:")
+                print(tokenizer.decode(input_ids[0]))
+                for token, label in zip(input_ids[0], labels[0]):
+                    logger.info(token.item(), f"'{tokenizer.decode(token)}'", label.item())
+                    print(token.item(), f"'{tokenizer.decode(token)}'", label.item())
 
         super().__init__(
             model=model,
