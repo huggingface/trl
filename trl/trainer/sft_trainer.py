@@ -188,7 +188,7 @@ class SFTTrainer(Trainer):
                         if param.__class__.__name__ == "Params4bit":
                             is_sharded_qlora = param.data.device.type == "cpu"
                             break
-                if getattr(model, "is_loaded_in_8bit", False) or (getattr(model, "is_loaded_in_4bit", False) and not is_sharded_qlora):
+                elif getattr(model, "is_loaded_in_8bit", False) or (getattr(model, "is_loaded_in_4bit", False) and not is_sharded_qlora):
                     preprare_model_kwargs = {
                         "use_gradient_checkpointing": getattr(args, "gradient_checkpointing", False)
                     }
