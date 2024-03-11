@@ -118,6 +118,8 @@ class SFTTrainer(Trainer):
             Dict of Optional kwargs to pass when creating packed or non-packed datasets
         eval_packing: (`Optional[bool]`, *optional*):
             Whether to pack the eval dataset as well. Defaults to `packing` if `None` is passed.
+        check_dataset_labels (`Optional[bool]`):
+            Flag to enable debugging of dataset labels and tokenization. If set to True, the trainer will print the tokens, decoded tokens, and their corresponding labels for the first item in the training dataset during initialization. Defaults to False.
     """
 
     _tag_names = ["trl", "sft"]
@@ -149,7 +151,7 @@ class SFTTrainer(Trainer):
         model_init_kwargs: Optional[Dict] = None,
         dataset_kwargs: Optional[Dict] = None,
         eval_packing: Optional[bool] = None,
-        check_dataset_labels: Optional[bool] = None,
+        check_dataset_labels: Optional[bool] = False,
     ):
         if model_init_kwargs is None:
             model_init_kwargs = {}
@@ -306,11 +308,11 @@ class SFTTrainer(Trainer):
         if check_dataset_labels:
             if train_dataset is not None and len(train_dataset) > 0:
                 input_ids, attention_mask, labels = data_collator([train_dataset[0]]).values()
-                # print is obviously the wrong choice but no logger
-                print(f"check_dataset_labels:")
+
+                print("check_dataset_labels:")
                 print(tokenizer.decode(input_ids[0]))
                 for token, label in zip(input_ids[0], labels[0]):
-                    print(token.item(), f"'{tokenizer.decode(token)}'", label.item())
+                    print(f"{token.item()}, '{tokenizer.decode(token)}' {label.item()}")
 
         super().__init__(
             model=model,
