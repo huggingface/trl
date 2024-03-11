@@ -97,6 +97,9 @@ setup(
     ],
     url="https://github.com/huggingface/trl",
     packages=find_packages(),
+    entry_points={
+        "console_scripts": ["trl=trl.commands.trl_cli:main"],
+    },
     include_package_data=True,
     install_requires=REQUIRED_PKGS,
     extras_require=EXTRAS,
