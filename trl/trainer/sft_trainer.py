@@ -192,7 +192,9 @@ class SFTTrainer(Trainer):
                         if param.__class__.__name__ == "Params4bit":
                             is_sharded_qlora = param.data.device.type == "cpu"
                             break
-                if getattr(model, "is_loaded_in_8bit", False) or (getattr(model, "is_loaded_in_4bit", False) and not is_sharded_qlora):
+                if getattr(model, "is_loaded_in_8bit", False) or (
+                    getattr(model, "is_loaded_in_4bit", False) and not is_sharded_qlora
+                ):
                     prepare_model_kwargs = {
                         "use_gradient_checkpointing": getattr(args, "gradient_checkpointing", False)
                     }
@@ -219,7 +221,12 @@ class SFTTrainer(Trainer):
                         model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
 
                 model = get_peft_model(model, peft_config)
-                if args is not None and args.bf16 and getattr(model, "is_loaded_in_4bit", False) and not is_sharded_qlora:
+                if (
+                    args is not None
+                    and args.bf16
+                    and getattr(model, "is_loaded_in_4bit", False)
+                    and not is_sharded_qlora
+                ):
                     peft_module_casting_to_bf16(model)
 
         if tokenizer is None:
