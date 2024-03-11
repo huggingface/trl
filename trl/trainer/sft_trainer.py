@@ -182,18 +182,24 @@ class SFTTrainer(Trainer):
                     inspect.signature(prepare_model_for_kbit_training).parameters
                 )
                 gradient_checkpointing_kwargs = getattr(args, "gradient_checkpointing_kwargs", None) or {}
-                # if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
-                #     preprare_model_kwargs = {
-                #         "use_gradient_checkpointing": getattr(args, "gradient_checkpointing", False)
-                #     }
+                is_sharded_qlora = False
+                if getattr(model, "is_loaded_in_4bit", False):
+                    for _, param in self.named_parameters():
+                        if param.__class__.__name__ == "Params4bit":
+                            is_sharded_qlora = param.data.device.type == "cpu"
+                            break
+                if getattr(model, "is_loaded_in_8bit", False) or (getattr(model, "is_loaded_in_4bit", False) and not is_sharded_qlora):
+                    preprare_model_kwargs = {
+                        "use_gradient_checkpointing": getattr(args, "gradient_checkpointing", False)
+                    }
 
-                #     if _support_gc_kwargs:
-                #         preprare_model_kwargs["gradient_checkpointing_kwargs"] = gradient_checkpointing_kwargs
+                    if _support_gc_kwargs:
+                        preprare_model_kwargs["gradient_checkpointing_kwargs"] = gradient_checkpointing_kwargs
 
-                #     model = prepare_model_for_kbit_training(model, **preprare_model_kwargs)
+                    model = prepare_model_for_kbit_training(model, **preprare_model_kwargs)
 
-                #     if args is not None:
-                #         args = dataclasses.replace(args, gradient_checkpointing=False)
+                    if args is not None:
+                        args = dataclasses.replace(args, gradient_checkpointing=False)
                 if getattr(args, "gradient_checkpointing", False) and (
                     "use_reentrant" not in gradient_checkpointing_kwargs
                     or gradient_checkpointing_kwargs["use_reentrant"]
@@ -209,8 +215,8 @@ class SFTTrainer(Trainer):
                         model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
 
                 model = get_peft_model(model, peft_config)
-                # if args.bf16 and getattr(model, "is_loaded_in_4bit", False):
-                #     peft_module_casting_to_bf16(model)
+                if args.bf16 and getattr(model, "is_loaded_in_4bit", False) and not is_sharded_qlora:
+                    peft_module_casting_to_bf16(model)
 
         if tokenizer is None:
             tokenizer = AutoTokenizer.from_pretrained(model.config._name_or_path)
