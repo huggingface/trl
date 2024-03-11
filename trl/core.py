@@ -22,7 +22,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
-from transformers.generation_utils import TopKLogitsWarper, TopPLogitsWarper
+from transformers.generation import TopKLogitsWarper, TopPLogitsWarper
 
 from .import_utils import is_npu_available, is_xpu_available
 
