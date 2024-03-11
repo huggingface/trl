@@ -29,6 +29,8 @@
     title: Best of N Sampling
   - local: dpo_trainer
     title: DPO Trainer
+  - local: kto_trainer
+    title: KTO Trainer
   - local: ddpo_trainer
     title: Denoising Diffusion Policy Optimization
   - local: iterative_sft_trainer

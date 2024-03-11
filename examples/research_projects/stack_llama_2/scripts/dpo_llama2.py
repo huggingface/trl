@@ -4,9 +4,10 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional
 
 import torch
+from accelerate import Accelerator
 from datasets import Dataset, load_dataset
 from peft import LoraConfig
-from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, TrainingArguments
+from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, TrainingArguments, set_seed
 
 from trl import DPOTrainer
 
@@ -41,6 +42,10 @@ class ScriptArguments:
         default=True, metadata={"help": "whether to use gradient checkpointing"}
     )
 
+    gradient_checkpointing_use_reentrant: Optional[bool] = field(
+        default=False, metadata={"help": "whether to use reentrant for gradient checkpointing"}
+    )
+
     lora_alpha: Optional[float] = field(default=16, metadata={"help": "the lora alpha parameter"})
     lora_dropout: Optional[float] = field(default=0.05, metadata={"help": "the lora dropout parameter"})
     lora_r: Optional[int] = field(default=8, metadata={"help": "the lora r parameter"})
@@ -54,6 +59,10 @@ class ScriptArguments:
 
     output_dir: Optional[str] = field(default="./results", metadata={"help": "the output directory"})
     log_freq: Optional[int] = field(default=1, metadata={"help": "the logging frequency"})
+    load_in_4bit: Optional[bool] = field(default=True, metadata={"help": "whether to load the model in 4bit"})
+    model_dtype: Optional[str] = field(
+        default="float16", metadata={"help": "model_dtype[float16, bfloat16, float] for loading."}
+    )
 
     # instrumentation
     sanity_check: Optional[bool] = field(default=False, metadata={"help": "only train on 1000 samples"})
@@ -73,12 +82,15 @@ class ScriptArguments:
             "https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992"
         },
     )
+    seed: Optional[int] = field(
+        default=0, metadata={"help": "Random seed that will be set at the beginning of training."}
+    )
 
 
 def get_stack_exchange_paired(
     data_dir: str = "data/rl",
     sanity_check: bool = False,
-    cache_dir: str = None,
+    cache_dir: Optional[str] = None,
     num_proc=24,
 ) -> Dataset:
     """Load the stack-exchange-paired dataset from Hugging Face and convert it to the necessary format.
@@ -123,12 +135,21 @@ if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
     script_args = parser.parse_args_into_dataclasses()[0]
 
+    set_seed(script_args.seed)
+
     # 1. load a pretrained model
+    torch_dtype = torch.float
+    if script_args.model_dtype == "float16":
+        torch_dtype = torch.float16
+    elif script_args.model_dtype == "bfloat16":
+        torch_dtype = torch.bfloat16
+
     model = AutoModelForCausalLM.from_pretrained(
         script_args.model_name_or_path,
         low_cpu_mem_usage=True,
-        torch_dtype=torch.float16,
-        load_in_4bit=True,
+        torch_dtype=torch_dtype,
+        load_in_4bit=script_args.load_in_4bit,
+        device_map={"": Accelerator().local_process_index},
     )
     model.config.use_cache = False
 
@@ -138,12 +159,6 @@ if __name__ == "__main__":
             name for name, buffer in model.named_buffers() if buffer.dtype == torch.bool
         ]
 
-    model_ref = AutoModelForCausalLM.from_pretrained(
-        script_args.model_name_or_path,
-        low_cpu_mem_usage=True,
-        torch_dtype=torch.float16,
-        load_in_4bit=True,
-    )
     tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf")
     tokenizer.pad_token = tokenizer.eos_token
 
@@ -181,6 +196,8 @@ if __name__ == "__main__":
         bf16=True,
         remove_unused_columns=False,
         run_name="dpo_llama2",
+        gradient_checkpointing_kwargs=dict(use_reentrant=script_args.gradient_checkpointing_use_reentrant),
+        seed=script_args.seed,
     )
 
     peft_config = LoraConfig(
@@ -203,7 +220,7 @@ if __name__ == "__main__":
     # 5. initialize the DPO trainer
     dpo_trainer = DPOTrainer(
         model,
-        model_ref,
+        ref_model=None,
         args=training_args,
         beta=script_args.beta,
         train_dataset=train_dataset,

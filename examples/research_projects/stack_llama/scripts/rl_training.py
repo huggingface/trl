@@ -1,4 +1,3 @@
-# coding=utf-8
 # Copyright 2022 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -67,6 +66,7 @@ class ScriptArguments:
     )
 
     adap_kl_ctrl: Optional[bool] = field(default=True, metadata={"help": "Use adaptive KL control, otherwise linear"})
+    load_in_8bit: Optional[bool] = field(default=True, metadata={"help": "whether to load the model in 8bit"})
 
 
 parser = HfArgumentParser(ScriptArguments)
@@ -163,7 +163,7 @@ dataset = build_dataset(tokenizer)
 
 
 def collator(data):
-    return dict((key, [d[key] for d in data]) for key in data[0])
+    return {key: [d[key] for d in data] for key in data[0]}
 
 
 # set seed before initializing value head for deterministic eval
@@ -181,7 +181,7 @@ lora_config = LoraConfig(
 )
 model = AutoModelForCausalLMWithValueHead.from_pretrained(
     config.model_name,
-    load_in_8bit=True,
+    load_in_8bit=script_args.load_in_8bit,
     device_map={"": current_device},
     peft_config=lora_config,
 )
@@ -216,11 +216,13 @@ sentiment_pipe = pipeline(
     "sentiment-analysis",
     model=reward_model_name,
     device_map={"": current_device},
-    model_kwargs={"load_in_8bit": True},
+    model_kwargs={"load_in_8bit": script_args.load_in_8bit},
     tokenizer=tokenizer,
     return_token_type_ids=False,
 )
 
+if sentiment_pipe.model.config.pad_token_id is None:
+    sentiment_pipe.model.config.pad_token_id = sentiment_pipe.model.config.eos_token_id
 # We then define the arguments to pass to the `generate` function. These arguments
 # are passed to the `generate` function of the PPOTrainer, which is a wrapper around
 # the `generate` function of the trained model.

@@ -523,7 +523,7 @@ class DDPOTrainer(BaseTrainer):
             global_step (int): The updated global step
         """
         info = defaultdict(list)
-        for i, sample in enumerate(batched_samples):
+        for _i, sample in enumerate(batched_samples):
             if self.config.train_cfg:
                 # concat negative prompts to sample prompts to avoid two forward passes
                 embeds = torch.cat([sample["negative_prompt_embeds"], sample["prompt_embeds"]])
@@ -613,7 +613,7 @@ class DDPOTrainer(BaseTrainer):
         try:
             user = whoami()["name"]
         # handle the offline case
-        except:  # noqa
+        except Exception:
             warnings.warn("Cannot retrieve user information assuming you are running in offline mode.")
             return
 

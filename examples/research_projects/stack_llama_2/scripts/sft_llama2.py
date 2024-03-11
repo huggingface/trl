@@ -8,7 +8,14 @@ from accelerate import Accelerator
 from datasets import load_dataset
 from peft import AutoPeftModelForCausalLM, LoraConfig
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, HfArgumentParser, TrainingArguments
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    BitsAndBytesConfig,
+    HfArgumentParser,
+    TrainingArguments,
+    set_seed,
+)
 
 from trl import SFTTrainer
 from trl.import_utils import is_npu_available, is_xpu_available
@@ -27,6 +34,7 @@ class ScriptArguments:
     seq_length: Optional[int] = field(default=1024, metadata={"help": "the sequence length"})
     num_workers: Optional[int] = field(default=4, metadata={"help": "the number of workers"})
     packing: Optional[bool] = field(default=True, metadata={"help": "whether to use packing for SFTTrainer"})
+    use_bnb: Optional[bool] = field(default=True, metadata={"help": "whether to use BitsAndBytes"})
 
     # LoraConfig
     lora_alpha: Optional[float] = field(default=16, metadata={"help": "the lora alpha parameter"})
@@ -52,6 +60,8 @@ if training_args.group_by_length and script_args.packing:
 # `gradient_checkpointing=True` will cause `Variable._execution_engine.run_backward`.
 if training_args.gradient_checkpointing:
     raise ValueError("gradient_checkpointing not supported")
+
+set_seed(training_args.seed)
 
 
 def chars_token_ratio(dataset, tokenizer, nb_examples=400):
@@ -91,7 +101,7 @@ def prepare_sample_text(example):
     return text
 
 
-def create_datasets(tokenizer, args):
+def create_datasets(tokenizer, args, seed=None):
     dataset = load_dataset(
         args.dataset_name,
         data_dir=args.subset,
@@ -104,9 +114,9 @@ def create_datasets(tokenizer, args):
         print("Loading the dataset in streaming mode")
         valid_data = dataset.take(args.size_valid_set)
         train_data = dataset.skip(args.size_valid_set)
-        train_data = train_data.shuffle(buffer_size=args.shuffle_buffer, seed=None)
+        train_data = train_data.shuffle(buffer_size=args.shuffle_buffer, seed=seed)
     else:
-        dataset = dataset.train_test_split(test_size=0.005, seed=None)
+        dataset = dataset.train_test_split(test_size=0.005, seed=seed)
         train_data = dataset["train"]
         valid_data = dataset["test"]
         print(f"Size of the train set: {len(train_data)}. Size of the validation set: {len(valid_data)}")
@@ -133,11 +143,13 @@ def create_datasets(tokenizer, args):
     return train_dataset, valid_dataset
 
 
-bnb_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_quant_type="nf4",
-    bnb_4bit_compute_dtype=torch.bfloat16,
-)
+bnb_config = None
+if script_args.use_bnb:
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.bfloat16,
+    )
 
 base_model = AutoModelForCausalLM.from_pretrained(
     script_args.model_name,
@@ -153,7 +165,7 @@ tokenizer = AutoTokenizer.from_pretrained(script_args.model_name, trust_remote_c
 tokenizer.pad_token = tokenizer.eos_token
 tokenizer.padding_side = "right"  # Fix weird overflow issue with fp16 training
 
-train_dataset, eval_dataset = create_datasets(tokenizer, script_args)
+train_dataset, eval_dataset = create_datasets(tokenizer, script_args, seed=training_args.seed)
 
 trainer = SFTTrainer(
     model=base_model,

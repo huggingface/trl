@@ -107,7 +107,7 @@ class DDPOConfig:
     def __post_init__(self):
         if self.log_with not in ["wandb", "tensorboard"]:
             warnings.warn(
-                ("Accelerator tracking only supports image logging if `log_with` is set to 'wandb' or 'tensorboard'.")
+                "Accelerator tracking only supports image logging if `log_with` is set to 'wandb' or 'tensorboard'."
             )
 
         if self.log_with == "wandb" and not is_torchvision_available():

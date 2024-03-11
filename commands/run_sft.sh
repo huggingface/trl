@@ -41,8 +41,8 @@ accelerate launch $EXTRA_ACCELERATE_ARGS \
     --dataset_name $DATASET_NAME \
     --output_dir $OUTPUT_DIR \
     --max_steps $MAX_STEPS \
-    --batch_size $BATCH_SIZE \
-    --seq_length $SEQ_LEN \
+    --per_device_train_batch_size $BATCH_SIZE \
+    --max_seq_length $SEQ_LEN \
     $EXTRA_TRAINING_ARGS
 """
 

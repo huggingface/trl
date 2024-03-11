@@ -251,7 +251,7 @@ trainer = SFTTrainer(
 
 trainer.train()
 ```
-To preperly format your input make sure to process all the examples by looping over them and returning a list of processed text. Check out a full example on how to use SFTTrainer on alpaca dataset [here](https://github.com/huggingface/trl/pull/444#issue-1760952763)
+To properly format your input make sure to process all the examples by looping over them and returning a list of processed text. Check out a full example on how to use SFTTrainer on alpaca dataset [here](https://github.com/huggingface/trl/pull/444#issue-1760952763)
 
 ### Packing dataset ([`ConstantLengthDataset`])
 
@@ -271,6 +271,7 @@ trainer.train()
 ```
 
 Note that if you use a packed dataset and if you pass `max_steps` in the training arguments you will probably train your models for more than few epochs, depending on the way you have configured the packed dataset and the training protocol. Double check that you know and understand what you are doing.
+If you don't want to pack your `eval_dataset`, you can pass `eval_packing=False` to the `SFTTrainer` init method.
 
 #### Customize your prompts using packed dataset
 
@@ -426,13 +427,13 @@ To use Flash Attention 2, first install the latest `flash-attn` package:
 pip install -U flash-attn
 ```
 
-And add `use_flash_attention_2=True` when calling `from_pretrained`:
+And add `attn_implementation="flash_attention_2"` when calling `from_pretrained`:
 
 ```python
 model = AutoModelForCausalLM.from_pretrained(
     model_id,
     load_in_4bit=True,
-    use_flash_attention_2=True
+    attn_implementation="flash_attention_2"
 )
 ```
 
@@ -440,6 +441,45 @@ If you don't use quantization, make sure your model is loaded in half-precision 
 After loading your model, you can either train it as it is, or attach adapters and train adapters on it in case your model is quantized.
 
 In contrary to Flash Attention 1, the integration makes it possible to train your model on an arbitrary dataset that also includes padding tokens.
+
+
+### Using model creation utility
+
+We included a utility function to create your model.
+
+[[autodoc]] ModelConfig
+
+```python
+from trl import ModelConfig, SFTTrainer, get_kbit_device_map, get_peft_config, get_quantization_config
+model_config = ModelConfig(
+    model_name_or_path="facebook/opt-350m"
+    attn_implementation=None, # or "flash_attention_2"
+)
+torch_dtype = (
+    model_config.torch_dtype
+    if model_config.torch_dtype in ["auto", None]
+    else getattr(torch, model_config.torch_dtype)
+)
+quantization_config = get_quantization_config(model_config)
+model_kwargs = dict(
+    revision=model_config.model_revision,
+    trust_remote_code=model_config.trust_remote_code,
+    attn_implementation=model_config.attn_implementation,
+    torch_dtype=torch_dtype,
+    use_cache=False if training_args.gradient_checkpointing else True,
+    device_map=get_kbit_device_map() if quantization_config is not None else None,
+    quantization_config=quantization_config,
+)
+model = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, **model_kwargs)
+trainer = SFTTrainer(
+    ...,
+    model=model_config.model_name_or_path,
+    peft_config=get_peft_config(model_config),
+)
+```
+
+
+
 
 ### Enhance model's performances using NEFTune
 
@@ -542,6 +582,20 @@ Pay attention to the following best practices when training a model with that tr
 - For training adapters in 8bit, you might need to tweak the arguments of the `prepare_model_for_kbit_training` method from PEFT, hence we advise users to use `prepare_in_int8_kwargs` field, or create the `PeftModel` outside the [`SFTTrainer`] and pass it.
 - For a more memory-efficient training using adapters, you can load the base model in 8bit, for that simply add `load_in_8bit` argument when creating the [`SFTTrainer`], or create a base model in 8bit outside the trainer and pass it.
 - If you create a model outside the trainer, make sure to not pass to the trainer any additional keyword arguments that are relative to `from_pretrained()` method.
+
+## Multi-GPU Training
+
+Trainer (and thus SFTTrainer) supports multi-GPU training. If you run your script with `python script.py` it will default to using DP as the strategy, which may be [slower than expected](https://github.com/huggingface/trl/issues/1303). To use DDP (which is generally recommended, see [here](https://huggingface.co/docs/transformers/en/perf_train_gpu_many?select-gpu=Accelerate#data-parallelism) for more info) you must launch the script with `python -m torch.distributed.launch script.py` or `accelerate launch script.py`. For DDP to work you must also check the following:
+- If you're using gradient_checkpointing, add the following to the TrainingArguments: `gradient_checkpointing_kwargs={'use_reentrant':False}` (more info [here](https://github.com/huggingface/transformers/issues/26969)
+- Ensure that the model is placed on the correct device:
+```python
+from accelerate import PartialState
+device_string = PartialState().process_index
+model = AutoModelForCausalLM.from_pretrained(
+     ...
+    device_map={'':device_string}
+)
+```
 
 ## GPTQ Conversion
 
