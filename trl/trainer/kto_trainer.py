@@ -672,8 +672,8 @@ class KTOTrainer(Trainer):
         return dict(
             prompt_input_ids=prompt_input_ids,
             prompt_attention_mask=prompt_attention_mask,
-            input_ids=answer_input_ids,
-            attention_mask=answer_attention_mask,
+            answer_input_ids=answer_input_ids,
+            answer_attention_mask=answer_attention_mask,
         )
 
     def get_KL_dataset(self, batch) -> Dict:
@@ -709,66 +709,35 @@ class KTOTrainer(Trainer):
 
             if not isinstance(prompt, str):
                 raise ValueError(f"prompt should be an str but got {type(prompt)}")
-            prompt_tokens = self.tokenizer(prompt, add_special_tokens=False)
-            prompt_tokens = {f"prompt_{k}": v for k, v in prompt_tokens.items()}
-
+            
             if not isinstance(completion, str):
                 raise ValueError(f"completion should be an str but got {type(completion)}")
-            completion_tokens = self.build_tokenized_answer(prompt, completion)
 
-            # Last prompt token might get merged by tokenizer and
-            # it should not be included for generation if that happens
-            completion_prompt_len_input_ids = len(completion_tokens["prompt_input_ids"])
-
-            for k, v in prompt_tokens.items():
-                prompt_tokens[k] = v[:completion_prompt_len_input_ids]
-
-            # add BOS token to head of prompt
-            prompt_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + prompt_tokens["prompt_input_ids"]
-            prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens["prompt_attention_mask"]
-
-            # add EOS token to end of completion
-            completion_tokens["input_ids"].append(self.tokenizer.eos_token_id)
-            completion_tokens["attention_mask"].append(1)
-
-            response_length = len(completion_tokens["input_ids"])
-
-            # if combined sequence is too long, truncate the prompt
-            for answer_tokens in [completion_tokens, prompt_tokens]:
-                if len(answer_tokens["prompt_input_ids"]) + response_length > self.max_length:
-                    if self.truncation_mode == "keep_start":
-                        for k in ["prompt_input_ids", "prompt_attention_mask"]:
-                            answer_tokens[k] = answer_tokens[k][: self.max_prompt_length]
-                    elif self.truncation_mode == "keep_end":
-                        for k in ["prompt_input_ids", "prompt_attention_mask"]:
-                            answer_tokens[k] = answer_tokens[k][-self.max_prompt_length :]
-                    else:
-                        raise ValueError(f"Unknown truncation mode: {self.truncation_mode}")
+            # keys of format prompt_* refers to just the prompt and answer_* refers to just the answer
+            all_tokens = self.build_tokenized_answer(prompt, completion)
+            
+            max_length = self.max_length - 2
+            # if combined sequence is too long (> max_length - 1 for BOS token - 1 for EOS), truncate the prompt
+            if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
+                if self.truncation_mode == "keep_start":
+                    all_tokens["prompt_input_ids"] = all_tokens["prompt_input_ids"][: self.max_prompt_length]
+                elif self.truncation_mode == "keep_end":
+                    all_tokens["prompt_input_ids"] = all_tokens["prompt_input_ids"][-self.max_prompt_length :]
+                else:
+                    raise ValueError(f"Unknown truncation mode: {self.truncation_mode}")
 
             # if that's still too long, truncate the response
-            if len(completion_tokens["prompt_input_ids"]) + response_length > self.max_length:
-                for k in ["input_ids", "attention_mask"]:
-                    completion_tokens[k] = completion_tokens[k][: self.max_length - self.max_prompt_length]
+            if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
+                all_tokens["answer_input_ids"] = all_tokens["answer_input_ids"][: max_length - self.max_prompt_length]
 
-            # Create labels
-            completion_sequence_tokens = {
-                k: completion_tokens[f"prompt_{k}"] + completion_tokens[k] for k in ["input_ids", "attention_mask"]
-            }
+            # for legacy reasons, use the completion_* prefix to now refer to the joint sequence
+            batch[f"{prefix}prompt_input_ids"] = [self.tokenizer.bos_token_id] + all_tokens["prompt_input_ids"]
+            batch[f"{prefix}prompt_attention_mask"] = [1] + all_tokens["prompt_attention_mask"]
+            batch[f"{prefix}completion_input_ids"] = [self.tokenizer.bos_token_id] + all_tokens["prompt_input_ids"] + all_tokens["answer_input_ids"] + [self.tokenizer.eos_token_id]
+            batch[f"{prefix}completion_attention_mask"] = [1] + all_tokens["prompt_attention_mask"] + all_tokens["answer_attention_mask"] + [1]
 
-            completion_sequence_tokens["labels"] = completion_sequence_tokens["input_ids"][:]
-            completion_sequence_tokens["labels"][: len(completion_tokens["prompt_input_ids"])] = [
-                self.label_pad_token_id
-            ] * len(completion_tokens["prompt_input_ids"])
-
-            for k, toks in {
-                "completion_": completion_sequence_tokens,
-                "": prompt_tokens,
-            }.items():
-                for type_key, tokens in toks.items():
-                    if type_key == "token_type_ids":
-                        continue
-                    batch[f"{prefix}{k}{type_key}"] = tokens
-
+            batch[f"{prefix}completion_labels"] = batch[f"{prefix}completion_input_ids"][:]
+            batch[f"{prefix}completion_labels"][: len(batch[f"{prefix}prompt_input_ids"])] = [self.label_pad_token_id] * len(batch[f"{prefix}prompt_input_ids"])
         else:
             completion_tokens = self.tokenizer(
                 completion, truncation=True, max_length=self.max_completion_length, add_special_tokens=True
