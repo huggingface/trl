@@ -718,16 +718,18 @@ class KTOTrainer(Trainer):
             max_length = self.max_length - 2
             # if combined sequence is too long (> max_length - 1 for BOS token - 1 for EOS), truncate the prompt
             if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
-                if self.truncation_mode == "keep_start":
-                    all_tokens["prompt_input_ids"] = all_tokens["prompt_input_ids"][: self.max_prompt_length]
-                elif self.truncation_mode == "keep_end":
-                    all_tokens["prompt_input_ids"] = all_tokens["prompt_input_ids"][-self.max_prompt_length :]
-                else:
-                    raise ValueError(f"Unknown truncation mode: {self.truncation_mode}")
+                for k in ["prompt_input_ids", "prompt_attention_mask"]:
+                    if self.truncation_mode == "keep_start":
+                        all_tokens[k] = all_tokens[k][: self.max_prompt_length]
+                    elif self.truncation_mode == "keep_end":
+                        all_tokens[k] = all_tokens[k][-self.max_prompt_length :]
+                    else:
+                        raise ValueError(f"Unknown truncation mode: {self.truncation_mode}")
 
             # if that's still too long, truncate the response
             if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
-                all_tokens["answer_input_ids"] = all_tokens["answer_input_ids"][: max_length - self.max_prompt_length]
+                for k in ["answer_input_ids", "answer_attention_mask"]:
+                    all_tokens[k] = all_tokens[k][: max_length - self.max_prompt_length]
 
             # for legacy reasons, use the completion_* prefix to now refer to the joint sequence
             batch[f"{prefix}prompt_input_ids"] = [self.tokenizer.bos_token_id] + all_tokens["prompt_input_ids"]
