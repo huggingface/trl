@@ -120,5 +120,5 @@ if __name__ == "__main__":
 
     trainer.train()
 
-    with console.status("[bold green]Training completed ! saving the model ..."):
+    with console.status(f"[bold green]Training completed! Saving the model to {training_args.output_dir}"):
         trainer.save_model(training_args.output_dir)
