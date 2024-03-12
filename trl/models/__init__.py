@@ -31,7 +31,6 @@ _import_structure = {
     "utils": [
         "setup_chat_format",
     ],
-    "SUPPORTED_ARCHITECTURES": SUPPORTED_ARCHITECTURES,
 }
 
 try:

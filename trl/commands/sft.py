@@ -92,6 +92,7 @@ class ScriptArguments:
     dataset_name: str = field(default="timdettmers/openassistant-guanaco", metadata={"help": "the dataset name"})
     dataset_text_field: str = field(default="text", metadata={"help": "the text field of the dataset"})
     max_seq_length: int = field(default=512, metadata={"help": "The maximum sequence length for SFT Trainer"})
+    packing: bool = field(default=False, metadata={"help": "Whether to apply data packing or not during training"})
 
 
 if __name__ == "__main__":
@@ -144,7 +145,7 @@ if __name__ == "__main__":
             dataset_text_field="text",
             max_seq_length=args.max_seq_length,
             tokenizer=tokenizer,
-            packing=True,
+            packing=args.packing,
             peft_config=get_peft_config(model_config),
             callbacks=[RichProgressCallback],
         )
