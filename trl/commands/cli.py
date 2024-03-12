@@ -17,6 +17,7 @@ class ScriptArguments:
     dataset_text_field: str = field(default="text", metadata={"help": "the text field of the dataset"})
     max_seq_length: int = field(default=512, metadata={"help": "The maximum sequence length for SFT Trainer"})
     config: str = field(default=None, metadata={"help": "Path to the optional config file"})
+    packing: bool = field(default=False, metadata={"help": "Whether to apply data packing or not during training"})
 
 
 def main():
@@ -54,6 +55,12 @@ def main():
 
         current_dir = os.path.dirname(__file__)
 
+    EXTRA_AGRS = """
+    """
+
+    if args.packing:
+        EXTRA_AGRS += """--packing yes """
+
     command = f"""
     python {current_dir}/{command_name}.py \
         --model_name_or_path {model_name} \
@@ -61,8 +68,10 @@ def main():
         --output_dir {output_dir} \
         --report_to {report_to} \
         --dataset_text_field {dataset_text_field} \
-        --max_seq_length {max_seq_length}
+        --max_seq_length {max_seq_length} \
     """
+
+    command += EXTRA_AGRS
 
     try:
         subprocess.run(
