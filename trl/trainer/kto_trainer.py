@@ -362,10 +362,10 @@ class KTOTrainer(Trainer):
             if not (des_weight_in_range or und_weight_in_range):
                 warnings.warn(
                     f"""
-                    You have different amounts of desirable/positive and undesirable/negative examples but the 
-                    weights on the desirable and undesirable losses don't seem to be in an ideal range. Based 
-                    on your data, we recommend EITHER desirable_weight in [{des_weight_lower_bound}, {des_weight_upper_bound}] 
-                    or undesirable_weight in [{und_weight_lower_bound}, {und_weight_upper_bound}] (but NOT BOTH). 
+                    You have different amounts of desirable/positive and undesirable/negative examples but the
+                    weights on the desirable and undesirable losses don't seem to be in an ideal range. Based
+                    on your data, we recommend EITHER desirable_weight in [{des_weight_lower_bound}, {des_weight_upper_bound}]
+                    or undesirable_weight in [{und_weight_lower_bound}, {und_weight_upper_bound}] (but NOT BOTH).
                     See the documentation on how to optimally set these weights.""",
                     UserWarning,
                 )
@@ -708,13 +708,13 @@ class KTOTrainer(Trainer):
 
             if not isinstance(prompt, str):
                 raise ValueError(f"prompt should be an str but got {type(prompt)}")
-            
+
             if not isinstance(completion, str):
                 raise ValueError(f"completion should be an str but got {type(completion)}")
 
             # keys of format prompt_* refers to just the prompt and answer_* refers to just the answer
             all_tokens = self.build_tokenized_answer(prompt, completion)
-            
+
             max_length = self.max_length - 2
             # if combined sequence is too long (> max_length - 1 for BOS token - 1 for EOS), truncate the prompt
             if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
@@ -734,11 +734,20 @@ class KTOTrainer(Trainer):
             # for legacy reasons, use the completion_* prefix to now refer to the joint sequence
             batch[f"{prefix}prompt_input_ids"] = [self.tokenizer.bos_token_id] + all_tokens["prompt_input_ids"]
             batch[f"{prefix}prompt_attention_mask"] = [1] + all_tokens["prompt_attention_mask"]
-            batch[f"{prefix}completion_input_ids"] = [self.tokenizer.bos_token_id] + all_tokens["prompt_input_ids"] + all_tokens["answer_input_ids"] + [self.tokenizer.eos_token_id]
-            batch[f"{prefix}completion_attention_mask"] = [1] + all_tokens["prompt_attention_mask"] + all_tokens["answer_attention_mask"] + [1]
+            batch[f"{prefix}completion_input_ids"] = (
+                [self.tokenizer.bos_token_id]
+                + all_tokens["prompt_input_ids"]
+                + all_tokens["answer_input_ids"]
+                + [self.tokenizer.eos_token_id]
+            )
+            batch[f"{prefix}completion_attention_mask"] = (
+                [1] + all_tokens["prompt_attention_mask"] + all_tokens["answer_attention_mask"] + [1]
+            )
 
             batch[f"{prefix}completion_labels"] = batch[f"{prefix}completion_input_ids"][:]
-            batch[f"{prefix}completion_labels"][: len(batch[f"{prefix}prompt_input_ids"])] = [self.label_pad_token_id] * len(batch[f"{prefix}prompt_input_ids"])
+            batch[f"{prefix}completion_labels"][: len(batch[f"{prefix}prompt_input_ids"])] = [
+                self.label_pad_token_id
+            ] * len(batch[f"{prefix}prompt_input_ids"])
         else:
             completion_tokens = self.tokenizer(
                 completion, truncation=True, max_length=self.max_completion_length, add_special_tokens=True
