@@ -23,9 +23,14 @@ class YamlConfigParser:
         if dataclasses is None:
             dataclasses = []
 
-        from transformers.trainer_pt_utils import AcceleratorConfig
+        # Here we import `AcceleratorConfig` from the local level to not
+        # break TRL lazy imports.
+        try:
+            from transformers.trainer_pt_utils import AcceleratorConfig
 
-        self._not_supported_classes.append(AcceleratorConfig)
+            self._not_supported_classes.append(AcceleratorConfig)
+        except ImportError:
+            ...
 
         self.merge_dataclasses(dataclasses)
 

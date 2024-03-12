@@ -61,13 +61,16 @@ class ScriptArguments:
     dataset_text_field: str = field(default="text", metadata={"help": "the text field of the dataset"})
     max_seq_length: int = field(default=512, metadata={"help": "The maximum sequence length for SFT Trainer"})
     packing: bool = field(default=False, metadata={"help": "Whether to apply data packing or not during training"})
+    gradient_checkpointing_use_reentrant: bool = field(
+        default=False, metadata={"help": "Whether to apply `use_reentrant` for gradient_checkpointing"}
+    )
 
 
 if __name__ == "__main__":
     console = Console()
     parser = HfArgumentParser((ScriptArguments, TrainingArguments, ModelConfig))
     args, training_args, model_config, _ = parser.parse_args_into_dataclasses(return_remaining_strings=True)
-    training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
+    training_args.gradient_checkpointing_kwargs = dict(use_reentrant=args.gradient_checkpointing_use_reentrant)
 
     # Force use our print callback
     training_args.disable_tqdm = True
