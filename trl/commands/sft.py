@@ -14,38 +14,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""
-# regular:
-python examples/scripts/sft.py \
-    --model_name_or_path="facebook/opt-350m" \
-    --report_to="wandb" \
-    --learning_rate=1.41e-5 \
-    --per_device_train_batch_size=64 \
-    --gradient_accumulation_steps=16 \
-    --output_dir="sft_openassistant-guanaco" \
-    --logging_steps=1 \
-    --num_train_epochs=3 \
-    --max_steps=-1 \
-    --push_to_hub \
-    --gradient_checkpointing \
-
-# peft:
-python examples/scripts/sft.py \
-    --model_name_or_path="facebook/opt-350m" \
-    --report_to="wandb" \
-    --learning_rate=1.41e-5 \
-    --per_device_train_batch_size=64 \
-    --gradient_accumulation_steps=16 \
-    --output_dir="sft_openassistant-guanaco" \
-    --logging_steps=1 \
-    --num_train_epochs=3 \
-    --max_steps=-1 \
-    --push_to_hub \
-    --gradient_checkpointing \
-    --use_peft \
-    --lora_r=64 \
-    --lora_alpha=16
-"""
 import logging
 import warnings
 
