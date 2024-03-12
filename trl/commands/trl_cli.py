@@ -13,47 +13,46 @@ SUPPORTED_COMMANDS = ["sft"]
 
 @dataclass
 class ScriptArguments:
-    dataset_name: str = field(default="timdettmers/openassistant-guanaco", metadata={"help": "the dataset name"})
+    dataset_name: str = field(metadata={"help": "the dataset name"})
     dataset_text_field: str = field(default="text", metadata={"help": "the text field of the dataset"})
     max_seq_length: int = field(default=512, metadata={"help": "The maximum sequence length for SFT Trainer"})
     config: str = field(default=None, metadata={"help": "Path to the optional config file"})
 
 
 def main():
-    from transformers import HfArgumentParser, TrainingArguments
-
-    from trl import ModelConfig
-
     console = Console()
 
-    # command_name = sys.argv[1]
+    with console.status("[bold purple]Initializing the CLI..."):
+        from transformers import HfArgumentParser, TrainingArguments
 
-    parser = HfArgumentParser((ScriptArguments, TrainingArguments, ModelConfig))
+        from trl import ModelConfig
 
-    (args, training_args, model_config, command_name) = parser.parse_args_into_dataclasses(
-        return_remaining_strings=True
-    )
+        parser = HfArgumentParser((ScriptArguments, TrainingArguments, ModelConfig))
 
-    command_name = command_name[0]
-
-    if command_name not in SUPPORTED_COMMANDS:
-        raise ValueError(
-            f"Please use one of the supported commands, got {command_name} - supported commands are {SUPPORTED_COMMANDS}"
+        (args, training_args, model_config, command_name) = parser.parse_args_into_dataclasses(
+            return_remaining_strings=True
         )
 
-    # Get the required args
-    model_name = model_config.model_name_or_path
-    dataset_name = args.dataset_name
-    dataset_text_field = args.dataset_text_field
-    max_seq_length = args.max_seq_length
-    config = args.config
+        command_name = command_name[0]
 
-    # if the configuration is None, create a new `output_dir` variable
-    config_parser = YamlConfigParser(config)
-    output_dir = training_args.output_dir
-    report_to = config_parser.report_to
+        if command_name not in SUPPORTED_COMMANDS:
+            raise ValueError(
+                f"Please use one of the supported commands, got {command_name} - supported commands are {SUPPORTED_COMMANDS}"
+            )
 
-    current_dir = os.path.dirname(__file__)
+        # Get the required args
+        model_name = model_config.model_name_or_path
+        dataset_name = args.dataset_name
+        dataset_text_field = args.dataset_text_field
+        max_seq_length = args.max_seq_length
+        config = args.config
+
+        # if the configuration is None, create a new `output_dir` variable
+        config_parser = YamlConfigParser(config)
+        output_dir = training_args.output_dir
+        report_to = config_parser.report_to
+
+        current_dir = os.path.dirname(__file__)
 
     command = f"""
     python {current_dir}/{command_name}.py \
