@@ -728,9 +728,6 @@ class DPOTrainer(Trainer):
         # logs either has 'loss' or 'eval_loss'
         train_eval = "train" if "loss" in logs else "eval"
         # Add averaged stored metrics to logs
-        import pdb
-
-        pdb.set_trace()
         for key, metrics in self._stored_metrics[train_eval].items():
             logs[key] = torch.tensor(metrics).mean().item()
         del self._stored_metrics[train_eval]

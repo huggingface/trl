@@ -15,11 +15,12 @@ def run_exp(exp_dict, savedir, args):
     git_hash = exp_dict.pop("git")
     print(args)
 
+    os.environ["WANDB_RUN_ID"] = os.path.basename(savedir)
+    os.environ["WANDB_NAME"] = exp_name
+    os.environ["WANDB_RUN_GROUP"] = exp_name + "_" + git_hash
+
     if args.wandb:
         os.environ["WANDB_MODE"] = "online"
-        os.environ["WANDB_RUN_ID"] = os.path.basename(savedir)
-        os.environ["WANDB_NAME"] = exp_name
-        os.environ["WANDB_RUN_GROUP"] = exp_name + git_hash
     else:
         os.environ["WANDB_MODE"] = "disabled"
 
@@ -150,6 +151,7 @@ if __name__ == "__main__":
     # parser.add_argument("-d", "--deepspeed", default=None, help="ds stage")
     parser.add_argument("--gpu-mem", default=32, type=int, help="mem of gpus to use for experiment")
     parser.add_argument("--wandb", action="store_true", help="force enable wandb", default=False)
+    parser.add_argument("--local-save", action="store_true", help="force local save", default=False)
     parser.add_argument("--search", default=None)
     # parser.add_argument(
     #     "--exp-id", default=None, help="id used to resume an experiment"
@@ -228,7 +230,8 @@ if __name__ == "__main__":
             timenow = datetime.datetime.now().strftime("%d-%m-%y_%H-%M-%S")
             exp_list[0]["name"] = exp_list[0]["name"] + f"_local_{timenow}"
 
-        exp_list[0]["save_strategy"] = "no"
+        if not args.local_save:
+            exp_list[0]["save_strategy"] = "no"
 
     # Run experiments and create results file
     hw.run_wizard(

@@ -12,15 +12,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# import random
+
 import os
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
 import bitsandbytes as bnb
 import torch
 from accelerate import Accelerator
-from callbacks import GoldModelRewardCallback, PerplexityGenCallback
+from callbacks import GoldModelRewardCallback, PerplexityCallback, PerplexityGenCallback
 from datasets import builder, concatenate_datasets, load_dataset
 from peft import AutoPeftModelForCausalLM, LoraConfig, PeftConfig, get_peft_model, prepare_model_for_kbit_training
 from scalar_rm_model import ScalarModel
@@ -119,7 +119,7 @@ class ScriptArguments:
     logging_steps: Optional[int] = field(default=100, metadata={"help": "the number of update steps between two logs"})
     log_n_samples_during_eval: Optional[int] = field(default=100)
     eval_steps: Optional[float] = field(default=None, metadata={"help": "the number of steps to eval at"})
-    save_steps: Optional[int] = field(default=1000, metadata={"help": "the number of steps to save at"})
+    save_steps: Optional[float] = field(default=1000, metadata={"help": "the number of steps to save at"})
     save_strategy: Optional[str] = field(default="steps")
     report_to: Optional[str] = field(
         default="wandb",
@@ -137,9 +137,11 @@ class ScriptArguments:
             "https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992"
         },
     )
+    push_to_hub: Optional[bool] = field(default=False)
+    push_to_hub_organization: Optional[str] = field(default=None)
 
     # gold model
-    gold_eval: bool = field(default=True)
+    gold_eval: Literal["full", "gen", "ppl", "none"] = field(default="full")
     gold_model_name: str = field(default=None, metadata={"help": "the gold reward model name"})
     gold_model_revision: Optional[str] = field(default=None, metadata={"help": "the model name"})
     gold_in_8bit: Optional[bool] = field(default=False, metadata={"help": "gold the model in 8 bits precision"})
@@ -338,7 +340,6 @@ def create_and_prepare_dataset(args):
     return train_dataset, eval_dataset
 
 
-
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
     script_args = parser.parse_args_into_dataclasses()[0]
@@ -353,6 +354,18 @@ if __name__ == "__main__":
         ]
 
     train_dataset, eval_dataset = create_and_prepare_dataset(script_args)
+
+    if script_args.push_to_hub:
+        model_id = script_args.model_name.rsplit("/", 1)[-1] + "_" + os.getenv("WANDB_RUN_GROUP")
+        hub_model_id = f"{script_args.push_to_hub_organization}/{model_id}"
+        print(f"pushing model to {hub_model_id}")
+    else:
+        hub_model_id = None
+
+    if script_args.gold_eval == "ppl":
+        hub_strategy = "all_checkpoints"
+    else:
+        hub_strategy = "every_save"
 
     # 4. initialize training arguments:
     training_args = TrainingArguments(
@@ -376,6 +389,10 @@ if __name__ == "__main__":
         bf16=script_args.bf16,
         fp16=script_args.fp16,
         ddp_find_unused_parameters=(script_args.gradient_checkpointing),
+        push_to_hub=script_args.push_to_hub,
+        hub_model_id=hub_model_id,
+        hub_strategy=hub_strategy,
+        hub_always_push=True,
     )
 
     # 5. initialize the DPO trainer
@@ -391,9 +408,8 @@ if __name__ == "__main__":
         max_prompt_length=script_args.max_prompt_length,
     )
 
-
     # Gold Eval
-    if script_args.gold_eval:
+    if script_args.gold_eval != "none":
         gold_eval_dataset = load_dataset(
             script_args.gold_dataset_name,
             split=script_args.gold_eval_split,
@@ -421,7 +437,7 @@ if __name__ == "__main__":
                 pad_token_id=tokenizer.eos_token_id,
             )
 
-        if script_args.gold_model_name:
+        if script_args.gold_eval == "full":
             gold_model = create_and_prepare_gold_model(script_args)
 
             callback = GoldModelRewardCallback(
@@ -441,7 +457,15 @@ if __name__ == "__main__":
         else:
             run_name = os.getenv("WANDB_NAME", f"{script_args.model_name}_{script_args.gold_dataset_name}")
             run_name += "_" + os.getenv("WANDB_RUN_ID", "xxxxx")[:5]
-            callback = PerplexityGenCallback(
+
+            if script_args.gold_eval == "gen":
+                callback_cls = PerplexityGenCallback
+            elif script_args.gold_eval == "ppl":
+                callback_cls = PerplexityCallback
+            else:
+                raise NotImplementedError
+
+            callback = callback_cls(
                 args=training_args,
                 dataset=gold_eval_dataset,
                 tokenizer=tokenizer,

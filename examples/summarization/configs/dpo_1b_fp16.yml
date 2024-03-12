@@ -6,8 +6,10 @@ tokenizer_name: EleutherAI/pythia-1b-deduped
 prompt_field: query
 eval_split: validation
 max_target_length: 128
-gold_eval: True
 ## training stuff
+gold_eval: ppl
+eval_steps: 0.2
+save_steps: 0.2
 beta: 0.5
 max_steps: -1
 num_train_epochs: 2

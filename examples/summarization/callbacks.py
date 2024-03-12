@@ -228,6 +228,86 @@ class GoldModelRewardCallback(TrainerCallback):
             return policy_output_decoded, reference_output_decoded
 
 
+class PerplexityCallback(TrainerCallback):
+    """Like GoldModelReward in that you generate and get ppl on dataset
+
+    But you don't run eval with the gold model
+    Useful when gold model is very larger and you want to run inference later
+    """
+
+    def __init__(
+        self,
+        args,
+        dataset,
+        tokenizer,
+        accelerator,
+        max_length,
+        max_prompt_length,
+        prompt_field,
+        target_field,
+        **kwargs,
+    ):
+        self.max_length = max_length
+
+        # data_collator = DataCollatorWithPadding(tokenizer)
+        data_collator = PromptAndTextCollator(
+            tokenizer,
+            max_prompt_length=max_prompt_length,
+            max_length=max_length,
+            prompt_field=prompt_field,
+            target_field=target_field,
+        )
+        dataloader_params = {
+            "batch_size": args.eval_batch_size,
+            "collate_fn": data_collator,
+            "num_workers": args.dataloader_num_workers,
+            "pin_memory": args.dataloader_pin_memory,
+        }
+        dataloader = DataLoader(dataset, **dataloader_params)
+        self.dataloader = accelerator.prepare(dataloader)
+        self.accelerator = accelerator
+        self.completed_step = -1
+
+    def on_evaluate(self, args, state, control, model, tokenizer, metrics, **kwargs):
+        nll_sum = 0.0
+        total_samples = 0
+
+        if state.global_step == self.completed_step:
+            return
+
+        for inputs in tqdm(
+            self.dataloader, desc="PPL and Gen Eval", dynamic_ncols=True, disable=not state.is_local_process_zero
+        ):
+            # get loss over true continuation i.e. ppl on dataset
+            with torch.no_grad():
+                nll_loss = model(
+                    input_ids=inputs["text_input_ids"],
+                    attention_mask=inputs["text_attention_mask"],
+                    labels=inputs["text_labels"],
+                ).loss
+
+            nll_loss = self.accelerator.gather_for_metrics(nll_loss)
+
+            if state.is_local_process_zero:
+                total_samples += nll_loss.size(0)
+                nll_sum += nll_loss.sum().item()
+
+        if state.is_world_process_zero:
+            # gather_for_metrics doesn't work for list of strings?
+            gold_log = {
+                "eval/perplexity": math.exp(nll_sum / total_samples),
+            }
+            for key, value in gold_log.items():
+                print(f"{key}: {value}")
+            if state.epoch:
+                gold_log["epoch"] = round(state.epoch, 2)
+                gold_log["step"] = state.global_step
+
+            wandb.log(gold_log)
+
+        self.completed_step = state.global_step
+
+
 class PerplexityGenCallback(TrainerCallback):
     """Like GoldModelReward in that you generate and get ppl on dataset
 
@@ -318,8 +398,6 @@ class PerplexityGenCallback(TrainerCallback):
                 generation_strs = tokenizer.batch_decode(generation_ids, skip_special_tokens=True)
                 all_prompts.extend(prompts)
                 all_generations.extend(generation_strs)
-
-            # self.accelerator.wait_for_everyone()
 
         if state.is_world_process_zero:
             # gather_for_metrics doesn't work for list of strings?
