@@ -1,4 +1,6 @@
 # flake8: noqa
+# This file is a copy of trl/examples/scripts/sft.py so that we could
+# use it together with rich and the TRL CLI in a more customizable manner.
 # Copyright 2023 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
