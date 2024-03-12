@@ -50,7 +50,7 @@ from datasets import load_dataset
 from tqdm import tqdm
 from transformers import AutoTokenizer, HfArgumentParser, TrainingArguments
 
-from trl import ModelConfig, SFTTrainer, get_peft_config, get_quantization_config
+from trl import ModelConfig, SFTTrainer, get_kbit_device_map, get_peft_config, get_quantization_config
 
 
 tqdm.pandas()
@@ -83,7 +83,7 @@ if __name__ == "__main__":
         attn_implementation=model_config.attn_implementation,
         torch_dtype=torch_dtype,
         use_cache=False if training_args.gradient_checkpointing else True,
-        # device_map=get_kbit_device_map() if quantization_config is not None else None,
+        device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
     tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path, use_fast=True)
