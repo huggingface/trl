@@ -41,8 +41,10 @@ _import_structure = {
     "ppo_config": ["PPOConfig"],
     "ppo_trainer": ["PPOTrainer"],
     "reward_config": ["RewardConfig"],
-    "reward_trainer": ["RewardTrainer"],
+    "reward_trainer": ["RewardTrainer", "compute_accuracy"],
     "sft_trainer": ["SFTTrainer"],
+    "base": ["BaseTrainer"],
+    "ddpo_config": ["DDPOConfig"],
 }
 
 try:
