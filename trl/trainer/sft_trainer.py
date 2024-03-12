@@ -309,10 +309,10 @@ class SFTTrainer(Trainer):
             if train_dataset is not None and len(train_dataset) > 0:
                 input_ids, attention_mask, labels = data_collator([train_dataset[0]]).values()
 
-                print("check_dataset_labels:")
-                print(tokenizer.decode(input_ids[0]))
+                print("check_dataset_labels:") # noqa
+                print(tokenizer.decode(input_ids[0])) # noqa
                 for token, label in zip(input_ids[0], labels[0]):
-                    print(f"{token.item()}, '{tokenizer.decode(token)}' {label.item()}")
+                    print(f"{token.item()}, '{tokenizer.decode(token)}' {label.item()}") # noqa
 
         super().__init__(
             model=model,
