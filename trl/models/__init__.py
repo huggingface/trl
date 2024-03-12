@@ -20,7 +20,6 @@ __version__ = "0.7.12.dev0"
 from typing import TYPE_CHECKING
 from ..import_utils import _LazyModule, is_diffusers_available, OptionalDependencyNotAvailable
 
-SUPPORTED_ARCHITECTURES = ()
 
 _import_structure = {
     "modeling_base": ["PreTrainedModelWrapper", "create_reference_model"],
@@ -28,9 +27,7 @@ _import_structure = {
         "AutoModelForCausalLMWithValueHead",
         "AutoModelForSeq2SeqLMWithValueHead",
     ],
-    "utils": [
-        "setup_chat_format",
-    ],
+    "utils": ["setup_chat_format", "SUPPORTED_ARCHITECTURES"],
 }
 
 try:
@@ -46,16 +43,10 @@ else:
         "DefaultDDPOStableDiffusionPipeline",
     ]
 
-
 if TYPE_CHECKING:
     from .modeling_base import PreTrainedModelWrapper, create_reference_model
     from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
-    from .utils import setup_chat_format
-
-    SUPPORTED_ARCHITECTURES = (
-        AutoModelForCausalLMWithValueHead,
-        AutoModelForSeq2SeqLMWithValueHead,
-    )
+    from .utils import setup_chat_format, SUPPORTED_ARCHITECTURES
 
     try:
         if not is_diffusers_available():

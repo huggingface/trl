@@ -30,6 +30,7 @@ _import_structure = {
         "PreTrainedModelWrapper",
         "create_reference_model",
         "setup_chat_format",
+        "SUPPORTED_ARCHITECTURES",
     ],
     "trainer": [
         "DataCollatorForCompletionOnlyLM",
@@ -86,6 +87,7 @@ if TYPE_CHECKING:
         PreTrainedModelWrapper,
         create_reference_model,
         setup_chat_format,
+        SUPPORTED_ARCHITECTURES,
     )
     from .trainer import (
         DataCollatorForCompletionOnlyLM,
