@@ -1,3 +1,4 @@
+import os
 from dataclasses import fields
 from typing import Any, List
 
@@ -7,7 +8,13 @@ import yaml
 class YamlConfigParser:
     # Some keys are processed by `TrainingArguments.__post_init__` and initialized there
     # this mapping ignores the processing of these keys if they are modified.
-    _keys_ignore = ["accelerator_config", "report_to", "fsdp_config", "logging_dir", "lr_scheduler_kwargs"]
+    _keys_ignore = {
+        "accelerator_config": None,
+        "report_to": "none",
+        "fsdp_config": None,
+        "logging_dir": None,
+        "lr_scheduler_kwargs": None,
+    }
 
     _not_supported_classes = [dict, list]
 
@@ -32,7 +39,17 @@ class YamlConfigParser:
         except ImportError:
             ...
 
+        self.parse_and_set_env()
         self.merge_dataclasses(dataclasses)
+
+    def parse_and_set_env(self):
+        if "env" in self.config:
+            env_vars = self.config["env"]
+            if isinstance(env_vars, dict):
+                for key, value in env_vars.items():
+                    os.environ[key] = str(value)
+            else:
+                raise ValueError("`env` field should be a dict in the YAML file.")
 
     def merge_dataclasses(self, dataclasses):
         for dataclass in dataclasses:
@@ -44,7 +61,7 @@ class YamlConfigParser:
 
                 default_value_changed = field_value != default_value
 
-                if field_name in self._keys_ignore:
+                if field_name in self._keys_ignore.keys():
                     if default_value_changed and not any(
                         isinstance(field_value, cls_to_test) for cls_to_test in self._not_supported_classes
                     ):

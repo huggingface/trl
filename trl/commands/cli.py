@@ -1,6 +1,5 @@
 import os
 import subprocess
-from dataclasses import dataclass, field
 from subprocess import CalledProcessError
 
 from rich.console import Console
@@ -11,15 +10,6 @@ from .config_parser import YamlConfigParser
 SUPPORTED_COMMANDS = ["sft"]
 
 
-@dataclass
-class ScriptArguments:
-    dataset_name: str = field(metadata={"help": "the dataset name"}, default=None)
-    dataset_text_field: str = field(default="text", metadata={"help": "the text field of the dataset"})
-    max_seq_length: int = field(default=512, metadata={"help": "The maximum sequence length for SFT Trainer"})
-    config: str = field(default=None, metadata={"help": "Path to the optional config file"})
-    packing: bool = field(default=False, metadata={"help": "Whether to apply data packing or not during training"})
-
-
 def main():
     console = Console()
 
@@ -27,6 +17,8 @@ def main():
         from transformers import HfArgumentParser, TrainingArguments
 
         from trl import ModelConfig
+
+        from .sft import ScriptArguments
 
         parser = HfArgumentParser((ScriptArguments, TrainingArguments, ModelConfig))
 
@@ -51,8 +43,7 @@ def main():
         model_name = model_config.model_name_or_path
 
     command = f"""
-    python {current_dir}/{command_name}.py \
-        {config_parser.to_string()}
+    python {current_dir}/{command_name}.py {config_parser.to_string()}
     """
 
     try:
