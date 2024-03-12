@@ -66,7 +66,7 @@ class ScriptArguments:
 if __name__ == "__main__":
     console = Console()
     parser = HfArgumentParser((ScriptArguments, TrainingArguments, ModelConfig))
-    args, training_args, model_config = parser.parse_args_into_dataclasses()
+    args, training_args, model_config, _ = parser.parse_args_into_dataclasses(return_remaining_strings=True)
     training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
 
     # Force use our print callback
@@ -110,7 +110,7 @@ if __name__ == "__main__":
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            dataset_text_field="text",
+            dataset_text_field=args.dataset_text_field,
             max_seq_length=args.max_seq_length,
             tokenizer=tokenizer,
             packing=args.packing,

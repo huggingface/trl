@@ -13,7 +13,7 @@ SUPPORTED_COMMANDS = ["sft"]
 
 @dataclass
 class ScriptArguments:
-    dataset_name: str = field(metadata={"help": "the dataset name"})
+    dataset_name: str = field(metadata={"help": "the dataset name"}, default=None)
     dataset_text_field: str = field(default="text", metadata={"help": "the text field of the dataset"})
     max_seq_length: int = field(default=512, metadata={"help": "The maximum sequence length for SFT Trainer"})
     config: str = field(default=None, metadata={"help": "Path to the optional config file"})
@@ -42,36 +42,18 @@ def main():
             )
 
         # Get the required args
-        model_name = model_config.model_name_or_path
-        dataset_name = args.dataset_name
-        dataset_text_field = args.dataset_text_field
-        max_seq_length = args.max_seq_length
         config = args.config
 
         # if the configuration is None, create a new `output_dir` variable
-        config_parser = YamlConfigParser(config)
-        output_dir = training_args.output_dir
-        report_to = config_parser.report_to
-
+        config_parser = YamlConfigParser(config, [args, training_args, model_config])
         current_dir = os.path.dirname(__file__)
 
-    EXTRA_AGRS = """
-    """
-
-    if args.packing:
-        EXTRA_AGRS += """--packing yes """
+        model_name = model_config.model_name_or_path
 
     command = f"""
     python {current_dir}/{command_name}.py \
-        --model_name_or_path {model_name} \
-        --dataset_name {dataset_name} \
-        --output_dir {output_dir} \
-        --report_to {report_to} \
-        --dataset_text_field {dataset_text_field} \
-        --max_seq_length {max_seq_length} \
+        {config_parser.to_string()}
     """
-
-    command += EXTRA_AGRS
 
     try:
         subprocess.run(
