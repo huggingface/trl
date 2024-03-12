@@ -1,6 +1,6 @@
-import argparse
 import os
 import subprocess
+from dataclasses import dataclass, field
 from subprocess import CalledProcessError
 
 from rich.console import Console
@@ -8,46 +8,61 @@ from rich.console import Console
 from .config_parser import YamlConfigParser
 
 
+SUPPORTED_COMMANDS = ["sft"]
+
+
+@dataclass
+class ScriptArguments:
+    dataset_name: str = field(default="timdettmers/openassistant-guanaco", metadata={"help": "the dataset name"})
+    dataset_text_field: str = field(default="text", metadata={"help": "the text field of the dataset"})
+    max_seq_length: int = field(default=512, metadata={"help": "The maximum sequence length for SFT Trainer"})
+    config: str = field(default=None, metadata={"help": "Path to the optional config file"})
+
+
 def main():
+    from transformers import HfArgumentParser, TrainingArguments
+
+    from trl import ModelConfig
+
     console = Console()
 
-    parser = argparse.ArgumentParser("HuggingFace TRL CLI tool", usage="trl <command> [<args>]")
+    # command_name = sys.argv[1]
 
-    # Step 3: Create subparsers for different commands
-    subparsers = parser.add_subparsers(dest="command", help="Choose a command")
+    parser = HfArgumentParser((ScriptArguments, TrainingArguments, ModelConfig))
 
-    # Subparser for 'sft' command
-    sft_parser = subparsers.add_parser("sft", help="Description of sft command")
-    sft_parser.add_argument("--model_name", type=str, help="Name of the model", required=True)
-    sft_parser.add_argument("--dataset_name", type=str, help="Name of the dataset", required=True)
-    sft_parser.add_argument("--config", type=str, help="Path to the config file", required=False, default=None)
+    (args, training_args, model_config, command_name) = parser.parse_args_into_dataclasses(
+        return_remaining_strings=True
+    )
 
-    # Subparser for 'dpo' command
-    dpo_parser = subparsers.add_parser("dpo", help="Description of dpo command")
-    dpo_parser.add_argument("--model_name", type=str, help="Name of the model", required=True)
-    dpo_parser.add_argument("--dataset_name", type=str, help="Name of the dataset", required=True)
-    dpo_parser.add_argument("--config", type=str, help="Path to the config file", required=False, default=None)
+    command_name = command_name[0]
 
-    args = parser.parse_args()
+    if command_name not in SUPPORTED_COMMANDS:
+        raise ValueError(
+            f"Please use one of the supported commands, got {command_name} - supported commands are {SUPPORTED_COMMANDS}"
+        )
 
     # Get the required args
-    model_name = args.model_name
+    model_name = model_config.model_name_or_path
     dataset_name = args.dataset_name
+    dataset_text_field = args.dataset_text_field
+    max_seq_length = args.max_seq_length
     config = args.config
 
     # if the configuration is None, create a new `output_dir` variable
     config_parser = YamlConfigParser(config)
-    output_dir = config_parser.output_dir
+    output_dir = training_args.output_dir
     report_to = config_parser.report_to
 
     current_dir = os.path.dirname(__file__)
 
     command = f"""
-    python {current_dir}/{args.command}.py \
+    python {current_dir}/{command_name}.py \
         --model_name_or_path {model_name} \
         --dataset_name {dataset_name} \
         --output_dir {output_dir} \
-        --report_to {report_to}
+        --report_to {report_to} \
+        --dataset_text_field {dataset_text_field} \
+        --max_seq_length {max_seq_length}
     """
 
     try:
@@ -60,7 +75,7 @@ def main():
             env=os.environ.copy(),
         )
     except (CalledProcessError, ChildProcessError):
-        console.log(f"TRL - {args.command.upper()} failed on {model_name}! See the logs above for further details.")
+        console.log(f"TRL - {command_name.upper()} failed on {model_name}! See the logs above for further details.")
 
 
 if __name__ == "__main__":
