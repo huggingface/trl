@@ -44,7 +44,7 @@ _import_structure = {
         "RewardTrainer",
         "SFTTrainer",
     ],
-    "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config"],
+    "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config", "RichProgressCallback"],
     "multitask_prompt_tuning": [
         "MultitaskPromptEmbedding",
         "MultitaskPromptTuningConfig",
@@ -100,7 +100,7 @@ if TYPE_CHECKING:
         RewardTrainer,
         SFTTrainer,
     )
-    from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config
+    from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config, RichProgressCallback
 
     try:
         if not is_diffusers_available():

@@ -1,3 +1,4 @@
+# flake8: noqa
 # Copyright 2023 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -43,17 +44,38 @@ python examples/scripts/sft.py \
     --lora_r=64 \
     --lora_alpha=16
 """
+import logging
+import warnings
+
+from rich.console import Console
+from rich.logging import RichHandler
+
+
+FORMAT = "%(message)s"
+logging.basicConfig(format=FORMAT, datefmt="[%X]", handlers=[RichHandler()], level=logging.ERROR)
+
+
+# Custom warning handler to redirect warnings to the logging system
+def warning_handler(message, category, filename, lineno, file=None, line=None):
+    logging.warning(f"{filename}:{lineno}: {category.__name__}: {message}")
+
+
+# Add the custom warning handler - we need to do that before importing anything to make sure the loggers work well
+warnings.showwarning = warning_handler
+
 from dataclasses import dataclass, field
 
 import torch
 from datasets import load_dataset
-from tqdm import tqdm
+from tqdm.rich import tqdm
 from transformers import AutoTokenizer, HfArgumentParser, TrainingArguments
 
-from trl import ModelConfig, SFTTrainer, get_peft_config, get_quantization_config
+from trl import ModelConfig, RichProgressCallback, SFTTrainer, get_peft_config, get_quantization_config
 
 
 tqdm.pandas()
+
+logging.basicConfig(format=FORMAT, datefmt="[%X]", handlers=[RichHandler()], level=logging.INFO)
 
 
 @dataclass
@@ -64,9 +86,13 @@ class ScriptArguments:
 
 
 if __name__ == "__main__":
+    console = Console()
     parser = HfArgumentParser((ScriptArguments, TrainingArguments, ModelConfig))
     args, training_args, model_config = parser.parse_args_into_dataclasses()
     training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
+
+    # Force use our print callback
+    training_args.disable_tqdm = True
 
     ################
     # Model & Tokenizer
@@ -99,17 +125,22 @@ if __name__ == "__main__":
     ################
     # Training
     ################
-    trainer = SFTTrainer(
-        model=model_config.model_name_or_path,
-        model_init_kwargs=model_kwargs,
-        args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        dataset_text_field="text",
-        max_seq_length=args.max_seq_length,
-        tokenizer=tokenizer,
-        packing=True,
-        peft_config=get_peft_config(model_config),
-    )
+    with console.status("[bold green]Initializing the SFTTrainer..."):
+        trainer = SFTTrainer(
+            model=model_config.model_name_or_path,
+            model_init_kwargs=model_kwargs,
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            dataset_text_field="text",
+            max_seq_length=args.max_seq_length,
+            tokenizer=tokenizer,
+            packing=True,
+            peft_config=get_peft_config(model_config),
+            callbacks=[RichProgressCallback],
+        )
+
     trainer.train()
-    trainer.save_model(training_args.output_dir)
+
+    with console.status("[bold green]Training completed ! saving the model ..."):
+        trainer.save_model(training_args.output_dir)

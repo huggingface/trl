@@ -27,6 +27,7 @@ _import_structure = {
         "RunningMoments",
         "disable_dropout_in_model",
         "peft_module_casting_to_bf16",
+        "RichProgressCallback",
     ],
     "dpo_trainer": [
         "DPOTrainer",
@@ -63,6 +64,7 @@ if TYPE_CHECKING:
         RunningMoments,
         disable_dropout_in_model,
         peft_module_casting_to_bf16,
+        RichProgressCallback,
     )
 
     # isort: on
