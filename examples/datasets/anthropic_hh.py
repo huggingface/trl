@@ -1,11 +1,13 @@
-from dataclasses import dataclass, field
 import multiprocessing
 import sys
+from dataclasses import dataclass, field
 from typing import Optional
+
 from datasets import load_dataset
-from transformers import HfArgumentParser
 from huggingface_hub import HfApi
 from huggingface_hub.repocard import RepoCard
+from transformers import HfArgumentParser
+
 
 """
 # debug
@@ -16,21 +18,26 @@ python examples/datasets/anthropic_hh.py --push_to_hub --hf_entity trl-internal-
 
 
 api = HfApi()
+
+
 @dataclass
 class ScriptArguments:
     debug: Optional[bool] = field(default=False, metadata={"help": "Enable debug mode"})
     hf_entity: Optional[str] = field(default=None, metadata={"help": "The Hugging Face entity to use"})
     hf_repo_id: Optional[str] = field(default="hh-rlhf-trl-style", metadata={"help": "The Hugging Face repository ID"})
     revision: Optional[str] = field(default="0.1.0", metadata={"help": "The revision of the repository"})
-    update_main_revision: Optional[bool] = field(default=True, metadata={"help": "Update the main revision of the repository"})
+    update_main_revision: Optional[bool] = field(
+        default=True, metadata={"help": "Update the main revision of the repository"}
+    )
     push_to_hub: Optional[bool] = field(default=False, metadata={"help": "Push the dataset to the Hugging Face Hub"})
+
 
 # GPT-4 generated 😄 Define a function to process the input and extract the dialogue into structured format
 def extract_dialogue(input_text):
     # Split the input by lines and initialize variables
-    lines = input_text.strip().split('\n\n')
+    lines = input_text.strip().split("\n\n")
     dialogue_list = []
-    
+
     # Iterate through each line and extract the dialogue
     for line in lines:
         # Check if the line starts with "Human" or "Assistant" and split accordingly
@@ -43,13 +50,14 @@ def extract_dialogue(input_text):
         else:
             # If the line doesn't start with "Human" or "Assistant", it's part of the previous message's content
             # Append it to the last message's content
-            dialogue_list[-1]['content'] += "\n\n" + line.strip()
+            dialogue_list[-1]["content"] += "\n\n" + line.strip()
             continue
 
         # Append the extracted dialogue piece to the list
         dialogue_list.append({"role": role, "content": content})
-    
+
     return dialogue_list
+
 
 if __name__ == "__main__":
     args = HfArgumentParser(ScriptArguments).parse_args_into_dataclasses()[0]
