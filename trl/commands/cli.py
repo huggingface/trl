@@ -56,11 +56,15 @@ def main():
         # if the configuration is None, create a new `output_dir` variable
         config_parser = YamlConfigParser(config, [args, training_args, model_config])
         current_dir = os.path.dirname(__file__)
+        trl_root_dir = "/".join(current_dir.split("/")[:-2])
 
         model_name = model_config.model_name_or_path
 
+    # Force-use rich
+    os.environ["TRL_USE_RICH"] = "1"
+
     command = f"""
-    python {current_dir}/{command_name}.py {config_parser.to_string()}
+    python {trl_root_dir}/examples/scripts/{command_name}.py {config_parser.to_string()}
     """
 
     try:
