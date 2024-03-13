@@ -51,7 +51,7 @@ class SftScriptArguments:
 
 @dataclass
 class DpoScriptArguments:
-    dataset_name: str = field(default="Anthropic/hh-rlhf", metadata={"help": "the dataset name"})
+    dataset_name: str = field(default=None, metadata={"help": "the dataset name"})
     beta: float = field(default=0.1, metadata={"help": "the beta parameter for DPO loss"})
     max_length: int = field(default=512, metadata={"help": "max length of each sample"})
     max_prompt_length: int = field(default=128, metadata={"help": "max length of each sample's prompt"})
