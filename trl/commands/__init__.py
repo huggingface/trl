@@ -1,6 +1,6 @@
 # flake8: noqa
 
-# Copyright 2022 The HuggingFace Team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,13 +19,12 @@ from typing import TYPE_CHECKING
 from ..import_utils import _LazyModule, OptionalDependencyNotAvailable
 
 
-_import_structure = {
-    "cli_utils": ["SftArgumentParser", "init_zero_verbose"],
-}
+_import_structure = {"cli_utils": ["SftArgumentParser", "init_zero_verbose"], "config_parser": ["YamlConfigParser"]}
 
 
 if TYPE_CHECKING:
     from .cli_utils import SftScriptArguments, init_zero_verbose
+    from .config_parser import YamlConfigParser
 else:
     import sys
 
