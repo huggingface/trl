@@ -17,6 +17,7 @@ import gc
 import re
 import tempfile
 import unittest
+from functools import partial
 
 import pytest
 import torch
@@ -193,6 +194,7 @@ class PPOTrainerTester(unittest.TestCase):
             tokenizer=self.gpt2_tokenizer,
             dataset=dummy_dataset,
         )
+        ppo_trainer.optimizer.zero_grad = partial(ppo_trainer.optimizer.zero_grad, set_to_none=False)
         dummy_dataloader = ppo_trainer.dataloader
         # train model with ppo
         for query_tensor, response_tensor in dummy_dataloader:
@@ -220,6 +222,7 @@ class PPOTrainerTester(unittest.TestCase):
             tokenizer=self.gpt2_tokenizer,
             dataset=dummy_dataset,
         )
+        ppo_trainer.optimizer.zero_grad = partial(ppo_trainer.optimizer.zero_grad, set_to_none=False)
         dummy_dataloader = ppo_trainer.dataloader
         # train model with ppo
         for query_tensor, response_tensor in dummy_dataloader:
@@ -252,6 +255,7 @@ class PPOTrainerTester(unittest.TestCase):
             tokenizer=self.gpt2_tokenizer,
             dataset=dummy_dataset,
         )
+        ppo_trainer.optimizer.zero_grad = partial(ppo_trainer.optimizer.zero_grad, set_to_none=False)
         dummy_dataloader = ppo_trainer.dataloader
 
         assert isinstance(ppo_trainer.optimizer.optimizer, torch.optim.SGD)
@@ -291,6 +295,7 @@ class PPOTrainerTester(unittest.TestCase):
             dataset=dummy_dataset,
             lr_scheduler=lr_scheduler,
         )
+        ppo_trainer.optimizer.zero_grad = partial(ppo_trainer.optimizer.zero_grad, set_to_none=False)
         dummy_dataloader = ppo_trainer.dataloader
 
         assert isinstance(ppo_trainer.optimizer.optimizer, torch.optim.SGD)
@@ -332,6 +337,7 @@ class PPOTrainerTester(unittest.TestCase):
             tokenizer=self.gpt2_tokenizer,
             dataset=dummy_dataset,
         )
+        ppo_trainer.optimizer.zero_grad = partial(ppo_trainer.optimizer.zero_grad, set_to_none=False)
         dummy_dataloader = ppo_trainer.dataloader
         # train model with ppo
         for query_tensor, response_tensor in dummy_dataloader:
@@ -382,6 +388,7 @@ class PPOTrainerTester(unittest.TestCase):
             dataset=dummy_dataset,
             num_shared_layers=num_shared_layers,
         )
+        ppo_trainer.optimizer.zero_grad = partial(ppo_trainer.optimizer.zero_grad, set_to_none=False)
         dummy_dataloader = ppo_trainer.dataloader
         # train model with ppo
         for query_tensor, response_tensor in dummy_dataloader:
@@ -449,6 +456,7 @@ class PPOTrainerTester(unittest.TestCase):
             tokenizer=self.gpt2_tokenizer,
             dataset=dummy_dataset,
         )
+        ppo_trainer.optimizer.zero_grad = partial(ppo_trainer.optimizer.zero_grad, set_to_none=False)
         dummy_dataloader = ppo_trainer.dataloader
         # train model with ppo
         for query_tensor, response_tensor in dummy_dataloader:
@@ -486,6 +494,7 @@ class PPOTrainerTester(unittest.TestCase):
             tokenizer=self.gpt2_tokenizer,
             dataset=dummy_dataset,
         )
+        ppo_trainer.optimizer.zero_grad = partial(ppo_trainer.optimizer.zero_grad, set_to_none=False)
         dummy_dataloader = ppo_trainer.dataloader
         # train model with ppo
         for query_tensor, response_tensor in dummy_dataloader:
@@ -526,6 +535,7 @@ class PPOTrainerTester(unittest.TestCase):
                 ref_model=self.gpt2_model_ref,
                 tokenizer=self.gpt2_tokenizer,
             )
+        ppo_trainer.optimizer.zero_grad = partial(ppo_trainer.optimizer.zero_grad, set_to_none=False)
         # train model with ppo
         reward = [torch.tensor([1.0])]
         # train model - this should work fine
@@ -692,7 +702,7 @@ class PPOTrainerTester(unittest.TestCase):
             tokenizer=self.gpt2_tokenizer,
             dataset=dummy_dataset,
         )
-
+        ppo_trainer.optimizer.zero_grad = partial(ppo_trainer.optimizer.zero_grad, set_to_none=False)
         dummy_dataloader = ppo_trainer.dataloader
 
         # train model with ppo
@@ -879,7 +889,7 @@ class PPOTrainerTester(unittest.TestCase):
             tokenizer=self.gpt2_tokenizer,
             dataset=dummy_dataset,
         )
-
+        ppo_trainer.optimizer.zero_grad = partial(ppo_trainer.optimizer.zero_grad, set_to_none=False)
         assert ppo_trainer.ref_model is None
 
         dummy_dataloader = ppo_trainer.dataloader
@@ -967,7 +977,7 @@ class PPOTrainerTester(unittest.TestCase):
                 tokenizer=self.gpt2_tokenizer,
                 dataset=dummy_dataset,
             )
-
+            ppo_trainer.optimizer.zero_grad = partial(ppo_trainer.optimizer.zero_grad, set_to_none=False)
             assert ppo_trainer.ref_model is None
 
             dummy_dataloader = ppo_trainer.dataloader
@@ -1213,6 +1223,7 @@ class PPOTrainerTester(unittest.TestCase):
             dataset=dummy_dataset,
         )
 
+        ppo_trainer.optimizer.zero_grad = partial(ppo_trainer.optimizer.zero_grad, set_to_none=False)
         dummy_dataloader = ppo_trainer.dataloader
         # train model with ppo
         for query_tensor, response_tensor in dummy_dataloader:
