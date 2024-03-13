@@ -187,6 +187,9 @@ class SFTTrainer(Trainer):
                 )
                 gradient_checkpointing_kwargs = getattr(args, "gradient_checkpointing_kwargs", None) or {}
                 is_sharded_qlora = False
+                # Below is to support QLoRA + FSDP / DS-Zero3 - one should never call 
+                # peft_module_casting_to_bf16 or prepare_model_for_kbit_training when doing 
+                # QLoRA + FSDP / DS-Zero3
                 if getattr(model, "is_loaded_in_4bit", False):
                     for _, param in model.named_parameters():
                         if param.__class__.__name__ == "Params4bit":
