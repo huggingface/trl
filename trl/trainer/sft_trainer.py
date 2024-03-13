@@ -36,6 +36,7 @@ from transformers import (
 from transformers.modeling_utils import unwrap_model
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
+from transformers.utils import logging 
 
 from ..extras.dataset_formatting import get_formatting_func_from_dataset
 from ..import_utils import is_peft_available
@@ -47,6 +48,7 @@ from .utils import (
     trl_sanitze_kwargs_for_tagging,
 )
 
+logger = logging.get_logger(__name__)
 
 if is_peft_available():
     from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
@@ -305,14 +307,17 @@ class SFTTrainer(Trainer):
                 "overflow issues when training a model in half-precision. You might consider adding `tokenizer.padding_side = 'right'` to your code."
             )
 
+        # set the correct log level depending on the node
+        log_level = args.get_process_log_level()
+        logger.setLevel(log_level)
+
         if check_dataset_labels:
             if train_dataset is not None and len(train_dataset) > 0:
                 input_ids, attention_mask, labels = data_collator([train_dataset[0]]).values()
-
-                print("check_dataset_labels:")  # noqa
-                print(tokenizer.decode(input_ids[0]))  # noqa
+                logger.info("check_dataset_labels:")  # noqa
+                logger.info(tokenizer.decode(input_ids[0]))  # noqa
                 for token, label in zip(input_ids[0], labels[0]):
-                    print(f"{token.item()}, '{tokenizer.decode(token)}' {label.item()}")  # noqa
+                    logger.info(f"{token.item()}, '{tokenizer.decode(token)}', {label.item()}")  # noqa
 
         super().__init__(
             model=model,
