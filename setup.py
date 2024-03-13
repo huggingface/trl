@@ -100,7 +100,7 @@ setup(
     entry_points={
         "console_scripts": ["trl=trl.commands.cli:main"],
     },
-    package_data={"trl": ["examples/scripts/sft.py"]},
+    package_data={"trl": ["examples/scripts/sft.py", "examples/scripts/dpo.py"]},
     include_package_data=True,
     install_requires=REQUIRED_PKGS,
     extras_require=EXTRAS,

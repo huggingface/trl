@@ -143,7 +143,7 @@ if __name__ == "__main__":
             tokenizer=tokenizer,
             packing=args.packing,
             peft_config=get_peft_config(model_config),
-            callbacks=[RichProgressCallback],
+            callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
         )
 
     trainer.train()

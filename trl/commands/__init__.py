@@ -19,11 +19,14 @@ from typing import TYPE_CHECKING
 from ..import_utils import _LazyModule, OptionalDependencyNotAvailable
 
 
-_import_structure = {"cli_utils": ["SftArgumentParser", "init_zero_verbose"], "config_parser": ["YamlConfigParser"]}
+_import_structure = {
+    "cli_utils": ["SftArgumentParser", "init_zero_verbose", "DpoScriptArguments"],
+    "config_parser": ["YamlConfigParser"],
+}
 
 
 if TYPE_CHECKING:
-    from .cli_utils import SftScriptArguments, init_zero_verbose
+    from .cli_utils import SftScriptArguments, init_zero_verbose, DpoScriptArguments
     from .config_parser import YamlConfigParser
 else:
     import sys

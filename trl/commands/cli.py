@@ -15,6 +15,7 @@
 # limitations under the License.
 import os
 import subprocess
+import sys
 from subprocess import CalledProcessError
 
 from rich.console import Console
@@ -22,7 +23,7 @@ from rich.console import Console
 from trl.commands.config_parser import YamlConfigParser
 
 
-SUPPORTED_COMMANDS = ["sft"]
+SUPPORTED_COMMANDS = ["sft", "dpo"]
 
 
 def main():
@@ -37,13 +38,11 @@ def main():
 
         from trl import ModelConfig
 
+        command_name = sys.argv[1]
+
         parser = HfArgumentParser((SftScriptArguments, TrainingArguments, ModelConfig))
 
-        (args, training_args, model_config, command_name) = parser.parse_args_into_dataclasses(
-            return_remaining_strings=True
-        )
-
-        command_name = command_name[0]
+        (args, training_args, model_config, _) = parser.parse_args_into_dataclasses(return_remaining_strings=True)
 
         if command_name not in SUPPORTED_COMMANDS:
             raise ValueError(

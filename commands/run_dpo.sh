@@ -3,6 +3,7 @@
 # but defaults to QLoRA + PEFT
 OUTPUT_DIR="test_dpo/"
 MODEL_NAME="HuggingFaceM4/tiny-random-LlamaForCausalLM"
+DATASET_NAME="trl-internal-testing/Anthropic-hh-rlhf-processed"
 MAX_STEPS=5
 BATCH_SIZE=2
 SEQ_LEN=128
@@ -36,6 +37,7 @@ accelerate launch $EXTRA_ACCELERATE_ARGS \
     --mixed_precision 'fp16' \
     `pwd`/examples/scripts/dpo.py \
     --model_name_or_path $MODEL_NAME \
+    --dataset_name $DATASET_NAME \
     --output_dir $OUTPUT_DIR \
     --max_steps $MAX_STEPS \
     --per_device_train_batch_size $BATCH_SIZE \
