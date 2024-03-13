@@ -45,6 +45,8 @@ _import_structure = {
         "RewardTrainer",
         "SFTTrainer",
     ],
+    "commands": [],
+    "commands.utils": ["SftArgumentParser", "init_zero_verbose"],
     "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config", "RichProgressCallback"],
     "multitask_prompt_tuning": [
         "MultitaskPromptEmbedding",
@@ -103,6 +105,7 @@ if TYPE_CHECKING:
         SFTTrainer,
     )
     from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config, RichProgressCallback
+    from .commands.utils import init_zero_verbose, SftScriptArguments
 
     try:
         if not is_diffusers_available():

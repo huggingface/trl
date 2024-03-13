@@ -15,25 +15,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import logging
-import warnings
+
+from trl.commands.utils import init_zero_verbose, SftScriptArguments
+
+init_zero_verbose()
+FORMAT = "%(message)s"
 
 from rich.console import Console
 from rich.logging import RichHandler
-
-
-FORMAT = "%(message)s"
-logging.basicConfig(format=FORMAT, datefmt="[%X]", handlers=[RichHandler()], level=logging.ERROR)
-
-
-# Custom warning handler to redirect warnings to the logging system
-def warning_handler(message, category, filename, lineno, file=None, line=None):
-    logging.warning(f"{filename}:{lineno}: {category.__name__}: {message}")
-
-
-# Add the custom warning handler - we need to do that before importing anything to make sure the loggers work well
-warnings.showwarning = warning_handler
-
-from dataclasses import dataclass, field
 
 import torch
 from datasets import load_dataset
@@ -55,21 +44,9 @@ tqdm.pandas()
 logging.basicConfig(format=FORMAT, datefmt="[%X]", handlers=[RichHandler()], level=logging.INFO)
 
 
-@dataclass
-class ScriptArguments:
-    dataset_name: str = field(default="timdettmers/openassistant-guanaco", metadata={"help": "the dataset name"})
-    dataset_text_field: str = field(default="text", metadata={"help": "the text field of the dataset"})
-    max_seq_length: int = field(default=512, metadata={"help": "The maximum sequence length for SFT Trainer"})
-    packing: bool = field(default=False, metadata={"help": "Whether to apply data packing or not during training"})
-    config: str = field(default=None, metadata={"help": "Path to the optional config file"})
-    gradient_checkpointing_use_reentrant: bool = field(
-        default=False, metadata={"help": "Whether to apply `use_reentrant` for gradient_checkpointing"}
-    )
-
-
 if __name__ == "__main__":
     console = Console()
-    parser = HfArgumentParser((ScriptArguments, TrainingArguments, ModelConfig))
+    parser = HfArgumentParser((SftScriptArguments, TrainingArguments, ModelConfig))
     args, training_args, model_config, _ = parser.parse_args_into_dataclasses(return_remaining_strings=True)
     training_args.gradient_checkpointing_kwargs = dict(use_reentrant=args.gradient_checkpointing_use_reentrant)
 

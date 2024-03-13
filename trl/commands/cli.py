@@ -12,15 +12,17 @@ SUPPORTED_COMMANDS = ["sft"]
 
 def main():
     console = Console()
+    # Make sure to import things locally to avoid verbose from third party libs.
+    with console.status("[bold purple]Welcome! Initializing the TRL CLI..."):
+        from trl.commands.utils import SftScriptArguments, init_zero_verbose
 
-    with console.status("[bold purple]Initializing the CLI..."):
+        init_zero_verbose()
+
         from transformers import HfArgumentParser, TrainingArguments
 
         from trl import ModelConfig
 
-        from .sft import ScriptArguments
-
-        parser = HfArgumentParser((ScriptArguments, TrainingArguments, ModelConfig))
+        parser = HfArgumentParser((SftScriptArguments, TrainingArguments, ModelConfig))
 
         (args, training_args, model_config, command_name) = parser.parse_args_into_dataclasses(
             return_remaining_strings=True
