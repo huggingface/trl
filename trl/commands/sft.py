@@ -16,7 +16,7 @@
 # limitations under the License.
 import logging
 
-from trl.commands.utils import init_zero_verbose, SftScriptArguments
+from trl.commands.cli_utils import init_zero_verbose, SftScriptArguments
 
 init_zero_verbose()
 FORMAT = "%(message)s"
