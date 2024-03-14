@@ -15,7 +15,6 @@ import tempfile
 import unittest
 
 import torch
-import wandb
 from datasets import Dataset
 from parameterized import parameterized
 from pytest import mark
@@ -40,7 +39,6 @@ class KTOTrainerTester(unittest.TestCase):
         cls.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         cls.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         cls.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
-        wandb.init(mode="disabled")
 
     def _init_dummy_dataset(self):
         # fmt: off
