@@ -51,3 +51,12 @@ trl sft --config config.yaml --output_dir your-output-dir
 ```
 
 The SFT CLI is based on the `examples/scripts/sft.py` script, all arguments supported in that script should be supported by the CLI.
+
+### Direct Policy Optimization (DPO)
+
+First, follow the basic instructions above and run `trl dpo --output_dir <output_dir> <*args>`. Make sure to process your DPO dataset in the TRL format by using a script similar for `examples/scripts/datasets/anthropic_hh.py`
+
+
+```bash
+trl dpo --config config.yaml --output_dir your-output-dir 
+```
