@@ -15,6 +15,7 @@ import tempfile
 import unittest
 
 import torch
+import wandb
 from datasets import Dataset
 from parameterized import parameterized
 from pytest import mark
@@ -39,6 +40,7 @@ class KTOTrainerTester(unittest.TestCase):
         cls.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         cls.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         cls.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
+        wandb.init(mode="disabled")
 
     def _init_dummy_dataset(self):
         # fmt: off
@@ -130,6 +132,41 @@ class KTOTrainerTester(unittest.TestCase):
                 # check the params have changed - ignore 0 biases
                 if param.sum() != 0:
                     self.assertFalse(torch.equal(param, new_param))
+
+    def test_kto_trainer_tokenize_row(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = KTOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=1,
+                learning_rate=9e-1,
+                evaluation_strategy="steps",
+                beta=0.1,
+            )
+
+            dummy_dataset = self._init_dummy_dataset()
+
+            trainer = KTOTrainer(
+                model=self.model,
+                ref_model=self.ref_model,
+                args=training_args,
+                tokenizer=self.tokenizer,
+                train_dataset=dummy_dataset,
+                eval_dataset=dummy_dataset,
+            )
+
+            row = dummy_dataset[0]
+
+            # test that the row can be tokenized
+            tokenized_row = trainer.tokenize_row(row)
+
+            # Assert bos_token_id and eos_token_id (latter only for completion)
+            assert tokenized_row["prompt_input_ids"][0] == self.tokenizer.bos_token_id
+            assert tokenized_row["completion_input_ids"][0] == self.tokenizer.bos_token_id
+            assert tokenized_row["prompt_input_ids"][-1] != self.tokenizer.eos_token_id
+            assert tokenized_row["completion_input_ids"][-1] == self.tokenizer.eos_token_id
 
     def test_kto_trainer_without_providing_ref_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

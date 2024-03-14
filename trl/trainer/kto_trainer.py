@@ -355,10 +355,10 @@ class KTOTrainer(Trainer):
 
         if len(desirable) != len(undesirable):
             # The lower and upper bounds come from Eq. (8) of https://arxiv.org/abs/2402.01306
-            des_weight_lower_bound = (len(undesirable) * self.undesirable_weight / len(desirable)) * 1
-            des_weight_upper_bound = (len(undesirable) * self.undesirable_weight / len(desirable)) * 1.33
-            und_weight_lower_bound = (len(desirable) * self.desirable_weight / len(undesirable)) / 1.33
-            und_weight_upper_bound = (len(desirable) * self.desirable_weight / len(undesirable)) / 1
+            des_weight_lower_bound = round((len(undesirable) * self.undesirable_weight / len(desirable)) * 1, 2)
+            des_weight_upper_bound = round((len(undesirable) * self.undesirable_weight / len(desirable)) * 1.33, 2)
+            und_weight_lower_bound = round((len(desirable) * self.desirable_weight / len(undesirable)) / 1.33, 2)
+            und_weight_upper_bound = round((len(desirable) * self.desirable_weight / len(undesirable)) / 1, 2)
 
             des_weight_in_range = des_weight_lower_bound <= self.desirable_weight <= des_weight_upper_bound
             und_weight_in_range = und_weight_lower_bound <= self.undesirable_weight <= und_weight_upper_bound
@@ -366,12 +366,11 @@ class KTOTrainer(Trainer):
             if not (des_weight_in_range or und_weight_in_range):
                 warnings.warn(
                     f"""
-                    You have different amounts of desirable/positive and undesirable/negative examples but the \
-                    weights on the desirable and undesirable losses don't seem to be in an ideal range. Based \
-                    on your data, we recommend EITHER desirable_weight in \
-                    [{des_weight_lower_bound}, {des_weight_upper_bound}] or undesirable_weight in \
-                    [{und_weight_lower_bound}, {und_weight_upper_bound}] (but NOT BOTH). See the documentation \
-                    on how to optimally set these weights.""",
+                    You have different amounts of desirable/positive and undesirable/negative examples but the
+                    weights on the desirable and undesirable losses don't seem to be in an ideal range. Based
+                    on your data, we recommend EITHER desirable_weight in [{des_weight_lower_bound}, {des_weight_upper_bound}]
+                    or undesirable_weight in [{und_weight_lower_bound}, {und_weight_upper_bound}] (but NOT BOTH).
+                    See the documentation on how to optimally set these weights.""",
                     UserWarning,
                 )
 
@@ -676,8 +675,8 @@ class KTOTrainer(Trainer):
         return dict(
             prompt_input_ids=prompt_input_ids,
             prompt_attention_mask=prompt_attention_mask,
-            input_ids=answer_input_ids,
-            attention_mask=answer_attention_mask,
+            answer_input_ids=answer_input_ids,
+            answer_attention_mask=answer_attention_mask,
         )
 
     def get_KL_dataset(self, batch) -> Dict:
@@ -713,66 +712,46 @@ class KTOTrainer(Trainer):
 
             if not isinstance(prompt, str):
                 raise ValueError(f"prompt should be an str but got {type(prompt)}")
-            prompt_tokens = self.tokenizer(prompt, add_special_tokens=False)
-            prompt_tokens = {f"prompt_{k}": v for k, v in prompt_tokens.items()}
 
             if not isinstance(completion, str):
                 raise ValueError(f"completion should be an str but got {type(completion)}")
-            completion_tokens = self.build_tokenized_answer(prompt, completion)
 
-            # Last prompt token might get merged by tokenizer and
-            # it should not be included for generation if that happens
-            completion_prompt_len_input_ids = len(completion_tokens["prompt_input_ids"])
+            # keys of format prompt_* refers to just the prompt and answer_* refers to just the answer
+            all_tokens = self.build_tokenized_answer(prompt, completion)
 
-            for k, v in prompt_tokens.items():
-                prompt_tokens[k] = v[:completion_prompt_len_input_ids]
-
-            # add BOS token to head of prompt
-            prompt_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + prompt_tokens["prompt_input_ids"]
-            prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens["prompt_attention_mask"]
-
-            # add EOS token to end of completion
-            completion_tokens["input_ids"].append(self.tokenizer.eos_token_id)
-            completion_tokens["attention_mask"].append(1)
-
-            response_length = len(completion_tokens["input_ids"])
-
-            # if combined sequence is too long, truncate the prompt
-            for answer_tokens in [completion_tokens, prompt_tokens]:
-                if len(answer_tokens["prompt_input_ids"]) + response_length > self.max_length:
+            max_length = self.max_length - 2
+            # if combined sequence is too long (> max_length - 1 for BOS token - 1 for EOS), truncate the prompt
+            if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
+                for k in ["prompt_input_ids", "prompt_attention_mask"]:
                     if self.truncation_mode == "keep_start":
-                        for k in ["prompt_input_ids", "prompt_attention_mask"]:
-                            answer_tokens[k] = answer_tokens[k][: self.max_prompt_length]
+                        all_tokens[k] = all_tokens[k][: self.max_prompt_length]
                     elif self.truncation_mode == "keep_end":
-                        for k in ["prompt_input_ids", "prompt_attention_mask"]:
-                            answer_tokens[k] = answer_tokens[k][-self.max_prompt_length :]
+                        all_tokens[k] = all_tokens[k][-self.max_prompt_length :]
                     else:
                         raise ValueError(f"Unknown truncation mode: {self.truncation_mode}")
 
             # if that's still too long, truncate the response
-            if len(completion_tokens["prompt_input_ids"]) + response_length > self.max_length:
-                for k in ["input_ids", "attention_mask"]:
-                    completion_tokens[k] = completion_tokens[k][: self.max_length - self.max_prompt_length]
+            if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
+                for k in ["answer_input_ids", "answer_attention_mask"]:
+                    all_tokens[k] = all_tokens[k][: max_length - self.max_prompt_length]
 
-            # Create labels
-            completion_sequence_tokens = {
-                k: completion_tokens[f"prompt_{k}"] + completion_tokens[k] for k in ["input_ids", "attention_mask"]
-            }
+            # for legacy reasons, use the completion_* prefix to now refer to the joint sequence
+            batch[f"{prefix}prompt_input_ids"] = [self.tokenizer.bos_token_id] + all_tokens["prompt_input_ids"]
+            batch[f"{prefix}prompt_attention_mask"] = [1] + all_tokens["prompt_attention_mask"]
+            batch[f"{prefix}completion_input_ids"] = (
+                [self.tokenizer.bos_token_id]
+                + all_tokens["prompt_input_ids"]
+                + all_tokens["answer_input_ids"]
+                + [self.tokenizer.eos_token_id]
+            )
+            batch[f"{prefix}completion_attention_mask"] = (
+                [1] + all_tokens["prompt_attention_mask"] + all_tokens["answer_attention_mask"] + [1]
+            )
 
-            completion_sequence_tokens["labels"] = completion_sequence_tokens["input_ids"][:]
-            completion_sequence_tokens["labels"][: len(completion_tokens["prompt_input_ids"])] = [
+            batch[f"{prefix}completion_labels"] = batch[f"{prefix}completion_input_ids"][:]
+            batch[f"{prefix}completion_labels"][: len(batch[f"{prefix}prompt_input_ids"])] = [
                 self.label_pad_token_id
-            ] * len(completion_tokens["prompt_input_ids"])
-
-            for k, toks in {
-                "completion_": completion_sequence_tokens,
-                "": prompt_tokens,
-            }.items():
-                for type_key, tokens in toks.items():
-                    if type_key == "token_type_ids":
-                        continue
-                    batch[f"{prefix}{k}{type_key}"] = tokens
-
+            ] * len(batch[f"{prefix}prompt_input_ids"])
         else:
             completion_tokens = self.tokenizer(
                 completion, truncation=True, max_length=self.max_completion_length, add_special_tokens=True
