@@ -127,7 +127,7 @@ class KTOTrainer(Trainer):
         elif not isinstance(model, str):
             raise ValueError("You passed model_kwargs to the KTOTrainer. But your model is already instantiated.")
         else:
-            model_init_kwargs = args.model_init_kwargs.copy()
+            model_init_kwargs = args.model_init_kwargs
             model_init_kwargs["torch_dtype"] = (
                 model_init_kwargs["torch_dtype"]
                 if model_init_kwargs["torch_dtype"] in ["auto", None]
@@ -141,7 +141,7 @@ class KTOTrainer(Trainer):
                 "You passed ref_model_kwargs to the KTOTrainer. But your ref_model is already instantiated."
             )
         else:
-            ref_model_init_kwargs = args.ref_model_init_kwargs.copy()
+            ref_model_init_kwargs = args.ref_model_init_kwargs
             ref_model_init_kwargs["torch_dtype"] = (
                 ref_model_init_kwargs["torch_dtype"]
                 if ref_model_init_kwargs["torch_dtype"] in ["auto", None]
