@@ -8,3 +8,46 @@ Currently supported CLIs are:
 - `trl dpo`
 
 ## Get started 
+
+Before getting started, pick up a Language Model from Hugging Face Hub. Supported models can be found with the filter "text-generation" within models. Also make sure to pick up a relevant dataset for your task.
+
+Also make sure to run:
+```bash
+accelerate config
+```
+and pick up the right configuration for your training setup (single / multi-GPU, DeepSpeed, etc.). Make sure to complete all steps of `accelerate config` before running any CLI command.
+
+We also recommend you passing a YAML config file to configure your training protocol. Below is a simple example of a YAML file that you can use for training your models with `trl sft` command.
+
+```yaml
+model_name_or_path:
+  HuggingFaceM4/tiny-random-LlamaForCausalLM
+dataset_name:
+  imdb
+dataset_text_field:
+  text
+report_to:
+  none
+learning_rate:
+  1e-4
+lr_scheduler_type:
+  cosine
+```
+
+Save that config in a `.yaml` and get directly started ! Note you can overwrite the arguments from the config file by explicitly passing them to the CLI, e.g.:
+
+```bash
+trl sft --config example_config.yaml --output_dir test-trl-cli --lr_scheduler_type cosine_with_restarts
+```
+
+Will force-use `cosine_with_restarts` for `lr_scheduler_type`.
+
+### Supervised Fine-tuning (SFT)
+
+Follow the basic instructions above and run `trl sft --output_dir <output_dir> <*args>`: 
+
+```bash
+trl sft --config config.yaml --output_dir your-output-dir 
+```
+
+The SFT CLI is based on the `examples/scripts/sft.py` script, all arguments supported in that script should be supported by the CLI.

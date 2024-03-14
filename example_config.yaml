@@ -10,5 +10,11 @@ model_name_or_path:
   HuggingFaceM4/tiny-random-LlamaForCausalLM
 dataset_name:
   imdb
+dataset_text_field:
+  text
 report_to:
   none
+learning_rate:
+  1e-4
+lr_scheduler_type:
+  cosine
