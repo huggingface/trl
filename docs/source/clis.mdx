@@ -42,6 +42,14 @@ trl sft --config example_config.yaml --output_dir test-trl-cli --lr_scheduler_ty
 
 Will force-use `cosine_with_restarts` for `lr_scheduler_type`.
 
+## Supported Arguments 
+
+We do support all arguments from `transformers.TrainingArguments`, for loading your model, we support all arguments from `~trl.ModelConfig`:
+
+[[autodoc]] ModelConfig
+
+You can pass any of these arguments either to the CLI or the YAML file.
+
 ### Supervised Fine-tuning (SFT)
 
 Follow the basic instructions above and run `trl sft --output_dir <output_dir> <*args>`: 
@@ -50,13 +58,14 @@ Follow the basic instructions above and run `trl sft --output_dir <output_dir> <
 trl sft --config config.yaml --output_dir your-output-dir 
 ```
 
-The SFT CLI is based on the `examples/scripts/sft.py` script, all arguments supported in that script should be supported by the CLI.
+The SFT CLI is based on the `examples/scripts/sft.py` script.
 
 ### Direct Policy Optimization (DPO)
 
 First, follow the basic instructions above and run `trl dpo --output_dir <output_dir> <*args>`. Make sure to process your DPO dataset in the TRL format by using a script similar for `examples/scripts/datasets/anthropic_hh.py`
 
-
 ```bash
 trl dpo --config config.yaml --output_dir your-output-dir 
 ```
+
+The SFT CLI is based on the `examples/scripts/dpo.py` script.
