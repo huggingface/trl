@@ -62,7 +62,23 @@ The SFT CLI is based on the `examples/scripts/sft.py` script.
 
 ### Direct Policy Optimization (DPO)
 
-First, follow the basic instructions above and run `trl dpo --output_dir <output_dir> <*args>`. Make sure to process your DPO dataset in the TRL format by using a script similar for `examples/scripts/datasets/anthropic_hh.py`
+First, follow the basic instructions above and run `trl dpo --output_dir <output_dir> <*args>`. Make sure to process your DPO dataset in the TRL format as follows:
+
+1- Make sure to pre-tokenize the dataset using chat templates:
+
+```bash
+python examples/datasets/tokenize_ds.py --model gpt2 --dataset yourdataset
+```
+
+You might need to adapt the `examples/datasets/tokenize_ds.py` to use yout chat template
+
+2- Format the dataset into TRL format (you can adapt the `examples/datasets/anthropic_hh.py`):
+
+```bash
+python examples/datasets/anthropic_hh.py --push_to_hub --hf_entity your-hf-org
+```
+
+Once your dataset being pushed, run the dpo CLI as follows:
 
 ```bash
 trl dpo --config config.yaml --output_dir your-output-dir 
