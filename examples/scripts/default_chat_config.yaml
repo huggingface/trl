@@ -1,0 +1,5 @@
+examples:
+  llama:
+    text: There is a Llama in my lawn, how can I get rid of it?
+  code:
+    text: Write a Python function that integrates any Python function f(x) over an arbitrary interval numerically.
