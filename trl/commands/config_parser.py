@@ -6,18 +6,6 @@ import yaml
 
 
 class YamlConfigParser:
-    # Some keys are processed by `TrainingArguments.__post_init__` and initialized there
-    # this mapping ignores the processing of these keys if they are modified.
-    _keys_ignore = {
-        "accelerator_config": None,
-        "report_to": "none",
-        "fsdp_config": None,
-        "logging_dir": None,
-        "lr_scheduler_kwargs": None,
-    }
-
-    _not_supported_classes = [dict, list]
-
     def __init__(self, config_path: str = None, dataclasses: List[Any] = None):
         self.config = None
 
@@ -30,14 +18,13 @@ class YamlConfigParser:
         if dataclasses is None:
             dataclasses = []
 
-        # Here we import `AcceleratorConfig` from the local level to not
+        # We create a dummy training args to compare the values before / after
+        # __post_init__
+        # Here we import `TrainingArguments` from the local level to not
         # break TRL lazy imports.
-        try:
-            from transformers.trainer_pt_utils import AcceleratorConfig
+        from transformers import TrainingArguments
 
-            self._not_supported_classes.append(AcceleratorConfig)
-        except ImportError:
-            ...
+        self._dummy_training_args = TrainingArguments(output_dir="dummy-training-args")
 
         self.parse_and_set_env()
         self.merge_dataclasses(dataclasses)
@@ -52,21 +39,22 @@ class YamlConfigParser:
                 raise ValueError("`env` field should be a dict in the YAML file.")
 
     def merge_dataclasses(self, dataclasses):
+        from transformers import TrainingArguments
+
         for dataclass in dataclasses:
             for data_class_field in fields(dataclass):
                 # Get the field here
                 field_name = data_class_field.name
                 field_value = getattr(dataclass, field_name)
-                default_value = data_class_field.default
+
+                if not isinstance(dataclass, TrainingArguments):
+                    default_value = data_class_field.default
+                else:
+                    default_value = (
+                        getattr(self._dummy_training_args, field_name) if field_name != "output_dir" else field_name
+                    )
 
                 default_value_changed = field_value != default_value
-
-                if field_name in self._keys_ignore.keys():
-                    if default_value_changed and not any(
-                        isinstance(field_value, cls_to_test) for cls_to_test in self._not_supported_classes
-                    ):
-                        self.config[field_name] = field_value
-                    continue
 
                 if field_value is not None:
                     if data_class_field in self.config:
