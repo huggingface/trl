@@ -14,6 +14,7 @@
 import importlib
 import os
 import sys
+from importlib.util import find_spec
 from itertools import chain
 from types import ModuleType
 from typing import Any
@@ -26,11 +27,11 @@ else:
 
 
 def is_peft_available() -> bool:
-    return importlib.util.find_spec("peft") is not None
+    return find_spec("peft") is not None
 
 
 def is_unsloth_available() -> bool:
-    return importlib.util.find_spec("unsloth") is not None
+    return find_spec("unsloth") is not None
 
 
 def is_accelerate_greater_20_0() -> bool:
@@ -70,26 +71,26 @@ def is_torch_greater_2_0() -> bool:
 
 
 def is_diffusers_available() -> bool:
-    return importlib.util.find_spec("diffusers") is not None
+    return find_spec("diffusers") is not None
 
 
 def is_bitsandbytes_available() -> bool:
     import torch
 
     # bnb can be imported without GPU but is not usable.
-    return importlib.util.find_spec("bitsandbytes") is not None and torch.cuda.is_available()
+    return find_spec("bitsandbytes") is not None and torch.cuda.is_available()
 
 
 def is_torchvision_available() -> bool:
-    return importlib.util.find_spec("torchvision") is not None
+    return find_spec("torchvision") is not None
 
 
 def is_rich_available() -> bool:
-    return importlib.util.find_spec("rich") is not None
+    return find_spec("rich") is not None
 
 
 def is_wandb_available() -> bool:
-    return importlib.util.find_spec("wandb") is not None
+    return find_spec("wandb") is not None
 
 
 def is_xpu_available() -> bool:
@@ -98,7 +99,7 @@ def is_xpu_available() -> bool:
 
         return accelerate.utils.is_xpu_available()
     else:
-        if importlib.util.find_spec("intel_extension_for_pytorch") is None:
+        if find_spec("intel_extension_for_pytorch") is None:
             return False
         try:
             import torch
@@ -110,7 +111,7 @@ def is_xpu_available() -> bool:
 
 def is_npu_available() -> bool:
     """Checks if `torch_npu` is installed and potentially if a NPU is in the environment"""
-    if importlib.util.find_spec("torch") is None or importlib.util.find_spec("torch_npu") is None:
+    if find_spec("torch") is None or find_spec("torch_npu") is None:
         return False
 
     import torch
