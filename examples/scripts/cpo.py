@@ -54,11 +54,10 @@ python examples/scripts/cpo.py \
 from dataclasses import dataclass, field
 from typing import Dict, Optional
 
-import torch
 from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, TrainingArguments
 
-from trl import CPOTrainer, ModelConfig, get_kbit_device_map, get_peft_config, get_quantization_config
+from trl import CPOTrainer, ModelConfig, get_peft_config
 
 
 @dataclass
