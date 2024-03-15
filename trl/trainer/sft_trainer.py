@@ -307,9 +307,6 @@ class SFTTrainer(Trainer):
                 "overflow issues when training a model in half-precision. You might consider adding `tokenizer.padding_side = 'right'` to your code."
             )
 
-        # set the correct log level depending on the node
-        log_level = args.get_process_log_level()
-        logger.setLevel(log_level)
 
         if check_dataset_labels:
             if train_dataset is not None and len(train_dataset) > 0:
