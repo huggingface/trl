@@ -362,11 +362,6 @@ if __name__ == "__main__":
     else:
         hub_model_id = None
 
-    if script_args.gold_eval == "ppl":
-        hub_strategy = "all_checkpoints"
-    else:
-        hub_strategy = "every_save"
-
     # 4. initialize training arguments:
     training_args = TrainingArguments(
         output_dir=script_args.output_dir,
@@ -391,7 +386,7 @@ if __name__ == "__main__":
         ddp_find_unused_parameters=(script_args.gradient_checkpointing),
         push_to_hub=script_args.push_to_hub,
         hub_model_id=hub_model_id,
-        hub_strategy=hub_strategy,
+        hub_strategy="end",
         hub_always_push=True,
     )
 
@@ -455,9 +450,6 @@ if __name__ == "__main__":
                 generation_config,
             )
         else:
-            run_name = os.getenv("WANDB_NAME", f"{script_args.model_name}_{script_args.gold_dataset_name}")
-            run_name += "_" + os.getenv("WANDB_RUN_ID", "xxxxx")[:5]
-
             if script_args.gold_eval == "gen":
                 callback_cls = PerplexityGenCallback
             elif script_args.gold_eval == "ppl":
@@ -476,7 +468,7 @@ if __name__ == "__main__":
                 target_field=script_args.gold_target_field,
                 log_n_samples_during_eval=script_args.log_n_samples_during_eval,
                 generation_config=generation_config,
-                hub_name=run_name,
+                hub_model_id=hub_model_id,
             )
 
         dpo_trainer.add_callback(callback)

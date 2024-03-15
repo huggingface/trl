@@ -245,6 +245,7 @@ class PerplexityCallback(TrainerCallback):
         max_prompt_length,
         prompt_field,
         target_field,
+        hub_model_id=None,
         **kwargs,
     ):
         self.max_length = max_length
@@ -267,6 +268,7 @@ class PerplexityCallback(TrainerCallback):
         self.dataloader = accelerator.prepare(dataloader)
         self.accelerator = accelerator
         self.completed_step = -1
+        self.hub_model_id = hub_model_id
 
     def on_evaluate(self, args, state, control, model, tokenizer, metrics, **kwargs):
         nll_sum = 0.0
@@ -305,6 +307,9 @@ class PerplexityCallback(TrainerCallback):
 
             wandb.log(gold_log)
 
+            if self.hub_model_id is not None:
+                model.push_to_hub(self.hub_model_id, revision=f"step{state.global_step}")
+
         self.completed_step = state.global_step
 
 
@@ -327,7 +332,7 @@ class PerplexityGenCallback(TrainerCallback):
         target_field,
         log_n_samples_during_eval=0,
         generation_config=None,
-        hub_name="tmp",
+        hub_model_id="tmp",
     ):
         self.max_length = max_length
         self.log_n_samples_during_eval = log_n_samples_during_eval
@@ -351,7 +356,7 @@ class PerplexityGenCallback(TrainerCallback):
         self.dataloader = accelerator.prepare(dataloader)
         self.accelerator = accelerator
         self.completed_step = -1
-        self.hub_name = hub_name
+        self.hub_name = hub_model_id
 
     def on_evaluate(self, args, state, control, model, tokenizer, metrics, **kwargs):
         all_generations = []
