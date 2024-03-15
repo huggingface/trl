@@ -12,8 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import subprocess
+import sys
+import unittest
 
 
+@unittest.skipIf(sys.platform.startswith("win"), "Skipping on Windows")
 def test_sft_cli():
     subprocess.run(
         "trl sft --max_steps 1 --output_dir tmp-sft --model_name_or_path HuggingFaceM4/tiny-random-LlamaForCausalLM --dataset_name imdb --learning_rate 1e-4 --lr_scheduler_type cosine",
@@ -22,6 +25,7 @@ def test_sft_cli():
     )
 
 
+@unittest.skipIf(sys.platform.startswith("win"), "Skipping on Windows")
 def test_dpo_cli():
     subprocess.run(
         "trl dpo --max_steps 1 --output_dir tmp-sft --model_name_or_path HuggingFaceM4/tiny-random-LlamaForCausalLM --dataset_name trl-internal-testing/Anthropic-hh-rlhf-processed --learning_rate 1e-4 --lr_scheduler_type cosine",
