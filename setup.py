@@ -99,7 +99,8 @@ setup(
     entry_points={
         "console_scripts": ["trl=trl.commands.cli:main"],
     },
-    packages=["examples/", "trl/"],
+    package_dir={"examples": "examples/scripts/"},
+    packages=["examples", "."],
     include_package_data=True,
     install_requires=REQUIRED_PKGS,
     extras_require=EXTRAS,
