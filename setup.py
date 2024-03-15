@@ -100,7 +100,7 @@ setup(
         "console_scripts": ["trl=trl.commands.cli:main"],
     },
     package_dir={"examples": "examples/scripts/"},
-    packages=["examples", "."],
+    packages=["examples", "trl"],
     include_package_data=True,
     install_requires=REQUIRED_PKGS,
     extras_require=EXTRAS,
