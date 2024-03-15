@@ -121,9 +121,9 @@ if __name__ == "__main__":
     ################
     # Optional rich context managers
     ###############
-    init_context = nullcontext if not TRL_USE_RICH else console.status("[bold green]Initializing the SFTTrainer...")
+    init_context = nullcontext() if not TRL_USE_RICH else console.status("[bold green]Initializing the SFTTrainer...")
     save_context = (
-        nullcontext
+        nullcontext()
         if not TRL_USE_RICH
         else console.status(f"[bold green]Training completed! Saving the model to {training_args.output_dir}")
     )

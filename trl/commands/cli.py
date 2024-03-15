@@ -34,7 +34,6 @@ def main():
 
         init_zero_verbose()
 
-        import trl_examples
         from transformers import HfArgumentParser, TrainingArguments
 
         from trl import ModelConfig
@@ -55,7 +54,7 @@ def main():
 
         # if the configuration is None, create a new `output_dir` variable
         config_parser = YamlConfigParser(config, [args, training_args, model_config])
-        trl_examples_dir = os.path.dirname(trl_examples.__file__)
+        trl_examples_dir = os.path.dirname(__file__)
 
         model_name = model_config.model_name_or_path
 
@@ -63,7 +62,7 @@ def main():
     os.environ["TRL_USE_RICH"] = "1"
 
     command = f"""
-    accelerate launch {trl_examples_dir}/{command_name}.py {config_parser.to_string()}
+    accelerate launch {trl_examples_dir}/scripts/{command_name}.py {config_parser.to_string()}
     """
 
     try:
