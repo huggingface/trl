@@ -6,6 +6,9 @@ tokenizer_name: EleutherAI/pythia-1b-deduped
 prompt_field: query
 eval_split: validation
 max_target_length: 128
+## hub stuff
+push_to_hub: True
+push_to_hub_organization: mnoukhov
 ## training stuff
 gold_eval: ppl
 eval_steps: 0.2

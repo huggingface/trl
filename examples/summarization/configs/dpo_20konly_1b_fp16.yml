@@ -7,6 +7,9 @@ prompt_field: query
 eval_split: validation
 pseudo_dataset_name: mnoukhov/summarize_from_feedback_tldr3_generated_20k_relabel_pythia1b_dpo
 max_target_length: 128
+## hub stuff
+push_to_hub: True
+push_to_hub_organization: mnoukhov
 ## training stuff
 gold_eval: ppl
 eval_steps: 0.2
