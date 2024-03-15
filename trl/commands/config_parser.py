@@ -57,31 +57,34 @@ class YamlConfigParser:
 
         dataclasses_copy = [deepcopy(dataclass) for dataclass in dataclasses]
 
-        for i, dataclass in enumerate(dataclasses):
-            for data_class_field in fields(dataclass):
-                # Get the field here
-                field_name = data_class_field.name
-                field_value = getattr(dataclass, field_name)
+        if len(self.config) > 0:
+            for i, dataclass in enumerate(dataclasses):
+                for data_class_field in fields(dataclass):
+                    # Get the field here
+                    field_name = data_class_field.name
+                    field_value = getattr(dataclass, field_name)
 
-                if not isinstance(dataclass, TrainingArguments):
-                    default_value = data_class_field.default
-                else:
-                    default_value = (
-                        getattr(self._dummy_training_args, field_name) if field_name != "output_dir" else field_name
-                    )
+                    if not isinstance(dataclass, TrainingArguments):
+                        default_value = data_class_field.default
+                    else:
+                        default_value = (
+                            getattr(self._dummy_training_args, field_name)
+                            if field_name != "output_dir"
+                            else field_name
+                        )
 
-                default_value_changed = field_value != default_value
+                    default_value_changed = field_value != default_value
 
-                if field_value is not None or field_name in self.config:
-                    if field_name in self.config:
-                        # In case the field value is different from default, overwrite it
-                        if default_value_changed and field_value != self.config[field_name]:
+                    if field_value is not None or field_name in self.config:
+                        if field_name in self.config:
+                            # In case the field value is different from default, overwrite it
+                            if default_value_changed and field_value != self.config[field_name]:
+                                setattr(dataclasses_copy[i], field_name, self.config[field_name])
+                            elif field_value is None and field_value != self.config[field_name]:
+                                setattr(dataclasses_copy[i], field_name, self.config[field_name])
+                            # Otherwise do nothing
+                        elif default_value_changed:
                             setattr(dataclasses_copy[i], field_name, field_value)
-                        elif field_value is None and field_value != self.config[field_name]:
-                            setattr(dataclasses_copy[i], field_name, self.config[field_name])
-                        # Otherwise do nothing
-                    elif default_value_changed:
-                        setattr(dataclasses_copy[i], field_name, field_value)
         return dataclasses_copy
 
     def to_string(self):
