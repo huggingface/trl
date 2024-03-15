@@ -105,6 +105,7 @@ setup(
     install_requires=REQUIRED_PKGS,
     extras_require=EXTRAS,
     python_requires=">=3.7",
+    data_files=[("examples", ["examples/scripts/sft.py", "examples/scripts/dpo.py"])],
     long_description=open("README.md", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
     zip_safe=False,
