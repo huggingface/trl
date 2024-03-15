@@ -63,7 +63,7 @@ def main():
     os.environ["TRL_USE_RICH"] = "1"
 
     command = f"""
-    accelerate launch {trl_examples_dir}/examples/scripts/{command_name}.py {config_parser.to_string()}
+    accelerate launch {trl_examples_dir}/{command_name}.py {config_parser.to_string()}
     """
 
     try:
