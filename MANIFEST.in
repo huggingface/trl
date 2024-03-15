@@ -3,4 +3,3 @@ include LICENSE
 include CONTRIBUTING.md
 include README.md
 recursive-exclude * __pycache__
-recursive-include examples/scripts *.py

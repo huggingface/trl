@@ -54,7 +54,7 @@ To create the package for pypi.
    Then push the change with a message 'set dev version'
 """
 
-from setuptools import find_packages, setup
+from setuptools import setup
 
 
 __version__ = "0.7.12.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
@@ -96,16 +96,14 @@ setup(
         "Programming Language :: Python :: 3.10",
     ],
     url="https://github.com/huggingface/trl",
-    packages=find_packages(),
     entry_points={
         "console_scripts": ["trl=trl.commands.cli:main"],
     },
-    package_data={"trl": ["../examples/*/**.py"]},
+    packages=["examples/", "trl/"],
     include_package_data=True,
     install_requires=REQUIRED_PKGS,
     extras_require=EXTRAS,
     python_requires=">=3.7",
-    data_files=[("examples", ["examples/scripts/sft.py", "examples/scripts/dpo.py"])],
     long_description=open("README.md", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
     zip_safe=False,
