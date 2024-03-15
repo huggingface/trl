@@ -55,7 +55,7 @@ def main():
         # if the configuration is None, create a new `output_dir` variable
         config_parser = YamlConfigParser(config, [args, training_args, model_config])
         current_dir = os.path.dirname(__file__)
-        trl_root_dir = "/".join(current_dir.split("/")[:-1])
+        trl_root_dir = "/".join(current_dir.split("/")[:-2])
 
         model_name = model_config.model_name_or_path
 
