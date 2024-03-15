@@ -54,7 +54,7 @@ To create the package for pypi.
    Then push the change with a message 'set dev version'
 """
 
-from setuptools import setup
+from setuptools import find_packages, setup
 
 
 __version__ = "0.7.12.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
@@ -99,8 +99,8 @@ setup(
     entry_points={
         "console_scripts": ["trl=trl.commands.cli:main"],
     },
-    package_dir={"examples": "examples/scripts/"},
-    packages=["examples", "trl"],
+    package_dir={"trl_examples": "examples/scripts/"},
+    packages=[*find_packages(), "trl_examples"],
     include_package_data=True,
     install_requires=REQUIRED_PKGS,
     extras_require=EXTRAS,
