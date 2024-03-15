@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import os
+from copy import deepcopy
 from dataclasses import fields
 from typing import Any, List
 
@@ -54,7 +55,9 @@ class YamlConfigParser:
     def merge_dataclasses(self, dataclasses):
         from transformers import TrainingArguments
 
-        for dataclass in dataclasses:
+        dataclasses_copy = [deepcopy(dataclass) for dataclass in dataclasses]
+
+        for i, dataclass in enumerate(dataclasses):
             for data_class_field in fields(dataclass):
                 # Get the field here
                 field_name = data_class_field.name
@@ -69,14 +72,17 @@ class YamlConfigParser:
 
                 default_value_changed = field_value != default_value
 
-                if field_value is not None:
-                    if data_class_field in self.config:
+                if field_value is not None or field_name in self.config:
+                    if field_name in self.config:
                         # In case the field value is different from default, overwrite it
                         if default_value_changed and field_value != self.config[field_name]:
-                            self.config[field_name] = field_value
+                            setattr(dataclasses_copy[i], field_name, field_value)
+                        elif field_value is None and field_value != self.config[field_name]:
+                            setattr(dataclasses_copy[i], field_name, self.config[field_name])
                         # Otherwise do nothing
                     elif default_value_changed:
-                        self.config[field_name] = field_value
+                        setattr(dataclasses_copy[i], field_name, field_value)
+        return dataclasses_copy
 
     def to_string(self):
         final_string = """"""

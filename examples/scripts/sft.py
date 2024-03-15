@@ -50,7 +50,7 @@ from contextlib import nullcontext
 
 TRL_USE_RICH = os.environ.get("TRL_USE_RICH", False)
 
-from trl.commands.cli_utils import init_zero_verbose, SftScriptArguments
+from trl.commands.cli_utils import init_zero_verbose, SftScriptArguments, TrlParser
 
 if TRL_USE_RICH:
     init_zero_verbose()
@@ -63,7 +63,7 @@ import torch
 from datasets import load_dataset
 
 from tqdm.rich import tqdm
-from transformers import AutoTokenizer, HfArgumentParser, TrainingArguments
+from transformers import AutoTokenizer, TrainingArguments
 
 from trl import (
     ModelConfig,
@@ -81,9 +81,8 @@ if TRL_USE_RICH:
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser((SftScriptArguments, TrainingArguments, ModelConfig))
-    args, training_args, model_config, _ = parser.parse_args_into_dataclasses(return_remaining_strings=True)
-    training_args.gradient_checkpointing_kwargs = dict(use_reentrant=args.gradient_checkpointing_use_reentrant)
+    parser = TrlParser(SftScriptArguments, TrainingArguments, ModelConfig)
+    args, training_args, model_config = parser.parse_args_and_config()
 
     # Force use our print callback
     if TRL_USE_RICH:

@@ -16,6 +16,9 @@
 # limitations under the License.
 from dataclasses import dataclass, field
 
+from transformers import HfArgumentParser
+from .config_parser import YamlConfigParser
+
 
 def init_zero_verbose():
     """
@@ -72,3 +75,21 @@ class DpoScriptArguments:
     gradient_checkpointing_use_reentrant: bool = field(
         default=False, metadata={"help": "Whether to apply `use_reentrant` for gradient_checkpointing"}
     )
+
+
+class TrlParser(HfArgumentParser):
+    def __init__(self, args, training_args, model_config):
+        super().__init__((args, training_args, model_config))
+
+    def parse_args_and_config(self):
+        parsed_args, parsed_training_args, parsed_model_config, _ = self.parse_args_into_dataclasses(
+            return_remaining_strings=True
+        )
+
+        self.config_parser = YamlConfigParser(parsed_args.config)
+        args, training_args, model_config = self.config_parser.merge_dataclasses(
+            ((parsed_args, parsed_training_args, parsed_model_config))
+        )
+
+        training_args.gradient_checkpointing_kwargs = dict(use_reentrant=args.gradient_checkpointing_use_reentrant)
+        return args, training_args, model_config
