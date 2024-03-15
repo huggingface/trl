@@ -39,6 +39,7 @@ from transformers import (
 )
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
+from transformers.utils import is_torch_fx_proxy
 
 from ..import_utils import is_peft_available, is_wandb_available
 from ..models import PreTrainedModelWrapper
@@ -239,6 +240,10 @@ class CPOTrainer(Trainer):
             raise ValueError("When no model is provided, you need to pass the parameter is_encoder_decoder.")
         else:
             self.is_encoder_decoder = is_encoder_decoder
+
+        if self.is_encoder_decoder:
+            self.decoder_start_token_id = model.config.decoder_start_token_id
+            self.pad_token_id = model.config.pad_token_id
 
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
         self.model_adapter_name = model_adapter_name
@@ -730,8 +735,8 @@ class CPOTrainer(Trainer):
 
         model_kwargs = (
             {
-                "labels": concatenated_batch["concatenated_labels"],
-                "decoder_input_ids": concatenated_batch.pop("concatenated_decoder_input_ids", None),
+                # "labels": concatenated_batch["concatenated_labels"],
+                "decoder_input_ids": self._shift_right(concatenated_batch["concatenated_labels"]),
             }
             if self.is_encoder_decoder
             else {}
@@ -745,24 +750,22 @@ class CPOTrainer(Trainer):
         all_logits = outputs.logits
 
         def cross_entropy_loss(logits, labels):
-            # Shift so that tokens < n predict n
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
+            if not self.is_encoder_decoder:
+                # Shift so that tokens < n predict n
+                logits = logits[..., :-1, :].contiguous()
+                labels = labels[..., 1:].contiguous()
             # Flatten the tokens
             loss_fct = nn.CrossEntropyLoss()
-            shift_logits = shift_logits.view(-1, logits.shape[-1])
-            shift_labels = shift_labels.view(-1)
+            logits = logits.view(-1, logits.shape[-1])
+            labels = labels.view(-1)
             # Enable model parallelism
-            shift_labels = shift_labels.to(shift_logits.device)
-            loss = loss_fct(shift_logits, shift_labels)
+            labels = labels.to(logits.device)
+            loss = loss_fct(logits, labels)
             return loss
 
-        if isinstance(outputs, dict) and "loss" not in outputs:
-            labels = concatenated_batch["concatenated_labels"]
-            nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
-        else:
-            nll_loss = outputs.loss
-
+        labels = concatenated_batch["concatenated_labels"]
+        nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
+        
         all_logps = self.get_batch_logps(
             all_logits,
             concatenated_batch["concatenated_labels"],
@@ -970,6 +973,29 @@ class CPOTrainer(Trainer):
         del self._stored_metrics[train_eval]
         return super().log(logs)
 
+    def _shift_right(self, input_ids):
+        if self.decoder_start_token_id is None:
+            raise ValueError(
+                "model.config.decoder_start_token_id has to be defined. It is usually set to the pad_token_id."
+            )
+
+        # shift inputs to the right
+        if is_torch_fx_proxy(input_ids):
+            # Item assignment is not supported natively for proxies.
+            shifted_input_ids = torch.full(input_ids.shape[:-1] + (1,), self.decoder_start_token_id)
+            shifted_input_ids = torch.cat([shifted_input_ids, input_ids[..., :-1]], dim=-1)
+        else:
+            shifted_input_ids = input_ids.new_zeros(input_ids.shape)
+            shifted_input_ids[..., 1:] = input_ids[..., :-1].clone()
+            shifted_input_ids[..., 0] = self.decoder_start_token_id
+
+        if self.pad_token_id is None:
+            raise ValueError("model.config.pad_token_id has to be defined.")
+        # replace possible -100 values in labels by `pad_token_id`
+        shifted_input_ids.masked_fill_(shifted_input_ids == -100, self.pad_token_id)
+
+        return shifted_input_ids
+        
     @wraps(Trainer.push_to_hub)
     def push_to_hub(self, commit_message: Optional[str] = "End of training", blocking: bool = True, **kwargs) -> str:
         """
