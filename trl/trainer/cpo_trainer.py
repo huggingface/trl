@@ -735,7 +735,6 @@ class CPOTrainer(Trainer):
 
         model_kwargs = (
             {
-                # "labels": concatenated_batch["concatenated_labels"],
                 "decoder_input_ids": self._shift_right(concatenated_batch["concatenated_labels"]),
             }
             if self.is_encoder_decoder
@@ -763,7 +762,7 @@ class CPOTrainer(Trainer):
             loss = loss_fct(logits, labels)
             return loss
 
-        labels = concatenated_batch["concatenated_labels"]
+        labels = concatenated_batch["concatenated_labels"].clone()
         nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
         
         all_logps = self.get_batch_logps(
