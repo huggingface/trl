@@ -764,7 +764,7 @@ class CPOTrainer(Trainer):
 
         labels = concatenated_batch["concatenated_labels"].clone()
         nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
-        
+
         all_logps = self.get_batch_logps(
             all_logits,
             concatenated_batch["concatenated_labels"],
@@ -994,7 +994,7 @@ class CPOTrainer(Trainer):
         shifted_input_ids.masked_fill_(shifted_input_ids == -100, self.pad_token_id)
 
         return shifted_input_ids
-        
+
     @wraps(Trainer.push_to_hub)
     def push_to_hub(self, commit_message: Optional[str] = "End of training", blocking: bool = True, **kwargs) -> str:
         """
