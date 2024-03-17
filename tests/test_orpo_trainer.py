@@ -78,15 +78,8 @@ class ORPOTrainerTester(unittest.TestCase):
         # fmt: on
         return Dataset.from_dict(dummy_dataset_dict)
 
-    @parameterized.expand(
-        [
-            ["gpt2", "sigmoid"],
-            ["t5", "hinge"],
-            ["gpt2", "ipo"],
-            ["t5", "ipo"],
-        ]
-    )
-    def test_orpo_trainer(self, name, loss_type):
+    @parameterized.expand([["gpt2"], ["t5"]])
+    def test_orpo_trainer(self, name):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = ORPOConfig(
                 output_dir=tmp_dir,
@@ -97,7 +90,6 @@ class ORPOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 evaluation_strategy="steps",
                 beta=0.1,
-                loss_type=loss_type,
             )
 
             dummy_dataset = self._init_dummy_dataset()

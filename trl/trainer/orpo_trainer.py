@@ -264,14 +264,7 @@ class ORPOTrainer(Trainer):
         self.max_target_length = max_target_length
         self.tokenizer = tokenizer
 
-        if args.loss_type in ["hinge", "ipo", "kto_pair"] and args.label_smoothing > 0:
-            warnings.warn(
-                "You are using a loss type that does not support label smoothing. Ignoring label_smoothing parameter."
-            )
-
         self.beta = args.beta
-        self.label_smoothing = args.label_smoothing
-        self.loss_type = args.loss_type
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
@@ -714,7 +707,7 @@ class ORPOTrainer(Trainer):
         all_logps = self.get_batch_logps(
             all_logits,
             concatenated_batch["concatenated_labels"],
-            average_log_prob=self.loss_type == "ipo",
+            average_log_prob=False,
             is_encoder_decoder=self.is_encoder_decoder,
             label_pad_token_id=self.label_pad_token_id,
         )
