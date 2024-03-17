@@ -18,7 +18,7 @@ The ORPO trainer expects a format identical to the DPO trainer, which should inc
 for example:
 
 ```py
-cpo_dataset_dict = {
+orpo_dataset_dict = {
     "prompt": [
         "hello",
         "how are you",
@@ -51,9 +51,9 @@ cpo_dataset_dict = {
 where the `prompt` contains the context inputs, `chosen` contains the corresponding chosen responses and `rejected` contains the corresponding negative (rejected) responses. As can be seen a prompt can have multiple responses and this is reflected in the entries being repeated in the dictionary's value arrays.
 
 ## Expected model format
-The CPO trainer expects a model of `AutoModelForCausalLM`, compared to PPO that expects `AutoModelForCausalLMWithValueHead` for the value function.
+The ORPO trainer expects a model of `AutoModelForCausalLM`, compared to PPO that expects `AutoModelForCausalLMWithValueHead` for the value function.
 
-## Using the `CPOTrainer`
+## Using the `ORPOTrainer`
 For a detailed example have a look at the `examples/scripts/orpo.py` script. At a high level we need to initialize the `ORPOTrainer` with a `model` we wish to train. **Note that ORPOTrainer eliminates the need to use the reference model, simplifying the optimization process.** The `beta` refers to the hyperparameter `lambda` in the paper or `alpha` in the code and refers to the weighting of the relative ratio loss in the full SFT loss.
 
 ```py
