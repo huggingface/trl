@@ -18,9 +18,9 @@ from transformers import TrainingArguments
 
 
 @dataclass
-class CPOConfig(TrainingArguments):
+class ORPOConfig(TrainingArguments):
     r"""
-    CPOConfig collects all training arguments related to the [`CPOTrainer`] class.
+    ORPOConfig collects all training arguments related to the [`ORPOTrainer`] class.
 
     Using [`HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
@@ -34,7 +34,7 @@ class CPOConfig(TrainingArguments):
         max_target_length (`int`, defaults to `None`):
             The maximum length of the target. This argument is required if you want to use the default data collator and your model is an encoder-decoder.
         beta (`float`, defaults to 0.1):
-            The beta factor in CPO loss (lambda/alpha in paper/code) that is the weight of the relative loss ratio in the SFT loss.
+            The beta factor in ORPO loss (lambda/alpha in paper/code) that is the weight of the relative loss ratio in the SFT loss.
         label_pad_token_id (`int`, defaults to `-100`):
             The label pad token id. This argument is required if you want to use the default data collator.
         padding_value (`int`, defaults to `None`):
