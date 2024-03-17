@@ -18,9 +18,9 @@ import torch
 from datasets import Dataset
 from parameterized import parameterized
 from pytest import mark
-from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer, TrainingArguments
+from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
-from trl import CPOTrainer
+from trl import CPOConfig, CPOTrainer
 
 from .testing_utils import require_peft
 
@@ -88,7 +88,7 @@ class CPOTrainerTester(unittest.TestCase):
     )
     def test_cpo_trainer(self, name, loss_type):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = CPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -96,6 +96,8 @@ class CPOTrainerTester(unittest.TestCase):
                 gradient_accumulation_steps=1,
                 learning_rate=9e-1,
                 evaluation_strategy="steps",
+                beta=0.1,
+                loss_type=loss_type,
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -106,11 +108,10 @@ class CPOTrainerTester(unittest.TestCase):
             elif name == "t5":
                 model = self.t5_model
                 tokenizer = self.t5_tokenizer
+                training_args.is_encoder_decoder = True
 
             trainer = CPOTrainer(
                 model=model,
-                beta=0.1,
-                loss_type=loss_type,
                 args=training_args,
                 tokenizer=tokenizer,
                 train_dataset=dummy_dataset,
@@ -144,7 +145,7 @@ class CPOTrainerTester(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = CPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -152,13 +153,13 @@ class CPOTrainerTester(unittest.TestCase):
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
                 evaluation_strategy="steps",
+                beta=0.1,
             )
 
             dummy_dataset = self._init_dummy_dataset()
 
             trainer = CPOTrainer(
                 model=self.model,
-                beta=0.1,
                 args=training_args,
                 tokenizer=self.tokenizer,
                 train_dataset=dummy_dataset,

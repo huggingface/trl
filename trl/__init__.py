@@ -23,6 +23,7 @@ from .models import (
 from .trainer import (
     DataCollatorForCompletionOnlyLM,
     DPOTrainer,
+    CPOConfig,
     CPOTrainer,
     IterativeSFTTrainer,
     KTOConfig,

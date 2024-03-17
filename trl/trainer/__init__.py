@@ -37,6 +37,7 @@ if is_diffusers_available():
     from .ddpo_trainer import DDPOTrainer
 
 from .dpo_trainer import DPOTrainer
+from .cpo_config import CPOConfig
 from .cpo_trainer import CPOTrainer
 from .iterative_sft_trainer import IterativeSFTTrainer
 from .kto_config import KTOConfig

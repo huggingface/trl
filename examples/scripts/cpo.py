@@ -51,33 +51,19 @@ python examples/scripts/cpo.py \
     --lora_r=16 \
     --lora_alpha=16
 """
+
 from dataclasses import dataclass, field
 from typing import Dict, Optional
 
 from datasets import Dataset, load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, TrainingArguments
+from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
-from trl import CPOTrainer, ModelConfig, get_peft_config
+from trl import CPOConfig, CPOTrainer, ModelConfig, get_peft_config
 
 
 @dataclass
 class ScriptArguments:
-    beta: float = field(default=0.1, metadata={"help": "the beta parameter for CPO loss"})
-    max_length: int = field(default=512, metadata={"help": "max length of each sample"})
-    max_prompt_length: int = field(default=128, metadata={"help": "max length of each sample's prompt"})
-    max_target_length: int = field(
-        default=128, metadata={"help": "Only used for encoder decoder model. Max target of each sample's prompt"}
-    )
     sanity_check: bool = field(default=True, metadata={"help": "only train on 1000 samples"})
-    ignore_bias_buffers: bool = field(
-        default=False,
-        metadata={
-            "help": "debug argument for distributed training;"
-            "fix for DDP issues with LM bias/mask buffers - invalid scalar type,`inplace operation. See"
-            "https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992"
-        },
-    )
-    generate_during_eval: bool = field(default=False, metadata={"help": "Generate during evaluation"})
 
 
 def extract_anthropic_prompt(prompt_and_response):
@@ -118,8 +104,8 @@ def get_hh(split: str, sanity_check: bool = False, silent: bool = False, cache_d
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser((ScriptArguments, TrainingArguments, ModelConfig))
-    args, training_args, model_config = parser.parse_args_into_dataclasses()
+    parser = HfArgumentParser((ScriptArguments, CPOConfig, ModelConfig))
+    args, cpo_args, model_config = parser.parse_args_into_dataclasses()
 
     ################
     # Model & Tokenizer
@@ -141,16 +127,11 @@ if __name__ == "__main__":
     ################
     trainer = CPOTrainer(
         model,
-        args=training_args,
-        beta=args.beta,
+        args=cpo_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         tokenizer=tokenizer,
-        max_length=args.max_length,
-        max_target_length=args.max_target_length,
-        max_prompt_length=args.max_prompt_length,
-        generate_during_eval=args.generate_during_eval,
         peft_config=get_peft_config(model_config),
     )
     trainer.train()
-    trainer.save_model(training_args.output_dir)
+    trainer.save_model(cpo_args.output_dir)
