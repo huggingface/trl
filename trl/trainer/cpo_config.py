@@ -34,7 +34,7 @@ class CPOConfig(TrainingArguments):
         max_target_length (`int`, defaults to `None`):
             The maximum length of the target. This argument is required if you want to use the default data collator and your model is an encoder-decoder.
         beta (`float`, defaults to 0.1):
-            The beta factor in CTO loss. Higher beta means less divergence from the initial policy.
+            The beta factor in CPO loss.
         label_smoothing (`float`, defaults to 0):
             The label smoothing factor. This argument is required if you want to use the default data collator.
         loss_type (`str`, defaults to `sigmoid`):
