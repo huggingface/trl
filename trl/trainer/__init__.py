@@ -22,6 +22,10 @@ from .utils import (
     ConstantLengthDataset,
     DataCollatorForCompletionOnlyLM,
     RunningMoments,
+    PtxData,
+    PtxDataArgs,
+    PtxLossArgs,
+    MiniBatchCycleIter,
     disable_dropout_in_model,
     peft_module_casting_to_bf16,
 )
