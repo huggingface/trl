@@ -27,6 +27,8 @@ from .trainer import (
     KTOConfig,
     KTOTrainer,
     ModelConfig,
+    ORPOConfig,
+    ORPOTrainer,
     PPOConfig,
     PPOTrainer,
     RewardConfig,
