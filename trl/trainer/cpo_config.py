@@ -51,6 +51,8 @@ class CPOConfig(TrainingArguments):
             If no model is provided, we need to know if the model_init returns an encoder-decoder.
         disable_dropout (`bool`, defaults to `True`):
             Whether or not to disable dropouts in `model`.
+        model_init_kwargs (`Optional[Dict]`, *optional*):
+            Dict of Optional kwargs to pass when instantiating the model from a string
     """
 
     max_length: Optional[int] = None

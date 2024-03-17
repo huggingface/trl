@@ -92,8 +92,6 @@ class CPOTrainer(Trainer):
             a dictionary string to metric values.
         dataset_num_proc (`Optional[int]`, *optional*):
             The number of workers to use to tokenize the data. Defaults to None.
-        model_init_kwargs (`Optional[Dict]`, *optional*):
-            Dict of Optional kwargs to pass when instantiating the model from a string
     """
 
     _tag_names = ["trl", "cpo"]
@@ -113,12 +111,18 @@ class CPOTrainer(Trainer):
         peft_config: Optional[Dict] = None,
         compute_metrics: Optional[Callable[[EvalLoopOutput], Dict]] = None,
         dataset_num_proc: Optional[int] = None,
-        model_init_kwargs: Optional[Dict] = None,
     ):
-        if model_init_kwargs is None:
+        if args.model_init_kwargs is None:
             model_init_kwargs = {}
         elif not isinstance(model, str):
             raise ValueError("You passed model_kwargs to the CPOTrainer. But your model is already instantiated.")
+        else:
+            model_init_kwargs = args.model_init_kwargs
+            model_init_kwargs["torch_dtype"] = (
+                model_init_kwargs["torch_dtype"]
+                if model_init_kwargs["torch_dtype"] in ["auto", None]
+                else getattr(torch, model_init_kwargs["torch_dtype"])
+            )
 
         if isinstance(model, str):
             warnings.warn(
