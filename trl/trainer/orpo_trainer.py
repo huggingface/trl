@@ -597,12 +597,12 @@ class ORPOTrainer(Trainer):
 
         return concatenated_batch
 
-    def orpo_loss(
+    def or_loss(
         self,
         policy_chosen_logps: torch.FloatTensor,
         policy_rejected_logps: torch.FloatTensor,
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
-        """Compute the ORPO loss for a batch of policy and reference model log probabilities.
+        """Compute ORPO's OR loss for a batch of policy and reference model log probabilities.
 
         Args:
             policy_chosen_logps: Log probabilities of the policy model for the chosen responses. Shape: (batch_size,)
@@ -613,25 +613,12 @@ class ORPOTrainer(Trainer):
             The losses tensor contains the ORPO loss for each example in the batch.
             The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
         """
-        logits = (policy_chosen_logps - policy_rejected_logps).to(self.accelerator.device)
-
-        # The beta is a temperature parameter for the CPO loss, typically something in the range of 0.1 to 0.5.
-        # We ignore the reference model as beta -> 0. The label_smoothing parameter encodes our uncertainty about the labels and
-        # calculates a conservative CPO loss.
-        if self.loss_type == "sigmoid":
-            losses = (
-                -F.logsigmoid(self.beta * logits) * (1 - self.label_smoothing)
-                - F.logsigmoid(-self.beta * logits) * self.label_smoothing
-            )
-        elif self.loss_type == "hinge":
-            losses = torch.relu(1 - self.beta * logits)
-        elif self.loss_type == "ipo":
-            # eqn (17) of the paper where beta is the regularization parameter for the IPO loss, denoted by tau in the paper.
-            losses = (logits - 1 / (2 * self.beta)) ** 2
-        else:
-            raise ValueError(
-                f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'kto_pair']"
-            )
+        log_odds = (policy_chosen_logps - policy_rejected_logps) - (
+            torch.log(1 - torch.exp(policy_chosen_logps)) - torch.log(1 - torch.exp(policy_rejected_logps))
+        )
+        sig_ratio = F.sigmoid(log_odds)
+        ratio = torch.log(sig_ratio)
+        losses = self.beta * ratio
 
         chosen_rewards = self.beta * (policy_chosen_logps.to(self.accelerator.device)).detach()
         rejected_rewards = self.beta * (policy_rejected_logps.to(self.accelerator.device)).detach()
@@ -722,7 +709,7 @@ class ORPOTrainer(Trainer):
             return loss
 
         labels = concatenated_batch["concatenated_labels"].clone()
-        nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
+        chosen_nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
 
         all_logps = self.get_batch_logps(
             all_logits,
@@ -738,7 +725,7 @@ class ORPOTrainer(Trainer):
         chosen_logits = all_logits[:len_chosen]
         rejected_logits = all_logits[len_chosen:]
 
-        return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, nll_loss)
+        return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, chosen_nll_loss)
 
     def get_batch_loss_metrics(
         self,
@@ -757,9 +744,9 @@ class ORPOTrainer(Trainer):
             policy_nll_loss,
         ) = self.concatenated_forward(model, batch)
 
-        losses, chosen_rewards, rejected_rewards = self.orpo_loss(policy_chosen_logps, policy_rejected_logps)
+        losses, chosen_rewards, rejected_rewards = self.or_loss(policy_chosen_logps, policy_rejected_logps)
 
-        loss = losses.mean() + policy_nll_loss
+        loss = policy_nll_loss - losses.mean()
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
         prefix = "eval_" if train_eval == "eval" else ""

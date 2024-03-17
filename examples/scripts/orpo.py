@@ -58,7 +58,7 @@ from typing import Dict, Optional
 from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
-from trl import ORPOConfig, ORPOTrainer, ModelConfig, get_peft_config
+from trl import ModelConfig, ORPOConfig, ORPOTrainer, get_peft_config
 
 
 @dataclass
