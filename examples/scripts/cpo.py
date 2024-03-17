@@ -133,5 +133,7 @@ if __name__ == "__main__":
         tokenizer=tokenizer,
         peft_config=get_peft_config(model_config),
     )
+
+    # train and save the model
     trainer.train()
     trainer.save_model(cpo_args.output_dir)
