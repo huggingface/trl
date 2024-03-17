@@ -85,8 +85,6 @@ class CPOTrainer(Trainer):
             The function to use to preprocess the logits before computing the metrics.
         peft_config (`Dict`, defaults to `None`):
             The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
-        generate_during_eval (`bool`, defaults to `False`):
-            Whether to sample and log generations during evaluation step.
         compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return
             a dictionary string to metric values.
