@@ -94,7 +94,6 @@ if __name__ == "__main__":
     if orpo_args.debug:
         for key in ds:
             ds[key] = ds[key].select(range(50))
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
     if tokenizer.chat_template is None:
         tokenizer.chat_template = "{% for message in messages %}{{message['role'] + ': ' + message['content'] + '\n\n'}}{% endfor %}{{ eos_token }}"
 
