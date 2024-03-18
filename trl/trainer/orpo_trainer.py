@@ -710,7 +710,7 @@ class ORPOTrainer(Trainer):
         all_logps = self.get_batch_logps(
             all_logits,
             concatenated_batch["concatenated_labels"],
-            average_log_prob=False,
+            average_log_prob=True,
             is_encoder_decoder=self.is_encoder_decoder,
             label_pad_token_id=self.label_pad_token_id,
         )
@@ -743,8 +743,9 @@ class ORPOTrainer(Trainer):
         losses, chosen_rewards, rejected_rewards, log_odds_ratio, log_odds = self.odds_ratio_loss(
             policy_chosen_logps, policy_rejected_logps
         )
-
+        # full ORPO loss
         loss = policy_nll_loss - losses.mean()
+
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
         prefix = "eval_" if train_eval == "eval" else ""
