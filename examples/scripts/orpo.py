@@ -63,11 +63,7 @@ from trl import ModelConfig, ORPOConfig, ORPOTrainer, get_peft_config
 
 @dataclass
 class ScriptArguments:
-    debug: bool = field(default=True, metadata={"help": "debugging mode"})
-    dataset: str = field(
-        default="Anthropic/hh-rlhf",
-        metadata={"help": "The name of the dataset to use."},
-    )
+    dataset: str = field(default="Anthropic/hh-rlhf", metadata={"help": "The name of the dataset to use."})
 
 
 def extract_anthropic_prompt(prompt_and_response):
@@ -95,7 +91,7 @@ if __name__ == "__main__":
     # Dataset
     ################
     ds = load_dataset(args.dataset)
-    if args.debug:
+    if orpo_args.debug:
         for key in ds:
             ds[key] = ds[key].select(range(50))
     tokenizer = AutoTokenizer.from_pretrained(args.model)
