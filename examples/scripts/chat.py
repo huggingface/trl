@@ -18,7 +18,9 @@ from typing import Optional
 import torch
 
 from trl.trainer.utils import get_kbit_device_map, get_quantization_config
-from trl.commands.cli_utils import ChatArguments
+from trl.commands.cli_utils import ChatArguments, init_zero_verbose, TrlParser
+
+init_zero_verbose()
 
 HELP_STRING = """\
 
