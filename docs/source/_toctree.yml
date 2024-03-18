@@ -5,6 +5,8 @@
     title: Quickstart
   - local: installation
     title: Installation
+  - local: clis
+    title: Get started with Command Line Interfaces (CLIs)
   - local: how_to_train
     title: PPO Training FAQ
   - local: use_model

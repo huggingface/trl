@@ -1,0 +1,87 @@
+# Command Line Interfaces (CLIs)
+
+You can use TRL to fine-tune your Language Model on Supervised Fine-Tuning (SFT) or Direct Policy Optimization (DPO) using the TRL CLIs.
+
+Currently supported CLIs are:
+
+- `trl sft`
+- `trl dpo`
+
+## Get started 
+
+Before getting started, pick up a Language Model from Hugging Face Hub. Supported models can be found with the filter "text-generation" within models. Also make sure to pick up a relevant dataset for your task.
+
+Also make sure to run:
+```bash
+accelerate config
+```
+and pick up the right configuration for your training setup (single / multi-GPU, DeepSpeed, etc.). Make sure to complete all steps of `accelerate config` before running any CLI command.
+
+We also recommend you passing a YAML config file to configure your training protocol. Below is a simple example of a YAML file that you can use for training your models with `trl sft` command.
+
+```yaml
+model_name_or_path:
+  HuggingFaceM4/tiny-random-LlamaForCausalLM
+dataset_name:
+  imdb
+dataset_text_field:
+  text
+report_to:
+  none
+learning_rate:
+  0.0001
+lr_scheduler_type:
+  cosine
+```
+
+Save that config in a `.yaml` and get directly started ! Note you can overwrite the arguments from the config file by explicitly passing them to the CLI, e.g.:
+
+```bash
+trl sft --config example_config.yaml --output_dir test-trl-cli --lr_scheduler_type cosine_with_restarts
+```
+
+Will force-use `cosine_with_restarts` for `lr_scheduler_type`.
+
+## Supported Arguments 
+
+We do support all arguments from `transformers.TrainingArguments`, for loading your model, we support all arguments from `~trl.ModelConfig`:
+
+[[autodoc]] ModelConfig
+
+You can pass any of these arguments either to the CLI or the YAML file.
+
+### Supervised Fine-tuning (SFT)
+
+Follow the basic instructions above and run `trl sft --output_dir <output_dir> <*args>`: 
+
+```bash
+trl sft --config config.yaml --output_dir your-output-dir 
+```
+
+The SFT CLI is based on the `examples/scripts/sft.py` script.
+
+### Direct Policy Optimization (DPO)
+
+First, follow the basic instructions above and run `trl dpo --output_dir <output_dir> <*args>`. Make sure to process your DPO dataset in the TRL format as follows:
+
+1- Make sure to pre-tokenize the dataset using chat templates:
+
+```bash
+python examples/datasets/tokenize_ds.py --model gpt2 --dataset yourdataset
+```
+
+You might need to adapt the `examples/datasets/tokenize_ds.py` to use yout chat template
+
+2- Format the dataset into TRL format (you can adapt the `examples/datasets/anthropic_hh.py`):
+
+```bash
+python examples/datasets/anthropic_hh.py --push_to_hub --hf_entity your-hf-org
+```
+
+Once your dataset being pushed, run the dpo CLI as follows:
+
+```bash
+trl dpo --config config.yaml --output_dir your-output-dir 
+```
+
+The SFT CLI is based on the `examples/scripts/dpo.py` script.

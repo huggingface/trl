@@ -15,34 +15,84 @@
 # limitations under the License.
 
 # There is a circular import in the PPOTrainer if we let isort sort these
-# isort: off
-from .utils import (
-    AdaptiveKLController,
-    FixedKLController,
-    ConstantLengthDataset,
-    DataCollatorForCompletionOnlyLM,
-    RunningMoments,
-    disable_dropout_in_model,
-    peft_module_casting_to_bf16,
-)
+from typing import TYPE_CHECKING
+from ..import_utils import _LazyModule, is_diffusers_available, OptionalDependencyNotAvailable
 
-# isort: on
+_import_structure = {
+    "utils": [
+        "AdaptiveKLController",
+        "FixedKLController",
+        "ConstantLengthDataset",
+        "DataCollatorForCompletionOnlyLM",
+        "RunningMoments",
+        "disable_dropout_in_model",
+        "peft_module_casting_to_bf16",
+        "RichProgressCallback",
+    ],
+    "dpo_trainer": [
+        "DPOTrainer",
+    ],
+    "iterative_sft_trainer": [
+        "IterativeSFTTrainer",
+    ],
+    "kto_config": ["KTOConfig"],
+    "kto_trainer": ["KTOTrainer"],
+    "model_config": ["ModelConfig"],
+    "ppo_config": ["PPOConfig"],
+    "ppo_trainer": ["PPOTrainer"],
+    "reward_config": ["RewardConfig"],
+    "reward_trainer": ["RewardTrainer", "compute_accuracy"],
+    "sft_trainer": ["SFTTrainer"],
+    "base": ["BaseTrainer"],
+    "ddpo_config": ["DDPOConfig"],
+}
 
-from ..import_utils import is_diffusers_available
-from .base import BaseTrainer
-from .ddpo_config import DDPOConfig
+try:
+    if not is_diffusers_available():
+        raise OptionalDependencyNotAvailable()
+except OptionalDependencyNotAvailable:
+    pass
+else:
+    _import_structure["ddpo_trainer"] = ["DDPOTrainer"]
 
 
-if is_diffusers_available():
-    from .ddpo_trainer import DDPOTrainer
+if TYPE_CHECKING:
+    # isort: off
+    from .utils import (
+        AdaptiveKLController,
+        FixedKLController,
+        ConstantLengthDataset,
+        DataCollatorForCompletionOnlyLM,
+        RunningMoments,
+        disable_dropout_in_model,
+        peft_module_casting_to_bf16,
+        RichProgressCallback,
+    )
 
-from .dpo_trainer import DPOTrainer
-from .iterative_sft_trainer import IterativeSFTTrainer
-from .kto_config import KTOConfig
-from .kto_trainer import KTOTrainer
-from .model_config import ModelConfig
-from .ppo_config import PPOConfig
-from .ppo_trainer import PPOTrainer
-from .reward_config import RewardConfig
-from .reward_trainer import RewardTrainer, compute_accuracy
-from .sft_trainer import SFTTrainer
+    # isort: on
+
+    from .base import BaseTrainer
+    from .ddpo_config import DDPOConfig
+
+    from .dpo_trainer import DPOTrainer
+    from .iterative_sft_trainer import IterativeSFTTrainer
+    from .kto_config import KTOConfig
+    from .kto_trainer import KTOTrainer
+    from .model_config import ModelConfig
+    from .ppo_config import PPOConfig
+    from .ppo_trainer import PPOTrainer
+    from .reward_config import RewardConfig
+    from .reward_trainer import RewardTrainer, compute_accuracy
+    from .sft_trainer import SFTTrainer
+
+    try:
+        if not is_diffusers_available():
+            raise OptionalDependencyNotAvailable()
+    except OptionalDependencyNotAvailable:
+        pass
+    else:
+        from .ddpo_trainer import DDPOTrainer
+else:
+    import sys
+
+    sys.modules[__name__] = _LazyModule(__name__, globals()["__file__"], _import_structure, module_spec=__spec__)
