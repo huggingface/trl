@@ -1,24 +1,20 @@
-import os
-from threading import Thread
-from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer, HfArgumentParser
-from rich.console import Console
+import copy
+import json
 import os
 import pwd
-import yaml
-import time
-import json
-import copy
-import os
 import re
+import time
+from threading import Thread
+
+import torch
 from rich.console import Console
 from rich.live import Live
 from rich.markdown import Markdown
-from dataclasses import dataclass, field
-from typing import Optional
-import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
 
+from trl.commands.cli_utils import ChatArguments, TrlParser, init_zero_verbose
 from trl.trainer.utils import get_kbit_device_map, get_quantization_config
-from trl.commands.cli_utils import ChatArguments, init_zero_verbose, TrlParser
+
 
 init_zero_verbose()
 
@@ -26,7 +22,7 @@ HELP_STRING = """\
 
 **TRL CHAT INTERFACE**
 
-The chat interface is a simple tool to try out a chat model. 
+The chat interface is a simple tool to try out a chat model.
 
 Besides talking to the model there are several commands:
 - **clear**: clears the current conversation and start a new one
@@ -37,11 +33,20 @@ Besides talking to the model there are several commands:
 - **exit**: closes the interface
 """
 
-SUPPORTED_GENERATION_KWARGS = ["max_new_tokens", "do_sample", "num_beams", "temperature", "top_p", "top_k", "repetition_penalty"]
+SUPPORTED_GENERATION_KWARGS = [
+    "max_new_tokens",
+    "do_sample",
+    "num_beams",
+    "temperature",
+    "top_p",
+    "top_k",
+    "repetition_penalty",
+]
 
 SETTING_RE = r"^set\s+[A-Za-z\s_]+=[A-Za-z\d\s.!\"#$%&'()*+,-/:<=>?@\[\]^_`{|}~]+(?:;\s*[A-Za-z\s_]+=[A-Za-z\d\s.!\"#$%&'()*+,-/:<=>?@\[\]^_`{|}~]+)*$"
 
-class RichInterface():
+
+class RichInterface:
     def __init__(self, model_name=None, user_name=None):
         self._console = Console()
         if model_name is None:
@@ -65,7 +70,7 @@ class RichInterface():
         with Live(console=self._console, refresh_per_second=4) as live:
             # Read lines from the stream
             for i, outputs in enumerate(output_stream):
-                if not outputs or i==0:
+                if not outputs or i == 0:
                     continue
                 text += outputs
                 # Render the accumulated text as Markdown
@@ -122,12 +127,13 @@ class RichInterface():
 def get_username():
     return pwd.getpwuid(os.getuid())[0]
 
+
 def create_default_filename(model_name):
     time_str = time.strftime("%Y-%m-%d_%H-%M-%S")
-    return f'{model_name}/chat_{time_str}.json'
+    return f"{model_name}/chat_{time_str}.json"
+
 
 def save_chat(chat, args, filename):
-    
     output_dict = {}
     output_dict["settings"] = vars(args)
     output_dict["chat_history"] = chat
@@ -143,6 +149,7 @@ def save_chat(chat, args, filename):
         json.dump(output_dict, f, indent=4)
     return os.path.abspath(filename)
 
+
 def clear_chat_history(system_prompt):
     if system_prompt is None:
         chat = []
@@ -150,15 +157,15 @@ def clear_chat_history(system_prompt):
         chat = [{"role": "system", "content": system_prompt}]
     return chat
 
+
 def parse_settings(user_input, current_args, interface):
     settings = user_input[4:].strip().split(";")
-    settings = [(setting.split("=")[0], setting[len(setting.split("=")[0])+1:]) for setting in settings]
+    settings = [(setting.split("=")[0], setting[len(setting.split("=")[0]) + 1 :]) for setting in settings]
     settings = dict(settings)
     error = False
 
     for name in settings:
         if hasattr(current_args, name):
-            
             try:
                 if isinstance(getattr(current_args, name), bool):
                     if settings[name] == "True":
@@ -170,10 +177,12 @@ def parse_settings(user_input, current_args, interface):
                 else:
                     settings[name] = type(getattr(current_args, name))(settings[name])
             except ValueError:
-                interface.print_red(f"Cannot cast setting {name} (={settings[name]}) to {type(getattr(current_args, name))}.")
-        else: 
+                interface.print_red(
+                    f"Cannot cast setting {name} (={settings[name]}) to {type(getattr(current_args, name))}."
+                )
+        else:
             interface.print_red(f"There is no '{name}' setting.")
-    
+
     if error:
         interface.print_red("There was an issue parsing the settings. No settings have been changed.")
         return current_args, False
@@ -182,16 +191,12 @@ def parse_settings(user_input, current_args, interface):
             setattr(current_args, name, settings[name])
             interface.print_green(f"Set {name} to {settings[name]}.")
 
-        time.sleep(1.5) # so the user has time to read the changes
+        time.sleep(1.5)  # so the user has time to read the changes
         return current_args, True
 
 
 def load_model(args):
-    torch_dtype = (
-        args.torch_dtype
-        if args.torch_dtype in ["auto", None]
-        else getattr(torch, args.torch_dtype)
-    )
+    torch_dtype = args.torch_dtype if args.torch_dtype in ["auto", None] else getattr(torch, args.torch_dtype)
     quantization_config = get_quantization_config(args)
     model_kwargs = dict(
         revision=args.model_revision,
@@ -256,13 +261,13 @@ def chat_cli():
                 chat = clear_chat_history(current_args.system_prompt)
                 continue
 
-            if user_input.startswith("save") and len(user_input.split())<2:
+            if user_input.startswith("save") and len(user_input.split()) < 2:
                 split_input = user_input.split()
-                
-                if len(split_input)==2:
-                    filename=split_input[1]
+
+                if len(split_input) == 2:
+                    filename = split_input[1]
                 else:
-                    filename=None
+                    filename = None
                 filename = save_chat(chat, current_args, filename)
                 interface.print_green(f"Chat saved in {filename}!")
                 continue
@@ -282,7 +287,9 @@ def chat_cli():
                     interface.print_user_message(current_args.examples[example_name]["text"])
                     user_input = current_args.examples[example_name]["text"]
                 else:
-                    interface.print_red(f"Example {example_name} not found in list of available examples: {list(current_args.examples.keys())}.")
+                    interface.print_red(
+                        f"Example {example_name} not found in list of available examples: {list(current_args.examples.keys())}."
+                    )
                     continue
 
             chat.append({"role": "user", "content": user_input})
@@ -298,9 +305,9 @@ def chat_cli():
                 temperature=current_args.temperature,
                 top_k=current_args.top_k,
                 top_p=current_args.top_p,
-                repetition_penalty=current_args.repetition_penalty
-                )
-            
+                repetition_penalty=current_args.repetition_penalty,
+            )
+
             thread = Thread(target=model.generate, kwargs=generation_kwargs)
             thread.start()
             model_output = interface.stream_output(generation_streamer)
@@ -309,6 +316,7 @@ def chat_cli():
 
         except KeyboardInterrupt:
             break
+
 
 if __name__ == "__main__":
     chat_cli()
