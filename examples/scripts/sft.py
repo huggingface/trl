@@ -1,3 +1,4 @@
+# flake8: noqa
 # Copyright 2023 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -43,30 +44,50 @@ python examples/scripts/sft.py \
     --lora_r=64 \
     --lora_alpha=16
 """
-from dataclasses import dataclass, field
+import logging
+import os
+from contextlib import nullcontext
+
+TRL_USE_RICH = os.environ.get("TRL_USE_RICH", False)
+
+from trl.commands.cli_utils import init_zero_verbose, SftScriptArguments, TrlParser
+
+if TRL_USE_RICH:
+    init_zero_verbose()
+    FORMAT = "%(message)s"
+
+    from rich.console import Console
+    from rich.logging import RichHandler
 
 import torch
 from datasets import load_dataset
-from tqdm import tqdm
-from transformers import AutoTokenizer, HfArgumentParser, TrainingArguments
 
-from trl import ModelConfig, SFTTrainer, get_kbit_device_map, get_peft_config, get_quantization_config
+from tqdm.rich import tqdm
+from transformers import AutoTokenizer, TrainingArguments
 
+from trl import (
+    ModelConfig,
+    RichProgressCallback,
+    SFTTrainer,
+    get_peft_config,
+    get_quantization_config,
+    get_kbit_device_map,
+)
 
 tqdm.pandas()
 
-
-@dataclass
-class ScriptArguments:
-    dataset_name: str = field(default="timdettmers/openassistant-guanaco", metadata={"help": "the dataset name"})
-    dataset_text_field: str = field(default="text", metadata={"help": "the text field of the dataset"})
-    max_seq_length: int = field(default=512, metadata={"help": "The maximum sequence length for SFT Trainer"})
+if TRL_USE_RICH:
+    logging.basicConfig(format=FORMAT, datefmt="[%X]", handlers=[RichHandler()], level=logging.INFO)
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser((ScriptArguments, TrainingArguments, ModelConfig))
-    args, training_args, model_config = parser.parse_args_into_dataclasses()
-    training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
+    parser = TrlParser((SftScriptArguments, TrainingArguments, ModelConfig))
+    args, training_args, model_config = parser.parse_args_and_config()
+
+    # Force use our print callback
+    if TRL_USE_RICH:
+        training_args.disable_tqdm = True
+        console = Console()
 
     ################
     # Model & Tokenizer
@@ -97,19 +118,34 @@ if __name__ == "__main__":
     eval_dataset = raw_datasets["test"]
 
     ################
+    # Optional rich context managers
+    ###############
+    init_context = nullcontext() if not TRL_USE_RICH else console.status("[bold green]Initializing the SFTTrainer...")
+    save_context = (
+        nullcontext()
+        if not TRL_USE_RICH
+        else console.status(f"[bold green]Training completed! Saving the model to {training_args.output_dir}")
+    )
+
+    ################
     # Training
     ################
-    trainer = SFTTrainer(
-        model=model_config.model_name_or_path,
-        model_init_kwargs=model_kwargs,
-        args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        dataset_text_field="text",
-        max_seq_length=args.max_seq_length,
-        tokenizer=tokenizer,
-        packing=True,
-        peft_config=get_peft_config(model_config),
-    )
+    with init_context:
+        trainer = SFTTrainer(
+            model=model_config.model_name_or_path,
+            model_init_kwargs=model_kwargs,
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            dataset_text_field=args.dataset_text_field,
+            max_seq_length=args.max_seq_length,
+            tokenizer=tokenizer,
+            packing=args.packing,
+            peft_config=get_peft_config(model_config),
+            callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
+        )
+
     trainer.train()
-    trainer.save_model(training_args.output_dir)
+
+    with save_context:
+        trainer.save_model(training_args.output_dir)

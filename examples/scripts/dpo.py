@@ -1,3 +1,4 @@
+# flake8: noqa
 # Copyright 2023 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,76 +49,47 @@ python examples/scripts/dpo.py \
     --lora_r=16 \
     --lora_alpha=16
 """
-from dataclasses import dataclass, field
-from typing import Dict, Optional
+import logging
+import os
+from contextlib import nullcontext
+
+TRL_USE_RICH = os.environ.get("TRL_USE_RICH", False)
+
+from trl.commands.cli_utils import DpoScriptArguments, init_zero_verbose, TrlParser
+
+if TRL_USE_RICH:
+    init_zero_verbose()
+    FORMAT = "%(message)s"
+
+    from rich.console import Console
+    from rich.logging import RichHandler
 
 import torch
-from datasets import Dataset, load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, TrainingArguments
+from datasets import load_dataset
+from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
 
-from trl import DPOTrainer, ModelConfig, get_kbit_device_map, get_peft_config, get_quantization_config
-
-
-@dataclass
-class ScriptArguments:
-    beta: float = field(default=0.1, metadata={"help": "the beta parameter for DPO loss"})
-    max_length: int = field(default=512, metadata={"help": "max length of each sample"})
-    max_prompt_length: int = field(default=128, metadata={"help": "max length of each sample's prompt"})
-    max_target_length: int = field(
-        default=128, metadata={"help": "Only used for encoder decoder model. Max target of each sample's prompt"}
-    )
-    sanity_check: bool = field(default=True, metadata={"help": "only train on 1000 samples"})
-    ignore_bias_buffers: bool = field(
-        default=False,
-        metadata={
-            "help": "debug argument for distributed training;"
-            "fix for DDP issues with LM bias/mask buffers - invalid scalar type,`inplace operation. See"
-            "https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992"
-        },
-    )
-    generate_during_eval: bool = field(default=False, metadata={"help": "Generate during evaluation"})
+from trl import (
+    DPOTrainer,
+    ModelConfig,
+    RichProgressCallback,
+    get_kbit_device_map,
+    get_peft_config,
+    get_quantization_config,
+)
 
 
-def extract_anthropic_prompt(prompt_and_response):
-    """Extract the anthropic prompt from a prompt and response pair."""
-    search_term = "\n\nAssistant:"
-    search_term_idx = prompt_and_response.rfind(search_term)
-    assert search_term_idx != -1, f"Prompt and response does not contain '{search_term}'"
-    return prompt_and_response[: search_term_idx + len(search_term)]
-
-
-def get_hh(split: str, sanity_check: bool = False, silent: bool = False, cache_dir: Optional[str] = None) -> Dataset:
-    """Load the Anthropic Helpful-Harmless dataset from Hugging Face and convert it to the necessary format.
-
-    The dataset is converted to a dictionary with the following structure:
-    {
-        'prompt': List[str],
-        'chosen': List[str],
-        'rejected': List[str],
-    }
-
-    Prompts should be structured as follows:
-      \n\nHuman: <prompt>\n\nAssistant:
-    Multiple turns are allowed, but the prompt should always start with \n\nHuman: and end with \n\nAssistant:.
-    """
-    dataset = load_dataset("Anthropic/hh-rlhf", split=split, cache_dir=cache_dir)
-    if sanity_check:
-        dataset = dataset.select(range(min(len(dataset), 1000)))
-
-    def split_prompt_and_responses(sample) -> Dict[str, str]:
-        prompt = extract_anthropic_prompt(sample["chosen"])
-        return {
-            "prompt": prompt,
-            "chosen": sample["chosen"][len(prompt) :],
-            "rejected": sample["rejected"][len(prompt) :],
-        }
-
-    return dataset.map(split_prompt_and_responses)
+if TRL_USE_RICH:
+    logging.basicConfig(format=FORMAT, datefmt="[%X]", handlers=[RichHandler()], level=logging.INFO)
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser((ScriptArguments, TrainingArguments, ModelConfig))
-    args, training_args, model_config = parser.parse_args_into_dataclasses()
+    parser = TrlParser((DpoScriptArguments, TrainingArguments, ModelConfig))
+    args, training_args, model_config = parser.parse_args_and_config()
+
+    # Force use our print callback
+    if TRL_USE_RICH:
+        training_args.disable_tqdm = True
+        console = Console()
 
     ################
     # Model & Tokenizer
@@ -153,27 +125,42 @@ if __name__ == "__main__":
         ]
 
     ################
+    # Optional rich context managers
+    ###############
+    init_context = nullcontext() if not TRL_USE_RICH else console.status("[bold green]Initializing the DPOTrainer...")
+    save_context = (
+        nullcontext()
+        if not TRL_USE_RICH
+        else console.status(f"[bold green]Training completed! Saving the model to {training_args.output_dir}")
+    )
+
+    ################
     # Dataset
     ################
-    train_dataset = get_hh("train", sanity_check=args.sanity_check)
-    eval_dataset = get_hh("test", sanity_check=args.sanity_check)
+    train_dataset = load_dataset(args.dataset_name, split="train")
+    eval_dataset = load_dataset(args.dataset_name, split="test")
 
     ################
     # Training
     ################
-    trainer = DPOTrainer(
-        model,
-        model_ref,
-        args=training_args,
-        beta=args.beta,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        tokenizer=tokenizer,
-        max_length=args.max_length,
-        max_target_length=args.max_target_length,
-        max_prompt_length=args.max_prompt_length,
-        generate_during_eval=args.generate_during_eval,
-        peft_config=get_peft_config(model_config),
-    )
+    with init_context:
+        trainer = DPOTrainer(
+            model,
+            model_ref,
+            args=training_args,
+            beta=args.beta,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            tokenizer=tokenizer,
+            max_length=args.max_length,
+            max_target_length=args.max_target_length,
+            max_prompt_length=args.max_prompt_length,
+            generate_during_eval=args.generate_during_eval,
+            peft_config=get_peft_config(model_config),
+            callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
+        )
+
     trainer.train()
-    trainer.save_model(training_args.output_dir)
+
+    with save_context:
+        trainer.save_model(training_args.output_dir)
