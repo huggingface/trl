@@ -5,6 +5,11 @@ check_dirs := examples tests trl
 ACCELERATE_CONFIG_PATH = `pwd`/examples/accelerate_configs
 COMMAND_FILES_PATH = `pwd`/commands
 
+
+dev:
+	[ -L "$(pwd)/trl/commands/scripts" ] && unlink "$(pwd)/trl/commands/scripts" || true
+	pip install -e ".[dev]"
+
 test:
 	python -m pytest -n auto --dist=loadfile -s -v ./tests/
 
