@@ -216,6 +216,8 @@ class TrlParser(HfArgumentParser):
 
         for parser_dataclass in dataclasses:
             if hasattr(parser_dataclass, "config"):
+                if self.config_parser is not None:
+                    raise ValueError("You passed the `config` field twice! Make sure to pass `config` only once.")
                 self.config_parser = YamlConfigParser(parser_dataclass.config)
 
         if self.config_parser is not None:
