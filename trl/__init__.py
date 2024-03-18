@@ -100,6 +100,8 @@ if TYPE_CHECKING:
         KTOConfig,
         KTOTrainer,
         ModelConfig,
+        ORPOConfig,
+        ORPOTrainer,
         PPOConfig,
         PPOTrainer,
         RewardConfig,

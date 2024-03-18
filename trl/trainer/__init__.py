@@ -81,6 +81,8 @@ if TYPE_CHECKING:
     from .kto_config import KTOConfig
     from .kto_trainer import KTOTrainer
     from .model_config import ModelConfig
+    from .orpo_config import ORPOConfig
+    from .orpo_trainer import ORPOTrainer
     from .ppo_config import PPOConfig
     from .ppo_trainer import PPOTrainer
     from .reward_config import RewardConfig
