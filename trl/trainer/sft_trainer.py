@@ -42,6 +42,7 @@ from ..import_utils import is_peft_available
 from .utils import (
     ConstantLengthDataset,
     DataCollatorForCompletionOnlyLM,
+    RichProgressCallback,
     neftune_post_forward_hook,
     peft_module_casting_to_bf16,
     trl_sanitze_kwargs_for_tagging,
@@ -343,6 +344,12 @@ class SFTTrainer(Trainer):
             self.train_dataset.infinite = True
         elif self.args.max_steps == -1 and packing:
             self.train_dataset.infinite = False
+
+        if any(isinstance(callback, RichProgressCallback) for callback in self.callback_handler.callbacks):
+            for callback in self.callback_handler.callbacks:
+                # Remove the PrinterCallback to avoid duplicated prints in case we passed a `RichProgressCallback`
+                if callback.__class__.__name__ == "PrinterCallback":
+                    self.callback_handler.pop_callback(callback)
 
     @wraps(Trainer.train)
     def train(self, *args, **kwargs):
