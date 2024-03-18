@@ -31,8 +31,8 @@ class ORPOConfig(TrainingArguments):
             The maximum length of the sequences in the batch. This argument is required if you want to use the default data collator.
         max_prompt_length (`int`, defaults to `None`):
             The maximum length of the prompt. This argument is required if you want to use the default data collator.
-        max_target_length (`int`, defaults to `None`):
-            The maximum length of the target. This argument is required if you want to use the default data collator and your model is an encoder-decoder.
+        max_completion_length (`int`, defaults to `None`):
+            The maximum length of the completions. This argument is required if you want to use the default data collator and your model is an encoder-decoder.
         beta (`float`, defaults to 0.1):
             The beta factor in ORPO loss (lambda/alpha in paper/code) that is the weight of the relative loss ratio in the SFT loss.
         label_pad_token_id (`int`, defaults to `-100`):
@@ -54,7 +54,7 @@ class ORPOConfig(TrainingArguments):
     max_length: Optional[int] = None
     max_prompt_length: Optional[int] = None
     max_completion_length: Optional[int] = None
-    max_target_length: Optional[int] = None
+    max_completion_length: Optional[int] = None
 
     beta: float = 0.1
     disable_dropout: bool = True
