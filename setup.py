@@ -53,6 +53,7 @@ To create the package for pypi.
 8. Change the version in __init__.py and setup.py to X.X.X+1.dev0 (e.g. VERSION=1.18.3 -> 1.18.4.dev0).
    Then push the change with a message 'set dev version'
 """
+import os
 
 from setuptools import find_packages, setup
 
@@ -79,34 +80,44 @@ EXTRAS["dev"] = []
 for reqs in EXTRAS.values():
     EXTRAS["dev"].extend(reqs)
 
-setup(
-    name="trl",
-    license="Apache 2.0",
-    classifiers=[
-        "Development Status :: 2 - Pre-Alpha",
-        "Intended Audience :: Developers",
-        "Intended Audience :: Science/Research",
-        "License :: OSI Approved :: Apache Software License",
-        "Natural Language :: English",
-        "Operating System :: OS Independent",
-        "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.7",
-        "Programming Language :: Python :: 3.8",
-        "Programming Language :: Python :: 3.9",
-        "Programming Language :: Python :: 3.10",
-    ],
-    url="https://github.com/huggingface/trl",
-    packages=find_packages(),
-    include_package_data=True,
-    install_requires=REQUIRED_PKGS,
-    extras_require=EXTRAS,
-    python_requires=">=3.7",
-    long_description=open("README.md", encoding="utf-8").read(),
-    long_description_content_type="text/markdown",
-    zip_safe=False,
-    version=__version__,
-    description="Train transformer language models with reinforcement learning.",
-    keywords="ppo, transformers, huggingface, gpt2, language modeling, rlhf",
-    author="Leandro von Werra",
-    author_email="leandro.vonwerra@gmail.com",
-)
+try:
+    file_path = os.path.dirname(os.path.abspath(__file__))
+    os.symlink(os.path.join(file_path, "examples/scripts"), os.path.join(file_path, "trl/commands/scripts"))
+
+    setup(
+        name="trl",
+        license="Apache 2.0",
+        classifiers=[
+            "Development Status :: 2 - Pre-Alpha",
+            "Intended Audience :: Developers",
+            "Intended Audience :: Science/Research",
+            "License :: OSI Approved :: Apache Software License",
+            "Natural Language :: English",
+            "Operating System :: OS Independent",
+            "Programming Language :: Python :: 3",
+            "Programming Language :: Python :: 3.7",
+            "Programming Language :: Python :: 3.8",
+            "Programming Language :: Python :: 3.9",
+            "Programming Language :: Python :: 3.10",
+        ],
+        url="https://github.com/huggingface/trl",
+        entry_points={
+            "console_scripts": ["trl=trl.commands.cli:main"],
+        },
+        package_data={"trl": ["commands/scripts/*"]},
+        packages=find_packages(),
+        include_package_data=True,
+        install_requires=REQUIRED_PKGS,
+        extras_require=EXTRAS,
+        python_requires=">=3.7",
+        long_description=open("README.md", encoding="utf-8").read(),
+        long_description_content_type="text/markdown",
+        zip_safe=False,
+        version=__version__,
+        description="Train transformer language models with reinforcement learning.",
+        keywords="ppo, transformers, huggingface, gpt2, language modeling, rlhf",
+        author="Leandro von Werra",
+        author_email="leandro.vonwerra@gmail.com",
+    )
+finally:
+    os.unlink(os.path.join(file_path, "trl/commands/scripts"))
