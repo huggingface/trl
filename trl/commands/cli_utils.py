@@ -172,6 +172,59 @@ class DpoScriptArguments:
     )
 
 
+@dataclass
+class ChatArguments:
+    # general settings
+    model: str = field(metadata={"help": "Name of the pre-trained model"})
+    user: str = field(default=None, metadata={"help": "Username to display in chat interface"})
+    system_prompt: str = field(default=None, metadata={"help": "System prompt"})
+    save_folder: str = field(default="./chat_history/", metadata={"help": "Folder to save chat history"})
+    device: str = field(default="cpu", metadata={"help":"device to use for inference."},)
+    # generation settings
+    max_new_tokens: int = field(default=256, metadata={"help": "Maximum number of tokens to generate"})
+    do_sample: bool = field(default=True, metadata={"help": "Whether to sample outputs during generation"})
+    num_beams: int = field(default=1, metadata={"help": "Number of beams for beam search"})
+    temperature: float = field(default=1.0, metadata={"help": "Temperature parameter for generation"})
+    top_k: int = field(default=50, metadata={"help": "Value of k for top-k sampling"})
+    top_p: float = field(default=1.0, metadata={"help": "Value of p for nucleus sampling"})
+    repetition_penalty: float = field(default=1.0, metadata={"help": "Repetition penalty"})
+    # model loading
+    model_revision: str = field(
+        default="main",
+        metadata={"help": "The specific model version to use (can be a branch name, tag name or commit id)."},
+    )
+    torch_dtype: str = field(
+        default=None,
+        metadata={
+            "help": (
+                "Override the default `torch.dtype` and load the model under this dtype. If `auto` is passed, the "
+                "dtype will be automatically derived from the model's weights."
+            ),
+            "choices": ["auto", "bfloat16", "float16", "float32"],
+        },
+    )
+    trust_remote_code: bool = field(default=False, metadata={"help": "Trust remote code when loading a model."})
+    attn_implementation: str = field(
+        default=None,
+        metadata={
+            "help": (
+                "Which attention implementation to use; you can run --attn_implementation=flash_attention_2, in which case you must install this manually by running `pip install flash-attn --no-build-isolation`"
+            )
+        },
+    )
+    load_in_8bit: bool = field(
+        default=False, metadata={"help": "use 8 bit precision for the base model - works only with LoRA"}
+    )
+    load_in_4bit: bool = field(
+        default=False, metadata={"help": "use 4 bit precision for the base model - works only with LoRA"}
+    )
+
+    bnb_4bit_quant_type: str = field(
+        default="nf4", metadata={"help": "precise the quantization type (fp4 or nf4)"}
+    )
+    use_bnb_nested_quant: bool = field(default=False, metadata={"help": "use nested quantization"})
+
+
 class TrlParser(HfArgumentParser):
     def __init__(self, parsers):
         """
