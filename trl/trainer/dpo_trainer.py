@@ -1080,6 +1080,7 @@ class DPOTrainer(Trainer):
         with compute_loss_context_manager():
             loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="train")
 
+        loss = loss.to(self.args.device)
         # force log the metrics
         self.store_metrics(metrics, train_eval="train")
 
