@@ -63,15 +63,9 @@ from trl import ModelConfig, ORPOConfig, ORPOTrainer, get_peft_config
 
 @dataclass
 class ScriptArguments:
-    dataset: str = field(default="Anthropic/hh-rlhf", metadata={"help": "The name of the dataset to use."})
-
-
-def extract_anthropic_prompt(prompt_and_response):
-    """Extract the anthropic prompt from a prompt and response pair."""
-    search_term = "\n\nAssistant:"
-    search_term_idx = prompt_and_response.rfind(search_term)
-    assert search_term_idx != -1, f"Prompt and response does not contain '{search_term}'"
-    return prompt_and_response[: search_term_idx + len(search_term)]
+    dataset: str = field(
+        default="trl-internal-testing/hh-rlhf-trl-style", metadata={"help": "The name of the dataset to use."}
+    )
 
 
 if __name__ == "__main__":
