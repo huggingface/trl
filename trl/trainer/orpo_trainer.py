@@ -589,12 +589,12 @@ class ORPOTrainer(Trainer):
 
         return concatenated_batch
 
-    def or_loss(
+    def odds_ratio_loss(
         self,
         policy_chosen_logps: torch.FloatTensor,
         policy_rejected_logps: torch.FloatTensor,
-    ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
-        """Compute ORPO's OR loss for a batch of policy and reference model log probabilities.
+    ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+        """Compute ORPO's odds ratio (OR) loss for a batch of policy and reference model log probabilities.
 
         Args:
             policy_chosen_logps: Log probabilities of the policy model for the chosen responses. Shape: (batch_size,)
@@ -604,7 +604,11 @@ class ORPOTrainer(Trainer):
             A tuple of three tensors: (losses, chosen_rewards, rejected_rewards).
             The losses tensor contains the ORPO loss for each example in the batch.
             The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
+            The log odds ratio for logging purposes.
+            The log odds for logging purposes.
         """
+
+        # Derived from Eqs. (4) and (7) from https://arxiv.org/abs/2403.07691 by using log identities and exp(log(P(y|x)) = P(y|x)
         log_odds = (policy_chosen_logps - policy_rejected_logps) - (
             torch.log(1 - torch.exp(policy_chosen_logps)) - torch.log(1 - torch.exp(policy_rejected_logps))
         )
@@ -615,7 +619,7 @@ class ORPOTrainer(Trainer):
         chosen_rewards = self.beta * (policy_chosen_logps.to(self.accelerator.device)).detach()
         rejected_rewards = self.beta * (policy_rejected_logps.to(self.accelerator.device)).detach()
 
-        return losses, chosen_rewards, rejected_rewards
+        return losses, chosen_rewards, rejected_rewards, torch.mean(ratio).item(), torch.mean(log_odds).item()
 
     @staticmethod
     def get_batch_logps(
@@ -736,7 +740,9 @@ class ORPOTrainer(Trainer):
             policy_nll_loss,
         ) = self.concatenated_forward(model, batch)
 
-        losses, chosen_rewards, rejected_rewards = self.or_loss(policy_chosen_logps, policy_rejected_logps)
+        losses, chosen_rewards, rejected_rewards, log_odds_ratio, log_odds = self.odds_ratio_loss(
+            policy_chosen_logps, policy_rejected_logps
+        )
 
         loss = policy_nll_loss - losses.mean()
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
@@ -750,7 +756,9 @@ class ORPOTrainer(Trainer):
         metrics[f"{prefix}logps/chosen"] = policy_chosen_logps.detach().mean().cpu()
         metrics[f"{prefix}logits/rejected"] = policy_rejected_logits.detach().mean().cpu()
         metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.detach().mean().cpu()
-        metrics[f"{prefix}nll_loss"] = policy_nll_loss.cpu().mean()
+        metrics[f"{prefix}nll_loss"] = policy_nll_loss.detach().mean().cpu()
+        metrics[f"{prefix}log_odds_ratio"] = log_odds_ratio
+        metrics[f"{prefix}log_odds"] = log_odds
 
         return loss, metrics
 
