@@ -24,7 +24,7 @@ python examples/scripts/orpo.py \
     --gradient_accumulation_steps 1 \
     --logging_steps 10 \
     --eval_steps 500 \
-    --output_dir="cpo_anthropic_hh" \
+    --output_dir="gpt2-aligned-orpo" \
     --warmup_steps 150 \
     --report_to wandb \
     --bf16 \
