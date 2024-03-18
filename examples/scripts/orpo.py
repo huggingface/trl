@@ -20,7 +20,7 @@ python examples/scripts/orpo.py \
     --model_name_or_path=gpt2 \
     --per_device_train_batch_size 4 \
     --max_steps 1000 \
-    --learning_rate 1e-3 \
+    --learning_rate 8e-6 \
     --gradient_accumulation_steps 1 \
     --logging_steps 10 \
     --eval_steps 500 \
