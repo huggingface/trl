@@ -1,6 +1,6 @@
 # ORPO Trainer
 
-[ORPO: Monolithic Preference Optimization without Reference Model](https://arxiv.org/abs/2403.07691) (ORPO) by Jiwoo Hong, Noah Lee and James Thorne study the crucial role of SFT within the context of preference alignment. Using preference data the method 
+[Odds Ratio Preference Optimization](https://arxiv.org/abs/2403.07691) (ORPO) by Jiwoo Hong, Noah Lee, and James Thorne studies the crucial role of SFT within the context of preference alignment. Using preference data the method 
 posits that a minor penalty for the disfavored generation style is sufficient for preference-aligned SFT.
 
 Thus ORPO is a reference model-free  preference optimization algorithm  eliminating the necessity for an additional preference alignment phase. 
