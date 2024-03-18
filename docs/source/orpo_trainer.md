@@ -84,7 +84,7 @@ While training and evaluating we record the following reward metrics:
 
 * `log_odds`: the mean log odds ratio of the chosen responses over the rejected responses
 
-* `ratio`: the mean of the log sigmoid of the `log_odds` ratio
+* `log_odds_ratio`: the mean of the log sigmoid of the `log_odds` ratio
 
 * `nll_loss`: the mean negative log likelihood loss from the SFT part of the loss over chosen responses
  
