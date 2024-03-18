@@ -52,10 +52,10 @@ python examples/scripts/cpo.py \
     --lora_alpha=16
 """
 
+import multiprocessing
 from dataclasses import dataclass, field
-from typing import Dict, Optional
 
-from datasets import Dataset, load_dataset
+from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
 from trl import CPOConfig, CPOTrainer, ModelConfig, get_peft_config
@@ -63,44 +63,9 @@ from trl import CPOConfig, CPOTrainer, ModelConfig, get_peft_config
 
 @dataclass
 class ScriptArguments:
-    sanity_check: bool = field(default=True, metadata={"help": "only train on 1000 samples"})
-
-
-def extract_anthropic_prompt(prompt_and_response):
-    """Extract the anthropic prompt from a prompt and response pair."""
-    search_term = "\n\nAssistant:"
-    search_term_idx = prompt_and_response.rfind(search_term)
-    assert search_term_idx != -1, f"Prompt and response does not contain '{search_term}'"
-    return prompt_and_response[: search_term_idx + len(search_term)]
-
-
-def get_hh(split: str, sanity_check: bool = False, silent: bool = False, cache_dir: Optional[str] = None) -> Dataset:
-    """Load the Anthropic Helpful-Harmless dataset from Hugging Face and convert it to the necessary format.
-
-    The dataset is converted to a dictionary with the following structure:
-    {
-        'prompt': List[str],
-        'chosen': List[str],
-        'rejected': List[str],
-    }
-
-    Prompts should be structured as follows:
-      \n\nHuman: <prompt>\n\nAssistant:
-    Multiple turns are allowed, but the prompt should always start with \n\nHuman: and end with \n\nAssistant:.
-    """
-    dataset = load_dataset("Anthropic/hh-rlhf", split=split, cache_dir=cache_dir)
-    if sanity_check:
-        dataset = dataset.select(range(min(len(dataset), 1000)))
-
-    def split_prompt_and_responses(sample) -> Dict[str, str]:
-        prompt = extract_anthropic_prompt(sample["chosen"])
-        return {
-            "prompt": prompt,
-            "chosen": sample["chosen"][len(prompt) :],
-            "rejected": sample["rejected"][len(prompt) :],
-        }
-
-    return dataset.map(split_prompt_and_responses)
+    dataset: str = field(
+        default="trl-internal-testing/hh-rlhf-trl-style", metadata={"help": "The name of the dataset to use."}
+    )
 
 
 if __name__ == "__main__":
@@ -119,8 +84,25 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    train_dataset = get_hh("train", sanity_check=args.sanity_check)
-    eval_dataset = get_hh("test", sanity_check=args.sanity_check)
+    ds = load_dataset(args.dataset)
+    if cpo_args.debug:
+        for key in ds:
+            ds[key] = ds[key].select(range(50))
+    if tokenizer.chat_template is None:
+        tokenizer.chat_template = "{% for message in messages %}{{message['role'] + ': ' + message['content'] + '\n\n'}}{% endfor %}{{ eos_token }}"
+
+    def process(row):
+        row["chosen"] = tokenizer.apply_chat_template(row["chosen"], tokenize=False)
+        row["rejected"] = tokenizer.apply_chat_template(row["rejected"], tokenize=False)
+        return row
+
+    ds = ds.map(
+        process,
+        num_proc=1 if cpo_args.debug else multiprocessing.cpu_count(),
+        load_from_cache_file=False,
+    )
+    train_dataset = ds["train"]
+    eval_dataset = ds["test"]
 
     ################
     # Training
