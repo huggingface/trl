@@ -2,7 +2,6 @@
 
 __version__ = "0.7.12.dev0"
 
-
 from typing import TYPE_CHECKING
 from .import_utils import _LazyModule, is_diffusers_available, OptionalDependencyNotAvailable
 

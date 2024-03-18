@@ -15,7 +15,6 @@
 # limitations under the License.
 
 # There is a circular import in the PPOTrainer if we let isort sort these
-
 from typing import TYPE_CHECKING
 from ..import_utils import _LazyModule, is_diffusers_available, OptionalDependencyNotAvailable
 
