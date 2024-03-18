@@ -77,7 +77,14 @@ orpo_trainer.train()
 
 While training and evaluating we record the following reward metrics:
 
-TODO
+* `rewards/chosen`: the mean log probabilities of the policy model for the chosen responses scaled by beta
+* `rewards/rejected`: the mean log probabilities of the policy model for the rejected responses scaled by beta
+* `rewards/accuracies`: mean of how often the chosen rewards are > than the corresponding rejected rewards
+* `rewards/margins`: the mean difference between the chosen and corresponding rejected rewards
+
+* `log_odds`: the mean log odds ratio of the chosen responses over the rejected responses
+
+* `ratio`: the mean of the log sigmoid of the `log_odds` ratio
 
 ## ORPOTrainer
 
