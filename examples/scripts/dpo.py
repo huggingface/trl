@@ -83,7 +83,7 @@ if TRL_USE_RICH:
 
 
 if __name__ == "__main__":
-    parser = TrlParser(DpoScriptArguments, TrainingArguments, ModelConfig)
+    parser = TrlParser((DpoScriptArguments, TrainingArguments, ModelConfig))
     args, training_args, model_config = parser.parse_args_and_config()
 
     # Force use our print callback
