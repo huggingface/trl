@@ -604,8 +604,8 @@ class ORPOTrainer(Trainer):
             A tuple of three tensors: (losses, chosen_rewards, rejected_rewards).
             The losses tensor contains the ORPO loss for each example in the batch.
             The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
-            The log odds ratio for logging purposes.
-            The log odds for logging purposes.
+            The log odds ratio of the chosen responses over the rejected responses ratio for logging purposes.
+            The `log(sigmoid(log_odds_chosen))` for logging purposes.
         """
 
         # Derived from Eqs. (4) and (7) from https://arxiv.org/abs/2403.07691 by using log identities and exp(log(P(y|x)) = P(y|x)
@@ -740,7 +740,7 @@ class ORPOTrainer(Trainer):
             policy_nll_loss,
         ) = self.concatenated_forward(model, batch)
 
-        losses, chosen_rewards, rejected_rewards, log_odds_ratio, log_odds = self.odds_ratio_loss(
+        losses, chosen_rewards, rejected_rewards, log_odds_ratio, log_odds_chosen = self.odds_ratio_loss(
             policy_chosen_logps, policy_rejected_logps
         )
         # full ORPO loss
@@ -759,7 +759,7 @@ class ORPOTrainer(Trainer):
         metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.detach().mean().cpu()
         metrics[f"{prefix}nll_loss"] = policy_nll_loss.detach().mean().cpu()
         metrics[f"{prefix}log_odds_ratio"] = log_odds_ratio
-        metrics[f"{prefix}log_odds"] = log_odds
+        metrics[f"{prefix}log_odds_chosen"] = log_odds_chosen
 
         return loss, metrics
 

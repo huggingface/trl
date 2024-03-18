@@ -82,9 +82,9 @@ While training and evaluating we record the following reward metrics:
 * `rewards/accuracies`: mean of how often the chosen rewards are > than the corresponding rejected rewards
 * `rewards/margins`: the mean difference between the chosen and corresponding rejected rewards
 
-* `log_odds`: the mean log odds ratio of the chosen responses over the rejected responses
+* `log_odds_chosen`: the mean log odds ratio of the chosen responses over the rejected responses
 
-* `log_odds_ratio`: the mean of the `log(sigmoid(log_odds))`
+* `log_odds_ratio`: the mean of the `log(sigmoid(log_odds_chosen))`
 
 * `nll_loss`: the mean negative log likelihood loss from the SFT part of the loss over chosen responses
  
