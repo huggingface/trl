@@ -104,7 +104,7 @@ if __name__ == "__main__":
 
     ds = ds.map(
         process,
-        num_proc=1 if args.debug else multiprocessing.cpu_count(),
+        num_proc=1 if orpo_args.debug else multiprocessing.cpu_count(),
         load_from_cache_file=False,
     )
     train_dataset = ds["train"]
