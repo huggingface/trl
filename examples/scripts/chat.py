@@ -203,19 +203,24 @@ def load_model(args):
     )
     model = AutoModelForCausalLM.from_pretrained(args.model, **model_kwargs)
 
-    if getattr(model, "hf_device_map", None)  is None:
+    if getattr(model, "hf_device_map", None) is None:
         model = model.to(args.device)
     print(model.device)
     return model
 
+
 def chat_cli():
-    parser = HfArgumentParser((ChatArguments))
-    args = parser.parse_args()
+    parser = TrlParser(ChatArguments)
+    args = parser.parse_args_into_dataclasses()[0]
+    if args.config == "default":
+        args.config = os.path.join(os.path.dirname(__file__), "config/default_chat_config.yaml")
+    if args.config.lower() == "none":
+        args.config = None
+    args = parser.update_dataclasses_with_config([args])[0]
+    if args.examples is None:
+        args.examples = {}
 
     current_args = copy.deepcopy(args)
-
-    with open(os.path.join(os.path.dirname(__file__), 'default_chat_config.yaml'), "r") as f:
-        config = yaml.load(f, Loader=yaml.Loader)
 
     if args.user is None:
         user = get_username()
@@ -268,19 +273,24 @@ def chat_cli():
                     chat = []
                     interface.clear()
                     continue
-                    
-            if user_input.startswith("example") and len(user_input.split())==2:
+
+            if user_input.startswith("example") and len(user_input.split()) == 2:
                 example_name = user_input.split()[1]
-                if example_name in config["examples"]:
+                if example_name in current_args.examples:
                     interface.clear()
                     chat = []
-                    interface.print_user_message(config["examples"][example_name]["text"])
-                    user_input = config["examples"][example_name]["text"]
+                    interface.print_user_message(current_args.examples[example_name]["text"])
+                    user_input = current_args.examples[example_name]["text"]
+                else:
+                    interface.print_red(f"Example {example_name} not found in list of available examples: {list(current_args.examples.keys())}.")
+                    continue
 
             chat.append({"role": "user", "content": user_input})
 
             generation_kwargs = dict(
-                inputs=tokenizer.apply_chat_template(chat,return_tensors="pt", add_generation_prompt=True).to(model.device), 
+                inputs=tokenizer.apply_chat_template(chat, return_tensors="pt", add_generation_prompt=True).to(
+                    model.device
+                ),
                 streamer=generation_streamer,
                 max_new_tokens=current_args.max_new_tokens,
                 do_sample=current_args.do_sample,
