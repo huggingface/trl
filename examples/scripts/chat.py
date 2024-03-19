@@ -156,7 +156,7 @@ def save_chat(chat, args, filename):
     folder = args.save_folder
 
     if filename is None:
-        filename = create_default_filename(args.model)
+        filename = create_default_filename(args.model_name_or_path)
         filename = os.path.join(folder, filename)
     os.makedirs(os.path.dirname(filename), exist_ok=True)
 
@@ -210,7 +210,9 @@ def parse_settings(user_input, current_args, interface):
         return current_args, True
 
 
-def load_model(args):
+def load_model_and_tokenizer(args):
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
+
     torch_dtype = args.torch_dtype if args.torch_dtype in ["auto", None] else getattr(torch, args.torch_dtype)
     quantization_config = get_quantization_config(args)
     model_kwargs = dict(
@@ -221,12 +223,12 @@ def load_model(args):
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
-    model = AutoModelForCausalLM.from_pretrained(args.model, **model_kwargs)
+    model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path, **model_kwargs)
 
     if getattr(model, "hf_device_map", None) is None:
         model = model.to(args.device)
-    print(model.device)
-    return model
+
+    return model, tokenizer
 
 
 def chat_cli():
@@ -247,11 +249,10 @@ def chat_cli():
     else:
         user = args.user
 
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
-    model = load_model(args)
+    model, tokenizer = load_model_and_tokenizer(args)
     generation_streamer = TextIteratorStreamer(tokenizer, skip_special_tokens=True)
 
-    interface = RichInterface(model_name=args.model, user_name=user)
+    interface = RichInterface(model_name=args.model_name_or_path, user_name=user)
     interface.clear()
     chat = clear_chat_history(current_args.system_prompt)
     while True:
