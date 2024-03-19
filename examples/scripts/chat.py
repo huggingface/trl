@@ -78,10 +78,7 @@ class RichInterface:
 
     def stream_output(self, output_stream):
         """Stream output from a role."""
-        # TODO: attribute fastchat
-        # TODO(suquark): the console flickers when there is a code block
-        #  above it. We need to cut off "live" when a code block is done.
-
+        # This method is originally from the FastChat CLI: https://github.com/lm-sys/FastChat/blob/main/fastchat/serve/cli.py
         # Create a Live context for updating the console output
         text = ""
         self._console.print(f"[bold blue]<{self.model_name}>:")
