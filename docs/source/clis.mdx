@@ -56,7 +56,7 @@ You can pass any of these arguments either to the CLI or the YAML file.
 Follow the basic instructions above and run `trl sft --output_dir <output_dir> <*args>`: 
 
 ```bash
-trl sft --config config.yaml --output_dir your-output-dir 
+trl sft --model_name_or_path facebook/opt-125m --dataset_name imdb --output_dir opt-sft-imdb
 ```
 
 The SFT CLI is based on the `examples/scripts/sft.py` script.
@@ -82,7 +82,7 @@ python examples/datasets/anthropic_hh.py --push_to_hub --hf_entity your-hf-org
 Once your dataset being pushed, run the dpo CLI as follows:
 
 ```bash
-trl dpo --config config.yaml --output_dir your-output-dir 
+trl dpo --model_name_or_path facebook/opt-125m --dataset_name trl-internal-testing/Anthropic-hh-rlhf-processed --output_dir opt-sft-hh-rlhf
 ```
 
 The SFT CLI is based on the `examples/scripts/dpo.py` script.
@@ -92,7 +92,7 @@ The SFT CLI is based on the `examples/scripts/dpo.py` script.
 The chat CLI lets you quickly load the model and talk to it. Simply run the following:
 
 ```bash
-trl chat --model  Qwen/Qwen1.5-0.5B-Chat 
+trl chat --model_name_or_path  Qwen/Qwen1.5-0.5B-Chat 
 ```
 
 Note that the chat interface relies on the chat template of the tokenizer to format the inputs for the model. Make sure your tokenizer has a chat template defined.
