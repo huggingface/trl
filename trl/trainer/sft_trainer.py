@@ -20,6 +20,7 @@ from typing import Callable, Dict, List, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 from accelerate.state import PartialState
+import datasets
 from datasets import Dataset
 from datasets.arrow_writer import SchemaInferenceError
 from datasets.builder import DatasetGenerationError
