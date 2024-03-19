@@ -104,9 +104,9 @@ try:
         entry_points={
             "console_scripts": ["trl=trl.commands.cli:main"],
         },
-        package_data={"trl": ["commands/scripts/*"]},
-        packages=find_packages(),
         include_package_data=True,
+        package_data={"trl": ["commands/scripts/config/*", "commands/scripts/*"]},
+        packages=find_packages(),
         install_requires=REQUIRED_PKGS,
         extras_require=EXTRAS,
         python_requires=">=3.7",

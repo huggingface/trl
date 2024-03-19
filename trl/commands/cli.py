@@ -21,7 +21,7 @@ from subprocess import CalledProcessError
 from rich.console import Console
 
 
-SUPPORTED_COMMANDS = ["sft", "dpo"]
+SUPPORTED_COMMANDS = ["sft", "dpo", "chat"]
 
 
 def main():
@@ -44,9 +44,14 @@ def main():
     # Force-use rich
     os.environ["TRL_USE_RICH"] = "1"
 
-    command = f"""
-    accelerate launch {trl_examples_dir}/scripts/{command_name}.py {" ".join(sys.argv[2:])}
-    """
+    if command_name == "chat":
+        command = f"""
+        python {trl_examples_dir}/scripts/{command_name}.py {" ".join(sys.argv[2:])}
+        """
+    else:
+        command = f"""
+        accelerate launch {trl_examples_dir}/scripts/{command_name}.py {" ".join(sys.argv[2:])}
+        """
 
     try:
         subprocess.run(
