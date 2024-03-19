@@ -105,7 +105,7 @@ try:
             "console_scripts": ["trl=trl.commands.cli:main"],
         },
         include_package_data=True,
-        package_data={"trl": ["commands/scripts/config/*"]},
+        package_data={"trl": ["commands/scripts/config/*", "commands/scripts/*"]},
         packages=find_packages(),
         install_requires=REQUIRED_PKGS,
         extras_require=EXTRAS,
