@@ -53,6 +53,8 @@ class CPOConfig(TrainingArguments):
             Whether or not to disable dropouts in `model`.
         model_init_kwargs (`Optional[Dict]`, *optional*):
             Dict of Optional kwargs to pass when instantiating the model from a string
+        dataset_num_proc (`Optional[int]`, *optional*):
+            The number of workers to use to tokenize the data. Defaults to None.
     """
 
     max_length: Optional[int] = None
@@ -72,3 +74,5 @@ class CPOConfig(TrainingArguments):
     is_encoder_decoder: Optional[bool] = None
 
     model_init_kwargs: Optional[Dict] = None
+
+    dataset_num_proc: Optional[int] = None
