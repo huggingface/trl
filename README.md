@@ -145,7 +145,6 @@ ppo_config = PPOConfig(batch_size=1, mini_batch_size=1)
 
 # encode a query
 query_txt = "This morning I went to the "
-
 query_tensor = tokenizer.encode(query_txt, return_tensors="pt")
 
 # get model response
