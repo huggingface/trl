@@ -514,7 +514,7 @@ class SFTTrainer(Trainer):
                 add_special_tokens=add_special_tokens,
             )
             
-            if isinstance(dataset, IterableDataset):
+            if isinstance(dataset, datasets.IterableDataset):
                 return constant_length_iterator
 
             def data_generator(constant_length_iterator):
