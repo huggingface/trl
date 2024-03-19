@@ -211,7 +211,6 @@ def parse_settings(user_input, current_args, interface):
 
 
 def load_model_and_tokenizer(args):
-
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
 
     torch_dtype = args.torch_dtype if args.torch_dtype in ["auto", None] else getattr(torch, args.torch_dtype)
