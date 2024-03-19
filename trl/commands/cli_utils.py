@@ -174,7 +174,7 @@ class DpoScriptArguments:
 @dataclass
 class ChatArguments:
     # general settings
-    model: str = field(metadata={"help": "Name of the pre-trained model"})
+    model_name_or_path: str = field(metadata={"help": "Name of the pre-trained model"})
     user: str = field(default=None, metadata={"help": "Username to display in chat interface"})
     system_prompt: str = field(default=None, metadata={"help": "System prompt"})
     save_folder: str = field(default="./chat_history/", metadata={"help": "Folder to save chat history"})
