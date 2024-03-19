@@ -15,6 +15,6 @@ dataset_text_field:
 report_to:
   none
 learning_rate:
-  1e-4
+  0.0001
 lr_scheduler_type:
   cosine
