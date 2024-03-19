@@ -180,7 +180,7 @@ train_stats = ppo_trainer.step([query_tensor[0]], [response_tensor[0]], reward)
 ```python
 # imports
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from trl import RewardTrainer
+from trl import DPOTrainer
 
 # load model and dataset - dataset needs to be in a specific format
 model = AutoModelForCausalLM.from_pretrained("gpt2")
