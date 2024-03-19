@@ -12,6 +12,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+
+from trl.commands.cli_utils import init_zero_verbose
+
+init_zero_verbose()
+
 import copy
 import json
 import os
@@ -29,8 +35,6 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStream
 from trl.commands.cli_utils import ChatArguments, TrlParser, init_zero_verbose
 from trl.trainer.utils import get_kbit_device_map, get_quantization_config
 
-
-init_zero_verbose()
 
 HELP_STRING = """\
 
