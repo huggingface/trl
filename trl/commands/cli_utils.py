@@ -155,7 +155,7 @@ class DpoScriptArguments:
     max_target_length: int = field(
         default=128, metadata={"help": "Only used for encoder decoder model. Max target of each sample's prompt"}
     )
-    sanity_check: bool = field(default=True, metadata={"help": "only train on 1000 samples"})
+    sanity_check: bool = field(default=False, metadata={"help": "only train on 1000 samples"})
     ignore_bias_buffers: bool = field(
         default=False,
         metadata={

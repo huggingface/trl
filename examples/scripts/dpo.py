@@ -50,6 +50,7 @@ python examples/scripts/dpo.py \
     --lora_alpha=16
 """
 import logging
+import multiprocessing
 import os
 from contextlib import nullcontext
 
@@ -118,6 +119,8 @@ if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    if tokenizer.chat_template is None:
+        tokenizer.chat_template = "{% for message in messages %}{{message['role'] + ': ' + message['content'] + '\n\n'}}{% endfor %}{{ eos_token }}"
     if args.ignore_bias_buffers:
         # torch distributed hack
         model._ddp_params_and_buffers_to_ignore = [
@@ -137,8 +140,18 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    train_dataset = load_dataset(args.dataset_name, split="train")
-    eval_dataset = load_dataset(args.dataset_name, split="test")
+    ds = load_dataset(args.dataset_name)
+    def process(row):
+        row["chosen"] = tokenizer.apply_chat_template(row["chosen"], tokenize=False)
+        row["rejected"] = tokenizer.apply_chat_template(row["rejected"], tokenize=False)
+        return row
+    ds = ds.map(
+        process,
+        num_proc=multiprocessing.cpu_count(),
+        load_from_cache_file=False,
+    )
+    train_dataset = ds["train"]
+    eval_dataset = ds["test"]
 
     ################
     # Training
