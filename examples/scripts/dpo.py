@@ -144,6 +144,7 @@ if __name__ == "__main__":
     if args.sanity_check:
         for key in ds:
             ds[key] = ds[key].select(range(50))
+
     def process(row):
         row["chosen"] = tokenizer.apply_chat_template(row["chosen"], tokenize=False)
         row["rejected"] = tokenizer.apply_chat_template(row["rejected"], tokenize=False)
