@@ -211,7 +211,7 @@ def parse_settings(user_input, current_args, interface):
 
 
 def load_model_and_tokenizer(args):
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, revision=args.model_revision)
 
     torch_dtype = args.torch_dtype if args.torch_dtype in ["auto", None] else getattr(torch, args.torch_dtype)
     quantization_config = get_quantization_config(args)
@@ -322,6 +322,7 @@ def chat_cli():
                 top_k=current_args.top_k,
                 top_p=current_args.top_p,
                 repetition_penalty=current_args.repetition_penalty,
+                pad_token_id=tokenizer.pad_token_id,
             )
 
             thread = Thread(target=model.generate, kwargs=generation_kwargs)
