@@ -323,6 +323,7 @@ def chat_cli():
                 top_p=current_args.top_p,
                 repetition_penalty=current_args.repetition_penalty,
                 pad_token_id=tokenizer.pad_token_id,
+                eos_token_id=tokenizer.eos_token_id,
             )
 
             thread = Thread(target=model.generate, kwargs=generation_kwargs)
