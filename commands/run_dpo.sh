@@ -3,7 +3,7 @@
 # but defaults to QLoRA + PEFT
 OUTPUT_DIR="test_dpo/"
 MODEL_NAME="HuggingFaceM4/tiny-random-LlamaForCausalLM"
-DATASET_NAME="trl-internal-testing/Anthropic-hh-rlhf-processed"
+DATASET_NAME="trl-internal-testing/hh-rlhf-trl-style"
 MAX_STEPS=5
 BATCH_SIZE=2
 SEQ_LEN=128
