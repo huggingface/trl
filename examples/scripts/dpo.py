@@ -15,6 +15,7 @@
 """
 # regular:
 python examples/scripts/dpo.py \
+    --dataset_name=trl-internal-testing/hh-rlhf-trl-style \
     --model_name_or_path=gpt2 \
     --per_device_train_batch_size 4 \
     --max_steps 1000 \
@@ -31,6 +32,7 @@ python examples/scripts/dpo.py \
 
 # peft:
 python examples/scripts/dpo.py \
+    --dataset_name=trl-internal-testing/hh-rlhf-trl-style \
     --model_name_or_path=gpt2 \
     --per_device_train_batch_size 4 \
     --max_steps 1000 \
@@ -141,10 +143,12 @@ if __name__ == "__main__":
     # Dataset
     ################
     ds = load_dataset(args.dataset_name)
+
     def process(row):
         row["chosen"] = tokenizer.apply_chat_template(row["chosen"], tokenize=False)
         row["rejected"] = tokenizer.apply_chat_template(row["rejected"], tokenize=False)
         return row
+
     ds = ds.map(
         process,
         num_proc=multiprocessing.cpu_count(),
