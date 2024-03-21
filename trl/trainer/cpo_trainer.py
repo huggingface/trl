@@ -17,7 +17,6 @@ import random
 import warnings
 from collections import defaultdict
 from contextlib import nullcontext
-from copy import deepcopy
 from functools import wraps
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
@@ -26,7 +25,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from accelerate import PartialState
-from accelerate.utils import is_deepspeed_available
 from datasets import Dataset
 from torch.utils.data import DataLoader
 from transformers import AutoModelForCausalLM, DataCollator, PreTrainedModel, PreTrainedTokenizerBase, Trainer
@@ -35,7 +33,6 @@ from transformers.trainer_utils import EvalLoopOutput
 from transformers.utils import is_torch_fx_proxy
 
 from ..import_utils import is_peft_available, is_wandb_available
-from ..models import PreTrainedModelWrapper
 from .cpo_config import CPOConfig
 from .utils import (
     DPODataCollatorWithPadding,
@@ -52,9 +49,6 @@ if is_peft_available():
 
 if is_wandb_available():
     import wandb
-
-if is_deepspeed_available():
-    import deepspeed
 
 
 class CPOTrainer(Trainer):
