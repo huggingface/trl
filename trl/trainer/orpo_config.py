@@ -56,7 +56,6 @@ class ORPOConfig(TrainingArguments):
     max_length: Optional[int] = None
     max_prompt_length: Optional[int] = None
     max_completion_length: Optional[int] = None
-    max_completion_length: Optional[int] = None
 
     beta: float = 0.1
     disable_dropout: bool = True
