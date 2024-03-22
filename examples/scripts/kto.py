@@ -148,5 +148,6 @@ if __name__ == "__main__":
         peft_config=get_peft_config(model_args),
     )
 
-    # 5. train
+    # 5. train and save the model
     kto_trainer.train()
+    kto_trainer.save_model(kto_args.output_dir)

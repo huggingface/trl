@@ -1,0 +1,102 @@
+# CPO Trainer
+
+Contrastive Preference Optimization (CPO) as introduced in the paper [Contrastive Preference Optimization: Pushing the Boundaries of LLM Performance in Machine Translation](https://huggingface.co/papers/2401.08417) by Haoran Xu, Amr Sharaf, Yunmo Chen, Weiting Tan, Lingfeng Shen, Benjamin Van Durme, Kenton Murray, and Young Jin Kim. At a high-level, CPO  trains models to
+avoid generating adequate, but not perfect translations in Machine Translation (MT) tasks. However, CPO is a general approximation to the DPO loss and can be applied to other domains like chat.
+
+CPO aims to mitigate two fundamental shortcomings of SFT. First, SFT’s methodology of minimizing the discrepancy between predicted outputs and gold-standard references inherently caps model performance at the quality level of the training data. Secondly, SFT lacks a mechanism to prevent the model from rejecting mistakes in translations. The CPO objective is derived from the DPO objective.
+
+## Expected dataset format
+
+The CPO trainer expects a format identical to the DPO trainer, which should include three entries. These entries should be named as follows:
+
+- `prompt`
+- `chosen`
+- `rejected`
+
+for example:
+
+```py
+cpo_dataset_dict = {
+    "prompt": [
+        "hello",
+        "how are you",
+        "What is your name?",
+        "What is your name?",
+        "Which is the best programming language?",
+        "Which is the best programming language?",
+        "Which is the best programming language?",
+    ],
+    "chosen": [
+        "hi nice to meet you",
+        "I am fine",
+        "My name is Mary",
+        "My name is Mary",
+        "Python",
+        "Python",
+        "Java",
+    ],
+    "rejected": [
+        "leave me alone",
+        "I am not fine",
+        "Whats it to you?",
+        "I dont have a name",
+        "Javascript",
+        "C++",
+        "C++",
+    ],
+}
+```
+where the `prompt` contains the context inputs, `chosen` contains the corresponding chosen responses and `rejected` contains the corresponding negative (rejected) responses. As can be seen a prompt can have multiple responses and this is reflected in the entries being repeated in the dictionary's value arrays.
+
+
+## Expected model format
+The CPO trainer expects a model of `AutoModelForCausalLM`, compared to PPO that expects `AutoModelForCausalLMWithValueHead` for the value function.
+
+## Using the `CPOTrainer`
+For a detailed example have a look at the `examples/scripts/cpo.py` script. At a high level we need to initialize the `CPOTrainer` with a `model` we wish to train. **Note that CPOTrainer eliminates the need to use the reference model, simplifying the optimization process.** The `beta` refers to the hyperparameter of the implicit reward, and the dataset contains the 3 entries listed above.
+
+```py
+cpo_config = CPOConfig(
+    beta=0.1,
+)
+
+cpo_trainer = CPOTrainer(
+    model,
+    args=cpo_config,
+    train_dataset=train_dataset,
+    tokenizer=tokenizer,
+)
+```
+After this one can then call:
+
+```py
+cpo_trainer.train()
+```
+
+## Loss functions
+
+Given the preference data, the `CPOTrainer` uses the sigmoid loss on the normalized likelihood via the `logsigmoid` to fit a logistic regression.
+
+The [RSO](https://arxiv.org/abs/2309.06657) authors propose to use a hinge loss on the normalized likelihood from the [SLiC](https://arxiv.org/abs/2305.10425) paper. The `CPOTrainer` can be switched to this loss via the `loss_type="hinge"` argument and the `beta` in this case is the reciprocal of the margin.
+
+The [IPO](https://arxiv.org/abs/2310.12036) authors provide a deeper theoretical understanding of the CPO algorithms and identify an issue with overfitting and propose an alternative loss which can be used via the `loss_type="ipo"` argument to the trainer. Note that the `beta`  parameter is the reciprocal of the gap between the log-likelihood ratios of the chosen vs the rejected completion pair and thus the smaller the `beta` the larger this gaps is. As per the paper the loss is averaged over log-likelihoods of the completion (unlike CPO which is summed only).
+
+
+## Logging
+
+While training and evaluating we record the following reward metrics:
+
+* `rewards/chosen`: the mean log probabilities of the policy model for the chosen responses scaled by beta
+* `rewards/rejected`: the mean log probabilities of the policy model for the rejected responses scaled by beta
+* `rewards/accuracies`: mean of how often the chosen rewards are > than the corresponding rejected rewards
+* `rewards/margins`: the mean difference between the chosen and corresponding rejected rewards
+* `nll_loss`: the mean negative log likelihood loss of the policy model for the chosen responses
+
+## CPOTrainer
+
+[[autodoc]] CPOTrainer
+
+
+## CPOConfig
+
+[[autodoc]] CPOConfig

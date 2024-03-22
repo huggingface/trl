@@ -33,6 +33,8 @@
     title: DPO Trainer
   - local: kto_trainer
     title: KTO Trainer
+  - local: cpo_trainer
+    title: CPO Trainer
   - local: ddpo_trainer
     title: Denoising Diffusion Policy Optimization
   - local: iterative_sft_trainer
