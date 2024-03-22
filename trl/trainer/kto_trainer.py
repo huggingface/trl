@@ -913,19 +913,17 @@ class KTOTrainer(Trainer):
 
         kl = (policy_KL_logps - reference_KL_logps).mean().detach()
         #kl_torch = F.kl_div(policy_KL_logps, reference_KL_logps, reduction="batchmean", log_target=True).detach()
-        print(policy_KL_logps, reference_KL_logps, kl)
+        #print(policy_KL_logps, reference_KL_logps, kl)
         kl = self.accelerator.gather(kl).mean().clamp(min=0)
-        print(policy_chosen_logps.shape, policy_rejected_logps.shape, policy_KL_logps.shape, reference_chosen_logps.shape, reference_rejected_logps.shape, reference_KL_logps.shape)
-        print(policy_chosen_logps.dtype, policy_rejected_logps.dtype, policy_KL_logps.dtype, reference_chosen_logps.dtype, reference_rejected_logps.dtype, reference_KL_logps.dtype)
-
+        
         if policy_chosen_logps.shape[0] > 0 and reference_chosen_logps.shape[0] > 0:
             chosen_logratios = policy_chosen_logps - reference_chosen_logps
             chosen_losses = 1 - F.sigmoid(self.beta * (chosen_logratios - kl))
             chosen_rewards = self.beta * chosen_logratios.detach()
         else:
             # lists can't be empty -- if they are, then accelerate.gather will hang
-            chosen_losses = torch.tensor([torch.nan], requires_grad=True).to(self.accelerator.device)
-            chosen_rewards = torch.tensor([torch.nan]).to(self.accelerator.device)
+            chosen_losses = torch.tensor([], requires_grad=True).to(self.accelerator.device)
+            chosen_rewards = torch.tensor([]).to(self.accelerator.device)
 
         if policy_rejected_logps.shape[0] > 0 and reference_rejected_logps.shape[0] > 0:
             rejected_logratios = policy_rejected_logps - reference_rejected_logps
@@ -933,8 +931,8 @@ class KTOTrainer(Trainer):
             rejected_rewards = self.beta * rejected_logratios.detach()
         else:
             # lists can't be empty -- if they are, then accelerate.gather will hang
-            rejected_losses = torch.tensor([torch.nan], requires_grad=True).to(self.accelerator.device)
-            rejected_rewards = torch.tensor([torch.nan]).to(self.accelerator.device)
+            rejected_losses = torch.tensor([], requires_grad=True).to(self.accelerator.device)
+            rejected_rewards = torch.tensor([]).to(self.accelerator.device)
 
         losses = torch.cat(
             (self.desirable_weight * chosen_losses, self.undesirable_weight * rejected_losses),
@@ -1005,6 +1003,10 @@ class KTOTrainer(Trainer):
         mean_rejected_logps = policy_rejected_logps.nanmean().detach()
 
         prefix = "eval_" if train_eval == "eval" else ""
+        print(self.accelerator.device)
+        print(mean_chosen_reward.shape, mean_rejected_reward.shape, mean_chosen_logps.shape, mean_rejected_logps.shape)
+        print(mean_chosen_reward.dtype, mean_rejected_reward.dtype, mean_chosen_logps.dtype, mean_rejected_logps.dtype)
+        print(mean_chosen_reward.device, mean_rejected_reward.device, mean_chosen_logps.device, mean_rejected_logps.device)
         metrics[f"{prefix}rewards/chosen"] = self.accelerator.gather(mean_chosen_reward).nanmean().cpu()
         metrics[f"{prefix}rewards/rejected"] = self.accelerator.gather(mean_rejected_reward).nanmean().cpu()
         metrics[f"{prefix}rewards/margins"] = metrics[f"{prefix}rewards/chosen"] - metrics[f"{prefix}rewards/rejected"]
@@ -1012,12 +1014,7 @@ class KTOTrainer(Trainer):
         metrics[f"{prefix}logps/chosen"] = self.accelerator.gather(mean_chosen_logps).nanmean().cpu()
         metrics[f"{prefix}logps/rejected"] = self.accelerator.gather(mean_rejected_logps).nanmean().cpu()
 
-        loss = (
-            losses.nanmean()
-            if losses.shape[0] > 0
-            else torch.tensor(float("nan"), requires_grad=True).to(self.accelerator.device)
-        )
-        return loss, metrics
+        return losses.nanmean(), metrics
 
     def compute_loss(
         self,
