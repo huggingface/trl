@@ -779,7 +779,12 @@ class KTOTrainer(Trainer):
                 raise ValueError(f"completion should be an str but got {type(completion)}")
 
             # keys of format prompt_* refers to just the prompt and answer_* refers to just the answer
-            all_tokens = self.build_tokenized_answer(prompt, completion)
+            all_tokens = {
+                "prompt_input_ids": feature["prompt_input_ids"],
+                "prompt_attention_mask": feature["prompt_attention_mask"],
+                "answer_input_ids": feature["answer_input_ids"],
+                "answer_attention_mask": feature["answer_attention_mask"],
+            }
 
             max_length = self.max_length - 2
             # if combined sequence is too long (> max_length - 1 for BOS token - 1 for EOS), truncate the prompt
