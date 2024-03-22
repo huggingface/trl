@@ -1048,7 +1048,7 @@ class KTOTrainer(Trainer):
     def get_batch_samples(self, model, batch: Dict[str, torch.LongTensor]) -> Tuple[str, str]:
         """Generate samples from the model and reference model for the given batch of inputs."""
 
-        # If one uses `generate_during_eval` with peft + bf16, we need to explictly call generate with
+        # If one uses `generate_during_eval` with peft + bf16, we need to explicitly call generate with
         # the torch cuda amp context manager as some hidden states are silently casted to full precision.
         generate_context_manager = nullcontext if not self._peft_has_been_casted_to_bf16 else torch.cuda.amp.autocast
 
@@ -1206,7 +1206,7 @@ class KTOTrainer(Trainer):
     @wraps(Trainer.push_to_hub)
     def push_to_hub(self, commit_message: Optional[str] = "End of training", blocking: bool = True, **kwargs) -> str:
         """
-        Overwrite the `push_to_hub` method in order to force-add the tag "sft" when pushing the
+        Overwrite the `push_to_hub` method in order to force-add the tag "kto" when pushing the
         model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
         """
         kwargs = trl_sanitze_kwargs_for_tagging(model=self.model, tag_names=self._tag_names, kwargs=kwargs)
