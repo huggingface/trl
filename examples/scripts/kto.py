@@ -138,6 +138,9 @@ if __name__ == "__main__":
     eval_dataset = get_hh("test", sanity_check=script_args.sanity_check)
 
     # 4. initialize the KTO trainer
+    import time
+
+    start = time.time()
     kto_trainer = KTOTrainer(
         model,
         model_ref,
@@ -147,6 +150,7 @@ if __name__ == "__main__":
         tokenizer=tokenizer,
         peft_config=get_peft_config(model_args),
     )
+    print(f"Time to initialize KTOTrainer: {time.time() - start:.2f}s")
 
     # 5. train
     kto_trainer.train()

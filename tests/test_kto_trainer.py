@@ -25,8 +25,6 @@ from trl.trainer.kto_trainer import process_tokens
 
 from .testing_utils import require_no_wandb, require_peft
 
-from typing import Dict
-
 
 class KTOTrainerTester(unittest.TestCase):
     @classmethod
@@ -197,8 +195,18 @@ class KTOTrainerTester(unittest.TestCase):
                     batched=True,
                     batch_size=2,
                 )
-                fn_kwargs = {"prefix": "", "is_encoder_decoder": trainer.is_encoder_decoder, "tokenizer": trainer.tokenizer, "max_length": trainer.max_length, "truncation_mode": trainer.truncation_mode, "label_pad_token_id": trainer.label_pad_token_id, "max_prompt_length": trainer.max_prompt_length}
-                tokenized_dataset_batched = tokenized_dataset_batched.map(process_tokens, fn_kwargs=fn_kwargs, num_proc=2)
+                fn_kwargs = {
+                    "prefix": "",
+                    "is_encoder_decoder": trainer.is_encoder_decoder,
+                    "tokenizer": trainer.tokenizer,
+                    "max_length": trainer.max_length,
+                    "truncation_mode": trainer.truncation_mode,
+                    "label_pad_token_id": trainer.label_pad_token_id,
+                    "max_prompt_length": trainer.max_prompt_length,
+                }
+                tokenized_dataset_batched = tokenized_dataset_batched.map(
+                    process_tokens, fn_kwargs=fn_kwargs, num_proc=2
+                )
                 for k, v in tokenized_dataset[:].items():
                     self.assertListEqual(v, tokenized_dataset_batched[k])
 
