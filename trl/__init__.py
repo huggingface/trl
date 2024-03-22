@@ -35,6 +35,8 @@ _import_structure = {
     "trainer": [
         "DataCollatorForCompletionOnlyLM",
         "DPOTrainer",
+        "CPOConfig",
+        "CPOTrainer",
         "IterativeSFTTrainer",
         "KTOConfig",
         "KTOTrainer",
@@ -96,6 +98,8 @@ if TYPE_CHECKING:
     from .trainer import (
         DataCollatorForCompletionOnlyLM,
         DPOTrainer,
+        CPOConfig,
+        CPOTrainer,
         IterativeSFTTrainer,
         KTOConfig,
         KTOTrainer,
