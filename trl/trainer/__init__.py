@@ -40,6 +40,8 @@ _import_structure = {
     "kto_config": ["KTOConfig"],
     "kto_trainer": ["KTOTrainer"],
     "model_config": ["ModelConfig"],
+    "orpo_config": ["ORPOConfig"],
+    "orpo_trainer": ["ORPOTrainer"],
     "ppo_config": ["PPOConfig"],
     "ppo_trainer": ["PPOTrainer"],
     "reward_config": ["RewardConfig"],
@@ -83,6 +85,8 @@ if TYPE_CHECKING:
     from .kto_config import KTOConfig
     from .kto_trainer import KTOTrainer
     from .model_config import ModelConfig
+    from .orpo_config import ORPOConfig
+    from .orpo_trainer import ORPOTrainer
     from .ppo_config import PPOConfig
     from .ppo_trainer import PPOTrainer
     from .reward_config import RewardConfig
