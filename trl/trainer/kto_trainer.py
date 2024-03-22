@@ -63,6 +63,99 @@ if is_deepspeed_available():
     import deepspeed
 
 
+def process_tokens(feature, model = None, **kwargs) -> Dict:
+        """Tokenize a single row from a KTO specific dataset.
+
+        At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
+        in case the prompt + completion responses is/are too long. First
+            we truncate the prompt; if we're still too long, we truncate the completion.
+
+        We also create the labels for the completion responses, which are of length equal to
+            the sum of the length of the prompt and the completion response, with
+            label_pad_token_id  for the prompt tokens.
+        """
+        prompt = feature["prompt"]
+        completion = feature["completion"]
+
+        batch = {
+            f"{kwargs['prefix']}prompt": prompt,
+            f"{kwargs['prefix']}completion": completion,
+            f"{kwargs['prefix']}label": feature["label"],
+        }
+
+        if not kwargs["is_encoder_decoder"]:
+            # Check issues below for more details
+            #  1. https://github.com/huggingface/trl/issues/907
+            #  2. https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
+            #  3. https://github.com/LianjiaTech/BELLE/issues/337
+
+            if not isinstance(prompt, str):
+                raise ValueError(f"prompt should be an str but got {type(prompt)}")
+
+            if not isinstance(completion, str):
+                raise ValueError(f"completion should be an str but got {type(completion)}")
+
+            # keys of format prompt_* refers to just the prompt and answer_* refers to just the answer
+            all_tokens = {
+                "prompt_input_ids": feature["prompt_input_ids"],
+                "prompt_attention_mask": feature["prompt_attention_mask"],
+                "answer_input_ids": feature["answer_input_ids"],
+                "answer_attention_mask": feature["answer_attention_mask"],
+            }
+
+            max_length = kwargs["max_length"] - 2
+            # if combined sequence is too long (> max_length - 1 for BOS token - 1 for EOS), truncate the prompt
+            if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
+                for k in ["prompt_input_ids", "prompt_attention_mask"]:
+                    if kwargs["truncation_mode"] == "keep_start":
+                        all_tokens[k] = all_tokens[k][: kwargs["max_prompt_length"]]
+                    elif kwargs["truncation_mode"] == "keep_end":
+                        all_tokens[k] = all_tokens[k][-kwargs["max_prompt_length"] :]
+                    else:
+                        raise ValueError(f"Unknown truncation mode: {kwargs['truncation_mode']}")
+
+            # if that's still too long, truncate the response
+            if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
+                for k in ["answer_input_ids", "answer_attention_mask"]:
+                    all_tokens[k] = all_tokens[k][: max_length - kwargs["max_prompt_length"]]
+
+            # for legacy reasons, use the completion_* prefix to now refer to the joint sequence
+            batch[f"{kwargs['prefix']}prompt_input_ids"] = [kwargs["tokenizer"].bos_token_id] + all_tokens["prompt_input_ids"]
+            batch[f"{kwargs['prefix']}prompt_attention_mask"] = [1] + all_tokens["prompt_attention_mask"]
+            batch[f"{kwargs['prefix']}completion_input_ids"] = (
+                [kwargs["tokenizer"].bos_token_id]
+                + all_tokens["prompt_input_ids"]
+                + all_tokens["answer_input_ids"]
+                + [kwargs["tokenizer"].eos_token_id]
+            )
+            batch[f"{kwargs['prefix']}completion_attention_mask"] = (
+                [1] + all_tokens["prompt_attention_mask"] + all_tokens["answer_attention_mask"] + [1]
+            )
+
+            batch[f"{kwargs['prefix']}completion_labels"] = batch[f"{kwargs['prefix']}completion_input_ids"][:]
+            batch[f"{kwargs['prefix']}completion_labels"][: len(batch[f"{kwargs['prefix']}prompt_input_ids"])] = [
+                kwargs["label_pad_token_id"]
+            ] * len(batch[f"{kwargs['prefix']}prompt_input_ids"])
+        else:
+            completion_tokens = kwargs["tokenizer"](
+                completion, truncation=True, max_length=kwargs["max_completion_length"], add_special_tokens=True
+            )
+            prompt_tokens = kwargs["tokenizer"](
+                prompt, truncation=True, max_length=kwargs["max_prompt_length"], add_special_tokens=True
+            )
+
+            batch[f"{kwargs['prefix']}prompt_input_ids"] = prompt_tokens["input_ids"]
+            batch[f"{kwargs['prefix']}prompt_attention_mask"] = prompt_tokens["attention_mask"]
+
+            batch[f"{kwargs['prefix']}completion_labels"] = completion_tokens["input_ids"]
+            batch[f"{kwargs['prefix']}completion_attention_mask"] = completion_tokens["attention_mask"]
+            if model is not None and hasattr(model, "prepare_decoder_input_ids_from_labels"):
+                batch[f"{kwargs['prefix']}completion_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
+                    labels=torch.tensor(batch["completion_labels"])
+                )
+
+        return batch
+
 class KTOTrainer(Trainer):
     r"""
     Initialize KTOTrainer.
@@ -341,12 +434,25 @@ class KTOTrainer(Trainer):
             eval_KL_dataset = eval_dataset.map(self.get_KL_dataset, batched=True, batch_size=total_batch_size)
 
         # tokenize the datasets
-        train_dataset = train_dataset.map(
-            lambda row: self.tokenize_row(row, prefix=""), remove_columns=train_dataset.column_names
-        )
-        train_KL_dataset = train_KL_dataset.map(
-            lambda row: self.tokenize_row(row, prefix="KL_"), remove_columns=train_KL_dataset.column_names
-        )
+        # train_dataset = train_dataset.map(
+        #     lambda row: self.tokenize_row(row, prefix=""), remove_columns=train_dataset.column_names
+        # )
+        # train_KL_dataset = train_KL_dataset.map(
+        #     lambda row: self.tokenize_row(row, prefix="KL_"), remove_columns=train_KL_dataset.column_names
+        # )
+        fn_kwargs = {"prefix": "", "is_encoder_decoder": self.is_encoder_decoder, "tokenizer": self.tokenizer, "max_length": self.max_length, "truncation_mode": self.truncation_mode, "label_pad_token_id": self.label_pad_token_id, "max_prompt_length": self.max_prompt_length}
+        train_dataset = train_dataset.map(self.build_tokenized_answer_batched, 
+                    batched=True,
+                    batch_size=24,
+                )
+        train_dataset = train_dataset.map(process_tokens, fn_kwargs=fn_kwargs, num_proc=24)
+        train_KL_dataset = train_KL_dataset.map(self.build_tokenized_answer_batched,
+                    batched=True,
+                    batch_size=24,
+                )
+        fn_kwargs["prefix"] = "KL_"
+        train_KL_dataset = train_KL_dataset.map(process_tokens, fn_kwargs=fn_kwargs, num_proc=24, remove_columns=[c for c in train_KL_dataset.column_names if c in train_dataset.column_names])
+
         # merge the datasets
         train_dataset = concatenate_datasets([train_dataset, train_KL_dataset], axis=1)
 
@@ -746,98 +852,98 @@ class KTOTrainer(Trainer):
             answer_attention_mask=answer_attention_mask,
         )
 
-    def process_tokens(self, feature, model: Union[PreTrainedModel, nn.Module] = None, prefix="") -> Dict:
-        """Tokenize a single row from a KTO specific dataset.
+    # def process_tokens(self, feature, model: Union[PreTrainedModel, nn.Module] = None, prefix="") -> Dict:
+    #     """Tokenize a single row from a KTO specific dataset.
 
-        At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
-        in case the prompt + completion responses is/are too long. First
-            we truncate the prompt; if we're still too long, we truncate the completion.
+    #     At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
+    #     in case the prompt + completion responses is/are too long. First
+    #         we truncate the prompt; if we're still too long, we truncate the completion.
 
-        We also create the labels for the completion responses, which are of length equal to
-            the sum of the length of the prompt and the completion response, with
-            label_pad_token_id  for the prompt tokens.
-        """
-        prompt = feature["prompt"]
-        completion = feature["completion"]
+    #     We also create the labels for the completion responses, which are of length equal to
+    #         the sum of the length of the prompt and the completion response, with
+    #         label_pad_token_id  for the prompt tokens.
+    #     """
+    #     prompt = feature["prompt"]
+    #     completion = feature["completion"]
 
-        batch = {
-            f"{prefix}prompt": prompt,
-            f"{prefix}completion": completion,
-            f"{prefix}label": feature["label"],
-        }
+    #     batch = {
+    #         f"{prefix}prompt": prompt,
+    #         f"{prefix}completion": completion,
+    #         f"{prefix}label": feature["label"],
+    #     }
 
-        if not self.is_encoder_decoder:
-            # Check issues below for more details
-            #  1. https://github.com/huggingface/trl/issues/907
-            #  2. https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
-            #  3. https://github.com/LianjiaTech/BELLE/issues/337
+    #     if not self.is_encoder_decoder:
+    #         # Check issues below for more details
+    #         #  1. https://github.com/huggingface/trl/issues/907
+    #         #  2. https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
+    #         #  3. https://github.com/LianjiaTech/BELLE/issues/337
 
-            if not isinstance(prompt, str):
-                raise ValueError(f"prompt should be an str but got {type(prompt)}")
+    #         if not isinstance(prompt, str):
+    #             raise ValueError(f"prompt should be an str but got {type(prompt)}")
 
-            if not isinstance(completion, str):
-                raise ValueError(f"completion should be an str but got {type(completion)}")
+    #         if not isinstance(completion, str):
+    #             raise ValueError(f"completion should be an str but got {type(completion)}")
 
-            # keys of format prompt_* refers to just the prompt and answer_* refers to just the answer
-            all_tokens = {
-                "prompt_input_ids": feature["prompt_input_ids"],
-                "prompt_attention_mask": feature["prompt_attention_mask"],
-                "answer_input_ids": feature["answer_input_ids"],
-                "answer_attention_mask": feature["answer_attention_mask"],
-            }
+    #         # keys of format prompt_* refers to just the prompt and answer_* refers to just the answer
+    #         all_tokens = {
+    #             "prompt_input_ids": feature["prompt_input_ids"],
+    #             "prompt_attention_mask": feature["prompt_attention_mask"],
+    #             "answer_input_ids": feature["answer_input_ids"],
+    #             "answer_attention_mask": feature["answer_attention_mask"],
+    #         }
 
-            max_length = self.max_length - 2
-            # if combined sequence is too long (> max_length - 1 for BOS token - 1 for EOS), truncate the prompt
-            if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
-                for k in ["prompt_input_ids", "prompt_attention_mask"]:
-                    if self.truncation_mode == "keep_start":
-                        all_tokens[k] = all_tokens[k][: self.max_prompt_length]
-                    elif self.truncation_mode == "keep_end":
-                        all_tokens[k] = all_tokens[k][-self.max_prompt_length :]
-                    else:
-                        raise ValueError(f"Unknown truncation mode: {self.truncation_mode}")
+    #         max_length = self.max_length - 2
+    #         # if combined sequence is too long (> max_length - 1 for BOS token - 1 for EOS), truncate the prompt
+    #         if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
+    #             for k in ["prompt_input_ids", "prompt_attention_mask"]:
+    #                 if self.truncation_mode == "keep_start":
+    #                     all_tokens[k] = all_tokens[k][: self.max_prompt_length]
+    #                 elif self.truncation_mode == "keep_end":
+    #                     all_tokens[k] = all_tokens[k][-self.max_prompt_length :]
+    #                 else:
+    #                     raise ValueError(f"Unknown truncation mode: {self.truncation_mode}")
 
-            # if that's still too long, truncate the response
-            if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
-                for k in ["answer_input_ids", "answer_attention_mask"]:
-                    all_tokens[k] = all_tokens[k][: max_length - self.max_prompt_length]
+    #         # if that's still too long, truncate the response
+    #         if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
+    #             for k in ["answer_input_ids", "answer_attention_mask"]:
+    #                 all_tokens[k] = all_tokens[k][: max_length - self.max_prompt_length]
 
-            # for legacy reasons, use the completion_* prefix to now refer to the joint sequence
-            batch[f"{prefix}prompt_input_ids"] = [self.tokenizer.bos_token_id] + all_tokens["prompt_input_ids"]
-            batch[f"{prefix}prompt_attention_mask"] = [1] + all_tokens["prompt_attention_mask"]
-            batch[f"{prefix}completion_input_ids"] = (
-                [self.tokenizer.bos_token_id]
-                + all_tokens["prompt_input_ids"]
-                + all_tokens["answer_input_ids"]
-                + [self.tokenizer.eos_token_id]
-            )
-            batch[f"{prefix}completion_attention_mask"] = (
-                [1] + all_tokens["prompt_attention_mask"] + all_tokens["answer_attention_mask"] + [1]
-            )
+    #         # for legacy reasons, use the completion_* prefix to now refer to the joint sequence
+    #         batch[f"{prefix}prompt_input_ids"] = [self.tokenizer.bos_token_id] + all_tokens["prompt_input_ids"]
+    #         batch[f"{prefix}prompt_attention_mask"] = [1] + all_tokens["prompt_attention_mask"]
+    #         batch[f"{prefix}completion_input_ids"] = (
+    #             [self.tokenizer.bos_token_id]
+    #             + all_tokens["prompt_input_ids"]
+    #             + all_tokens["answer_input_ids"]
+    #             + [self.tokenizer.eos_token_id]
+    #         )
+    #         batch[f"{prefix}completion_attention_mask"] = (
+    #             [1] + all_tokens["prompt_attention_mask"] + all_tokens["answer_attention_mask"] + [1]
+    #         )
 
-            batch[f"{prefix}completion_labels"] = batch[f"{prefix}completion_input_ids"][:]
-            batch[f"{prefix}completion_labels"][: len(batch[f"{prefix}prompt_input_ids"])] = [
-                self.label_pad_token_id
-            ] * len(batch[f"{prefix}prompt_input_ids"])
-        else:
-            completion_tokens = self.tokenizer(
-                completion, truncation=True, max_length=self.max_completion_length, add_special_tokens=True
-            )
-            prompt_tokens = self.tokenizer(
-                prompt, truncation=True, max_length=self.max_prompt_length, add_special_tokens=True
-            )
+    #         batch[f"{prefix}completion_labels"] = batch[f"{prefix}completion_input_ids"][:]
+    #         batch[f"{prefix}completion_labels"][: len(batch[f"{prefix}prompt_input_ids"])] = [
+    #             self.label_pad_token_id
+    #         ] * len(batch[f"{prefix}prompt_input_ids"])
+    #     else:
+    #         completion_tokens = self.tokenizer(
+    #             completion, truncation=True, max_length=self.max_completion_length, add_special_tokens=True
+    #         )
+    #         prompt_tokens = self.tokenizer(
+    #             prompt, truncation=True, max_length=self.max_prompt_length, add_special_tokens=True
+    #         )
 
-            batch[f"{prefix}prompt_input_ids"] = prompt_tokens["input_ids"]
-            batch[f"{prefix}prompt_attention_mask"] = prompt_tokens["attention_mask"]
+    #         batch[f"{prefix}prompt_input_ids"] = prompt_tokens["input_ids"]
+    #         batch[f"{prefix}prompt_attention_mask"] = prompt_tokens["attention_mask"]
 
-            batch[f"{prefix}completion_labels"] = completion_tokens["input_ids"]
-            batch[f"{prefix}completion_attention_mask"] = completion_tokens["attention_mask"]
-            if model is not None and hasattr(model, "prepare_decoder_input_ids_from_labels"):
-                batch[f"{prefix}completion_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
-                    labels=torch.tensor(batch["completion_labels"])
-                )
+    #         batch[f"{prefix}completion_labels"] = completion_tokens["input_ids"]
+    #         batch[f"{prefix}completion_attention_mask"] = completion_tokens["attention_mask"]
+    #         if model is not None and hasattr(model, "prepare_decoder_input_ids_from_labels"):
+    #             batch[f"{prefix}completion_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
+    #                 labels=torch.tensor(batch["completion_labels"])
+    #             )
 
-        return batch
+    #     return batch
 
     def tokenize_row(self, feature, model: Union[PreTrainedModel, nn.Module] = None, prefix="") -> Dict:
         """Tokenize a single row from a KTO specific dataset.
