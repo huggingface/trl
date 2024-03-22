@@ -211,6 +211,8 @@ class ORPOTrainer(Trainer):
                 UserWarning,
             )
             max_length = 512
+        else:
+            max_length = args.max_length
         if args.max_prompt_length is None:
             warnings.warn(
                 "`max_prompt_length` is not set in the ORPOConfig's init"
@@ -218,6 +220,8 @@ class ORPOTrainer(Trainer):
                 UserWarning,
             )
             max_prompt_length = 128
+        else:
+            max_prompt_length = args.max_prompt_length
 
         if args.max_completion_length is None and self.is_encoder_decoder:
             warnings.warn(
