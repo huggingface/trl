@@ -1004,15 +1004,14 @@ class KTOTrainer(Trainer):
 
         prefix = "eval_" if train_eval == "eval" else ""
         print(self.accelerator.device)
-        print(mean_chosen_reward.shape, mean_rejected_reward.shape, mean_chosen_logps.shape, mean_rejected_logps.shape)
-        print(mean_chosen_reward.dtype, mean_rejected_reward.dtype, mean_chosen_logps.dtype, mean_rejected_logps.dtype)
-        print(mean_chosen_reward.device, mean_rejected_reward.device, mean_chosen_logps.device, mean_rejected_logps.device)
-        metrics[f"{prefix}rewards/chosen"] = self.accelerator.gather(mean_chosen_reward).nanmean().cpu()
-        metrics[f"{prefix}rewards/rejected"] = self.accelerator.gather(mean_rejected_reward).nanmean().cpu()
+        print(mean_chosen_reward, mean_rejected_reward, mean_chosen_logps, mean_rejected_logps)
+        metrics[f"{prefix}rewards/chosen"] = chosen_rewards.detach().nanmean().cpu()
+        metrics[f"{prefix}rewards/rejected"] = rejected_rewards.detach().nanmean().cpu()
         metrics[f"{prefix}rewards/margins"] = metrics[f"{prefix}rewards/chosen"] - metrics[f"{prefix}rewards/rejected"]
-        metrics[f"{prefix}kl"] = kl.item()  # has already been gathered in kto_loss
-        metrics[f"{prefix}logps/chosen"] = self.accelerator.gather(mean_chosen_logps).nanmean().cpu()
-        metrics[f"{prefix}logps/rejected"] = self.accelerator.gather(mean_rejected_logps).nanmean().cpu()
+        metrics[f"{prefix}kl"] = kl.detach().item()  # has already been gathered in kto_loss
+        metrics[f"{prefix}logps/chosen"] = mean_chosen_logps.detach().nanmean().cpu()
+        metrics[f"{prefix}logps/rejected"] = mean_rejected_logps.detach().nanmean().cpu()
+        print(losses.nanmean(), metrics)
 
         return losses.nanmean(), metrics
 
