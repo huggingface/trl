@@ -63,29 +63,35 @@ The SFT CLI is based on the `examples/scripts/sft.py` script.
 
 ### Direct Policy Optimization (DPO)
 
-First, follow the basic instructions above and run `trl dpo --output_dir <output_dir> <*args>`. Make sure to process your DPO dataset in the TRL format as follows:
+To use the DPO CLI, you need to have a dataset in the TRL format such as 
 
-1- Make sure to pre-tokenize the dataset using chat templates:
+* TRL's Anthropic HH dataset: https://huggingface.co/datasets/trl-internal-testing/hh-rlhf-trl-style
+* TRL's OpenAI TL;DR summarization dataset: https://huggingface.co/datasets/trl-internal-testing/tldr-preference-trl-style
+
+These datasets always have at least three columns `prompt, chosen, rejected`:
+
+* `prompt` is a list of strings.
+* `chosen` is the chosen response in [chat format](https://huggingface.co/docs/transformers/main/en/chat_templating)
+* `rejected` is the rejected response [chat format](https://huggingface.co/docs/transformers/main/en/chat_templating) 
+
+
+To do a quick start, you can run the following command:
 
 ```bash
-python examples/datasets/tokenize_ds.py --model gpt2 --dataset yourdataset
+trl dpo --model_name_or_path facebook/opt-125m --output_dir trl-hh-rlhf --dataset_name trl-internal-testing/hh-rlhf-trl-style
 ```
 
-You might need to adapt the `examples/datasets/tokenize_ds.py` to use yout chat template
 
-2- Format the dataset into TRL format (you can adapt the `examples/datasets/anthropic_hh.py`):
+The DPO CLI is based on the `examples/scripts/dpo.py` script.
+
+
+#### Custom preference dataset
+
+Format the dataset into TRL format (you can adapt the `examples/datasets/anthropic_hh.py`):
 
 ```bash
 python examples/datasets/anthropic_hh.py --push_to_hub --hf_entity your-hf-org
 ```
-
-Once your dataset being pushed, run the dpo CLI as follows:
-
-```bash
-trl dpo --model_name_or_path facebook/opt-125m --dataset_name trl-internal-testing/Anthropic-hh-rlhf-processed --output_dir opt-sft-hh-rlhf
-```
-
-The SFT CLI is based on the `examples/scripts/dpo.py` script.
 
 ## Chat interface
 
