@@ -106,10 +106,7 @@ class RewardTrainerTester(unittest.TestCase):
 
     @require_peft
     def test_reward_trainer_peft(self):
-        import peft
         from peft import LoraConfig, TaskType
-
-        peft_version = peft.__version__
 
         peft_config = LoraConfig(
             task_type=TaskType.SEQ_CLS,
@@ -172,7 +169,7 @@ class RewardTrainerTester(unittest.TestCase):
             previous_non_trainable_params = {}
 
             # due to a change in the way the modules to save are dealt in PEFT.
-            trainable_params_name = ["lora", "score"] if peft_version < "0.3.0" else ["lora", "modules_to_save"]
+            trainable_params_name = ["lora", "modules_to_save"]
 
             # check gradients are not None
             for n, param in trainer.model.named_parameters():

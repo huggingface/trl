@@ -18,17 +18,23 @@ import unittest
 
 @unittest.skipIf(sys.platform.startswith("win"), "Skipping on Windows")
 def test_sft_cli():
-    subprocess.run(
-        "trl sft --max_steps 1 --output_dir tmp-sft --model_name_or_path HuggingFaceM4/tiny-random-LlamaForCausalLM --dataset_name imdb --learning_rate 1e-4 --lr_scheduler_type cosine",
-        shell=True,
-        check=True,
-    )
+    try:
+        subprocess.run(
+            "trl sft --max_steps 1 --output_dir tmp-sft --model_name_or_path HuggingFaceM4/tiny-random-LlamaForCausalLM --dataset_name imdb --learning_rate 1e-4 --lr_scheduler_type cosine",
+            shell=True,
+            check=True,
+        )
+    except BaseException as exc:
+        raise AssertionError("An error occured while running the CLI, please double check") from exc
 
 
 @unittest.skipIf(sys.platform.startswith("win"), "Skipping on Windows")
 def test_dpo_cli():
-    subprocess.run(
-        "trl dpo --max_steps 1 --output_dir tmp-sft --model_name_or_path HuggingFaceM4/tiny-random-LlamaForCausalLM --dataset_name trl-internal-testing/Anthropic-hh-rlhf-processed --learning_rate 1e-4 --lr_scheduler_type cosine",
-        shell=True,
-        check=True,
-    )
+    try:
+        subprocess.run(
+            "trl dpo --max_steps 1 --output_dir tmp-sft --model_name_or_path HuggingFaceM4/tiny-random-LlamaForCausalLM --dataset_name trl-internal-testing/hh-rlhf-trl-style --learning_rate 1e-4 --lr_scheduler_type cosine --sanity_check",
+            shell=True,
+            check=True,
+        )
+    except BaseException as exc:
+        raise AssertionError("An error occured while running the CLI, please double check") from exc

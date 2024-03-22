@@ -3,7 +3,7 @@
 </div>
 
 # TRL - Transformer Reinforcement Learning
-> Full stack transformer language models with reinforcement learning.
+> Full stack library to fine-tune and align large language models.
 
 <p align="center">
     <a href="https://github.com/huggingface/trl/blob/main/LICENSE">
@@ -20,57 +20,69 @@
 
 ## What is it?
 
-<div style="text-align: center">
-<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/TRL-readme.png">
-</div>
+The `trl` library is a full stack tool to fine-tune and align transformer language and diffusion models using methods such as Supervised Fine-tuning step (SFT), Reward Modeling (RM) and the Proximal Policy Optimization (PPO) as well as Direct Preference Optimization (DPO). 
 
-`trl` is a full stack library where we provide a set of tools to train transformer language models and stable diffusion models with Reinforcement Learning, from the Supervised Fine-tuning step (SFT), Reward Modeling step (RM) to the Proximal Policy Optimization (PPO) step. The library is built on top of the [`transformers`](https://github.com/huggingface/transformers) library by  🤗 Hugging Face. Therefore, pre-trained language models can be directly loaded via `transformers`. At this point, most of decoder architectures and encoder-decoder architectures are supported. Refer to the documentation or the `examples/` folder for example code snippets and how to run these tools.
-
-**Highlights:**
-
-- [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer): A light and friendly wrapper around `transformers` Trainer to easily fine-tune language models or adapters on a custom dataset.
-- [`RewardTrainer`](https://huggingface.co/docs/trl/reward_trainer): A light wrapper around `transformers` Trainer to easily fine-tune language models for human preferences (Reward Modeling).
-- [`PPOTrainer`](https://huggingface.co/docs/trl/trainer#trl.PPOTrainer): A PPO trainer for language models that just needs (query, response, reward) triplets to optimise the language model.
-- [`AutoModelForCausalLMWithValueHead`](https://huggingface.co/docs/trl/models#trl.AutoModelForCausalLMWithValueHead) & [`AutoModelForSeq2SeqLMWithValueHead`](https://huggingface.co/docs/trl/models#trl.AutoModelForSeq2SeqLMWithValueHead): A transformer model with an additional scalar output for each token which can be used as a value function in reinforcement learning.
-- [Examples](https://github.com/huggingface/trl/tree/main/examples): Train GPT2 to generate positive movie reviews with a BERT sentiment classifier, full RLHF using adapters only, train GPT-j to be less toxic, [Stack-Llama example](https://huggingface.co/blog/stackllama), etc.
-
-## How PPO works
-Fine-tuning a language model via PPO consists of roughly three steps:
-
-1. **Rollout**: The language model generates a response or continuation based on query which could be the start of a sentence.
-2. **Evaluation**: The query and response are evaluated with a function, model, human feedback or some combination of them. The important thing is that this process should yield a scalar value for each query/response pair.
-3. **Optimization**: This is the most complex part. In the optimisation step the query/response pairs are used to calculate the log-probabilities of the tokens in the sequences. This is done with the model that is trained and a reference model, which is usually the pre-trained model before fine-tuning. The KL-divergence between the two outputs is used as an additional reward signal to make sure the generated responses don't deviate too far from the reference language model. The active language model is then trained with PPO.
-
-This process is illustrated in the sketch below:
+The library is built on top of the [`transformers`](https://github.com/huggingface/transformers) library and thus allows to use any model architecture available there.
 
 
-<div style="text-align: center">
-<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl_overview.png" width="800">
-<p style="text-align: center;"> <b>Figure:</b> Sketch of the workflow. </p>
-</div>
+## Highlights
+
+- **`Efficient and scalable`**: 
+    - [`accelerate`](https://github.com/huggingface/accelerate) is the backbone of `trl` which allows to scale model training from a single GPU to a large scale multi-node cluster with methods such as DDP and DeepSpeed.
+    - [`PEFT`](https://github.com/huggingface/peft) is fully integrated and allows to train even the largest models on modest hardware with quantisation and methods such as LoRA or QLoRA.
+    - [`unsloth`](https://github.com/unslothai/unsloth) is also integrated and allows to significantly speed up training with dedicated kernels.
+- **`CLI`**: With the [CLI](https://huggingface.co/docs/trl/clis) you can fine-tune and chat with LLMs without writing any code using a single command and a flexible config system.
+- **`Trainers`**: The Trainer classes are an abstraction to apply many fine-tuning methods with ease such as the [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer), [`DPOTrainer`](https://huggingface.co/docs/trl/trainer#trl.DPOTrainer), [`RewardTrainer`](https://huggingface.co/docs/trl/reward_trainer), and [`PPOTrainer`](https://huggingface.co/docs/trl/trainer#trl.PPOTrainer).
+- **`AutoModels`**: The [`AutoModelForCausalLMWithValueHead`](https://huggingface.co/docs/trl/models#trl.AutoModelForCausalLMWithValueHead) & [`AutoModelForSeq2SeqLMWithValueHead`](https://huggingface.co/docs/trl/models#trl.AutoModelForSeq2SeqLMWithValueHead) classes add an additional value head to the model which allows to train them with RL algorithms such as PPO.
+- **`Examples`**: Train GPT2 to generate positive movie reviews with a BERT sentiment classifier, full RLHF using adapters only, train GPT-j to be less toxic, [StackLlama example](https://huggingface.co/blog/stackllama), etc. following the [examples](https://github.com/huggingface/trl/tree/main/examples).
 
 ## Installation
 
 ### Python package
-Install the library with pip:
+Install the library with `pip`:
 ```bash
 pip install trl
 ```
 
 ### From source
-If you want to run the examples in the repository a few additional libraries are required. Clone the repository and install it with pip:
+If you want to use the latest features before an official release you can install from source:
+```bash
+pip install git+https://github.com/huggingface/trl.git
+```
+
+### Repository
+If you want to use the examples you can clone the repository with the following command:
 ```bash
 git clone https://github.com/huggingface/trl.git
-cd trl/
-pip install .
 ```
 
-If you wish to develop TRL, you should install in editable mode:
+## Command Line Interface (CLI)
+
+You can use TRL Command Line Interface (CLI) to quickly get started with Supervised Fine-tuning (SFT), Direct Preference Optimization (DPO) and test your aligned model with the chat CLI: 
+
+**SFT:**
+
 ```bash
-pip install -e .
+trl sft --model_name_or_path facebook/opt-125m --dataset_name imdb --output_dir opt-sft-imdb
 ```
+
+**DPO:**
+
+```bash
+trl dpo --model_name_or_path facebook/opt-125m --dataset_name trl-internal-testing/hh-rlhf-trl-style --output_dir opt-sft-hh-rlhf 
+```
+
+**Chat:**
+
+```bash
+trl chat --model_name_or_path Qwen/Qwen1.5-0.5B-Chat
+```
+
+Read more about CLI in the [relevant documentation section](https://huggingface.co/docs/trl/main/en/clis) or use `--help` for more details.
 
 ## How to use
+
+For more flexibility and control over the training you can use the dedicated trainer classes to fine-tune the model in Python.
 
 ### `SFTTrainer`
 
@@ -138,11 +150,10 @@ model = AutoModelForCausalLMWithValueHead.from_pretrained('gpt2')
 model_ref = create_reference_model(model)
 
 tokenizer = AutoTokenizer.from_pretrained('gpt2')
+tokenizer.pad_token = tokenizer.eos_token
 
 # initialize trainer
-ppo_config = PPOConfig(
-    batch_size=1,
-)
+ppo_config = PPOConfig(batch_size=1, mini_batch_size=1)
 
 # encode a query
 query_txt = "This morning I went to the "
@@ -162,13 +173,50 @@ reward = [torch.tensor(1.0)]
 train_stats = ppo_trainer.step([query_tensor[0]], [response_tensor[0]], reward)
 ```
 
+### `DPOTrainer`
+
+`DPOTrainer` is a trainer that uses [Direct Preference Optimization algorithm](https://arxiv.org/abs/2305.18290). This is a basic example on how to use the `DPOTrainer` from the library. The `DPOTrainer` is a wrapper around the `transformers` Trainer to easily fine-tune reward models or adapters on a custom preference dataset.
+
+```python
+# imports
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from trl import DPOTrainer
+
+# load model and dataset - dataset needs to be in a specific format
+model = AutoModelForCausalLM.from_pretrained("gpt2")
+tokenizer = AutoTokenizer.from_pretrained("gpt2")
+
+...
+
+# load trainer
+trainer = DPOTrainer(
+    model=model,
+    tokenizer=tokenizer,
+    train_dataset=dataset,
+)
+
+# train
+trainer.train()
+```
+
+## Development
+
+If you want to contribute to `trl` or customizing it to your needs make sure to read the [contribution guide](https://github.com/huggingface/trl/blob/main/CONTRIBUTING.md) and make sure you make a dev install:
+
+```bash
+git clone https://github.com/huggingface/trl.git
+cd trl/
+make dev
+```
+
 ## References
 
 ### Proximal Policy Optimisation
 The PPO implementation largely follows the structure introduced in the paper **"Fine-Tuning Language Models from Human Preferences"** by D. Ziegler et al. \[[paper](https://arxiv.org/pdf/1909.08593.pdf), [code](https://github.com/openai/lm-human-preferences)].
 
-### Language models
-The language models utilize the `transformers` library by 🤗 Hugging Face.  Currently, `trl` only supports `transformers` models **for text**.
+### Direct Preference Optimization
+DPO is based on the original implementation of **"Direct Preference Optimization: Your Language Model is Secretly a Reward Model"** by E. Mitchell et al. \[[paper](), [code](https://github.com/eric-mitchell/direct-preference-optimization)]
+
 
 ## Citation
 

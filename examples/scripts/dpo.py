@@ -15,9 +15,9 @@
 """
 # regular:
 python examples/scripts/dpo.py \
+    --dataset_name=trl-internal-testing/hh-rlhf-trl-style \
     --model_name_or_path=gpt2 \
     --per_device_train_batch_size 4 \
-    --max_steps 1000 \
     --learning_rate 1e-3 \
     --gradient_accumulation_steps 1 \
     --logging_steps 10 \
@@ -31,9 +31,9 @@ python examples/scripts/dpo.py \
 
 # peft:
 python examples/scripts/dpo.py \
+    --dataset_name=trl-internal-testing/hh-rlhf-trl-style \
     --model_name_or_path=gpt2 \
     --per_device_train_batch_size 4 \
-    --max_steps 1000 \
     --learning_rate 1e-3 \
     --gradient_accumulation_steps 1 \
     --logging_steps 10 \
@@ -50,6 +50,7 @@ python examples/scripts/dpo.py \
     --lora_alpha=16
 """
 import logging
+import multiprocessing
 import os
 from contextlib import nullcontext
 
@@ -118,6 +119,8 @@ if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    if tokenizer.chat_template is None:
+        tokenizer.chat_template = "{% for message in messages %}{{message['role'] + ': ' + message['content'] + '\n\n'}}{% endfor %}{{ eos_token }}"
     if args.ignore_bias_buffers:
         # torch distributed hack
         model._ddp_params_and_buffers_to_ignore = [
@@ -137,8 +140,23 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    train_dataset = load_dataset(args.dataset_name, split="train")
-    eval_dataset = load_dataset(args.dataset_name, split="test")
+    ds = load_dataset(args.dataset_name)
+    if args.sanity_check:
+        for key in ds:
+            ds[key] = ds[key].select(range(50))
+
+    def process(row):
+        row["chosen"] = tokenizer.apply_chat_template(row["chosen"], tokenize=False)
+        row["rejected"] = tokenizer.apply_chat_template(row["rejected"], tokenize=False)
+        return row
+
+    ds = ds.map(
+        process,
+        num_proc=multiprocessing.cpu_count(),
+        load_from_cache_file=False,
+    )
+    train_dataset = ds["train"]
+    eval_dataset = ds["test"]
 
     ################
     # Training

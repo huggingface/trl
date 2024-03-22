@@ -9,6 +9,7 @@ COMMAND_FILES_PATH = `pwd`/commands
 dev:
 	[ -L "$(pwd)/trl/commands/scripts" ] && unlink "$(pwd)/trl/commands/scripts" || true
 	pip install -e ".[dev]"
+	ln -s `pwd`/examples/scripts/ `pwd`/trl/commands
 
 test:
 	python -m pytest -n auto --dist=loadfile -s -v ./tests/
