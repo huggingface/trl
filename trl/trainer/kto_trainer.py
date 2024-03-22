@@ -912,27 +912,15 @@ class KTOTrainer(Trainer):
         """
 
         kl = (policy_KL_logps - reference_KL_logps).mean().detach()
-        #kl_torch = F.kl_div(policy_KL_logps, reference_KL_logps, reduction="batchmean", log_target=True).detach()
-        #print(policy_KL_logps, reference_KL_logps, kl)
         kl = self.accelerator.gather(kl).mean().clamp(min=0)
-        
-        if policy_chosen_logps.shape[0] > 0 and reference_chosen_logps.shape[0] > 0:
-            chosen_logratios = policy_chosen_logps - reference_chosen_logps
-            chosen_losses = 1 - F.sigmoid(self.beta * (chosen_logratios - kl))
-            chosen_rewards = self.beta * chosen_logratios.detach()
-        else:
-            # lists can't be empty -- if they are, then accelerate.gather will hang
-            chosen_losses = torch.tensor([], requires_grad=True).to(self.accelerator.device)
-            chosen_rewards = torch.tensor([]).to(self.accelerator.device)
 
-        if policy_rejected_logps.shape[0] > 0 and reference_rejected_logps.shape[0] > 0:
-            rejected_logratios = policy_rejected_logps - reference_rejected_logps
-            rejected_losses = 1 - F.sigmoid(self.beta * (kl - rejected_logratios))
-            rejected_rewards = self.beta * rejected_logratios.detach()
-        else:
-            # lists can't be empty -- if they are, then accelerate.gather will hang
-            rejected_losses = torch.tensor([], requires_grad=True).to(self.accelerator.device)
-            rejected_rewards = torch.tensor([]).to(self.accelerator.device)
+        chosen_logratios = policy_chosen_logps - reference_chosen_logps
+        chosen_losses = 1 - F.sigmoid(self.beta * (chosen_logratios - kl))
+        chosen_rewards = self.beta * chosen_logratios.detach()
+
+        rejected_logratios = policy_rejected_logps - reference_rejected_logps
+        rejected_losses = 1 - F.sigmoid(self.beta * (kl - rejected_logratios))
+        rejected_rewards = self.beta * rejected_logratios.detach()
 
         losses = torch.cat(
             (self.desirable_weight * chosen_losses, self.undesirable_weight * rejected_losses),
@@ -997,21 +985,13 @@ class KTOTrainer(Trainer):
             reference_KL_logps,
         )
 
-        mean_chosen_reward = chosen_rewards.nanmean().detach()
-        mean_rejected_reward = rejected_rewards.nanmean().detach()
-        mean_chosen_logps = policy_chosen_logps.nanmean().detach()
-        mean_rejected_logps = policy_rejected_logps.nanmean().detach()
-
         prefix = "eval_" if train_eval == "eval" else ""
-        print(self.accelerator.device)
-        print(mean_chosen_reward, mean_rejected_reward, mean_chosen_logps, mean_rejected_logps)
         metrics[f"{prefix}rewards/chosen"] = chosen_rewards.detach().nanmean().cpu()
         metrics[f"{prefix}rewards/rejected"] = rejected_rewards.detach().nanmean().cpu()
         metrics[f"{prefix}rewards/margins"] = metrics[f"{prefix}rewards/chosen"] - metrics[f"{prefix}rewards/rejected"]
-        metrics[f"{prefix}kl"] = kl.detach().item()  # has already been gathered in kto_loss
-        metrics[f"{prefix}logps/chosen"] = mean_chosen_logps.detach().nanmean().cpu()
-        metrics[f"{prefix}logps/rejected"] = mean_rejected_logps.detach().nanmean().cpu()
-        print(losses.nanmean(), metrics)
+        metrics[f"{prefix}kl"] = kl.detach().cpu()  # is already the mean value within batch
+        metrics[f"{prefix}logps/chosen"] = policy_chosen_logps.detach().nanmean().cpu()
+        metrics[f"{prefix}logps/rejected"] = policy_rejected_logps.detach().nanmean().cpu()
 
         return losses.nanmean(), metrics
 
