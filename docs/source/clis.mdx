@@ -1,17 +1,18 @@
 # Command Line Interfaces (CLIs)
 
-You can use TRL to fine-tune your Language Model on Supervised Fine-Tuning (SFT) or Direct Policy Optimization (DPO) using the TRL CLIs.
+You can use TRL to fine-tune your Language Model with Supervised Fine-Tuning (SFT) or Direct Policy Optimization (DPO) or even chat with your model using the TRL CLIs.
 
 Currently supported CLIs are:
 
-- `trl sft`
-- `trl dpo`
+- `trl sft`: fine-tune a LLM on a text/instruction dataset
+- `trl dpo`: fine-tune a LLM with DPO on a preference dataset 
+- `trl chat`: quickly spin up a LLM fine-tuned for chatting
 
-## Get started 
+## Fine-tuning with the CLI
 
 Before getting started, pick up a Language Model from Hugging Face Hub. Supported models can be found with the filter "text-generation" within models. Also make sure to pick up a relevant dataset for your task.
 
-Also make sure to run:
+Before using the `sft` or `dpo` commands make sure to run:
 ```bash
 accelerate config
 ```
@@ -42,7 +43,7 @@ trl sft --config example_config.yaml --output_dir test-trl-cli --lr_scheduler_ty
 
 Will force-use `cosine_with_restarts` for `lr_scheduler_type`.
 
-## Supported Arguments 
+### Supported Arguments 
 
 We do support all arguments from `transformers.TrainingArguments`, for loading your model, we support all arguments from `~trl.ModelConfig`:
 
@@ -55,33 +56,60 @@ You can pass any of these arguments either to the CLI or the YAML file.
 Follow the basic instructions above and run `trl sft --output_dir <output_dir> <*args>`: 
 
 ```bash
-trl sft --config config.yaml --output_dir your-output-dir 
+trl sft --model_name_or_path facebook/opt-125m --dataset_name imdb --output_dir opt-sft-imdb
 ```
 
 The SFT CLI is based on the `examples/scripts/sft.py` script.
 
 ### Direct Policy Optimization (DPO)
 
-First, follow the basic instructions above and run `trl dpo --output_dir <output_dir> <*args>`. Make sure to process your DPO dataset in the TRL format as follows:
+To use the DPO CLI, you need to have a dataset in the TRL format such as 
 
-1- Make sure to pre-tokenize the dataset using chat templates:
+* TRL's Anthropic HH dataset: https://huggingface.co/datasets/trl-internal-testing/hh-rlhf-trl-style
+* TRL's OpenAI TL;DR summarization dataset: https://huggingface.co/datasets/trl-internal-testing/tldr-preference-trl-style
+
+These datasets always have at least three columns `prompt, chosen, rejected`:
+
+* `prompt` is a list of strings.
+* `chosen` is the chosen response in [chat format](https://huggingface.co/docs/transformers/main/en/chat_templating)
+* `rejected` is the rejected response [chat format](https://huggingface.co/docs/transformers/main/en/chat_templating) 
+
+
+To do a quick start, you can run the following command:
 
 ```bash
-python examples/datasets/tokenize_ds.py --model gpt2 --dataset yourdataset
+trl dpo --model_name_or_path facebook/opt-125m --output_dir trl-hh-rlhf --dataset_name trl-internal-testing/hh-rlhf-trl-style
 ```
 
-You might need to adapt the `examples/datasets/tokenize_ds.py` to use yout chat template
 
-2- Format the dataset into TRL format (you can adapt the `examples/datasets/anthropic_hh.py`):
+The DPO CLI is based on the `examples/scripts/dpo.py` script.
+
+
+#### Custom preference dataset
+
+Format the dataset into TRL format (you can adapt the `examples/datasets/anthropic_hh.py`):
 
 ```bash
 python examples/datasets/anthropic_hh.py --push_to_hub --hf_entity your-hf-org
 ```
 
-Once your dataset being pushed, run the dpo CLI as follows:
+## Chat interface
+
+The chat CLI lets you quickly load the model and talk to it. Simply run the following:
 
 ```bash
-trl dpo --config config.yaml --output_dir your-output-dir 
+trl chat --model_name_or_path  Qwen/Qwen1.5-0.5B-Chat 
 ```
 
-The SFT CLI is based on the `examples/scripts/dpo.py` script.
+Note that the chat interface relies on the chat template of the tokenizer to format the inputs for the model. Make sure your tokenizer has a chat template defined.
+
+Besides talking to the model there are a few commands you can use:
+
+- **clear**: clears the current conversation and start a new one
+- **example {NAME}**: load example named `{NAME}` from the config and use it as the user input
+- **set {SETTING_NAME}={SETTING_VALUE};**: change the system prompt or generation settings (multiple settings are separated by a ';').
+- **reset**: same as clear but also resets the generation configs to defaults if they have been changed by **set**
+- **save {SAVE_NAME} (optional)**: save the current chat and settings to file by default to `./chat_history/{MODEL_NAME}/chat_{DATETIME}.yaml` or `{SAVE_NAME}` if provided
+- **exit**: closes the interface
+
+The default examples are defined in `examples/scripts/config/default_chat_config.yaml` but you can pass your own with `--config CONIG_FILE` where you can also specify the default generation parameters.

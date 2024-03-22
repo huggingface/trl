@@ -2,8 +2,23 @@
 
 TRL supports the DPO Trainer for training language models from preference data, as described in the paper [Direct Preference Optimization: Your Language Model is Secretly a Reward Model](https://arxiv.org/abs/2305.18290) by Rafailov et al., 2023. For a full example have a look at  [`examples/scripts/dpo.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/dpo.py).
 
-
 The first step as always is to train your SFT model, to ensure the data we train on is in-distribution for the DPO algorithm.
+
+## How DPO works
+
+Fine-tuning a language model via DPO consists of two steps and is easier than PPO:
+
+1. **Data collection**: Gather a preference dataset with positive and negative selected pairs of generation, given a prompt.
+2. **Optimization**: Maximize the log-likelihood of the DPO loss directly.
+
+DPO-compatible datasets can be found with [the tag `dpo` on Hugging Face Hub](https://huggingface.co/datasets?other=dpo).
+
+This process is illustrated in the sketch below (from [figure 1 of the original paper](https://arxiv.org/pdf/2305.18290.pdf)):
+
+<img width="835" alt="Screenshot 2024-03-19 at 12 39 41" src="https://github.com/huggingface/trl/assets/49240599/9150fac6-3d88-4ca2-8ec6-2a6f3473216d">
+
+Read more about DPO algorithm in the [original paper](https://arxiv.org/pdf/2305.18290.pdf).
+
 
 ## Expected dataset format
 

@@ -87,7 +87,6 @@ class YamlConfigParser:
                             # In case the field value is not different from default, overwrite it
                             if not default_value_changed:
                                 value_to_replace = self.config[field_name]
-
                                 setattr(dataclasses_copy[i], field_name, value_to_replace)
                         # Otherwise do nothing
 
@@ -156,7 +155,7 @@ class DpoScriptArguments:
     max_target_length: int = field(
         default=128, metadata={"help": "Only used for encoder decoder model. Max target of each sample's prompt"}
     )
-    sanity_check: bool = field(default=True, metadata={"help": "only train on 1000 samples"})
+    sanity_check: bool = field(default=False, metadata={"help": "only train on 1000 samples"})
     ignore_bias_buffers: bool = field(
         default=False,
         metadata={
@@ -170,6 +169,67 @@ class DpoScriptArguments:
     gradient_checkpointing_use_reentrant: bool = field(
         default=False, metadata={"help": "Whether to apply `use_reentrant` for gradient_checkpointing"}
     )
+
+
+@dataclass
+class ChatArguments:
+    # general settings
+    model_name_or_path: str = field(metadata={"help": "Name of the pre-trained model"})
+    user: str = field(default=None, metadata={"help": "Username to display in chat interface"})
+    system_prompt: str = field(default=None, metadata={"help": "System prompt"})
+    save_folder: str = field(default="./chat_history/", metadata={"help": "Folder to save chat history"})
+    device: str = field(
+        default="cpu",
+        metadata={"help": "device to use for inference."},
+    )
+    config: str = field(
+        default="default",
+        metadata={
+            "help": "Config file used for setting the configs. If `default` uses examples/scripts/config/default_chat_config.yaml"
+        },
+    )
+    examples: str = field(default=None, metadata={"help": "Empty placeholder needs to be set via config."})
+    # generation settings
+    max_new_tokens: int = field(default=256, metadata={"help": "Maximum number of tokens to generate"})
+    do_sample: bool = field(default=True, metadata={"help": "Whether to sample outputs during generation"})
+    num_beams: int = field(default=1, metadata={"help": "Number of beams for beam search"})
+    temperature: float = field(default=1.0, metadata={"help": "Temperature parameter for generation"})
+    top_k: int = field(default=50, metadata={"help": "Value of k for top-k sampling"})
+    top_p: float = field(default=1.0, metadata={"help": "Value of p for nucleus sampling"})
+    repetition_penalty: float = field(default=1.0, metadata={"help": "Repetition penalty"})
+    # model loading
+    model_revision: str = field(
+        default="main",
+        metadata={"help": "The specific model version to use (can be a branch name, tag name or commit id)."},
+    )
+    torch_dtype: str = field(
+        default=None,
+        metadata={
+            "help": (
+                "Override the default `torch.dtype` and load the model under this dtype. If `auto` is passed, the "
+                "dtype will be automatically derived from the model's weights."
+            ),
+            "choices": ["auto", "bfloat16", "float16", "float32"],
+        },
+    )
+    trust_remote_code: bool = field(default=False, metadata={"help": "Trust remote code when loading a model."})
+    attn_implementation: str = field(
+        default=None,
+        metadata={
+            "help": (
+                "Which attention implementation to use; you can run --attn_implementation=flash_attention_2, in which case you must install this manually by running `pip install flash-attn --no-build-isolation`"
+            )
+        },
+    )
+    load_in_8bit: bool = field(
+        default=False, metadata={"help": "use 8 bit precision for the base model - works only with LoRA"}
+    )
+    load_in_4bit: bool = field(
+        default=False, metadata={"help": "use 4 bit precision for the base model - works only with LoRA"}
+    )
+
+    bnb_4bit_quant_type: str = field(default="nf4", metadata={"help": "precise the quantization type (fp4 or nf4)"})
+    use_bnb_nested_quant: bool = field(default=False, metadata={"help": "use nested quantization"})
 
 
 class TrlParser(HfArgumentParser):
@@ -211,9 +271,11 @@ class TrlParser(HfArgumentParser):
     def parse_args_and_config(self):
         dataclasses = self.parse_args_into_dataclasses(return_remaining_strings=True)
         # Pop the last element which should be the remaining strings
-        dataclasses = dataclasses[:-1]
-        self.config_parser = None
+        dataclasses = self.update_dataclasses_with_config(dataclasses[:-1])
+        return dataclasses
 
+    def update_dataclasses_with_config(self, dataclasses):
+        self.config_parser = None
         for parser_dataclass in dataclasses:
             if hasattr(parser_dataclass, "config"):
                 if self.config_parser is not None:
@@ -222,6 +284,5 @@ class TrlParser(HfArgumentParser):
 
         if self.config_parser is not None:
             dataclasses = self.config_parser.merge_dataclasses(dataclasses)
-
         dataclasses = self.post_process_dataclasses(dataclasses)
         return dataclasses
