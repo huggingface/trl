@@ -163,6 +163,30 @@ class KTOTrainerTester(unittest.TestCase):
                     [50256, 10814, 11, 5968, 1219, 72, 3621, 284, 1826, 345, 50256],
                 )
 
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                tokenized_dataset = dummy_dataset.map(
+                    lambda x: trainer.build_tokenized_answer(x["prompt"], x["completion"]),
+                    remove_columns=dummy_dataset.column_names,
+                )
+                tokenized_dataset_batched = dummy_dataset.map(
+                    trainer.build_tokenized_answer_batched,
+                    remove_columns=dummy_dataset.column_names,
+                    batched=True,
+                    batch_size=2,
+                )
+                self.assertListEqual(
+                    tokenized_dataset["prompt_input_ids"], tokenized_dataset_batched["prompt_input_ids"]
+                )
+                self.assertListEqual(
+                    tokenized_dataset["prompt_attention_mask"], tokenized_dataset_batched["prompt_attention_mask"]
+                )
+                self.assertListEqual(
+                    tokenized_dataset["answer_input_ids"], tokenized_dataset_batched["answer_input_ids"]
+                )
+                self.assertListEqual(
+                    tokenized_dataset["answer_attention_mask"], tokenized_dataset_batched["answer_attention_mask"]
+                )
+
     def test_kto_trainer_without_providing_ref_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = KTOConfig(
