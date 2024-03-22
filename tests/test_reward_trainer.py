@@ -106,10 +106,7 @@ class RewardTrainerTester(unittest.TestCase):
 
     @require_peft
     def test_reward_trainer_peft(self):
-        import peft
         from peft import LoraConfig, TaskType
-
-        peft_version = peft.__version__
 
         peft_config = LoraConfig(
             task_type=TaskType.SEQ_CLS,
