@@ -746,17 +746,23 @@ class KTOTrainer(Trainer):
                     all_tokens[k] = all_tokens[k][: max_length - self.max_prompt_length]
 
             # for legacy reasons, use the completion_* prefix to now refer to the joint sequence
-            batch[f"{prefix}prompt_input_ids"] = [self.tokenizer.bos_token_id] + all_tokens["prompt_input_ids"]
-            batch[f"{prefix}prompt_attention_mask"] = [1] + all_tokens["prompt_attention_mask"]
+            batch[f"{prefix}prompt_input_ids"] = all_tokens["prompt_input_ids"]
+            batch[f"{prefix}prompt_attention_mask"] = all_tokens["prompt_attention_mask"]
             batch[f"{prefix}completion_input_ids"] = (
-                [self.tokenizer.bos_token_id]
-                + all_tokens["prompt_input_ids"]
+                all_tokens["prompt_input_ids"]
                 + all_tokens["answer_input_ids"]
                 + [self.tokenizer.eos_token_id]
             )
             batch[f"{prefix}completion_attention_mask"] = (
-                [1] + all_tokens["prompt_attention_mask"] + all_tokens["answer_attention_mask"] + [1]
+                all_tokens["prompt_attention_mask"] + all_tokens["answer_attention_mask"] + [1]
             )
+
+            # Append bos_token_id if it exists
+            if self.tokenizer.bos_token_id is not None:
+                batch[f"{prefix}prompt_input_ids"] = [self.tokenizer.bos_token_id] + batch[f"{prefix}prompt_input_ids"]
+                batch[f"{prefix}prompt_attention_mask"] = [1] + batch[f"{prefix}prompt_attention_mask"]
+                batch[f"{prefix}completion_input_ids"] = [self.tokenizer.bos_token_id] + batch[f"{prefix}completion_input_ids"]
+                batch[f"{prefix}completion_attention_mask"] = [1] + batch[f"{prefix}completion_attention_mask"]
 
             batch[f"{prefix}completion_labels"] = batch[f"{prefix}completion_input_ids"][:]
             batch[f"{prefix}completion_labels"][: len(batch[f"{prefix}prompt_input_ids"])] = [
