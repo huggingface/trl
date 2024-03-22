@@ -204,6 +204,8 @@ class CPOTrainer(Trainer):
                 UserWarning,
             )
             max_length = 512
+        else:
+            max_length = args.max_length
         if args.max_prompt_length is None:
             warnings.warn(
                 "`max_prompt_length` is not set in the CPOConfig's init"
@@ -211,6 +213,8 @@ class CPOTrainer(Trainer):
                 UserWarning,
             )
             max_prompt_length = 128
+        else:
+            max_prompt_length = args.max_prompt_length
 
         if args.max_target_length is None and self.is_encoder_decoder:
             warnings.warn(
