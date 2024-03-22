@@ -155,16 +155,13 @@ class KTOTrainerTester(unittest.TestCase):
                 eval_dataset=dummy_dataset,
             )
 
-            row = dummy_dataset[0]
-
-            # test that the row can be tokenized
-            tokenized_row = trainer.tokenize_row(row)
-
-            # Assert bos_token_id and eos_token_id (latter only for completion)
-            assert tokenized_row["prompt_input_ids"][0] == self.tokenizer.bos_token_id
-            assert tokenized_row["completion_input_ids"][0] == self.tokenizer.bos_token_id
-            assert tokenized_row["prompt_input_ids"][-1] != self.tokenizer.eos_token_id
-            assert tokenized_row["completion_input_ids"][-1] == self.tokenizer.eos_token_id
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                tokenized_dataset = dummy_dataset.map(trainer.tokenize_row, remove_columns=dummy_dataset.column_names)
+                self.assertEqual(tokenized_dataset[0]["prompt_input_ids"], [50256, 10814, 11])
+                self.assertEqual(
+                    tokenized_dataset[0]["completion_input_ids"],
+                    [50256, 10814, 11, 5968, 1219, 72, 3621, 284, 1826, 345, 50256],
+                )
 
     def test_kto_trainer_without_providing_ref_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
