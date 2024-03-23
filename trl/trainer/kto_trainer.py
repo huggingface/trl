@@ -927,7 +927,6 @@ class KTOTrainer(Trainer):
             0,
         )
 
-        print(losses.shape, chosen_rewards.shape, rejected_rewards.shape)
         return losses, chosen_rewards, rejected_rewards, kl
 
     def get_batch_loss_metrics(
@@ -1008,6 +1007,9 @@ class KTOTrainer(Trainer):
             )
 
         loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="train")
+
+        # Make sure to move the loss to the device the original accumulating loss is at back in the `Trainer` class:
+        loss = loss.to(self.args.device)
 
         # force log the metrics
         if self.accelerator.is_main_process:
