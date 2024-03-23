@@ -1,0 +1,20 @@
+{
+  "add_prefix_space": false,
+  "added_tokens_decoder": {
+    "50256": {
+      "content": "<|endoftext|>",
+      "lstrip": false,
+      "normalized": true,
+      "rstrip": false,
+      "single_word": false,
+      "special": true
+    }
+  },
+  "bos_token": "<|endoftext|>",
+  "clean_up_tokenization_spaces": true,
+  "eos_token": "<|endoftext|>",
+  "model_max_length": 1024,
+  "pad_token": "<|endoftext|>",
+  "tokenizer_class": "GPT2Tokenizer",
+  "unk_token": "<|endoftext|>"
+}

@@ -1,0 +1,26 @@
+{
+  "alpha_pattern": {},
+  "auto_mapping": null,
+  "base_model_name_or_path": "gpt2",
+  "bias": "none",
+  "fan_in_fan_out": true,
+  "inference_mode": true,
+  "init_lora_weights": true,
+  "layers_pattern": null,
+  "layers_to_transform": null,
+  "loftq_config": {},
+  "lora_alpha": 16,
+  "lora_dropout": 0.05,
+  "megatron_config": null,
+  "megatron_core": "megatron.core",
+  "modules_to_save": null,
+  "peft_type": "LORA",
+  "r": 16,
+  "rank_pattern": {},
+  "revision": null,
+  "target_modules": [
+    "c_attn"
+  ],
+  "task_type": "CAUSAL_LM",
+  "use_rslora": false
+}
