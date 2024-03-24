@@ -19,9 +19,9 @@ In general, the optimal configuration for KTO will be similar to that of DPO:
 # regular:
 python examples/scripts/kto.py \
     --model_name_or_path=gpt2 \
-    --per_device_train_batch_size 4 \
+    --per_device_train_batch_size 16 \
     --max_steps 1000 \
-    --learning_rate 1e-3 \
+    --learning_rate 2e-5 \
     --gradient_accumulation_steps 1 \
     --logging_steps 10 \
     --eval_steps 500 \
@@ -35,14 +35,13 @@ python examples/scripts/kto.py \
 # peft:
 python examples/scripts/kto.py \
     --model_name_or_path=gpt2 \
-    --per_device_train_batch_size 4 \
+    --per_device_train_batch_size 16 \
     --max_steps 1000 \
-    --learning_rate 1e-3 \
+    --learning_rate 2e-4 \
     --gradient_accumulation_steps 1 \
     --logging_steps 10 \
     --eval_steps 500 \
     --output_dir="kto_anthropic_hh" \
-    --optim rmsprop \
     --warmup_steps 150 \
     --report_to wandb \
     --bf16 \
