@@ -3,6 +3,14 @@ from typing import Literal, Optional, Tuple
 
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
+from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
+
+
+SUPPORTED_ARCHITECTURES = (
+    AutoModelForCausalLMWithValueHead,
+    AutoModelForSeq2SeqLMWithValueHead,
+)
+
 
 # TODO: Add Abstract Base Class if more formats are added
 @dataclass

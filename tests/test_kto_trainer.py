@@ -15,12 +15,12 @@ import tempfile
 import unittest
 
 import torch
+import wandb
 from datasets import Dataset
 from parameterized import parameterized
 from pytest import mark
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
-import wandb
 from trl import KTOConfig, KTOTrainer
 
 from .testing_utils import require_no_wandb, require_peft
