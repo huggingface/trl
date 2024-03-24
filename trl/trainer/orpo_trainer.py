@@ -13,6 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import inspect
 import random
 import warnings
@@ -685,6 +686,7 @@ class ORPOTrainer(Trainer):
         outputs = model(
             concatenated_batch["concatenated_input_ids"],
             attention_mask=concatenated_batch["concatenated_attention_mask"],
+            use_cache=False,
             **model_kwargs,
         )
         all_logits = outputs.logits
