@@ -27,7 +27,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from accelerate.utils import is_deepspeed_available, tqdm
-from datasets import Dataset, concatenate_datasets, interleave_datasets
+from datasets import Dataset, concatenate_datasets
 from torch.utils.data import DataLoader, SequentialSampler
 from transformers import (
     AutoModelForCausalLM,
@@ -360,15 +360,15 @@ class KTOTrainer(Trainer):
             # merge the datasets
             eval_dataset = concatenate_datasets([eval_dataset, eval_KL_dataset], axis=1)
 
-        desirable = train_dataset.filter(lambda x: x["label"])
-        undesirable = train_dataset.filter(lambda x: not x["label"])
+        num_desirable = sum(train_dataset["label"])
+        num_undesirable = len(train_dataset) - num_desirable
 
-        if len(desirable) != len(undesirable):
+        if num_desirable != num_undesirable:
             # The lower and upper bounds come from Eq. (8) of https://arxiv.org/abs/2402.01306
-            des_weight_lower_bound = round((len(undesirable) * self.undesirable_weight / len(desirable)) * 1, 2)
-            des_weight_upper_bound = round((len(undesirable) * self.undesirable_weight / len(desirable)) * 1.33, 2)
-            und_weight_lower_bound = round((len(desirable) * self.desirable_weight / len(undesirable)) / 1.33, 2)
-            und_weight_upper_bound = round((len(desirable) * self.desirable_weight / len(undesirable)) / 1, 2)
+            des_weight_lower_bound = round((len(num_undesirable) * self.undesirable_weight / len(num_desirable)) * 1, 2)
+            des_weight_upper_bound = round((len(num_undesirable) * self.undesirable_weight / len(num_desirable)) * 1.33, 2)
+            und_weight_lower_bound = round((len(num_desirable) * self.desirable_weight / len(num_undesirable)) / 1.33, 2)
+            und_weight_upper_bound = round((len(num_desirable) * self.desirable_weight / len(num_undesirable)) / 1, 2)
 
             des_weight_in_range = des_weight_lower_bound <= self.desirable_weight <= des_weight_upper_bound
             und_weight_in_range = und_weight_lower_bound <= self.undesirable_weight <= und_weight_upper_bound
@@ -384,27 +384,17 @@ class KTOTrainer(Trainer):
                     UserWarning,
                 )
 
-        # split the dataset and interleave them together with equal probability of choosing chosen or rejected
-        interleaved_train_dataset = interleave_datasets(
-            [desirable, undesirable],
-            stopping_strategy="all_exhausted",
-        )
-        interleaved_train_dataset = interleaved_train_dataset.shuffle(seed=args.data_seed)
-
+        train_dataset = train_dataset.shuffle(seed=args.data_seed)
+ 
         if eval_dataset is not None:
-            interleaved_eval_dataset = interleave_datasets(
-                [eval_dataset.filter(lambda x: x["label"]), eval_dataset.filter(lambda x: not x["label"])],
-                stopping_strategy="all_exhausted",
-            )
-        else:
-            interleaved_eval_dataset = None
+            eval_dataset = eval_dataset.shuffle(seed=args.data_seed)
 
         super().__init__(
             model=model,
             args=args,
             data_collator=data_collator,
-            train_dataset=interleaved_train_dataset,
-            eval_dataset=interleaved_eval_dataset,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
             tokenizer=tokenizer,
             model_init=model_init,
             compute_metrics=compute_metrics,
@@ -1000,18 +990,23 @@ class KTOTrainer(Trainer):
 
         prefix = "eval_" if train_eval == "eval" else ""
 
-        if len(chosen_rewards) > 0:
-            metrics[f"{prefix}rewards/chosen"] = self.accelerator.gather(mean_chosen_reward).nanmean().cpu()
-            metrics[f"{prefix}logps/chosen"] = self.accelerator.gather(mean_chosen_logps).nanmean().cpu()
-
-        if len(rejected_rewards) > 0:
-            metrics[f"{prefix}rewards/rejected"] = self.accelerator.gather(mean_rejected_reward).nanmean().cpu()
-            metrics[f"{prefix}logps/rejected"] = self.accelerator.gather(mean_rejected_logps).nanmean().cpu()
-
-        if len(chosen_rewards) > 0 and len(rejected_rewards) > 0:
-            metrics[f"{prefix}rewards/margins"] = metrics[f"{prefix}rewards/chosen"] - metrics[f"{prefix}rewards/rejected"]
-        
+        metrics[f"{prefix}rewards/chosen"] = self.accelerator.gather(mean_chosen_reward).nanmean().item()
+        metrics[f"{prefix}logps/chosen"] = self.accelerator.gather(mean_chosen_logps).nanmean().item()
+        metrics[f"{prefix}rewards/rejected"] = self.accelerator.gather(mean_rejected_reward).nanmean().item()
+        metrics[f"{prefix}logps/rejected"] = self.accelerator.gather(mean_rejected_logps).nanmean().item()
+        metrics[f"{prefix}rewards/margins"] = metrics[f"{prefix}rewards/chosen"] - metrics[f"{prefix}rewards/rejected"]
         metrics[f"{prefix}kl"] = kl.item()  # has already been gathered in kto_loss
+
+        if np.isnan(metrics[f"{prefix}rewards/chosen"]):
+            metrics.pop(f"{prefix}rewards/chosen")
+            metrics.pop(f"{prefix}logps/chosen")
+
+        if np.isnan(metrics[f"{prefix}rewards/rejected"]):
+            metrics.pop(f"{prefix}rewards/rejected")
+            metrics.pop(f"{prefix}logps/rejected")
+
+        if np.isnan(metrics[f"{prefix}rewards/margins"]):
+            metrics.pop(f"{prefix}rewards/margins")
         
         loss = (
             losses.mean()
@@ -1047,7 +1042,6 @@ class KTOTrainer(Trainer):
             self._stored_metrics[train_eval][key].append(value)
 
     def _get_train_sampler(self) -> Optional[torch.utils.data.Sampler]:
-        # We use a sequential sampler for training as the order of the interleaved dataset is important
         if self.train_dataset is None or not has_length(self.train_dataset):
             return None
         return SequentialSampler(self.train_dataset)
