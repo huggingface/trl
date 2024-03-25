@@ -78,6 +78,10 @@ if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    if tokenizer.chat_template is None:
+        raise ValueError(
+            "Tokenizer must have a chat template in order to format the examples. Alternatively, adjust this script to format the examples differently."
+        )
 
     # Load the dataset
     dataset = load_dataset(script_args.dataset_name)
