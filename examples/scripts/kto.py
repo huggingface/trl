@@ -99,7 +99,7 @@ def get_hh(split: str, sanity_check: bool = False, silent: bool = False, cache_d
     """
     dataset = load_dataset("Anthropic/hh-rlhf", split=split, cache_dir=cache_dir)
     if sanity_check:
-        dataset = dataset.select(range(min(len(dataset), 10_000)))
+        dataset = dataset.select(range(min(len(dataset), 1000)))
 
     flat_data = {
         "prompt": [],
@@ -137,9 +137,6 @@ if __name__ == "__main__":
     eval_dataset = get_hh("test", sanity_check=script_args.sanity_check)
 
     # 4. initialize the KTO trainer
-    import time
-
-    start = time.time()
     kto_trainer = KTOTrainer(
         model,
         model_ref,
@@ -149,7 +146,6 @@ if __name__ == "__main__":
         tokenizer=tokenizer,
         peft_config=get_peft_config(model_args),
     )
-    print(f"Time to initialize KTOTrainer: {time.time() - start:.2f}s")
 
     # 5. train and save the model
     kto_trainer.train()
