@@ -21,7 +21,7 @@ from pytest import mark
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
 from trl import KTOConfig, KTOTrainer
-from trl.trainer.kto_trainer import _process_tokens, _tokenize
+from trl.trainer.kto_trainer import _get_kl_dataset, _process_tokens, _tokenize
 
 from .testing_utils import require_no_wandb, require_peft
 
@@ -161,7 +161,7 @@ class KTOTrainerTester(unittest.TestCase):
                     _tokenize,
                     fn_kwargs={"tokenizer": trainer.tokenizer},
                     batched=True,
-                    batch_size=4,
+                    batch_size=2,
                 )
                 self.assertListEqual(tokenized_dataset["prompt"], dummy_dataset["prompt"])
                 self.assertListEqual(tokenized_dataset["completion"], dummy_dataset["completion"])
@@ -170,6 +170,21 @@ class KTOTrainerTester(unittest.TestCase):
                 self.assertListEqual(tokenized_dataset["prompt_attention_mask"][0], [1, 1])
                 self.assertListEqual(tokenized_dataset["answer_input_ids"][0], [5968, 1219, 72, 3621, 284, 1826, 345])
                 self.assertListEqual(tokenized_dataset["answer_attention_mask"][0], [1, 1, 1, 1, 1, 1, 1])
+
+                # Test reversal of (prompt, completion) pairs for KL dataset
+                tokenized_kl_dataset = tokenized_dataset.map(_get_kl_dataset, batched=True, batch_size=2)
+                self.assertListEqual(
+                    tokenized_kl_dataset["prompt_input_ids"][0], tokenized_dataset["prompt_input_ids"][0]
+                )
+                self.assertListEqual(
+                    tokenized_kl_dataset["prompt_attention_mask"][0], tokenized_dataset["prompt_attention_mask"][0]
+                )
+                self.assertListEqual(
+                    tokenized_kl_dataset["answer_input_ids"][0], tokenized_dataset["answer_input_ids"][1]
+                )
+                self.assertListEqual(
+                    tokenized_kl_dataset["answer_attention_mask"][0], tokenized_dataset["answer_attention_mask"][1]
+                )
 
                 fn_kwargs = {
                     "prefix": "",
