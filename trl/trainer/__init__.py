@@ -38,7 +38,7 @@ _import_structure = {
         "IterativeSFTTrainer",
     ],
     "kto_config": ["KTOConfig"],
-    "kto_trainer": ["KTOTrainer", "process_tokens"],
+    "kto_trainer": ["KTOTrainer"],
     "model_config": ["ModelConfig"],
     "orpo_config": ["ORPOConfig"],
     "orpo_trainer": ["ORPOTrainer"],
