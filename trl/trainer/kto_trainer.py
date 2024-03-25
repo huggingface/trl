@@ -64,17 +64,17 @@ if is_deepspeed_available():
     import deepspeed
 
 if TYPE_CHECKING:
-    from transformers import PreTrainedTokenizer
+    from transformers import PreTrainedModel, PreTrainedTokenizer
 
 
-def _get_kl_dataset(batch) -> Dict:
+def _get_kl_dataset(batch: Dict[str, List[Any]]) -> Dict[str, List[Any]]:
     """Creates mismatched pairs of prompts and completions for the KL dataset by reversing the order of completions."""
     batch["answer_input_ids"] = batch["answer_input_ids"][::-1]
     batch["answer_attention_mask"] = batch["answer_attention_mask"][::-1]
     return batch
 
 
-def _tokenize(batch: Dict, tokenizer: "PreTrainedTokenizer") -> Dict:
+def _tokenize(batch: Dict[str, List[Any]], tokenizer: "PreTrainedTokenizer") -> Dict[str, List[Any]]:
     """Tokenize a batch from a KTO specific dataset."""
     prompt_tokenized = tokenizer(batch["prompt"], add_special_tokens=False)
     prompt_input_ids = prompt_tokenized["input_ids"]
@@ -125,7 +125,7 @@ def _tokenize(batch: Dict, tokenizer: "PreTrainedTokenizer") -> Dict:
     )
 
 
-def _process_tokens(feature, model=None, **kwargs) -> Dict:
+def _process_tokens(example: Dict[str, Any], model: "PreTrainedModel" = None, **kwargs) -> Dict:
     """Process tokens of a KTO specific dataset.
 
     At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
@@ -136,13 +136,13 @@ def _process_tokens(feature, model=None, **kwargs) -> Dict:
         the sum of the length of the prompt and the completion response, with
         label_pad_token_id  for the prompt tokens.
     """
-    prompt = feature["prompt"]
-    completion = feature["completion"]
+    prompt = example["prompt"]
+    completion = example["completion"]
 
     batch = {
         f"{kwargs['prefix']}prompt": prompt,
         f"{kwargs['prefix']}completion": completion,
-        f"{kwargs['prefix']}label": feature["label"],
+        f"{kwargs['prefix']}label": example["label"],
     }
 
     if not kwargs["is_encoder_decoder"]:
@@ -159,10 +159,10 @@ def _process_tokens(feature, model=None, **kwargs) -> Dict:
 
         # keys of format prompt_* refers to just the prompt and answer_* refers to just the answer
         all_tokens = {
-            "prompt_input_ids": feature["prompt_input_ids"],
-            "prompt_attention_mask": feature["prompt_attention_mask"],
-            "answer_input_ids": feature["answer_input_ids"],
-            "answer_attention_mask": feature["answer_attention_mask"],
+            "prompt_input_ids": example["prompt_input_ids"],
+            "prompt_attention_mask": example["prompt_attention_mask"],
+            "answer_input_ids": example["answer_input_ids"],
+            "answer_attention_mask": example["answer_attention_mask"],
         }
 
         max_length = kwargs["max_length"] - 2
