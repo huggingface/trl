@@ -132,7 +132,7 @@ class KTOTrainerTester(unittest.TestCase):
                 if param.sum() != 0:
                     self.assertFalse(torch.equal(param, new_param))
 
-    def test_tokenize_and_processing(self):
+    def test_tokenize_and_process_tokens(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = KTOConfig(
                 output_dir=tmp_dir,
