@@ -32,12 +32,16 @@ _import_structure = {
     "dpo_trainer": [
         "DPOTrainer",
     ],
+    "cpo_config": ["CPOConfig"],
+    "cpo_trainer": ["CPOTrainer"],
     "iterative_sft_trainer": [
         "IterativeSFTTrainer",
     ],
     "kto_config": ["KTOConfig"],
     "kto_trainer": ["KTOTrainer", "process_tokens"],
     "model_config": ["ModelConfig"],
+    "orpo_config": ["ORPOConfig"],
+    "orpo_trainer": ["ORPOTrainer"],
     "ppo_config": ["PPOConfig"],
     "ppo_trainer": ["PPOTrainer"],
     "reward_config": ["RewardConfig"],
@@ -76,9 +80,13 @@ if TYPE_CHECKING:
 
     from .dpo_trainer import DPOTrainer
     from .iterative_sft_trainer import IterativeSFTTrainer
+    from .cpo_config import CPOConfig
+    from .cpo_trainer import CPOTrainer
     from .kto_config import KTOConfig
     from .kto_trainer import KTOTrainer
     from .model_config import ModelConfig
+    from .orpo_config import ORPOConfig
+    from .orpo_trainer import ORPOTrainer
     from .ppo_config import PPOConfig
     from .ppo_trainer import PPOTrainer
     from .reward_config import RewardConfig
