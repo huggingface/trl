@@ -500,6 +500,21 @@ class KTOTrainer(Trainer):
                 )
 
             # Tokenize and prepare the datasets
+            train_dataset = train_dataset.map(
+                _tokenize,
+                fn_kwargs={"tokenizer": self.tokenizer},
+                batched=True,
+                batch_size=1000,
+                desc="Tokenizing train dataset",
+            )
+            train_kl_dataset = train_kl_dataset.map(
+                _tokenize,
+                fn_kwargs={"tokenizer": self.tokenizer},
+                batched=True,
+                batch_size=1000,
+                desc="Tokenizing KL train dataset",
+            )
+            # Prepare the datasets
             fn_kwargs = {
                 "prefix": "",
                 "is_encoder_decoder": self.is_encoder_decoder,
@@ -510,24 +525,10 @@ class KTOTrainer(Trainer):
                 "max_prompt_length": self.max_prompt_length,
             }
             train_dataset = train_dataset.map(
-                _tokenize,
-                fn_kwargs={"tokenizer": self.tokenizer},
-                batched=True,
-                batch_size=1000,
-                desc="Tokenizing train dataset",
-            )
-            train_dataset = train_dataset.map(
                 _process_tokens,
                 fn_kwargs=fn_kwargs,
                 num_proc=args.dataset_num_proc,
                 desc="Processing tokenized train dataset",
-            )
-            train_kl_dataset = train_kl_dataset.map(
-                _tokenize,
-                fn_kwargs={"tokenizer": self.tokenizer},
-                batched=True,
-                batch_size=1000,
-                desc="Tokenizing KL train dataset",
             )
             fn_kwargs["prefix"] = "KL_"
             train_kl_dataset = train_kl_dataset.map(
@@ -542,6 +543,22 @@ class KTOTrainer(Trainer):
             train_dataset = concatenate_datasets([train_dataset, train_kl_dataset], axis=1)
 
             if eval_dataset is not None:
+                # Tokenize
+                eval_dataset = eval_dataset.map(
+                    _tokenize,
+                    fn_kwargs={"tokenizer": self.tokenizer},
+                    batched=True,
+                    batch_size=1000,
+                    desc="Tokenizing eval dataset",
+                )
+                eval_kl_dataset = eval_kl_dataset.map(
+                    _tokenize,
+                    fn_kwargs={"tokenizer": self.tokenizer},
+                    batched=True,
+                    batch_size=1000,
+                    desc="Tokenizing KL eval dataset",
+                )
+                # Process
                 fn_kwargs = {
                     "prefix": "",
                     "is_encoder_decoder": self.is_encoder_decoder,
@@ -552,24 +569,10 @@ class KTOTrainer(Trainer):
                     "max_prompt_length": self.max_prompt_length,
                 }
                 eval_dataset = eval_dataset.map(
-                    _tokenize,
-                    fn_kwargs={"tokenizer": self.tokenizer},
-                    batched=True,
-                    batch_size=1000,
-                    desc="Tokenizing eval dataset",
-                )
-                eval_dataset = eval_dataset.map(
                     _process_tokens,
                     fn_kwargs=fn_kwargs,
                     num_proc=args.dataset_num_proc,
                     desc="Processing tokenized eval dataset",
-                )
-                eval_kl_dataset = eval_kl_dataset.map(
-                    _tokenize,
-                    fn_kwargs={"tokenizer": self.tokenizer},
-                    batched=True,
-                    batch_size=1000,
-                    desc="Tokenizing KL eval dataset",
                 )
                 fn_kwargs["prefix"] = "KL_"
                 eval_kl_dataset = eval_kl_dataset.map(
