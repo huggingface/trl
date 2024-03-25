@@ -20,7 +20,7 @@ from contextlib import nullcontext
 from copy import deepcopy
 from functools import wraps
 from operator import itemgetter
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -63,14 +63,18 @@ if is_wandb_available():
 if is_deepspeed_available():
     import deepspeed
 
+if TYPE_CHECKING:
+    from transformers import PreTrainedTokenizer
+
 
 def _get_kl_dataset(batch) -> Dict:
     """Creates mismatched pairs of prompts and completions for the KL dataset by reversing the order of completions."""
-    batch["completion"] = batch["completion"][::-1]
+    batch["answer_input_ids"] = batch["answer_input_ids"][::-1]
+    batch["answer_attention_mask"] = batch["answer_attention_mask"][::-1]
     return batch
 
 
-def _tokenize(batch: Dict, tokenizer) -> Dict:
+def _tokenize(batch: Dict, tokenizer: "PreTrainedTokenizer") -> Dict:
     """Tokenize a batch from a KTO specific dataset."""
     prompt_tokenized = tokenizer(batch["prompt"], add_special_tokens=False)
     prompt_input_ids = prompt_tokenized["input_ids"]
@@ -481,7 +485,14 @@ class KTOTrainer(Trainer):
         self.undesirable_weight = args.undesirable_weight
 
         with PartialState().local_main_process_first():
-            # get KL datasets
+            # Tokenize and prepare the training datasets
+            train_dataset = train_dataset.map(
+                _tokenize,
+                fn_kwargs={"tokenizer": self.tokenizer},
+                batched=True,
+                desc="Tokenizing train dataset",
+            )
+            # Get KL datasets
             total_batch_size = (
                 max(torch.cuda.device_count(), 1) * args.per_device_train_batch_size * args.gradient_accumulation_steps
             )
@@ -489,28 +500,10 @@ class KTOTrainer(Trainer):
                 raise ValueError(
                     "Batch size is 1 (too small). KTO will not work properly because the KL term will be equivalent to the implied reward."
                 )
-            # note: for best results, mismatched outputs y' used to estimate the KL term for a batch should be the
+            # Note: for best results, mismatched outputs y' used to estimate the KL term for a batch should be the
             # same as the matched outputs y used to estimate the rewards in that batch, just paired with different x
             train_kl_dataset = train_dataset.map(
                 _get_kl_dataset, batched=True, batch_size=total_batch_size, desc="Extracting KL train dataset"
-            )
-            if eval_dataset is not None:
-                eval_kl_dataset = eval_dataset.map(
-                    _get_kl_dataset, batched=True, batch_size=total_batch_size, desc="Extracting KL eval dataset"
-                )
-
-            # Tokenize and prepare the datasets
-            train_dataset = train_dataset.map(
-                _tokenize,
-                fn_kwargs={"tokenizer": self.tokenizer},
-                batched=True,
-                desc="Tokenizing train dataset",
-            )
-            train_kl_dataset = train_kl_dataset.map(
-                _tokenize,
-                fn_kwargs={"tokenizer": self.tokenizer},
-                batched=True,
-                desc="Tokenizing KL train dataset",
             )
             # Prepare the datasets
             fn_kwargs = {
@@ -534,7 +527,7 @@ class KTOTrainer(Trainer):
                 fn_kwargs=fn_kwargs,
                 num_proc=args.dataset_num_proc,
                 remove_columns=[c for c in train_kl_dataset.column_names if c in train_dataset.column_names],
-                desc="Processing tokenized KL train dataset",
+                desc="Processing tokenized train KL dataset",
             )
 
             # merge the datasets
@@ -548,11 +541,9 @@ class KTOTrainer(Trainer):
                     batched=True,
                     desc="Tokenizing eval dataset",
                 )
-                eval_kl_dataset = eval_kl_dataset.map(
-                    _tokenize,
-                    fn_kwargs={"tokenizer": self.tokenizer},
-                    batched=True,
-                    desc="Tokenizing KL eval dataset",
+                # Get KL dataset
+                eval_kl_dataset = eval_dataset.map(
+                    _get_kl_dataset, batched=True, batch_size=total_batch_size, desc="Extracting eval KL dataset"
                 )
                 # Process
                 fn_kwargs = {
@@ -576,7 +567,7 @@ class KTOTrainer(Trainer):
                     fn_kwargs=fn_kwargs,
                     num_proc=args.dataset_num_proc,
                     remove_columns=[c for c in eval_kl_dataset.column_names if c in eval_dataset.column_names],
-                    desc="Processing tokenized KL eval dataset",
+                    desc="Processing tokenized eval KL dataset",
                 )
 
                 # merge the datasets
