@@ -504,14 +504,12 @@ class KTOTrainer(Trainer):
                 _tokenize,
                 fn_kwargs={"tokenizer": self.tokenizer},
                 batched=True,
-                batch_size=1000,
                 desc="Tokenizing train dataset",
             )
             train_kl_dataset = train_kl_dataset.map(
                 _tokenize,
                 fn_kwargs={"tokenizer": self.tokenizer},
                 batched=True,
-                batch_size=1000,
                 desc="Tokenizing KL train dataset",
             )
             # Prepare the datasets
@@ -548,14 +546,12 @@ class KTOTrainer(Trainer):
                     _tokenize,
                     fn_kwargs={"tokenizer": self.tokenizer},
                     batched=True,
-                    batch_size=1000,
                     desc="Tokenizing eval dataset",
                 )
                 eval_kl_dataset = eval_kl_dataset.map(
                     _tokenize,
                     fn_kwargs={"tokenizer": self.tokenizer},
                     batched=True,
-                    batch_size=1000,
                     desc="Tokenizing KL eval dataset",
                 )
                 # Process
