@@ -497,7 +497,6 @@ class PPOTrainer(BaseTrainer):
                 response = unwrapped_model.generate(input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs)
 
             if generate_ref_response:
-                # (lewtun): not sure why we had a context manager for PEFT models here, but not in other places.
                 with unwrap_model_for_generation(
                     self.model, self.accelerator, is_peft_model=self.is_peft_model
                 ) as unwrapped_model:
