@@ -53,7 +53,12 @@ from ..core import (
     stats_to_np,
 )
 from ..import_utils import is_npu_available, is_torch_greater_2_0, is_xpu_available
-from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper, create_reference_model
+from ..models import (
+    SUPPORTED_ARCHITECTURES,
+    PreTrainedModelWrapper,
+    create_reference_model,
+    unwrap_model_for_generation,
+)
 from . import AdaptiveKLController, BaseTrainer, FixedKLController, PPOConfig, RunningMoments
 
 
@@ -461,6 +466,7 @@ class PPOTrainer(BaseTrainer):
         if generate_ref_response:
             ref_model = self.model if self.is_peft_model else self.ref_model
         if isinstance(query_tensor, List):
+            # LEWIS: ctx here
             response = self._generate_batched(
                 self.model,
                 query_tensor,
@@ -470,6 +476,7 @@ class PPOTrainer(BaseTrainer):
                 **generation_kwargs,
             )
             if generate_ref_response:
+                # LEWIS: ctx here
                 with self.optional_peft_ctx():
                     ref_response = self._generate_batched(
                         ref_model,
@@ -488,12 +495,18 @@ class PPOTrainer(BaseTrainer):
 
             if length_sampler is not None:
                 generation_kwargs["max_new_tokens"] = length_sampler()
-            response = self.accelerator.unwrap_model(self.model).generate(
-                input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs
-            )
+
+            with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
+                response = unwrapped_model.generate(input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs)
+
             if generate_ref_response:
-                with self.optional_peft_ctx():
-                    ref_response = ref_model.generate(input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs)
+                # (lewtun): not sure why we had a context manager for PEFT models here, but not in other places.
+                with unwrap_model_for_generation(
+                    self.model, self.accelerator, is_peft_model=self.is_peft_model
+                ) as unwrapped_model:
+                    ref_response = unwrapped_model.generate(
+                        input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs
+                    )
 
             if not return_prompt and not self.is_encoder_decoder:
                 response = response[:, query_tensor.shape[0] :]
@@ -543,7 +556,8 @@ class PPOTrainer(BaseTrainer):
                 return_tensors="pt",
             ).to(self.current_device)
 
-            generations = self.accelerator.unwrap_model(model).generate(**padded_inputs, **generation_kwargs)
+            with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+                generations = unwrapped_model.generate(**padded_inputs, **generation_kwargs)
 
             for generation, mask in zip(generations, padded_inputs["attention_mask"]):
                 if not self.is_encoder_decoder:
