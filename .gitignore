@@ -146,4 +146,4 @@ examples/notebooks/wandb/
 wandb/
 
 # chat files
-trl/commands/
+trl/commands/scripts/
