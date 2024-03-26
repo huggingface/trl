@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from deepspeed.runtime.engine import DeepSpeedEngine
     from torch.nn.parallel.distributed import DistributedDataParallel
 
-    from trl.models import PreTrainedModelWrapper
+    from .modeling_base import PreTrainedModelWrapper
 
 
 # TODO: Add Abstract Base Class if more formats are added
