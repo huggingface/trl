@@ -110,5 +110,4 @@ if __name__ == "__main__":
     # Train and push the model to the Hub
     kto_trainer.train()
     kto_trainer.save_model(kto_args.output_dir)
-    model_name = f"{model_args.model_name_or_path.split('/')[-1]}"
-    kto_trainer.push_to_hub(f"{model_name}-kto")
+    kto_trainer.push_to_hub()
