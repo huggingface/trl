@@ -1,6 +1,6 @@
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Literal, Optional, Tuple, Union
 
 from accelerate.utils import is_deepspeed_available
 from transformers import PreTrainedModel, PreTrainedTokenizer
@@ -133,8 +133,8 @@ def add_hooks(model: "DeepSpeedEngine") -> None:
 
 @contextmanager
 def unwrap_model_for_generation(
-    model: "DistributedDataParallel" | "DeepSpeedEngine", accelerator: "Accelerator", is_peft_model: bool = False
-) -> "PreTrainedModelWrapper" | "DeepSpeedEngine":
+    model: Union["DistributedDataParallel", "DeepSpeedEngine"], accelerator: "Accelerator", is_peft_model: bool = False
+) -> Union["PreTrainedModelWrapper", "DeepSpeedEngine"]:
     """Context manager to unwrap a model for generation.
 
     For ZeRO-3 models, we gather the weights once to speed up generation.
