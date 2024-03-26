@@ -174,31 +174,21 @@ for _epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     query_tensors = batch["input_ids"]
 
     # Get response from gpt2
-    import time
-
-    start_time = time.time()
     response_tensors, ref_response_tensors = ppo_trainer.generate(
         query_tensors, return_prompt=False, generate_ref_response=True, **generation_kwargs
     )
-    generation_time = torch.tensor([time.time() - start_time]).to(ppo_trainer.accelerator.device)
-    # batch["response"] = tokenizer.batch_decode(response_tensors)
-    # batch["ref_response"] = tokenizer.batch_decode(ref_response_tensors)
+    batch["response"] = tokenizer.batch_decode(response_tensors)
+    batch["ref_response"] = tokenizer.batch_decode(ref_response_tensors)
 
-    # # Compute sentiment score
-    # texts = [q + r for q, r in zip(batch["query"], batch["response"])]
-    # pipe_outputs = sentiment_pipe(texts, **sent_kwargs)
-    # rewards = [torch.tensor(output[1]["score"]) for output in pipe_outputs]
-    # ref_texts = [q + r for q, r in zip(batch["query"], batch["ref_response"])]
-    # ref_pipe_outputs = sentiment_pipe(ref_texts, **sent_kwargs)
-    # ref_rewards = [torch.tensor(output[1]["score"]) for output in ref_pipe_outputs]
-    # batch["ref_rewards"] = ref_rewards
+    # Compute sentiment score
+    texts = [q + r for q, r in zip(batch["query"], batch["response"])]
+    pipe_outputs = sentiment_pipe(texts, **sent_kwargs)
+    rewards = [torch.tensor(output[1]["score"]) for output in pipe_outputs]
+    ref_texts = [q + r for q, r in zip(batch["query"], batch["ref_response"])]
+    ref_pipe_outputs = sentiment_pipe(ref_texts, **sent_kwargs)
+    ref_rewards = [torch.tensor(output[1]["score"]) for output in ref_pipe_outputs]
+    batch["ref_rewards"] = ref_rewards
 
-    # # Run PPO step
-    # stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
-    # ppo_trainer.log_stats(stats, batch, rewards, columns_to_log=["query", "response", "ref_response", "ref_rewards"])
-
-    break
-
-generation_time_gather = ppo_trainer.accelerator.gather(generation_time)
-if ppo_trainer.accelerator.is_main_process:
-    print(f"Generation time: {generation_time_gather.mean().item():.2f} seconds for {len(query_tensors)} generations")
+    # Run PPO step
+    stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
+    ppo_trainer.log_stats(stats, batch, rewards, columns_to_log=["query", "response", "ref_response", "ref_rewards"])
