@@ -386,8 +386,6 @@ if __name__ == "__main__":
         ddp_find_unused_parameters=(script_args.gradient_checkpointing),
         push_to_hub=script_args.push_to_hub,
         hub_model_id=hub_model_id,
-        hub_strategy="end",
-        hub_always_push=True,
     )
 
     # 5. initialize the DPO trainer
