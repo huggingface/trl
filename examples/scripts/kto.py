@@ -17,30 +17,31 @@ Run the KTO training script with the commands below. In general, the optimal con
 
 # Full training:
 python examples/scripts/kto.py \
-    --model_name_or_path=stabilityai/stablelm-2-zephyr-1_6b \
+    --model_name_or_path=trl-lib/qwen1.5-1.8b-sft \
     --per_device_train_batch_size 16 \
-    --num_train_epochs 1 \
-    --learning_rate 2e-5 \
+    --num_train_epochs 3 \
+    --learning_rate 1e-6 \
+    --lr_scheduler_type=cosine \
     --gradient_accumulation_steps 1 \
     --logging_steps 10 \
     --eval_steps 500 \
     --output_dir="kto-aligned-model" \
-    --warmup_steps 150 \
+    --warmup_ratio 0.1 \
     --report_to wandb \
     --bf16 \
     --logging_first_step
 
 # LoRA:
 python examples/scripts/kto.py \
-    --model_name_or_path=stabilityai/stablelm-2-zephyr-1_6b \
+    --model_name_or_path=trl-lib/qwen1.5-1.8b-sft \
     --per_device_train_batch_size 16 \
     --num_train_epochs 1 \
-    --learning_rate 2e-4 \
+    --learning_rate 1e-5 \
     --gradient_accumulation_steps 1 \
     --logging_steps 10 \
     --eval_steps 500 \
     --output_dir="kto-aligned-model-lora" \
-    --warmup_steps 150 \
+    --warmup_ratio 0.1 \
     --report_to wandb \
     --bf16 \
     --logging_first_step \
@@ -54,7 +55,7 @@ from dataclasses import dataclass
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
-from trl import KTOConfig, KTOTrainer, ModelConfig, get_peft_config
+from trl import KTOConfig, KTOTrainer, ModelConfig, get_peft_config, setup_chat_format
 
 
 # Define and parse arguments.
@@ -78,10 +79,10 @@ if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+
+    # If we are aligning a base model, we use ChatML as the default template
     if tokenizer.chat_template is None:
-        raise ValueError(
-            "Tokenizer must have a chat template in order to format the examples. Alternatively, adjust this script to format the examples differently."
-        )
+        model, tokenizer = setup_chat_format(model, tokenizer)
 
     # Load the dataset
     dataset = load_dataset(script_args.dataset_name)
@@ -108,4 +109,5 @@ if __name__ == "__main__":
     # Train and push the model to the Hub
     kto_trainer.train()
     kto_trainer.save_model(kto_args.output_dir)
-    kto_trainer.push_to_hub()
+    model_name = f"{kto_args.model_name_or_path.split('/')[-1]}"
+    kto_trainer.push_to_hub(f"{model_name}-kto")
