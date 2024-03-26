@@ -1,0 +1,4 @@
+base_model_name: vwxyzjn/EleutherAI_pythia-1b-deduped__sft__tldr
+base_model_revision: sft__55513__1706646024
+lora_adapter_name: mnoukhov/EleutherAI_pythia-1b-deduped__sft__tldr_dpo_20konly_1b_fp16.yml_24e9f83
+dataset_name: vwxyzjn/summarize_from_feedback_oai_preprocessing_1706381144
