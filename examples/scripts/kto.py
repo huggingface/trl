@@ -19,8 +19,8 @@ Run the KTO training script with the commands below. In general, the optimal con
 python examples/scripts/kto.py \
     --model_name_or_path=trl-lib/qwen1.5-1.8b-sft \
     --per_device_train_batch_size 16 \
-    --num_train_epochs 3 \
-    --learning_rate 1e-6 \
+    --num_train_epochs 1 \
+    --learning_rate 1e-5 \
     --lr_scheduler_type=cosine \
     --gradient_accumulation_steps 1 \
     --logging_steps 10 \
@@ -36,7 +36,8 @@ python examples/scripts/kto.py \
     --model_name_or_path=trl-lib/qwen1.5-1.8b-sft \
     --per_device_train_batch_size 16 \
     --num_train_epochs 1 \
-    --learning_rate 1e-5 \
+    --learning_rate 1e-4 \
+    --lr_scheduler_type=cosine \
     --gradient_accumulation_steps 1 \
     --logging_steps 10 \
     --eval_steps 500 \
@@ -109,5 +110,5 @@ if __name__ == "__main__":
     # Train and push the model to the Hub
     kto_trainer.train()
     kto_trainer.save_model(kto_args.output_dir)
-    model_name = f"{kto_args.model_name_or_path.split('/')[-1]}"
+    model_name = f"{model_args.model_name_or_path.split('/')[-1]}"
     kto_trainer.push_to_hub(f"{model_name}-kto")
