@@ -1,6 +1,6 @@
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Literal, Optional, Tuple
 
 from accelerate.utils import is_deepspeed_available
 from transformers import PreTrainedModel, PreTrainedTokenizer
@@ -16,6 +16,13 @@ SUPPORTED_ARCHITECTURES = (
 
 if is_deepspeed_available():
     import deepspeed
+
+if TYPE_CHECKING:
+    from accelerate import Accelerator
+    from deepspeed.runtime.engine import DeepSpeedEngine
+    from torch.nn.parallel.distributed import DistributedDataParallel
+
+    from trl.models import PreTrainedModelWrapper
 
 
 # TODO: Add Abstract Base Class if more formats are added
@@ -99,7 +106,8 @@ def setup_chat_format(
     return model, tokenizer
 
 
-def remove_hooks(model):
+def remove_hooks(model: "DeepSpeedEngine") -> None:
+    """Removes the optimizer hooks from a DeepSpeed ZeRO-3 model."""
     if model.optimizer is not None and hasattr(model.optimizer, "parameter_offload"):
         optimizer_offload = model.optimizer.parameter_offload
     elif model.optimizer is not None:
@@ -114,7 +122,8 @@ def remove_hooks(model):
     optimizer_offload.backward_hooks = []
 
 
-def add_hooks(model):
+def add_hooks(model: "DeepSpeedEngine") -> None:
+    """Adds the optimizer hooks from a DeepSpeed ZeRO-3 model."""
     if model.optimizer is not None and hasattr(model.optimizer, "parameter_offload"):
         optimizer_offload = model.optimizer.parameter_offload
     elif model.optimizer is not None:
@@ -123,7 +132,13 @@ def add_hooks(model):
 
 
 @contextmanager
-def unwrap_model_for_generation(model, accelerator, is_peft_model=False):
+def unwrap_model_for_generation(
+    model: "DistributedDataParallel" | "DeepSpeedEngine", accelerator: "Accelerator", is_peft_model: bool = False
+) -> "PreTrainedModelWrapper" | "DeepSpeedEngine":
+    """Context manager to unwrap a model for generation.
+
+    For ZeRO-3 models, we gather the weights once to speed up generation.
+    """
     unwrapped_model = accelerator.unwrap_model(model)
     if is_peft_model:
         unwrapped_model.pretrained_model.disable_adapter()

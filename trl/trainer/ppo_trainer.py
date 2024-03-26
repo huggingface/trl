@@ -466,7 +466,6 @@ class PPOTrainer(BaseTrainer):
         if generate_ref_response:
             ref_model = self.model if self.is_peft_model else self.ref_model
         if isinstance(query_tensor, List):
-            # LEWIS: ctx here
             response = self._generate_batched(
                 self.model,
                 query_tensor,
@@ -476,16 +475,14 @@ class PPOTrainer(BaseTrainer):
                 **generation_kwargs,
             )
             if generate_ref_response:
-                # LEWIS: ctx here
-                with self.optional_peft_ctx():
-                    ref_response = self._generate_batched(
-                        ref_model,
-                        query_tensor,
-                        length_sampler=length_sampler,
-                        batch_size=batch_size,
-                        return_prompt=return_prompt,
-                        **generation_kwargs,
-                    )
+                ref_response = self._generate_batched(
+                    ref_model,
+                    query_tensor,
+                    length_sampler=length_sampler,
+                    batch_size=batch_size,
+                    return_prompt=return_prompt,
+                    **generation_kwargs,
+                )
 
         else:
             if len(query_tensor.shape) == 2:
