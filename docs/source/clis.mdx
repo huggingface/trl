@@ -101,7 +101,11 @@ The chat CLI lets you quickly load the model and talk to it. Simply run the foll
 trl chat --model_name_or_path  Qwen/Qwen1.5-0.5B-Chat 
 ```
 
-Note that the chat interface relies on the chat template of the tokenizer to format the inputs for the model. Make sure your tokenizer has a chat template defined.
+> [!TIP]
+> To use the chat CLI with the developer installation, you must run `make dev` 
+>
+
+Note that the chat interface relies on the tokenizer's [chat template](https://huggingface.co/docs/transformers/chat_templating) to format the inputs for the model. Make sure your tokenizer has a chat template defined.
 
 Besides talking to the model there are a few commands you can use:
 
@@ -112,4 +116,4 @@ Besides talking to the model there are a few commands you can use:
 - **save {SAVE_NAME} (optional)**: save the current chat and settings to file by default to `./chat_history/{MODEL_NAME}/chat_{DATETIME}.yaml` or `{SAVE_NAME}` if provided
 - **exit**: closes the interface
 
-The default examples are defined in `examples/scripts/config/default_chat_config.yaml` but you can pass your own with `--config CONIG_FILE` where you can also specify the default generation parameters.
+The default examples are defined in `examples/scripts/config/default_chat_config.yaml` but you can pass your own with `--config CONFIG_FILE` where you can also specify the default generation parameters.
