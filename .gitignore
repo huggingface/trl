@@ -145,5 +145,5 @@ nbs/wandb/
 examples/notebooks/wandb/
 wandb/
 
-# chat files
+# cli scripts that are symlinked from `examples/scripts`
 trl/commands/scripts/
