@@ -25,28 +25,30 @@ python examples/scripts/kto.py \
     --gradient_accumulation_steps 1 \
     --logging_steps 10 \
     --eval_steps 500 \
-    --output_dir="kto-aligned-model" \
+    --output_dir=kto-aligned-model \
     --warmup_ratio 0.1 \
     --report_to wandb \
     --bf16 \
     --logging_first_step
 
-# LoRA:
+# QLoRA:
 python examples/scripts/kto.py \
     --model_name_or_path=trl-lib/qwen1.5-1.8b-sft \
-    --per_device_train_batch_size 16 \
+    --per_device_train_batch_size 8 \
     --num_train_epochs 1 \
     --learning_rate 1e-4 \
     --lr_scheduler_type=cosine \
     --gradient_accumulation_steps 1 \
     --logging_steps 10 \
     --eval_steps 500 \
-    --output_dir="kto-aligned-model-lora" \
+    --output_dir=kto-aligned-model-lora \
     --warmup_ratio 0.1 \
     --report_to wandb \
     --bf16 \
     --logging_first_step \
     --use_peft \
+    --load_in_4bit \
+    --lora_target_modules=all-linear \
     --lora_r=16 \
     --lora_alpha=16
 """
