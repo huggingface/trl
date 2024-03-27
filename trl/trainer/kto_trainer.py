@@ -974,11 +974,11 @@ class KTOTrainer(Trainer):
         """Compute the KTO loss for a batch of policy and reference model log probabilities.
 
         Args:
-            policy_chosen_logps: Log probabilities of the policy model for the chosen responses. Shape: (batch_size,)
-            policy_rejected_logps: Log probabilities of the policy model for the rejected responses. Shape: (batch_size,)
+            policy_chosen_logps: Log probabilities of the policy model for the chosen responses. Shape: (num(chosen) in batch_size,)
+            policy_rejected_logps: Log probabilities of the policy model for the rejected responses. Shape: (num(rejected) in batch_size,)
             policy_KL_logps: Log probabilities of the policy model for the KL responses. Shape: (batch_size,)
-            reference_chosen_logps: Log probabilities of the reference model for the chosen responses. Shape: (batch_size,)
-            reference_rejected_logps: Log probabilities of the reference model for the rejected responses. Shape: (batch_size,)
+            reference_chosen_logps: Log probabilities of the reference model for the chosen responses. Shape: (num(chosen) in batch_size,)
+            reference_rejected_logps: Log probabilities of the reference model for the rejected responses. Shape: (num(rejected) in batch_size,)
             reference_KL_logps: Log probabilities of the reference model for the KL responses. Shape: (batch_size,)
 
         Returns:
@@ -987,39 +987,29 @@ class KTOTrainer(Trainer):
             The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
             The KL tensor contains the detached KL divergence estimate between the policy and reference models.
         """
-        KL = (policy_KL_logps - reference_KL_logps).mean().detach()
-        KL = self.accelerator.gather(KL).mean().clamp(min=0)
 
-        if policy_chosen_logps.shape[0] != 0 or reference_chosen_logps.shape[0] != 0:
-            chosen_logratios = policy_chosen_logps - reference_chosen_logps
-            chosen_losses = 1 - F.sigmoid(self.beta * (chosen_logratios - KL))
-            chosen_rewards = self.beta * chosen_logratios.detach()
-        else:
-            # lists can't be empty -- if they are, then accelerate.gather will hang
-            chosen_losses = torch.Tensor([torch.nan]).to(self.accelerator.device)
-            chosen_rewards = torch.Tensor([torch.nan]).to(self.accelerator.device)
+        kl = (policy_KL_logps - reference_KL_logps).mean().detach()
+        kl = self.accelerator.gather(kl).mean().clamp(min=0)
 
-        if policy_rejected_logps.shape[0] != 0 or reference_rejected_logps.shape[0] != 0:
-            rejected_logratios = policy_rejected_logps - reference_rejected_logps
-            rejected_losses = 1 - F.sigmoid(self.beta * (KL - rejected_logratios))
-            rejected_rewards = self.beta * rejected_logratios.detach()
-        else:
-            # lists can't be empty -- if they are, then accelerate.gather will hang
-            rejected_losses = torch.Tensor([torch.nan]).to(self.accelerator.device)
-            rejected_rewards = torch.Tensor([torch.nan]).to(self.accelerator.device)
+        chosen_logratios = policy_chosen_logps - reference_chosen_logps
+        chosen_losses = 1 - F.sigmoid(self.beta * (chosen_logratios - kl))
+        chosen_rewards = self.beta * chosen_logratios.detach()
+
+        rejected_logratios = policy_rejected_logps - reference_rejected_logps
+        rejected_losses = 1 - F.sigmoid(self.beta * (kl - rejected_logratios))
+        rejected_rewards = self.beta * rejected_logratios.detach()
 
         losses = torch.cat(
             (self.desirable_weight * chosen_losses, self.undesirable_weight * rejected_losses),
             0,
         )
 
-        return losses, chosen_rewards, rejected_rewards, KL
+        return losses, chosen_rewards, rejected_rewards, kl
 
     def get_batch_loss_metrics(
         self,
         model,
         batch: Dict[str, Union[List, torch.LongTensor]],
-        train_eval: Literal["train", "eval"] = "train",
     ):
         """Compute the KTO loss and other metrics for the given batch of inputs for train or test."""
         metrics = {}
@@ -1070,25 +1060,14 @@ class KTOTrainer(Trainer):
             reference_KL_logps,
         )
 
-        mean_chosen_reward = chosen_rewards.nanmean().detach()
-        mean_rejected_reward = rejected_rewards.nanmean().detach()
-        mean_chosen_logps = policy_chosen_logps.nanmean().detach()
-        mean_rejected_logps = policy_rejected_logps.nanmean().detach()
+        # math. incorrect to build mean here, as len(chosen_rewards != nan ) and len(rejected_rewards != nan) varies betw. batches
+        metrics["rewards/chosen"] = chosen_rewards.detach().tolist() 
+        metrics["rewards/rejected"] = rejected_rewards.detach().tolist()
+        metrics["kl"] = kl.detach().item()  # is already the mean value within batch
+        metrics["logps/chosen"] = policy_chosen_logps.detach().tolist()
+        metrics["logps/rejected"] = policy_rejected_logps.detach().tolist()
 
-        prefix = "eval_" if train_eval == "eval" else ""
-        metrics[f"{prefix}rewards/chosen"] = self.accelerator.gather(mean_chosen_reward).nanmean().cpu()
-        metrics[f"{prefix}rewards/rejected"] = self.accelerator.gather(mean_rejected_reward).nanmean().cpu()
-        metrics[f"{prefix}rewards/margins"] = metrics[f"{prefix}rewards/chosen"] - metrics[f"{prefix}rewards/rejected"]
-        metrics[f"{prefix}kl"] = kl.item()  # has already been gathered in kto_loss
-        metrics[f"{prefix}logps/chosen"] = self.accelerator.gather(mean_chosen_logps).nanmean().cpu()
-        metrics[f"{prefix}logps/rejected"] = self.accelerator.gather(mean_rejected_logps).nanmean().cpu()
-
-        loss = (
-            losses.mean()
-            if losses.shape[0] != 0
-            else torch.tensor(float("nan"), requires_grad=True).to(self.accelerator.device)
-        )
-        return loss, metrics
+        return losses.nanmean(), metrics
 
     def compute_loss(
         self,
@@ -1102,7 +1081,10 @@ class KTOTrainer(Trainer):
                 "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
             )
 
-        loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="train")
+        loss, metrics = self.get_batch_loss_metrics(model, inputs)
+
+        # Make sure to move the loss to the device the original accumulating loss is at back in the `Trainer` class:
+        loss = loss.to(self.args.device)
 
         # force log the metrics
         if self.accelerator.is_main_process:
@@ -1112,9 +1094,12 @@ class KTOTrainer(Trainer):
             return (loss, metrics)
         return loss
 
-    def store_metrics(self, metrics: Dict[str, float], train_eval: Literal["train", "eval"] = "train") -> None:
+    def store_metrics(self, metrics: Dict[str, Union[float, list]], train_eval: Literal["train", "eval"] = "train") -> None:
         for key, value in metrics.items():
-            self._stored_metrics[train_eval][key].append(value)
+            if isinstance(value, list):
+                self._stored_metrics[train_eval][key].extend(value)
+            else:
+                self._stored_metrics[train_eval][key].append(value)
 
     def _get_train_sampler(self) -> Optional[torch.utils.data.Sampler]:
         # We use a sequential sampler for training as the order of the interleaved dataset is important
@@ -1188,7 +1173,7 @@ class KTOTrainer(Trainer):
 
         prediction_context_manager = torch.cuda.amp.autocast if self._peft_has_been_casted_to_bf16 else nullcontext
         with torch.no_grad(), prediction_context_manager():
-            loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="eval")
+            loss, metrics = self.get_batch_loss_metrics(model, inputs)
 
         # force log the metrics
         if self.accelerator.is_main_process:
@@ -1276,7 +1261,11 @@ class KTOTrainer(Trainer):
         train_eval = "train" if "loss" in logs else "eval"
         # Add averaged stored metrics to logs
         for key, metrics in self._stored_metrics[train_eval].items():
-            logs[key] = torch.tensor(metrics).mean().item()
+            logs[f"{train_eval}/{key}"] = torch.tensor(metrics).nanmean().item()
+
+        # Add reward margin to log if rewards are available
+        if f"{train_eval}/rewards/chosen" in logs and f"{train_eval}/rewards/rejected" in logs:
+            logs[f"{train_eval}/rewards/margins"] = logs[f"{train_eval}/rewards/chosen"] - logs[f"{train_eval}/rewards/rejected"]
         del self._stored_metrics[train_eval]
         return super().log(logs)
 
