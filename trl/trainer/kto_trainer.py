@@ -984,7 +984,7 @@ class KTOTrainer(Trainer):
         )
 
         # math. incorrect to build mean here, as len(chosen_rewards != nan ) and len(rejected_rewards != nan) varies betw. batches
-        metrics["rewards/chosen"] = chosen_rewards.detach().tolist() 
+        metrics["rewards/chosen"] = chosen_rewards.detach().tolist()
         metrics["rewards/rejected"] = rejected_rewards.detach().tolist()
         metrics["kl"] = kl.detach().item()  # is already the mean value within batch
         metrics["logps/chosen"] = policy_chosen_logps.detach().tolist()
@@ -1017,7 +1017,9 @@ class KTOTrainer(Trainer):
             return (loss, metrics)
         return loss
 
-    def store_metrics(self, metrics: Dict[str, Union[float, list]], train_eval: Literal["train", "eval"] = "train") -> None:
+    def store_metrics(
+        self, metrics: Dict[str, Union[float, list]], train_eval: Literal["train", "eval"] = "train"
+    ) -> None:
         for key, value in metrics.items():
             if isinstance(value, list):
                 self._stored_metrics[train_eval][key].extend(value)
@@ -1188,7 +1190,9 @@ class KTOTrainer(Trainer):
 
         # Add reward margin to log if rewards are available
         if f"{train_eval}/rewards/chosen" in logs and f"{train_eval}/rewards/rejected" in logs:
-            logs[f"{train_eval}/rewards/margins"] = logs[f"{train_eval}/rewards/chosen"] - logs[f"{train_eval}/rewards/rejected"]
+            logs[f"{train_eval}/rewards/margins"] = (
+                logs[f"{train_eval}/rewards/chosen"] - logs[f"{train_eval}/rewards/rejected"]
+            )
         del self._stored_metrics[train_eval]
         return super().log(logs)
 
