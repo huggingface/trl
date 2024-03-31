@@ -1072,7 +1072,7 @@ class KTOTrainer(Trainer):
             metrics[f"{prefix}rewards/rejected"] = ((self.accelerator.gather(rejected_rewards.mean()) * all_num_rejected).nansum() / all_num_rejected.sum()).item()
             metrics[f"{prefix}logps/rejected"] = ((self.accelerator.gather(policy_rejected_logps.mean()) * all_num_rejected).nansum() / all_num_rejected.sum()).item()
 
-        metrics[f"{prefix}kl"] = self.accelerator.gather(KL).mean().item()
+        metrics[f"{prefix}kl"] = KL.item()
         if all_num_chosen.sum().item() > 0 and all_num_rejected.sum().item() > 0:
             metrics[f"{prefix}rewards/margins"] = metrics[f"{prefix}rewards/chosen"] - metrics[f"{prefix}rewards/rejected"]
         
