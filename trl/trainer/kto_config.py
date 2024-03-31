@@ -56,6 +56,8 @@ class KTOConfig(TrainingArguments):
             Dict of Optional kwargs to pass when instantiating the model from a string.
         ref_model_init_kwargs: (`Optional[Dict]`, *optional*):
             Dict of Optional kwargs to pass when instantiating the ref model from a string.
+        dataset_num_proc: (`Optional[int]`, *optional*, defaults to `None`):
+            Number of processes to use for processing the datasets.
     """
 
     max_length: Optional[int] = None
@@ -79,3 +81,4 @@ class KTOConfig(TrainingArguments):
     precompute_ref_log_probs: bool = False
     model_init_kwargs: Optional[Dict] = None
     ref_model_init_kwargs: Optional[Dict] = None
+    dataset_num_proc: Optional[int] = None
