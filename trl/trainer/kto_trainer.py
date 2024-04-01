@@ -1087,7 +1087,7 @@ class KTOTrainer(Trainer):
                 metrics[f"{prefix}rewards/chosen"] - metrics[f"{prefix}rewards/rejected"]
             )
 
-        return losses.mean(), metrics
+        return losses.nanmean(), metrics
 
     def compute_loss(
         self,
