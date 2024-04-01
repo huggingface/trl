@@ -1065,17 +1065,28 @@ class KTOTrainer(Trainer):
         prefix = "eval_" if train_eval == "eval" else ""
 
         if all_num_chosen.sum().item() > 0:
-            metrics[f"{prefix}rewards/chosen"] = ((self.accelerator.gather(chosen_rewards.mean()) * all_num_chosen).nansum() / all_num_chosen.sum()).item()
-            metrics[f"{prefix}logps/chosen"] = ((self.accelerator.gather(policy_chosen_logps.mean()) * all_num_chosen).nansum() / all_num_chosen.sum()).item()
+            metrics[f"{prefix}rewards/chosen"] = (
+                (self.accelerator.gather(chosen_rewards.mean()) * all_num_chosen).nansum() / all_num_chosen.sum()
+            ).item()
+            metrics[f"{prefix}logps/chosen"] = (
+                (self.accelerator.gather(policy_chosen_logps.mean()) * all_num_chosen).nansum() / all_num_chosen.sum()
+            ).item()
 
         if all_num_rejected.sum().item() > 0:
-            metrics[f"{prefix}rewards/rejected"] = ((self.accelerator.gather(rejected_rewards.mean()) * all_num_rejected).nansum() / all_num_rejected.sum()).item()
-            metrics[f"{prefix}logps/rejected"] = ((self.accelerator.gather(policy_rejected_logps.mean()) * all_num_rejected).nansum() / all_num_rejected.sum()).item()
+            metrics[f"{prefix}rewards/rejected"] = (
+                (self.accelerator.gather(rejected_rewards.mean()) * all_num_rejected).nansum() / all_num_rejected.sum()
+            ).item()
+            metrics[f"{prefix}logps/rejected"] = (
+                (self.accelerator.gather(policy_rejected_logps.mean()) * all_num_rejected).nansum()
+                / all_num_rejected.sum()
+            ).item()
 
         metrics[f"{prefix}kl"] = KL.item()
         if all_num_chosen.sum().item() > 0 and all_num_rejected.sum().item() > 0:
-            metrics[f"{prefix}rewards/margins"] = metrics[f"{prefix}rewards/chosen"] - metrics[f"{prefix}rewards/rejected"]
-        
+            metrics[f"{prefix}rewards/margins"] = (
+                metrics[f"{prefix}rewards/chosen"] - metrics[f"{prefix}rewards/rejected"]
+            )
+
         return losses.mean(), metrics
 
     def compute_loss(
