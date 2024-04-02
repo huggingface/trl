@@ -880,10 +880,7 @@ class KTOTrainer(Trainer):
         chosen_logps = completion_logps[chosen_idx, ...]
         rejected_logps = completion_logps[rejected_idx, ...]
 
-        chosen_logits = completion_logits[chosen_idx, ...]
-        rejected_logits = completion_logits[rejected_idx, ...]
-
-        return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, KL_logps)
+        return (chosen_logps, rejected_logps, completion_logits, KL_logps)
 
     def kto_loss(
         self,
@@ -933,6 +930,7 @@ class KTOTrainer(Trainer):
         self,
         model,
         batch: Dict[str, Union[List, torch.LongTensor]],
+        return_logits = False,
     ):
         """Compute the KTO loss and other metrics for the given batch of inputs for train or test."""
         metrics = {}
@@ -941,8 +939,7 @@ class KTOTrainer(Trainer):
         (
             policy_chosen_logps,
             policy_rejected_logps,
-            policy_chosen_logits,
-            policy_rejected_logits,
+            logits,
             policy_KL_logps,
         ) = self.forward(model, batch)
 
@@ -962,14 +959,12 @@ class KTOTrainer(Trainer):
                             reference_chosen_logps,
                             reference_rejected_logps,
                             _,
-                            _,
                             reference_KL_logps,
                         ) = self.forward(self.model, batch)
                 else:
                     (
                         reference_chosen_logps,
                         reference_rejected_logps,
-                        _,
                         _,
                         reference_KL_logps,
                     ) = self.forward(self.ref_model, batch)
@@ -990,6 +985,9 @@ class KTOTrainer(Trainer):
         metrics["logps/chosen"] = policy_chosen_logps.detach().tolist()
         metrics["logps/rejected"] = policy_rejected_logps.detach().tolist()
 
+        if return_logits:
+            return losses.nanmean(), metrics, logits
+
         return losses.nanmean(), metrics
 
     def compute_loss(
@@ -1004,14 +1002,16 @@ class KTOTrainer(Trainer):
                 "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
             )
 
-        loss, metrics = self.get_batch_loss_metrics(model, inputs)
+        compute_loss_context_manager = torch.cuda.amp.autocast if self._peft_has_been_casted_to_bf16 else nullcontext
+
+        with compute_loss_context_manager():
+            loss, metrics = self.get_batch_loss_metrics(model, inputs)
 
         # Make sure to move the loss to the device the original accumulating loss is at back in the `Trainer` class:
         loss = loss.to(self.args.device)
 
         # force log the metrics
-        if self.accelerator.is_main_process:
-            self.store_metrics(metrics, train_eval="train")
+        self.store_metrics(metrics, train_eval="train")
 
         if return_outputs:
             return (loss, metrics)
@@ -1098,25 +1098,18 @@ class KTOTrainer(Trainer):
 
         prediction_context_manager = torch.cuda.amp.autocast if self._peft_has_been_casted_to_bf16 else nullcontext
         with torch.no_grad(), prediction_context_manager():
-            loss, metrics = self.get_batch_loss_metrics(model, inputs)
+            if prediction_loss_only:
+                loss, metrics = self.get_batch_loss_metrics(model, inputs)
+            else:
+                loss, metrics, logits = self.get_batch_loss_metrics(model, inputs, return_logits=True)
 
         # force log the metrics
-        if self.accelerator.is_main_process:
-            self.store_metrics(metrics, train_eval="eval")
+        self.store_metrics(metrics, train_eval="eval")
 
         if prediction_loss_only:
             return (loss.detach(), None, None)
 
-        # logits for the chosen and rejected samples from model
-        logits_dict = {
-            "eval_logits/chosen": metrics["eval_logits/chosen"],
-            "eval_logits/rejected": metrics["eval_logits/rejected"],
-        }
-        logits = tuple(v.unsqueeze(dim=0) for k, v in logits_dict.items() if k not in ignore_keys)
-        logits = torch.stack(logits).mean(axis=1).to(self.accelerator.device)
-        labels = torch.zeros(logits.shape[0], device=self.accelerator.device)
-
-        return (loss.detach(), logits, labels)
+        return (loss.detach(), logits, inputs["label"])
 
     def evaluation_loop(
         self,
