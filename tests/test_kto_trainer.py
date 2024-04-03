@@ -14,7 +14,6 @@
 import os
 import tempfile
 import unittest
-from unittest.mock import patch
 
 import torch
 from datasets import Dataset
