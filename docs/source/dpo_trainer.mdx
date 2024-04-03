@@ -161,7 +161,7 @@ training_args = TrainingArguments(output_dir="./output")
 
 dpo_trainer = DPOTrainer(
     model,
-    model_ref=None,
+    ref_model=None,
     args=training_args,
     beta=0.1,
     train_dataset=train_dataset,

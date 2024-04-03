@@ -130,7 +130,10 @@ We can then loop over all examples in the dataset and generate a response for ea
 
 ```py
 from tqdm import tqdm
-for epoch in tqdm(range(ppo_trainer.config.ppo_epochs), "epoch: "):
+
+
+epochs = 10
+for epoch in tqdm(range(epochs), "epoch: "):
     for batch in tqdm(ppo_trainer.dataloader): 
         query_tensors = batch["input_ids"]
     

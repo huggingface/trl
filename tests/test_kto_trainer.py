@@ -11,7 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import os
 import tempfile
 import unittest
 
@@ -27,7 +26,6 @@ from trl.trainer.kto_trainer import _get_kl_dataset, _process_tokens, _tokenize
 from .testing_utils import require_no_wandb, require_peft
 
 
-@patch.dict(os.environ, {"WANDB_DISABLED": "true"})
 class KTOTrainerTester(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
