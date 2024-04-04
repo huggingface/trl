@@ -1,10 +1,12 @@
 import tempfile
 import unittest
-from trl.trainer.utils import RichProgressCallback
-import torch.nn as nn
+
 import torch
-from transformers import Trainer, TrainingArguments
+import torch.nn as nn
 from datasets import Dataset
+from transformers import Trainer, TrainingArguments
+
+from trl.trainer.utils import RichProgressCallback
 
 
 class DummyModel(nn.Module):
@@ -13,15 +15,15 @@ class DummyModel(nn.Module):
         self.a = nn.Parameter(torch.tensor(1.0))
 
     def forward(self, x):
-        return self.a*x
+        return self.a * x
 
 
 class TestRichProgressCallback(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.dummy_model = DummyModel()
-        cls.dummy_train_dataset = Dataset.from_list([{"x": 1.0, "y": 2.0}]*5)
-        cls.dummy_val_dataset = Dataset.from_list([{"x": 1.0, "y": 2.0}]*101)
+        cls.dummy_train_dataset = Dataset.from_list([{"x": 1.0, "y": 2.0}] * 5)
+        cls.dummy_val_dataset = Dataset.from_list([{"x": 1.0, "y": 2.0}] * 101)
 
     def test_rich_progress_callback_logging(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
