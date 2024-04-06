@@ -1,11 +1,19 @@
+import gc
 import os
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import List, Optional
 
+import torch
+from accelerate import Accelerator
 from datasets import Dataset, DatasetInfo, builder, load_dataset
 from huggingface_hub import list_repo_refs
-from transformers import AutoTokenizer, HfArgumentParser
+from scalar_rm_model import ScalarModel, ScalarModelConfig
+from torch.utils.data import DataLoader
+from transformers import AutoTokenizer, HfArgumentParser, Trainer
 from vllm import LLM, SamplingParams
+from vllm.model_executor.parallel_utils.parallel_state import destroy_model_parallel
+
+import wandb
 
 
 builder.has_sufficient_disk_space = lambda needed_bytes, directory=".": True
@@ -18,9 +26,9 @@ class GenerateScriptArguments:
         metadata={"help": "output folder"},
     )
     num_gpus: Optional[int] = field(default=1)
-    base_model_name: Optional[str] = field(default="EleutherAI/pythia-410m", metadata={"help": "the model name"})
-    base_model_revision: Optional[str] = field(default=None)
-    lora_adapter_name: Optional[str] = field(default=None)
+    model_name: Optional[str] = field(default="EleutherAI/pythia-410m", metadata={"help": "the model name"})
+    model_revisions: Optional[List[str]] = field(default_factory=list)
+    # base_model_revision: Optional[str] = field(default=None)
     tokenizer_name: Optional[str] = field(default=None, metadata={"help": "the tokenizer name"})
     dataset_name: Optional[str] = field(
         default="arianhosseini/openai_summarize_unlabelled", metadata={"help": "the dataset name"}
@@ -32,63 +40,25 @@ class GenerateScriptArguments:
     temperature: Optional[float] = field(default=0.7, metadata={"help": "Gen temperature"})
     top_p: Optional[float] = field(default=1.0, metadata={"help": "Gen temperature"})
     max_new_tokens: Optional[int] = field(default=48, metadata={"help": "max new tokens"})
-    dtype: Optional[str] = field(default="auto")
+    gen_dtype: Optional[str] = field(default="auto")
 
 
 @dataclass
 class EvalScriptArguments:
+    wandb_log_id: Optional[str] = field(default=None)
     gold_model_name: Optional[str] = field(default="EleutherAI/pythia-410m", metadata={"help": "the model name"})
-
-
-def prepare_vllm_model(script_args):
-    if script_args.tokenizer_name is not None:
-        tokenizer_name = script_args.tokenizer_name
-        revision = "main"
-    else:
-        tokenizer_name = script_args.base_model_name
-        revision = script_args.base_model_revision
-
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, revision=revision)
-
-    if tokenizer_name.startswith("EleutherAI"):
-        tokenizer.add_special_tokens({"pad_token": "[PAD]"})
-
-    tokenizer.padding_side = "left"
-
-    llm = LLM(
-        model=script_args.base_model_name,
-        revision=script_args.base_model_revision,
-        dtype=script_args.dtype,
-        tokenizer=tokenizer_name,
-        max_model_len=script_args.seq_length,
-        tensor_parallel_size=script_args.num_gpus,
-        trust_remote_code=True,
-        enable_lora=True,
-    )
-    llm.set_tokenizer(tokenizer)
-
-    return llm, tokenizer
-
-
-def strip_prompt(examples):
-    examples["prompt"] = [prompt.strip() for prompt in examples["prompt"]]
-
-    return examples
+    gold_model_revision: Optional[str] = field(default=None)
+    eval_dtype: Optional[str] = field(default="auto")
+    max_length: Optional[int] = field(default=512)
+    gold_tokenizer_name: Optional[str] = field(default=None, metadata={"help": "the tokenizer name"})
 
 
 def generate(script_args):
-    llm, _ = prepare_vllm_model(script_args)
-
-    list_repo_refs(script_args.lora_adapter_name, repo_type="model")
-    import pdb
-
-    pdb.set_trace()
+    tokenizer = AutoTokenizer.from_pretrained(script_args.tokenizer_name)
+    tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+    tokenizer.padding_side = "left"
 
     dataset = load_dataset(script_args.dataset_name, split=script_args.train_split)
-    # dataset = dataset.map(strip_prompt, batched=True)
-    # prompts = dataset["prompt"]
-
-    # dataset = dataset.filter(lambda x: x["has_comparison"] is True)
     prompts = dataset["query"]
 
     sampling_params = SamplingParams(
@@ -96,23 +66,49 @@ def generate(script_args):
         max_tokens=script_args.max_new_tokens,
         top_p=script_args.top_p,
         n=1,
+        include_stop_str_in_output=True,
     )
 
-    # for
-    generations = llm.generate(prompts, sampling_params)
+    refs = list_repo_refs(script_args.model_name, repo_type="model")
+    gens = {}
+    for branch in refs.branches:
+        if branch.name == "main":
+            continue
 
-    print(f"generated {len(generations)} samples")
+        if script_args.model_revisions and branch.name not in script_args.model_revisions:
+            continue
 
-    def dataset_generator():
-        for gen in generations:
-            if len(gen.outputs) == 2:
-                yield {
-                    "prompt": gen.prompt,
-                    "chosen": gen.outputs[0].text,
-                    "rejected": gen.outputs[1].text,
-                }
-            else:
-                print("skipping gen, only 1 output")
+        print(f"generating step {branch.name}")
+        llm = LLM(
+            model=script_args.model_name,
+            tokenizer=script_args.tokenizer_name,
+            revision=branch.name,
+            dtype=script_args.gen_dtype,
+            max_model_len=script_args.seq_length,
+            tensor_parallel_size=script_args.num_gpus,
+            trust_remote_code=True,
+        )
+
+        llm.set_tokenizer(tokenizer)
+
+        generations = llm.generate(prompts, sampling_params)
+
+        texts = [output.prompt + output.outputs[0].text for output in generations]
+
+        gens[branch.name] = texts
+
+        # delete old model
+        destroy_model_parallel()
+        del llm.llm_engine.driver_worker
+        del llm
+        gc.collect()
+        torch.cuda.empty_cache()
+        torch.distributed.destroy_process_group()
+
+    reference = dataset["query_reference_response"]
+
+    print(f"generated {len(gens)} steps")
+    return reference, gens
 
     # ds_info = DatasetInfo(
     #     f"{script_args.dataset_name} split {script_args.train_split} prompts used to generate with {script_args.model_name}"
@@ -122,11 +118,120 @@ def generate(script_args):
     # generated_dataset.push_to_hub(os.path.basename(script_args.output_dir), split="train")
 
 
+def evaluate(script_args, reference, generations):
+    if script_args.wandb_log_id is not None:
+        wandb_name = os.environ["WANDB_RUN_NAME"]
+        original_name = wandb_name.removeprefix("geneval_")
+        wandb.init(id=script_args.wandb_log_id, resume="allow", name=original_name)
+        log_to_wandb = True
+        print("Logging to WandB")
+    else:
+        log_to_wandb = False
+
+    torch_dtype = (
+        script_args.eval_dtype if script_args.eval_dtype in ["auto", None] else getattr(torch, script_args.eval_dtype)
+    )
+    tokenizer = AutoTokenizer.from_pretrained(script_args.gold_tokenizer_name)
+    tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+
+    scalar_model_config = ScalarModelConfig.from_pretrained(
+        script_args.gold_model_name,
+        revision=script_args.gold_model_revision,
+        trust_remote_code=True,
+    )
+    # hack to remove the path
+    # models/EleutherAI/pythia-6.9b-deduped/sft_model_55513 -> EleutherAI/pythia-6.9b-deduped
+    if scalar_model_config.base_model.startswith("models/"):
+        original_model = scalar_model_config.base_config["_name_or_path"].split("/")[2]
+        sft_model = f"vwxyzjn/EleutherAI_{original_model}__sft__tldr"
+        scalar_model_config.base_config["_name_or_path"] = sft_model
+        scalar_model_config.base_model = sft_model
+        _, seed, _ = script_args.gold_model_revision.split("__")
+        scalar_model_config.base_model_revision = f"sft__{seed}__1708611267"
+
+    # quantization_config = get_quantization_config(model_config)
+    model = ScalarModel.from_pretrained(
+        script_args.gold_model_name,
+        revision=script_args.gold_model_revision,
+        config=scalar_model_config,
+    )
+
+    model.config.pad_token_id = tokenizer.pad_token_id
+
+    trainer = Trainer(
+        model=model,
+        tokenizer=tokenizer,
+    )
+
+    ## get reference continuation rewards
+    dataset = Dataset.from_dict({"reference": reference})
+    dataset = dataset.map(
+        lambda example: tokenizer(
+            example["reference"],
+            padding="max_length",
+            max_length=script_args.max_length,
+            truncation=True,
+        ),
+        batched=True,
+    )
+
+    ref_results = trainer.predict(dataset)
+    ref_rewards = ref_results.predictions
+
+    step = 0
+    for step_str, query_response in generations.items():
+        dataset = Dataset.from_dict({"query_response": query_response})
+        dataset = dataset.map(
+            lambda example: tokenizer(
+                example["query_response"],
+                padding="max_length",
+                max_length=script_args.max_length,
+                truncation=True,
+            ),
+            batched=True,
+        )
+
+        print(f"Evaluating {step_str}")
+        results = trainer.predict(dataset)
+        gen_rewards = results.predictions
+
+        win_rate = (gen_rewards > ref_rewards).mean().item()
+        norm_reward = (gen_rewards - ref_rewards).mean().item()
+
+        if step_str.startswith("step"):
+            step_str = step_str.removeprefix("step")
+
+        if step_str.isdigit():
+            step = int(step_str)
+        else:
+            print(f"Warning step name {step_str} is not an integer")
+            step = step + 1
+
+        if log_to_wandb:
+            wandb.log(
+                {
+                    "gold/win_rate": win_rate,
+                    "gold/norm_reward": norm_reward,
+                    "step": step,
+                }
+            )
+
+        print(f"step {step}: win-rate {win_rate} norm-reward {norm_reward}")
+
+
 def main_args_dict(args_dict):
     parser = HfArgumentParser([GenerateScriptArguments, EvalScriptArguments])
     generate_args, eval_args = parser.parse_dict(args_dict)
-    output_datasets = generate(generate_args)
-    # eval_generations(eval_args, outputs_datasets=output_datasets)
+    if eval_args.gold_tokenizer_name is None:
+        eval_args.gold_tokenizer_name = generate_args.tokenizer_name
+
+    print("GENERATING")
+    reference, generations = generate(generate_args)
+    # dataset = load_dataset(generate_args.dataset_name, split=generate_args.train_split)
+    # generations = {"step0": dataset["query_reference_response"]}
+    # reference = dataset["query_reference_response"]
+    print("EVALUATING")
+    evaluate(eval_args, reference, generations)
 
 
 if __name__ == "__main__":

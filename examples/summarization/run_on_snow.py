@@ -22,6 +22,8 @@ def run_exp(exp_dict, savedir, args):
 
     if args.wandb:
         os.environ["WANDB_MODE"] = "online"
+        os.environ["WANDB_PROJECT"] = "trl"
+        os.environ["WANDB_ENTITY"] = "mila-language-drift"
     else:
         os.environ["WANDB_MODE"] = "disabled"
 
@@ -63,6 +65,8 @@ def run_exp(exp_dict, savedir, args):
     elif exp_name.startswith("scalarrm"):
         exp_dict.pop("save_strategy", None)
         accelerate_launch("scalar_rm_model.py", exp_dict, args)
+    elif exp_name.startswith("costa_dpo"):
+        accelerate_launch("costa_dpo.py", exp_dict, args)
     else:
         raise Exception(f"Config file {exp_name} does not start with one of the correct prefixes")
 

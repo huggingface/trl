@@ -17,6 +17,7 @@ from transformers import (
     PreTrainedModel,
     Trainer,
 )
+from transformers.modeling_outputs import SequenceClassifierOutputWithPast
 
 from trl import ModelConfig, RewardConfig
 
@@ -109,10 +110,33 @@ class ScalarModel(PreTrainedModel):
             std=1 / np.sqrt(self.config.hidden_size + 1),
         )
 
-    def forward(self, **kwargs):
-        output = self.lm_backbone(**kwargs)
-        reward = self.scalar_head(output.hidden_states[-1]) - self.config.bias
-        return reward
+    def forward(self, input_ids, attention_mask, output_hidden_states=True, return_dict=True, **kwargs):
+        output = self.lm_backbone(input_ids, attention_mask, output_hidden_states=True, return_dict=True, **kwargs)
+        reward_logits = self.scalar_head(output.hidden_states[-1]) - self.config.bias
+
+        sequence_lengths = first_true_indices(input_ids[:, :] == self.config.pad_token_id) - 1
+        # https://github.com/huggingface/transformers/blob/dc68a39c8111217683bf49a4912d0c9018bab33d/src/transformers/models/gpt2/modeling_gpt2.py#L1454
+        reward = reward_logits[
+            torch.arange(reward_logits.size(0), device=reward_logits.device), sequence_lengths
+        ].squeeze(-1)
+
+        return_dict = kwargs.pop("return_dict", None)
+        if not return_dict:
+            return_values = (reward,) + output[1:]
+
+        return SequenceClassifierOutputWithPast(loss=None, logits=reward)
+
+
+def first_true_indices(bools, dtype=torch.long):
+    """
+    Takes an N-dimensional bool tensor and returns an (N-1)-dimensional tensor of integers giving
+    the position of the first True in each "row".
+
+    Returns the length of the rows (bools.size(-1)) if no element is True in a given row.
+    """
+    row_len = bools.size(-1)
+    zero_or_index = row_len * (~bools).type(dtype) + torch.arange(row_len, dtype=dtype, device=bools.device)
+    return torch.min(zero_or_index, dim=-1).values
 
 
 if __name__ == "__main__":
@@ -177,9 +201,6 @@ if __name__ == "__main__":
         )
 
         results = trainer.predict(dataset)
-        import pdb
-
-        pdb.set_trace()
         # raw_datasets = raw_datasets.filter(
         #     lambda x: len(x["input_ids_chosen"]) <= reward_config.max_length
         #     and len(x["input_ids_rejected"]) <= reward_config.max_length
