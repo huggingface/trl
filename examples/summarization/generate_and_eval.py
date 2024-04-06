@@ -120,7 +120,7 @@ def generate(script_args):
 
 def evaluate(script_args, reference, generations):
     if script_args.wandb_log_id is not None:
-        wandb_name = os.environ["WANDB_RUN_NAME"]
+        wandb_name = os.environ["WANDB_NAME"]
         original_name = wandb_name.removeprefix("geneval_")
         wandb.init(id=script_args.wandb_log_id, resume="allow", name=original_name)
         log_to_wandb = True
