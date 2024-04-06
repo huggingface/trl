@@ -33,7 +33,7 @@ class GenerateScriptArguments:
     dataset_name: Optional[str] = field(
         default="arianhosseini/openai_summarize_unlabelled", metadata={"help": "the dataset name"}
     )
-    train_split: Optional[str] = field(default="train[:20]", metadata={"help": "the dataset name"})
+    split: Optional[str] = field(default="validation", metadata={"help": "the dataset name"})
     batch_size: Optional[int] = field(default=4)
     seq_length: Optional[int] = field(default=512, metadata={"help": "Input sequence length"})
 
@@ -58,7 +58,7 @@ def generate(script_args):
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
     tokenizer.padding_side = "left"
 
-    dataset = load_dataset(script_args.dataset_name, split=script_args.train_split)
+    dataset = load_dataset(script_args.dataset_name, split=script_args.split)
     prompts = dataset["query"]
 
     sampling_params = SamplingParams(
