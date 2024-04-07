@@ -212,7 +212,7 @@ def evaluate(script_args, reference, generations):
                 {
                     "gold/win_rate": win_rate,
                     "gold/norm_reward": norm_reward,
-                    "step": step,
+                    "train/global_step": step,
                 }
             )
 
