@@ -234,7 +234,7 @@ def create_and_prepare_model(args):
     else:
         modules = None
 
-    if args.use_peft:
+    if args.use_peft and args.mode == "train":
         modules_to_save = ["lm_head"]
         peft_config = LoraConfig(
             r=args.lora_r,

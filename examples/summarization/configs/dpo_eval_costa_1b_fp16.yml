@@ -1,4 +1,6 @@
 mode: eval
+push_to_hub: False
+gold_eval: none
 ## costa stuff
 model_name: vwxyzjn/EleutherAI_pythia-1b-deduped__dpo__tldr
 model_revision: dpo__55513__1707379566
@@ -8,10 +10,8 @@ prompt_field: query
 eval_split: validation
 max_target_length: 128
 ## hub stuff
-push_to_hub: True
 push_to_hub_organization: mnoukhov
 ## training stuff
-gold_eval: ppl
 eval_steps: 0.2
 save_steps: 0.2
 beta: 0.5
