@@ -356,7 +356,8 @@ if __name__ == "__main__":
     train_dataset, eval_dataset = create_and_prepare_dataset(script_args)
 
     if script_args.push_to_hub:
-        model_id = script_args.model_name.rsplit("/", 1)[-1] + "_" + os.getenv("WANDB_RUN_GROUP")
+        base_config_name = os.getenv("WANDB_RUN_GROUP").split("/")[0]
+        model_id = script_args.model_name.rsplit("/", 1)[-1] + "_" + base_config_name
         hub_model_id = f"{script_args.push_to_hub_organization}/{model_id}"
         print(f"pushing model to {hub_model_id}")
     else:
