@@ -196,17 +196,17 @@ class RewardTrainer(Trainer):
         else:
             self.use_reward_data_collator = False
         super().__init__(
-            model,
-            args,
-            data_collator,
-            train_dataset,
-            eval_dataset,
-            tokenizer,
-            model_init,
-            compute_metrics,
-            callbacks,
-            optimizers,
-            preprocess_logits_for_metrics,
+            model=model,
+            args=args,
+            data_collator=data_collator,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            tokenizer=tokenizer,
+            model_init=model_init,
+            compute_metrics=compute_metrics,
+            callbacks=callbacks,
+            optimizers=optimizers,
+            preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
         # Add tags for models that have been loaded with the correct transformers version
