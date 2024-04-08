@@ -61,7 +61,7 @@ def run_exp(exp_dict, savedir, args):
     elif exp_name.startswith("geneval"):
         exp_dict.pop("save_strategy", None)
         exp_dict["num_gpus"] = args.gpus
-        accelerate_launch("generate_and_eval.py", exp_dict, args)
+        generate_and_eval.main_args_dict(exp_dict)
     elif exp_name.startswith("scalarrm"):
         exp_dict.pop("save_strategy", None)
         accelerate_launch("scalar_rm_model.py", exp_dict, args)
