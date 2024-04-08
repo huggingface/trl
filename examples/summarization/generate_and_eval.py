@@ -235,7 +235,15 @@ def main_args_dict(args_dict):
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser(GenerateScriptArguments)
-    script_args = parser.parse_args_into_dataclasses()[0]
+    parser = HfArgumentParser([GenerateScriptArguments, EvalScriptArguments])
+    generate_args, eval_args = parser.parse_args_into_dataclasses()
+    if eval_args.gold_tokenizer_name is None:
+        eval_args.gold_tokenizer_name = generate_args.tokenizer_name
 
-    main(script_args)
+    print("GENERATING")
+    reference, generations = generate(generate_args)
+    # dataset = load_dataset(generate_args.dataset_name, split=generate_args.train_split)
+    # generations = {"step0": dataset["query_reference_response"]}
+    # reference = dataset["query_reference_response"]
+    print("EVALUATING")
+    evaluate(eval_args, reference, generations)
