@@ -160,7 +160,7 @@ class ScriptArguments:
     gold_prompt_field: Optional[str] = field(default="prompt")
     gold_target_field: Optional[str] = field(default="label")
     gold_load_and_unload: Optional[str] = field(default=False)
-    mode: Optional[str] = field(default="train")
+    mode: Literal["train", "eval", "predict", "relabel"] = field(default="train")
     eval_first_step: Optional[bool] = field(default=True)
     strip_prompt: Optional[bool] = field(default=True)
 
@@ -403,7 +403,7 @@ if __name__ == "__main__":
     )
 
     # Gold Eval
-    if script_args.gold_eval != "none":
+    if script_args.gold_eval != "none" and script_args.mode in ["train", "eval"]:
         gold_eval_dataset = load_dataset(
             script_args.gold_dataset_name,
             split=script_args.gold_eval_split,
