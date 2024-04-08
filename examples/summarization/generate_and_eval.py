@@ -1,4 +1,5 @@
 import gc
+import json
 import os
 from dataclasses import dataclass, field
 from typing import List, Optional
@@ -22,7 +23,7 @@ builder.has_sufficient_disk_space = lambda needed_bytes, directory=".": True
 @dataclass
 class GenerateScriptArguments:
     output_dir: Optional[str] = field(
-        default="compare_results",
+        default="/home/toolkit/trl_results",
         metadata={"help": "output folder"},
     )
     num_gpus: Optional[int] = field(default=1)
@@ -97,7 +98,7 @@ def generate(script_args):
 
         gens[branch.name] = texts
 
-        dataset[f"generations_{branch.name}"] = texts
+        dataset = dataset.add_column(f"generations_{branch.name}", texts)
 
         # delete old model
         destroy_model_parallel()
@@ -109,7 +110,21 @@ def generate(script_args):
 
     reference = dataset["query_reference_response"]
 
-    dataset.save_to_disk(f"{script_args.dataset_name.replace("/","_")}_{script_args.model_name.replace("/","_")}")
+    if script_args.output_dir is not None:
+        dataset_path = os.path.join(
+            script_args.output_dir,
+            script_args.dataset_name.replace("/", "_"),
+            script_args.model_name.replace("/", "_"),
+        )
+        os.makedirs(dataset_path)
+        dataset.save_to_disk(dataset_path)
+        with open(f"{dataset_path}_sampling_params.txt", "w") as f:
+            try:
+                from pprint import pprint
+
+                pprint(sampling_params, stream=f)
+            except:
+                print(sampling_params, file=f)
 
     print(f"generated {len(gens)} steps")
     return reference, gens
