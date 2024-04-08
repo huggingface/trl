@@ -97,6 +97,8 @@ def generate(script_args):
 
         gens[branch.name] = texts
 
+        dataset[f"generations_{branch.name}"] = texts
+
         # delete old model
         destroy_model_parallel()
         del llm.llm_engine.driver_worker
@@ -106,6 +108,8 @@ def generate(script_args):
         torch.distributed.destroy_process_group()
 
     reference = dataset["query_reference_response"]
+
+    dataset.save_to_disk(f"{script_args.dataset_name.replace("/","_")}_{script_args.model_name.replace("/","_")}")
 
     print(f"generated {len(gens)} steps")
     return reference, gens
