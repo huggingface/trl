@@ -15,6 +15,7 @@ import torch
 import torch.nn as nn
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM
 
+from ..import_utils import is_npu_available, is_xpu_available
 from .modeling_base import PreTrainedModelWrapper
 
 
@@ -245,7 +246,13 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
                 )
 
             first_device = list(set(self.pretrained_model.hf_device_map.values()))[0]
-
+            if isinstance(first_device, int):
+                if is_npu_available():
+                    first_device = f"npu:{first_device}"
+                elif is_xpu_available():
+                    first_device = f"xpu:{first_device}"
+                else:
+                    first_device = f"cuda:{first_device}"
             self.v_head = self.v_head.to(first_device)
 
             def set_device_hook(module, input, outputs):
