@@ -25,7 +25,7 @@ _import_structure = {
         "AutoModelForCausalLMWithValueHead",
         "AutoModelForSeq2SeqLMWithValueHead",
     ],
-    "utils": ["setup_chat_format", "SUPPORTED_ARCHITECTURES"],
+    "utils": ["setup_chat_format", "SUPPORTED_ARCHITECTURES", "unwrap_model_for_generation"],
 }
 
 try:

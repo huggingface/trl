@@ -12,36 +12,36 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, Literal, Optional
 
 from transformers import TrainingArguments
 
 
 @dataclass
-class KTOConfig(TrainingArguments):
+class CPOConfig(TrainingArguments):
     r"""
-    KTOConfig collects all training arguments related to the [`KTOTrainer`] class.
+    CPOConfig collects all training arguments related to the [`CPOTrainer`] class.
 
     Using [`HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.
 
     Parameters:
-        max_length (`int`, *optional*, defaults to `None`):
+        max_length (`int`, defaults to `None`):
             The maximum length of the sequences in the batch. This argument is required if you want to use the default data collator.
-        max_prompt_length (`int`, *optional*, defaults to `None`):
+        max_prompt_length (`int`, defaults to `None`):
             The maximum length of the prompt. This argument is required if you want to use the default data collator.
-        max_completion_length (`int`, *optional*, defaults to `None`):
+        max_target_length (`int`, defaults to `None`):
             The maximum length of the target. This argument is required if you want to use the default data collator and your model is an encoder-decoder.
         beta (`float`, defaults to 0.1):
-            The beta factor in KTO loss. Higher beta means less divergence from the initial policy.
-        desirable_weight (`float`, *optional*, defaults to 1.0):
-            The desirable losses are weighed by this factor to counter unequal number of desirable and undesirable paris.
-        undesirable_weight (`float`, *optional*, defaults to 1.0):
-            The undesirable losses are weighed by this factor to counter unequal number of desirable and undesirable pairs.
+            The beta factor in CPO loss.
+        label_smoothing (`float`, defaults to 0):
+            The label smoothing factor. This argument is required if you want to use the default data collator.
+        loss_type (`str`, defaults to `sigmoid`):
+            The type of loss to use. This argument is required if you want to use the default data collator.
         label_pad_token_id (`int`, defaults to `-100`):
             The label pad token id. This argument is required if you want to use the default data collator.
-        padding_value (`int`, defaults to `0`):
+        padding_value (`int`, defaults to `None`):
             The padding value if it is different to the tokenizer's pad_token_id.
         truncation_mode (`str`, defaults to `keep_end`):
             The truncation mode to use, either `keep_end` or `keep_start`. This argument is required if you want to use the default data collator.
@@ -49,36 +49,30 @@ class KTOConfig(TrainingArguments):
             Whether to sample and log generations during evaluation step.
         is_encoder_decoder (`Optional[bool]`, `optional`, defaults to `None`):
             If no model is provided, we need to know if the model_init returns an encoder-decoder.
-        precompute_ref_log_probs (`bool`, defaults to `False`):
-            Flag to precompute reference model log probabilities for training and evaluation datasets. This is useful if you want to train
-            without the reference model and reduce the total GPU memory needed.
-        model_init_kwargs: (`Optional[Dict]`, *optional*):
-            Dict of Optional kwargs to pass when instantiating the model from a string.
-        ref_model_init_kwargs: (`Optional[Dict]`, *optional*):
-            Dict of Optional kwargs to pass when instantiating the ref model from a string.
-        dataset_num_proc: (`Optional[int]`, *optional*, defaults to `None`):
-            Number of processes to use for processing the datasets.
+        disable_dropout (`bool`, defaults to `True`):
+            Whether or not to disable dropouts in `model`.
+        model_init_kwargs (`Optional[Dict]`, *optional*):
+            Dict of Optional kwargs to pass when instantiating the model from a string
+        dataset_num_proc (`Optional[int]`, *optional*):
+            The number of workers to use to tokenize the data. Defaults to None.
     """
 
     max_length: Optional[int] = None
-    """The maximum length of the sequences in the batch. This argument is required if you want to use the default data collator."""
     max_prompt_length: Optional[int] = None
-    """The maximum length of the prompt. This argument is required if you want to use the default data collator."""
     max_completion_length: Optional[int] = None
-    """The maximum length of the target. This argument is required if you want to use the default data collator and your model is an encoder-decoder."""
+    max_target_length: Optional[int] = None
+
     beta: float = 0.1
-    """The beta factor in KTO loss. Higher beta means less divergence from the initial policy."""
-    desirable_weight: Optional[float] = 1.0
-    """The desirable losses are weighed by this factor."""
-    undesirable_weight: Optional[float] = 1.0
-    """The undesirable losses are weighed by this factor."""
+    label_smoothing: float = 0
+    loss_type: Literal["sigmoid", "hinge", "ipo", "kto_pair"] = "sigmoid"
+    disable_dropout: bool = True
 
     label_pad_token_id: int = -100
     padding_value: int = None
     truncation_mode: str = "keep_end"
     generate_during_eval: bool = False
     is_encoder_decoder: Optional[bool] = None
-    precompute_ref_log_probs: bool = False
+
     model_init_kwargs: Optional[Dict] = None
-    ref_model_init_kwargs: Optional[Dict] = None
+
     dataset_num_proc: Optional[int] = None

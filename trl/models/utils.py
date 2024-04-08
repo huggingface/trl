@@ -1,6 +1,8 @@
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Literal, Optional, Tuple, Union
 
+from accelerate.utils import is_deepspeed_available
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
 from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
@@ -10,6 +12,17 @@ SUPPORTED_ARCHITECTURES = (
     AutoModelForCausalLMWithValueHead,
     AutoModelForSeq2SeqLMWithValueHead,
 )
+
+
+if is_deepspeed_available():
+    import deepspeed
+
+if TYPE_CHECKING:
+    from accelerate import Accelerator
+    from deepspeed.runtime.engine import DeepSpeedEngine
+    from torch.nn.parallel.distributed import DistributedDataParallel
+
+    from .modeling_base import PreTrainedModelWrapper
 
 
 # TODO: Add Abstract Base Class if more formats are added
@@ -84,10 +97,60 @@ def setup_chat_format(
     model.resize_token_embeddings(
         len(tokenizer), pad_to_multiple_of=resize_to_multiple_of if resize_to_multiple_of is not None else None
     )
-    # Make sure to update the generation config to use the new eos & bos token
+    # Update the model config to use the new eos & bos tokens
+    if getattr(model, "config", None) is not None:
+        model.config.pad_token_id = tokenizer.pad_token_id
+        model.config.bos_token_id = tokenizer.bos_token_id
+        model.config.eos_token_id = tokenizer.eos_token_id
+    # Update the generation config to use the new eos & bos token
     if getattr(model, "generation_config", None) is not None:
         model.generation_config.bos_token_id = tokenizer.bos_token_id
         model.generation_config.eos_token_id = tokenizer.eos_token_id
         model.generation_config.pad_token_id = tokenizer.pad_token_id
 
     return model, tokenizer
+
+
+def remove_hooks(model: "DeepSpeedEngine") -> None:
+    """Removes the optimizer hooks from a DeepSpeed ZeRO-3 model."""
+    if model.optimizer is not None and hasattr(model.optimizer, "parameter_offload"):
+        optimizer_offload = model.optimizer.parameter_offload
+    elif model.optimizer is not None:
+        optimizer_offload = model.optimizer
+
+    for hook in optimizer_offload.forward_hooks:
+        hook.remove()
+    for hook in optimizer_offload.backward_hooks:
+        hook.remove()
+
+    optimizer_offload.forward_hooks = []
+    optimizer_offload.backward_hooks = []
+
+
+def add_hooks(model: "DeepSpeedEngine") -> None:
+    """Adds the optimizer hooks from a DeepSpeed ZeRO-3 model."""
+    if model.optimizer is not None and hasattr(model.optimizer, "parameter_offload"):
+        optimizer_offload = model.optimizer.parameter_offload
+    elif model.optimizer is not None:
+        optimizer_offload = model.optimizer
+    optimizer_offload._register_hooks_recursively(optimizer_offload.module)
+
+
+@contextmanager
+def unwrap_model_for_generation(
+    model: Union["DistributedDataParallel", "DeepSpeedEngine"], accelerator: "Accelerator", is_peft_model: bool = False
+) -> Union["PreTrainedModelWrapper", "DeepSpeedEngine"]:
+    """Context manager to unwrap a model for generation.
+
+    For ZeRO-3 models, we gather the weights once to speed up generation.
+    """
+    unwrapped_model = accelerator.unwrap_model(model)
+    if is_peft_model:
+        unwrapped_model.pretrained_model.disable_adapter()
+    if accelerator.state.deepspeed_plugin is not None and accelerator.state.deepspeed_plugin.zero_stage == 3:
+        with deepspeed.zero.GatheredParameters(model.parameters()):
+            remove_hooks(model)
+            yield model
+            add_hooks(model)
+    else:
+        yield unwrapped_model

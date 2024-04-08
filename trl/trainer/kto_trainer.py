@@ -20,14 +20,15 @@ from contextlib import nullcontext
 from copy import deepcopy
 from functools import wraps
 from operator import itemgetter
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from accelerate import PartialState
 from accelerate.utils import is_deepspeed_available, tqdm
-from datasets import Dataset, concatenate_datasets, interleave_datasets
+from datasets import Dataset, concatenate_datasets
 from torch.utils.data import DataLoader, SequentialSampler
 from transformers import (
     AutoModelForCausalLM,
@@ -61,6 +62,163 @@ if is_wandb_available():
 
 if is_deepspeed_available():
     import deepspeed
+
+if TYPE_CHECKING:
+    from transformers import PreTrainedModel, PreTrainedTokenizer
+
+
+def _get_kl_dataset(batch: Dict[str, List[Any]]) -> Dict[str, List[Any]]:
+    """Creates mismatched pairs of prompts and completions for the KL dataset by reversing the order of completions."""
+    batch["answer_input_ids"] = batch["answer_input_ids"][::-1]
+    batch["answer_attention_mask"] = batch["answer_attention_mask"][::-1]
+    return batch
+
+
+def _tokenize(batch: Dict[str, List[Any]], tokenizer: "PreTrainedTokenizer") -> Dict[str, List[Any]]:
+    """Tokenize a batch from a KTO specific dataset."""
+    prompt_tokenized = tokenizer(batch["prompt"], add_special_tokens=False)
+    prompt_input_ids = prompt_tokenized["input_ids"]
+    prompt_attention_mask = prompt_tokenized["attention_mask"]
+    prompt_and_completion = [prompt + completion for prompt, completion in zip(batch["prompt"], batch["completion"])]
+    full_tokenized = tokenizer(prompt_and_completion, add_special_tokens=False)
+    full_input_ids = full_tokenized["input_ids"]
+    full_attention_mask = full_tokenized["attention_mask"]
+
+    answer_input_ids = [f[len(p) :] for f, p in zip(full_input_ids, prompt_input_ids)]
+    answer_attention_mask = [f[len(p) :] for f, p in zip(full_attention_mask, prompt_attention_mask)]
+
+    # Concat tokens to form `enc(a) + enc(a + b)[len(enc(a)):]`
+    full_concat_input_ids = [np.concatenate([p, a]) for p, a in zip(prompt_input_ids, answer_input_ids)]
+    # Prepare input tokens for token by token comparison
+    full_input_ids = [np.array(f) for f in full_input_ids]
+    for full, concat in zip(full_input_ids, full_concat_input_ids):
+        if len(full) != len(concat):
+            raise ValueError("Prompt input ids and answer input ids should have the same length.")
+
+    # On some tokenizers, like Llama-2 tokenizer, there are occasions where tokens
+    # can be merged together when tokenizing prompt+answer. This could result
+    # on the last token from the prompt being different when tokenized on its own
+    # vs when done as prompt+answer.
+    response_token_ids_start_idx = [len(p) for p in prompt_input_ids]
+
+    # If tokenized prompt is different than both prompt+answer, then it means the
+    # last token has changed due to merging.
+    for idx, (p, f, r) in enumerate(zip(prompt_input_ids, full_input_ids, response_token_ids_start_idx)):
+        if not np.array_equal(p, f[:r]):
+            response_token_ids_start_idx[idx] -= 1
+
+    prompt_input_ids = [f[:r] for f, r in zip(full_input_ids, response_token_ids_start_idx)]
+    prompt_attention_mask = [f[:r] for f, r in zip(full_attention_mask, response_token_ids_start_idx)]
+
+    for p, m in zip(prompt_input_ids, prompt_attention_mask):
+        if len(p) != len(m):
+            raise ValueError("Prompt input ids and attention mask should have the same length.")
+
+    answer_input_ids = [f[r:] for f, r in zip(full_input_ids, response_token_ids_start_idx)]
+    answer_attention_mask = [f[r:] for f, r in zip(full_attention_mask, response_token_ids_start_idx)]
+
+    return dict(
+        prompt_input_ids=prompt_input_ids,
+        prompt_attention_mask=prompt_attention_mask,
+        answer_input_ids=answer_input_ids,
+        answer_attention_mask=answer_attention_mask,
+    )
+
+
+def _process_tokens(example: Dict[str, Any], model: "PreTrainedModel" = None, **kwargs) -> Dict:
+    """Process tokens of a KTO specific dataset.
+
+    At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
+    in case the prompt + completion responses is/are too long. First
+        we truncate the prompt; if we're still too long, we truncate the completion.
+
+    We also create the labels for the completion responses, which are of length equal to
+        the sum of the length of the prompt and the completion response, with
+        label_pad_token_id  for the prompt tokens.
+    """
+    prompt = example["prompt"]
+    completion = example["completion"]
+
+    batch = {
+        f"{kwargs['prefix']}prompt": prompt,
+        f"{kwargs['prefix']}completion": completion,
+        f"{kwargs['prefix']}label": example["label"],
+    }
+
+    if not kwargs["is_encoder_decoder"]:
+        # Check issues below for more details
+        #  1. https://github.com/huggingface/trl/issues/907
+        #  2. https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
+        #  3. https://github.com/LianjiaTech/BELLE/issues/337
+
+        if not isinstance(prompt, str):
+            raise ValueError(f"prompt should be an str but got {type(prompt)}")
+
+        if not isinstance(completion, str):
+            raise ValueError(f"completion should be an str but got {type(completion)}")
+
+        # keys of format prompt_* refers to just the prompt and answer_* refers to just the answer
+        all_tokens = {
+            "prompt_input_ids": example["prompt_input_ids"],
+            "prompt_attention_mask": example["prompt_attention_mask"],
+            "answer_input_ids": example["answer_input_ids"],
+            "answer_attention_mask": example["answer_attention_mask"],
+        }
+
+        max_length = kwargs["max_length"] - 2
+        # if combined sequence is too long (> max_length - 1 for BOS token - 1 for EOS), truncate the prompt
+        if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
+            for k in ["prompt_input_ids", "prompt_attention_mask"]:
+                if kwargs["truncation_mode"] == "keep_start":
+                    all_tokens[k] = all_tokens[k][: kwargs["max_prompt_length"]]
+                elif kwargs["truncation_mode"] == "keep_end":
+                    all_tokens[k] = all_tokens[k][-kwargs["max_prompt_length"] :]
+                else:
+                    raise ValueError(f"Unknown truncation mode: {kwargs['truncation_mode']}")
+
+        # if that's still too long, truncate the response
+        if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
+            for k in ["answer_input_ids", "answer_attention_mask"]:
+                all_tokens[k] = all_tokens[k][: max_length - kwargs["max_prompt_length"]]
+
+        # for legacy reasons, use the completion_* prefix to now refer to the joint sequence
+        batch[f"{kwargs['prefix']}prompt_input_ids"] = [kwargs["tokenizer"].bos_token_id] + all_tokens[
+            "prompt_input_ids"
+        ]
+        batch[f"{kwargs['prefix']}prompt_attention_mask"] = [1] + all_tokens["prompt_attention_mask"]
+        batch[f"{kwargs['prefix']}completion_input_ids"] = (
+            [kwargs["tokenizer"].bos_token_id]
+            + all_tokens["prompt_input_ids"]
+            + all_tokens["answer_input_ids"]
+            + [kwargs["tokenizer"].eos_token_id]
+        )
+        batch[f"{kwargs['prefix']}completion_attention_mask"] = (
+            [1] + all_tokens["prompt_attention_mask"] + all_tokens["answer_attention_mask"] + [1]
+        )
+
+        batch[f"{kwargs['prefix']}completion_labels"] = batch[f"{kwargs['prefix']}completion_input_ids"][:]
+        batch[f"{kwargs['prefix']}completion_labels"][: len(batch[f"{kwargs['prefix']}prompt_input_ids"])] = [
+            kwargs["label_pad_token_id"]
+        ] * len(batch[f"{kwargs['prefix']}prompt_input_ids"])
+    else:
+        completion_tokens = kwargs["tokenizer"](
+            completion, truncation=True, max_length=kwargs["max_completion_length"], add_special_tokens=True
+        )
+        prompt_tokens = kwargs["tokenizer"](
+            prompt, truncation=True, max_length=kwargs["max_prompt_length"], add_special_tokens=True
+        )
+
+        batch[f"{kwargs['prefix']}prompt_input_ids"] = prompt_tokens["input_ids"]
+        batch[f"{kwargs['prefix']}prompt_attention_mask"] = prompt_tokens["attention_mask"]
+
+        batch[f"{kwargs['prefix']}completion_labels"] = completion_tokens["input_ids"]
+        batch[f"{kwargs['prefix']}completion_attention_mask"] = completion_tokens["attention_mask"]
+        if model is not None and hasattr(model, "prepare_decoder_input_ids_from_labels"):
+            batch[f"{kwargs['prefix']}completion_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
+                labels=torch.tensor(batch["completion_labels"])
+            )
+
+    return batch
 
 
 class KTOTrainer(Trainer):
@@ -326,85 +484,133 @@ class KTOTrainer(Trainer):
         self.desirable_weight = args.desirable_weight
         self.undesirable_weight = args.undesirable_weight
 
-        # get KL datasets
-        total_batch_size = (
-            max(torch.cuda.device_count(), 1) * args.per_device_train_batch_size * args.gradient_accumulation_steps
-        )
-        if total_batch_size <= 1:
-            raise ValueError(
-                "Batch size is 1 (too small). KTO will not work properly because the KL term will be equivalent to the implied reward."
+        with PartialState().local_main_process_first():
+            # Shuffle the datasets
+            train_dataset = train_dataset.shuffle(seed=args.data_seed)
+            if eval_dataset is not None:
+                eval_dataset = eval_dataset.shuffle(seed=args.data_seed)
+            # Tokenize and prepare the training datasets
+            train_dataset = train_dataset.map(
+                _tokenize,
+                fn_kwargs={"tokenizer": self.tokenizer},
+                batched=True,
+                desc="Tokenizing train dataset",
             )
-        # note: for best results, mismatched outputs y' used to estimate the KL term for a batch should be the
-        # same as the matched outputs y used to estimate the rewards in that batch, just paired with different x
-        train_KL_dataset = train_dataset.map(self.get_KL_dataset, batched=True, batch_size=total_batch_size)
-        if eval_dataset is not None:
-            eval_KL_dataset = eval_dataset.map(self.get_KL_dataset, batched=True, batch_size=total_batch_size)
+            # Get KL datasets
+            total_batch_size = (
+                max(torch.cuda.device_count(), 1) * args.per_device_train_batch_size * args.gradient_accumulation_steps
+            )
+            if total_batch_size <= 1:
+                raise ValueError(
+                    "Batch size is 1 (too small). KTO will not work properly because the KL term will be equivalent to the implied reward."
+                )
+            # create pairs for estimating the KL term by flipping the matched pairs in each batch of size total_batch_size
+            # i.e., (x_1, y_1), ..., (x_n, y_n) --> (x_1, y_n), ..., (x_n, y_1) = (x'_1, y'_1), ..., (x'_n, y'_n)
+            train_kl_dataset = train_dataset.map(
+                _get_kl_dataset, batched=True, batch_size=total_batch_size, desc="Extracting KL train dataset"
+            )
+            # Prepare the datasets
+            fn_kwargs = {
+                "prefix": "",
+                "is_encoder_decoder": self.is_encoder_decoder,
+                "tokenizer": self.tokenizer,
+                "max_length": self.max_length,
+                "truncation_mode": self.truncation_mode,
+                "label_pad_token_id": self.label_pad_token_id,
+                "max_prompt_length": self.max_prompt_length,
+            }
+            train_dataset = train_dataset.map(
+                _process_tokens,
+                fn_kwargs=fn_kwargs,
+                num_proc=args.dataset_num_proc,
+                desc="Processing tokenized train dataset",
+            )
+            fn_kwargs["prefix"] = "KL_"
+            train_kl_dataset = train_kl_dataset.map(
+                _process_tokens,
+                fn_kwargs=fn_kwargs,
+                num_proc=args.dataset_num_proc,
+                remove_columns=[c for c in train_kl_dataset.column_names if c in train_dataset.column_names],
+                desc="Processing tokenized train KL dataset",
+            )
 
-        # tokenize the datasets
-        train_dataset = train_dataset.map(
-            lambda row: self.tokenize_row(row, prefix=""), remove_columns=train_dataset.column_names
-        )
-        train_KL_dataset = train_KL_dataset.map(
-            lambda row: self.tokenize_row(row, prefix="KL_"), remove_columns=train_KL_dataset.column_names
-        )
-        # merge the datasets
-        train_dataset = concatenate_datasets([train_dataset, train_KL_dataset], axis=1)
-
-        if eval_dataset is not None:
-            eval_dataset = eval_dataset.map(
-                lambda row: self.tokenize_row(row, prefix=""), remove_columns=eval_dataset.column_names
-            )
-            eval_KL_dataset = eval_KL_dataset.map(
-                lambda row: self.tokenize_row(row, prefix="KL_"), remove_columns=eval_KL_dataset.column_names
-            )
             # merge the datasets
-            eval_dataset = concatenate_datasets([eval_dataset, eval_KL_dataset], axis=1)
+            train_dataset = concatenate_datasets([train_dataset, train_kl_dataset], axis=1)
 
-        desirable = train_dataset.filter(lambda x: x["label"])
-        undesirable = train_dataset.filter(lambda x: not x["label"])
-
-        if len(desirable) != len(undesirable):
-            # The lower and upper bounds come from Eq. (8) of https://arxiv.org/abs/2402.01306
-            des_weight_lower_bound = round((len(undesirable) * self.undesirable_weight / len(desirable)) * 1, 2)
-            des_weight_upper_bound = round((len(undesirable) * self.undesirable_weight / len(desirable)) * 1.33, 2)
-            und_weight_lower_bound = round((len(desirable) * self.desirable_weight / len(undesirable)) / 1.33, 2)
-            und_weight_upper_bound = round((len(desirable) * self.desirable_weight / len(undesirable)) / 1, 2)
-
-            des_weight_in_range = des_weight_lower_bound <= self.desirable_weight <= des_weight_upper_bound
-            und_weight_in_range = und_weight_lower_bound <= self.undesirable_weight <= und_weight_upper_bound
-
-            if not (des_weight_in_range or und_weight_in_range):
-                warnings.warn(
-                    f"""
-                    You have different amounts of desirable/positive and undesirable/negative examples but the
-                    weights on the desirable and undesirable losses don't seem to be in an ideal range. Based
-                    on your data, we recommend EITHER desirable_weight in [{des_weight_lower_bound}, {des_weight_upper_bound}]
-                    or undesirable_weight in [{und_weight_lower_bound}, {und_weight_upper_bound}] (but NOT BOTH).
-                    See the documentation on how to optimally set these weights.""",
-                    UserWarning,
+            if eval_dataset is not None:
+                # Tokenize
+                eval_dataset = eval_dataset.map(
+                    _tokenize,
+                    fn_kwargs={"tokenizer": self.tokenizer},
+                    batched=True,
+                    desc="Tokenizing eval dataset",
+                )
+                # Get KL dataset
+                eval_kl_dataset = eval_dataset.map(
+                    _get_kl_dataset, batched=True, batch_size=total_batch_size, desc="Extracting eval KL dataset"
+                )
+                # Process
+                fn_kwargs = {
+                    "prefix": "",
+                    "is_encoder_decoder": self.is_encoder_decoder,
+                    "tokenizer": self.tokenizer,
+                    "max_length": self.max_length,
+                    "truncation_mode": self.truncation_mode,
+                    "label_pad_token_id": self.label_pad_token_id,
+                    "max_prompt_length": self.max_prompt_length,
+                }
+                eval_dataset = eval_dataset.map(
+                    _process_tokens,
+                    fn_kwargs=fn_kwargs,
+                    num_proc=args.dataset_num_proc,
+                    desc="Processing tokenized eval dataset",
+                )
+                fn_kwargs["prefix"] = "KL_"
+                eval_kl_dataset = eval_kl_dataset.map(
+                    _process_tokens,
+                    fn_kwargs=fn_kwargs,
+                    num_proc=args.dataset_num_proc,
+                    remove_columns=[c for c in eval_kl_dataset.column_names if c in eval_dataset.column_names],
+                    desc="Processing tokenized eval KL dataset",
                 )
 
-        # split the dataset and interleave them together with equal probability of choosing chosen or rejected
-        interleaved_train_dataset = interleave_datasets(
-            [desirable, undesirable],
-            stopping_strategy="all_exhausted",
-        )
-        interleaved_train_dataset = interleaved_train_dataset.shuffle(seed=args.data_seed)
+                # merge the datasets
+                eval_dataset = concatenate_datasets([eval_dataset, eval_kl_dataset], axis=1)
 
-        if eval_dataset is not None:
-            interleaved_eval_dataset = interleave_datasets(
-                [eval_dataset.filter(lambda x: x["label"]), eval_dataset.filter(lambda x: not x["label"])],
-                stopping_strategy="all_exhausted",
+            desirable = train_dataset.filter(
+                lambda x: x["label"], num_proc=args.dataset_num_proc, desc="Filtering desirable examples"
             )
-        else:
-            interleaved_eval_dataset = None
+            undesirable = train_dataset.filter(
+                lambda x: not x["label"], num_proc=args.dataset_num_proc, desc="Filtering undesirable examples"
+            )
+
+            if len(desirable) != len(undesirable):
+                # The lower and upper bounds come from Eq. (8) of https://arxiv.org/abs/2402.01306
+                des_weight_lower_bound = round((len(undesirable) * self.undesirable_weight / len(desirable)) * 1, 2)
+                des_weight_upper_bound = round((len(undesirable) * self.undesirable_weight / len(desirable)) * 1.33, 2)
+                und_weight_lower_bound = round((len(desirable) * self.desirable_weight / len(undesirable)) / 1.33, 2)
+                und_weight_upper_bound = round((len(desirable) * self.desirable_weight / len(undesirable)) / 1, 2)
+
+                des_weight_in_range = des_weight_lower_bound <= self.desirable_weight <= des_weight_upper_bound
+                und_weight_in_range = und_weight_lower_bound <= self.undesirable_weight <= und_weight_upper_bound
+
+                if not (des_weight_in_range or und_weight_in_range):
+                    warnings.warn(
+                        f"""
+                        You have different amounts of desirable/positive and undesirable/negative examples but the
+                        weights on the desirable and undesirable losses don't seem to be in an ideal range. Based
+                        on your data, we recommend EITHER desirable_weight in [{des_weight_lower_bound}, {des_weight_upper_bound}]
+                        or undesirable_weight in [{und_weight_lower_bound}, {und_weight_upper_bound}] (but NOT BOTH).
+                        See the documentation on how to optimally set these weights.""",
+                        UserWarning,
+                    )
 
         super().__init__(
             model=model,
             args=args,
             data_collator=data_collator,
-            train_dataset=interleaved_train_dataset,
-            eval_dataset=interleaved_eval_dataset,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
             tokenizer=tokenizer,
             model_init=model_init,
             compute_metrics=compute_metrics,
@@ -639,149 +845,6 @@ class KTOTrainer(Trainer):
 
         return completion_logps, KL_logps
 
-    def build_tokenized_answer(self, prompt, answer):
-        """
-        Llama tokenizer does not satisfy `enc(a + b) = enc(a) + enc(b)`.
-        It does ensure `enc(a + b) = enc(a) + enc(a + b)[len(enc(a)):]`.
-        Reference:
-            https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
-        """
-
-        full_tokenized = self.tokenizer(prompt + answer, add_special_tokens=False)
-        prompt_input_ids = self.tokenizer(prompt, add_special_tokens=False)["input_ids"]
-
-        answer_input_ids = full_tokenized["input_ids"][len(prompt_input_ids) :]
-        answer_attention_mask = full_tokenized["attention_mask"][len(prompt_input_ids) :]
-
-        # Concat tokens to form `enc(a) + enc(a + b)[len(enc(a)):]`
-        full_concat_input_ids = np.concatenate([prompt_input_ids, answer_input_ids])
-
-        # Prepare input tokens for token by token comparison
-        full_input_ids = np.array(full_tokenized["input_ids"])
-
-        if len(full_input_ids) != len(full_concat_input_ids):
-            raise ValueError("Prompt input ids and answer input ids should have the same length.")
-
-        # On some tokenizers, like Llama-2 tokenizer, there are occasions where tokens
-        # can be merged together when tokenizing prompt+answer. This could result
-        # on the last token from the prompt being different when tokenized on its own
-        # vs when done as prompt+answer.
-        response_token_ids_start_idx = len(prompt_input_ids)
-
-        # If tokenized prompt is different than both prompt+answer, then it means the
-        # last token has changed due to merging.
-        if prompt_input_ids != full_tokenized["input_ids"][:response_token_ids_start_idx]:
-            response_token_ids_start_idx -= 1
-
-        prompt_input_ids = full_tokenized["input_ids"][:response_token_ids_start_idx]
-        prompt_attention_mask = full_tokenized["attention_mask"][:response_token_ids_start_idx]
-
-        if len(prompt_input_ids) != len(prompt_attention_mask):
-            raise ValueError("Prompt input ids and attention mask should have the same length.")
-
-        answer_input_ids = full_tokenized["input_ids"][response_token_ids_start_idx:]
-        answer_attention_mask = full_tokenized["attention_mask"][response_token_ids_start_idx:]
-
-        return dict(
-            prompt_input_ids=prompt_input_ids,
-            prompt_attention_mask=prompt_attention_mask,
-            answer_input_ids=answer_input_ids,
-            answer_attention_mask=answer_attention_mask,
-        )
-
-    def get_KL_dataset(self, batch) -> Dict:
-        """Creates mismatched pairs of prompts and completions for the KL dataset."""
-        batch["completion"] = batch["completion"][::-1]
-        return batch
-
-    def tokenize_row(self, feature, model: Union[PreTrainedModel, nn.Module] = None, prefix="") -> Dict:
-        """Tokenize a single row from a KTO specific dataset.
-
-        At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
-        in case the prompt + completion responses is/are too long. First
-            we truncate the prompt; if we're still too long, we truncate the completion.
-
-        We also create the labels for the completion responses, which are of length equal to
-            the sum of the length of the prompt and the completion response, with
-            label_pad_token_id  for the prompt tokens.
-        """
-        prompt = feature["prompt"]
-        completion = feature["completion"]
-
-        batch = {
-            f"{prefix}prompt": prompt,
-            f"{prefix}completion": completion,
-            f"{prefix}label": feature["label"],
-        }
-
-        if not self.is_encoder_decoder:
-            # Check issues below for more details
-            #  1. https://github.com/huggingface/trl/issues/907
-            #  2. https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
-            #  3. https://github.com/LianjiaTech/BELLE/issues/337
-
-            if not isinstance(prompt, str):
-                raise ValueError(f"prompt should be an str but got {type(prompt)}")
-
-            if not isinstance(completion, str):
-                raise ValueError(f"completion should be an str but got {type(completion)}")
-
-            # keys of format prompt_* refers to just the prompt and answer_* refers to just the answer
-            all_tokens = self.build_tokenized_answer(prompt, completion)
-
-            max_length = self.max_length - 2
-            # if combined sequence is too long (> max_length - 1 for BOS token - 1 for EOS), truncate the prompt
-            if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
-                for k in ["prompt_input_ids", "prompt_attention_mask"]:
-                    if self.truncation_mode == "keep_start":
-                        all_tokens[k] = all_tokens[k][: self.max_prompt_length]
-                    elif self.truncation_mode == "keep_end":
-                        all_tokens[k] = all_tokens[k][-self.max_prompt_length :]
-                    else:
-                        raise ValueError(f"Unknown truncation mode: {self.truncation_mode}")
-
-            # if that's still too long, truncate the response
-            if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
-                for k in ["answer_input_ids", "answer_attention_mask"]:
-                    all_tokens[k] = all_tokens[k][: max_length - self.max_prompt_length]
-
-            # for legacy reasons, use the completion_* prefix to now refer to the joint sequence
-            batch[f"{prefix}prompt_input_ids"] = [self.tokenizer.bos_token_id] + all_tokens["prompt_input_ids"]
-            batch[f"{prefix}prompt_attention_mask"] = [1] + all_tokens["prompt_attention_mask"]
-            batch[f"{prefix}completion_input_ids"] = (
-                [self.tokenizer.bos_token_id]
-                + all_tokens["prompt_input_ids"]
-                + all_tokens["answer_input_ids"]
-                + [self.tokenizer.eos_token_id]
-            )
-            batch[f"{prefix}completion_attention_mask"] = (
-                [1] + all_tokens["prompt_attention_mask"] + all_tokens["answer_attention_mask"] + [1]
-            )
-
-            batch[f"{prefix}completion_labels"] = batch[f"{prefix}completion_input_ids"][:]
-            batch[f"{prefix}completion_labels"][: len(batch[f"{prefix}prompt_input_ids"])] = [
-                self.label_pad_token_id
-            ] * len(batch[f"{prefix}prompt_input_ids"])
-        else:
-            completion_tokens = self.tokenizer(
-                completion, truncation=True, max_length=self.max_completion_length, add_special_tokens=True
-            )
-            prompt_tokens = self.tokenizer(
-                prompt, truncation=True, max_length=self.max_prompt_length, add_special_tokens=True
-            )
-
-            batch[f"{prefix}prompt_input_ids"] = prompt_tokens["input_ids"]
-            batch[f"{prefix}prompt_attention_mask"] = prompt_tokens["attention_mask"]
-
-            batch[f"{prefix}completion_labels"] = completion_tokens["input_ids"]
-            batch[f"{prefix}completion_attention_mask"] = completion_tokens["attention_mask"]
-            if model is not None and hasattr(model, "prepare_decoder_input_ids_from_labels"):
-                batch[f"{prefix}completion_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
-                    labels=torch.tensor(batch["completion_labels"])
-                )
-
-        return batch
-
     @staticmethod
     def get_batch_logps(
         logits: torch.FloatTensor,
@@ -969,7 +1032,7 @@ class KTOTrainer(Trainer):
                         reference_KL_logps,
                     ) = self.forward(self.ref_model, batch)
 
-        losses, chosen_rewards, rejected_rewards, kl = self.kto_loss(
+        losses, chosen_rewards, rejected_rewards, KL = self.kto_loss(
             policy_chosen_logps,
             policy_rejected_logps,
             policy_KL_logps,
@@ -978,15 +1041,36 @@ class KTOTrainer(Trainer):
             reference_KL_logps,
         )
 
-        # math. incorrect to build mean here, as len(chosen_rewards != nan ) and len(rejected_rewards != nan) varies betw. batches
-        metrics["rewards/chosen"] = chosen_rewards.detach().tolist()
-        metrics["rewards/rejected"] = rejected_rewards.detach().tolist()
-        metrics["kl"] = kl.detach().item()  # is already the mean value within batch
-        metrics["logps/chosen"] = policy_chosen_logps.detach().tolist()
-        metrics["logps/rejected"] = policy_rejected_logps.detach().tolist()
+        num_chosen = torch.Tensor([len(chosen_rewards)]).to(self.accelerator.device)
+        num_rejected = torch.Tensor([len(rejected_rewards)]).to(self.accelerator.device)
 
-        if return_logits:
-            return losses.nanmean(), metrics, logits
+        all_num_chosen = self.accelerator.gather(num_chosen)
+        all_num_rejected = self.accelerator.gather(num_rejected)
+
+        prefix = "eval_" if train_eval == "eval" else ""
+
+        if all_num_chosen.sum().item() > 0:
+            metrics[f"{prefix}rewards/chosen"] = (
+                (self.accelerator.gather(chosen_rewards.mean()) * all_num_chosen).nansum() / all_num_chosen.sum()
+            ).item()
+            metrics[f"{prefix}logps/chosen"] = (
+                (self.accelerator.gather(policy_chosen_logps.mean()) * all_num_chosen).nansum() / all_num_chosen.sum()
+            ).item()
+
+        if all_num_rejected.sum().item() > 0:
+            metrics[f"{prefix}rewards/rejected"] = (
+                (self.accelerator.gather(rejected_rewards.mean()) * all_num_rejected).nansum() / all_num_rejected.sum()
+            ).item()
+            metrics[f"{prefix}logps/rejected"] = (
+                (self.accelerator.gather(policy_rejected_logps.mean()) * all_num_rejected).nansum()
+                / all_num_rejected.sum()
+            ).item()
+
+        metrics[f"{prefix}kl"] = KL.item()
+        if all_num_chosen.sum().item() > 0 and all_num_rejected.sum().item() > 0:
+            metrics[f"{prefix}rewards/margins"] = (
+                metrics[f"{prefix}rewards/chosen"] - metrics[f"{prefix}rewards/rejected"]
+            )
 
         return losses.nanmean(), metrics
 
@@ -1001,15 +1085,13 @@ class KTOTrainer(Trainer):
                 "compute_loss is only implemented for DPODataCollatorWithPadding, and you passed a datacollator that is different than "
                 "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
             )
-
         compute_loss_context_manager = torch.cuda.amp.autocast if self._peft_has_been_casted_to_bf16 else nullcontext
 
         with compute_loss_context_manager():
-            loss, metrics = self.get_batch_loss_metrics(model, inputs)
+            loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="train")
 
         # Make sure to move the loss to the device the original accumulating loss is at back in the `Trainer` class:
         loss = loss.to(self.args.device)
-
         # force log the metrics
         self.store_metrics(metrics, train_eval="train")
 
@@ -1027,7 +1109,6 @@ class KTOTrainer(Trainer):
                 self._stored_metrics[train_eval][key].append(value)
 
     def _get_train_sampler(self) -> Optional[torch.utils.data.Sampler]:
-        # We use a sequential sampler for training as the order of the interleaved dataset is important
         if self.train_dataset is None or not has_length(self.train_dataset):
             return None
         return SequentialSampler(self.train_dataset)
@@ -1035,7 +1116,7 @@ class KTOTrainer(Trainer):
     def get_batch_samples(self, model, batch: Dict[str, torch.LongTensor]) -> Tuple[str, str]:
         """Generate samples from the model and reference model for the given batch of inputs."""
 
-        # If one uses `generate_during_eval` with peft + bf16, we need to explictly call generate with
+        # If one uses `generate_during_eval` with peft + bf16, we need to explicitly call generate with
         # the torch cuda amp context manager as some hidden states are silently casted to full precision.
         generate_context_manager = nullcontext if not self._peft_has_been_casted_to_bf16 else torch.cuda.amp.autocast
 
@@ -1192,7 +1273,7 @@ class KTOTrainer(Trainer):
     @wraps(Trainer.push_to_hub)
     def push_to_hub(self, commit_message: Optional[str] = "End of training", blocking: bool = True, **kwargs) -> str:
         """
-        Overwrite the `push_to_hub` method in order to force-add the tag "sft" when pushing the
+        Overwrite the `push_to_hub` method in order to force-add the tag "kto" when pushing the
         model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
         """
         kwargs = trl_sanitze_kwargs_for_tagging(model=self.model, tag_names=self._tag_names, kwargs=kwargs)
