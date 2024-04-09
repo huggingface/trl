@@ -705,7 +705,7 @@ class ORPOTrainer(Trainer):
             loss = loss_fct(logits, labels)
             return loss
 
-        labels = concatenated_batch["concatenated_labels"].clone()
+        labels = concatenated_batch["concatenated_input_ids"].clone()
         chosen_nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
 
         all_logps = self.get_batch_logps(
