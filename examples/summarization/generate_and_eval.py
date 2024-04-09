@@ -116,7 +116,7 @@ def generate(script_args):
             script_args.dataset_name.replace("/", "_"),
             script_args.model_name.replace("/", "_"),
         )
-        os.makedirs(dataset_path)
+        os.makedirs(dataset_path, exist_ok=True)
         dataset.save_to_disk(dataset_path)
         with open(f"{dataset_path}_sampling_params.txt", "w") as f:
             try:
