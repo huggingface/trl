@@ -130,12 +130,14 @@ if __name__ == "__main__":
             texts = []
             images = []
             for example in examples:
+                if len(example["images"]) > 1:
+                    raise ValueError("This collator only supports one image per example")
                 messages = example["messages"]
                 text = self.processor.tokenizer.apply_chat_template(
                     messages, tokenize=False, add_generation_prompt=False
                 )
                 texts.append(text)
-                images.append(example["image"])
+                images.append(example["images"][0])
 
             batch = self.processor(texts, images, return_tensors="pt", padding=True)
 
