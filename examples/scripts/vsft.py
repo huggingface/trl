@@ -100,9 +100,9 @@ if __name__ == "__main__":
     ################
     # Model, Tokenizer & Processor
     ################
-    
+
     LLAVA_CHAT_TEMPLATE = """{% for message in messages %}{% if message['role'] == 'user' %}USER:{% else %}ASSISTANT:{% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{{'\n'}}{% endfor %}"""
-    
+
     torch_dtype = (
         model_config.torch_dtype
         if model_config.torch_dtype in ["auto", None]
@@ -122,7 +122,7 @@ if __name__ == "__main__":
     # tokenizer.pad_token = tokenizer.eos_token
     tokenizer.chat_template = LLAVA_CHAT_TEMPLATE
     processor = AutoProcessor.from_pretrained(model_config.model_name_or_path)
-    processor.tokenizer = tokenizer  
+    processor.tokenizer = tokenizer
 
     model = LlavaForConditionalGeneration.from_pretrained(model_config.model_name_or_path, **model_kwargs)
 
@@ -133,7 +133,7 @@ if __name__ == "__main__":
     class LLavaDataCollator:
         def __init__(self, processor):
             self.processor = processor
-            
+
         def __call__(self, examples):
             texts = []
             images = []
@@ -155,7 +155,7 @@ if __name__ == "__main__":
             batch["labels"] = labels
 
             return batch
-        
+
     data_collator = LLavaDataCollator(processor)
 
     ################
@@ -184,12 +184,12 @@ if __name__ == "__main__":
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            dataset_text_field="text", # need a dummy field
+            dataset_text_field="text",  # need a dummy field
             tokenizer=tokenizer,
             peft_config=get_peft_config(model_config),
             callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
             data_collator=data_collator,
-            dataset_kwargs={"skip_prepare_dataset": True}
+            dataset_kwargs={"skip_prepare_dataset": True},
         )
 
     trainer.train()
