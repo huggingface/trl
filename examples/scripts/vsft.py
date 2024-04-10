@@ -1,5 +1,5 @@
 # flake8: noqa
-# Copyright 2023 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,32 +14,40 @@
 # limitations under the License.
 """
 # regular:
-python examples/scripts/sft.py \
+python examples/scripts/vsft.py \
     --model_name_or_path="llava-hf/llava-1.5-7b-hf" \
     --report_to="wandb" \
     --learning_rate=1.41e-5 \
-    --per_device_train_batch_size=64 \
-    --gradient_accumulation_steps=16 \
-    --output_dir="vsft-llava-1.5-7b-hf" \
+    --per_device_train_batch_size=8 \
+    --gradient_accumulation_steps=1 \
+    --output_dir="data/vsft-llava-1.5-7b-hf" \
     --logging_steps=1 \
     --num_train_epochs=1 \
     --max_steps=-1 \
     --push_to_hub \
     --gradient_checkpointing \
-
+    --remove_unused_columns=False \
+    --torch_dtype=float16 \
+    --fp16=True \ 
+    --dataset_name=HuggingFaceH4/llava-instruct-mix-vsft \
+    
 # peft:
-python examples/scripts/sft.py \
-    --model_name_or_path="facebook/opt-350m" \
+python examples/scripts/vsft.py \
+    --model_name_or_path="llava-hf/llava-1.5-7b-hf" \
     --report_to="wandb" \
     --learning_rate=1.41e-5 \
     --per_device_train_batch_size=8 \
     --gradient_accumulation_steps=1 \
-    --output_dir="sft_openassistant-guanaco" \
+    --output_dir="data/vsft-llava-1.5-7b-hf" \
     --logging_steps=1 \
-    --num_train_epochs=3 \
+    --num_train_epochs=1 \
     --max_steps=-1 \
     --push_to_hub \
     --gradient_checkpointing \
+    --remove_unused_columns=False \
+    --torch_dtype=float16 \
+    --fp16=True \ 
+    --dataset_name=HuggingFaceH4/llava-instruct-mix-vsft \    
     --use_peft \
     --lora_r=64 \
     --lora_alpha=16
