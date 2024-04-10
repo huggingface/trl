@@ -396,12 +396,13 @@ class SFTTrainer(Trainer):
         remove_unused_columns=True,
         append_concat_token=True,
         add_special_tokens=True,
+        skip_prepare_dataset=False,
     ):
         if dataset is None:
             raise ValueError("The dataset should not be None")
 
         # check if torch dataset / dataloader and do nothing
-        if isinstance(dataset, (torch.utils.data.IterableDataset, torch.utils.data.Dataset, ConstantLengthDataset)):
+        if skip_prepare_dataset or isinstance(dataset, (torch.utils.data.IterableDataset, torch.utils.data.Dataset, ConstantLengthDataset)):
             return dataset
 
         if not packing:
