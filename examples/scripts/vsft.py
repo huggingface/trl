@@ -93,15 +93,7 @@ if __name__ == "__main__":
     # Model, Tokenizer & Processor
     ################
     
-    LLAVA_CHAT_TEMPLATE = """
-        {% for message in messages %}
-            {% if message['role'] == 'user' %}
-                USER: {{ message['content'] }}\n
-            {% else %}
-                ASSISTANT: {{ message['content'] }}\n
-            {% endif %}
-        {% endfor %}
-    """
+    LLAVA_CHAT_TEMPLATE = """{% for message in messages %}{% if message['role'] == 'user' %}USER:{% else %}ASSISTANT:{% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{{'\n'}}{% endfor %}"""
     
     torch_dtype = (
         model_config.torch_dtype
@@ -155,7 +147,6 @@ if __name__ == "__main__":
             return batch
         
     data_collator = LLavaDataCollator(processor)
-
 
     ################
     # Dataset
