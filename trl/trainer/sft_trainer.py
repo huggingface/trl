@@ -17,10 +17,10 @@ import warnings
 from functools import wraps
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
+import datasets
 import torch
 import torch.nn as nn
 from accelerate.state import PartialState
-import datasets
 from datasets import Dataset
 from datasets.arrow_writer import SchemaInferenceError
 from datasets.builder import DatasetGenerationError
@@ -402,7 +402,9 @@ class SFTTrainer(Trainer):
             raise ValueError("The dataset should not be None")
 
         # check if torch dataset / dataloader and do nothing
-        if isinstance(dataset, (torch.utils.data.IterableDataset, torch.utils.data.Dataset, ConstantLengthDataset)) and not isinstance(dataset, datasets.IterableDataset):
+        if isinstance(
+            dataset, (torch.utils.data.IterableDataset, torch.utils.data.Dataset, ConstantLengthDataset)
+        ) and not isinstance(dataset, datasets.IterableDataset):
             return dataset
 
         if not packing:
@@ -513,7 +515,7 @@ class SFTTrainer(Trainer):
                 append_concat_token=append_concat_token,
                 add_special_tokens=add_special_tokens,
             )
-            
+
             if isinstance(dataset, datasets.IterableDataset):
                 return constant_length_iterator
 
