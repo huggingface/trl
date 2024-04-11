@@ -19,9 +19,15 @@ import unittest
 import numpy as np
 import pytest
 import torch
+from datasets import Dataset, Image, Sequence
 from PIL import Image as PILImage
-from datasets import Dataset, Sequence, Image
-from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments, LlavaForConditionalGeneration, AutoProcessor
+from transformers import (
+    AutoModelForCausalLM,
+    AutoProcessor,
+    AutoTokenizer,
+    LlavaForConditionalGeneration,
+    TrainingArguments,
+)
 
 from trl import SFTTrainer
 from trl.import_utils import is_peft_available
@@ -123,57 +129,49 @@ class SFTTrainerTester(unittest.TestCase):
                 {"prompt": "What is 4+4?", "completion": "8"},
             ]
         )
-        
+
         cls.dummy_vsft_instruction_dataset = Dataset.from_dict(
             {
                 "messages": [
                     [
-                        {"role": "user", "content": [{"type": "text","text": "What is in this image?"},{"type": "image"}]},
-                        {"role": "assistant", "content": [{"type": "text","text": "It is random noise."}]},
-                        {"role": "user", "content": [{"type": "text","text": "Oh ye, you are right, what is 1+1"}]
+                        {
+                            "role": "user",
+                            "content": [{"type": "text", "text": "What is in this image?"}, {"type": "image"}],
                         },
-                        {"role": "assistant", 
-                         "content": [
-                                 {
-                                 "type": "text",
-                                 "text": "2"
-                                 }
-                         ]
+                        {
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": "It is random noise."}],
                         },
+                        {
+                            "role": "user",
+                            "content": [{"type": "text", "text": "Oh ye, you are right, what is 1+1"}],
+                        },
+                        {
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": "2"}],
+                        },
+                    ],
+                    [
+                        {
+                            "role": "user",
+                            "content": [{"type": "text", "text": "What is in this image?"}, {"type": "image"}],
+                        },
+                        {
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": "It is random noise."}],
+                        },
+                    ],
                 ],
-                
-                          [
-                        {"role": "user", 
-                         "content": [
-                                 {
-                                 "type": "text",
-                                 "text": "What is in this image?"
-                                 },
-                                 {
-                                 "type": "image",
-                                 }
-                         ]
-                        },
-                        {"role": "assistant", 
-                         
-                         
-                         "content": [
-                                 {
-                                 "type": "text",
-                                 "text": "It is random noise."
-                                 }
-                         ]
-                        }
-                ]
+                "images": [
+                    [PILImage.fromarray((np.random.rand(40, 50, 3) * 255).astype("uint8")).convert("RGBA")],
+                    [PILImage.fromarray((np.random.rand(50, 60, 3) * 255).astype("uint8")).convert("RGBA")],
                 ],
-                "images":[
-                            [PILImage.fromarray((np.random.rand(400,500,3) * 255).astype('uint8')).convert('RGBA')],
-                            [PILImage.fromarray((np.random.rand(500,600,3) * 255).astype('uint8')).convert('RGBA')]
-                          ]
             }
         )
-        cls.dummy_vsft_instruction_dataset = cls.dummy_vsft_instruction_dataset.cast_column("images", Sequence(Image()) )
-        
+        cls.dummy_vsft_instruction_dataset = cls.dummy_vsft_instruction_dataset.cast_column(
+            "images", Sequence(Image())
+        )
+
         cls.train_dataset = ConstantLengthDataset(
             cls.tokenizer,
             cls.dummy_dataset,
@@ -1069,10 +1067,12 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 per_device_eval_batch_size=2,
                 remove_unused_columns=False,
-                
             )
-            tiny_llava = LlavaForConditionalGeneration.from_pretrained("trl-internal-testing/tiny-random-LlavaForConditionalGeneration")
+            tiny_llava = LlavaForConditionalGeneration.from_pretrained(
+                "trl-internal-testing/tiny-random-LlavaForConditionalGeneration"
+            )
             processor = AutoProcessor.from_pretrained("trl-internal-testing/tiny-random-LlavaForConditionalGeneration")
+
             # processor.tokenizer.chat_template = """A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. {% for message in messages %}{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}"""
             class LLavaDataCollator:
                 def __init__(self, processor):
@@ -1101,7 +1101,7 @@ class SFTTrainerTester(unittest.TestCase):
                     return batch
 
             data_collator = LLavaDataCollator(processor)
-            
+
             trainer = SFTTrainer(
                 model=tiny_llava,
                 args=training_args,
@@ -1118,5 +1118,3 @@ class SFTTrainerTester(unittest.TestCase):
             assert trainer.state.log_history[0]["eval_loss"] is not None
 
             assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2")
-            
-    
