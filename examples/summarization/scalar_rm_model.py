@@ -90,8 +90,9 @@ class ScalarModelConfig(PretrainedConfig):
 
 class ScalarModel(PreTrainedModel):
     config_class = ScalarModelConfig
+    _supports_flash_attn_2 = True
 
-    def __init__(self, config: ScalarModelConfig):
+    def __init__(self, config: ScalarModelConfig, **base_model_kwargs):
         super().__init__(config)
         # if config.base_model == "models/EleutherAI/pythia-6.9b-deduped/sft_model_55513":
         #     config.base_model = "vwxyzjn/EleutherAI_pythia-6.9b-deduped__sft__tldr"
@@ -104,6 +105,7 @@ class ScalarModel(PreTrainedModel):
             revision=getattr(config, "base_model_revision", None),
             config=self.config.base_config,
             trust_remote_code=True,
+            **base_model_kwargs,
         )
         self.scalar_head = layer_init(
             nn.Linear(self.config.hidden_size, 1),
@@ -158,7 +160,6 @@ if __name__ == "__main__":
     scalar_model_config = ScalarModelConfig.from_pretrained(
         model_config.model_name_or_path,
         revision=model_config.model_revision,
-        trust_remote_code=True,
     )
     # hack to remove the path
     # models/EleutherAI/pythia-6.9b-deduped/sft_model_55513 -> EleutherAI/pythia-6.9b-deduped
@@ -173,7 +174,6 @@ if __name__ == "__main__":
     model = ScalarModel.from_pretrained(
         model_config.model_name_or_path,
         revision=model_config.model_revision,
-        trust_remote_code=model_config.trust_remote_code,
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
         config=scalar_model_config,
