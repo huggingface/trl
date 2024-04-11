@@ -1,4 +1,5 @@
 import gc
+import hashlib
 import json
 import os
 from dataclasses import dataclass, field
@@ -68,6 +69,7 @@ def generate(script_args):
         top_p=script_args.top_p,
         n=1,
         include_stop_str_in_output=True,
+        skip_special_tokens=False,
     )
 
     refs = list_repo_refs(script_args.model_name, repo_type="model")
@@ -111,6 +113,9 @@ def generate(script_args):
     reference = dataset["query_reference_response"]
 
     if script_args.output_dir is not None:
+        # TODO add hash to dataset path
+        # sampling_str = str(sampling_params)
+        # sampling_hash = hashlib.sha256(sampling_str.encode()).hexdigest()[:10]
         dataset_path = os.path.join(
             script_args.output_dir,
             script_args.dataset_name.replace("/", "_"),
@@ -119,12 +124,7 @@ def generate(script_args):
         os.makedirs(dataset_path, exist_ok=True)
         dataset.save_to_disk(dataset_path)
         with open(f"{dataset_path}_sampling_params.txt", "w") as f:
-            try:
-                from pprint import pprint
-
-                pprint(sampling_params, stream=f)
-            except:
-                print(sampling_params, file=f)
+            print(sampling_params, file=f)
 
     print(f"generated {len(gens)} steps")
     return reference, gens
@@ -182,17 +182,31 @@ def evaluate(script_args, reference, generations):
         tokenizer=tokenizer,
     )
 
+    def tokenize_and_add_eos(tokenizer, text_column, max_length):
+        def fn(example):
+            text = example[text_column]
+            if not text.endswith(tokenizer.eos_token):
+                text += tokenizer.eos_token
+
+            tokenized = tokenizer(
+                text,
+                padding="max_length",
+                max_length=max_length,
+                truncation=True,
+            )
+
+            # guarantee that last token is EOS if truncated
+            token_length = sum(tokenized["attention_mask"])
+            if token_length == max_length:
+                tokenized["input_ids"][-1] = tokenizer.eos_token_id
+
+            return tokenized
+
+        return fn
+
     ## get reference continuation rewards
     dataset = Dataset.from_dict({"reference": reference})
-    dataset = dataset.map(
-        lambda example: tokenizer(
-            example["reference"],
-            padding="max_length",
-            max_length=script_args.max_length,
-            truncation=True,
-        ),
-        batched=True,
-    )
+    dataset = dataset.map(tokenize_and_add_eos(tokenizer, "reference", script_args.max_length))
 
     ref_results = trainer.predict(dataset)
     ref_rewards = ref_results.predictions
@@ -200,15 +214,7 @@ def evaluate(script_args, reference, generations):
     step = 0
     for step_str, query_response in generations.items():
         dataset = Dataset.from_dict({"query_response": query_response})
-        dataset = dataset.map(
-            lambda example: tokenizer(
-                example["query_response"],
-                padding="max_length",
-                max_length=script_args.max_length,
-                truncation=True,
-            ),
-            batched=True,
-        )
+        dataset = dataset.map(tokenize_and_add_eos(tokenizer, "query_response", script_args.max_length))
 
         print(f"Evaluating {step_str}")
         results = trainer.predict(dataset)
