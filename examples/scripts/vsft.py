@@ -192,5 +192,3 @@ if __name__ == "__main__":
     with save_context:
         trainer.save_model(training_args.output_dir)
         trainer.push_to_hub()
-        
-    #model.push_to_hub("HuggingFaceH4/llava-1.5-7b-hf-sft", revision="v0.2", private=True)
