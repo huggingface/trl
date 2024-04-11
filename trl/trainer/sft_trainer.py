@@ -403,8 +403,8 @@ class SFTTrainer(Trainer):
             raise ValueError("The dataset should not be None")
 
         if skip_prepare_dataset:
-          return dataset
-        
+            return dataset
+
         # If the dataset is already preprocessed (tokenized), return as-is. Only works if dataset is
         # a datasets.Dataset or datasets.IterableDataset -- not for torch Dataset
         column_names = (
