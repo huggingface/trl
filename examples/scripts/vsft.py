@@ -21,9 +21,8 @@ python examples/scripts/vsft.py \
     --per_device_train_batch_size=8 \
     --gradient_accumulation_steps=1 \
     --output_dir="data/vsft-llava-1.5-7b-hf" \
-    --logging_steps=1 \
+    --logging_steps=5 \
     --num_train_epochs=1 \
-    --max_steps=-1 \
     --push_to_hub \
     --gradient_checkpointing \
     --remove_unused_columns=False \
@@ -39,9 +38,8 @@ python examples/scripts/vsft.py \
     --per_device_train_batch_size=8 \
     --gradient_accumulation_steps=1 \
     --output_dir="data/vsft-llava-1.5-7b-hf" \
-    --logging_steps=1 \
+    --logging_steps=5 \
     --num_train_epochs=1 \
-    --max_steps=-1 \
     --push_to_hub \
     --gradient_checkpointing \
     --remove_unused_columns=False \
@@ -91,7 +89,7 @@ if TRL_USE_RICH:
 if __name__ == "__main__":
     parser = TrlParser((SftScriptArguments, TrainingArguments, ModelConfig))
     args, training_args, model_config = parser.parse_args_and_config()
-
+    training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
     # Force use our print callback
     if TRL_USE_RICH:
         training_args.disable_tqdm = True
@@ -100,8 +98,7 @@ if __name__ == "__main__":
     ################
     # Model, Tokenizer & Processor
     ################
-
-    LLAVA_CHAT_TEMPLATE = """{% for message in messages %}{% if message['role'] == 'user' %}USER:{% else %}ASSISTANT:{% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{{'\n'}}{% endfor %}"""
+    LLAVA_CHAT_TEMPLATE = """A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. {% for message in messages %}{% if message['role'] == 'user' %}USER:{% else %}ASSISTANT:{% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{{'\n'}}{% endfor %}"""
 
     torch_dtype = (
         model_config.torch_dtype
@@ -114,12 +111,11 @@ if __name__ == "__main__":
         trust_remote_code=model_config.trust_remote_code,
         attn_implementation=model_config.attn_implementation,
         torch_dtype=torch_dtype,
-        # use_cache=False if training_args.gradient_checkpointing else True, # llava does not have this option
+        # use_cache=False if training_args.gradient_checkpointing else True, # llava does not expose this option
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
     tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path, use_fast=True)
-    # tokenizer.pad_token = tokenizer.eos_token
     tokenizer.chat_template = LLAVA_CHAT_TEMPLATE
     processor = AutoProcessor.from_pretrained(model_config.model_name_or_path)
     processor.tokenizer = tokenizer
@@ -138,14 +134,14 @@ if __name__ == "__main__":
             texts = []
             images = []
             for example in examples:
-                if len(example["images"]) > 1:
-                    raise ValueError("This collator only supports one image per example")
+                # if len(example["images"]) > 1:
+                #     raise ValueError("This collator only supports one image per example")
                 messages = example["messages"]
                 text = self.processor.tokenizer.apply_chat_template(
                     messages, tokenize=False, add_generation_prompt=False
                 )
                 texts.append(text)
-                images.append(example["images"][0])
+                images.append(example["images"])
 
             batch = self.processor(texts, images, return_tensors="pt", padding=True)
 
@@ -196,3 +192,6 @@ if __name__ == "__main__":
 
     with save_context:
         trainer.save_model(training_args.output_dir)
+        trainer.push_to_hub()
+        
+    #model.push_to_hub("HuggingFaceH4/llava-1.5-7b-hf-sft", revision="v0.2", private=True)
