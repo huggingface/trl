@@ -85,6 +85,7 @@ if TYPE_CHECKING:
         is_diffusers_available,
         is_npu_available,
         is_peft_available,
+        is_pil_available,
         is_wandb_available,
         is_xpu_available,
     )
