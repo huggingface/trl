@@ -19,14 +19,20 @@ import unittest
 import numpy as np
 import pytest
 import torch
-from datasets import Dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
+from datasets import Dataset, Image, Sequence
+from transformers import (
+    AutoModelForCausalLM,
+    AutoProcessor,
+    AutoTokenizer,
+    LlavaForConditionalGeneration,
+    TrainingArguments,
+)
 
 from trl import SFTTrainer
-from trl.import_utils import is_peft_available
+from trl.import_utils import is_peft_available, is_pil_available
 from trl.trainer import ConstantLengthDataset, DataCollatorForCompletionOnlyLM
 
-from .testing_utils import require_peft
+from .testing_utils import require_peft, requires_pil
 
 
 def formatting_prompts_func(example):
@@ -44,6 +50,9 @@ def formatting_prompts_func_batched(example):
 
 if is_peft_available():
     from peft import LoraConfig, PeftModel
+
+if is_pil_available():
+    from PIL import Image as PILImage
 
 
 class SFTTrainerTester(unittest.TestCase):
@@ -122,6 +131,49 @@ class SFTTrainerTester(unittest.TestCase):
                 {"prompt": "What is 4+4?", "completion": "8"},
             ]
         )
+
+        if is_pil_available():
+            cls.dummy_vsft_instruction_dataset = Dataset.from_dict(
+                {
+                    "messages": [
+                        [
+                            {
+                                "role": "user",
+                                "content": [{"type": "text", "text": "What is in this image?"}, {"type": "image"}],
+                            },
+                            {
+                                "role": "assistant",
+                                "content": [{"type": "text", "text": "It is random noise."}],
+                            },
+                            {
+                                "role": "user",
+                                "content": [{"type": "text", "text": "Oh ye, you are right, what is 1+1"}],
+                            },
+                            {
+                                "role": "assistant",
+                                "content": [{"type": "text", "text": "2"}],
+                            },
+                        ],
+                        [
+                            {
+                                "role": "user",
+                                "content": [{"type": "text", "text": "What is in this image?"}, {"type": "image"}],
+                            },
+                            {
+                                "role": "assistant",
+                                "content": [{"type": "text", "text": "It is random noise."}],
+                            },
+                        ],
+                    ],
+                    "images": [
+                        [PILImage.fromarray((np.random.rand(40, 50, 3) * 255).astype("uint8")).convert("RGBA")],
+                        [PILImage.fromarray((np.random.rand(50, 60, 3) * 255).astype("uint8")).convert("RGBA")],
+                    ],
+                }
+            )
+            cls.dummy_vsft_instruction_dataset = cls.dummy_vsft_instruction_dataset.cast_column(
+                "images", Sequence(Image())
+            )
 
         cls.train_dataset = ConstantLengthDataset(
             cls.tokenizer,
@@ -980,3 +1032,95 @@ class SFTTrainerTester(unittest.TestCase):
 
             assert len(trainer.train_dataset["input_ids"]) != 1
             assert len(trainer.eval_dataset["input_ids"]) != 1
+
+    @requires_pil
+    def test_sft_trainer_skip_prepare_dataset(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                evaluation_strategy="steps",
+                max_steps=4,
+                eval_steps=2,
+                save_steps=2,
+                per_device_train_batch_size=2,
+                gradient_checkpointing=True,
+                remove_unused_columns=False,
+            )
+
+            trainer = SFTTrainer(
+                model=self.model_id,
+                args=training_args,
+                train_dataset=self.dummy_vsft_instruction_dataset,
+                eval_dataset=self.dummy_vsft_instruction_dataset,
+                dataset_text_field="text",  # need a dummy field
+                dataset_kwargs={"skip_prepare_dataset": True},
+            )
+            assert trainer.train_dataset.features == self.dummy_vsft_instruction_dataset.features
+            assert trainer.eval_dataset.features == self.dummy_vsft_instruction_dataset.features
+
+    @requires_pil
+    def test_sft_trainer_llava(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                evaluation_strategy="steps",
+                max_steps=4,
+                eval_steps=2,
+                save_steps=2,
+                per_device_train_batch_size=2,
+                per_device_eval_batch_size=2,
+                remove_unused_columns=False,
+            )
+            tiny_llava = LlavaForConditionalGeneration.from_pretrained(
+                "trl-internal-testing/tiny-random-LlavaForConditionalGeneration"
+            )
+            processor = AutoProcessor.from_pretrained("trl-internal-testing/tiny-random-LlavaForConditionalGeneration")
+
+            processor.tokenizer.chat_template = """A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. {% for message in messages %}{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}"""
+
+            class LLavaDataCollator:
+                def __init__(self, processor):
+                    self.processor = processor
+
+                def __call__(self, examples):
+                    texts = []
+                    images = []
+                    for example in examples:
+                        if len(example["images"]) > 1:
+                            raise ValueError("This collator only supports one image per example")
+                        messages = example["messages"]
+                        text = self.processor.tokenizer.apply_chat_template(
+                            messages, tokenize=False, add_generation_prompt=False
+                        )
+                        texts.append(text)
+                        images.append(example["images"][0])
+
+                    batch = self.processor(texts, images, return_tensors="pt", padding=True)
+
+                    labels = batch["input_ids"].clone()
+                    if self.processor.tokenizer.pad_token_id is not None:
+                        labels[labels == self.processor.tokenizer.pad_token_id] = -100
+                    batch["labels"] = labels
+
+                    return batch
+
+            data_collator = LLavaDataCollator(processor)
+
+            trainer = SFTTrainer(
+                model=tiny_llava,
+                args=training_args,
+                train_dataset=self.dummy_vsft_instruction_dataset,
+                eval_dataset=self.dummy_vsft_instruction_dataset,
+                dataset_text_field="text",  # need a dummy field
+                dataset_kwargs={"skip_prepare_dataset": True},
+                data_collator=data_collator,
+            )
+
+            trainer.train()
+
+            assert trainer.state.log_history[(-1)]["train_loss"] is not None
+            assert trainer.state.log_history[0]["eval_loss"] is not None
+
+            assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2")

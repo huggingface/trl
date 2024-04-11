@@ -397,9 +397,13 @@ class SFTTrainer(Trainer):
         remove_unused_columns=True,
         append_concat_token=True,
         add_special_tokens=True,
+        skip_prepare_dataset=False,
     ):
         if dataset is None:
             raise ValueError("The dataset should not be None")
+
+        if skip_prepare_dataset:
+            return dataset
 
         # If the dataset is already preprocessed (tokenized), return as-is. Only works if dataset is
         # a datasets.Dataset or datasets.IterableDataset -- not for torch Dataset
