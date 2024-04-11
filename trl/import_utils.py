@@ -74,6 +74,10 @@ def is_diffusers_available() -> bool:
     return find_spec("diffusers") is not None
 
 
+def is_pil_available() -> bool:
+    return find_spec("PIL") is not None
+
+
 def is_bitsandbytes_available() -> bool:
     import torch
 
