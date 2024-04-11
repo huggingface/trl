@@ -19,8 +19,8 @@ import unittest
 import numpy as np
 import pytest
 import torch
-from PIL import Image
-from datasets import Dataset
+from PIL import Image as PILImage
+from datasets import Dataset, Sequence, Image
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments, LlavaForConditionalGeneration, AutoProcessor
 
 from trl import SFTTrainer
@@ -167,15 +167,13 @@ class SFTTrainerTester(unittest.TestCase):
                 ]
                 ],
                 "images":[
-                            [Image.fromarray((np.random.rand(100,100,3) * 255).astype('uint8')).convert('RGBA')],
-                            [Image.fromarray((np.random.rand(100,100,3) * 255).astype('uint8')).convert('RGBA')]
+                            [PILImage.fromarray((np.random.rand(400,500,3) * 255).astype('uint8')).convert('RGBA')],
+                            [PILImage.fromarray((np.random.rand(500,600,3) * 255).astype('uint8')).convert('RGBA')]
                           ]
             }
         )
+        cls.dummy_vsft_instruction_dataset = cls.dummy_vsft_instruction_dataset.cast_column("images", Sequence(Image()) )
         
-        
-        
-
         cls.train_dataset = ConstantLengthDataset(
             cls.tokenizer,
             cls.dummy_dataset,
@@ -1069,12 +1067,13 @@ class SFTTrainerTester(unittest.TestCase):
                 eval_steps=2,
                 save_steps=2,
                 per_device_train_batch_size=2,
+                per_device_eval_batch_size=2,
                 remove_unused_columns=False,
                 
             )
             tiny_llava = LlavaForConditionalGeneration.from_pretrained("trl-internal-testing/tiny-random-LlavaForConditionalGeneration")
             processor = AutoProcessor.from_pretrained("trl-internal-testing/tiny-random-LlavaForConditionalGeneration")
-            processor.tokenizer.chat_template = """A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. {% for message in messages %}{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}"""
+            # processor.tokenizer.chat_template = """A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. {% for message in messages %}{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}"""
             class LLavaDataCollator:
                 def __init__(self, processor):
                     self.processor = processor
