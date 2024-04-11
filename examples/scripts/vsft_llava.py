@@ -46,9 +46,10 @@ python examples/scripts/vsft.py \
     --torch_dtype=float16 \
     --fp16=True \ 
     --dataset_name=HuggingFaceH4/llava-instruct-mix-vsft \    
-    --use_peft \
+    --use_peft=True \
     --lora_r=64 \
-    --lora_alpha=16
+    --lora_alpha=16 \
+    --lora_target_modules=all-linear"
 
 # evaluation:
  
