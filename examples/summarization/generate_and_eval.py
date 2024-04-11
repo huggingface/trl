@@ -11,7 +11,7 @@ from datasets import Dataset, DatasetInfo, builder, load_dataset
 from huggingface_hub import list_repo_refs
 from scalar_rm_model import ScalarModel, ScalarModelConfig
 from torch.utils.data import DataLoader
-from transformers import AutoTokenizer, HfArgumentParser, Trainer
+from transformers import AutoTokenizer, HfArgumentParser, Trainer, TrainingArguments
 from vllm import LLM, SamplingParams
 from vllm.model_executor.parallel_utils.parallel_state import destroy_model_parallel
 
@@ -51,8 +51,10 @@ class EvalScriptArguments:
     gold_model_name: Optional[str] = field(default="EleutherAI/pythia-410m", metadata={"help": "the model name"})
     gold_model_revision: Optional[str] = field(default=None)
     eval_dtype: Optional[str] = field(default="auto")
+    eval_batch_size: Optional[int] = field(default=16)
     max_length: Optional[int] = field(default=512)
     gold_tokenizer_name: Optional[str] = field(default=None, metadata={"help": "the tokenizer name"})
+    flash_attention: Optional[bool] = field(default=False)
 
 
 def generate(script_args):
@@ -81,50 +83,7 @@ def generate(script_args):
         if script_args.model_revisions and branch.name not in script_args.model_revisions:
             continue
 
-        print(f"generating step {branch.name}")
-        llm = LLM(
-            model=script_args.model_name,
-            tokenizer=script_args.tokenizer_name,
-            revision=branch.name,
-            dtype=script_args.gen_dtype,
-            max_model_len=script_args.seq_length,
-            tensor_parallel_size=script_args.num_gpus,
-            trust_remote_code=True,
-        )
-
-        llm.set_tokenizer(tokenizer)
-
-        generations = llm.generate(prompts, sampling_params)
-
-        texts = [output.prompt + output.outputs[0].text for output in generations]
-
-        gens[branch.name] = texts
-
-        dataset = dataset.add_column(f"generations_{branch.name}", texts)
-
-        # delete old model
-        destroy_model_parallel()
-        del llm.llm_engine.driver_worker
-        del llm
-        gc.collect()
-        torch.cuda.empty_cache()
-        torch.distributed.destroy_process_group()
-
-    reference = dataset["query_reference_response"]
-
-    if script_args.output_dir is not None:
-        # TODO add hash to dataset path
-        # sampling_str = str(sampling_params)
-        # sampling_hash = hashlib.sha256(sampling_str.encode()).hexdigest()[:10]
-        dataset_path = os.path.join(
-            script_args.output_dir,
-            script_args.dataset_name.replace("/", "_"),
-            script_args.model_name.replace("/", "_"),
-        )
-        os.makedirs(dataset_path, exist_ok=True)
-        dataset.save_to_disk(dataset_path)
-        with open(f"{dataset_path}_sampling_params.txt", "w") as f:
-            print(sampling_params, file=f)
+        print(sampling_params, file=f)
 
     print(f"generated {len(gens)} steps")
     return reference, gens
@@ -137,26 +96,23 @@ def generate(script_args):
     # generated_dataset.push_to_hub(os.path.basename(script_args.output_dir), split="train")
 
 
-def evaluate(script_args, reference, generations):
-    if script_args.wandb_log_id is not None:
+def evaluate(args, reference, generations):
+    if args.wandb_log_id is not None:
         wandb_name = os.environ["WANDB_NAME"]
         original_name = wandb_name.removeprefix("geneval_")
-        wandb.init(id=script_args.wandb_log_id, resume="allow", name=original_name)
+        wandb.init(id=args.wandb_log_id, resume="allow", name=original_name)
         log_to_wandb = True
         print("Logging to WandB")
     else:
         log_to_wandb = False
 
-    torch_dtype = (
-        script_args.eval_dtype if script_args.eval_dtype in ["auto", None] else getattr(torch, script_args.eval_dtype)
-    )
-    tokenizer = AutoTokenizer.from_pretrained(script_args.gold_tokenizer_name)
+    torch_dtype = args.eval_dtype if args.eval_dtype in ["auto", None] else getattr(torch, args.eval_dtype)
+    tokenizer = AutoTokenizer.from_pretrained(args.gold_tokenizer_name)
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
 
     scalar_model_config = ScalarModelConfig.from_pretrained(
-        script_args.gold_model_name,
-        revision=script_args.gold_model_revision,
-        trust_remote_code=True,
+        args.gold_model_name,
+        revision=args.gold_model_revision,
     )
     # hack to remove the path
     # models/EleutherAI/pythia-6.9b-deduped/sft_model_55513 -> EleutherAI/pythia-6.9b-deduped
@@ -165,21 +121,26 @@ def evaluate(script_args, reference, generations):
         sft_model = f"vwxyzjn/EleutherAI_{original_model}__sft__tldr"
         scalar_model_config.base_config["_name_or_path"] = sft_model
         scalar_model_config.base_model = sft_model
-        _, seed, _ = script_args.gold_model_revision.split("__")
+        _, seed, _ = args.gold_model_revision.split("__")
         scalar_model_config.base_model_revision = f"sft__{seed}__1708611267"
 
     # quantization_config = get_quantization_config(model_config)
     model = ScalarModel.from_pretrained(
-        script_args.gold_model_name,
-        revision=script_args.gold_model_revision,
+        args.gold_model_name,
+        revision=args.gold_model_revision,
         config=scalar_model_config,
+        torch_dtype=torch_dtype,
+        use_flash_attention_2=args.flash_attention,
     )
 
     model.config.pad_token_id = tokenizer.pad_token_id
 
+    training_args = TrainingArguments(per_device_eval_batch_size=int(args.eval_batch_size), output_dir=".")
+
     trainer = Trainer(
         model=model,
         tokenizer=tokenizer,
+        args=training_args,
     )
 
     def tokenize_and_add_eos(tokenizer, text_column, max_length):
@@ -206,7 +167,7 @@ def evaluate(script_args, reference, generations):
 
     ## get reference continuation rewards
     dataset = Dataset.from_dict({"reference": reference})
-    dataset = dataset.map(tokenize_and_add_eos(tokenizer, "reference", script_args.max_length))
+    dataset = dataset.map(tokenize_and_add_eos(tokenizer, "reference", args.max_length))
 
     ref_results = trainer.predict(dataset)
     ref_rewards = ref_results.predictions
@@ -214,7 +175,7 @@ def evaluate(script_args, reference, generations):
     step = 0
     for step_str, query_response in generations.items():
         dataset = Dataset.from_dict({"query_response": query_response})
-        dataset = dataset.map(tokenize_and_add_eos(tokenizer, "query_response", script_args.max_length))
+        dataset = dataset.map(tokenize_and_add_eos(tokenizer, "query_response", args.max_length))
 
         print(f"Evaluating {step_str}")
         results = trainer.predict(dataset)
@@ -251,10 +212,10 @@ def main_args_dict(args_dict):
         eval_args.gold_tokenizer_name = generate_args.tokenizer_name
 
     print("GENERATING")
-    reference, generations = generate(generate_args)
-    # dataset = load_dataset(generate_args.dataset_name, split=generate_args.train_split)
-    # generations = {"step0": dataset["query_reference_response"]}
-    # reference = dataset["query_reference_response"]
+    # reference, generations = generate(generate_args)
+    dataset = load_dataset(generate_args.dataset_name, split=generate_args.split)
+    generations = {"step0": dataset["query_reference_response"]}
+    reference = dataset["query_reference_response"]
     print("EVALUATING")
     evaluate(eval_args, reference, generations)
 
