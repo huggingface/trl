@@ -19,6 +19,7 @@ from trl import (
     is_bitsandbytes_available,
     is_diffusers_available,
     is_peft_available,
+    is_pil_available,
     is_wandb_available,
     is_xpu_available,
 )
@@ -48,6 +49,15 @@ def require_diffusers(test_case):
     """
     if not is_diffusers_available():
         test_case = unittest.skip("test requires diffusers")(test_case)
+    return test_case
+
+
+def requires_pil(test_case):
+    """
+    Decorator marking a test that requires PIL. Skips the test if pil is not available.
+    """
+    if not is_pil_available():
+        test_case = unittest.skip("test requires PIL")(test_case)
     return test_case
 
 

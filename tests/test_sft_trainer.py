@@ -20,7 +20,6 @@ import numpy as np
 import pytest
 import torch
 from datasets import Dataset, Image, Sequence
-from PIL import Image as PILImage
 from transformers import (
     AutoModelForCausalLM,
     AutoProcessor,
@@ -30,10 +29,10 @@ from transformers import (
 )
 
 from trl import SFTTrainer
-from trl.import_utils import is_peft_available
+from trl.import_utils import is_peft_available, is_pil_available
 from trl.trainer import ConstantLengthDataset, DataCollatorForCompletionOnlyLM
 
-from .testing_utils import require_peft
+from .testing_utils import require_peft, requires_pil
 
 
 def formatting_prompts_func(example):
@@ -51,6 +50,9 @@ def formatting_prompts_func_batched(example):
 
 if is_peft_available():
     from peft import LoraConfig, PeftModel
+
+if is_pil_available():
+    from PIL import Image as PILImage
 
 
 class SFTTrainerTester(unittest.TestCase):
@@ -130,47 +132,48 @@ class SFTTrainerTester(unittest.TestCase):
             ]
         )
 
-        cls.dummy_vsft_instruction_dataset = Dataset.from_dict(
-            {
-                "messages": [
-                    [
-                        {
-                            "role": "user",
-                            "content": [{"type": "text", "text": "What is in this image?"}, {"type": "image"}],
-                        },
-                        {
-                            "role": "assistant",
-                            "content": [{"type": "text", "text": "It is random noise."}],
-                        },
-                        {
-                            "role": "user",
-                            "content": [{"type": "text", "text": "Oh ye, you are right, what is 1+1"}],
-                        },
-                        {
-                            "role": "assistant",
-                            "content": [{"type": "text", "text": "2"}],
-                        },
+        if is_pil_available():
+            cls.dummy_vsft_instruction_dataset = Dataset.from_dict(
+                {
+                    "messages": [
+                        [
+                            {
+                                "role": "user",
+                                "content": [{"type": "text", "text": "What is in this image?"}, {"type": "image"}],
+                            },
+                            {
+                                "role": "assistant",
+                                "content": [{"type": "text", "text": "It is random noise."}],
+                            },
+                            {
+                                "role": "user",
+                                "content": [{"type": "text", "text": "Oh ye, you are right, what is 1+1"}],
+                            },
+                            {
+                                "role": "assistant",
+                                "content": [{"type": "text", "text": "2"}],
+                            },
+                        ],
+                        [
+                            {
+                                "role": "user",
+                                "content": [{"type": "text", "text": "What is in this image?"}, {"type": "image"}],
+                            },
+                            {
+                                "role": "assistant",
+                                "content": [{"type": "text", "text": "It is random noise."}],
+                            },
+                        ],
                     ],
-                    [
-                        {
-                            "role": "user",
-                            "content": [{"type": "text", "text": "What is in this image?"}, {"type": "image"}],
-                        },
-                        {
-                            "role": "assistant",
-                            "content": [{"type": "text", "text": "It is random noise."}],
-                        },
+                    "images": [
+                        [PILImage.fromarray((np.random.rand(40, 50, 3) * 255).astype("uint8")).convert("RGBA")],
+                        [PILImage.fromarray((np.random.rand(50, 60, 3) * 255).astype("uint8")).convert("RGBA")],
                     ],
-                ],
-                "images": [
-                    [PILImage.fromarray((np.random.rand(40, 50, 3) * 255).astype("uint8")).convert("RGBA")],
-                    [PILImage.fromarray((np.random.rand(50, 60, 3) * 255).astype("uint8")).convert("RGBA")],
-                ],
-            }
-        )
-        cls.dummy_vsft_instruction_dataset = cls.dummy_vsft_instruction_dataset.cast_column(
-            "images", Sequence(Image())
-        )
+                }
+            )
+            cls.dummy_vsft_instruction_dataset = cls.dummy_vsft_instruction_dataset.cast_column(
+                "images", Sequence(Image())
+            )
 
         cls.train_dataset = ConstantLengthDataset(
             cls.tokenizer,
@@ -1030,6 +1033,7 @@ class SFTTrainerTester(unittest.TestCase):
             assert len(trainer.train_dataset["input_ids"]) != 1
             assert len(trainer.eval_dataset["input_ids"]) != 1
 
+    @requires_pil
     def test_sft_trainer_skip_prepare_dataset(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
@@ -1055,6 +1059,7 @@ class SFTTrainerTester(unittest.TestCase):
             assert trainer.train_dataset.features == self.dummy_vsft_instruction_dataset.features
             assert trainer.eval_dataset.features == self.dummy_vsft_instruction_dataset.features
 
+    @requires_pil
     def test_sft_trainer_llava(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
