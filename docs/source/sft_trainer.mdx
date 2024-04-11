@@ -605,6 +605,12 @@ You may experience some issues with GPTQ Quantization after completing training.
 
 [[autodoc]] SFTTrainer
 
-## ConstantLengthDataset
+## Datasets
+
+In the SFTTrainer we smartly support `datasets.IterableDataset` in addition to other style datasets. This is useful if you are using large corpora that you do not want to save all to disk. The data will be tokenized and processed on the fly, even when packing is enabled.
+
+Additionally, in the SFTTrainer, we support pre-tokenized datasets if they are `datasets.Dataset` or `datasets.IterableDataset`. In other words, if such a dataset has a column of `input_ids`, no further processing (tokenization or packing) will be done, and the dataset will be used as-is. This can be useful if you have pretokenized your dataset outside of this script and want to re-use it directly.
+
+### ConstantLengthDataset
 
 [[autodoc]] trainer.ConstantLengthDataset
