@@ -40,6 +40,7 @@ python -i trl/trainer/ppov2_trainer.py \
     --output_dir models/minimal/ppo \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 64 \
+    --lr_scheduler_type linear \
 """
 
 
@@ -379,6 +380,7 @@ class PPOTrainer(Trainer):
             batch_size=args.local_batch_size,
             shuffle=True,
             collate_fn=DataCollatorWithPadding(tokenizer),
+            drop_last=True, # needed; otherwise the last batch will be of ragged shape
         )
 
         device = accelerator.device
@@ -446,9 +448,7 @@ class PPOTrainer(Trainer):
         model.train()
         for update in range(1, args.num_updates + 1):
             global_step += 1 * args.batch_size
-            frac = 1.0 - (update - 1.0) / args.num_updates
-            lrnow = frac * args.learning_rate
-            optimizer.param_groups[0]["lr"] = lrnow
+            self.lr_scheduler.step()
             data = next(iter_dataloader)
             with torch.no_grad():
                 queries = data["input_ids"].to(device)
@@ -678,32 +678,10 @@ class PPOTrainer(Trainer):
                 metrics["ppo/val/ratio"] = self.accelerator.gather(ratio_stats).mean().item()
                 metrics["ppo/val/ratio_var"] = self.accelerator.gather(ratio_stats).var().item()
                 metrics["ppo/val/num_eos_tokens"] = (responses == tokenizer.eos_token_id).sum().item()
-                metrics["ppo/lr"] = lrnow
+                metrics["ppo/lr"] = self.lr_scheduler.get_last_lr()
                 metrics["ppo/episode"] = global_step
                 self.state.epoch = global_step / self.train_dataset_len  # used by self.log
                 self.log(metrics)
-
-                # accelerator.print("ppo/eps", eps, update)
-                # writer.add_scalar("ppo/eps", eps, update)
-                # writer.add_scalar("objective/kl", accelerator.gather(mean_kl).mean().item(), update)
-                # writer.add_scalar("objective/entropy", accelerator.gather(mean_entropy).mean().item(), update)
-                # writer.add_scalar("objective/non_score_reward", accelerator.gather(mean_non_score_reward).mean().item(), update)
-                # writer.add_scalar(
-                #     "objective/score_total", accelerator.gather(mean_non_score_reward + scores.mean()).mean().item(), update
-                # )
-                # writer.add_scalar("objective/scores", accelerator.gather(scores.mean()).mean().item(), update)
-                # writer.add_scalar("ppo/policy/approxkl_avg", accelerator.gather(approxkl_stats).mean().item(), update)
-                # writer.add_scalar("ppo/policy/clipfrac_avg", accelerator.gather(pg_clipfrac_stats).mean().item(), update)
-                # writer.add_scalar("ppo/loss/policy_avg", accelerator.gather(pg_loss_stats).mean().item(), update)
-                # writer.add_scalar("ppo/loss/value_avg", accelerator.gather(vf_loss_stats).mean().item(), update)
-                # writer.add_scalar("ppo/val/clipfrac_avg", accelerator.gather(vf_clipfrac_stats).mean().item(), update)
-                # writer.add_scalar("ppo/policy/entropy_avg", accelerator.gather(entropy_stats).mean().item(), update)
-                # writer.add_scalar("ppo/val/ratio", accelerator.gather(ratio_stats).mean().item(), update)
-                # writer.add_scalar("ppo/val/ratio_var", accelerator.gather(ratio_stats).var().item(), update)
-                # writer.add_scalar("ppo/val/num_eos_tokens", (responses == tokenizer.eos_token_id).sum().item(), update)
-                # writer.add_scalar("ppo/lr", lrnow, update)
-                # writer.add_scalar("ppo/episode", global_step, update)
-
             del kl, mean_kl, mean_entropy, mean_non_score_reward, scores
             torch.cuda.empty_cache()
 
