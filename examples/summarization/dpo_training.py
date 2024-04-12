@@ -97,6 +97,7 @@ class ScriptArguments:
     optimizer_type: Optional[str] = field(default="adamw_torch", metadata={"help": "the optimizer type"})
     warmup_steps: Optional[int] = field(default=150)
     learning_rate: Optional[float] = field(default=1e-3, metadata={"help": "optimizer learning rate"})
+    lr_scheduler_type: Optional[str] = field(default="linear")
     per_device_train_batch_size: Optional[int] = field(default=4, metadata={"help": "batch size per device"})
     per_device_eval_batch_size: Optional[int] = field(default=8, metadata={"help": "batch size per device"})
     gradient_accumulation_steps: Optional[int] = field(
@@ -318,7 +319,7 @@ def strip_prompt(examples):
     return examples
 
 
-def create_and_prepare_dataset(args):
+def create_and_prepare_dataset(args, tokenizer):
     train_dataset = load_dataset(args.dataset_name, split=args.train_split)
     eval_dataset = load_dataset(args.dataset_name, split=args.eval_split)
 
@@ -337,6 +338,17 @@ def create_and_prepare_dataset(args):
 
         train_dataset = concatenate_datasets(all_train_datasets)
 
+    if args.dataset_name.startswith("vwxyzjn"):
+        # remove eos token from end of chosen
+        def remove_eos(example):
+            example["chosen"] = example["chosen"].removesuffix(tokenizer.eos_token)
+            example["rejected"] = example["rejected"].removesuffix(tokenizer.eos_token)
+
+            return example
+
+        train_dataset = train_dataset.map(remove_eos)
+        eval_dataset = eval_dataset.map(remove_eos)
+
     return train_dataset, eval_dataset
 
 
@@ -353,7 +365,7 @@ if __name__ == "__main__":
             name for name, buffer in model.named_buffers() if buffer.dtype == torch.bool
         ]
 
-    train_dataset, eval_dataset = create_and_prepare_dataset(script_args)
+    train_dataset, eval_dataset = create_and_prepare_dataset(script_args, tokenizer)
 
     if script_args.push_to_hub:
         # modelname_configname_wandbid
@@ -375,6 +387,7 @@ if __name__ == "__main__":
         remove_unused_columns=False,
         gradient_accumulation_steps=script_args.gradient_accumulation_steps,
         learning_rate=script_args.learning_rate,
+        lr_scheduler_type=script_args.lr_scheduler_type,
         evaluation_strategy="epoch" if script_args.eval_steps is None else "steps",
         save_strategy=script_args.save_strategy,
         logging_first_step=True,
