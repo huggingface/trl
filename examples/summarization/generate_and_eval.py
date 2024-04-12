@@ -212,10 +212,10 @@ def main_args_dict(args_dict):
         eval_args.gold_tokenizer_name = generate_args.tokenizer_name
 
     print("GENERATING")
-    # reference, generations = generate(generate_args)
-    dataset = load_dataset(generate_args.dataset_name, split=generate_args.split)
-    generations = {"step0": dataset["query_reference_response"]}
-    reference = dataset["query_reference_response"]
+    reference, generations = generate(generate_args)
+    # dataset = load_dataset(generate_args.dataset_name, split=generate_args.split)
+    # generations = {"step0": dataset["query_reference_response"]}
+    # reference = dataset["query_reference_response"]
     print("EVALUATING")
     evaluate(eval_args, reference, generations)
 

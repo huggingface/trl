@@ -8,5 +8,5 @@ gold_model_name: vwxyzjn/EleutherAI_pythia-6.9b-deduped__reward__tldr
 gold_model_revision: reward__55513__1708628552
 eval_dtype: bfloat16
 max_new_tokens: 128
-max_length: 630
+max_length: 640
 temperature: 0.010001
