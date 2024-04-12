@@ -1,70 +1,37 @@
 import os
-import random
 import time
-from collections import defaultdict
-from dataclasses import asdict, dataclass, field
-from types import SimpleNamespace
-from typing import Literal, Optional
+from dataclasses import dataclass
+from typing import Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
-import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.optim as optim
-import tyro
 from accelerate import Accelerator
 from accelerate.state import AcceleratorState
-from accelerate.utils import broadcast, gather_object
+from accelerate.utils import broadcast
 from datasets import Dataset, load_dataset
 from huggingface_hub import HfApi
-from rich.pretty import pprint
 from torch.utils.data import DataLoader
-from torch.utils.tensorboard import SummaryWriter
-from tqdm import tqdm
 from transformers import (
-    AutoConfig,
-    AutoModel,
     AutoModelForCausalLM,
-    AutoTokenizer,
-    GenerationConfig,
-    PretrainedConfig,
-    PreTrainedModel,
-    DataCollatorWithPadding,
     AutoModelForSequenceClassification,
+    AutoTokenizer,
+    DataCollatorWithPadding,
+    GenerationConfig,
     HfArgumentParser,
-)
-from transformers.trainer_callback import CallbackHandler, DefaultFlowCallback
-from transformers.integrations import get_reporting_integration_callbacks
-
-
-from dataclasses import dataclass
-import multiprocessing
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
-import numpy as np
-import datasets
-import torch
-import torch.nn as nn
-from transformers import (
-    DataCollatorWithPadding,
+    PreTrainedModel,
     PreTrainedTokenizer,
-    PreTrainedTokenizerBase,
-    AutoTokenizer,
-    TrainingArguments,
     Trainer,
-    EvalPrediction,
     TrainerCallback,
-    GenerationConfig,
-    AutoConfig,
-    AutoModelForCausalLM,
-    AutoModelForSequenceClassification,
-    TrainerState,
     TrainerControl,
+    TrainerState,
+    TrainingArguments,
 )
-from transformers.trainer_utils import seed_worker
-from torch.utils.data import DataLoader, Dataset, RandomSampler, SequentialSampler
-import torch.nn.functional as F
-from trl import set_seed
+from transformers.integrations import get_reporting_integration_callbacks
+from transformers.trainer_callback import CallbackHandler, DefaultFlowCallback
+
+
 torch.set_printoptions(precision=4, sci_mode=False)
 api = HfApi()
 INVALID_LOGPROB = 1.0
@@ -82,6 +49,7 @@ class PpoHParams:
     whiten_rewards: bool = False
     kl_coef: float = 0.05
 
+
 """
 python -i trl/trainer/ppo3.py \
     --learning_rate 3e-6 \
@@ -89,6 +57,7 @@ python -i trl/trainer/ppo3.py \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 64 \
 """
+
 
 @dataclass
 class PPOConfig(TrainingArguments):
@@ -177,12 +146,6 @@ def disable_dropout(model: torch.nn.Module):
             module.p = 0
 
 
-def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
-    torch.nn.init.normal_(layer.weight, std=std)
-    torch.nn.init.constant_(layer.bias, val=bias_const)
-    return layer
-
-
 def masked_mean(values, mask, axis=None):
     """Compute mean of tensor with a masked values."""
     if axis is not None:
@@ -232,7 +195,9 @@ def get_reward(model, query_responses, tokenizer, context_length):
         output_hidden_states=True,
     )
     reward_logits = model.score(output.hidden_states[-1])
-    sequence_lengths = first_true_indices(query_responses[:, context_length:] == tokenizer.pad_token_id) - 1 + context_length
+    sequence_lengths = (
+        first_true_indices(query_responses[:, context_length:] == tokenizer.pad_token_id) - 1 + context_length
+    )
     # https://github.com/huggingface/transformers/blob/dc68a39c8111217683bf49a4912d0c9018bab33d/src/transformers/models/gpt2/modeling_gpt2.py#L1454
     return (
         reward_logits,
@@ -280,7 +245,7 @@ def generate(lm_backbone, queries, tokenizer, generation_config):
         # https://github.com/huggingface/transformers/blob/ac33aeeeee2a7a89b89c93c2962e6feb90daef0a/src/transformers/models/gpt2/modeling_gpt2.py#L1227-L1250
         generation_config=generation_config,
         return_dict_in_generate=True,
-        output_scores=True
+        output_scores=True,
     )
     logits = torch.stack(output.scores, 1)
     return torch.cat((queries, output.sequences[:, context_length:]), dim=1), logits
@@ -321,24 +286,24 @@ def forward(model, query_responses, tokenizer):
 
 class PPOTrainer(Trainer):
     def __init__(
-            self,
-            args: PPOConfig,
-            tokenizer: PreTrainedTokenizer,
-            policy: nn.Module,
-            ref_policy: nn.Module,
-            reward_model: nn.Module,
-            train_dataset: Dataset,
-            train_generation_config: GenerationConfig,
-            value_model: Optional[nn.Module] = None,
-            data_collator: Optional[DataCollatorWithPadding] = None,
-            eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
-            eval_generation_config: Optional[GenerationConfig] = None,
-            # less commonly used
-            optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
-            # compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
-            # model_init: Optional[Callable[[torch.nn.Module], None]] = None,
-            callbacks: Optional[List[TrainerCallback]] = None,
-        ) -> None:
+        self,
+        args: PPOConfig,
+        tokenizer: PreTrainedTokenizer,
+        policy: nn.Module,
+        ref_policy: nn.Module,
+        reward_model: nn.Module,
+        train_dataset: Dataset,
+        train_generation_config: GenerationConfig,
+        value_model: Optional[nn.Module] = None,
+        data_collator: Optional[DataCollatorWithPadding] = None,
+        eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
+        eval_generation_config: Optional[GenerationConfig] = None,
+        # less commonly used
+        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        # compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
+        # model_init: Optional[Callable[[torch.nn.Module], None]] = None,
+        callbacks: Optional[List[TrainerCallback]] = None,
+    ) -> None:
         self.args = args
         self.tokenizer = tokenizer
         self.policy = policy
@@ -384,14 +349,16 @@ class PPOTrainer(Trainer):
         #########
         for module in [policy, ref_policy, value_model, reward_model]:
             disable_dropout(module)
-        policy.generation_config.eos_token_id = None  # disable `pad_token_id` and `eos_token_id` because we just want to
+        policy.generation_config.eos_token_id = (
+            None  # disable `pad_token_id` and `eos_token_id` because we just want to
+        )
         policy.generation_config.pad_token_id = None  # generate tokens without truncation / padding
-        
+
         #########
         # setup model, optimizer, and others
         #########
         if args.truncate_token and args.truncate_token == "eos":
-            args.truncate_token_id = tokenizer.eos_token_id 
+            args.truncate_token_id = tokenizer.eos_token_id
         self.model = PolicyAndValueWrapper(policy, value_model)
         self.create_optimizer_and_scheduler(num_training_steps=args.num_updates)
 
@@ -407,12 +374,11 @@ class PPOTrainer(Trainer):
         if self.callbacks is None:
             self.callbacks = default_callbacks
         self.callback_handler = CallbackHandler(
-            self.callbacks , self.model, self.tokenizer, self.optimizer, self.lr_scheduler
+            self.callbacks, self.model, self.tokenizer, self.optimizer, self.lr_scheduler
         )
         self.control = TrainerControl()
 
     # def get_train_dataloader(self) -> DataLoader:
-
 
     def train(self):
         args = self.args
@@ -423,9 +389,13 @@ class PPOTrainer(Trainer):
         ref_policy = self.ref_policy
         reward_model = self.reward_model
         tokenizer = self.tokenizer
-        value_model = self.value_model
 
-        dataloader = DataLoader(self.train_dataset, batch_size=args.local_batch_size, shuffle=True, collate_fn=DataCollatorWithPadding(tokenizer))
+        dataloader = DataLoader(
+            self.train_dataset,
+            batch_size=args.local_batch_size,
+            shuffle=True,
+            collate_fn=DataCollatorWithPadding(tokenizer),
+        )
 
         device = accelerator.device
         # torch.backends.cudnn.deterministic = True # TODO: check if cudnn matters
@@ -636,7 +606,9 @@ class PPOTrainer(Trainer):
                             logits /= args.temperature + 1e-7
                             new_all_logprobs = F.log_softmax(logits, dim=-1)
                             new_logprobs = torch.gather(new_all_logprobs, 2, mb_responses.unsqueeze(-1)).squeeze(-1)
-                            new_logprobs = torch.masked_fill(new_logprobs, padding_mask[micro_batch_inds], INVALID_LOGPROB)
+                            new_logprobs = torch.masked_fill(
+                                new_logprobs, padding_mask[micro_batch_inds], INVALID_LOGPROB
+                            )
                             vpred = vpred_temp[:, context_length - 1 : -1].squeeze(-1)
                             vpred = torch.masked_fill(vpred, padding_mask_p1[micro_batch_inds], 0)
                             vpredclipped = torch.clamp(
@@ -648,14 +620,18 @@ class PPOTrainer(Trainer):
                             vf_losses2 = torch.square(vpredclipped - mb_return)
                             vf_loss_max = torch.max(vf_losses1, vf_losses2)
                             vf_loss = 0.5 * masked_mean(vf_loss_max, ~padding_mask_p1[micro_batch_inds])
-                            vf_clipfrac = masked_mean((vf_losses2 > vf_losses1).float(), ~padding_mask_p1[micro_batch_inds])
+                            vf_clipfrac = masked_mean(
+                                (vf_losses2 > vf_losses1).float(), ~padding_mask_p1[micro_batch_inds]
+                            )
                             logprobs_diff = new_logprobs - mb_logprobs
                             ratio = torch.exp(logprobs_diff)
                             pg_losses = -mb_advantage * ratio
                             pg_losses2 = -mb_advantage * torch.clamp(ratio, 1.0 - args.cliprange, 1.0 + args.cliprange)
                             pg_loss_max = torch.max(pg_losses, pg_losses2)
                             pg_loss = masked_mean(pg_loss_max, ~padding_mask[micro_batch_inds])
-                            pg_clipfrac = masked_mean((pg_losses2 > pg_losses).float(), ~padding_mask[micro_batch_inds])
+                            pg_clipfrac = masked_mean(
+                                (pg_losses2 > pg_losses).float(), ~padding_mask[micro_batch_inds]
+                            )
                             loss = pg_loss + args.vf_coef * vf_loss
                             accelerator.backward(loss)
                             optimizer.step()
@@ -666,10 +642,14 @@ class PPOTrainer(Trainer):
                                 entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1)
                                 approxkl = 0.5 * (logprobs_diff**2).mean()
                                 approxkl_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = approxkl
-                                pg_clipfrac_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = pg_clipfrac
+                                pg_clipfrac_stats[
+                                    ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
+                                ] = pg_clipfrac
                                 pg_loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = pg_loss
                                 vf_loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = vf_loss
-                                vf_clipfrac_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = vf_clipfrac
+                                vf_clipfrac_stats[
+                                    ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
+                                ] = vf_clipfrac
                                 entropy_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = entropy.mean()
                                 ratio_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = ratio.mean()
                         gradient_accumulation_idx += 1
@@ -689,19 +669,21 @@ class PPOTrainer(Trainer):
                     f"approxkl: {approxkl_stats[:ppo_epoch_idx + 1].mean().item():.4f}",
                     f"pg_loss: {pg_loss_stats[:ppo_epoch_idx + 1].mean().item():.4f}",
                     f"pg_clipfrac: {pg_clipfrac_stats[:ppo_epoch_idx + 1].mean().item():.4f}",
-                    f"ratio: {ratio_stats[:ppo_epoch_idx + 1].mean().item():.4f}"
+                    f"ratio: {ratio_stats[:ppo_epoch_idx + 1].mean().item():.4f}",
                 )
             with torch.no_grad():
                 mean_kl = kl.sum(1).mean()
                 mean_entropy = (-logprobs).sum(1).mean()
                 mean_non_score_reward = non_score_reward.sum(1).mean()
                 eps = int(global_step / (time.time() - start_time))
-                
                 metrics = {}
+                metrics["ppo/eps"] = eps
                 metrics["objective/kl"] = self.accelerator.gather(mean_kl).mean().item()
                 metrics["objective/entropy"] = self.accelerator.gather(mean_entropy).mean().item()
                 metrics["objective/non_score_reward"] = self.accelerator.gather(mean_non_score_reward).mean().item()
-                metrics["objective/score_total"] = self.accelerator.gather(mean_non_score_reward + scores.mean()).mean().item()
+                metrics["objective/score_total"] = (
+                    self.accelerator.gather(mean_non_score_reward + scores.mean()).mean().item()
+                )
                 metrics["objective/scores"] = self.accelerator.gather(scores.mean()).mean().item()
                 metrics["ppo/policy/approxkl_avg"] = self.accelerator.gather(approxkl_stats).mean().item()
                 metrics["ppo/policy/clipfrac_avg"] = self.accelerator.gather(pg_clipfrac_stats).mean().item()
@@ -714,8 +696,7 @@ class PPOTrainer(Trainer):
                 metrics["ppo/val/num_eos_tokens"] = (responses == tokenizer.eos_token_id).sum().item()
                 metrics["ppo/lr"] = lrnow
                 metrics["ppo/episode"] = global_step
-                print(metrics)
-                self.state.epoch = global_step / self.train_dataset_len # used by self.log
+                self.state.epoch = global_step / self.train_dataset_len  # used by self.log
                 self.log(metrics)
 
                 # accelerator.print("ppo/eps", eps, update)
@@ -738,8 +719,7 @@ class PPOTrainer(Trainer):
                 # writer.add_scalar("ppo/val/num_eos_tokens", (responses == tokenizer.eos_token_id).sum().item(), update)
                 # writer.add_scalar("ppo/lr", lrnow, update)
                 # writer.add_scalar("ppo/episode", global_step, update)
-                
-                
+
             del kl, mean_kl, mean_entropy, mean_non_score_reward, scores
             torch.cuda.empty_cache()
 
@@ -766,7 +746,7 @@ class PPOTrainer(Trainer):
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser((PPOConfig))
+    parser = HfArgumentParser(PPOConfig)
     args = parser.parse_args_into_dataclasses()[0]
     # set_seed(local_seed) # TODO: check seeding
 
@@ -780,7 +760,9 @@ if __name__ == "__main__":
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
     if tokenizer.chat_template is None:
         # a default chat template to simply concatenate the messages
-        tokenizer.chat_template = "{% for message in messages %}{{' ' + message['content']}}{% endfor %}{{ eos_token }}"
+        tokenizer.chat_template = (
+            "{% for message in messages %}{{' ' + message['content']}}{% endfor %}{{ eos_token }}"
+        )
     value_model: PreTrainedModel = AutoModelForSequenceClassification.from_pretrained(
         args.reward_model_path,
         num_labels=1,
@@ -795,29 +777,34 @@ if __name__ == "__main__":
     # Dataset
     ################
     raw_datasets = load_dataset("trl-internal-testing/descriptiveness-sentiment-trl-style", split="descriptiveness")
+
     def process(row):
         row["chosen"] = tokenizer.apply_chat_template(row["chosen"], tokenize=False).strip()
         row["rejected"] = tokenizer.apply_chat_template(row["rejected"], tokenize=False).strip()
         return row
+
     raw_datasets = raw_datasets.map(process, load_from_cache_file=False)
     eval_samples = 20
     train_dataset = raw_datasets.select(range(len(raw_datasets) - eval_samples))
     eval_dataset = raw_datasets.select(range(len(raw_datasets) - eval_samples, len(raw_datasets)))
 
     dataset_text_field = "chosen"
+
     def prepare_dataset(dataset, tokenizer):
         """pre-tokenize the dataset before training; only collate during training"""
+
         def tokenize(element):
             outputs = tokenizer(
                 element[dataset_text_field],
                 padding=False,
             )
             return {"input_ids": outputs["input_ids"]}
+
         return dataset.map(
             tokenize,
             remove_columns=dataset.column_names,
             batched=True,
-            num_proc=4, #multiprocessing.cpu_count(),
+            num_proc=4,  # multiprocessing.cpu_count(),
             load_from_cache_file=False,
         )
 
