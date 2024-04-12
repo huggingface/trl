@@ -66,6 +66,7 @@ accelerate launch --num_processes=8 -m lmms_eval \
 import logging
 import os
 from contextlib import nullcontext
+from pathlib import Path
 
 TRL_USE_RICH = os.environ.get("TRL_USE_RICH", False)
 
@@ -79,6 +80,7 @@ if TRL_USE_RICH:
     from rich.logging import RichHandler
 
 import torch
+from accelerate import Accelerator
 from datasets import load_dataset
 
 from tqdm.rich import tqdm
@@ -111,7 +113,7 @@ if __name__ == "__main__":
     ################
     # Model, Tokenizer & Processor
     ################
-    LLAVA_CHAT_TEMPLATE = """A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. {% for message in messages %}{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}"""
+    LLAVA_CHAT_TEMPLATE = """{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. {% for message in messages %}{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}{% if add_generation_prompt %}ASSISTANT: {% endif %}"""
 
     torch_dtype = (
         model_config.torch_dtype
@@ -205,3 +207,5 @@ if __name__ == "__main__":
     with save_context:
         trainer.save_model(training_args.output_dir)
         trainer.push_to_hub()
+        if Accelerator().is_main_process:
+            processor.push_to_hub(Path(training_args.output_dir).name)
