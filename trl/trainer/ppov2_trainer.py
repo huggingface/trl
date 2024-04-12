@@ -11,7 +11,6 @@ from accelerate import Accelerator
 from accelerate.state import AcceleratorState
 from accelerate.utils import broadcast
 from datasets import Dataset, load_dataset
-from huggingface_hub import HfApi
 from torch.utils.data import DataLoader
 from transformers import (
     AutoModelForCausalLM,
@@ -32,28 +31,13 @@ from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer_callback import CallbackHandler, DefaultFlowCallback
 
 
-torch.set_printoptions(precision=4, sci_mode=False)
-api = HfApi()
 INVALID_LOGPROB = 1.0
 
 
-@dataclass
-class PpoHParams:
-    nminibatches: int = 1
-    noptepochs: int = 4
-    vf_coef: float = 0.1
-    cliprange: float = 0.2
-    cliprange_value: float = 0.2
-    gamma: float = 1
-    lam: float = 0.95
-    whiten_rewards: bool = False
-    kl_coef: float = 0.05
-
-
 """
-python -i trl/trainer/ppo3.py \
+python -i trl/trainer/ppov2_trainer.py \
     --learning_rate 3e-6 \
-    --output_dir minimal/ppo \
+    --output_dir models/minimal/ppo \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 64 \
 """
@@ -591,7 +575,7 @@ class PPOTrainer(Trainer):
                     mini_batch_inds = b_inds[mini_batch_start:mini_batch_end]
                     gradient_accumulation_idx = 0
                     for micro_batch_start in range(0, args.local_mini_batch_size, args.per_device_train_batch_size):
-                        with accelerator.accumulate(policy):
+                        with accelerator.accumulate(model):
                             micro_batch_end = micro_batch_start + args.per_device_train_batch_size
                             micro_batch_inds = mini_batch_inds[micro_batch_start:micro_batch_end]
                             mb_return = returns[micro_batch_inds]
