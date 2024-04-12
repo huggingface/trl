@@ -107,10 +107,6 @@ class PPOConfig(TrainingArguments):
     """Number of epochs to train"""
     num_updates: Optional[int] = None
     """The number of updates to train"""
-    # gradient_accumulation_steps: int = 64
-    # """The number of gradient accumulation steps"""
-    # per_device_train_batch_size: Optional[int] = 1
-    # """The micro batch size per GPU (HF's `per_device_train_batch_size`)"""
     total_episodes: Optional[int] = 1000000
     """The total number of episodes in the dataset"""
     micro_batch_size: Optional[int] = None
@@ -135,7 +131,7 @@ class PPOConfig(TrainingArguments):
     """the name of the pretrained model to use"""
     response_length: int = 53
     """the length of the response"""
-    truncate_token: Literal["eos"] = "eos"
+    truncate_token: Optional[Literal["eos"]] = None
     """the truncate token"""
     truncate_token_id: Optional[int] = None
     """the truncation token id"""
@@ -152,58 +148,25 @@ class PPOConfig(TrainingArguments):
     sft_model_path: str = "EleutherAI/pythia-160m"
     """the path to the sft model"""
 
-    # wandb and HF tracking configs
-    track: bool = False
-    """if toggled, this experiment will be tracked with Weights and Biases"""
-    wandb_project_name: str = "tldr_summarize"
-    """the wandb's project name"""
-    wandb_entity: Optional[str] = None
-    """the entity (team) of wandb's project"""
-    push_to_hub: bool = False
-    """whether to upload the saved model to huggingface"""
-    hf_entity: Optional[str] = None
-    """the user or org name of the model repository from the Hugging Face Hub"""
-    hf_repo_id: Optional[str] = None
-    """the id of the saved model in the Hugging Face Hub (can be autoset if not given)"""
-    hf_repo_revision: Optional[str] = None
-    """the revision of the saved model in the Hugging Face Hub (can be autoset if not given)"""
-    hf_repo_url: Optional[str] = None
-    """the url of the saved model in the Hugging Face Hub (will be autoset)"""
-    output_dir: str = "models/ppo_model"
-    """Where to save the model"""
-    ppo: PpoHParams = field(default_factory=PpoHParams)
-
-
-def parse_args() -> tuple[PPOConfig, Accelerator]:
-    args = tyro.cli(PPOConfig)
-    accelerator = Accelerator(gradient_accumulation_steps=args.gradient_accumulation_steps)
-    args.world_size = accelerator.num_processes
-    args.local_batch_size = args.per_device_train_batch_size * args.gradient_accumulation_steps * args.nminibatches
-    args.micro_batch_size = int(args.per_device_train_batch_size * args.world_size)
-    args.batch_size = int(args.local_batch_size * args.world_size)
-    args.mini_batch_size = exact_div(args.batch_size, args.nminibatches)
-    args.local_mini_batch_size = exact_div(args.local_batch_size, args.nminibatches)
-    if args.ppo.whiten_rewards:
-        assert (
-            args.local_mini_batch_size >= 8
-        ), f"Per-rank minibatch size {args.local_mini_batch_size} is insufficient for whitening"
-    # `per_rank_rollout_batch_size` is our `args.local_batch_size`
-    # `per_rank_minibatch_size` is our `args.local_mini_batch_size`
-    args.num_updates = args.total_episodes // args.batch_size
-    time_tensor = torch.tensor(int(time.time()), device=accelerator.device)
-    time_int = broadcast(time_tensor, 0).item()  # avoid different timestamps across processes
-    args.run_name = f"{args.exp_name}__{args.seed}__{time_int}"
-    if args.push_to_hub:
-        if args.hf_repo_id is None: # auto-generate one
-            args.hf_repo_id = f"{args.base_model.replace('/', '_')}__{args.exp_name}__tldr"
-        if args.hf_entity is None:  # find the current user
-            args.hf_entity = api.whoami()["name"]
-        if "/" not in args.hf_repo_id: # prepend the current user
-            args.hf_repo_id = f"{args.hf_entity}/{args.hf_repo_id}"
-        if args.hf_repo_revision is None:  # auto-generate one
-            args.hf_repo_revision = args.run_name
-        args.hf_repo_url = f"https://huggingface.co/{args.hf_repo_id}/tree/{args.hf_repo_revision}"
-    return args, accelerator
+    # ppo args
+    nminibatches: int = 1
+    """the number of minibatches to split a batch into"""
+    noptepochs: int = 4
+    """the number of epochs to train"""
+    vf_coef: float = 0.1
+    """the value function coefficient"""
+    cliprange: float = 0.2
+    """the clip range"""
+    cliprange_value: float = 0.2
+    """the clip range for the value function"""
+    gamma: float = 1
+    """the discount factor"""
+    lam: float = 0.95
+    """the lambda value for GAE"""
+    whiten_rewards: bool = False
+    """whether to whiten the rewards"""
+    kl_coef: float = 0.05
+    """the KL coefficient"""
 
 
 # taken from https://github.com/vwxyzjn/direct-preference-optimization/blob/f8b8c0f49dc92a430bae41585f9d467d3618fe2f/utils.py#L99
@@ -404,7 +367,7 @@ class PPOTrainer(Trainer):
         args.batch_size = int(args.local_batch_size * args.world_size)
         args.mini_batch_size = exact_div(args.batch_size, args.nminibatches)
         args.local_mini_batch_size = exact_div(args.local_batch_size, args.nminibatches)
-        if args.ppo.whiten_rewards:
+        if args.whiten_rewards:
             assert (
                 args.local_mini_batch_size >= 8
             ), f"Per-rank minibatch size {args.local_mini_batch_size} is insufficient for whitening"
@@ -414,16 +377,6 @@ class PPOTrainer(Trainer):
         time_tensor = torch.tensor(int(time.time()), device=accelerator.device)
         time_int = broadcast(time_tensor, 0).item()  # avoid different timestamps across processes
         args.run_name = f"{args.exp_name}__{args.seed}__{time_int}"
-        if args.push_to_hub:
-            if args.hf_repo_id is None: # auto-generate one
-                args.hf_repo_id = f"{args.base_model.replace('/', '_')}__{args.exp_name}__tldr"
-            if args.hf_entity is None:  # find the current user
-                args.hf_entity = api.whoami()["name"]
-            if "/" not in args.hf_repo_id: # prepend the current user
-                args.hf_repo_id = f"{args.hf_entity}/{args.hf_repo_id}"
-            if args.hf_repo_revision is None:  # auto-generate one
-                args.hf_repo_revision = args.run_name
-            args.hf_repo_url = f"https://huggingface.co/{args.hf_repo_id}/tree/{args.hf_repo_revision}"
         self.local_seed = args.seed + accelerator.process_index * 100003  # Prime
 
         #########
@@ -435,8 +388,10 @@ class PPOTrainer(Trainer):
         policy.generation_config.pad_token_id = None  # generate tokens without truncation / padding
         
         #########
-        # setup model and optimizer
+        # setup model, optimizer, and others
         #########
+        if args.truncate_token and args.truncate_token == "eos":
+            args.truncate_token_id = tokenizer.eos_token_id 
         self.model = PolicyAndValueWrapper(policy, value_model)
         self.create_optimizer_and_scheduler(num_training_steps=args.num_updates)
 
@@ -526,7 +481,7 @@ class PPOTrainer(Trainer):
         accelerator.print("===training policy===")
         global_step = 0
         start_time = time.time()
-        stats_shape = (args.ppo.noptepochs, args.nminibatches, args.gradient_accumulation_steps)
+        stats_shape = (args.noptepochs, args.nminibatches, args.gradient_accumulation_steps)
         approxkl_stats = torch.zeros(stats_shape, device=device)
         pg_clipfrac_stats = torch.zeros(stats_shape, device=device)
         pg_loss_stats = torch.zeros(stats_shape, device=device)
@@ -577,7 +532,9 @@ class PPOTrainer(Trainer):
                     torch.cuda.empty_cache()
 
                     # Response Processing 1. truncate response after the first occurrence of `truncate_token_id`
-                    postprocessed_response = truncate_response(args, tokenizer, response)
+                    postprocessed_response = response
+                    if args.truncate_token_id:
+                        postprocessed_response = truncate_response(args, tokenizer, response)
 
                     # Response Processing 2. run reward model on the truncated responses
                     postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
@@ -626,14 +583,14 @@ class PPOTrainer(Trainer):
 
                 # 4. compute rewards
                 kl = logprobs - ref_logprobs
-                non_score_reward = -args.ppo.kl_coef * kl
+                non_score_reward = -args.kl_coef * kl
                 rewards = non_score_reward.clone()
                 actual_start = torch.arange(rewards.size(0), device=rewards.device)
                 actual_end = torch.where(sequence_lengths_p1 < rewards.size(1), sequence_lengths_p1, sequence_lengths)
                 rewards[[actual_start, actual_end]] += scores
 
                 # 5. whiten rewards
-                if args.ppo.whiten_rewards:
+                if args.whiten_rewards:
                     rewards = masked_whiten(rewards, mask=~padding_mask_p1, shift_mean=False)
                     rewards = torch.masked_fill(rewards, padding_mask_p1, 0)
 
@@ -643,8 +600,8 @@ class PPOTrainer(Trainer):
                 gen_length = responses.shape[1]
                 for t in reversed(range(gen_length)):
                     nextvalues = values[:, t + 1] if t < gen_length - 1 else 0.0
-                    delta = rewards[:, t] + args.ppo.gamma * nextvalues - values[:, t]
-                    lastgaelam = delta + args.ppo.gamma * args.ppo.lam * lastgaelam
+                    delta = rewards[:, t] + args.gamma * nextvalues - values[:, t]
+                    lastgaelam = delta + args.gamma * args.lam * lastgaelam
                     advantages_reversed.append(lastgaelam)
                 advantages = torch.stack(advantages_reversed[::-1], axis=1)
                 returns = advantages + values
@@ -656,7 +613,7 @@ class PPOTrainer(Trainer):
                 torch.cuda.empty_cache()
 
             # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
-            for ppo_epoch_idx in range(args.ppo.noptepochs):
+            for ppo_epoch_idx in range(args.noptepochs):
                 b_inds = np.random.permutation(args.local_batch_size)
                 minibatch_idx = 0
                 for mini_batch_start in range(0, args.local_batch_size, args.local_mini_batch_size):
@@ -684,8 +641,8 @@ class PPOTrainer(Trainer):
                             vpred = torch.masked_fill(vpred, padding_mask_p1[micro_batch_inds], 0)
                             vpredclipped = torch.clamp(
                                 vpred,
-                                mb_values - args.ppo.cliprange_value,
-                                mb_values + args.ppo.cliprange_value,
+                                mb_values - args.cliprange_value,
+                                mb_values + args.cliprange_value,
                             )
                             vf_losses1 = torch.square(vpred - mb_return)
                             vf_losses2 = torch.square(vpredclipped - mb_return)
@@ -695,11 +652,11 @@ class PPOTrainer(Trainer):
                             logprobs_diff = new_logprobs - mb_logprobs
                             ratio = torch.exp(logprobs_diff)
                             pg_losses = -mb_advantage * ratio
-                            pg_losses2 = -mb_advantage * torch.clamp(ratio, 1.0 - args.ppo.cliprange, 1.0 + args.ppo.cliprange)
+                            pg_losses2 = -mb_advantage * torch.clamp(ratio, 1.0 - args.cliprange, 1.0 + args.cliprange)
                             pg_loss_max = torch.max(pg_losses, pg_losses2)
                             pg_loss = masked_mean(pg_loss_max, ~padding_mask[micro_batch_inds])
                             pg_clipfrac = masked_mean((pg_losses2 > pg_losses).float(), ~padding_mask[micro_batch_inds])
-                            loss = pg_loss + args.ppo.vf_coef * vf_loss
+                            loss = pg_loss + args.vf_coef * vf_loss
                             accelerator.backward(loss)
                             optimizer.step()
                             optimizer.zero_grad()
@@ -824,8 +781,6 @@ if __name__ == "__main__":
     if tokenizer.chat_template is None:
         # a default chat template to simply concatenate the messages
         tokenizer.chat_template = "{% for message in messages %}{{' ' + message['content']}}{% endfor %}{{ eos_token }}"
-    if args.truncate_token == "eos":
-        args.truncate_token_id = tokenizer.eos_token_id
     value_model: PreTrainedModel = AutoModelForSequenceClassification.from_pretrained(
         args.reward_model_path,
         num_labels=1,
