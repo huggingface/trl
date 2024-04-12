@@ -738,7 +738,7 @@ class CPOTrainer(Trainer):
         metrics[f"{prefix}logps/chosen"] = policy_chosen_logps.detach().mean().cpu()
         metrics[f"{prefix}logits/rejected"] = policy_rejected_logits.detach().mean().cpu()
         metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.detach().mean().cpu()
-        metrics[f"{prefix}nll_loss"] = policy_nll_loss.cpu().mean()
+        metrics[f"{prefix}nll_loss"] = policy_nll_loss.detach().mean().cpu()
 
         return loss, metrics
 
