@@ -139,7 +139,7 @@ class PPOConfig(TrainingArguments):
     """the sampling temperature"""
     penalty_reward_value: int = -1
     """the reward value for responses that do not contain `truncate_token_id`"""
-    non_eos_penalty: bool = True
+    non_eos_penalty: bool = False
     """whether to penalize responses that do not contain `truncate_token_id`"""
     offload: bool = False
     """Whether to offload ref policy and reward model to CPU"""
