@@ -66,7 +66,6 @@ accelerate launch --num_processes=8 -m lmms_eval \
 import logging
 import os
 from contextlib import nullcontext
-from pathlib import Path
 
 TRL_USE_RICH = os.environ.get("TRL_USE_RICH", False)
 
@@ -208,4 +207,4 @@ if __name__ == "__main__":
         trainer.save_model(training_args.output_dir)
         trainer.push_to_hub()
         if Accelerator().is_main_process:
-            processor.push_to_hub(Path(training_args.output_dir).name)
+            processor.push_to_hub(training_args.hub_model_id)
