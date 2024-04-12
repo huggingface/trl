@@ -15,6 +15,7 @@
 """
 # regular:
 python examples/scripts/vsft_llava.py \
+    --dataset_name="HuggingFaceH4/llava-instruct-mix-vsft" \
     --model_name_or_path="llava-hf/llava-1.5-7b-hf" \
     --report_to="wandb" \
     --learning_rate=1.4e-5 \
@@ -27,11 +28,11 @@ python examples/scripts/vsft_llava.py \
     --gradient_checkpointing \
     --remove_unused_columns=False \
     --torch_dtype=float16 \
-    --fp16=True \ 
-    --dataset_name="HuggingFaceH4/llava-instruct-mix-vsft"
+    --fp16=True
     
 # peft:
 python examples/scripts/vsft_llava.py \
+    --dataset_name="HuggingFaceH4/llava-instruct-mix-vsft" \    
     --model_name_or_path="llava-hf/llava-1.5-7b-hf" \
     --report_to="wandb" \
     --learning_rate=1.4e-5 \
@@ -45,7 +46,6 @@ python examples/scripts/vsft_llava.py \
     --remove_unused_columns=False \
     --torch_dtype=float16 \
     --fp16=True \ 
-    --dataset_name="HuggingFaceH4/llava-instruct-mix-vsft" \    
     --use_peft=True \
     --lora_r=64 \
     --lora_alpha=16 \
@@ -171,9 +171,6 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    import pdb
-
-    pdb.set_trace()
     raw_datasets = load_dataset(sft_script_args.dataset_name)
     train_dataset = raw_datasets["train"]
     eval_dataset = raw_datasets["test"]
