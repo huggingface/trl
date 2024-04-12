@@ -48,6 +48,7 @@ _import_structure = {
         "PPOTrainer",
         "RewardConfig",
         "RewardTrainer",
+        "SFTConfig",
         "SFTTrainer",
     ],
     "commands": [],
@@ -112,6 +113,7 @@ if TYPE_CHECKING:
         PPOTrainer,
         RewardConfig,
         RewardTrainer,
+        SFTConfig,
         SFTTrainer,
     )
     from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config, RichProgressCallback

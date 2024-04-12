@@ -46,6 +46,7 @@ _import_structure = {
     "ppo_trainer": ["PPOTrainer"],
     "reward_config": ["RewardConfig"],
     "reward_trainer": ["RewardTrainer", "compute_accuracy"],
+    "sft_config": ["SFTConfig"],
     "sft_trainer": ["SFTTrainer"],
     "base": ["BaseTrainer"],
     "ddpo_config": ["DDPOConfig"],
@@ -91,6 +92,7 @@ if TYPE_CHECKING:
     from .ppo_trainer import PPOTrainer
     from .reward_config import RewardConfig
     from .reward_trainer import RewardTrainer, compute_accuracy
+    from .sft_config import SFTConfig
     from .sft_trainer import SFTTrainer
 
     try:

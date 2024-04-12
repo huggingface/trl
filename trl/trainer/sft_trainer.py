@@ -32,7 +32,6 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     Trainer,
-    TrainingArguments,
 )
 from transformers.modeling_utils import unwrap_model
 from transformers.trainer_callback import TrainerCallback
@@ -40,6 +39,7 @@ from transformers.trainer_utils import EvalPrediction
 
 from ..extras.dataset_formatting import get_formatting_func_from_dataset
 from ..import_utils import is_peft_available
+from .sft_config import SFTConfig
 from .utils import (
     ConstantLengthDataset,
     DataCollatorForCompletionOnlyLM,
@@ -95,7 +95,7 @@ class SFTTrainer(Trainer):
         formatting_func (`Optional[Callable]`):
             The formatting function to be used for creating the `ConstantLengthDataset`.
         max_seq_length (`Optional[int]`):
-            The maximum sequence length to use for the `ConstantLengthDataset` and for automatically creating the Dataset. Defaults to `512`.
+            The maximum sequence length to use for the `ConstantLengthDataset` and for automatically creating the Dataset. Defaults to `1024`.
         infinite (`Optional[bool]`):
             Whether to use an infinite dataset or not. Defaults to `False`.
         num_of_sequences (`Optional[int]`):
@@ -127,7 +127,7 @@ class SFTTrainer(Trainer):
     def __init__(
         self,
         model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
-        args: Optional[TrainingArguments] = None,
+        args: Optional[SFTConfig] = None,
         data_collator: Optional[DataCollator] = None,  # type: ignore
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,

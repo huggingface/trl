@@ -44,6 +44,7 @@ python examples/scripts/sft.py \
     --lora_r=64 \
     --lora_alpha=16
 """
+
 import logging
 import os
 from contextlib import nullcontext
@@ -63,11 +64,12 @@ import torch
 from datasets import load_dataset
 
 from tqdm.rich import tqdm
-from transformers import AutoTokenizer, TrainingArguments
+from transformers import AutoTokenizer
 
 from trl import (
     ModelConfig,
     RichProgressCallback,
+    SFTConfig,
     SFTTrainer,
     get_peft_config,
     get_quantization_config,
@@ -81,7 +83,7 @@ if TRL_USE_RICH:
 
 
 if __name__ == "__main__":
-    parser = TrlParser((SftScriptArguments, TrainingArguments, ModelConfig))
+    parser = TrlParser((SftScriptArguments, SFTConfig, ModelConfig))
     args, training_args, model_config = parser.parse_args_and_config()
 
     # Force use our print callback

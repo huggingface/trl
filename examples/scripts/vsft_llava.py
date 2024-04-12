@@ -14,7 +14,7 @@
 # limitations under the License.
 """
 # regular:
-python examples/scripts/vsft.py \
+python examples/scripts/vsft_llava.py \
     --model_name_or_path="llava-hf/llava-1.5-7b-hf" \
     --report_to="wandb" \
     --learning_rate=1.4e-5 \
@@ -28,10 +28,10 @@ python examples/scripts/vsft.py \
     --remove_unused_columns=False \
     --torch_dtype=float16 \
     --fp16=True \ 
-    --dataset_name=HuggingFaceH4/llava-instruct-mix-vsft \
+    --dataset_name="HuggingFaceH4/llava-instruct-mix-vsft"
     
 # peft:
-python examples/scripts/vsft.py \
+python examples/scripts/vsft_llava.py \
     --model_name_or_path="llava-hf/llava-1.5-7b-hf" \
     --report_to="wandb" \
     --learning_rate=1.4e-5 \
@@ -45,7 +45,7 @@ python examples/scripts/vsft.py \
     --remove_unused_columns=False \
     --torch_dtype=float16 \
     --fp16=True \ 
-    --dataset_name=HuggingFaceH4/llava-instruct-mix-vsft \    
+    --dataset_name="HuggingFaceH4/llava-instruct-mix-vsft" \    
     --use_peft=True \
     --lora_r=64 \
     --lora_alpha=16 \
@@ -63,6 +63,7 @@ accelerate launch --num_processes=8 -m lmms_eval \
         --output_path ./logs/ \
         --log_sample    
 """
+
 import logging
 import os
 from contextlib import nullcontext
@@ -82,11 +83,12 @@ import torch
 from datasets import load_dataset
 
 from tqdm.rich import tqdm
-from transformers import AutoTokenizer, AutoProcessor, TrainingArguments, LlavaForConditionalGeneration
+from transformers import AutoTokenizer, AutoProcessor, LlavaForConditionalGeneration
 
 from trl import (
     ModelConfig,
     RichProgressCallback,
+    SFTConfig,
     SFTTrainer,
     get_peft_config,
     get_quantization_config,
@@ -100,8 +102,8 @@ if TRL_USE_RICH:
 
 
 if __name__ == "__main__":
-    parser = TrlParser((SftScriptArguments, TrainingArguments, ModelConfig))
-    args, training_args, model_config = parser.parse_args_and_config()
+    parser = TrlParser((SftScriptArguments, SFTConfig, ModelConfig))
+    sft_script_args, training_args, model_config = parser.parse_args_and_config()
     training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
     # Force use our print callback
     if TRL_USE_RICH:
@@ -169,7 +171,10 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    raw_datasets = load_dataset(args.dataset_name)
+    import pdb
+
+    pdb.set_trace()
+    raw_datasets = load_dataset(sft_script_args.dataset_name)
     train_dataset = raw_datasets["train"]
     eval_dataset = raw_datasets["test"]
 

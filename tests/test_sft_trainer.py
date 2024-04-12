@@ -25,10 +25,9 @@ from transformers import (
     AutoProcessor,
     AutoTokenizer,
     LlavaForConditionalGeneration,
-    TrainingArguments,
 )
 
-from trl import SFTTrainer
+from trl import SFTConfig, SFTTrainer
 from trl.import_utils import is_peft_available, is_pil_available
 from trl.trainer import ConstantLengthDataset, DataCollatorForCompletionOnlyLM
 
@@ -216,7 +215,7 @@ class SFTTrainerTester(unittest.TestCase):
 
     def test_sft_trainer(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -243,7 +242,7 @@ class SFTTrainerTester(unittest.TestCase):
 
     def test_sft_trainer_uncorrect_data(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -331,7 +330,7 @@ class SFTTrainerTester(unittest.TestCase):
 
     def test_sft_trainer_with_model_num_train_epochs(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -358,7 +357,7 @@ class SFTTrainerTester(unittest.TestCase):
             assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -385,7 +384,7 @@ class SFTTrainerTester(unittest.TestCase):
             assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -411,7 +410,7 @@ class SFTTrainerTester(unittest.TestCase):
 
     def test_sft_trainer_with_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -437,7 +436,7 @@ class SFTTrainerTester(unittest.TestCase):
             assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -464,7 +463,7 @@ class SFTTrainerTester(unittest.TestCase):
 
         # with formatting_func + packed
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -491,7 +490,7 @@ class SFTTrainerTester(unittest.TestCase):
 
         # with formatting_func + packed
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -515,7 +514,7 @@ class SFTTrainerTester(unittest.TestCase):
             assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -540,7 +539,7 @@ class SFTTrainerTester(unittest.TestCase):
 
     def test_sft_trainer_with_multiple_eval_datasets(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -662,7 +661,7 @@ class SFTTrainerTester(unittest.TestCase):
 
     def test_sft_trainer_infinite_with_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -693,7 +692,7 @@ class SFTTrainerTester(unittest.TestCase):
 
     def test_sft_trainer_infinite_with_model_epochs(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 num_train_epochs=1,
@@ -721,7 +720,7 @@ class SFTTrainerTester(unittest.TestCase):
 
     def test_sft_trainer_with_model_neftune(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -784,7 +783,7 @@ class SFTTrainerTester(unittest.TestCase):
     @require_peft
     def test_peft_sft_trainer(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -825,7 +824,7 @@ class SFTTrainerTester(unittest.TestCase):
     @require_peft
     def test_peft_sft_trainer_gc(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -867,7 +866,7 @@ class SFTTrainerTester(unittest.TestCase):
     @require_peft
     def test_peft_sft_trainer_neftune(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -929,7 +928,7 @@ class SFTTrainerTester(unittest.TestCase):
     @require_peft
     def test_peft_sft_trainer_tag(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -962,7 +961,7 @@ class SFTTrainerTester(unittest.TestCase):
     @require_peft
     def test_sft_trainer_tag(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -985,7 +984,7 @@ class SFTTrainerTester(unittest.TestCase):
 
     def test_sft_trainer_eval_packing(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -1036,7 +1035,7 @@ class SFTTrainerTester(unittest.TestCase):
     @requires_pil
     def test_sft_trainer_skip_prepare_dataset(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -1062,7 +1061,7 @@ class SFTTrainerTester(unittest.TestCase):
     @requires_pil
     def test_sft_trainer_llava(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
