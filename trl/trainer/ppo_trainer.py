@@ -18,7 +18,7 @@ import time
 import typing
 import warnings
 from contextlib import nullcontext
-from typing import Callable, List, Optional, Union
+from typing import Callable, Dict, List, Optional, Union
 
 import datasets
 import numpy as np
@@ -36,6 +36,7 @@ from transformers import (
     PreTrainedTokenizerBase,
     PreTrainedTokenizerFast,
 )
+from transformers.utils import ModelOutput
 
 from ..core import (
     WANDB_PADDING,
@@ -433,6 +434,58 @@ class PPOTrainer(BaseTrainer):
         else:
             return dataset.remove_columns(ignored_columns)
 
+    def _get_values_and_logits(
+        self,
+        model: PreTrainedModelWrapper,
+        generation_results: ModelOutput,
+        masks: Optional[torch.LongTensor] = None,
+    ):
+        """
+        Extract logits and compute values from a model's generation output.
+
+        Args:
+            model (`PreTrainedModelWrapper`):
+                Model used for the generation.
+            generation_results (`ModelOutput`):
+                Output of the generate call where return_dict_in_generate is set to `True`.
+            masks (`torch.LongTensor`, *optional*):
+                Attention mask for the model inputs and outputs.
+
+        Returns:
+            `Dict[str, torch.FloatTensor]`: Dictionary containing the logits and values of the model.
+        """
+        # Prepare data for PPO training
+        if generation_results.get("logits", None) is None or generation_results.get("hidden_states", None) is None:
+            return None
+        else:
+            # Gather the final hidden states for the whole sequence for calculating values
+            last_hidden_states = torch.cat([x[-1] for x in generation_results["hidden_states"]], dim=1)
+            # Pad to add one extra hidden state for the final token
+            # The values and logits calculated from this are cut off later during the batched_forward_pass
+            last_hidden_states = F.pad(last_hidden_states, (0, 0, 0, 1), value=0)
+
+            unwrapped_model = self.accelerator.unwrap_model(model)
+            values = unwrapped_model.v_head(last_hidden_states).squeeze(-1)
+
+            lm_head_weights = unwrapped_model.pretrained_model.get_output_embeddings().weight
+            logits = last_hidden_states @ lm_head_weights.T
+
+            if masks is None:
+                return {"values": values, "logits": logits}
+
+            outputs = {
+                "values": [],
+                "logits": [],
+            }
+
+            # Remove left padding from the logits and values
+            for logit, value, mask in zip(logits, values, masks):
+                padding_count = (1 - mask).sum()
+                outputs["values"].append(value[padding_count:])
+                outputs["logits"].append(logit[padding_count:])
+
+            return outputs
+
     def generate(
         self,
         query_tensor: Union[torch.Tensor, List[torch.Tensor]],
@@ -440,6 +493,7 @@ class PPOTrainer(BaseTrainer):
         batch_size: int = 4,
         return_prompt: bool = True,
         generate_ref_response: bool = False,
+        return_values_and_logits: bool = False,
         **generation_kwargs,
     ):
         """
@@ -459,6 +513,9 @@ class PPOTrainer(BaseTrainer):
                 If set to `True` the reference response is also generated, defaults to `False`.
             generation_kwargs (dict[str, Any]):
                 Keyword arguments for generation.
+            return_values_and_logits (`bool`, *optional*):
+                Returns a dictionary with logits and values when `True`. This data can later be passed to
+                the `step` method for training to avoid recomputation.
 
         Returns:
             `torch.LongTensor`: A tensor of shape (`batch_size`, `gen_len`) containing response tokens.
@@ -466,21 +523,23 @@ class PPOTrainer(BaseTrainer):
         if generate_ref_response:
             ref_model = self.model if self.is_peft_model else self.ref_model
         if isinstance(query_tensor, List):
-            response = self._generate_batched(
+            response, values_and_logits = self._generate_batched(
                 self.model,
                 query_tensor,
                 length_sampler=length_sampler,
                 batch_size=batch_size,
                 return_prompt=return_prompt,
+                return_values_and_logits=return_values_and_logits,
                 **generation_kwargs,
             )
             if generate_ref_response:
-                ref_response = self._generate_batched(
+                ref_response, ref_values_and_logits = self._generate_batched(
                     ref_model,
                     query_tensor,
                     length_sampler=length_sampler,
                     batch_size=batch_size,
                     return_prompt=return_prompt,
+                    return_values_and_logits=return_values_and_logits,
                     **generation_kwargs,
                 )
 
@@ -492,17 +551,29 @@ class PPOTrainer(BaseTrainer):
 
             if length_sampler is not None:
                 generation_kwargs["max_new_tokens"] = length_sampler()
+            generation_kwargs["output_logits"] = return_values_and_logits
+            generation_kwargs["output_hidden_states"] = return_values_and_logits
 
             with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
-                response = unwrapped_model.generate(input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs)
+                generate_output = unwrapped_model.generate(
+                    input_ids=query_tensor.unsqueeze(dim=0),
+                    return_dict_in_generate=True,
+                    **generation_kwargs,
+                )
+                response = generate_output["sequences"]
+            values_and_logits = self._get_values_and_logits(self.model, generate_output)
 
             if generate_ref_response:
                 with unwrap_model_for_generation(
                     self.model, self.accelerator, is_peft_model=self.is_peft_model
                 ) as unwrapped_model:
-                    ref_response = unwrapped_model.generate(
-                        input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs
+                    ref_generate_output = unwrapped_model.generate(
+                        input_ids=query_tensor.unsqueeze(dim=0),
+                        return_dict_in_generate=True,
+                        **generation_kwargs,
                     )
+                    ref_response = ref_generate_output["sequences"]
+                ref_values_and_logits = self._get_values_and_logits(ref_model, ref_generate_output)
 
             if not return_prompt and not self.is_encoder_decoder:
                 response = response[:, query_tensor.shape[0] :]
@@ -510,7 +581,12 @@ class PPOTrainer(BaseTrainer):
                     ref_response = ref_response[:, query_tensor.shape[0] :]
 
         if generate_ref_response:
+            if return_values_and_logits:
+                return response, ref_response, values_and_logits, ref_values_and_logits
             return response, ref_response
+
+        if return_values_and_logits:
+            return response, values_and_logits
         return response
 
     def _generate_batched(
@@ -522,6 +598,7 @@ class PPOTrainer(BaseTrainer):
         return_prompt: bool = True,
         pad_to_multiple_of: Optional[int] = None,
         remove_padding: bool = True,
+        return_values_and_logits: bool = False,
         **generation_kwargs,
     ):
         outputs = []
@@ -536,6 +613,8 @@ class PPOTrainer(BaseTrainer):
         for i in range(0, len(query_tensors), batch_size):
             if length_sampler is not None:
                 generation_kwargs["max_new_tokens"] = length_sampler()
+            generation_kwargs["output_logits"] = return_values_and_logits
+            generation_kwargs["output_hidden_states"] = return_values_and_logits
 
             # prevent overflow if query tensors are not even multiple of bs
             end_index = min(len(query_tensors), i + batch_size)
@@ -553,7 +632,12 @@ class PPOTrainer(BaseTrainer):
             ).to(self.current_device)
 
             with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
-                generations = unwrapped_model.generate(**padded_inputs, **generation_kwargs)
+                generate_output = unwrapped_model.generate(
+                    **padded_inputs, return_dict_in_generate=True, **generation_kwargs
+                )
+                generations = generate_output["sequences"]
+
+            values_and_logits = self._get_values_and_logits(model, generate_output, padded_inputs["attention_mask"])
 
             for generation, mask in zip(generations, padded_inputs["attention_mask"]):
                 if not self.is_encoder_decoder:
@@ -572,7 +656,7 @@ class PPOTrainer(BaseTrainer):
                 outputs.append(output)
 
         self.tokenizer.padding_side = padding_side_default
-        return outputs
+        return outputs, values_and_logits
 
     def _step_safety_checker(
         self,
@@ -581,6 +665,8 @@ class PPOTrainer(BaseTrainer):
         responses: List[torch.LongTensor],
         scores: List[torch.FloatTensor],
         masks: Optional[List[torch.LongTensor]] = None,
+        values_and_logits: Optional[Dict[str, torch.FloatTensor]] = None,
+        ref_values_and_logits: Optional[Dict[str, torch.FloatTensor]] = None,
     ):
         """
         Check if the input data is valid for training.
@@ -596,6 +682,12 @@ class PPOTrainer(BaseTrainer):
                 List of tensors containing the scores.
             masks (List[`torch.LongTensor`], *optional*):
                 list of optional tensors containing the masks of shape (`query_length` + `response_length`)
+            values_and_logits (Dict[str, `torch.FloatTensor`], *optional*):
+                Dictionary containing the logits and values of the model.
+                This data can be obtained from the `generate`.
+            ref_values_and_logits (Dict[str, `torch.FloatTensor`], *optional*):
+                Dictionary containing the logits and values of the reference model.
+                This data can be obtained from the `generate`.
         Returns:
             `tuple`: The input processed data.
         """
@@ -615,6 +707,27 @@ class PPOTrainer(BaseTrainer):
         scores = [tensor.to(self.current_device) for tensor in scores]
         masks = [tensor.to(self.current_device) for tensor in masks] if masks is not None else None
 
+        # make sure values_and_logits have the correct keys
+        if values_and_logits is not None:
+            if self.is_encoder_decoder:
+                raise ValueError("values_and_logits is not supported for encoder-decoder models")
+
+            if "values" not in values_and_logits or "logits" not in values_and_logits:
+                raise ValueError("values_and_logits must contain 'values' and 'logits' keys")
+
+            values_and_logits = {k: [x.to(self.current_device) for x in v] for k, v in values_and_logits.items()}
+
+        if ref_values_and_logits is not None:
+            if self.is_encoder_decoder:
+                raise ValueError("ref_values_and_logits is not supported for encoder-decoder models")
+
+            if "values" not in ref_values_and_logits or "logits" not in ref_values_and_logits:
+                raise ValueError("ref_values_and_logits must contain 'values' and 'logits' keys")
+
+            ref_values_and_logits = {
+                k: [x.to(self.current_device) for x in v] for k, v in ref_values_and_logits.items()
+            }
+
         # squeeze scores if needed
         for i, score in enumerate(scores):
             if score.dim() > 1:
@@ -622,7 +735,7 @@ class PPOTrainer(BaseTrainer):
             elif score.dim() == 1:
                 scores[i] = score.squeeze()
 
-        return queries, responses, scores, masks
+        return queries, responses, scores, masks, values_and_logits, ref_values_and_logits
 
     @PPODecorators.empty_device_cache()
     def step(
@@ -631,6 +744,8 @@ class PPOTrainer(BaseTrainer):
         responses: List[torch.LongTensor],
         scores: List[torch.FloatTensor],
         response_masks: Optional[List[torch.LongTensor]] = None,
+        values_and_logits: Optional[Dict[str, torch.FloatTensor]] = None,
+        ref_values_and_logits: Optional[Dict[str, torch.FloatTensor]] = None,
     ):
         """
         Run a PPO optimisation step given a list of queries, model responses, and rewards.
@@ -644,14 +759,27 @@ class PPOTrainer(BaseTrainer):
                 List of tensors containing the scores.
             response_masks (List[`torch.FloatTensor`], *optional*)):
                 List of tensors containing masks of the response tokens.
+            values_and_logits (Dict[str, `torch.FloatTensor`], *optional*):
+                Dictionary containing the logits and values of the model.
+                This data can be obtained from the `generate`.
+            ref_values_and_logits (Dict[str, `torch.FloatTensor`], *optional*):
+                Dictionary containing the logits and values of the reference model.
+                This data can be obtained from the `generate`.
 
         Returns:
             `dict[str, Any]`: A summary of the training statistics
         """
         bs = self.config.batch_size
 
-        queries, responses, scores, response_masks = self._step_safety_checker(
-            bs, queries, responses, scores, response_masks
+        (
+            queries,
+            responses,
+            scores,
+            response_masks,
+            values_and_logits,
+            ref_values_and_logits,
+        ) = self._step_safety_checker(
+            bs, queries, responses, scores, response_masks, values_and_logits, ref_values_and_logits
         )
         scores = torch.tensor(scores, device=self.current_device)
         if self.config.use_score_scaling:
@@ -725,6 +853,7 @@ class PPOTrainer(BaseTrainer):
                 model_inputs,
                 response_masks=response_masks,
                 return_logits=full_kl_penalty,
+                values_and_logits=values_and_logits,
             )
             with self.optional_peft_ctx():
                 ref_logprobs, ref_logits_or_none, _, _ = self.batched_forward_pass(
@@ -733,6 +862,7 @@ class PPOTrainer(BaseTrainer):
                     responses,
                     model_inputs,
                     return_logits=full_kl_penalty,
+                    values_and_logits=ref_values_and_logits,
                 )
 
         timing["time/ppo/forward_pass"] = time.time() - t
@@ -957,6 +1087,7 @@ class PPOTrainer(BaseTrainer):
         model_inputs: dict,
         return_logits: bool = False,
         response_masks: Optional[torch.Tensor] = None,
+        values_and_logits: Optional[Dict[str, torch.FloatTensor]] = None,
     ):
         """
         Calculate model outputs in multiple batches.
@@ -968,6 +1099,8 @@ class PPOTrainer(BaseTrainer):
                 List of tensors containing the encoded responses, shape (`batch_size`, `response_length`)
             return_logits (`bool`, *optional*, defaults to `False`):
                 Whether to return all_logits. Set to `False` if logits are not needed to reduce memory consumption.
+            values_and_logits (`Dict[str, torch.FloatTensor]`, *optional*):
+                Dictionary containing the logits and values of the model.
         Returns:
             (tuple):
                 - all_logprobs (`torch.FloatTensor`): Log probabilities of the responses,
@@ -991,7 +1124,23 @@ class PPOTrainer(BaseTrainer):
             response_batch = responses[i * fbs : (i + 1) * fbs]
             if response_masks is not None:
                 response_masks_batch = response_masks[i * fbs : (i + 1) * fbs]
-            logits, _, values = model(**input_kwargs)
+
+            if values_and_logits is None:
+                logits, _, values = model(**input_kwargs)
+            else:
+                target_length = input_kwargs["input_ids"].shape[1]
+                device = input_kwargs["input_ids"].device
+
+                # Pad values and logits to the target length
+                logits = torch.zeros([fbs, target_length, *values_and_logits["logits"][0].shape[1:]], device=device)
+                values = torch.zeros([fbs, target_length, *values_and_logits["values"][0].shape[1:]], device=device)
+
+                for j in range(fbs):
+                    logit_j = values_and_logits["logits"][i * fbs + j]
+                    logits[j, : logit_j.shape[0]] = logit_j
+
+                    value_j = values_and_logits["values"][i * fbs + j]
+                    values[j, : value_j.shape[0]] = value_j
 
             if self.is_encoder_decoder:
                 input_ids = input_kwargs["decoder_input_ids"]

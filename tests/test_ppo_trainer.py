@@ -19,6 +19,7 @@ import tempfile
 import unittest
 from functools import partial
 
+import numpy as np
 import pytest
 import torch
 from huggingface_hub import HfApi, HfFolder, delete_repo
@@ -504,7 +505,7 @@ class PPOTrainerTester(unittest.TestCase):
             # train model - this should raise an error
             bs = ppo_trainer.config.batch_size
 
-            queries, responses, _, _ = ppo_trainer._step_safety_checker(
+            queries, responses, _, _, _, _ = ppo_trainer._step_safety_checker(
                 bs, list(query_tensor), list(response_tensor), reward
             )
 
@@ -552,6 +553,79 @@ class PPOTrainerTester(unittest.TestCase):
         # check train stats
         for stat in EXPECTED_STATS:
             assert stat in train_stats, f"Train stats should contain {stat}"
+
+    def test_ppo_step_with_values_and_logits(self):
+        # initialize dataset
+        dummy_dataset = self._init_dummy_dataset()
+
+        # Remove dropout to ensure deterministic results
+        self.gpt2_model.v_head.dropout = torch.nn.Identity()
+        self.gpt2_model.pretrained_model.transformer.drop = torch.nn.Identity()
+        for block in self.gpt2_model.pretrained_model.transformer.h:
+            block.attn.attn_dropout = torch.nn.Identity()
+            block.attn.resid_dropout = torch.nn.Identity()
+            block.mlp.dropout = torch.nn.Identity()
+
+        ppo_trainer = PPOTrainer(
+            config=PPOConfig(batch_size=2, mini_batch_size=2, log_with=None),
+            model=self.gpt2_model,
+            ref_model=self.gpt2_model_ref,
+            tokenizer=self.gpt2_tokenizer,
+            dataset=dummy_dataset,
+        )
+        # Set learning rate to zero to ensure no weight updates between runs
+        for group in ppo_trainer.optimizer.param_groups:
+            group["lr"] = 0.0
+        dummy_dataloader = ppo_trainer.dataloader
+
+        generation_kwargs = {
+            "min_length": -1,
+            "top_k": 0.0,
+            "top_p": 1.0,
+            "do_sample": True,
+            "pad_token_id": self.gpt2_tokenizer.eos_token_id,
+            "max_new_tokens": 4,
+        }
+
+        # train model with ppo
+        for query_tensor, _ in dummy_dataloader:
+            query_tensors = list(query_tensor)
+            response_tensors, values_and_logits = ppo_trainer.generate(
+                query_tensors,
+                return_prompt=False,
+                return_values_and_logits=True,
+                **generation_kwargs,
+            )
+
+            # define a reward for response
+            # (this could be any reward such as human feedback or output from another model)
+            reward = [torch.tensor(1.0), torch.tensor(0.0)]
+
+            # train model with values and logits
+            stats = ppo_trainer.step(query_tensors, response_tensors, reward, values_and_logits=values_and_logits)
+
+            # train model without values and logits
+            other_stats = ppo_trainer.step(query_tensors, response_tensors, reward)
+            break
+
+        # We need to mask out logprobs for the padding tokens because logprobs and values are
+        # not computed for padding tokens when passed into the `step` function
+        sequence_lengths = [len(q) + len(r) - 1 for q, r in zip(query_tensors, response_tensors)]
+        masks = np.ones(
+            (
+                len(query_tensors),
+                max(sequence_lengths),
+            )
+        )
+        for i, length in enumerate(sequence_lengths):
+            masks[i, length:] = 0
+
+        logprobs = stats["objective/logprobs"] * masks
+        other_logprobs = other_stats["objective/logprobs"] * masks
+
+        assert np.allclose(logprobs, other_logprobs)
+        assert np.allclose(stats["ppo/val/mean"], other_stats["ppo/val/mean"])
+        assert np.allclose(stats["ppo/val/var"], other_stats["ppo/val/var"])
 
     def test_loss_trainer(self):
         """
