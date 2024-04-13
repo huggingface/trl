@@ -726,6 +726,11 @@ class PPOTrainer(BaseTrainer):
                 response_masks=response_masks,
                 return_logits=full_kl_penalty,
             )
+
+            if self.config.bootstrap_rewards:
+                all_values = values
+                values = values[:, :-1]
+
             with self.optional_peft_ctx():
                 ref_logprobs, ref_logits_or_none, _, _ = self.batched_forward_pass(
                     self.model if self.is_peft_model else self.ref_model,
@@ -751,6 +756,10 @@ class PPOTrainer(BaseTrainer):
             timing["time/ppo/compute_rewards"] = time.time() - t
 
             t = time.time()
+
+            if self.config.bootstrap_rewards:
+                rewards = self._bootstrap_rewards(model_inputs["input_ids"], rewards, all_values, masks)
+
             values, advantages, returns = self.compute_advantages(values, rewards, masks)
             timing["time/ppo/compute_advantages"] = time.time() - t
 
@@ -802,6 +811,9 @@ class PPOTrainer(BaseTrainer):
                             model_inputs,
                             return_logits=True,
                         )
+                        if self.config.bootstrap_rewards:
+                            vpreds = vpreds[:, :-1]
+
                         train_stats = self.train_minibatch(
                             mini_batch_dict["logprobs"],
                             mini_batch_dict["values"],
@@ -868,6 +880,29 @@ class PPOTrainer(BaseTrainer):
             self.lr_scheduler.step()
 
         return stats
+
+    def _bootstrap_rewards(self, input_ids, rewards, all_values, masks):
+        """
+        Use the value function to bootstrap the final reward if the sequence does not end with an eos token.
+
+        Args:
+            input_ids (`torch.LongTensor`):
+                The combined query and response input ids of the sequence,
+                of shape (`batch_size`, `query_length` + `response_length`).
+            rewards (`torch.FloatTensor`):
+                Tensor of rewards for the sequence, of shape (`batch_size`, `query_length` + `response_length` - 1).
+            all_values (`torch.FloatTensor`):
+                Values for the full sequence, of shape (`batch_size`, `query_length` + `response_length`).
+            masks (`torch.LongTensor`):
+                Tensor containing masks for training, of shape (`batch_size`, `query_length` + `response_length` - 1)
+        """
+        last_token_idxs = []
+        for mask in masks:
+            last_token_idxs.append(mask.nonzero()[-1][0] + 1)
+        for i, last_token_idx in enumerate(last_token_idxs):
+            if input_ids[i][last_token_idx] != self.tokenizer.eos_token_id:
+                rewards[i][last_token_idx - 1] += self.config.gamma * all_values[i][last_token_idx]
+        return rewards
 
     def _early_stop(self, policykl):
         r"""
@@ -974,7 +1009,8 @@ class PPOTrainer(BaseTrainer):
                     shape (`batch_size`, `response_length`)
                 - all_ref_logprobs (`torch.FloatTensor`): Log probabilities of the responses,
                     shape (`batch_size`, `response_length`)
-                - all_values (`torch.FloatTensor`): Values of the responses, shape (`batch_size`, `response_length`)
+                - all_values (`torch.FloatTensor`): Values of the responses, shape (`batch_size`, `response_length`).
+                    When `bootstrap_rewards` is set to `True`, the values are of shape (`batch_size`, `response_length` + 1).
         """
         bs = len(queries)
         fbs = self.config.mini_batch_size
@@ -1035,7 +1071,7 @@ class PPOTrainer(BaseTrainer):
         return (
             torch.cat(all_logprobs),
             torch.cat(all_logits)[:, :-1] if return_logits else None,
-            torch.cat(all_values)[:, :-1],
+            torch.cat(all_values) if self.config.bootstrap_rewards else torch.cat(all_values)[:, :-1],
             torch.cat(all_masks)[:, :-1],
         )
 

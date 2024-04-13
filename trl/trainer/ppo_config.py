@@ -124,6 +124,8 @@ class PPOConfig:
     """Score clipping"""
     whiten_rewards: bool = False
     """Whiten the rewards before compute advantages"""
+    bootstrap_rewards: bool = False
+    """Use the value function to bootstrap the rewards when responses do not end with an EOS token"""
 
     # computed hyperparameters at runtime; we use `tyro.conf.Suppress` to hide them from the help text
     is_encoder_decoder: Optional[tyro.conf.Suppress[bool]] = None

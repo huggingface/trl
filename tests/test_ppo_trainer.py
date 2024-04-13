@@ -1198,6 +1198,29 @@ class PPOTrainerTester(unittest.TestCase):
         model_grad_acc = gpt2_model_clone.v_head.summary.weight
         assert torch.allclose(model_grad_acc, model_grad, rtol=0.001, atol=0.001)
 
+    def test_bootstrap_rewards(self):
+        dummy_dataset = self._init_dummy_dataset()
+
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=self.gpt2_model,
+            ref_model=None,
+            tokenizer=self.gpt2_tokenizer,
+            dataset=dummy_dataset,
+        )
+
+        input_ids = torch.tensor(
+            [[1, 2, 3, 4], [5, 6, ppo_trainer.tokenizer.eos_token_id, ppo_trainer.tokenizer.pad_token_id]],
+        )
+        rewards = torch.tensor([[0.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+        values = torch.tensor([[1, 2, 3, 4], [5, 6, 7, 8]])
+        masks = torch.tensor([[0, 1, 1], [1, 1, 0]])
+
+        bootstrap_rewards = ppo_trainer._bootstrap_rewards(input_ids, rewards, values, masks)
+        assert torch.allclose(
+            bootstrap_rewards, torch.tensor([[0.0, 0.0, 4.0 * self.ppo_config.gamma], [0.0, 1.0, 0.0]])
+        )
+
     @unittest.skip("Fix by either patching `whomai()` to work in the staging endpoint or use a dummy prod user.")
     def test_push_to_hub_if_best_reward(self):
         REPO_NAME = "test-ppo-trainer"
