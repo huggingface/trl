@@ -66,6 +66,8 @@ class ScriptArguments:
     # model parameters
     model_name: Optional[str] = field(default="gpt2", metadata={"help": "the model name"})
     model_revision: Optional[str] = field(default=None, metadata={"help": "the model name"})
+    ref_model_name: Optional[str] = field(default="gpt2", metadata={"help": "the model name"})
+    ref_model_revision: Optional[str] = field(default=None, metadata={"help": "the model name"})
     tokenizer_name: Optional[str] = field(default=None, metadata={"help": "the model name"})
     bf16: Optional[bool] = field(
         default=False,
@@ -254,6 +256,16 @@ def create_and_prepare_model(args):
             if target_module_found:
                 model.get_submodule(key + ".original_module").requires_grad_(False)
 
+        ref_model = None
+    else:
+        ref_model = AutoModelForCausalLM.from_pretrained(
+            args.ref_model_name,
+            revision=args.ref_model_revision,
+            quantization_config=quantization_config,
+            device_map=device_map,
+            torch_dtype=dtype,
+        )
+
     # if args.bf16:
     #     for name, module in model.named_modules():
     #         if isinstance(module, LoraLayer):
@@ -274,7 +286,7 @@ def create_and_prepare_model(args):
     # if getattr(model.config, "pad_token_id", None) is None:
     #     model.config.pad_token_id = model.config.eos_token_id
 
-    return model, tokenizer
+    return model, tokenizer, ref_model
 
 
 def create_and_prepare_gold_model(args):
@@ -357,7 +369,7 @@ if __name__ == "__main__":
     script_args = parser.parse_args_into_dataclasses()[0]
 
     # 1. load a pretrained model
-    model, tokenizer = create_and_prepare_model(script_args)
+    model, tokenizer, ref_model = create_and_prepare_model(script_args)
 
     if script_args.ignore_bias_buffers:
         # torch distributed hack
@@ -407,6 +419,7 @@ if __name__ == "__main__":
     # 5. initialize the DPO trainer
     dpo_trainer = DPOTrainer(
         model=model,
+        ref_model=ref_model,
         args=training_args,
         beta=script_args.beta,
         train_dataset=train_dataset,
