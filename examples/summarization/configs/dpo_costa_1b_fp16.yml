@@ -5,7 +5,7 @@ dataset_name: vwxyzjn/summarize_from_feedback_oai_preprocessing_1706381144
 tokenizer_name: EleutherAI/pythia-1b-deduped
 prompt_field: query
 eval_split: validation
-max_target_length: 128
+max_target_length: 131
 ## hub stuff
 push_to_hub: True
 push_to_hub_organization: mnoukhov

@@ -6,6 +6,9 @@ ref_model_name: vwxyzjn/EleutherAI_pythia-1b-deduped__sft__tldr
 ref_model_revision: sft__55513__1706646024
 tokenizer_name: EleutherAI/pythia-1b-deduped
 dataset_name: mnoukhov/summarize_from_feedback_tldr3_generated_20k_vllm_pythia1b_dpo_temp0.7_length128
+max_prompt_length: 512
+max_target_length: 128
+max_length: 640
 eval_split: train
 use_peft: False
 beta: 0.5
