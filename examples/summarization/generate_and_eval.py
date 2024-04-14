@@ -9,9 +9,10 @@ import torch
 from accelerate import Accelerator
 from datasets import Dataset, DatasetInfo, builder, load_dataset
 from huggingface_hub import list_repo_refs
+from peft import PeftConfig, PeftModelForCausalLM
 from scalar_rm_model import ScalarModel, ScalarModelConfig
 from torch.utils.data import DataLoader
-from transformers import AutoTokenizer, HfArgumentParser, Trainer, TrainingArguments
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, Trainer, TrainingArguments
 from vllm import LLM, SamplingParams
 from vllm.model_executor.parallel_utils.parallel_state import destroy_model_parallel
 
@@ -28,6 +29,8 @@ class GenerateScriptArguments:
         metadata={"help": "output folder"},
     )
     num_gpus: Optional[int] = field(default=1)
+    base_model_name: Optional[str] = field(default=None, metadata={"help": "the model name"})
+    base_model_revision: Optional[str] = field(default=None)
     model_name: Optional[str] = field(default="EleutherAI/pythia-410m", metadata={"help": "the model name"})
     model_revisions: Optional[List[str]] = field(default_factory=list)
     # base_model_revision: Optional[str] = field(default=None)
@@ -76,16 +79,83 @@ def generate(script_args):
 
     refs = list_repo_refs(script_args.model_name, repo_type="model")
     gens = {}
-    for branch in refs.branches:
-        if branch.name == "main":
+    revisions = sorted([branch.name for branch in refs.branches])
+    for revision in revisions:
+        if revision == "main":
             continue
 
-        if script_args.model_revisions and branch.name not in script_args.model_revisions:
+        if script_args.model_revisions and revision not in script_args.model_revisions:
             continue
 
-        print(sampling_params, file=f)
+        print(f"generating step {revision}")
+
+        if script_args.base_model_name is None:
+            # merged model
+            model_name = script_args.model_name
+            revision_name = revision
+        else:
+            # peft model that needs to be merged
+            base_model = AutoModelForCausalLM.from_pretrained(
+                script_args.base_model_name, revision=script_args.base_model_revision
+            )
+            # merge the model and save
+            model = PeftModelForCausalLM.from_pretrained(
+                base_model, script_args.model_name, revision=revision, device="cpu"
+            )
+            merged = model.merge_and_unload()
+            model_save_path = f"/home/toolkit/trl_results/{script_args.model_name}_merged/{revision}"
+            merged.save_pretrained(model_save_path)
+            del model
+            del merged
+            model_name = model_save_path
+            revision_name = revision
+            revision = None
+
+        llm = LLM(
+            model=model_name,
+            revision=revision,
+            tokenizer=script_args.tokenizer_name,
+            dtype=script_args.gen_dtype,
+            max_model_len=script_args.seq_length,
+            tensor_parallel_size=script_args.num_gpus,
+            trust_remote_code=True,
+        )
+
+        llm.set_tokenizer(tokenizer)
+
+        generations = llm.generate(prompts, sampling_params)
+
+        texts = [output.prompt + output.outputs[0].text for output in generations]
+
+        gens[revision_name] = texts
+
+        dataset = dataset.add_column(f"generations_{revision_name}", texts)
+
+        # delete old model
+        destroy_model_parallel()
+        del llm.llm_engine.driver_worker
+        del llm
+        gc.collect()
+        torch.cuda.empty_cache()
+        torch.distributed.destroy_process_group()
+
+    if script_args.output_dir is not None:
+        # TODO add hash to dataset path
+        # sampling_str = str(sampling_params)
+        # sampling_hash = hashlib.sha256(sampling_str.encode()).hexdigest()[:10]
+        dataset_path = os.path.join(
+            script_args.output_dir,
+            script_args.dataset_name.replace("/", "_"),
+            script_args.model_name.replace("/", "_"),
+        )
+        os.makedirs(dataset_path, exist_ok=True)
+        dataset.save_to_disk(dataset_path)
+        with open(f"{dataset_path}_sampling_params.txt", "w") as f:
+            print(sampling_params, file=f)
 
     print(f"generated {len(gens)} steps")
+    reference = dataset["query_reference_response"]
+
     return reference, gens
 
     # ds_info = DatasetInfo(
