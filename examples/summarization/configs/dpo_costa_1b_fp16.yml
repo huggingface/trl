@@ -23,7 +23,6 @@ bf16: False
 fp16: True
 learning_rate: 3e-6
 use_peft: True
-lora_all_linear: True
 lora_r: 16
 lora_alpha: 32
 lora_dropout: 0.

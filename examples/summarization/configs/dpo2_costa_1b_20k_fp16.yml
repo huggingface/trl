@@ -18,7 +18,7 @@ push_to_hub_organization: mnoukhov
 gold_eval: ppl
 eval_steps: 0.2
 save_steps: 0.2
-beta: 0.5
+beta: 0.05
 max_steps: -1
 num_train_epochs: 1
 load_in_8bit: False
@@ -26,10 +26,9 @@ bf16: False
 fp16: True
 learning_rate: 3e-6
 use_peft: True
-lora_all_linear: True
-lora_r: 8
+lora_r: 16
 lora_alpha: 32
-lora_dropout: 0.05
+lora_dropout: 0.
 gradient_accumulation_steps: 4
 per_device_train_batch_size: 4
 per_device_eval_batch_size: 4
