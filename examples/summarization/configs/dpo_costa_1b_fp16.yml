@@ -8,6 +8,7 @@ eval_split: validation
 max_prompt_length: 512
 max_target_length: 131
 max_length: 640
+lr_scheduler_type: cosine
 ## hub stuff
 push_to_hub: True
 push_to_hub_organization: mnoukhov
@@ -21,7 +22,7 @@ num_train_epochs: 1
 load_in_8bit: False
 bf16: False
 fp16: True
-learning_rate: 3e-6
+learning_rate: 3e-5
 use_peft: True
 lora_r: 16
 lora_alpha: 32
@@ -29,4 +30,3 @@ lora_dropout: 0.
 gradient_accumulation_steps: 4
 per_device_train_batch_size: 4
 per_device_eval_batch_size: 4
-warmup_steps: 150
