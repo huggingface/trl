@@ -17,7 +17,20 @@ from trl.trainer.ppov2_bandit_rloo_trainer import PPOConfig, PPOTrainer
 
 
 """
-python -i examples/scripts/minimal/ppo_bandit_rloo.py \
+# run ppo
+python examples/scripts/minimal/ppo_bandit_rloo.py \
+    --learning_rate 3e-6 \
+    --output_dir models/minimal/ppo \
+    --per_device_train_batch_size 64 \
+    --gradient_accumulation_steps 1 \
+    --total_episodes 10000 \
+    --base_model EleutherAI/pythia-1b-deduped \
+    --non_eos_penalty \
+# run REINFORCE w/ RLOO; `--epochs 1 --nminibatches 1` in PPO is equivalent to REINFORCE
+python -i examples/scripts/minimal/reinforce_bandit_rloo.py \
+    --epochs 1 \
+    --nminibatches 1 \
+    --rloo_k 4 \
     --learning_rate 3e-6 \
     --output_dir models/minimal/ppo \
     --per_device_train_batch_size 64 \
