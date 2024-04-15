@@ -93,7 +93,6 @@ class ScriptArguments:
     lora_alpha: Optional[float] = field(default=16, metadata={"help": "the lora alpha parameter"})
     lora_dropout: Optional[float] = field(default=0.05, metadata={"help": "the lora dropout parameter"})
     lora_r: Optional[int] = field(default=8, metadata={"help": "the lora r parameter"})
-    lora_all_linear: Optional[bool] = field(default=False, metadata={"help": "lora adapter on all linear layers"})
 
     # training parameters
     optimizer_type: Optional[str] = field(default="adamw_torch", metadata={"help": "the optimizer type"})
@@ -168,21 +167,11 @@ class ScriptArguments:
     strip_prompt: Optional[bool] = field(default=True)
 
 
-def find_all_linear_names(args, model):
-    cls = bnb.nn.Linear4bit if args.load_in_4bit else (bnb.nn.Linear8bitLt if args.load_in_8bit else torch.nn.Linear)
-    lora_module_names = set()
-    for name, module in model.named_modules():
-        if isinstance(module, cls):
-            names = name.split(".")
-            lora_module_names.add(names[0] if len(names) == 1 else names[-1])
-
-    if "lm_head" in lora_module_names:  # needed for 16-bit
-        lora_module_names.remove("lm_head")
-
-    if "score" in lora_module_names:  # needed for 16-bit
-        lora_module_names.remove("score")
-
-    return list(lora_module_names)
+def disable_dropout(model: torch.nn.Module):
+    """Disable dropout in a model."""
+    for module in model.modules():
+        if isinstance(module, torch.nn.Dropout):
+            module.p = 0
 
 
 def create_and_prepare_model(args):
@@ -232,29 +221,19 @@ def create_and_prepare_model(args):
     # we add `score` to the list of modules to save to
     # correctly save the score head.
     # set target modules to be query_key_value for Pythia
-    if args.lora_all_linear:
-        modules = find_all_linear_names(args, model)
-    else:
-        modules = None
-
     if args.use_peft and args.mode == "train":
-        modules_to_save = ["lm_head"]
         peft_config = LoraConfig(
             r=args.lora_r,
             lora_alpha=args.lora_alpha,
             lora_dropout=args.lora_dropout,
             bias="none",
             task_type="CAUSAL_LM",
-            target_modules=modules,
-            modules_to_save=modules_to_save,
+            target_modules="all-linear",
         )
 
         model = get_peft_model(model, peft_config)
 
-        for key, _ in model.named_modules():
-            target_module_found = any(key.endswith(target_key) for target_key in modules_to_save)
-            if target_module_found:
-                model.get_submodule(key + ".original_module").requires_grad_(False)
+        disable_dropout(model)
 
         ref_model = None
     else:
@@ -265,26 +244,14 @@ def create_and_prepare_model(args):
             device_map=device_map,
             torch_dtype=dtype,
         )
+        disable_dropout(ref_model)
 
-    # if args.bf16:
-    #     for name, module in model.named_modules():
-    #         if isinstance(module, LoraLayer):
-    #             module = module.to(torch.bfloat16)
-    #         if "norm" in name:
-    #             module = module.to(torch.float32)
-    #         if "score" in name or "embed_tokens" in name:
-    #             if hasattr(module, "weight") and module.weight.dtype == torch.float32:
-    #                 module = module.to(torch.bfloat16)
-
-    # tokenizer_name = script_args.model_name if script_args.tokenizer_name is None else script_args.tokenizer_name
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
 
     if tokenizer_name.startswith("EleutherAI"):
         tokenizer.add_special_tokens({"pad_token": "[PAD]"})
     elif getattr(tokenizer, "pad_token", None) is None:
         tokenizer.pad_token = tokenizer.eos_token
-    # if getattr(model.config, "pad_token_id", None) is None:
-    #     model.config.pad_token_id = model.config.eos_token_id
 
     return model, tokenizer, ref_model
 
