@@ -10,15 +10,11 @@ import torch.nn.functional as F
 from accelerate import Accelerator
 from accelerate.state import AcceleratorState
 from accelerate.utils import broadcast
-from datasets import Dataset, load_dataset
+from datasets import Dataset
 from torch.utils.data import DataLoader
 from transformers import (
-    AutoModelForCausalLM,
-    AutoModelForSequenceClassification,
-    AutoTokenizer,
     DataCollatorWithPadding,
     GenerationConfig,
-    HfArgumentParser,
     PreTrainedModel,
     PreTrainedTokenizer,
     Trainer,
@@ -362,8 +358,22 @@ class PPOTrainer(Trainer):
             self.callbacks, self.model, self.tokenizer, self.optimizer, self.lr_scheduler
         )
         self.control = TrainerControl()
+        self.is_deepspeed_enabled = getattr(self.accelerator.state, "deepspeed_plugin", None) is not None
+        self.is_fsdp_enabled = getattr(self.accelerator.state, "fsdp_plugin", None) is not None
 
     # def get_train_dataloader(self) -> DataLoader:
+
+    def save_model(self, output_dir: Optional[str] = None):
+        """
+        Copied from Trainer.save_model, simplified.
+        By default we only save the policy and not the value network.
+        """
+        unwrapped: PreTrainedModel = self.accelerator.unwrap_model(self.model).policy
+        if output_dir is None:
+            output_dir = self.args.output_dir
+        state_dict = self.accelerator.get_state_dict(unwrapped)
+        if self.args.should_save:
+            self._save(output_dir, state_dict=state_dict)
 
     def train(self):
         args = self.args
@@ -380,7 +390,7 @@ class PPOTrainer(Trainer):
             batch_size=args.local_batch_size,
             shuffle=True,
             collate_fn=DataCollatorWithPadding(tokenizer),
-            drop_last=True, # needed; otherwise the last batch will be of ragged shape
+            drop_last=True,  # needed; otherwise the last batch will be of ragged shape
         )
 
         device = accelerator.device
@@ -446,7 +456,7 @@ class PPOTrainer(Trainer):
         entropy_stats = torch.zeros(stats_shape, device=device)
         ratio_stats = torch.zeros(stats_shape, device=device)
         model.train()
-        for update in range(1, args.num_updates + 1):
+        for _ in range(1, args.num_updates + 1):
             global_step += 1 * args.batch_size
             self.lr_scheduler.step()
             data = next(iter_dataloader)
@@ -661,7 +671,7 @@ class PPOTrainer(Trainer):
                 mean_non_score_reward = non_score_reward.sum(1).mean()
                 eps = int(global_step / (time.time() - start_time))
                 metrics = {}
-                metrics["ppo/eps"] = eps
+                metrics["eps"] = eps
                 metrics["objective/kl"] = self.accelerator.gather(mean_kl).mean().item()
                 metrics["objective/entropy"] = self.accelerator.gather(mean_entropy).mean().item()
                 metrics["objective/non_score_reward"] = self.accelerator.gather(mean_non_score_reward).mean().item()
@@ -669,126 +679,18 @@ class PPOTrainer(Trainer):
                     self.accelerator.gather(mean_non_score_reward + scores.mean()).mean().item()
                 )
                 metrics["objective/scores"] = self.accelerator.gather(scores.mean()).mean().item()
-                metrics["ppo/policy/approxkl_avg"] = self.accelerator.gather(approxkl_stats).mean().item()
-                metrics["ppo/policy/clipfrac_avg"] = self.accelerator.gather(pg_clipfrac_stats).mean().item()
-                metrics["ppo/loss/policy_avg"] = self.accelerator.gather(pg_loss_stats).mean().item()
-                metrics["ppo/loss/value_avg"] = self.accelerator.gather(vf_loss_stats).mean().item()
-                metrics["ppo/val/clipfrac_avg"] = self.accelerator.gather(vf_clipfrac_stats).mean().item()
-                metrics["ppo/policy/entropy_avg"] = self.accelerator.gather(entropy_stats).mean().item()
-                metrics["ppo/val/ratio"] = self.accelerator.gather(ratio_stats).mean().item()
-                metrics["ppo/val/ratio_var"] = self.accelerator.gather(ratio_stats).var().item()
-                metrics["ppo/val/num_eos_tokens"] = (responses == tokenizer.eos_token_id).sum().item()
-                metrics["ppo/lr"] = self.lr_scheduler.get_last_lr()
-                metrics["ppo/episode"] = global_step
+                metrics["policy/approxkl_avg"] = self.accelerator.gather(approxkl_stats).mean().item()
+                metrics["policy/clipfrac_avg"] = self.accelerator.gather(pg_clipfrac_stats).mean().item()
+                metrics["loss/policy_avg"] = self.accelerator.gather(pg_loss_stats).mean().item()
+                metrics["loss/value_avg"] = self.accelerator.gather(vf_loss_stats).mean().item()
+                metrics["val/clipfrac_avg"] = self.accelerator.gather(vf_clipfrac_stats).mean().item()
+                metrics["policy/entropy_avg"] = self.accelerator.gather(entropy_stats).mean().item()
+                metrics["val/ratio"] = self.accelerator.gather(ratio_stats).mean().item()
+                metrics["val/ratio_var"] = self.accelerator.gather(ratio_stats).var().item()
+                metrics["val/num_eos_tokens"] = (responses == tokenizer.eos_token_id).sum().item()
+                metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
+                metrics["episode"] = global_step
                 self.state.epoch = global_step / self.train_dataset_len  # used by self.log
                 self.log(metrics)
             del kl, mean_kl, mean_entropy, mean_non_score_reward, scores
             torch.cuda.empty_cache()
-
-        # # save model
-        # if args.output_dir and args.num_train_epochs > 0:
-        #     os.makedirs(os.path.dirname(args.output_dir), exist_ok=True)
-        #     if accelerator.is_main_process:
-        #         tokenizer.save_pretrained(args.output_dir)
-        #         if args.push_to_hub:
-        #             tokenizer.push_to_hub(repo_id=args.hf_repo_id, revision=args.hf_repo_revision)
-        #     unwrapped: PreTrainedModel = accelerator.unwrap_model(model).policy
-        #     accelerator.wait_for_everyone()
-        #     if accelerator.is_main_process:
-        #         unwrapped.save_pretrained(
-        #             args.output_dir,
-        #             is_main_process=accelerator.is_main_process,
-        #             save_function=accelerator.save,
-        #             state_dict=accelerator.get_state_dict(unwrapped),
-        #             safe_serialization=False,
-        #         )
-        #         if args.push_to_hub:
-        #             unwrapped.push_to_hub(repo_id=args.hf_repo_id, revision=args.hf_repo_revision, safe_serialization=False)
-        #             accelerator.print(f"🔥 pushed to https://huggingface.co/{args.hf_repo_id}/tree/{args.hf_repo_revision}")
-
-
-if __name__ == "__main__":
-    parser = HfArgumentParser(PPOConfig)
-    args = parser.parse_args_into_dataclasses()[0]
-    # set_seed(local_seed) # TODO: check seeding
-
-    # Model & Tokenizer
-    ################
-    tokenizer = AutoTokenizer.from_pretrained(
-        args.base_model,
-        padding_side="left",
-        trust_remote_code=True,
-    )
-    tokenizer.add_special_tokens({"pad_token": "[PAD]"})
-    if tokenizer.chat_template is None:
-        # a default chat template to simply concatenate the messages
-        tokenizer.chat_template = (
-            "{% for message in messages %}{{' ' + message['content']}}{% endfor %}{{ eos_token }}"
-        )
-    value_model: PreTrainedModel = AutoModelForSequenceClassification.from_pretrained(
-        args.reward_model_path,
-        num_labels=1,
-    )
-    reward_model: PreTrainedModel = AutoModelForSequenceClassification.from_pretrained(
-        args.reward_model_path,
-        num_labels=1,
-    )
-    ref_policy = AutoModelForCausalLM.from_pretrained(args.sft_model_path)
-    policy = AutoModelForCausalLM.from_pretrained(args.sft_model_path)
-    ################
-    # Dataset
-    ################
-    raw_datasets = load_dataset("trl-internal-testing/descriptiveness-sentiment-trl-style", split="descriptiveness")
-
-    def process(row):
-        row["chosen"] = tokenizer.apply_chat_template(row["chosen"], tokenize=False).strip()
-        row["rejected"] = tokenizer.apply_chat_template(row["rejected"], tokenize=False).strip()
-        return row
-
-    raw_datasets = raw_datasets.map(process, load_from_cache_file=False)
-    eval_samples = 20
-    train_dataset = raw_datasets.select(range(len(raw_datasets) - eval_samples))
-    eval_dataset = raw_datasets.select(range(len(raw_datasets) - eval_samples, len(raw_datasets)))
-
-    dataset_text_field = "chosen"
-
-    def prepare_dataset(dataset, tokenizer):
-        """pre-tokenize the dataset before training; only collate during training"""
-
-        def tokenize(element):
-            outputs = tokenizer(
-                element[dataset_text_field],
-                padding=False,
-            )
-            return {"input_ids": outputs["input_ids"]}
-
-        return dataset.map(
-            tokenize,
-            remove_columns=dataset.column_names,
-            batched=True,
-            num_proc=4,  # multiprocessing.cpu_count(),
-            load_from_cache_file=False,
-        )
-
-    ################
-    # Training
-    ################
-    trainer = PPOTrainer(
-        args=args,
-        tokenizer=tokenizer,
-        policy=policy,
-        ref_policy=ref_policy,
-        reward_model=reward_model,
-        value_model=value_model,
-        train_dataset=prepare_dataset(train_dataset, tokenizer),
-        eval_dataset=prepare_dataset(eval_dataset, tokenizer),
-        train_generation_config=GenerationConfig(
-            max_new_tokens=args.response_length,
-            min_new_tokens=args.response_length,
-            temperature=(args.temperature + 1e-7),
-            top_k=0.0,
-            top_p=1.0,
-            do_sample=True,
-        ),
-    )
-    trainer.train()
