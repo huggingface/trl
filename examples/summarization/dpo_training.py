@@ -14,7 +14,7 @@
 # limitations under the License.
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Literal, Optional
 
 import torch
@@ -35,6 +35,7 @@ from transformers import (
 )
 from transformers.trainer_utils import get_last_checkpoint
 
+import wandb
 from trl import DPOTrainer
 
 
@@ -383,6 +384,9 @@ if __name__ == "__main__":
         max_target_length=script_args.max_target_length,
         max_prompt_length=script_args.max_prompt_length,
     )
+
+    wandb.init()
+    wandb.config.update(asdict(script_args))
 
     # Gold Eval
     if script_args.gold_eval != "none" and script_args.mode in ["train", "eval"]:
