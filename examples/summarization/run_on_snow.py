@@ -7,7 +7,7 @@ from copy import deepcopy
 import generate_and_eval
 import yaml
 from accelerate.commands import launch
-from generate_vllm import generate_vllm_args_dict
+from generate_vllm import generate_relabel_args_dict
 from haven import haven_wizard as hw
 
 
@@ -57,7 +57,7 @@ def run_exp(exp_dict, savedir, args):
     elif exp_name.startswith("vllm"):
         exp_dict.pop("save_strategy", None)
         exp_dict["num_gpus"] = args.gpus
-        generate_vllm_args_dict(exp_dict)
+        generate_relabel_args_dict(exp_dict)
     elif exp_name.startswith("geneval"):
         exp_dict.pop("save_strategy", None)
         exp_dict["num_gpus"] = args.gpus
