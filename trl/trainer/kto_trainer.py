@@ -16,7 +16,7 @@ import inspect
 import random
 import warnings
 from collections import defaultdict
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from copy import deepcopy
 from functools import wraps
 from operator import itemgetter
@@ -257,6 +257,10 @@ class KTOTrainer(Trainer):
         compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return
             a dictionary string to metric values.
+        model_adapter_name (`str`, defaults to `None`):
+            Name of the train target PEFT adapter, when using LoRA with multiple adapters.
+        ref_adapter_name (`str`, defaults to `None`):
+            Name of the reference PEFT adapter, when using LoRA with multiple adapters.
     """
 
     _tag_names = ["trl", "kto"]
@@ -276,6 +280,8 @@ class KTOTrainer(Trainer):
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         peft_config: Optional[Dict] = None,
         compute_metrics: Optional[Callable[[EvalLoopOutput], Dict]] = None,
+        model_adapter_name: Optional[str] = None,
+        ref_adapter_name: Optional[str] = None,
     ):
         if type(args) == TrainingArguments:
             raise ValueError("Please use `KTOConfig` instead TrainingArguments.")
@@ -392,6 +398,8 @@ class KTOTrainer(Trainer):
             self.is_encoder_decoder = args.is_encoder_decoder
 
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
+        self.model_adapter_name = model_adapter_name
+        self.ref_adapter_name = ref_adapter_name
 
         if ref_model:
             self.ref_model = ref_model
@@ -677,6 +685,18 @@ class KTOTrainer(Trainer):
         model.eval()
         return model
 
+    @contextmanager
+    def null_ref_context(self):
+        """Context manager for handling null reference model (that is, peft adapter manipulation)."""
+        with self.accelerator.unwrap_model(
+            self.model
+        ).disable_adapter() if self.is_peft_model and not self.ref_adapter_name else nullcontext():
+            if self.ref_adapter_name:
+                self.model.set_adapter(self.ref_adapter_name)
+            yield
+            if self.ref_adapter_name:
+                self.model.set_adapter(self.model_adapter_name or "default")
+
     def get_train_dataloader(self) -> DataLoader:
         """
         Returns the training [`~torch.utils.data.DataLoader`].
@@ -775,9 +795,7 @@ class KTOTrainer(Trainer):
         """Computes log probabilities of the reference model for a single padded batch of a KTO specific dataset."""
         with torch.no_grad():
             if self.ref_model is None:
-                with self.accelerator.unwrap_model(
-                    self.model
-                ).disable_adapter() if self.is_peft_model else nullcontext():
+                with self.null_ref_context():
                     if self.is_encoder_decoder:
                         completion_logits = self.model(
                             padded_batch["prompt_input_ids"],
@@ -1029,7 +1047,7 @@ class KTOTrainer(Trainer):
         else:
             with torch.no_grad():
                 if self.ref_model is None:
-                    with self.accelerator.unwrap_model(self.model).disable_adapter():
+                    with self.null_ref_context():
                         (
                             reference_chosen_logps,
                             reference_rejected_logps,
