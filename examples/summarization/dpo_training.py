@@ -166,13 +166,6 @@ class ScriptArguments:
     strip_prompt: Optional[bool] = field(default=True)
 
 
-def disable_dropout(model: torch.nn.Module):
-    """Disable dropout in a model."""
-    for module in model.modules():
-        if isinstance(module, torch.nn.Dropout):
-            module.p = 0
-
-
 def create_and_prepare_model(args):
     if args.load_in_8bit and args.load_in_4bit:
         raise ValueError("You can't load the model in 8 bits and 4 bits at the same time")
@@ -232,8 +225,6 @@ def create_and_prepare_model(args):
 
         model = get_peft_model(model, peft_config)
 
-        disable_dropout(model)
-
         ref_model = None
     else:
         ref_model = AutoModelForCausalLM.from_pretrained(
@@ -243,7 +234,6 @@ def create_and_prepare_model(args):
             device_map=device_map,
             torch_dtype=dtype,
         )
-        disable_dropout(ref_model)
 
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
 
@@ -500,9 +490,13 @@ if __name__ == "__main__":
                 if pred_chosen >= pred_rejected:
                     relabel_batch["chosen"].append(chosen)
                     relabel_batch["rejected"].append(rejected)
+                    relabel_batch["pred_chosen"].append(pred_chosen)
+                    relabel_batch["pred_rejected"].append(pred_rejected)
                 else:
                     relabel_batch["chosen"].append(rejected)
                     relabel_batch["rejected"].append(chosen)
+                    relabel_batch["pred_chosen"].append(pred_rejected)
+                    relabel_batch["pred_rejected"].append(pred_chosen)
 
             return relabel_batch
 
