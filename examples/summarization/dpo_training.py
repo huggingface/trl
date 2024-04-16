@@ -17,7 +17,6 @@ import os
 from dataclasses import dataclass, field
 from typing import Dict, List, Literal, Optional
 
-import bitsandbytes as bnb
 import torch
 from accelerate import Accelerator
 from callbacks import GoldModelRewardCallback, PerplexityCallback, PerplexityGenCallback
@@ -347,10 +346,8 @@ if __name__ == "__main__":
     train_dataset, eval_dataset = create_and_prepare_dataset(script_args, tokenizer)
 
     if script_args.push_to_hub:
-        # modelname_configname_wandbid
-        model_id = script_args.model_name.rsplit("/", 1)[-1]
-        model_id += "_" + os.getenv("WANDB_RUN_GROUP").split("/")[0]
-        model_id += "_" + os.getenv("WANDB_RUN_ID", "xxxxx")[:5]
+        # configname_wandbid
+        model_id = os.getenv("WANDB_NAME", "config_name") + "_" + os.getenv("WANDB_RUN_ID", "xxxxx")
         hub_model_id = f"{script_args.push_to_hub_organization}/{model_id}"
         print(f"pushing model to {hub_model_id}")
     else:
