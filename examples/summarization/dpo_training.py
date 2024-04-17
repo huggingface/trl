@@ -387,7 +387,7 @@ if __name__ == "__main__":
 
     if dpo_trainer.accelerator.is_local_main_process:
         wandb.init(reinit=True)
-        wandb.config.update(asdict(script_args))
+        wandb.config.update(asdict(script_args), allow_val_change=True)
 
     # Gold Eval
     if script_args.gold_eval != "none" and script_args.mode in ["train", "eval"]:
