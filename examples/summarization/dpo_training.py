@@ -371,8 +371,6 @@ if __name__ == "__main__":
         hub_model_id=hub_model_id,
     )
 
-    wandb.init(reinit=True)
-    wandb.config.update(asdict(script_args))
     # 5. initialize the DPO trainer
     dpo_trainer = DPOTrainer(
         model=model,
@@ -386,6 +384,10 @@ if __name__ == "__main__":
         max_target_length=script_args.max_target_length,
         max_prompt_length=script_args.max_prompt_length,
     )
+
+    if dpo_trainer.accelerator.is_local_main_process:
+        wandb.init(reinit=True)
+        wandb.config.update(asdict(script_args))
 
     # Gold Eval
     if script_args.gold_eval != "none" and script_args.mode in ["train", "eval"]:
