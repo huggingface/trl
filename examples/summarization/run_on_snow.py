@@ -183,7 +183,7 @@ if __name__ == "__main__":
             for val in search_vals:
                 exp_dict_copy = deepcopy(exp_dict)
                 exp_dict_copy[search_key] = val
-                exp_dict_copy["name"] = exp_dict_copy["name"] + f"/{search_key}={val}"
+                # exp_dict_copy["name"] = exp_dict_copy["name"] + f"/{search_key}={val}"
                 exps.append(exp_dict_copy)
             # for key, val in vars(extra_args).items():
             #     exp_dict[key] = val
