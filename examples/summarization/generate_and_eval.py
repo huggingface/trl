@@ -166,13 +166,20 @@ def generate(script_args):
     # generated_dataset.push_to_hub(os.path.basename(script_args.output_dir), split="train")
 
 
-def evaluate(args, reference, generations):
+def evaluate(args, reference, generations, model_name=None):
     if args.wandb_log_id is not None:
-        wandb_name = os.environ["WANDB_NAME"]
-        original_name = wandb_name.removeprefix("geneval_")
-        wandb.init(id=args.wandb_log_id, resume="allow", name=original_name)
+        # don't overwrite the wandb name of the original run
+        if args.wandb_log_id == "model_name":
+            # model name = config_wandblogid
+            wandb_log_id = model_name.split("_")[-1]
+        else:
+            wandb_log_id = args.wandb_log_id
+
+        os.environ.pop("WANDB_NAME")
+        # original_name = wandb_name.removeprefix("geneval_")
+        wandb.init(id=wandb_log_id, resume="allow")
         log_to_wandb = True
-        print("Logging to WandB")
+        print(f"Logging to WandB {wandb_log_id}")
     else:
         log_to_wandb = False
 
@@ -287,7 +294,7 @@ def main_args_dict(args_dict):
     # generations = {"step0": dataset["query_reference_response"]}
     # reference = dataset["query_reference_response"]
     print("EVALUATING")
-    evaluate(eval_args, reference, generations)
+    evaluate(eval_args, reference, generations, generate_args.model_name)
 
 
 if __name__ == "__main__":
