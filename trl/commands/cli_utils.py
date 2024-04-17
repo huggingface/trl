@@ -137,7 +137,7 @@ def init_zero_verbose():
 @dataclass
 class SftScriptArguments:
     dataset_name: str = field(default="timdettmers/openassistant-guanaco", metadata={"help": "the dataset name"})
-    dataset_text_field: str = field(default="text", metadata={"help": "the text field of the dataset"})
+    dataset_text_field: str = field(default=None, metadata={"help": "the text field of the dataset"})
     max_seq_length: int = field(default=512, metadata={"help": "The maximum sequence length for SFT Trainer"})
     packing: bool = field(default=False, metadata={"help": "Whether to apply data packing or not during training"})
     config: str = field(default=None, metadata={"help": "Path to the optional config file"})
