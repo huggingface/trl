@@ -162,16 +162,44 @@ class DPOTrainer(Trainer):
         reference_free: bool = False,
         force_use_ref_model: bool = False,
     ):
-        if model_init_kwargs is None:
+        if model_init_kwargs != args.model_init_kwargs:
+            warnings.warn(
+                "You passed `model_init_kwargs` to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
+            )
+            args.model_init_kwargs = model_init_kwargs
+
+        if args.model_init_kwargs is None:
             model_init_kwargs = {}
         elif not isinstance(model, str):
-            raise ValueError("You passed model_kwargs to the DPOTrainer. But your model is already instantiated.")
+            raise ValueError(
+                "You passed model_init_kwargs to the DPOTrainer/DPOConfig, but your model is already instantiated."
+            )
+        else:
+            model_init_kwargs = args.model_init_kwargs
+            model_init_kwargs["torch_dtype"] = (
+                model_init_kwargs["torch_dtype"]
+                if model_init_kwargs["torch_dtype"] in ["auto", None]
+                else getattr(torch, model_init_kwargs["torch_dtype"])
+            )
 
-        if ref_model_init_kwargs is None:
+        if ref_model_init_kwargs != args.ref_model_init_kwargs:
+            warnings.warn(
+                "You passed `ref_model_kwargs` to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
+            )
+            args.ref_model_init_kwargs = ref_model_init_kwargs
+
+        if args.ref_model_init_kwargs is None:
             ref_model_init_kwargs = {}
         elif not isinstance(ref_model, str):
             raise ValueError(
-                "You passed ref_model_kwargs to the DPOTrainer. But your ref_model is already instantiated."
+                "You passed ref_model_init_kwargs to the DPOTrainer/DPOConfig, but your ref_model is already instantiated."
+            )
+        else:
+            ref_model_init_kwargs = args.ref_model_init_kwargs
+            ref_model_init_kwargs["torch_dtype"] = (
+                ref_model_init_kwargs["torch_dtype"]
+                if ref_model_init_kwargs["torch_dtype"] in ["auto", None]
+                else getattr(torch, ref_model_init_kwargs["torch_dtype"])
             )
 
         if isinstance(model, str):
@@ -192,6 +220,12 @@ class DPOTrainer(Trainer):
         # has been called in order to properly call autocast if needed.
         self._peft_has_been_casted_to_bf16 = False
 
+        if force_use_ref_model != args.force_use_ref_model:
+            warnings.warn(
+                "You passed `force_use_ref_model` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+            )
+            args.force_use_ref_model = force_use_ref_model
+
         if not is_peft_available() and peft_config is not None:
             raise ValueError(
                 "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
@@ -201,7 +235,7 @@ class DPOTrainer(Trainer):
             if isinstance(model, PeftModel):
                 model = model.merge_and_unload()
 
-            if ref_model is not None and not force_use_ref_model:
+            if ref_model is not None and not args.force_use_ref_model:
                 raise ValueError(
                     "You passed both a ref_model and a peft_config. For training PEFT adapters with DPO there is no need to pass a reference"
                     " model. Please pass `ref_model=None` in case you want to train PEFT adapters, or pass a ref_model with `force_use_ref_model=True` in DPOTrainer's init."
@@ -253,27 +287,62 @@ class DPOTrainer(Trainer):
 
                 model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
 
-        if generate_during_eval and not is_wandb_available():
+        if generate_during_eval != args.generate_during_eval:
+            warnings.warn(
+                "You passed `generate_during_eval` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+            )
+            args.generate_during_eval = generate_during_eval
+        if args.generate_during_eval and not is_wandb_available():
             raise ValueError(
                 "`generate_during_eval=True` requires Weights and Biases to be installed."
                 " Please install `wandb` to resolve."
             )
 
+        if is_encoder_decoder != args.is_encoder_decoder:
+            warnings.warn(
+                "You passed `is_encoder_decoder` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+            )
+            args.is_encoder_decoder = is_encoder_decoder
         if model is not None:
             self.is_encoder_decoder = model.config.is_encoder_decoder
-        elif is_encoder_decoder is None:
-            raise ValueError("When no model is provided, you need to pass the parameter is_encoder_decoder.")
+        elif args.is_encoder_decoder is None:
+            raise ValueError(
+                "When no model is provided, you need to pass the parameter is_encoder_decoder to the DPOTrainer/DPOConfig."
+            )
         else:
-            self.is_encoder_decoder = is_encoder_decoder
+            self.is_encoder_decoder = args.is_encoder_decoder
 
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
-        self.model_adapter_name = model_adapter_name
-        self.ref_adapter_name = ref_adapter_name
-        self.reference_free = reference_free
+        if model_adapter_name != args.model_adapter_name:
+            warnings.warn(
+                "You passed `model_adapter_name` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+            )
+            args.model_adapter_name = model_adapter_name
+        self.model_adapter_name = args.model_adapter_name
+
+        if ref_adapter_name != args.ref_adapter_name:
+            warnings.warn(
+                "You passed `ref_adapter_name` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+            )
+            args.ref_adapter_name = ref_adapter_name
+        self.ref_adapter_name = args.ref_adapter_name
+
+        if reference_free != args.reference_free:
+            warnings.warn(
+                "You passed `reference_free` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+            )
+            args.reference_free = reference_free
+        self.reference_free = args.reference_free
+
+        if precompute_ref_log_probs != args.precompute_ref_log_probs:
+            warnings.warn(
+                "You passed `precompute_ref_log_probs` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+            )
+            args.precompute_ref_log_probs = precompute_ref_log_probs
 
         if ref_model:
             self.ref_model = ref_model
-        elif self.is_peft_model or precompute_ref_log_probs:
+        elif self.is_peft_model or args.precompute_ref_log_probs:
             # The `model` with adapters turned off will be used as the reference model
             self.ref_model = None
         else:
@@ -281,14 +350,26 @@ class DPOTrainer(Trainer):
 
         if tokenizer is None:
             raise ValueError("tokenizer must be specified to tokenize a DPO dataset.")
-        if max_length is None:
+
+        if max_length != args.max_length:
+            warnings.warn(
+                "You passed `max_length` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+            )
+            args.max_length = max_length
+        if args.max_length is None:
             warnings.warn(
                 "`max_length` is not set in the DPOTrainer's init"
                 " it will default to `512` by default, but you should do it yourself in the future.",
                 UserWarning,
             )
             max_length = 512
-        if max_prompt_length is None:
+
+        if max_prompt_length != args.max_prompt_length:
+            warnings.warn(
+                "You passed `max_prompt_length` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+            )
+            args.max_prompt_length = max_prompt_length
+        if args.max_prompt_length is None:
             warnings.warn(
                 "`max_prompt_length` is not set in the DPOTrainer's init"
                 " it will default to `128` by default, but you should do it yourself in the future.",
@@ -296,7 +377,12 @@ class DPOTrainer(Trainer):
             )
             max_prompt_length = 128
 
-        if max_target_length is None and self.is_encoder_decoder:
+        if max_target_length != args.max_target_length:
+            warnings.warn(
+                "You passed `max_target_length` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+            )
+            args.max_target_length = max_target_length
+        if args.max_target_length is None and self.is_encoder_decoder:
             warnings.warn(
                 "When using an encoder decoder architecture, you should set `max_target_length` in the DPOTrainer's init"
                 " it will default to `128` by default, but you should do it yourself in the future.",
@@ -304,10 +390,15 @@ class DPOTrainer(Trainer):
             )
             max_target_length = 128
 
+        if label_pad_token_id != args.label_pad_token_id:
+            warnings.warn(
+                "You passed `label_pad_token_id` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+            )
+            args.label_pad_token_id = label_pad_token_id
         if data_collator is None:
             data_collator = DPODataCollatorWithPadding(
                 pad_token_id=tokenizer.pad_token_id,
-                label_pad_token_id=label_pad_token_id,
+                label_pad_token_id=args.label_pad_token_id,
                 is_encoder_decoder=self.is_encoder_decoder,
             )
 
@@ -324,38 +415,73 @@ class DPOTrainer(Trainer):
         else:
             self.use_dpo_data_collator = False
 
-        if disable_dropout:
+        if disable_dropout != args.disable_dropout:
+            warnings.warn(
+                "You passed `disable_dropout` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+            )
+            args.disable_dropout = disable_dropout
+        if args.disable_dropout:
             disable_dropout_in_model(model)
             if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
 
         self.max_length = max_length
-        self.generate_during_eval = generate_during_eval
-        self.label_pad_token_id = label_pad_token_id
-        self.padding_value = padding_value if padding_value is not None else tokenizer.pad_token_id
+        self.generate_during_eval = args.generate_during_eval
+        self.label_pad_token_id = args.label_pad_token_id
+        if padding_value != args.padding_value:
+            warnings.warn(
+                "You passed `padding_value` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+            )
+            args.padding_value = padding_value
+        self.padding_value = args.padding_value if padding_value is not None else tokenizer.pad_token_id
         self.max_prompt_length = max_prompt_length
-        self.truncation_mode = truncation_mode
+        if truncation_mode != args.truncation_mode:
+            warnings.warn(
+                "You passed `truncation_mode` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+            )
+            args.truncation_mode = truncation_mode
+        self.truncation_mode = args.truncation_mode
         self.max_target_length = max_target_length
         self.tokenizer = tokenizer
-        self.precompute_ref_log_probs = precompute_ref_log_probs
+        self.precompute_ref_log_probs = args.precompute_ref_log_probs
 
         # Since ref_logs are precomputed on the first call to get_train/eval_dataloader
         # keep track of first called to avoid computation of future calls
         self._precomputed_train_ref_log_probs = False
         self._precomputed_eval_ref_log_probs = False
 
-        if loss_type in ["hinge", "ipo", "kto_pair"] and label_smoothing > 0:
+        if loss_type != args.loss_type:
+            warnings.warn(
+                "You passed `loss_type` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+            )
+            args.loss_type = loss_type
+        if label_smoothing != args.label_smoothing:
+            warnings.warn(
+                "You passed `label_smoothing` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+            )
+            args.label_smoothing = label_smoothing
+        if args.loss_type in ["hinge", "ipo", "kto_pair"] and args.label_smoothing > 0:
             warnings.warn(
                 "You are using a loss type that does not support label smoothing. Ignoring label_smoothing parameter."
             )
 
-        self.beta = beta
-        self.label_smoothing = label_smoothing
-        self.loss_type = loss_type
+        if beta != args.beta:
+            warnings.warn(
+                "You passed `beta` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+            )
+            args.beta = beta
+        self.beta = args.beta
+        self.label_smoothing = args.label_smoothing
+        self.loss_type = args.loss_type
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
-        self.dataset_num_proc = dataset_num_proc
+        if dataset_num_proc != args.dataset_num_proc:
+            warnings.warn(
+                "You passed `dataset_num_proc` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+            )
+            args.dataset_num_proc = dataset_num_proc
+        self.dataset_num_proc = args.dataset_num_proc
 
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
