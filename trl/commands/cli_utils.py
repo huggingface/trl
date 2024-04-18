@@ -138,6 +138,8 @@ def init_zero_verbose():
 class SftScriptArguments:
     dataset_name: str = field(default="timdettmers/openassistant-guanaco", metadata={"help": "the dataset name"})
     dataset_text_field: str = field(default=None, metadata={"help": "the text field of the dataset"})
+    dataset_train_name: str = field(default="train", metadata={"help": "the name of the training set of the dataset"})
+    dataset_test_name: str = field(default="test", metadata={"help": "the name of the training set of the dataset"})
     max_seq_length: int = field(default=512, metadata={"help": "The maximum sequence length for SFT Trainer"})
     packing: bool = field(default=False, metadata={"help": "Whether to apply data packing or not during training"})
     config: str = field(default=None, metadata={"help": "Path to the optional config file"})
