@@ -131,8 +131,7 @@ First install `unsloth` according to the [official documentation](https://github
 
 ```python
 import torch
-from transformers import TrainingArguments
-from trl import DPOTrainer
+from trl import DPOConfig, DPOTrainer
 from unsloth import FastLanguageModel
 
 max_seq_length = 2048 # Supports automatic RoPE Scaling, so choose any number.
@@ -159,13 +158,15 @@ model = FastLanguageModel.get_peft_model(
     random_state = 3407,
 )
 
-training_args = TrainingArguments(output_dir="./output")
+training_args = DPOConfig(
+    output_dir="./output",
+    beta=0.1,
+)
 
 dpo_trainer = DPOTrainer(
     model,
     ref_model=None,
     args=training_args,
-    beta=0.1,
     train_dataset=train_dataset,
     tokenizer=tokenizer,
 )
@@ -224,11 +225,14 @@ model = PeftModel.from_pretrained(
 model.load_adapter("/path/to/peft", adapter_name="reference")
 
 # Initialize the trainer, without a ref_model param.
-dpo_trainer = DPOTrainer(
-    model,
-    ...
+training_args = DPOConfig(
     model_adapter_name="train",
     ref_adapter_name="reference",
+)
+dpo_trainer = DPOTrainer(
+    model,
+    args=training_args,
+    ...
 )
 ```
 
