@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, Literal, Optional
 
 from transformers import TrainingArguments
 
@@ -65,6 +65,7 @@ class DPOConfig(TrainingArguments):
         force_use_ref_model (`bool`, defaults to `False`):
             In case one passes a PEFT model for the active model and you want to use a different model for the ref_model, set this flag to `True`.
     """
+
     beta: float = 0.1
     label_smoothing: float = 0
     loss_type: Literal["sigmoid", "hinge", "ipo", "kto_pair"] = "sigmoid"
