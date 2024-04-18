@@ -67,9 +67,10 @@ if TRL_USE_RICH:
 
 import torch
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl import (
+    DPOConfig,
     DPOTrainer,
     ModelConfig,
     RichProgressCallback,
@@ -84,7 +85,7 @@ if TRL_USE_RICH:
 
 
 if __name__ == "__main__":
-    parser = TrlParser((DpoScriptArguments, TrainingArguments, ModelConfig))
+    parser = TrlParser((DpoScriptArguments, DPOConfig, ModelConfig))
     args, training_args, model_config = parser.parse_args_and_config()
 
     # Force use our print callback
@@ -166,14 +167,14 @@ if __name__ == "__main__":
             model,
             model_ref,
             args=training_args,
-            beta=args.beta,
+            beta=training_args.beta,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             tokenizer=tokenizer,
-            max_length=args.max_length,
-            max_target_length=args.max_target_length,
-            max_prompt_length=args.max_prompt_length,
-            generate_during_eval=args.generate_during_eval,
+            max_length=training_args.max_length,
+            max_target_length=training_args.max_target_length,
+            max_prompt_length=training_args.max_prompt_length,
+            generate_during_eval=training_args.generate_during_eval,
             peft_config=get_peft_config(model_config),
             callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
         )
