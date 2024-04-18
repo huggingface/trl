@@ -23,6 +23,8 @@ from callbacks import GoldModelRewardCallback, PerplexityCallback, PerplexityGen
 from datasets import builder, concatenate_datasets, load_dataset
 from peft import AutoPeftModelForCausalLM, LoraConfig, PeftConfig, get_peft_model, prepare_model_for_kbit_training
 from scalar_rm_model import ScalarModel
+from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForSequenceClassification,
