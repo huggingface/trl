@@ -14,17 +14,16 @@
 # limitations under the License.
 
 import os
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from typing import Dict, List, Literal, Optional
 
+import bitsandbytes as bnb
 import torch
 from accelerate import Accelerator
 from callbacks import GoldModelRewardCallback, PerplexityCallback, PerplexityGenCallback
 from datasets import builder, concatenate_datasets, load_dataset
 from peft import AutoPeftModelForCausalLM, LoraConfig, PeftConfig, get_peft_model, prepare_model_for_kbit_training
 from scalar_rm_model import ScalarModel
-from torch.utils.data import DataLoader
-from tqdm.auto import tqdm
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForSequenceClassification,
@@ -37,7 +36,6 @@ from transformers import (
 )
 from transformers.trainer_utils import get_last_checkpoint
 
-import wandb
 from trl import DPOTrainer
 
 
@@ -68,8 +66,6 @@ class ScriptArguments:
     # model parameters
     model_name: Optional[str] = field(default="gpt2", metadata={"help": "the model name"})
     model_revision: Optional[str] = field(default=None, metadata={"help": "the model name"})
-    ref_model_name: Optional[str] = field(default="gpt2", metadata={"help": "the model name"})
-    ref_model_revision: Optional[str] = field(default=None, metadata={"help": "the model name"})
     tokenizer_name: Optional[str] = field(default=None, metadata={"help": "the model name"})
     bf16: Optional[bool] = field(
         default=False,
@@ -95,12 +91,12 @@ class ScriptArguments:
     lora_alpha: Optional[float] = field(default=16, metadata={"help": "the lora alpha parameter"})
     lora_dropout: Optional[float] = field(default=0.05, metadata={"help": "the lora dropout parameter"})
     lora_r: Optional[int] = field(default=8, metadata={"help": "the lora r parameter"})
+    lora_all_linear: Optional[bool] = field(default=False, metadata={"help": "lora adapter on all linear layers"})
 
     # training parameters
     optimizer_type: Optional[str] = field(default="adamw_torch", metadata={"help": "the optimizer type"})
     warmup_steps: Optional[int] = field(default=150)
     learning_rate: Optional[float] = field(default=1e-3, metadata={"help": "optimizer learning rate"})
-    lr_scheduler_type: Optional[str] = field(default="linear")
     per_device_train_batch_size: Optional[int] = field(default=4, metadata={"help": "batch size per device"})
     per_device_eval_batch_size: Optional[int] = field(default=8, metadata={"help": "batch size per device"})
     gradient_accumulation_steps: Optional[int] = field(
@@ -164,9 +160,26 @@ class ScriptArguments:
     gold_prompt_field: Optional[str] = field(default="prompt")
     gold_target_field: Optional[str] = field(default="label")
     gold_load_and_unload: Optional[str] = field(default=False)
-    mode: Literal["train", "eval", "predict", "relabel"] = field(default="train")
+    mode: Optional[str] = field(default="train")
     eval_first_step: Optional[bool] = field(default=True)
     strip_prompt: Optional[bool] = field(default=True)
+
+
+def find_all_linear_names(args, model):
+    cls = bnb.nn.Linear4bit if args.load_in_4bit else (bnb.nn.Linear8bitLt if args.load_in_8bit else torch.nn.Linear)
+    lora_module_names = set()
+    for name, module in model.named_modules():
+        if isinstance(module, cls):
+            names = name.split(".")
+            lora_module_names.add(names[0] if len(names) == 1 else names[-1])
+
+    if "lm_head" in lora_module_names:  # needed for 16-bit
+        lora_module_names.remove("lm_head")
+
+    if "score" in lora_module_names:  # needed for 16-bit
+        lora_module_names.remove("score")
+
+    return list(lora_module_names)
 
 
 def create_and_prepare_model(args):
@@ -216,36 +229,51 @@ def create_and_prepare_model(args):
     # we add `score` to the list of modules to save to
     # correctly save the score head.
     # set target modules to be query_key_value for Pythia
-    if args.use_peft and args.mode == "train":
+    if args.lora_all_linear:
+        modules = find_all_linear_names(args, model)
+    else:
+        modules = None
+
+    if args.use_peft:
+        modules_to_save = ["lm_head"]
         peft_config = LoraConfig(
             r=args.lora_r,
             lora_alpha=args.lora_alpha,
             lora_dropout=args.lora_dropout,
             bias="none",
             task_type="CAUSAL_LM",
-            target_modules="all-linear",
+            target_modules=modules,
+            modules_to_save=modules_to_save,
         )
 
         model = get_peft_model(model, peft_config)
 
-        ref_model = None
-    else:
-        ref_model = AutoModelForCausalLM.from_pretrained(
-            args.ref_model_name,
-            revision=args.ref_model_revision,
-            quantization_config=quantization_config,
-            device_map=device_map,
-            torch_dtype=dtype,
-        )
+        for key, _ in model.named_modules():
+            target_module_found = any(key.endswith(target_key) for target_key in modules_to_save)
+            if target_module_found:
+                model.get_submodule(key + ".original_module").requires_grad_(False)
 
+    # if args.bf16:
+    #     for name, module in model.named_modules():
+    #         if isinstance(module, LoraLayer):
+    #             module = module.to(torch.bfloat16)
+    #         if "norm" in name:
+    #             module = module.to(torch.float32)
+    #         if "score" in name or "embed_tokens" in name:
+    #             if hasattr(module, "weight") and module.weight.dtype == torch.float32:
+    #                 module = module.to(torch.bfloat16)
+
+    # tokenizer_name = script_args.model_name if script_args.tokenizer_name is None else script_args.tokenizer_name
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
 
     if tokenizer_name.startswith("EleutherAI"):
         tokenizer.add_special_tokens({"pad_token": "[PAD]"})
     elif getattr(tokenizer, "pad_token", None) is None:
         tokenizer.pad_token = tokenizer.eos_token
+    # if getattr(model.config, "pad_token_id", None) is None:
+    #     model.config.pad_token_id = model.config.eos_token_id
 
-    return model, tokenizer, ref_model
+    return model, tokenizer
 
 
 def create_and_prepare_gold_model(args):
@@ -290,7 +318,7 @@ def strip_prompt(examples):
     return examples
 
 
-def create_and_prepare_dataset(args, tokenizer):
+def create_and_prepare_dataset(args):
     train_dataset = load_dataset(args.dataset_name, split=args.train_split)
     eval_dataset = load_dataset(args.dataset_name, split=args.eval_split)
 
@@ -309,17 +337,6 @@ def create_and_prepare_dataset(args, tokenizer):
 
         train_dataset = concatenate_datasets(all_train_datasets)
 
-    if args.dataset_name.startswith("vwxyzjn"):
-        # remove eos token from end of chosen
-        def remove_eos(example):
-            example["chosen"] = example["chosen"].removesuffix(tokenizer.eos_token)
-            example["rejected"] = example["rejected"].removesuffix(tokenizer.eos_token)
-
-            return example
-
-        train_dataset = train_dataset.map(remove_eos)
-        eval_dataset = eval_dataset.map(remove_eos)
-
     return train_dataset, eval_dataset
 
 
@@ -328,7 +345,7 @@ if __name__ == "__main__":
     script_args = parser.parse_args_into_dataclasses()[0]
 
     # 1. load a pretrained model
-    model, tokenizer, ref_model = create_and_prepare_model(script_args)
+    model, tokenizer = create_and_prepare_model(script_args)
 
     if script_args.ignore_bias_buffers:
         # torch distributed hack
@@ -336,11 +353,10 @@ if __name__ == "__main__":
             name for name, buffer in model.named_buffers() if buffer.dtype == torch.bool
         ]
 
-    train_dataset, eval_dataset = create_and_prepare_dataset(script_args, tokenizer)
+    train_dataset, eval_dataset = create_and_prepare_dataset(script_args)
 
     if script_args.push_to_hub:
-        # configname_wandbid
-        model_id = os.getenv("WANDB_NAME", "config_name") + "_" + os.getenv("WANDB_RUN_ID", "xxxxx")
+        model_id = script_args.model_name.rsplit("/", 1)[-1] + "_" + os.getenv("WANDB_RUN_GROUP")
         hub_model_id = f"{script_args.push_to_hub_organization}/{model_id}"
         print(f"pushing model to {hub_model_id}")
     else:
@@ -356,7 +372,6 @@ if __name__ == "__main__":
         remove_unused_columns=False,
         gradient_accumulation_steps=script_args.gradient_accumulation_steps,
         learning_rate=script_args.learning_rate,
-        lr_scheduler_type=script_args.lr_scheduler_type,
         evaluation_strategy="epoch" if script_args.eval_steps is None else "steps",
         save_strategy=script_args.save_strategy,
         logging_first_step=True,
@@ -376,7 +391,6 @@ if __name__ == "__main__":
     # 5. initialize the DPO trainer
     dpo_trainer = DPOTrainer(
         model=model,
-        ref_model=ref_model,
         args=training_args,
         beta=script_args.beta,
         train_dataset=train_dataset,
@@ -387,12 +401,8 @@ if __name__ == "__main__":
         max_prompt_length=script_args.max_prompt_length,
     )
 
-    if dpo_trainer.accelerator.is_local_main_process:
-        wandb.init(reinit=True)
-        wandb.config.update(asdict(script_args), allow_val_change=True)
-
     # Gold Eval
-    if script_args.gold_eval != "none" and script_args.mode in ["train", "eval"]:
+    if script_args.gold_eval != "none":
         gold_eval_dataset = load_dataset(
             script_args.gold_dataset_name,
             split=script_args.gold_eval_split,
@@ -497,13 +507,9 @@ if __name__ == "__main__":
                 if pred_chosen >= pred_rejected:
                     relabel_batch["chosen"].append(chosen)
                     relabel_batch["rejected"].append(rejected)
-                    relabel_batch["pred_chosen"].append(pred_chosen)
-                    relabel_batch["pred_rejected"].append(pred_rejected)
                 else:
                     relabel_batch["chosen"].append(rejected)
                     relabel_batch["rejected"].append(chosen)
-                    relabel_batch["pred_chosen"].append(pred_rejected)
-                    relabel_batch["pred_rejected"].append(pred_chosen)
 
             return relabel_batch
 

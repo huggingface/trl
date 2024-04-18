@@ -4,20 +4,25 @@ import os
 import subprocess
 from copy import deepcopy
 
+import generate_and_eval
 import yaml
 from accelerate.commands import launch
-from generate_vllm import generate_vllm_args_dict
+from generate_vllm import generate_relabel_args_dict
+from haven import haven_wizard as hw
 
 def run_exp(exp_dict, savedir, args):
     exp_name = exp_dict.pop("name")
     git_hash = exp_dict.pop("git")
     print(args)
 
+    os.environ["WANDB_RUN_ID"] = os.path.basename(savedir)
+    os.environ["WANDB_NAME"] = exp_name
+    os.environ["WANDB_RUN_GROUP"] = exp_name + "_" + git_hash
+
     if args.wandb:
         os.environ["WANDB_MODE"] = "online"
-        os.environ["WANDB_RUN_ID"] = os.path.basename(savedir)
-        os.environ["WANDB_NAME"] = exp_name
-        os.environ["WANDB_RUN_GROUP"] = exp_name + git_hash
+        os.environ["WANDB_PROJECT"] = "trl"
+        os.environ["WANDB_ENTITY"] = "mila-language-drift"
     else:
         os.environ["WANDB_MODE"] = "disabled"
 
@@ -51,7 +56,16 @@ def run_exp(exp_dict, savedir, args):
     elif exp_name.startswith("vllm"):
         exp_dict.pop("save_strategy", None)
         exp_dict["num_gpus"] = args.gpus
-        generate_vllm_args_dict(exp_dict)
+        generate_relabel_args_dict(exp_dict)
+    elif exp_name.startswith("geneval"):
+        exp_dict.pop("save_strategy", None)
+        exp_dict["num_gpus"] = args.gpus
+        generate_and_eval.main_args_dict(exp_dict)
+    elif exp_name.startswith("scalarrm"):
+        exp_dict.pop("save_strategy", None)
+        accelerate_launch("scalar_rm_model.py", exp_dict, args)
+    elif exp_name.startswith("costa_dpo"):
+        accelerate_launch("costa_dpo.py", exp_dict, args)
     else:
         raise Exception(f"Config file {exp_name} does not start with one of the correct prefixes")
 
@@ -145,6 +159,7 @@ if __name__ == "__main__":
     # parser.add_argument("-d", "--deepspeed", default=None, help="ds stage")
     parser.add_argument("--gpu-mem", default=32, type=int, help="mem of gpus to use for experiment")
     parser.add_argument("--wandb", action="store_true", help="force enable wandb", default=False)
+    parser.add_argument("--local-save", action="store_true", help="force local save", default=False)
     parser.add_argument("--search", default=None)
     # parser.add_argument(
     #     "--exp-id", default=None, help="id used to resume an experiment"
@@ -167,7 +182,7 @@ if __name__ == "__main__":
             for val in search_vals:
                 exp_dict_copy = deepcopy(exp_dict)
                 exp_dict_copy[search_key] = val
-                exp_dict_copy["name"] = exp_dict_copy["name"] + f"/{search_key}={val}"
+                # exp_dict_copy["name"] = exp_dict_copy["name"] + f"/{search_key}={val}"
                 exps.append(exp_dict_copy)
             # for key, val in vars(extra_args).items():
             #     exp_dict[key] = val
@@ -223,7 +238,8 @@ if __name__ == "__main__":
             timenow = datetime.datetime.now().strftime("%d-%m-%y_%H-%M-%S")
             exp_list[0]["name"] = exp_list[0]["name"] + f"_local_{timenow}"
 
-        exp_list[0]["save_strategy"] = "no"
+        if not args.local_save:
+            exp_list[0]["save_strategy"] = "no"
 
     # Run experiments and create results file
     if job_scheduler == "toolkit":
