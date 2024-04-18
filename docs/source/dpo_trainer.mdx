@@ -78,11 +78,13 @@ The DPO trainer expects a model of `AutoModelForCausalLM`, compared to PPO that 
 For a detailed example have a look at the `examples/scripts/dpo.py` script. At a high level we need to initialize the `DPOTrainer` with a `model` we wish to train, a reference `ref_model` which we will use to calculate the implicit rewards of the preferred and rejected response, the `beta` refers to the hyperparameter of the implicit reward, and the dataset contains the 3 entries listed above. Note that the `model` and `ref_model` need to have the same architecture (ie decoder only or encoder-decoder).
 
 ```py
+training_args = DPOConfig(
+    beta=0.1,
+)
 dpo_trainer = DPOTrainer(
     model,
     model_ref,
     args=training_args,
-    beta=0.1,
     train_dataset=train_dataset,
     tokenizer=tokenizer,
 )
@@ -233,3 +235,7 @@ dpo_trainer = DPOTrainer(
 ## DPOTrainer
 
 [[autodoc]] DPOTrainer
+
+## DPOConfig
+
+[[autodoc]] DPOConfig
