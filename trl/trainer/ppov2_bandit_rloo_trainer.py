@@ -215,9 +215,9 @@ def generate(lm_backbone, queries, tokenizer, generation_config):
         # https://github.com/huggingface/transformers/blob/ac33aeeeee2a7a89b89c93c2962e6feb90daef0a/src/transformers/models/gpt2/modeling_gpt2.py#L1227-L1250
         generation_config=generation_config,
         return_dict_in_generate=True,
-        output_logits=True,
+        output_scores=True,
     )
-    logits = torch.stack(output.logits, 1)
+    logits = torch.stack(output.scores, 1)
     return torch.cat((queries, output.sequences[:, context_length:]), dim=1), logits
 
 
@@ -252,7 +252,6 @@ def forward(model, query_responses, tokenizer):
         return_dict=True,
         output_hidden_states=True,
     )
-
 
 
 def prepare_deepspeed2(model, train_micro_batch_size_per_gpu):
@@ -324,6 +323,10 @@ class PPOTrainer(Trainer):
         self.args = args
         self.tokenizer = tokenizer
         self.policy = policy
+
+        self.policy.generation_config.eos_token_id = None  # disable `pad_token_id` and `eos_token_id` because we just want to
+        self.policy.generation_config.pad_token_id = None  # generate tokens without truncation / padding
+
         self.ref_policy = ref_policy
         self.reward_model = reward_model
         self.train_dataset = train_dataset
@@ -429,7 +432,7 @@ class PPOTrainer(Trainer):
         )
 
         device = accelerator.device
-        # torch.backends.cudnn.deterministic = True # TODO: check if cudnn matters
+        torch.backends.cudnn.deterministic = True # TODO: check if cudnn matters
 
         # sync random states for DataLoader(shuffle=True) before `accelerator.prepare`
         # see https://gist.github.com/vwxyzjn/2581bff1e48e185e0b85b6dfe1def79c
@@ -443,30 +446,6 @@ class PPOTrainer(Trainer):
 
         iter_dataloader = iter(repeat_generator())
         if args.deepspeed2:
-            accelerator.print("args.deepspeed")
-            # import deepspeed
-
-            # deepspeed_states = AcceleratorState().deepspeed_plugin
-            # deepspeed_states.deepspeed_config["train_micro_batch_size_per_gpu"] = args.per_device_train_batch_size
-
-            # eval_ds_config = {
-            #     "train_micro_batch_size_per_gpu": deepspeed_states.deepspeed_config["train_micro_batch_size_per_gpu"],
-            #     "bf16": {"enabled": True},
-            #     "prescale_gradients": False,
-            #     "wall_clock_breakdown": False,
-            # }
-            # if args.offload:
-            #     deepspeed_states.deepspeed_config["checkpoint"] = {"use_node_local_storage": True}
-            #     eval_ds_config["zero_optimization"] = {
-            #         "stage": 3,
-            #         "stage3_param_persistence_threshold": 1e4,
-            #         "offload_param": {"device": "cpu"},
-            #     }
-            # accelerator.print(f"{eval_ds_config=}")
-            # reward_model, *_ = deepspeed.initialize(model=reward_model, config=eval_ds_config)
-            # reward_model.eval()
-            # ref_policy, *_ = deepspeed.initialize(model=ref_policy, config=eval_ds_config)
-            # ref_policy.eval()
             reward_model = prepare_deepspeed2(reward_model, args.per_device_train_batch_size)
             ref_policy = prepare_deepspeed2(ref_policy, args.per_device_train_batch_size)
         elif args.deepspeed3:
@@ -523,7 +502,6 @@ class PPOTrainer(Trainer):
                     response = query_response[:, context_length:]
 
                     # use the logits during generation directly, instead of using the following
-                    logits /= args.temperature + 1e-7
                     all_logprob = F.log_softmax(logits, dim=-1)
                     logprob = torch.gather(all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
                     del logits, all_logprob
@@ -559,6 +537,7 @@ class PPOTrainer(Trainer):
                 postprocessed_responses = torch.cat(postprocessed_responses, 0)
                 logprobs = torch.cat(logprobs, 0)
                 ref_logprobs = torch.cat(ref_logprobs, 0)
+                print(f"{(ref_logprobs - logprobs).exp()=}")
                 sequence_lengths = torch.cat(sequence_lengths, 0)
                 scores = torch.cat(scores, 0)
                 del (logprob, ref_logprob, score)
@@ -622,6 +601,7 @@ class PPOTrainer(Trainer):
                             new_logprobs = torch.masked_fill(
                                 new_logprobs, padding_mask[micro_batch_inds], INVALID_LOGPROB
                             )
+                            new_ratio = (new_logprobs - mb_logprobs).exp()
                             new_logprobs = new_logprobs.sum(1)
                             mb_logprobs = mb_logprobs.sum(1)
                             logprobs_diff = new_logprobs - mb_logprobs
@@ -647,7 +627,7 @@ class PPOTrainer(Trainer):
                                 ] = pg_clipfrac
                                 pg_loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = pg_loss
                                 entropy_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = entropy.mean()
-                                ratio_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = ratio.mean()
+                                ratio_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = new_ratio.mean()
                         gradient_accumulation_idx += 1
                     minibatch_idx += 1
                     # del everything and empty cache

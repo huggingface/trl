@@ -47,7 +47,9 @@ class PPOConfig(TrainingArguments):
     """the name of this experiment"""
     run_name: Optional[str] = None
     """a unique name of this run"""
-    deepspeed: bool = False
+    deepspeed2: bool = False
+    """Whether to use deepspeed to train the model"""
+    deepspeed3: bool = False
     """Whether to use deepspeed to train the model"""
 
     # various batch sizes
@@ -265,6 +267,53 @@ def forward(model, query_responses, tokenizer):
     )
 
 
+def prepare_deepspeed2(model, train_micro_batch_size_per_gpu):
+    import deepspeed
+    deepspeed_states = AcceleratorState().deepspeed_plugin
+    deepspeed_states.deepspeed_config["train_micro_batch_size_per_gpu"] = train_micro_batch_size_per_gpu
+
+    eval_ds_config = {
+        "train_micro_batch_size_per_gpu": deepspeed_states.deepspeed_config["train_micro_batch_size_per_gpu"],
+        "bf16": {"enabled": True},
+        "prescale_gradients": False,
+        "wall_clock_breakdown": False,
+    }
+    model, *_ = deepspeed.initialize(model=model, config=eval_ds_config)
+    model.eval()
+    print("🔥 deepspeed2 is initialized")
+    return model
+
+
+def prepare_deepspeed3(model, accelerator):
+    import deepspeed
+    # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
+    # deepspeed_states = AcceleratorState().deepspeed_plugin
+    # deepspeed_states.deepspeed_config["train_micro_batch_size_per_gpu"] = args.batch_size
+    deepspeed_plugin = accelerator.state.deepspeed_plugin
+    config_kwargs = deepspeed_plugin.deepspeed_config
+    if model is not None:
+        if hasattr(model, "config"):
+            hidden_size = (
+                max(model.config.hidden_sizes)
+                if getattr(model.config, "hidden_sizes", None)
+                else getattr(model.config, "hidden_size", None)
+            )
+            if hidden_size is not None and config_kwargs["zero_optimization"]["stage"] == 3:
+                # Note that `stage3_prefetch_bucket_size` can produce DeepSpeed messages like: `Invalidate trace cache @ step 0: expected module 1, but got module 0`
+                # This is expected and is not an error, see: https://github.com/microsoft/DeepSpeed/discussions/4081
+                config_kwargs.update(
+                    {
+                        "zero_optimization.reduce_bucket_size": hidden_size * hidden_size,
+                        "zero_optimization.stage3_param_persistence_threshold": 10 * hidden_size,
+                        "zero_optimization.stage3_prefetch_bucket_size": 0,
+                    }
+                )
+    model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
+    model.eval()
+    print("🔥 deepspeed3 is initialized")
+    return model
+
+
 class PPOTrainer(Trainer):
     def __init__(
         self,
@@ -288,6 +337,11 @@ class PPOTrainer(Trainer):
         self.args = args
         self.tokenizer = tokenizer
         self.policy = policy
+
+        self.policy.generation_config.eos_token_id = None  # disable `pad_token_id` and `eos_token_id` because we just want to
+        self.policy.generation_config.pad_token_id = None  # generate tokens without truncation / padding
+
+
         self.ref_policy = ref_policy
         self.reward_model = reward_model
         self.train_dataset = train_dataset
@@ -394,7 +448,7 @@ class PPOTrainer(Trainer):
         )
 
         device = accelerator.device
-        # torch.backends.cudnn.deterministic = True # TODO: check if cudnn matters
+        torch.backends.cudnn.deterministic = True # TODO: check if cudnn matters
 
         # sync random states for DataLoader(shuffle=True) before `accelerator.prepare`
         # see https://gist.github.com/vwxyzjn/2581bff1e48e185e0b85b6dfe1def79c
@@ -407,30 +461,12 @@ class PPOTrainer(Trainer):
                 yield from dataloader
 
         iter_dataloader = iter(repeat_generator())
-        if args.deepspeed:
-            import deepspeed
-
-            deepspeed_states = AcceleratorState().deepspeed_plugin
-            deepspeed_states.deepspeed_config["train_micro_batch_size_per_gpu"] = args.per_device_train_batch_size
-
-            eval_ds_config = {
-                "train_micro_batch_size_per_gpu": deepspeed_states.deepspeed_config["train_micro_batch_size_per_gpu"],
-                "bf16": {"enabled": True},
-                "prescale_gradients": False,
-                "wall_clock_breakdown": False,
-            }
-            if args.offload:
-                deepspeed_states.deepspeed_config["checkpoint"] = {"use_node_local_storage": True}
-                eval_ds_config["zero_optimization"] = {
-                    "stage": 3,
-                    "stage3_param_persistence_threshold": 1e4,
-                    "offload_param": {"device": "cpu"},
-                }
-            accelerator.print(f"{eval_ds_config=}")
-            reward_model, *_ = deepspeed.initialize(model=reward_model, config=eval_ds_config)
-            reward_model.eval()
-            ref_policy, *_ = deepspeed.initialize(model=ref_policy, config=eval_ds_config)
-            ref_policy.eval()
+        if args.deepspeed2:
+            reward_model = prepare_deepspeed2(reward_model, args.per_device_train_batch_size)
+            ref_policy = prepare_deepspeed2(ref_policy, args.per_device_train_batch_size)
+        elif args.deepspeed3:
+            reward_model = prepare_deepspeed3(reward_model, accelerator)
+            ref_policy = prepare_deepspeed3(ref_policy, accelerator)
         else:
             ref_policy = ref_policy.to(device)
             reward_model = reward_model.to(device)
@@ -675,7 +711,7 @@ class PPOTrainer(Trainer):
                 metrics["objective/kl"] = self.accelerator.gather(mean_kl).mean().item()
                 metrics["objective/entropy"] = self.accelerator.gather(mean_entropy).mean().item()
                 metrics["objective/non_score_reward"] = self.accelerator.gather(mean_non_score_reward).mean().item()
-                metrics["objective/score_total"] = (
+                metrics["objective/rlhf_reward"] = (
                     self.accelerator.gather(mean_non_score_reward + scores.mean()).mean().item()
                 )
                 metrics["objective/scores"] = self.accelerator.gather(scores.mean()).mean().item()
