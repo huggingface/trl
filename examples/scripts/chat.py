@@ -322,7 +322,7 @@ def chat_cli():
                 top_k=current_args.top_k,
                 top_p=current_args.top_p,
                 repetition_penalty=current_args.repetition_penalty,
-                pad_token_id=tokenizer.pad_token_id,
+                pad_token_id=tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id,
                 eos_token_id=tokenizer.eos_token_id,
             )
 
