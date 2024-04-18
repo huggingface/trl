@@ -419,6 +419,8 @@ elif script_args.mode == "relabel":
             "prompt": [],
             "chosen": [],
             "rejected": [],
+            "pred_chosen": [],
+            "pred_rejected": [],
         }
         for prompt, chosen, rejected, pred_chosen, pred_rejected in zip(
             batch["prompt"],
@@ -431,9 +433,13 @@ elif script_args.mode == "relabel":
             if pred_chosen >= pred_rejected:
                 relabel_batch["chosen"].append(chosen)
                 relabel_batch["rejected"].append(rejected)
+                relabel_batch["pred_chosen"].append(pred_chosen)
+                relabel_batch["pred_rejected"].append(pred_rejected)
             else:
                 relabel_batch["chosen"].append(rejected)
                 relabel_batch["rejected"].append(chosen)
+                relabel_batch["pred_chosen"].append(pred_rejected)
+                relabel_batch["pred_rejected"].append(pred_chosen)
 
         return relabel_batch
 

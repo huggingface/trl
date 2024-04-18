@@ -175,6 +175,8 @@ def relabel(script_args, dataset):
             "prompt": [],
             "chosen": [],
             "rejected": [],
+            "pred_chosen": [],
+            "pred_rejected": [],
         }
         for prompt, chosen, rejected, pred_chosen, pred_rejected in zip(
             batch["prompt"],
