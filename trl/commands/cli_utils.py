@@ -15,6 +15,7 @@
 # limitations under the License.
 import inspect
 import os
+import sys
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any, List
@@ -138,6 +139,8 @@ def init_zero_verbose():
 class SftScriptArguments:
     dataset_name: str = field(default="timdettmers/openassistant-guanaco", metadata={"help": "the dataset name"})
     dataset_text_field: str = field(default=None, metadata={"help": "the text field of the dataset"})
+    dataset_train_name: str = field(default="train", metadata={"help": "the name of the training set of the dataset"})
+    dataset_test_name: str = field(default="test", metadata={"help": "the name of the training set of the dataset"})
     max_seq_length: int = field(default=512, metadata={"help": "The maximum sequence length for SFT Trainer"})
     packing: bool = field(default=False, metadata={"help": "Whether to apply data packing or not during training"})
     config: str = field(default=None, metadata={"help": "Path to the optional config file"})
@@ -269,6 +272,24 @@ class TrlParser(HfArgumentParser):
         return dataclasses
 
     def parse_args_and_config(self):
+        # Hack to force-replace the `output_dir` from the YAML file if one did not passed
+        # output_dir in the command line
+        if "--config" in sys.argv:
+            config_index = sys.argv.index("--config") + 1
+            config_path = sys.argv[config_index]
+
+            with open(config_path) as yaml_file:
+                yaml_config = yaml.safe_load(yaml_file)
+
+            output_dir = yaml_config.get("output_dir")
+
+            if output_dir is not None:
+                if "--output_dir" in sys.argv:
+                    output_dir_index = sys.argv.index("--output_dir")
+                    sys.argv.index[output_dir_index + 1] = output_dir
+                else:
+                    sys.argv.extend(["--output_dir", output_dir])
+
         dataclasses = self.parse_args_into_dataclasses(return_remaining_strings=True)
         # Pop the last element which should be the remaining strings
         dataclasses = self.update_dataclasses_with_config(dataclasses[:-1])
