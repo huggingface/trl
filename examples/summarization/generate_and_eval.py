@@ -1,18 +1,14 @@
 import gc
-import hashlib
-import json
 import os
 from dataclasses import dataclass, field
 from typing import List, Optional
 
 import torch
-from accelerate import Accelerator
-from datasets import Dataset, DatasetInfo, builder, load_dataset
+from datasets import Dataset, builder, load_dataset
 from huggingface_hub import list_repo_refs
-from peft import PeftConfig, PeftModelForCausalLM
+from peft import PeftModelForCausalLM
 from scalar_rm_model import ScalarModel, ScalarModelConfig
-from torch.utils.data import DataLoader
-from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, Trainer, TrainingArguments
+from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, Trainer, TrainingArguments
 from vllm import LLM, SamplingParams
 from vllm.model_executor.parallel_utils.parallel_state import destroy_model_parallel
 
