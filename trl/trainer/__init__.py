@@ -29,14 +29,11 @@ _import_structure = {
         "peft_module_casting_to_bf16",
         "RichProgressCallback",
     ],
-    "dpo_trainer": [
-        "DPOTrainer",
-    ],
+    "dpo_config": ["DPOConfig"],
+    "dpo_trainer": ["DPOTrainer"],
     "cpo_config": ["CPOConfig"],
     "cpo_trainer": ["CPOTrainer"],
-    "iterative_sft_trainer": [
-        "IterativeSFTTrainer",
-    ],
+    "iterative_sft_trainer": ["IterativeSFTTrainer"],
     "kto_config": ["KTOConfig"],
     "kto_trainer": ["KTOTrainer"],
     "model_config": ["ModelConfig"],
@@ -78,6 +75,7 @@ if TYPE_CHECKING:
     from .base import BaseTrainer
     from .ddpo_config import DDPOConfig
 
+    from .dpo_config import DPOConfig
     from .dpo_trainer import DPOTrainer
     from .iterative_sft_trainer import IterativeSFTTrainer
     from .cpo_config import CPOConfig

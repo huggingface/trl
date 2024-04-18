@@ -35,6 +35,7 @@ _import_structure = {
     ],
     "trainer": [
         "DataCollatorForCompletionOnlyLM",
+        "DPOConfig",
         "DPOTrainer",
         "CPOConfig",
         "CPOTrainer",
@@ -99,6 +100,7 @@ if TYPE_CHECKING:
     )
     from .trainer import (
         DataCollatorForCompletionOnlyLM,
+        DPOConfig,
         DPOTrainer,
         CPOConfig,
         CPOTrainer,
