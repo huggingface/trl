@@ -22,7 +22,7 @@ num_train_epochs: 1
 load_in_8bit: False
 bf16: False
 fp16: True
-learning_rate: 3e-5
+learning_rate: 1e-5
 use_peft: True
 lora_r: 16
 lora_alpha: 32
