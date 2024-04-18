@@ -200,6 +200,14 @@ class ChatArguments:
     top_k: int = field(default=50, metadata={"help": "Value of k for top-k sampling"})
     top_p: float = field(default=1.0, metadata={"help": "Value of p for nucleus sampling"})
     repetition_penalty: float = field(default=1.0, metadata={"help": "Repetition penalty"})
+    eos_tokens: str = field(
+        default=None,
+        metadata={"help": "EOS tokens to stop the generation. If multiple they should be comma separated"},
+    )
+    eos_token_ids: str = field(
+        default=None,
+        metadata={"help": "EOS token IDs to stop the generation. If multiple they should be comma separated"},
+    )
     # model loading
     model_revision: str = field(
         default="main",
