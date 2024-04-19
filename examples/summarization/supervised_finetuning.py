@@ -93,7 +93,6 @@ class ScriptArguments:
 
     output_dir: Optional[str] = field(default="./results", metadata={"help": "the output directory"})
     output_model_name: Optional[str] = field(default=None, metadata={"help": "the model pushed to hub"})
-    log_freq: Optional[int] = field(default=1, metadata={"help": "the logging frequency"})
     logging_steps: Optional[int] = field(default=10, metadata={"help": "the number of logging steps"})
     eval_steps: Optional[int] = field(default=1000, metadata={"help": "the number of steps to eval at"})
     save_steps: Optional[int] = field(default=1000, metadata={"help": "the number of steps to save at"})
@@ -101,31 +100,6 @@ class ScriptArguments:
     seed: Optional[int] = field(default=0)
     just_eval: Optional[bool] = field(default=False)
     resume_from_checkpoint: Optional[str] = field(default=None)
-
-
-def find_all_linear_names(args, model):
-    if isinstance(model.transformer, GPT2Model):
-        cls = Conv1D
-    else:
-        cls = (
-            bnb.nn.Linear4bit if args.load_in_4bit else (bnb.nn.Linear8bitLt if args.load_in_8bit else torch.nn.Linear)
-        )
-
-    lora_module_names = set()
-    for name, module in model.named_modules():
-        if isinstance(module, cls):
-            names = name.split(".")
-            lora_module_names.add(names[0] if len(names) == 1 else names[-1])
-
-    if "lm_head" in lora_module_names:  # needed for 16-bit
-        lora_module_names.remove("lm_head")
-
-    if "score" in lora_module_names:  # needed for 16-bit
-        lora_module_names.remove("score")
-
-    print(lora_module_names)
-
-    return list(lora_module_names)
 
 
 def chars_token_ratio(dataset, tokenizer, nb_examples=400):
@@ -261,16 +235,11 @@ if __name__ == "__main__":
     )
 
     if args.use_peft:
-        if args.lora_all_linear:
-            target_modules = find_all_linear_names(args, model)
-        else:
-            target_modules = None
-
         peft_config = LoraConfig(
             r=args.lora_r,
             lora_alpha=args.lora_alpha,
             lora_dropout=args.lora_dropout,
-            target_modules=target_modules,
+            target_modules="all-linear",
             bias="none",
             task_type="CAUSAL_LM",
         )
@@ -327,10 +296,10 @@ if __name__ == "__main__":
             else:
                 model_cls = AutoPeftModelForCausalLM
 
-            model = model_cls.from_pretrained(
-                output_dir, device_map="auto", torch_dtype=trainer.model.config.torch_dtype
-            )
-            model = model.merge_and_unload()
+            # model = model_cls.from_pretrained(
+            #     output_dir, device_map="auto", torch_dtype=trainer.model.config.torch_dtype
+            # )
+            model = trainer.model.merge_and_unload()
 
             output_merged_dir = os.path.join(args.output_dir, "final_merged_checkpoint")
             model.save_pretrained(output_merged_dir, safe_serialization=True)

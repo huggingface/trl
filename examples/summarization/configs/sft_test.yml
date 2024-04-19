@@ -1,6 +1,6 @@
-train_split: train[900:1000]
+train_split: train[:100]
 eval_split: valid[:100]
-model_name: gpt2-xl
+model_name: "EleutherAI/pythia-410m"
 log_with: "wandb"
 learning_rate: 1e-5
 lr_scheduler_type: cosine
@@ -15,9 +15,8 @@ gradient_accumulation_steps: 1
 per_device_train_batch_size: 2
 per_device_eval_batch_size: 8
 train_completions: False
-num_train_epochs: 3
+num_train_epochs: 1
 seq_length: 560
 use_peft: True
-lora_all_linear: True
 lora_r: 8
 lora_alpha: 32

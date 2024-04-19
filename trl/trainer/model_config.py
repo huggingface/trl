@@ -41,6 +41,9 @@ class ModelConfig:
         default=False,
         metadata={"help": ("Whether to use PEFT or not for training.")},
     )
+    lora_task_type: str = field(
+        default="CAUSAL_LM", metadata={"help": "The task_type to pass for LoRA (use SEQ_CLS for reward modeling)"}
+    )
     lora_r: Optional[int] = field(
         default=16,
         metadata={"help": ("LoRA R value.")},

@@ -1,5 +1,5 @@
 ## dpo 2 
-pseudo_dataset_name: mnoukhov/summarize_from_feedback_tldr3_generated_20k_relabel_pythia1b_dpo_temp0.7_length128
+pseudo_dataset_name: mnoukhov/summarize_from_feedback_tldr3_generated_relabel_20k_dpo_costa_1b_fp16.yml_3d94f50_b9ff2
 train_split: train[:1]
 max_prompt_length: 512
 max_target_length: 131
@@ -21,11 +21,11 @@ eval_steps: 0.2
 save_steps: 0.2
 beta: 0.05
 max_steps: -1
-num_train_epochs: 1
+num_train_epochs: 2
 load_in_8bit: False
 bf16: False
 fp16: True
-learning_rate: 3e-5
+learning_rate: 1e-5
 use_peft: True
 lora_r: 16
 lora_alpha: 32
