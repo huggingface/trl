@@ -71,20 +71,20 @@ class DPOTrainerSlowTester(unittest.TestCase):
                 fp16=True,
                 logging_strategy="no",
                 report_to="none",
+                beta=0.1,
+                loss_type=loss_type,
+                precompute_ref_log_probs=pre_compute_logits,
+                max_length=self.max_length,
             )
 
             # dpo train lora model
             trainer = DPOTrainer(
                 model=model,
                 ref_model=None,
-                beta=0.1,
                 args=training_args,
                 tokenizer=tokenizer,
                 train_dataset=self.dataset,
                 eval_dataset=self.dataset,
-                loss_type=loss_type,
-                precompute_ref_log_probs=pre_compute_logits,
-                max_length=self.max_length,
             )
 
             # train the model
@@ -127,22 +127,22 @@ class DPOTrainerSlowTester(unittest.TestCase):
                 report_to="none",
                 gradient_checkpointing=True,
                 gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
+                generate_during_eval=False,
+                loss_type=loss_type,
+                precompute_ref_log_probs=pre_compute_logits,
+                beta=0.1,
+                max_length=self.max_length,
             )
 
             # dpo train lora model
             trainer = DPOTrainer(
                 model=model,
                 ref_model=None,
-                beta=0.1,
                 args=training_args,
                 tokenizer=tokenizer,
                 train_dataset=self.dataset,
                 eval_dataset=self.dataset,
-                generate_during_eval=False,
-                loss_type=loss_type,
-                precompute_ref_log_probs=pre_compute_logits,
                 peft_config=self.peft_config,
-                max_length=self.max_length,
             )
 
             assert isinstance(trainer.model, PeftModel)
@@ -191,22 +191,22 @@ class DPOTrainerSlowTester(unittest.TestCase):
                 report_to="none",
                 gradient_checkpointing=True,
                 gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
+                beta=0.1,
+                generate_during_eval=False,
+                loss_type=loss_type,
+                precompute_ref_log_probs=pre_compute_logits,
+                max_length=self.max_length,
             )
 
             # dpo train lora model
             trainer = DPOTrainer(
                 model=model,
                 ref_model=None,
-                beta=0.1,
                 args=training_args,
                 tokenizer=tokenizer,
                 train_dataset=self.dataset,
                 eval_dataset=self.dataset,
-                generate_during_eval=False,
-                loss_type=loss_type,
-                precompute_ref_log_probs=pre_compute_logits,
                 peft_config=self.peft_config,
-                max_length=self.max_length,
             )
 
             assert isinstance(trainer.model, PeftModel)

@@ -102,7 +102,7 @@ class DPOTrainer(Trainer):
     _tag_names = ["trl", "dpo"]
 
     @_deprecate_arguments(
-        version="0.10.0",
+        version="1.0.0",
         deprecated_args=[
             "beta",
             "label_smoothing",
@@ -220,7 +220,7 @@ class DPOTrainer(Trainer):
         # has been called in order to properly call autocast if needed.
         self._peft_has_been_casted_to_bf16 = False
 
-        if force_use_ref_model != args.force_use_ref_model:
+        if force_use_ref_model:
             warnings.warn(
                 "You passed `force_use_ref_model` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
@@ -287,7 +287,7 @@ class DPOTrainer(Trainer):
 
                 model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
 
-        if generate_during_eval != args.generate_during_eval:
+        if generate_during_eval:
             warnings.warn(
                 "You passed `generate_during_eval` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
@@ -327,14 +327,14 @@ class DPOTrainer(Trainer):
             args.ref_adapter_name = ref_adapter_name
         self.ref_adapter_name = args.ref_adapter_name
 
-        if reference_free != args.reference_free:
+        if reference_free:
             warnings.warn(
                 "You passed `reference_free` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
             args.reference_free = reference_free
         self.reference_free = args.reference_free
 
-        if precompute_ref_log_probs != args.precompute_ref_log_probs:
+        if precompute_ref_log_probs:
             warnings.warn(
                 "You passed `precompute_ref_log_probs` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
@@ -362,7 +362,7 @@ class DPOTrainer(Trainer):
                 " it will default to `512` by default, but you should do it yourself in the future.",
                 UserWarning,
             )
-            max_length = 512
+            args.max_length = 512
 
         if max_prompt_length is not None:
             warnings.warn(
@@ -375,7 +375,7 @@ class DPOTrainer(Trainer):
                 " it will default to `128` by default, but you should do it yourself in the future.",
                 UserWarning,
             )
-            max_prompt_length = 128
+            args.max_prompt_length = 128
 
         if max_target_length is not None:
             warnings.warn(
@@ -388,9 +388,9 @@ class DPOTrainer(Trainer):
                 " it will default to `128` by default, but you should do it yourself in the future.",
                 UserWarning,
             )
-            max_target_length = 128
+            args.max_target_length = 128
 
-        if label_pad_token_id != args.label_pad_token_id:
+        if label_pad_token_id != -100:
             warnings.warn(
                 "You passed `label_pad_token_id` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
@@ -415,7 +415,7 @@ class DPOTrainer(Trainer):
         else:
             self.use_dpo_data_collator = False
 
-        if disable_dropout != args.disable_dropout:
+        if not disable_dropout:
             warnings.warn(
                 "You passed `disable_dropout` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
@@ -425,23 +425,23 @@ class DPOTrainer(Trainer):
             if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
 
-        self.max_length = max_length
+        self.max_length = args.max_length
         self.generate_during_eval = args.generate_during_eval
         self.label_pad_token_id = args.label_pad_token_id
-        if padding_value != args.padding_value:
+        if padding_value != 0:
             warnings.warn(
                 "You passed `padding_value` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
             args.padding_value = padding_value
         self.padding_value = args.padding_value if padding_value is not None else tokenizer.pad_token_id
-        self.max_prompt_length = max_prompt_length
-        if truncation_mode != args.truncation_mode:
+        self.max_prompt_length = args.max_prompt_length
+        if truncation_mode != "keep_end":
             warnings.warn(
                 "You passed `truncation_mode` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
             args.truncation_mode = truncation_mode
         self.truncation_mode = args.truncation_mode
-        self.max_target_length = max_target_length
+        self.max_target_length = args.max_target_length
         self.tokenizer = tokenizer
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
 
@@ -450,12 +450,12 @@ class DPOTrainer(Trainer):
         self._precomputed_train_ref_log_probs = False
         self._precomputed_eval_ref_log_probs = False
 
-        if loss_type != args.loss_type:
+        if loss_type != "sigmoid":
             warnings.warn(
                 "You passed `loss_type` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
             args.loss_type = loss_type
-        if label_smoothing != args.label_smoothing:
+        if label_smoothing != 0:
             warnings.warn(
                 "You passed `label_smoothing` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
@@ -465,7 +465,7 @@ class DPOTrainer(Trainer):
                 "You are using a loss type that does not support label smoothing. Ignoring label_smoothing parameter."
             )
 
-        if beta != args.beta:
+        if beta != 0.1:
             warnings.warn(
                 "You passed `beta` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
