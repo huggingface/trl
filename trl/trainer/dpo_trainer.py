@@ -162,7 +162,7 @@ class DPOTrainer(Trainer):
         reference_free: bool = False,
         force_use_ref_model: bool = False,
     ):
-        if model_init_kwargs != args.model_init_kwargs:
+        if model_init_kwargs is not None:
             warnings.warn(
                 "You passed `model_init_kwargs` to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
             )
@@ -182,7 +182,7 @@ class DPOTrainer(Trainer):
                 else getattr(torch, model_init_kwargs["torch_dtype"])
             )
 
-        if ref_model_init_kwargs != args.ref_model_init_kwargs:
+        if ref_model_init_kwargs is not None:
             warnings.warn(
                 "You passed `ref_model_kwargs` to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
             )
@@ -298,7 +298,7 @@ class DPOTrainer(Trainer):
                 " Please install `wandb` to resolve."
             )
 
-        if is_encoder_decoder != args.is_encoder_decoder:
+        if is_encoder_decoder is not None:
             warnings.warn(
                 "You passed `is_encoder_decoder` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
@@ -313,14 +313,14 @@ class DPOTrainer(Trainer):
             self.is_encoder_decoder = args.is_encoder_decoder
 
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
-        if model_adapter_name != args.model_adapter_name:
+        if model_adapter_name is not None:
             warnings.warn(
                 "You passed `model_adapter_name` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
             args.model_adapter_name = model_adapter_name
         self.model_adapter_name = args.model_adapter_name
 
-        if ref_adapter_name != args.ref_adapter_name:
+        if ref_adapter_name is not None:
             warnings.warn(
                 "You passed `ref_adapter_name` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
@@ -351,7 +351,7 @@ class DPOTrainer(Trainer):
         if tokenizer is None:
             raise ValueError("tokenizer must be specified to tokenize a DPO dataset.")
 
-        if max_length != args.max_length:
+        if max_length is not None:
             warnings.warn(
                 "You passed `max_length` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
@@ -364,7 +364,7 @@ class DPOTrainer(Trainer):
             )
             max_length = 512
 
-        if max_prompt_length != args.max_prompt_length:
+        if max_prompt_length is not None:
             warnings.warn(
                 "You passed `max_prompt_length` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
@@ -377,7 +377,7 @@ class DPOTrainer(Trainer):
             )
             max_prompt_length = 128
 
-        if max_target_length != args.max_target_length:
+        if max_target_length is not None:
             warnings.warn(
                 "You passed `max_target_length` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
@@ -476,7 +476,7 @@ class DPOTrainer(Trainer):
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
-        if dataset_num_proc != args.dataset_num_proc:
+        if dataset_num_proc is not None:
             warnings.warn(
                 "You passed `dataset_num_proc` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
