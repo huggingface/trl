@@ -10,6 +10,7 @@ from accelerate.commands import launch
 from generate_vllm import generate_relabel_args_dict
 from haven import haven_wizard as hw
 
+
 def run_exp(exp_dict, savedir, args):
     exp_name = exp_dict.pop("name")
     git_hash = exp_dict.pop("git")
@@ -44,6 +45,8 @@ def run_exp(exp_dict, savedir, args):
         accelerate_launch("gpt_reward_modeling.py", exp_dict, args)
     elif exp_name.startswith("sft"):
         accelerate_launch("supervised_finetuning.py", exp_dict, args)
+    elif exp_name.startswith("newsft"):
+        accelerate_launch("sft.py", exp_dict, args)
     elif exp_name.startswith("rouge"):
         exp_dict.pop("save_strategy", None)
         accelerate_launch("evaluate_rouge.py", exp_dict, args)
@@ -242,22 +245,21 @@ if __name__ == "__main__":
             exp_list[0]["save_strategy"] = "no"
 
     # Run experiments and create results file
-    if job_scheduler == "toolkit":
-        from haven import haven_wizard as hw
+    # if job_scheduler == "toolkit":
+    from haven import haven_wizard as hw
 
-        hw.run_wizard(
-            func=run_exp,
-            exp_list=exp_list,
-            savedir_base=args.savedir_base,
-            reset=args.reset,
-            job_config=job_config,
-            job_scheduler=job_scheduler,
-            results_fname="results/notebook.ipynb",
-            python_binary_path=args.python_binary,
-            args=args,
-            use_threads=True,
-            save_logs=False,
-            # exp_id=args.exp_id,
-        )
-    else:
-        run_exp(exp_list[0], "output", args)
+    hw.run_wizard(
+        func=run_exp,
+        exp_list=exp_list,
+        savedir_base=args.savedir_base,
+        reset=args.reset,
+        job_config=job_config,
+        job_scheduler=job_scheduler,
+        results_fname="results/notebook.ipynb",
+        python_binary_path=args.python_binary,
+        args=args,
+        use_threads=True,
+        save_logs=False,
+    )
+    # else:
+    #     run_exp(exp_list[0], "output", args)
