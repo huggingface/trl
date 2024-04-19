@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import inspect
+import logging
 import os
 import sys
 from copy import deepcopy
@@ -22,6 +23,9 @@ from typing import Any, List
 
 import yaml
 from transformers import HfArgumentParser
+
+
+logger = logging.getLogger(__name__)
 
 
 class YamlConfigParser:
@@ -256,6 +260,8 @@ class TrlParser(HfArgumentParser):
         """
         super().__init__(parsers)
 
+        self.config_parser = None
+
     def post_process_dataclasses(self, dataclasses):
         # Apply additional post-processing in case some arguments needs a special
         # care
@@ -294,11 +300,17 @@ class TrlParser(HfArgumentParser):
             if output_dir is not None:
                 if "--output_dir" in sys.argv:
                     output_dir_index = sys.argv.index("--output_dir")
-                    sys.argv.index[output_dir_index + 1] = output_dir
+                    sys.argv[output_dir_index + 1] = output_dir
                 else:
                     sys.argv.extend(["--output_dir", output_dir])
 
         dataclasses = self.parse_args_into_dataclasses(return_remaining_strings=True)
+
+        if len(dataclasses[-1]) > 0:
+            logger.warning(
+                f"Detected extra arguments that are going to be ignored: {dataclasses[-1]} - make sure to double check what you are doing"
+            )
+
         # Pop the last element which should be the remaining strings
         dataclasses = self.update_dataclasses_with_config(dataclasses[:-1])
         return dataclasses
