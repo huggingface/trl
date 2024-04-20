@@ -358,7 +358,7 @@ class DPOTrainer(Trainer):
             args.max_length = max_length
         if args.max_length is None:
             warnings.warn(
-                "`max_length` is not set in the DPOTrainer's init"
+                "`max_length` is not set in the DPOConfig's init"
                 " it will default to `512` by default, but you should do it yourself in the future.",
                 UserWarning,
             )
@@ -371,7 +371,7 @@ class DPOTrainer(Trainer):
             args.max_prompt_length = max_prompt_length
         if args.max_prompt_length is None:
             warnings.warn(
-                "`max_prompt_length` is not set in the DPOTrainer's init"
+                "`max_prompt_length` is not set in the DPOConfig's init"
                 " it will default to `128` by default, but you should do it yourself in the future.",
                 UserWarning,
             )
@@ -384,7 +384,7 @@ class DPOTrainer(Trainer):
             args.max_target_length = max_target_length
         if args.max_target_length is None and self.is_encoder_decoder:
             warnings.warn(
-                "When using an encoder decoder architecture, you should set `max_target_length` in the DPOTrainer's init"
+                "When using an encoder decoder architecture, you should set `max_target_length` in the DPOConfig's init"
                 " it will default to `128` by default, but you should do it yourself in the future.",
                 UserWarning,
             )
@@ -428,7 +428,7 @@ class DPOTrainer(Trainer):
         self.max_length = args.max_length
         self.generate_during_eval = args.generate_during_eval
         self.label_pad_token_id = args.label_pad_token_id
-        if padding_value != 0:
+        if padding_value is not None:
             warnings.warn(
                 "You passed `padding_value` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
