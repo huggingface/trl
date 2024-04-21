@@ -114,6 +114,9 @@ class ScriptArguments:
     gradient_checkpointing: Optional[bool] = field(
         default=False, metadata={"help": "whether to use gradient checkpointing"}
     )
+    gradient_checkpointing_use_reentrant: bool = field(
+        default=True, metadata={"help": "Whether to apply `use_reentrant` for gradient_checkpointing"}
+    )
 
     # instrumentation
     seed: Optional[int] = field(default=0)
@@ -366,9 +369,11 @@ if __name__ == "__main__":
         report_to=script_args.report_to,
         bf16=script_args.bf16,
         fp16=script_args.fp16,
-        ddp_find_unused_parameters=(script_args.gradient_checkpointing),
+        ddp_find_unused_parameters=False,
         push_to_hub=script_args.push_to_hub,
         hub_model_id=hub_model_id,
+        gradient_checkpointing=script_args.gradient_checkpointing,
+        gradient_checkpointing_kwargs=dict(use_reentrant=script_args.gradient_checkpointing_use_reentrant),
     )
 
     # 5. initialize the DPO trainer
