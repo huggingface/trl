@@ -14,13 +14,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import inspect
+import logging
 import os
+import sys
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any, List
 
 import yaml
 from transformers import HfArgumentParser
+
+
+logger = logging.getLogger(__name__)
 
 
 class YamlConfigParser:
@@ -194,6 +199,14 @@ class ChatArguments:
     top_k: int = field(default=50, metadata={"help": "Value of k for top-k sampling"})
     top_p: float = field(default=1.0, metadata={"help": "Value of p for nucleus sampling"})
     repetition_penalty: float = field(default=1.0, metadata={"help": "Repetition penalty"})
+    eos_tokens: str = field(
+        default=None,
+        metadata={"help": "EOS tokens to stop the generation. If multiple they should be comma separated"},
+    )
+    eos_token_ids: str = field(
+        default=None,
+        metadata={"help": "EOS token IDs to stop the generation. If multiple they should be comma separated"},
+    )
     # model loading
     model_revision: str = field(
         default="main",
@@ -242,6 +255,8 @@ class TrlParser(HfArgumentParser):
         """
         super().__init__(parsers)
 
+        self.config_parser = None
+
     def post_process_dataclasses(self, dataclasses):
         # Apply additional post-processing in case some arguments needs a special
         # care
@@ -266,17 +281,48 @@ class TrlParser(HfArgumentParser):
         return dataclasses
 
     def parse_args_and_config(self):
+        # Hack to force-replace the `output_dir` from the YAML file if one did not passed
+        # output_dir in the command line
+        if "--config" in sys.argv:
+            config_index = sys.argv.index("--config") + 1
+            config_path = sys.argv[config_index]
+
+            self.config_parser = YamlConfigParser(config_path)
+            output_dir = self.config_parser.config.get("output_dir")
+
+            if output_dir is not None:
+                if "--output_dir" in sys.argv:
+                    output_dir_index = sys.argv.index("--output_dir")
+                    passed_output_dir = sys.argv[output_dir_index + 1]
+                    self.config_parser.config["output_dir"] = passed_output_dir
+                else:
+                    sys.argv.extend(["--output_dir", output_dir])
+
         dataclasses = self.parse_args_into_dataclasses(return_remaining_strings=True)
+
+        if len(dataclasses[-1]) > 0:
+            # It is expected that `config` is in that list but not ignored
+            # let's simply remove them
+            list_ignored = dataclasses[-1]
+            if "--config" in list_ignored:
+                config_index = list_ignored.index("--config") + 1
+                config_path = list_ignored[config_index]
+
+                list_ignored.remove(config_path)
+                list_ignored.remove("--config")
+
+            if len(list_ignored) > 0:
+                logger.warning(
+                    f"Detected extra arguments that are going to be ignored: {list_ignored} - make sure to double check what you are doing"
+                )
+
         # Pop the last element which should be the remaining strings
         dataclasses = self.update_dataclasses_with_config(dataclasses[:-1])
         return dataclasses
 
     def update_dataclasses_with_config(self, dataclasses):
-        self.config_parser = None
         for parser_dataclass in dataclasses:
-            if hasattr(parser_dataclass, "config"):
-                if self.config_parser is not None:
-                    raise ValueError("You passed the `config` field twice! Make sure to pass `config` only once.")
+            if hasattr(parser_dataclass, "config") and self.config_parser is None:
                 self.config_parser = YamlConfigParser(parser_dataclass.config)
 
         if self.config_parser is not None:

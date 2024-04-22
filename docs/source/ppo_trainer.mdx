@@ -151,7 +151,7 @@ for epoch in tqdm(range(epochs), "epoch: "):
         ppo_trainer.log_stats(stats, batch, rewards)
 
 #### Save model
-ppo_trainer.save_model("my_ppo_model")
+ppo_trainer.save_pretrained("my_ppo_model")
 ```
 
 ## Logging
