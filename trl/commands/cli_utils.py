@@ -152,6 +152,8 @@ class SftScriptArguments:
 @dataclass
 class DpoScriptArguments:
     dataset_name: str = field(default=None, metadata={"help": "the dataset name"})
+    dataset_train_name: str = field(default="train", metadata={"help": "the name of the training set of the dataset"})
+    dataset_test_name: str = field(default="test", metadata={"help": "the name of the training set of the dataset"})
     sanity_check: bool = field(default=False, metadata={"help": "only train on 1000 samples"})
     ignore_bias_buffers: bool = field(
         default=False,

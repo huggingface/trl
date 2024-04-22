@@ -49,6 +49,7 @@ python examples/scripts/dpo.py \
     --lora_r=16 \
     --lora_alpha=16
 """
+
 import logging
 import multiprocessing
 import os
@@ -156,8 +157,8 @@ if __name__ == "__main__":
         num_proc=multiprocessing.cpu_count(),
         load_from_cache_file=False,
     )
-    train_dataset = ds["train"]
-    eval_dataset = ds["test"]
+    train_dataset = ds[args.dataset_train_name]
+    eval_dataset = ds[args.dataset_test_name]
 
     ################
     # Training
@@ -171,10 +172,6 @@ if __name__ == "__main__":
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             tokenizer=tokenizer,
-            max_length=training_args.max_length,
-            max_target_length=training_args.max_target_length,
-            max_prompt_length=training_args.max_prompt_length,
-            generate_during_eval=training_args.generate_during_eval,
             peft_config=get_peft_config(model_config),
             callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
         )
