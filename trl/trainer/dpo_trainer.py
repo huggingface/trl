@@ -125,6 +125,7 @@ class DPOTrainer(Trainer):
             "reference_free",
             "force_use_ref_model",
         ],
+        custom_message="Deprecated positional argument(s) used in DPOTrainer, please use the DPOConfig to set these arguments instead.",
     )
     def __init__(
         self,
