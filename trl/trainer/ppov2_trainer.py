@@ -1,15 +1,19 @@
+from collections import defaultdict
 import os
 import time
 from dataclasses import dataclass
 from typing import Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from rich.console import Console
+from rich.table import Table
 from accelerate import Accelerator
 from accelerate.state import AcceleratorState
-from accelerate.utils import broadcast
+from accelerate.utils import broadcast, gather_object
 from datasets import Dataset
 from torch.utils.data import DataLoader
 from transformers import (
@@ -25,6 +29,7 @@ from transformers import (
 )
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer_callback import CallbackHandler, DefaultFlowCallback
+from trl.models.utils import unwrap_model_for_generation
 
 
 INVALID_LOGPROB = 1.0
@@ -77,6 +82,8 @@ class PPOConfig(TrainingArguments):
     """per rank eval batch size"""
     local_rollout_forward_batch_size: int = 64
     """per rank no grad forward pass in the rollout phase"""
+    num_sample_generations: int = 10
+    """the number of debugging samples generations (i.e., `generate_completions` calls) throughout training"""
 
     # other args
     base_model: str = "EleutherAI/pythia-160m"
@@ -119,6 +126,16 @@ class PPOConfig(TrainingArguments):
     """whether to whiten the rewards"""
     kl_coef: float = 0.05
     """the KL coefficient"""
+
+
+def print_rich_table(df: pd.DataFrame) -> Table:
+    console = Console()
+    table = Table(show_lines=True)
+    for column in df.columns:
+        table.add_column(column)
+    for _, row in df.iterrows():
+        table.add_row(*row.astype(str).tolist())
+    console.print(table)
 
 
 # taken from https://github.com/vwxyzjn/direct-preference-optimization/blob/f8b8c0f49dc92a430bae41585f9d467d3618fe2f/utils.py#L99
@@ -378,6 +395,8 @@ class PPOTrainer(Trainer):
         time_int = broadcast(time_tensor, 0).item()  # avoid different timestamps across processes
         args.run_name = f"{args.exp_name}__{args.seed}__{time_int}"
         self.local_seed = args.seed + accelerator.process_index * 100003  # Prime
+        if args.num_sample_generations > 0:
+            self.sample_generations_freq = max(1, args.num_updates // args.num_sample_generations)
 
         #########
         # disable dropout
@@ -414,47 +433,75 @@ class PPOTrainer(Trainer):
         self.control = TrainerControl()
         self.is_deepspeed_enabled = getattr(self.accelerator.state, "deepspeed_plugin", None) is not None
         self.is_fsdp_enabled = getattr(self.accelerator.state, "fsdp_plugin", None) is not None
-
-    # def get_train_dataloader(self) -> DataLoader:
-
-    def save_model(self, output_dir: Optional[str] = None):
-        """
-        Copied from Trainer.save_model, simplified.
-        By default we only save the policy and not the value network.
-        """
-        unwrapped: PreTrainedModel = self.accelerator.unwrap_model(self.model).policy
-        if output_dir is None:
-            output_dir = self.args.output_dir
-        state_dict = self.accelerator.get_state_dict(unwrapped)
+        # Create distant repo and output directory if needed
+        self.hub_model_id = None
+        if self.args.push_to_hub:
+            self.init_hf_repo()
         if self.args.should_save:
-            self._save(output_dir, state_dict=state_dict)
+            os.makedirs(self.args.output_dir, exist_ok=True)
+        self.backup_model = None
 
-    def train(self):
-        args = self.args
-        accelerator = self.accelerator
-        local_seed = self.local_seed
-        optimizer = self.optimizer
-        model = self.model
-        ref_policy = self.ref_policy
-        reward_model = self.reward_model
-        tokenizer = self.tokenizer
-
-        dataloader = DataLoader(
+        #########
+        ### setup dataloader
+        #########
+        self.dataloader = DataLoader(
             self.train_dataset,
             batch_size=args.local_batch_size,
             shuffle=True,
             collate_fn=DataCollatorWithPadding(tokenizer),
             drop_last=True,  # needed; otherwise the last batch will be of ragged shape
         )
-
-        device = accelerator.device
-        torch.backends.cudnn.deterministic = True # TODO: check if cudnn matters
-
         # sync random states for DataLoader(shuffle=True) before `accelerator.prepare`
         # see https://gist.github.com/vwxyzjn/2581bff1e48e185e0b85b6dfe1def79c
         torch.manual_seed(args.seed)
-        model, optimizer, dataloader = accelerator.prepare(model, optimizer, dataloader)
-        torch.manual_seed(local_seed)  # reset the local seed again
+        self.model, self.optimizer, self.dataloader = accelerator.prepare(self.model, self.optimizer, self.dataloader)
+        torch.manual_seed(self.local_seed)  # reset the local seed again
+
+        self.eval_dataloader = DataLoader(
+            self.eval_dataset,
+            batch_size=args.per_device_eval_batch_size,
+            collate_fn=DataCollatorWithPadding(self.tokenizer),
+            drop_last=True,
+        ) # no need to shuffle eval dataset
+        self.eval_dataloader = accelerator.prepare(self.eval_dataloader)
+
+    def get_train_dataloader(self) -> DataLoader:
+        return self.dataloader
+    
+    def get_eval_dataloader(self) -> DataLoader:
+        return self.eval_dataloader
+
+    def push_to_hub(self, **kwargs):
+        """Modified from `Trainer.save_model` to only save the policy and not the value network."""
+        self.backup_model = self.model
+        self.model = self.accelerator.unwrap_model(self.model).policy # save only the policy
+        super().push_to_hub(**kwargs)
+        self.model = self.backup_model
+
+    def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
+        """Modified from `Trainer.save_model` to only save the policy and not the value network."""
+        if not _internal_call: # `push_to_hub` already swaps out the self.model with policy
+            self.backup_model = self.model
+            self.model = self.accelerator.unwrap_model(self.model).policy # save only the policy
+        if output_dir is None:
+            output_dir = self.args.output_dir
+        state_dict = self.accelerator.get_state_dict(self.model)
+        if self.args.should_save:
+            self._save(output_dir, state_dict=state_dict)
+        if not _internal_call:
+            self.model = self.backup_model
+
+    def train(self):
+        args = self.args
+        accelerator = self.accelerator
+        optimizer = self.optimizer
+        model = self.model
+        ref_policy = self.ref_policy
+        reward_model = self.reward_model
+        tokenizer = self.tokenizer
+        dataloader = self.dataloader
+        device = accelerator.device
+        # torch.backends.cudnn.deterministic = True # TODO: check if cudnn matters
 
         def repeat_generator():
             while True:
@@ -492,7 +539,7 @@ class PPOTrainer(Trainer):
         entropy_stats = torch.zeros(stats_shape, device=device)
         ratio_stats = torch.zeros(stats_shape, device=device)
         model.train()
-        for _ in range(1, args.num_updates + 1):
+        for update in range(1, args.num_updates + 1):
             global_step += 1 * args.batch_size
             self.lr_scheduler.step()
             data = next(iter_dataloader)
@@ -509,12 +556,13 @@ class PPOTrainer(Trainer):
                 sequence_lengths = []
                 for i in range(0, queries.shape[0], args.local_rollout_forward_batch_size):
                     query = queries[i : i + args.local_rollout_forward_batch_size]
-                    query_response, logits = generate(
-                        accelerator.unwrap_model(model).policy,
-                        query,
-                        tokenizer,
-                        generation_config,
-                    )
+                    with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+                        query_response, logits = generate(
+                            unwrapped_model.policy,
+                            query,
+                            tokenizer,
+                            generation_config,
+                        )
                     response = query_response[:, context_length:]
 
                     # use the logits during generation directly, instead of using the following
@@ -730,3 +778,42 @@ class PPOTrainer(Trainer):
                 self.log(metrics)
             del kl, mean_kl, mean_entropy, mean_non_score_reward, scores
             torch.cuda.empty_cache()
+
+            if args.num_sample_generations > 0 and (update - 1) % self.sample_generations_freq == 0:
+                self.generate_completions(sampling=True)
+
+    def generate_completions(self, sampling: bool = False):
+        args = self.args
+        generation_config = GenerationConfig(
+            max_new_tokens=self.args.response_length,
+            temperature=(0.01 + 1e-7),
+            top_k=0.0,
+            top_p=1.0,
+            do_sample=True,
+        )
+
+        table = defaultdict(list)
+        for batch in self.eval_dataloader:
+            query = batch["input_ids"]
+            name = f"trained {args.base_model}"
+            
+            context_length = query.shape[1]
+            with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
+                query_response, _ = generate(
+                    unwrapped_model.policy,
+                    query,
+                    self.tokenizer,
+                    generation_config,
+                )
+            generation = query_response[:, context_length:]
+            table["query"].extend(gather_object(self.tokenizer.batch_decode(query, skip_special_tokens=True)))
+            table[name].extend(gather_object(self.tokenizer.batch_decode(generation, skip_special_tokens=True)))
+            if sampling:
+                break
+        df = pd.DataFrame(table)
+        if self.accelerator.process_index == 0:
+            print_rich_table(df.iloc[0 : 0 + 5])
+        if "wandb" in args.report_to:
+            import wandb
+            if wandb.run is not None:
+                wandb.log({"completions": wandb.Table(dataframe=df)})
