@@ -22,7 +22,7 @@ class SFTConfig(TrainingArguments):
     r"""
     dataset_text_field (`Optional[str]`):
         The name of the text field of the dataset, in case this is passed by a user, the trainer will automatically create a
-        `ConstantLengthDataset` based on the `dataset_text_field` argument.
+        `ConstantLengthDataset` based on the `dataset_text_field` argument. Defaults to None.
     packing (`Optional[bool]`):
             Used only in case `dataset_text_field` is passed. This argument is used by the `ConstantLengthDataset` to pack the sequences
             of the dataset. Defaults to False.
@@ -37,11 +37,16 @@ class SFTConfig(TrainingArguments):
         If not `None`, this will activate NEFTune noise embeddings. This has been proven to drastically improve model performances for instruction
         fine-tuning. Check out the original paper here: https://arxiv.org/abs/2310.05914 and the original code here: https://github.com/neelsjain/NEFTune
     model_init_kwargs: (`Optional[Dict]`, *optional*):
-        Dict of Optional kwargs to pass when instantiating the model from a string
+        Dict of Optional kwargs to pass when instantiating the model from a string.
     dataset_kwargs: (`Optional[Dict]`, *optional*):
         Dict of Optional kwargs to pass when creating packed or non-packed datasets
     eval_packing: (`Optional[bool]`, *optional*):
         Whether to pack the eval dataset as well. Defaults to `packing` if `None` is passed.
+    num_of_sequences (`Optional[int]`):
+            The number of sequences to use for the `ConstantLengthDataset`. Defaults to `1024`.
+    chars_per_token (`Optional[float]`):
+            The number of characters per token to use for the `ConstantLengthDataset`. Defaults to `3.6`. You can check how this is computed in the
+            stack-llama example: https://github.com/huggingface/trl/blob/08f550674c553c36c51d1027613c29f14f3676a5/examples/stack_llama/scripts/supervised_finetuning.py#L53.
     """
 
     dataset_text_field: Optional[str] = None
@@ -53,3 +58,5 @@ class SFTConfig(TrainingArguments):
     model_init_kwargs: Optional[Dict] = None
     dataset_kwargs: Optional[Dict] = None
     eval_packing: Optional[bool] = None
+    num_of_sequences: Optional[int] = 1024
+    chars_per_token: Optional[float] = 3.6

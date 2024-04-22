@@ -25,7 +25,7 @@ python examples/scripts/sft.py \
     --num_train_epochs=3 \
     --max_steps=-1 \
     --push_to_hub \
-    --gradient_checkpointing \
+    --gradient_checkpointing
 
 # peft:
 python examples/scripts/sft.py \
@@ -44,6 +44,7 @@ python examples/scripts/sft.py \
     --lora_r=64 \
     --lora_alpha=16
 """
+
 import logging
 import os
 from contextlib import nullcontext
@@ -139,10 +140,7 @@ if __name__ == "__main__":
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            dataset_text_field=args.dataset_text_field,
-            max_seq_length=args.max_seq_length,
             tokenizer=tokenizer,
-            packing=args.packing,
             peft_config=get_peft_config(model_config),
             callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
         )
