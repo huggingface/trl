@@ -88,6 +88,8 @@ class DPOTrainerTester(unittest.TestCase):
             ["t5", "ipo", True],
             ["gpt2", "kto_pair", True],
             ["t5", "kto_pair", False],
+            ["gpt2", "bco_pair", False],
+            ["t5", "bco_pair", True],
         ]
     )
     def test_dpo_trainer(self, name, loss_type, pre_compute):
@@ -453,6 +455,10 @@ class DPOTrainerTester(unittest.TestCase):
             ["gpt2", "kto_pair", False, True],
             ["gpt2", "kto_pair", True, False],
             ["gpt2", "kto_pair", True, True],
+            ["gpt2", "bco_pair", False, False],
+            ["gpt2", "bco_pair", False, True],
+            ["gpt2", "bco_pair", True, False],
+            ["gpt2", "bco_pair", True, True],
         ]
     )
     @require_bitsandbytes
