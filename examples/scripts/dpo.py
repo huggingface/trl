@@ -168,7 +168,6 @@ if __name__ == "__main__":
             model,
             model_ref,
             args=training_args,
-            beta=training_args.beta,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             tokenizer=tokenizer,
