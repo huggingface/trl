@@ -401,7 +401,7 @@ class RLOOTrainer(Trainer):
                 "policy/entropy_avg": self.accelerator.gather(entropy).mean().item(),
                 "val/ratio": self.accelerator.gather(new_ratio).mean().item(),
                 "val/ratio_var": self.accelerator.gather(ratio_stats).var().item(),
-                "val/num_eos_tokens": responses == tokenizer.eos_token_id).sum().item(),
+                "val/num_eos_tokens": (responses == tokenizer.eos_token_id).sum().item(),
             })
 
         del kl, mean_kl, mean_entropy, scores
