@@ -173,8 +173,8 @@ if __name__ == "__main__":
     # Dataset
     ################
     raw_datasets = load_dataset(sft_script_args.dataset_name)
-    train_dataset = raw_datasets["train"]
-    eval_dataset = raw_datasets["test"]
+    train_dataset = raw_datasets[sft_script_args.dataset_train_name]
+    eval_dataset = raw_datasets[sft_script_args.dataset_test_name]
 
     ################
     # Optional rich context managers
