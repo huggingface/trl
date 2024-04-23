@@ -1,0 +1,463 @@
+import os
+import time
+from dataclasses import dataclass
+from typing import Dict, List, Literal, Optional, Tuple, Union
+import warnings
+
+import collections
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from accelerate import Accelerator
+from accelerate.state import AcceleratorState
+from accelerate.utils import broadcast
+from datasets import Dataset
+from torch.utils.data import DataLoader
+from transformers import (
+    DataCollatorWithPadding,
+    GenerationConfig,
+    PreTrainedModel,
+    PreTrainedTokenizer,
+    Trainer,
+    TrainerCallback,
+    TrainerControl,
+    TrainerState,
+    TrainingArguments,
+)
+from transformers.integrations import get_reporting_integration_callbacks
+from transformers.trainer_callback import CallbackHandler, DefaultFlowCallback
+
+from ..models import SUPPORTED_ARCHITECTURES, create_reference_model
+
+
+INVALID_LOGPROB = 1.0
+
+
+"""
+python -i trl/trainer/ppov2_trainer.py \
+    --learning_rate 3e-6 \
+    --output_dir models/minimal/ppo \
+    --per_device_train_batch_size 1 \
+    --gradient_accumulation_steps 64 \
+    --lr_scheduler_type linear \
+"""
+
+
+@dataclass
+class RLOOConfig(TrainingArguments):
+    # various batch sizes
+    batch_size: Optional[int] = None
+    """The batch size across devices (HF's `per_device_train_batch_size` * `world_size` * `gradient_accumulation_steps`)"""
+    nminibatches: int = 1
+    """Number of minibatches to split a batch into"""
+    local_mini_batch_size: Optional[int] = None
+    """the mini batch size per GPU"""
+    mini_batch_size: Optional[int] = None
+    """the mini batch size across GPUs"""
+    local_eval_batch_size: int = 2
+    """per rank eval batch size"""
+    local_rollout_forward_batch_size: int = 64
+    """per rank no grad forward pass in the rollout phase"""
+    # PR TODO: understand this param
+
+    # other args
+    base_model: str = "EleutherAI/pythia-160m"
+    """the name of the pretrained model to use"""
+    response_length: int = 53
+    """the length of the response"""
+    truncate_token: Optional[Literal["eos"]] = None
+    """the truncate token"""
+    truncate_token_id: Optional[int] = None
+    """the truncation token id"""
+    temperature: float = 0.7
+    """the sampling temperature"""
+    penalty_reward_value: int = -1
+    """the reward value for responses that do not contain `truncate_token_id`"""
+    non_eos_penalty: bool = False
+    """whether to penalize responses that do not contain `truncate_token_id`"""
+    offload: bool = False
+    """Whether to offload ref policy and reward model to CPU"""
+    reward_model_path: str = "EleutherAI/pythia-160m"
+    """the path to the reward model"""
+    sft_model_path: str = "EleutherAI/pythia-160m"
+    """the path to the sft model"""
+
+    # ppo args
+    nminibatches: int = 1
+    """the number of minibatches to split a batch into"""
+    noptepochs: int = 4
+    """the number of epochs to train"""
+    vf_coef: float = 0.1
+    """the value function coefficient"""
+    cliprange: float = 0.2
+    """the clip range"""
+    cliprange_value: float = 0.2
+    """the clip range for the value function"""
+    gamma: float = 1
+    """the discount factor"""
+    lam: float = 0.95
+    """the lambda value for GAE"""
+    whiten_rewards: bool = False
+    """whether to whiten the rewards"""
+    kl_coef: float = 0.05
+    """the KL coefficient"""
+
+    # rloo args
+    rloo_k: int = 4
+    """REINFORCE Leave-One-Out (RLOO) number of online samples per prompt"""
+
+
+# taken from https://github.com/vwxyzjn/direct-preference-optimization/blob/f8b8c0f49dc92a430bae41585f9d467d3618fe2f/utils.py#L99
+def disable_dropout(model: torch.nn.Module):
+    """Disable dropout in a model."""
+    for module in model.modules():
+        if isinstance(module, torch.nn.Dropout):
+            module.p = 0
+
+def get_reward_model_reward(reward_model, query_responses, tokenizer, context_length):
+    attention_mask = query_responses != tokenizer.pad_token_id
+    # position_ids = attention_mask.cumsum(1) - attention_mask.long()  # exclusive cumsum
+    lm_backbone = getattr(reward_model, model.base_model_prefix)
+    input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
+    output = lm_backbone(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        # position_ids=position_ids,
+        return_dict=True,
+        output_hidden_states=True,
+    )
+    reward_logits = reward_model.score(output.hidden_states[-1])
+    sequence_lengths = (
+        first_true_indices(query_responses[:, context_length:] == tokenizer.pad_token_id) - 1 + context_length
+    )
+    # https://github.com/huggingface/transformers/blob/dc68a39c8111217683bf49a4912d0c9018bab33d/src/transformers/models/gpt2/modeling_gpt2.py#L1454
+    return reward_logits[
+        torch.arange(reward_logits.size(0), device=reward_logits.device),
+        sequence_lengths,
+    ].squeeze(-1),
+
+
+def generate(lm_backbone, queries, tokenizer, generation_config):
+    """generate in a way that does not affect padding tokens"""
+    context_length = queries.shape[1]
+    attention_mask = queries != tokenizer.pad_token_id
+    input_ids = torch.masked_fill(queries, ~attention_mask, 0)
+    output = lm_backbone.generate(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        # position_ids=attention_mask.cumsum(1) - attention_mask.long(), # not needed: already adjusted in generations
+        # https://github.com/huggingface/transformers/blob/ac33aeeeee2a7a89b89c93c2962e6feb90daef0a/src/transformers/models/gpt2/modeling_gpt2.py#L1227-L1250
+        generation_config=generation_config,
+        return_dict_in_generate=True,
+        output_scores=True,
+    )
+    logits = torch.stack(output.scores, 1)
+    return torch.cat((queries, output.sequences[:, context_length:]), dim=1), logits
+
+
+def first_true_indices(bools, dtype=torch.long):
+    """
+    Takes an N-dimensional bool tensor and returns an (N-1)-dimensional tensor of integers giving
+    the position of the first True in each "row".
+
+    Returns the length of the rows (bools.size(-1)) if no element is True in a given row.
+    """
+    row_len = bools.size(-1)
+    zero_or_index = row_len * (~bools).type(dtype) + torch.arange(row_len, dtype=dtype, device=bools.device)
+    return torch.min(zero_or_index, dim=-1).values
+
+
+def truncate_response(args, tokenizer, responses):
+    trunc_idxs = first_true_indices(responses == args.truncate_token_id).unsqueeze(-1)
+    new_size = [1] * (len(responses.size()) - 1) + [responses.shape[1]]
+    idxs = torch.arange(responses.shape[1], device=responses.device).view(*new_size)
+    postprocessed_responses = torch.masked_fill(responses, idxs > trunc_idxs, tokenizer.pad_token_id)
+    return postprocessed_responses
+
+
+def forward(model, query_responses, tokenizer):
+    attention_mask = query_responses != tokenizer.pad_token_id
+    # position_ids = attention_mask.cumsum(1) - attention_mask.long()
+    input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
+    return model(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        # position_ids=position_ids,
+        return_dict=True,
+        output_hidden_states=True,
+    )
+
+
+class RLOOTrainer(Trainer):
+    def __init__(
+            self,
+            model: Optional[PreTrainedModelWrapper],
+            args: RLOOConfig,
+            train_dataset: Union[Dataset, IterableDataset, "datasets.Dataset"],
+            reward_model: "PR TODO: type hint" = None,
+            reward_fn: "PR TODO: type hint" = None,
+            ref_model: Optional[PreTrainedModelWrapper] = None,
+            train_generation_config: Optional[GenerationConfig] = None,
+            eval_generation_config: Optional[GenerationConfig] = None,
+            tokenizer: Optional[PreTrainedTokenizerBase] = None,
+            **kwargs
+    ) -> None:
+
+        assert (reward_model is not None) != (reward_fn is not None), "Must set either reward_model or reward_fn, but not both"
+        self.reward_model = reward_model
+        self.reward_fn = reward_fn
+        # PR TODO: implement use of custom reward_fn
+
+
+        default_generation_config = GenerationConfig(
+            max_new_tokens=args.response_length,
+            min_new_tokens=args.response_length,
+            temperature=(args.temperature + 1e-7),
+            top_k=0.0,
+            top_p=1.0,
+            do_sample=True,
+        )
+        self.train_generation_config = train_generation_config or default_generation_config
+        self.eval_generation_config = eval_generation_config or default_generation_config
+        # disable `pad_token_id` and `eos_token_id` because we just want to
+        # generate tokens without truncation / padding
+        self.train_generation_config.eos_token_id = None
+        self.train_generation_config.pad_eos_token_id = None
+
+
+        super().__init__(
+            model=model,
+            args=args,
+            train_dataset=train_dataset,
+            tokenizer=tokenizer,
+            **kwargs,
+        )
+
+        #########################
+        # Prepare reference model
+        #########################
+        if isinstance(ref_model, SUPPORTED_ARCHITECTURES):
+            self.ref_model = ref_model
+            if num_shared_layers is not None:
+                warnings.warn(
+                    "num_shared_layers is ignored when ref_model is provided. Two different models are used for the "
+                    "model and the reference model and no layers are shared.",
+                    UserWarning,
+                )
+        elif ref_model is None and not self.is_peft_model:
+            self.ref_model = create_reference_model(self.model, num_shared_layers=num_shared_layers)
+        elif self.is_peft_model:
+            self.ref_model = None
+        else:
+            raise ValueError(
+                f"ref_model must be a PreTrainedModelWrapper or `None`, got {type(ref_model)} - supported "
+                f"architectures are: {SUPPORTED_ARCHITECTURES} "
+            )
+        self.optional_peft_ctx = (
+            self.accelerator.unwrap_model(self.model).pretrained_model.disable_adapter
+            if self.is_peft_model
+            else nullcontext
+        )
+        # PR TODO: setup peft_ctx for generate()
+
+
+        #########
+        # disable dropout
+        #########
+        # PR TODO: review the below, I'm not sure why we disable dropout
+        for module in [model, ref_model, reward_model]:
+            disable_dropout(module)
+        if self.reward_model is not None:
+            disable_dropout(self.reward_model)
+
+
+    def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) - >torch.Tensor:
+        """
+        https://github.com/huggingface/transformers/blob/8c12690cecbb97e187861e386f7a0ac790e4236c/src/transformers/trainer.py#L3112
+        """
+        model.train()
+        inputs = self._prepare_inputs(inputs)
+
+        queries = inputs["input_ids"].to(device)
+        queries = queries.repeat(args.rloo_k, 1)
+        context_length = queries.shape[1]
+        query_responses = []
+        responses = []
+        postprocessed_responses = []
+        logprobs = []
+        ref_logprobs = []
+        scores = []
+        sequence_lengths = []
+        for i in range(0, queries.shape[0], args.local_rollout_forward_batch_size):
+            query = queries[i : i + args.local_rollout_forward_batch_size]
+            query_response, logits = generate(
+                accelerator.unwrap_model(model),
+                query,
+                tokenizer,
+                generation_config,
+            )
+            response = query_response[:, context_length:]
+
+            # use the logits during generation directly, instead of using the following
+            all_logprob = F.log_softmax(logits, dim=-1)
+            logprob = torch.gather(all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
+            del logits, all_logprob
+            torch.cuda.empty_cache()
+
+            with torch.no_grad(), self.optional_peft_ctx():
+                ref_output = forward(self.ref_model, query_response, tokenizer)
+            ref_logits = ref_output.logits[:, context_length - 1 : -1]
+            ref_logits /= args.temperature + 1e-7
+            ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
+            ref_logprob = torch.gather(ref_all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
+            del ref_output, ref_logits, ref_all_logprob
+            torch.cuda.empty_cache()
+
+            # Response Processing 1. truncate response after the
+            # first occurrence of `truncate_token_id`
+            postprocessed_response = response
+            if args.truncate_token_id:
+                postprocessed_response = truncate_response(args, tokenizer, response)
+
+            # Response Processing 2. run reward model on the truncated responses
+            postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
+            sequence_length = first_true_indices(postprocessed_response == tokenizer.pad_token_id) - 1
+            if self.reward_model:
+                score = get_reward_model_reward(
+                    self.reward_model,
+                    postprocessed_query_response,
+                    tokenizer,
+                    context_length
+                )
+            else:
+                self.reward_fn(
+                    postprocessed_query_response,
+                    tokenizer,
+                    context_length
+                )
+
+            query_responses.append(query_response)
+            responses.append(response)
+            postprocessed_responses.append(postprocessed_response)
+            logprobs.append(logprob)
+            ref_logprobs.append(ref_logprob)
+            sequence_lengths.append(sequence_length)
+            scores.append(score)
+
+        query_responses = torch.cat(query_responses, 0)
+        responses = torch.cat(responses, 0)
+        postprocessed_responses = torch.cat(postprocessed_responses, 0)
+        logprobs = torch.cat(logprobs, 0)
+        ref_logprobs = torch.cat(ref_logprobs, 0)
+        print(f"{(ref_logprobs - logprobs).exp()=}")
+        sequence_lengths = torch.cat(sequence_lengths, 0)
+        scores = torch.cat(scores, 0)
+        del (logprob, ref_logprob, score)
+        torch.cuda.empty_cache()
+
+        # Response Processing 3. filter response. Ensure that the sample contains truncate_token_id
+        # responses not passing that filter will receive a low (fixed) score
+        # only query humans on responses that pass that filter
+        contain_eos_token = torch.any(postprocessed_responses == tokenizer.eos_token_id, dim=-1)
+        if args.non_eos_penalty:
+            scores = torch.where(contain_eos_token, scores, torch.full_like(scores, args.penalty_reward_value))
+        accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
+
+        # be very careful with `padding_mask_p1`;
+        # see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
+        response_idxs = torch.arange(responses.shape[1], device=responses.device).repeat(responses.shape[0], 1)
+        padding_mask = response_idxs > sequence_lengths.unsqueeze(1)
+        logprobs = torch.masked_fill(logprobs, padding_mask, INVALID_LOGPROB)
+        ref_logprobs = torch.masked_fill(ref_logprobs, padding_mask, INVALID_LOGPROB)
+
+        # 4. compute rewards
+        kl = logprobs - ref_logprobs
+        non_score_reward = (-args.kl_coef * kl).sum(1)
+        rlhf_reward = scores - non_score_reward
+
+        # we generated `self.args.rloo_k` many responses per prompt
+        # now we can implement the RLOO loss by subtracting the reward of
+        # a response by the average rewards of other `rloo_k - 1` responses
+        advantages = torch.zeros_like(rlhf_reward)
+        for i in range(0, len(advantages)):
+            other_response_rlhf_rewards = []
+            for j in range(0, len(advantages)):
+                if i != j:
+                    other_response_rlhf_rewards.append(rlhf_reward[j])
+            advantages[i] = rlhf_reward[i] - torch.stack(other_response_rlhf_rewards).mean()
+        torch.cuda.empty_cache()
+
+        # calculate loss
+        with accelerator.accumulate(model):
+            output = forward(model, query_responses, tokenizer)
+            logits = output.logits[:, context_length - 1 : -1]
+            logits /= args.temperature + 1e-7
+            new_all_logprobs = F.log_softmax(logits, dim=-1)
+            new_logprobs = torch.gather(new_all_logprobs, 2, responses.unsqueeze(-1)).squeeze(-1)
+            new_logprobs = torch.masked_fill(
+                new_logprobs, padding_mask[micro_batch_inds], INVALID_LOGPROB
+            )
+            new_ratio = (new_logprobs - logprobs).exp()
+            new_logprobs = new_logprobs.sum(1)
+            logprobs = logprobs.sum(1)
+            logprobs_diff = new_logprobs - logprobs
+            ratio = torch.exp(logprobs_diff)
+            # print(f"{ratio=}")
+            pg_losses = -advantages * ratio
+            pg_losses2 = -advantages * torch.clamp(ratio, 1.0 - args.cliprange, 1.0 + args.cliprange)
+            pg_loss_max = torch.max(pg_losses, pg_losses2)
+            pg_loss = pg_loss_max.mean()
+            pg_clipfrac = (pg_losses2 > pg_losses).float().mean()
+            loss = pg_loss
+            accelerator.backward(loss)
+            optimizer.step()
+            optimizer.zero_grad()
+            with torch.no_grad():
+                prob_dist = torch.nn.functional.softmax(logits, dim=-1)
+                entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1)
+                approxkl = 0.5 * (logprobs_diff**2).mean()
+
+        # del everything and empty cache
+        # fmt: off
+        del (
+            output, logits, new_all_logprobs, new_logprobs,
+            logprobs_diff, ratio, pg_losses, pg_losses2,
+            pg_loss, loss, pg_clipfrac, prob_dist, entropy, approxkl,
+        )
+        # fmt: on
+        torch.cuda.empty_cache()
+
+        with torch.no_grad():
+            rlhf_reward_mean = self.accelerator.gather(rlhf_reward).mean().item()
+            accelerator.print(f"{rlhf_reward_mean=}")
+            mean_kl = kl.sum(1).mean()
+            mean_entropy = (-logprobs).sum(1).mean()
+            # PR TODO: why is this metric removed?
+            # mean_non_score_reward = non_score_reward.sum(1).mean()
+
+            self.log({
+                "objective/kl": self.accelerator.gather(mean_kl).mean().item(),
+                "objective/entropy": self.accelerator.gather(mean_entropy).mean().item(),
+                "objective/non_score_reward": self.accelerator.gather(mean_non_score_reward).mean().item(),
+                "objective/rlhf_reward": self.accelerator.gather(rlhf_reward).mean().item(),
+                "objective/scores": self.accelerator.gather(scores.mean()).mean().item(),
+                "policy/approxkl_avg": self.accelerator.gather(approxkl).mean().item(),
+                "policy/clipfrac_avg": self.accelerator.gather(pg_clipfrac).mean().item(),
+                "loss/policy_avg": self.accelerator.gather(pg_loss).mean().item(),
+                "loss/value_avg": self.accelerator.gather(vf_loss_stats).mean().item(),
+                "val/clipfrac_avg": self.accelerator.gather(vf_clipfrac_stats).mean().item(),
+                "policy/entropy_avg": self.accelerator.gather(entropy).mean().item(),
+                "val/ratio": self.accelerator.gather(new_ratio).mean().item(),
+                "val/ratio_var": self.accelerator.gather(ratio_stats).var().item(),
+                "val/num_eos_tokens": responses == tokenizer.eos_token_id).sum().item(),
+            })
+
+        del kl, mean_kl, mean_entropy, scores
+        torch.cuda.empty_cache()
+
+        return loss.detach() / self.args.gradient_accumulation_steps
+
+
+if __name__ == "__main__":
+    pass
