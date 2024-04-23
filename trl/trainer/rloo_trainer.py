@@ -1,10 +1,10 @@
+from copy import deepcopy
 import os
 import time
 from dataclasses import dataclass
 from typing import Dict, List, Literal, Optional, Tuple, Union, Callable, Any
 import warnings
 
-import collections
 import numpy as np
 import torch
 import torch.nn as nn
@@ -30,6 +30,8 @@ from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer_callback import CallbackHandler, DefaultFlowCallback
 
 from ..models import SUPPORTED_ARCHITECTURES, create_reference_model, PreTrainedModelWrapper
+
+from ppo_trainer import PPOTrainer
 
 
 INVALID_LOGPROB = 1.0
@@ -192,6 +194,8 @@ class RLOOTrainer(Trainer):
             **kwargs,
         )
 
+        self._prepare_multigpu()
+
         #########################
         # Prepare reference model
         #########################
@@ -223,6 +227,62 @@ class RLOOTrainer(Trainer):
         if self.reward_model is not None:
             disable_dropout(self.reward_model)
 
+
+    def _prepare_multigpu(self):
+        if not hasattr(self, "accelerator"):
+            raise AttributeError(
+                "Your `Trainer` does not have an `accelerator` object. Consider upgrading `transformers`."
+            )
+
+        # Deepspeed Zero-3 does not support precompute_ref_log_probs
+        if self.is_deepspeed_enabled:
+            if self.accelerator.state.deepspeed_plugin.zero_stage == 3 and self.precompute_ref_log_probs:
+                raise ValueError(
+                    "You cannot use `precompute_ref_log_probs=True` with Deepspeed ZeRO-3. Please set `precompute_ref_log_probs=False`."
+                )
+
+        if self.ref_model is None:
+            if not (self.is_peft_model or self.precompute_ref_log_probs):
+                raise ValueError(
+                    "No reference model and model is not a Peft model. Try setting `precompute_ref_log_probs=True`"
+                )
+        else:
+            if self.is_deepspeed_enabled:
+                self.ref_model = self._prepare_deepspeed(self.ref_model)
+            else:
+                self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
+
+
+    def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
+        # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
+        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
+        config_kwargs = deepcopy(deepspeed_plugin.deepspeed_config)
+
+        if model is not None:
+            if hasattr(model, "config"):
+                hidden_size = (
+                    max(model.config.hidden_sizes)
+                    if getattr(model.config, "hidden_sizes", None)
+                    else getattr(model.config, "hidden_size", None)
+                )
+                if hidden_size is not None and config_kwargs["zero_optimization"]["stage"] == 3:
+                    # Note that `stage3_prefetch_bucket_size` can produce DeepSpeed messages like: `Invalidate trace cache @ step 0: expected module 1, but got module 0`
+                    # This is expected and is not an error, see: https://github.com/microsoft/DeepSpeed/discussions/4081
+                    config_kwargs.update(
+                        {
+                            "zero_optimization.reduce_bucket_size": hidden_size * hidden_size,
+                            "zero_optimization.stage3_param_persistence_threshold": 10 * hidden_size,
+                            "zero_optimization.stage3_prefetch_bucket_size": 0.9 * hidden_size * hidden_size,
+                        }
+                    )
+
+        # If ZeRO-3 is used, we shard both the active and reference model.
+        # Otherwise, we assume the reference model fits in memory and is initialized on each device with ZeRO disabled (stage 0)
+        if config_kwargs["zero_optimization"]["stage"] != 3:
+            config_kwargs["zero_optimization"]["stage"] = 0
+        model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
+        model.eval()
+        return model
 
     def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         """
