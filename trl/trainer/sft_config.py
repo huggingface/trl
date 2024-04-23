@@ -24,12 +24,12 @@ class SFTConfig(TrainingArguments):
         The name of the text field of the dataset, in case this is passed by a user, the trainer will automatically create a
         `ConstantLengthDataset` based on the `dataset_text_field` argument. Defaults to None.
     packing (`Optional[bool]`):
-            Used only in case `dataset_text_field` is passed. This argument is used by the `ConstantLengthDataset` to pack the sequences
-            of the dataset. Defaults to False.
+        Used only in case `dataset_text_field` is passed. This argument is used by the `ConstantLengthDataset` to pack the sequences
+        of the dataset. Defaults to False.
     max_seq_length (`Optional[int]`):
         The maximum sequence length to use for the `ConstantLengthDataset` and for automatically creating the Dataset. Defaults to min of the smaller of the `tokenizer.model_max_length` and `1024`.
     dataset_num_proc (`Optional[int]`):
-            The number of workers to use to tokenize the data. Only used when `packing=False`. Defaults to None.
+        The number of workers to use to tokenize the data. Only used when `packing=False`. Defaults to None.
     dataset_batch_size (`int`):
         The number of examples to tokenize per batch. If batch_size <= 0 or batch_size == None,
         tokenize the full dataset as a single batch. Defaults to 1000.
@@ -43,10 +43,10 @@ class SFTConfig(TrainingArguments):
     eval_packing: (`Optional[bool]`, *optional*):
         Whether to pack the eval dataset as well. Defaults to `packing` if `None` is passed.
     num_of_sequences (`Optional[int]`):
-            The number of sequences to use for the `ConstantLengthDataset`. Defaults to `1024`.
+        The number of sequences to use for the `ConstantLengthDataset`. Defaults to `1024`.
     chars_per_token (`Optional[float]`):
-            The number of characters per token to use for the `ConstantLengthDataset`. Defaults to `3.6`. You can check how this is computed in the
-            stack-llama example: https://github.com/huggingface/trl/blob/08f550674c553c36c51d1027613c29f14f3676a5/examples/stack_llama/scripts/supervised_finetuning.py#L53.
+        The number of characters per token to use for the `ConstantLengthDataset`. Defaults to `3.6`. You can check how this is computed in the
+        stack-llama example: https://github.com/huggingface/trl/blob/08f550674c553c36c51d1027613c29f14f3676a5/examples/stack_llama/scripts/supervised_finetuning.py#L53.
     """
 
     dataset_text_field: Optional[str] = None
