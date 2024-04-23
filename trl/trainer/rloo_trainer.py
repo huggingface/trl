@@ -1,7 +1,7 @@
 import os
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Literal, Optional, Tuple, Union
+from typing import Dict, List, Literal, Optional, Tuple, Union, Callable
 import warnings
 
 import collections
@@ -195,8 +195,8 @@ class RLOOTrainer(Trainer):
             model: Optional[PreTrainedModelWrapper],
             args: RLOOConfig,
             train_dataset: Union[Dataset, IterableDataset, "datasets.Dataset"],
-            reward_model: "PR TODO: type hint" = None,
-            reward_fn: "PR TODO: type hint" = None,
+            reward_model: Optional[PreTrainedModelWrapper] = None,
+            reward_fn: Callable = None,
             ref_model: Optional[PreTrainedModelWrapper] = None,
             train_generation_config: Optional[GenerationConfig] = None,
             eval_generation_config: Optional[GenerationConfig] = None,
@@ -207,7 +207,6 @@ class RLOOTrainer(Trainer):
         assert (reward_model is not None) != (reward_fn is not None), "Must set either reward_model or reward_fn, but not both"
         self.reward_model = reward_model
         self.reward_fn = reward_fn
-        # PR TODO: implement use of custom reward_fn
 
 
         default_generation_config = GenerationConfig(
