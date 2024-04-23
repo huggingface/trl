@@ -267,7 +267,7 @@ class TrlParser(HfArgumentParser):
             if dataclass_obj.__class__.__name__ == "TrainingArguments":
                 training_args = dataclass_obj
                 training_args_index = i
-            elif dataclass_obj.__class__.__name__ in ("SftScriptArguments", "DpoScriptArguments"):
+            elif dataclass_obj.__class__.__name__ in ("SftScriptArguments", "DPOScriptArguments"):
                 trl_args = dataclass_obj
             else:
                 ...

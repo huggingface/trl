@@ -57,7 +57,7 @@ from contextlib import nullcontext
 
 TRL_USE_RICH = os.environ.get("TRL_USE_RICH", False)
 
-from trl.commands.cli_utils import DpoScriptArguments, init_zero_verbose, TrlParser
+from trl.commands.cli_utils import DPOScriptArguments, init_zero_verbose, TrlParser
 
 if TRL_USE_RICH:
     init_zero_verbose()
@@ -86,7 +86,7 @@ if TRL_USE_RICH:
 
 
 if __name__ == "__main__":
-    parser = TrlParser((DpoScriptArguments, DPOConfig, ModelConfig))
+    parser = TrlParser((DPOScriptArguments, DPOConfig, ModelConfig))
     args, training_args, model_config = parser.parse_args_and_config()
 
     # Force use our print callback
@@ -157,8 +157,8 @@ if __name__ == "__main__":
         num_proc=multiprocessing.cpu_count(),
         load_from_cache_file=False,
     )
-    train_dataset = ds[args.dataset_train_name]
-    eval_dataset = ds[args.dataset_test_name]
+    train_dataset = ds[args.dataset_train_split]
+    eval_dataset = ds[args.dataset_test_split]
 
     ################
     # Training
