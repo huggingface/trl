@@ -394,7 +394,7 @@ class DPOTrainerTester(unittest.TestCase):
         # Note this test only works on compute capability > 7 GPU devices
         from peft import LoraConfig
 
-        model_id = "HuggingFaceM4/tiny-random-LlamaForCausalLM"
+        model_id = "trl-internal-testing/tiny-random-LlamaForCausalLM"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         lora_config = LoraConfig(
@@ -519,7 +519,7 @@ class DPOTrainerTester(unittest.TestCase):
     def test_dpo_lora_tags(self):
         from peft import LoraConfig
 
-        model_id = "HuggingFaceM4/tiny-random-LlamaForCausalLM"
+        model_id = "trl-internal-testing/tiny-random-LlamaForCausalLM"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         lora_config = LoraConfig(
