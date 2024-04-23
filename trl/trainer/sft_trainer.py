@@ -468,6 +468,11 @@ class SFTTrainer(Trainer):
             dataset.column_names if isinstance(dataset, (datasets.Dataset, datasets.IterableDataset)) else None
         )
         if column_names and "input_ids" in column_names:
+            if formatting_func is not None:
+                warnings.warn(
+                    "You passed a dataset that is already processed (contains an `input_ids` field) together with a valid formatting function. Therefore `formatting_func` will be ignored."
+                )
+
             return dataset
 
         # check if torch dataset / dataloader and do nothing
