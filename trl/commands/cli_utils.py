@@ -154,7 +154,7 @@ class SftScriptArguments:
 
 
 @dataclass
-class DpoScriptArguments:
+class DPOScriptArguments:
     dataset_name: str = field(default=None, metadata={"help": "the dataset name"})
     dataset_train_name: str = field(default="train", metadata={"help": "the name of the training set of the dataset"})
     dataset_test_name: str = field(default="test", metadata={"help": "the name of the training set of the dataset"})
