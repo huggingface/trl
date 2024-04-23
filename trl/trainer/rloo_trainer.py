@@ -237,7 +237,9 @@ class RLOOTrainer(Trainer):
 
     def _prepare_multigpu(self):
         # Deepspeed Zero-3 does not support precompute_ref_log_probs
-        if self.is_deepspeed_enabled:
+        if self.ref_model is None:
+            return
+        elif self.is_deepspeed_enabled:
             self.ref_model = self._prepare_deepspeed(self.ref_model)
         else:
             self.ref_model = self.accelerator.prepare_model(
