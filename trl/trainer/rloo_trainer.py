@@ -230,7 +230,7 @@ class RLOOTrainer(Trainer):
         # disable dropout
         #########
         # PR TODO: review the below, I'm not sure why we disable dropout
-        for module in [model, ref_model, reward_model]:
+        for module in [model, ref_model]:
             disable_dropout(module)
         if self.reward_model is not None:
             disable_dropout(self.reward_model)
