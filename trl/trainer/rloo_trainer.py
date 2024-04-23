@@ -236,29 +236,14 @@ class RLOOTrainer(Trainer):
 
 
     def _prepare_multigpu(self):
-        if not hasattr(self, "accelerator"):
-            raise AttributeError(
-                "Your `Trainer` does not have an `accelerator` object. Consider upgrading `transformers`."
-            )
-
         # Deepspeed Zero-3 does not support precompute_ref_log_probs
         if self.is_deepspeed_enabled:
-            if self.accelerator.state.deepspeed_plugin.zero_stage == 3 and self.precompute_ref_log_probs:
-                raise ValueError(
-                    "You cannot use `precompute_ref_log_probs=True` with Deepspeed ZeRO-3. Please set `precompute_ref_log_probs=False`."
-                )
-
-        if self.ref_model is None:
-            if not (self.is_peft_model or self.precompute_ref_log_probs):
-                raise ValueError(
-                    "No reference model and model is not a Peft model. Try setting `precompute_ref_log_probs=True`"
-                )
+            self.ref_model = self._prepare_deepspeed(self.ref_model)
         else:
-            if self.is_deepspeed_enabled:
-                self.ref_model = self._prepare_deepspeed(self.ref_model)
-            else:
-                self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
-
+            self.ref_model = self.accelerator.prepare_model(
+                self.ref_model,
+                evaluation_mode=True
+            )
 
     def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
         # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
