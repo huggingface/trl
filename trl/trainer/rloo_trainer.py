@@ -27,8 +27,6 @@ from transformers import (
     TrainingArguments,
     PreTrainedTokenizerBase
 )
-from transformers.integrations import get_reporting_integration_callbacks
-from transformers.trainer_callback import CallbackHandler, DefaultFlowCallback
 
 from ..models import SUPPORTED_ARCHITECTURES, create_reference_model, PreTrainedModelWrapper
 
@@ -287,6 +285,7 @@ class RLOOTrainer(Trainer):
         model.train()
         inputs = self._prepare_inputs(inputs)
 
+        print(queries)
         queries = inputs["input_ids"].to(device)
         queries = queries.repeat(self.args.rloo_k, 1)
         context_length = queries.shape[1]
