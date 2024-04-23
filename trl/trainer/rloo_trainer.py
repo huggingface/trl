@@ -32,6 +32,8 @@ from transformers.trainer_callback import CallbackHandler, DefaultFlowCallback
 from ..models import SUPPORTED_ARCHITECTURES, create_reference_model, PreTrainedModelWrapper
 
 
+from ..import_utils import is_peft_available
+
 if is_peft_available():
     from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
 
