@@ -1,4 +1,4 @@
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 import os
 import time
 from dataclasses import dataclass
@@ -485,9 +485,12 @@ class PPOTrainer(Trainer):
             self.model = self.accelerator.unwrap_model(self.model).policy # save only the policy
         if output_dir is None:
             output_dir = self.args.output_dir
-        state_dict = self.accelerator.get_state_dict(self.model)
+        state_dict = self.accelerator.get_state_dict(self.backup_model)
+        policy_state_dict = state_dict
+        if self.accelerator.is_main_process:
+            policy_state_dict = OrderedDict({k[len("policy."):]: v for k, v in state_dict.items() if k.startswith("policy.")})
         if self.args.should_save:
-            self._save(output_dir, state_dict=state_dict)
+            self._save(output_dir, state_dict=policy_state_dict)
         if not _internal_call:
             self.model = self.backup_model
 
@@ -796,18 +799,26 @@ class PPOTrainer(Trainer):
         for batch in self.eval_dataloader:
             query = batch["input_ids"]
             name = f"trained {args.base_model}"
-            
-            context_length = query.shape[1]
-            with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
-                query_response, _ = generate(
-                    unwrapped_model.policy,
-                    query,
-                    self.tokenizer,
-                    generation_config,
-                )
-            generation = query_response[:, context_length:]
-            table["query"].extend(gather_object(self.tokenizer.batch_decode(query, skip_special_tokens=True)))
-            table[name].extend(gather_object(self.tokenizer.batch_decode(generation, skip_special_tokens=True)))
+            with torch.no_grad():
+                context_length = query.shape[1]
+                with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
+                    query_response, _ = generate(
+                        unwrapped_model.policy,
+                        query,
+                        self.tokenizer,
+                        generation_config,
+                    )
+                response = query_response[:, context_length:]
+                postprocessed_response = response
+                if args.truncate_token_id:
+                    postprocessed_response = truncate_response(args, self.tokenizer, response)
+                table["query"].extend(gather_object(self.tokenizer.batch_decode(query, skip_special_tokens=True)))
+                table[name].extend(gather_object(self.tokenizer.batch_decode(postprocessed_response)))
+
+                postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
+                _, score, _ = get_reward(self.reward_model, postprocessed_query_response, self.tokenizer, context_length)
+                table["score"].extend(self.accelerator.gather(score).float().cpu().numpy())
+
             if sampling:
                 break
         df = pd.DataFrame(table)

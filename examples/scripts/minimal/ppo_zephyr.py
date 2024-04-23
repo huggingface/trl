@@ -35,7 +35,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
     --output_dir models/minimal/ppo_zephyr1 \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 32 \
-    --total_episodes 10000 \
+    --total_episodes 200000 \
     --base_model HuggingFaceH4/mistral-7b-sft-beta \
     --sft_model_path HuggingFaceH4/mistral-7b-sft-beta \
     --reward_model_path weqweasdas/RM-Mistral-7B \
@@ -43,7 +43,8 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
     --deepspeed3 \
     --kl_coef 0.10 \
     --non_eos_penalty \
-    --response_length 256 \
+    --truncate_token eos \
+    --response_length 128 \
 """
 
 
@@ -137,8 +138,7 @@ if __name__ == "__main__":
         ),
     )
     trainer.train()
-    # trainer.save_model(args.output_dir)
-    # trainer.generate_completions(True)
-    # trainer.push_to_hub()
-    # trainer.push_to_hub()
+    trainer.save_model(args.output_dir)
+    trainer.push_to_hub()
+    trainer.generate_completions(True)
 
