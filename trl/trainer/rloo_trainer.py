@@ -285,7 +285,7 @@ class RLOOTrainer(Trainer):
         model.train()
         inputs = self._prepare_inputs(inputs)
 
-        print(queries)
+        print(inputs)
         queries = inputs["input_ids"].to(device)
         queries = queries.repeat(self.args.rloo_k, 1)
         context_length = queries.shape[1]
