@@ -236,30 +236,24 @@ class RLOOTrainer(Trainer):
         #########################
         # Prepare reference model
         #########################
+        self.is_peft_model = getattr(self.model, "is_peft_model", False)
         if isinstance(ref_model, SUPPORTED_ARCHITECTURES):
             self.ref_model = ref_model
-            if num_shared_layers is not None:
-                warnings.warn(
-                    "num_shared_layers is ignored when ref_model is provided. Two different models are used for the "
-                    "model and the reference model and no layers are shared.",
-                    UserWarning,
-                )
         elif ref_model is None and not self.is_peft_model:
             self.ref_model = create_reference_model(self.model, num_shared_layers=num_shared_layers)
         elif self.is_peft_model:
             self.ref_model = None
         else:
             raise ValueError(
-                f"ref_model must be a PreTrainedModelWrapper or `None`, got {type(ref_model)} - supported "
-                f"architectures are: {SUPPORTED_ARCHITECTURES} "
+                f"ref_model must be a PreTrainedModelWrapper or `None` "
+                f"got {type(ref_model)} "
+                f"- supported architectures are: {SUPPORTED_ARCHITECTURES} "
             )
         self.optional_peft_ctx = (
             self.accelerator.unwrap_model(self.model).pretrained_model.disable_adapter
             if self.is_peft_model
             else nullcontext
         )
-        # PR TODO: setup peft_ctx for generate()
-
 
         #########
         # disable dropout
