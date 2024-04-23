@@ -4,6 +4,7 @@ import time
 from dataclasses import dataclass
 from typing import Dict, List, Literal, Optional, Tuple, Union, Callable, Any
 import warnings
+from contextlib import nullcontext
 
 import numpy as np
 import torch
