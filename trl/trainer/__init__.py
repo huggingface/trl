@@ -46,6 +46,7 @@ _import_structure = {
     "ppo_trainer": ["PPOTrainer"],
     "reward_config": ["RewardConfig"],
     "reward_trainer": ["RewardTrainer", "compute_accuracy"],
+    "rloo_trainer": ["RLOOTrainer"],
     "sft_trainer": ["SFTTrainer"],
     "base": ["BaseTrainer"],
     "ddpo_config": ["DDPOConfig"],
