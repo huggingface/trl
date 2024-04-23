@@ -72,7 +72,7 @@ class PPOConfig(TrainingArguments):
     """The batch size per GPU (HF's `per_device_train_batch_size` * `gradient_accumulation_steps`)"""
     batch_size: Optional[int] = None
     """The batch size across devices (HF's `per_device_train_batch_size` * `world_size` * `gradient_accumulation_steps`)"""
-    nminibatches: int = 1
+    num_mini_batches: int = 1
     """Number of minibatches to split a batch into"""
     local_mini_batch_size: Optional[int] = None
     """the mini batch size per GPU"""
@@ -108,9 +108,7 @@ class PPOConfig(TrainingArguments):
     """the path to the sft model"""
 
     # ppo args
-    nminibatches: int = 1
-    """the number of minibatches to split a batch into"""
-    noptepochs: int = 4
+    num_ppo_epochs: int = 4
     """the number of epochs to train"""
     vf_coef: float = 0.1
     """the value function coefficient"""
@@ -340,11 +338,9 @@ class PPOTrainer(Trainer):
         ref_policy: nn.Module,
         reward_model: nn.Module,
         train_dataset: Dataset,
-        train_generation_config: GenerationConfig,
         value_model: Optional[nn.Module] = None,
         data_collator: Optional[DataCollatorWithPadding] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
-        eval_generation_config: Optional[GenerationConfig] = None,
         # less commonly used
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         # compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
@@ -363,13 +359,9 @@ class PPOTrainer(Trainer):
         self.reward_model = reward_model
         self.train_dataset = train_dataset
         self.train_dataset_len = len(train_dataset)
-        self.train_generation_config = train_generation_config
         self.value_model = value_model
         self.data_collator = data_collator
         self.eval_dataset = eval_dataset
-        self.eval_generation_config = eval_generation_config
-        if eval_generation_config is None:
-            self.eval_generation_config = train_generation_config
         self.optimizer, self.lr_scheduler = optimizers
         self.callbacks = callbacks
 
@@ -379,11 +371,11 @@ class PPOTrainer(Trainer):
         accelerator = Accelerator(gradient_accumulation_steps=args.gradient_accumulation_steps)
         self.accelerator = accelerator
         args.world_size = accelerator.num_processes
-        args.local_batch_size = args.per_device_train_batch_size * args.gradient_accumulation_steps * args.nminibatches
+        args.local_batch_size = args.per_device_train_batch_size * args.gradient_accumulation_steps * args.num_mini_batches
         args.micro_batch_size = int(args.per_device_train_batch_size * args.world_size)
         args.batch_size = int(args.local_batch_size * args.world_size)
-        args.mini_batch_size = exact_div(args.batch_size, args.nminibatches)
-        args.local_mini_batch_size = exact_div(args.local_batch_size, args.nminibatches)
+        args.mini_batch_size = exact_div(args.batch_size, args.num_mini_batches)
+        args.local_mini_batch_size = exact_div(args.local_batch_size, args.num_mini_batches)
         if args.whiten_rewards:
             assert (
                 args.local_mini_batch_size >= 8
@@ -533,7 +525,7 @@ class PPOTrainer(Trainer):
         accelerator.print("===training policy===")
         global_step = 0
         start_time = time.time()
-        stats_shape = (args.noptepochs, args.nminibatches, args.gradient_accumulation_steps)
+        stats_shape = (args.num_ppo_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
         approxkl_stats = torch.zeros(stats_shape, device=device)
         pg_clipfrac_stats = torch.zeros(stats_shape, device=device)
         pg_loss_stats = torch.zeros(stats_shape, device=device)
@@ -664,7 +656,7 @@ class PPOTrainer(Trainer):
                 torch.cuda.empty_cache()
 
             # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
-            for ppo_epoch_idx in range(args.noptepochs):
+            for ppo_epoch_idx in range(args.num_ppo_epochs):
                 b_inds = np.random.permutation(args.local_batch_size)
                 minibatch_idx = 0
                 for mini_batch_start in range(0, args.local_batch_size, args.local_mini_batch_size):

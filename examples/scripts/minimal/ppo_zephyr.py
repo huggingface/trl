@@ -29,8 +29,8 @@ python -i examples/scripts/minimal/ppo_zephyr.py \
     
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/minimal/ppo_zephyr.py \
-    --noptepochs 1 \
-    --nminibatches 1 \
+    --num_ppo_epochs 1 \
+    --num_mini_batches 1 \
     --learning_rate 3e-6 \
     --output_dir models/minimal/ppo_zephyr1 \
     --per_device_train_batch_size 1 \
