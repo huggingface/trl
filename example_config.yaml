@@ -7,7 +7,7 @@
 #   CUDA_VISIBLE_DEVICES: 0
 
 model_name_or_path:
-  HuggingFaceM4/tiny-random-LlamaForCausalLM
+  trl-internal-testing/tiny-random-LlamaForCausalLM
 dataset_name:
   imdb
 dataset_text_field:
