@@ -52,7 +52,7 @@ _import_structure = {
         "SFTTrainer",
     ],
     "commands": [],
-    "commands.cli_utils": ["init_zero_verbose", "SftScriptArguments", "DpoScriptArguments", "TrlParser"],
+    "commands.cli_utils": ["init_zero_verbose", "SFTScriptArguments", "DpoScriptArguments", "TrlParser"],
     "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config", "RichProgressCallback"],
     "multitask_prompt_tuning": [
         "MultitaskPromptEmbedding",
@@ -117,7 +117,7 @@ if TYPE_CHECKING:
         SFTTrainer,
     )
     from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config, RichProgressCallback
-    from .commands.cli_utils import init_zero_verbose, SftScriptArguments, DpoScriptArguments, TrlParser
+    from .commands.cli_utils import init_zero_verbose, SFTScriptArguments, DpoScriptArguments, TrlParser
 
     try:
         if not is_diffusers_available():

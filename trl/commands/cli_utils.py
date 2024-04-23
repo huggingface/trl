@@ -140,7 +140,7 @@ def init_zero_verbose():
 
 
 @dataclass
-class SftScriptArguments:
+class SFTScriptArguments:
     dataset_name: str = field(default="timdettmers/openassistant-guanaco", metadata={"help": "the dataset name"})
     dataset_train_split: str = field(default="train", metadata={"help": "The dataset split to train on"})
     dataset_test_split: str = field(default="test", metadata={"help": "The dataset split to evaluate on"})
@@ -269,7 +269,7 @@ class TrlParser(HfArgumentParser):
             if dataclass_obj.__class__.__name__ == "TrainingArguments":
                 training_args = dataclass_obj
                 training_args_index = i
-            elif dataclass_obj.__class__.__name__ in ("SftScriptArguments", "DpoScriptArguments"):
+            elif dataclass_obj.__class__.__name__ in ("SFTScriptArguments", "DpoScriptArguments"):
                 trl_args = dataclass_obj
             else:
                 ...

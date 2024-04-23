@@ -70,7 +70,7 @@ from contextlib import nullcontext
 
 TRL_USE_RICH = os.environ.get("TRL_USE_RICH", False)
 
-from trl.commands.cli_utils import init_zero_verbose, SftScriptArguments, TrlParser
+from trl.commands.cli_utils import init_zero_verbose, SFTScriptArguments, TrlParser
 
 if TRL_USE_RICH:
     init_zero_verbose()
@@ -103,7 +103,7 @@ if TRL_USE_RICH:
 
 
 if __name__ == "__main__":
-    parser = TrlParser((SftScriptArguments, SFTConfig, ModelConfig))
+    parser = TrlParser((SFTScriptArguments, SFTConfig, ModelConfig))
     sft_script_args, training_args, model_config = parser.parse_args_and_config()
     training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
     # Force use our print callback
@@ -173,8 +173,8 @@ if __name__ == "__main__":
     # Dataset
     ################
     raw_datasets = load_dataset(sft_script_args.dataset_name)
-    train_dataset = raw_datasets[sft_script_args.dataset_train_name]
-    eval_dataset = raw_datasets[sft_script_args.dataset_test_name]
+    train_dataset = raw_datasets[sft_script_args.dataset_train_split]
+    eval_dataset = raw_datasets[sft_script_args.dataset_test_split]
 
     ################
     # Optional rich context managers
