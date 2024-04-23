@@ -143,7 +143,7 @@ def init_zero_verbose():
 class SftScriptArguments:
     dataset_name: str = field(default="timdettmers/openassistant-guanaco", metadata={"help": "the dataset name"})
     dataset_train_split: str = field(default="train", metadata={"help": "The dataset split to train on"})
-    dataset_test_name: str = field(default="test", metadata={"help": "the name of the training set of the dataset"})
+    dataset_test_split: str = field(default="test", metadata={"help": "The dataset split to evaluate on"})
     config: str = field(default=None, metadata={"help": "Path to the optional config file"})
     gradient_checkpointing_use_reentrant: bool = field(
         default=False, metadata={"help": "Whether to apply `use_reentrant` for gradient_checkpointing"}
