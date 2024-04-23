@@ -24,6 +24,7 @@ from transformers import (
     TrainerControl,
     TrainerState,
     TrainingArguments,
+    PreTrainedTokenizerBase
 )
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer_callback import CallbackHandler, DefaultFlowCallback
