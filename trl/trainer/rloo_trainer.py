@@ -164,6 +164,7 @@ class RLOOTrainer(Trainer):
     ) -> None:
 
         self.ref_model = ref_model
+        self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
 
         assert (reward_model is not None) != (reward_fn is not None), "Must set either reward_model or reward_fn, but not both"
         self.reward_model = reward_model
