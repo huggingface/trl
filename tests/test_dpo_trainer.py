@@ -18,9 +18,9 @@ import torch
 from datasets import Dataset
 from parameterized import parameterized
 from pytest import mark
-from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer, TrainingArguments
+from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
-from trl import DPOTrainer
+from trl import DPOConfig, DPOTrainer
 
 from .testing_utils import require_bitsandbytes, require_no_wandb, require_peft
 
@@ -94,7 +94,7 @@ class DPOTrainerTester(unittest.TestCase):
     )
     def test_dpo_trainer(self, name, loss_type, pre_compute):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = DPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -102,6 +102,9 @@ class DPOTrainerTester(unittest.TestCase):
                 gradient_accumulation_steps=1,
                 learning_rate=9e-1,
                 evaluation_strategy="steps",
+                beta=0.1,
+                loss_type=loss_type,
+                precompute_ref_log_probs=pre_compute,
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -118,13 +121,10 @@ class DPOTrainerTester(unittest.TestCase):
             trainer = DPOTrainer(
                 model=model,
                 ref_model=ref_model,
-                beta=0.1,
-                loss_type=loss_type,
                 args=training_args,
                 tokenizer=tokenizer,
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
-                precompute_ref_log_probs=pre_compute,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -142,7 +142,7 @@ class DPOTrainerTester(unittest.TestCase):
 
     def test_dpo_trainer_without_providing_ref_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = DPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -150,6 +150,8 @@ class DPOTrainerTester(unittest.TestCase):
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
                 evaluation_strategy="steps",
+                beta=0.1,
+                precompute_ref_log_probs=True,
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -157,12 +159,10 @@ class DPOTrainerTester(unittest.TestCase):
             trainer = DPOTrainer(
                 model=self.model,
                 ref_model=None,
-                beta=0.1,
                 args=training_args,
                 tokenizer=self.tokenizer,
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
-                precompute_ref_log_probs=True,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -192,7 +192,7 @@ class DPOTrainerTester(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = DPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -200,6 +200,8 @@ class DPOTrainerTester(unittest.TestCase):
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
                 evaluation_strategy="steps",
+                beta=0.1,
+                precompute_ref_log_probs=True,
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -207,13 +209,11 @@ class DPOTrainerTester(unittest.TestCase):
             trainer = DPOTrainer(
                 model=self.model,
                 ref_model=None,
-                beta=0.1,
                 args=training_args,
                 tokenizer=self.tokenizer,
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
                 peft_config=lora_config,
-                precompute_ref_log_probs=True,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -232,7 +232,7 @@ class DPOTrainerTester(unittest.TestCase):
 
     def test_dpo_trainer_padding_token_is_none(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = DPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -240,6 +240,7 @@ class DPOTrainerTester(unittest.TestCase):
                 gradient_accumulation_steps=1,
                 learning_rate=9e-1,
                 evaluation_strategy="steps",
+                beta=0.1,
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -256,7 +257,6 @@ class DPOTrainerTester(unittest.TestCase):
                 trainer = DPOTrainer(
                     model=self.model,
                     ref_model=None,
-                    beta=0.1,
                     args=training_args,
                     tokenizer=tokenizer,
                     train_dataset=dummy_dataset,
@@ -267,7 +267,7 @@ class DPOTrainerTester(unittest.TestCase):
 
     def test_dpo_trainer_w_dataset_num_proc(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = DPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -275,6 +275,8 @@ class DPOTrainerTester(unittest.TestCase):
                 gradient_accumulation_steps=1,
                 learning_rate=9e-1,
                 evaluation_strategy="steps",
+                beta=0.1,
+                dataset_num_proc=5,
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -291,12 +293,10 @@ class DPOTrainerTester(unittest.TestCase):
                 trainer = DPOTrainer(
                     model=self.model,
                     ref_model=None,
-                    beta=0.1,
                     args=training_args,
                     tokenizer=tokenizer,
                     train_dataset=dummy_dataset,
                     eval_dataset=dummy_dataset,
-                    dataset_num_proc=5,
                 )
 
                 trainer.train()
@@ -304,7 +304,7 @@ class DPOTrainerTester(unittest.TestCase):
     @require_no_wandb
     def test_dpo_trainer_generate_during_eval_no_wandb(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = DPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -312,6 +312,8 @@ class DPOTrainerTester(unittest.TestCase):
                 gradient_accumulation_steps=1,
                 learning_rate=9e-1,
                 evaluation_strategy="steps",
+                beta=0.1,
+                generate_during_eval=True,
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -324,12 +326,10 @@ class DPOTrainerTester(unittest.TestCase):
                 DPOTrainer(
                     model=self.model,
                     ref_model=None,
-                    beta=0.1,
                     args=training_args,
                     tokenizer=self.tokenizer,
                     train_dataset=dummy_dataset,
                     eval_dataset=dummy_dataset,
-                    generate_during_eval=True,
                 )
 
     @require_peft
@@ -350,7 +350,7 @@ class DPOTrainerTester(unittest.TestCase):
         model_peft = get_peft_model(model, lora_config)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = DPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -358,6 +358,8 @@ class DPOTrainerTester(unittest.TestCase):
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
                 evaluation_strategy="steps",
+                beta=0.1,
+                precompute_ref_log_probs=True,
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -366,13 +368,11 @@ class DPOTrainerTester(unittest.TestCase):
             trainer = DPOTrainer(
                 model=model_peft,
                 ref_model=None,
-                beta=0.1,
                 args=training_args,
                 tokenizer=self.tokenizer,
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
                 peft_config=lora_config,
-                precompute_ref_log_probs=True,
             )
 
             # train the model
@@ -409,7 +409,7 @@ class DPOTrainerTester(unittest.TestCase):
         model = AutoModelForCausalLM.from_pretrained(model_id, load_in_4bit=True)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = DPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -418,6 +418,8 @@ class DPOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 evaluation_strategy="steps",
                 bf16=True,
+                beta=0.1,
+                generate_during_eval=True,
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -426,13 +428,11 @@ class DPOTrainerTester(unittest.TestCase):
             trainer = DPOTrainer(
                 model=model,
                 ref_model=None,
-                beta=0.1,
                 args=training_args,
                 tokenizer=tokenizer,
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
                 peft_config=lora_config,
-                generate_during_eval=True,
             )
 
             # train the model
@@ -481,7 +481,7 @@ class DPOTrainerTester(unittest.TestCase):
         model = AutoModelForCausalLM.from_pretrained(self.model_id, load_in_4bit=True)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = DPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -490,6 +490,10 @@ class DPOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 evaluation_strategy="steps",
                 bf16=True,
+                beta=0.1,
+                generate_during_eval=gen_during_eval,
+                loss_type=loss_type,
+                precompute_ref_log_probs=pre_compute,
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -498,15 +502,11 @@ class DPOTrainerTester(unittest.TestCase):
             trainer = DPOTrainer(
                 model=model,
                 ref_model=None,
-                beta=0.1,
                 args=training_args,
                 tokenizer=self.tokenizer,
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
                 peft_config=lora_config,
-                generate_during_eval=gen_during_eval,
-                loss_type=loss_type,
-                precompute_ref_log_probs=pre_compute,
             )
 
             # train the model
@@ -534,7 +534,7 @@ class DPOTrainerTester(unittest.TestCase):
         model = AutoModelForCausalLM.from_pretrained(model_id)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = DPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -542,6 +542,7 @@ class DPOTrainerTester(unittest.TestCase):
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
                 evaluation_strategy="steps",
+                beta=0.1,
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -550,7 +551,6 @@ class DPOTrainerTester(unittest.TestCase):
             trainer = DPOTrainer(
                 model=model,
                 ref_model=None,
-                beta=0.1,
                 args=training_args,
                 tokenizer=tokenizer,
                 train_dataset=dummy_dataset,
@@ -569,7 +569,7 @@ class DPOTrainerTester(unittest.TestCase):
         model = AutoModelForCausalLM.from_pretrained(model_id)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = DPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -577,6 +577,7 @@ class DPOTrainerTester(unittest.TestCase):
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
                 evaluation_strategy="steps",
+                beta=0.1,
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -585,7 +586,6 @@ class DPOTrainerTester(unittest.TestCase):
             trainer = DPOTrainer(
                 model=model,
                 ref_model=None,
-                beta=0.1,
                 args=training_args,
                 tokenizer=tokenizer,
                 train_dataset=dummy_dataset,
@@ -614,7 +614,7 @@ class DPOTrainerTester(unittest.TestCase):
         ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = DPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -622,6 +622,7 @@ class DPOTrainerTester(unittest.TestCase):
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
                 evaluation_strategy="steps",
+                beta=0.1,
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -632,7 +633,6 @@ class DPOTrainerTester(unittest.TestCase):
                 trainer = DPOTrainer(
                     model=model_peft,
                     ref_model=ref_model,
-                    beta=0.1,
                     args=training_args,
                     tokenizer=self.tokenizer,
                     train_dataset=dummy_dataset,
@@ -640,16 +640,26 @@ class DPOTrainerTester(unittest.TestCase):
                     peft_config=lora_config,
                 )
 
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=4,
+                learning_rate=9e-1,
+                evaluation_strategy="steps",
+                beta=0.1,
+                force_use_ref_model=True,
+            )
+
             trainer = DPOTrainer(
                 model=model_peft,
                 ref_model=ref_model,
-                beta=0.1,
                 args=training_args,
                 tokenizer=self.tokenizer,
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
                 peft_config=lora_config,
-                force_use_ref_model=True,
             )
 
             # train the model

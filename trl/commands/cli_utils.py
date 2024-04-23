@@ -154,14 +154,10 @@ class SftScriptArguments:
 
 
 @dataclass
-class DpoScriptArguments:
+class DPOScriptArguments:
     dataset_name: str = field(default=None, metadata={"help": "the dataset name"})
-    beta: float = field(default=0.1, metadata={"help": "the beta parameter for DPO loss"})
-    max_length: int = field(default=512, metadata={"help": "max length of each sample"})
-    max_prompt_length: int = field(default=128, metadata={"help": "max length of each sample's prompt"})
-    max_target_length: int = field(
-        default=128, metadata={"help": "Only used for encoder decoder model. Max target of each sample's prompt"}
-    )
+    dataset_train_split: str = field(default="train", metadata={"help": "The dataset split to use for training"})
+    dataset_test_split: str = field(default="test", metadata={"help": "The dataset split to use for evaluation"})
     sanity_check: bool = field(default=False, metadata={"help": "only train on 1000 samples"})
     ignore_bias_buffers: bool = field(
         default=False,
@@ -171,7 +167,6 @@ class DpoScriptArguments:
             "https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992"
         },
     )
-    generate_during_eval: bool = field(default=False, metadata={"help": "Generate during evaluation"})
     config: str = field(default=None, metadata={"help": "Path to the optional config file"})
     gradient_checkpointing_use_reentrant: bool = field(
         default=False, metadata={"help": "Whether to apply `use_reentrant` for gradient_checkpointing"}
@@ -272,7 +267,7 @@ class TrlParser(HfArgumentParser):
             if dataclass_obj.__class__.__name__ == "TrainingArguments":
                 training_args = dataclass_obj
                 training_args_index = i
-            elif dataclass_obj.__class__.__name__ in ("SftScriptArguments", "DpoScriptArguments"):
+            elif dataclass_obj.__class__.__name__ in ("SftScriptArguments", "DPOScriptArguments"):
                 trl_args = dataclass_obj
             else:
                 ...

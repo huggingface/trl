@@ -49,6 +49,7 @@ python examples/scripts/dpo.py \
     --lora_r=16 \
     --lora_alpha=16
 """
+
 import logging
 import multiprocessing
 import os
@@ -56,7 +57,7 @@ from contextlib import nullcontext
 
 TRL_USE_RICH = os.environ.get("TRL_USE_RICH", False)
 
-from trl.commands.cli_utils import DpoScriptArguments, init_zero_verbose, TrlParser
+from trl.commands.cli_utils import DPOScriptArguments, init_zero_verbose, TrlParser
 
 if TRL_USE_RICH:
     init_zero_verbose()
@@ -67,9 +68,10 @@ if TRL_USE_RICH:
 
 import torch
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl import (
+    DPOConfig,
     DPOTrainer,
     ModelConfig,
     RichProgressCallback,
@@ -84,7 +86,7 @@ if TRL_USE_RICH:
 
 
 if __name__ == "__main__":
-    parser = TrlParser((DpoScriptArguments, TrainingArguments, ModelConfig))
+    parser = TrlParser((DPOScriptArguments, DPOConfig, ModelConfig))
     args, training_args, model_config = parser.parse_args_and_config()
 
     # Force use our print callback
@@ -155,8 +157,8 @@ if __name__ == "__main__":
         num_proc=multiprocessing.cpu_count(),
         load_from_cache_file=False,
     )
-    train_dataset = ds["train"]
-    eval_dataset = ds["test"]
+    train_dataset = ds[args.dataset_train_split]
+    eval_dataset = ds[args.dataset_test_split]
 
     ################
     # Training
@@ -166,14 +168,9 @@ if __name__ == "__main__":
             model,
             model_ref,
             args=training_args,
-            beta=args.beta,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             tokenizer=tokenizer,
-            max_length=args.max_length,
-            max_target_length=args.max_target_length,
-            max_prompt_length=args.max_prompt_length,
-            generate_during_eval=args.generate_during_eval,
             peft_config=get_peft_config(model_config),
             callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
         )
