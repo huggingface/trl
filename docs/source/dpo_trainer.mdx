@@ -78,11 +78,13 @@ The DPO trainer expects a model of `AutoModelForCausalLM`, compared to PPO that 
 For a detailed example have a look at the `examples/scripts/dpo.py` script. At a high level we need to initialize the `DPOTrainer` with a `model` we wish to train, a reference `ref_model` which we will use to calculate the implicit rewards of the preferred and rejected response, the `beta` refers to the hyperparameter of the implicit reward, and the dataset contains the 3 entries listed above. Note that the `model` and `ref_model` need to have the same architecture (ie decoder only or encoder-decoder).
 
 ```py
+training_args = DPOConfig(
+    beta=0.1,
+)
 dpo_trainer = DPOTrainer(
     model,
     model_ref,
     args=training_args,
-    beta=0.1,
     train_dataset=train_dataset,
     tokenizer=tokenizer,
 )
@@ -131,8 +133,7 @@ First install `unsloth` according to the [official documentation](https://github
 
 ```python
 import torch
-from transformers import TrainingArguments
-from trl import DPOTrainer
+from trl import DPOConfig, DPOTrainer
 from unsloth import FastLanguageModel
 
 max_seq_length = 2048 # Supports automatic RoPE Scaling, so choose any number.
@@ -159,13 +160,15 @@ model = FastLanguageModel.get_peft_model(
     random_state = 3407,
 )
 
-training_args = TrainingArguments(output_dir="./output")
+training_args = DPOConfig(
+    output_dir="./output",
+    beta=0.1,
+)
 
 dpo_trainer = DPOTrainer(
     model,
     ref_model=None,
     args=training_args,
-    beta=0.1,
     train_dataset=train_dataset,
     tokenizer=tokenizer,
 )
@@ -224,14 +227,21 @@ model = PeftModel.from_pretrained(
 model.load_adapter("/path/to/peft", adapter_name="reference")
 
 # Initialize the trainer, without a ref_model param.
-dpo_trainer = DPOTrainer(
-    model,
-    ...
+training_args = DPOConfig(
     model_adapter_name="train",
     ref_adapter_name="reference",
+)
+dpo_trainer = DPOTrainer(
+    model,
+    args=training_args,
+    ...
 )
 ```
 
 ## DPOTrainer
 
 [[autodoc]] DPOTrainer
+
+## DPOConfig
+
+[[autodoc]] DPOConfig
