@@ -163,6 +163,8 @@ class RLOOTrainer(Trainer):
             **kwargs
     ) -> None:
 
+        self.ref_model = ref_model
+
         assert (reward_model is not None) != (reward_fn is not None), "Must set either reward_model or reward_fn, but not both"
         self.reward_model = reward_model
         self.reward_fn = reward_fn
