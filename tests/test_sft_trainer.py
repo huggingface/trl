@@ -25,10 +25,9 @@ from transformers import (
     AutoProcessor,
     AutoTokenizer,
     LlavaForConditionalGeneration,
-    TrainingArguments,
 )
 
-from trl import SFTTrainer
+from trl import SFTConfig, SFTTrainer
 from trl.import_utils import is_peft_available, is_pil_available
 from trl.trainer import ConstantLengthDataset, DataCollatorForCompletionOnlyLM
 
@@ -216,7 +215,7 @@ class SFTTrainerTester(unittest.TestCase):
 
     def test_sft_trainer(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -224,6 +223,7 @@ class SFTTrainerTester(unittest.TestCase):
                 eval_steps=2,
                 save_steps=2,
                 per_device_train_batch_size=2,
+                packing=True,
             )
 
             trainer = SFTTrainer(
@@ -231,7 +231,6 @@ class SFTTrainerTester(unittest.TestCase):
                 args=training_args,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
-                packing=True,
             )
 
             trainer.train()
@@ -243,7 +242,7 @@ class SFTTrainerTester(unittest.TestCase):
 
     def test_sft_trainer_uncorrect_data(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -251,6 +250,7 @@ class SFTTrainerTester(unittest.TestCase):
                 eval_steps=1,
                 save_steps=1,
                 per_device_train_batch_size=2,
+                packing=True,
             )
 
             with pytest.raises(ValueError):
@@ -258,13 +258,16 @@ class SFTTrainerTester(unittest.TestCase):
                     model=self.model,
                     args=training_args,
                     train_dataset=self.dummy_dataset,
-                    packing=True,
                 )
             # this should work since the dummy chatml include the correct format
-            _ = SFTTrainer(
-                model=self.model,
-                args=training_args,
-                train_dataset=self.dummy_chatml_dataset,
+            training_args = SFTConfig(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                evaluation_strategy="steps",
+                max_steps=2,
+                eval_steps=1,
+                save_steps=1,
+                per_device_train_batch_size=2,
                 max_seq_length=32,  # make sure there is at least 1 packed sequence
                 num_of_sequences=32,
                 packing=True,
@@ -273,13 +276,33 @@ class SFTTrainerTester(unittest.TestCase):
                 model=self.model,
                 args=training_args,
                 train_dataset=self.dummy_chatml_dataset,
+            )
+
+            training_args = SFTConfig(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                evaluation_strategy="steps",
+                max_steps=2,
+                eval_steps=1,
+                save_steps=1,
+                per_device_train_batch_size=2,
                 packing=False,
             )
-            # this should work since the dummy instruction dataset is the correct format
             _ = SFTTrainer(
                 model=self.model,
                 args=training_args,
-                train_dataset=self.dummy_instruction_dataset,
+                train_dataset=self.dummy_chatml_dataset,
+            )
+            # this should work since the dummy instruction dataset is the correct format
+
+            training_args = SFTConfig(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                evaluation_strategy="steps",
+                max_steps=2,
+                eval_steps=1,
+                save_steps=1,
+                per_device_train_batch_size=2,
                 max_seq_length=16,  # make sure there is at least 1 packed sequence
                 packing=True,
             )
@@ -287,7 +310,34 @@ class SFTTrainerTester(unittest.TestCase):
                 model=self.model,
                 args=training_args,
                 train_dataset=self.dummy_instruction_dataset,
+            )
+
+            training_args = SFTConfig(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                evaluation_strategy="steps",
+                max_steps=2,
+                eval_steps=1,
+                save_steps=1,
+                per_device_train_batch_size=2,
                 packing=False,
+            )
+            _ = SFTTrainer(
+                model=self.model,
+                args=training_args,
+                train_dataset=self.dummy_instruction_dataset,
+            )
+
+            training_args = SFTConfig(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                evaluation_strategy="steps",
+                max_steps=2,
+                eval_steps=1,
+                save_steps=1,
+                per_device_train_batch_size=2,
+                max_seq_length=32,  # make sure there is at least 1 packed sequence
+                packing=True,
             )
             # This should work
             _ = SFTTrainer(
@@ -295,43 +345,68 @@ class SFTTrainerTester(unittest.TestCase):
                 args=training_args,
                 train_dataset=self.dummy_dataset,
                 formatting_func=formatting_prompts_func,
-                max_seq_length=32,  # make sure there is at least 1 packed sequence
-                packing=True,
             )
 
             with pytest.raises(ValueError):
                 # This should not work because not enough data for one sample
+                training_args = SFTConfig(
+                    output_dir=tmp_dir,
+                    dataloader_drop_last=True,
+                    evaluation_strategy="steps",
+                    max_steps=2,
+                    eval_steps=1,
+                    save_steps=1,
+                    per_device_train_batch_size=2,
+                    max_seq_length=1024,  # make sure there is NOT at least 1 packed sequence
+                    packing=True,
+                )
                 _ = SFTTrainer(
                     model=self.model,
                     args=training_args,
                     train_dataset=self.dummy_dataset,
                     formatting_func=formatting_prompts_func,
-                    max_seq_length=1024,  # make sure there is NOT at least 1 packed sequence
-                    packing=True,
                 )
 
             # This should not work as well
             with pytest.raises(ValueError):
+                training_args = SFTConfig(
+                    output_dir=tmp_dir,
+                    dataloader_drop_last=True,
+                    evaluation_strategy="steps",
+                    max_steps=2,
+                    eval_steps=1,
+                    save_steps=1,
+                    per_device_train_batch_size=2,
+                    packing=False,
+                )
                 _ = SFTTrainer(
                     model=self.model,
                     args=training_args,
                     train_dataset=self.dummy_dataset,
                     formatting_func=formatting_prompts_func,
-                    packing=False,
                 )
 
             # but this should work
+            training_args = SFTConfig(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                evaluation_strategy="steps",
+                max_steps=2,
+                eval_steps=1,
+                save_steps=1,
+                per_device_train_batch_size=2,
+                packing=False,
+            )
             _ = SFTTrainer(
                 model=self.model,
                 args=training_args,
                 train_dataset=self.dummy_dataset,
                 formatting_func=formatting_prompts_func_batched,
-                packing=False,
             )
 
     def test_sft_trainer_with_model_num_train_epochs(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -340,6 +415,7 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=1,
                 num_train_epochs=2,
                 per_device_train_batch_size=2,
+                packing=True,
             )
 
             trainer = SFTTrainer(
@@ -347,7 +423,6 @@ class SFTTrainerTester(unittest.TestCase):
                 args=training_args,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
-                packing=True,
             )
 
             trainer.train()
@@ -358,7 +433,7 @@ class SFTTrainerTester(unittest.TestCase):
             assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -366,16 +441,16 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=1,
                 num_train_epochs=2,
                 per_device_train_batch_size=2,
+                dataset_text_field="text",
+                max_seq_length=16,
+                num_of_sequences=16,
+                packing=True,
             )
 
             trainer = SFTTrainer(
                 model=self.model,
                 args=training_args,
                 train_dataset=self.dummy_dataset,
-                dataset_text_field="text",
-                max_seq_length=16,
-                num_of_sequences=16,
-                packing=True,
             )
 
             trainer.train()
@@ -385,7 +460,7 @@ class SFTTrainerTester(unittest.TestCase):
             assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -393,14 +468,14 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=1,
                 num_train_epochs=2,
                 per_device_train_batch_size=2,
+                dataset_text_field="text",
+                max_seq_length=16,
             )
 
             trainer = SFTTrainer(
                 model=self.model,
                 args=training_args,
                 train_dataset=self.dummy_dataset,
-                dataset_text_field="text",
-                max_seq_length=16,
             )
 
             trainer.train()
@@ -411,7 +486,7 @@ class SFTTrainerTester(unittest.TestCase):
 
     def test_sft_trainer_with_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -419,6 +494,7 @@ class SFTTrainerTester(unittest.TestCase):
                 eval_steps=1,
                 save_steps=1,
                 per_device_train_batch_size=2,
+                packing=True,
             )
 
             trainer = SFTTrainer(
@@ -426,7 +502,6 @@ class SFTTrainerTester(unittest.TestCase):
                 args=training_args,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
-                packing=True,
             )
 
             trainer.train()
@@ -437,23 +512,23 @@ class SFTTrainerTester(unittest.TestCase):
             assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
                 max_steps=2,
                 save_steps=1,
                 per_device_train_batch_size=2,
+                dataset_text_field="text",
+                max_seq_length=16,
+                num_of_sequences=16,
+                packing=True,
             )
 
             trainer = SFTTrainer(
                 model=self.model,
                 args=training_args,
                 train_dataset=self.dummy_dataset,
-                dataset_text_field="text",
-                max_seq_length=16,
-                num_of_sequences=16,
-                packing=True,
             )
 
             trainer.train()
@@ -464,13 +539,16 @@ class SFTTrainerTester(unittest.TestCase):
 
         # with formatting_func + packed
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
                 max_steps=2,
                 save_steps=1,
                 per_device_train_batch_size=2,
+                max_seq_length=16,
+                num_of_sequences=16,
+                packing=True,
             )
 
             trainer = SFTTrainer(
@@ -478,9 +556,6 @@ class SFTTrainerTester(unittest.TestCase):
                 args=training_args,
                 train_dataset=self.dummy_dataset,
                 formatting_func=formatting_prompts_func,
-                max_seq_length=16,
-                num_of_sequences=16,
-                packing=True,
             )
 
             trainer.train()
@@ -491,13 +566,14 @@ class SFTTrainerTester(unittest.TestCase):
 
         # with formatting_func + packed
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
                 max_steps=2,
                 save_steps=1,
                 per_device_train_batch_size=2,
+                max_seq_length=16,
             )
 
             trainer = SFTTrainer(
@@ -505,7 +581,6 @@ class SFTTrainerTester(unittest.TestCase):
                 args=training_args,
                 train_dataset=self.dummy_dataset,
                 formatting_func=formatting_prompts_func_batched,
-                max_seq_length=16,
             )
 
             trainer.train()
@@ -515,21 +590,21 @@ class SFTTrainerTester(unittest.TestCase):
             assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
                 max_steps=2,
                 save_steps=1,
                 per_device_train_batch_size=2,
+                dataset_text_field="text",
+                max_seq_length=16,
             )
 
             trainer = SFTTrainer(
                 model=self.model,
                 args=training_args,
                 train_dataset=self.dummy_dataset,
-                dataset_text_field="text",
-                max_seq_length=16,
             )
 
             trainer.train()
@@ -540,7 +615,7 @@ class SFTTrainerTester(unittest.TestCase):
 
     def test_sft_trainer_with_multiple_eval_datasets(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -548,6 +623,7 @@ class SFTTrainerTester(unittest.TestCase):
                 eval_steps=1,
                 save_steps=1,
                 per_device_train_batch_size=2,
+                packing=True,
             )
 
             trainer = SFTTrainer(
@@ -558,7 +634,6 @@ class SFTTrainerTester(unittest.TestCase):
                     "data1": self.eval_dataset,
                     "data2": self.eval_dataset,
                 },
-                packing=True,
             )
 
             trainer.train()
@@ -662,7 +737,7 @@ class SFTTrainerTester(unittest.TestCase):
 
     def test_sft_trainer_infinite_with_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -670,6 +745,8 @@ class SFTTrainerTester(unittest.TestCase):
                 eval_steps=1,
                 save_steps=1,
                 per_device_train_batch_size=2,
+                packing=True,
+                max_seq_length=500,
             )
 
             trainer = SFTTrainer(
@@ -677,8 +754,6 @@ class SFTTrainerTester(unittest.TestCase):
                 args=training_args,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
-                packing=True,
-                max_seq_length=500,
             )
 
             assert trainer.train_dataset.infinite
@@ -693,12 +768,14 @@ class SFTTrainerTester(unittest.TestCase):
 
     def test_sft_trainer_infinite_with_model_epochs(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 num_train_epochs=1,
                 per_device_train_batch_size=2,
                 save_strategy="epoch",
+                packing=True,
+                max_seq_length=500,
             )
 
             trainer = SFTTrainer(
@@ -706,8 +783,6 @@ class SFTTrainerTester(unittest.TestCase):
                 args=training_args,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
-                packing=True,
-                max_seq_length=500,
             )
 
             assert not trainer.train_dataset.infinite
@@ -721,7 +796,7 @@ class SFTTrainerTester(unittest.TestCase):
 
     def test_sft_trainer_with_model_neftune(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -729,6 +804,8 @@ class SFTTrainerTester(unittest.TestCase):
                 eval_steps=1,
                 save_steps=1,
                 per_device_train_batch_size=2,
+                neftune_noise_alpha=5,
+                packing=True,
             )
 
             trainer = SFTTrainer(
@@ -736,8 +813,6 @@ class SFTTrainerTester(unittest.TestCase):
                 args=training_args,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
-                neftune_noise_alpha=5,
-                packing=True,
             )
 
             trainer.model = trainer._trl_activate_neftune(trainer.model)
@@ -764,27 +839,29 @@ class SFTTrainerTester(unittest.TestCase):
 
     @require_peft
     def test_peft_sft_trainer_str(self):
-        peft_config = LoraConfig(
-            r=16,
-            lora_alpha=32,
-            lora_dropout=0.05,
-            bias="none",
-            task_type="CAUSAL_LM",
-        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            peft_config = LoraConfig(
+                r=16,
+                lora_alpha=32,
+                lora_dropout=0.05,
+                bias="none",
+                task_type="CAUSAL_LM",
+            )
 
-        _ = SFTTrainer(
-            model=self.model_id,
-            args=None,
-            train_dataset=self.train_dataset,
-            eval_dataset=self.eval_dataset,
-            peft_config=peft_config,
-            packing=True,
-        )
+            training_args = SFTConfig(packing=True, output_dir=tmp_dir)
+
+            _ = SFTTrainer(
+                model=self.model_id,
+                args=training_args,
+                train_dataset=self.train_dataset,
+                eval_dataset=self.eval_dataset,
+                peft_config=peft_config,
+            )
 
     @require_peft
     def test_peft_sft_trainer(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -792,6 +869,7 @@ class SFTTrainerTester(unittest.TestCase):
                 eval_steps=2,
                 save_steps=2,
                 per_device_train_batch_size=2,
+                packing=True,
             )
 
             peft_config = LoraConfig(
@@ -808,7 +886,6 @@ class SFTTrainerTester(unittest.TestCase):
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
                 peft_config=peft_config,
-                packing=True,
             )
 
             assert isinstance(trainer.model, PeftModel)
@@ -825,7 +902,7 @@ class SFTTrainerTester(unittest.TestCase):
     @require_peft
     def test_peft_sft_trainer_gc(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -834,6 +911,7 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=2,
                 per_device_train_batch_size=2,
                 gradient_checkpointing=True,
+                packing=True,
             )
 
             peft_config = LoraConfig(
@@ -850,7 +928,6 @@ class SFTTrainerTester(unittest.TestCase):
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
                 peft_config=peft_config,
-                packing=True,
             )
 
             assert isinstance(trainer.model, PeftModel)
@@ -867,7 +944,7 @@ class SFTTrainerTester(unittest.TestCase):
     @require_peft
     def test_peft_sft_trainer_neftune(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -875,6 +952,8 @@ class SFTTrainerTester(unittest.TestCase):
                 eval_steps=2,
                 save_steps=2,
                 per_device_train_batch_size=2,
+                neftune_noise_alpha=5,
+                packing=True,
             )
 
             peft_config = LoraConfig(
@@ -891,8 +970,6 @@ class SFTTrainerTester(unittest.TestCase):
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
                 peft_config=peft_config,
-                neftune_noise_alpha=5,
-                packing=True,
             )
 
             trainer.model = trainer._trl_activate_neftune(trainer.model)
@@ -929,7 +1006,7 @@ class SFTTrainerTester(unittest.TestCase):
     @require_peft
     def test_peft_sft_trainer_tag(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -938,6 +1015,7 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=2,
                 per_device_train_batch_size=2,
                 gradient_checkpointing=True,
+                packing=True,
             )
 
             peft_config = LoraConfig(
@@ -954,7 +1032,6 @@ class SFTTrainerTester(unittest.TestCase):
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
                 peft_config=peft_config,
-                packing=True,
             )
 
             assert trainer.model.model_tags == trainer._tag_names
@@ -962,7 +1039,7 @@ class SFTTrainerTester(unittest.TestCase):
     @require_peft
     def test_sft_trainer_tag(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -971,6 +1048,7 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=2,
                 per_device_train_batch_size=2,
                 gradient_checkpointing=True,
+                packing=True,
             )
 
             trainer = SFTTrainer(
@@ -978,14 +1056,13 @@ class SFTTrainerTester(unittest.TestCase):
                 args=training_args,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
-                packing=True,
             )
 
             assert trainer.model.model_tags == trainer._tag_names
 
     def test_sft_trainer_eval_packing(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -994,40 +1071,60 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=2,
                 per_device_train_batch_size=2,
                 gradient_checkpointing=True,
-            )
-
-            trainer = SFTTrainer(
-                model=self.model_id,
-                args=training_args,
-                train_dataset=self.dummy_chatml_dataset,
-                eval_dataset=self.dummy_chatml_dataset,
                 packing=True,
                 max_seq_length=32,  # make sure there is at least 1 packed sequence
                 eval_packing=False,
             )
 
-            assert len(trainer.train_dataset["input_ids"]) == 1
-            assert len(trainer.eval_dataset["input_ids"]) != 1
-
             trainer = SFTTrainer(
                 model=self.model_id,
                 args=training_args,
                 train_dataset=self.dummy_chatml_dataset,
                 eval_dataset=self.dummy_chatml_dataset,
+            )
+
+            assert len(trainer.train_dataset["input_ids"]) == 1
+            assert len(trainer.eval_dataset["input_ids"]) != 1
+
+            training_args = SFTConfig(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                evaluation_strategy="steps",
+                max_steps=4,
+                eval_steps=2,
+                save_steps=2,
+                per_device_train_batch_size=2,
+                gradient_checkpointing=True,
                 max_seq_length=32,  # make sure there is at least 1 packed sequence
                 packing=True,
+            )
+            trainer = SFTTrainer(
+                model=self.model_id,
+                args=training_args,
+                train_dataset=self.dummy_chatml_dataset,
+                eval_dataset=self.dummy_chatml_dataset,
             )
 
             assert len(trainer.train_dataset["input_ids"]) == 1
             assert len(trainer.eval_dataset["input_ids"]) == 1
 
+            training_args = SFTConfig(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                evaluation_strategy="steps",
+                max_steps=4,
+                eval_steps=2,
+                save_steps=2,
+                per_device_train_batch_size=2,
+                gradient_checkpointing=True,
+                max_seq_length=32,  # make sure there is at least 1 packed sequence
+                packing=False,
+            )
             trainer = SFTTrainer(
                 model=self.model_id,
                 args=training_args,
                 train_dataset=self.dummy_chatml_dataset,
                 eval_dataset=self.dummy_chatml_dataset,
-                max_seq_length=32,  # make sure there is at least 1 packed sequence
-                packing=False,
             )
 
             assert len(trainer.train_dataset["input_ids"]) != 1
@@ -1036,7 +1133,7 @@ class SFTTrainerTester(unittest.TestCase):
     @requires_pil
     def test_sft_trainer_skip_prepare_dataset(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -1046,6 +1143,8 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 gradient_checkpointing=True,
                 remove_unused_columns=False,
+                dataset_text_field="text",  # need a dummy field
+                dataset_kwargs={"skip_prepare_dataset": True},
             )
 
             trainer = SFTTrainer(
@@ -1053,8 +1152,6 @@ class SFTTrainerTester(unittest.TestCase):
                 args=training_args,
                 train_dataset=self.dummy_vsft_instruction_dataset,
                 eval_dataset=self.dummy_vsft_instruction_dataset,
-                dataset_text_field="text",  # need a dummy field
-                dataset_kwargs={"skip_prepare_dataset": True},
             )
             assert trainer.train_dataset.features == self.dummy_vsft_instruction_dataset.features
             assert trainer.eval_dataset.features == self.dummy_vsft_instruction_dataset.features
@@ -1062,7 +1159,7 @@ class SFTTrainerTester(unittest.TestCase):
     @requires_pil
     def test_sft_trainer_llava(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
                 evaluation_strategy="steps",
@@ -1072,13 +1169,15 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 per_device_eval_batch_size=2,
                 remove_unused_columns=False,
+                dataset_text_field="text",  # need a dummy field
+                dataset_kwargs={"skip_prepare_dataset": True},
             )
             tiny_llava = LlavaForConditionalGeneration.from_pretrained(
                 "trl-internal-testing/tiny-random-LlavaForConditionalGeneration"
             )
             processor = AutoProcessor.from_pretrained("trl-internal-testing/tiny-random-LlavaForConditionalGeneration")
 
-            processor.tokenizer.chat_template = """A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. {% for message in messages %}{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}"""
+            processor.tokenizer.chat_template = """{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. {% for message in messages %}{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}{% if add_generation_prompt %}ASSISTANT: {% endif %}"""
 
             class LLavaDataCollator:
                 def __init__(self, processor):
@@ -1113,8 +1212,6 @@ class SFTTrainerTester(unittest.TestCase):
                 args=training_args,
                 train_dataset=self.dummy_vsft_instruction_dataset,
                 eval_dataset=self.dummy_vsft_instruction_dataset,
-                dataset_text_field="text",  # need a dummy field
-                dataset_kwargs={"skip_prepare_dataset": True},
                 data_collator=data_collator,
             )
 
