@@ -28,7 +28,7 @@ from transformers import (
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer_callback import CallbackHandler, DefaultFlowCallback
 
-from ..models import SUPPORTED_ARCHITECTURES, create_reference_model
+from ..models import SUPPORTED_ARCHITECTURES, create_reference_model, PreTrainedModelWrapper
 
 
 INVALID_LOGPROB = 1.0
