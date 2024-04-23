@@ -210,7 +210,7 @@ class RLOOTrainer(Trainer):
         if isinstance(ref_model, SUPPORTED_ARCHITECTURES):
             self.ref_model = ref_model
         elif ref_model is None and not self.is_peft_model:
-            self.ref_model = create_reference_model(self.model, num_shared_layers=num_shared_layers)
+            self.ref_model = create_reference_model(self.model)
         elif self.is_peft_model:
             self.ref_model = None
         else:
