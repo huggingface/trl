@@ -152,7 +152,7 @@ class RLOOTrainer(Trainer):
             self,
             model: Optional[PreTrainedModelWrapper],
             args: RLOOConfig,
-            train_dataset: Union[Dataset, IterableDataset, "datasets.Dataset"],
+            train_dataset: Union[Dataset, "datasets.Dataset"],
             reward_model: Optional[PreTrainedModelWrapper] = None,
             reward_fn: Callable = None,
             ref_model: Optional[PreTrainedModelWrapper] = None,
