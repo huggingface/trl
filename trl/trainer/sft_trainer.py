@@ -24,6 +24,7 @@ from accelerate.state import PartialState
 from datasets import Dataset
 from datasets.arrow_writer import SchemaInferenceError
 from datasets.builder import DatasetGenerationError
+from huggingface_hub.utils._deprecation import _deprecate_arguments
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -32,7 +33,6 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     Trainer,
-    TrainingArguments,
 )
 from transformers.modeling_utils import unwrap_model
 from transformers.trainer_callback import TrainerCallback
@@ -40,6 +40,7 @@ from transformers.trainer_utils import EvalPrediction
 
 from ..extras.dataset_formatting import get_formatting_func_from_dataset
 from ..import_utils import is_peft_available
+from .sft_config import SFTConfig
 from .utils import (
     ConstantLengthDataset,
     DataCollatorForCompletionOnlyLM,
@@ -89,45 +90,33 @@ class SFTTrainer(Trainer):
             The function to use to preprocess the logits before computing the metrics.
         peft_config (`Optional[PeftConfig]`):
             The PeftConfig object to use to initialize the PeftModel.
-        dataset_text_field (`Optional[str]`):
-            The name of the text field of the dataset, in case this is passed by a user, the trainer will automatically create a
-            `ConstantLengthDataset` based on the `dataset_text_field` argument.
         formatting_func (`Optional[Callable]`):
             The formatting function to be used for creating the `ConstantLengthDataset`.
-        max_seq_length (`Optional[int]`):
-            The maximum sequence length to use for the `ConstantLengthDataset` and for automatically creating the Dataset. Defaults to `512`.
-        infinite (`Optional[bool]`):
-            Whether to use an infinite dataset or not. Defaults to `False`.
-        num_of_sequences (`Optional[int]`):
-            The number of sequences to use for the `ConstantLengthDataset`. Defaults to `1024`.
-        chars_per_token (`Optional[float]`):
-            The number of characters per token to use for the `ConstantLengthDataset`. Defaults to `3.6`. You can check how this is computed in the
-            stack-llama example: https://github.com/huggingface/trl/blob/08f550674c553c36c51d1027613c29f14f3676a5/examples/stack_llama/scripts/supervised_finetuning.py#L53.
-        packing (`Optional[bool]`):
-            Used only in case `dataset_text_field` is passed. This argument is used by the `ConstantLengthDataset` to pack the sequences
-            of the dataset.
-        dataset_num_proc (`Optional[int]`):
-            The number of workers to use to tokenize the data. Only used when `packing=False`. Defaults to None.
-        dataset_batch_size (`int`):
-            The number of examples to tokenize per batch. If batch_size <= 0 or batch_size == None,
-            tokenize the full dataset as a single batch. Defaults to 1000.
-        neftune_noise_alpha (`Optional[float]`):
-            If not `None`, this will activate NEFTune noise embeddings. This has been proven to drastically improve model performances for instruction
-            fine-tuning. Check out the original paper here: https://arxiv.org/abs/2310.05914 and the original code here: https://github.com/neelsjain/NEFTune
-        model_init_kwargs: (`Optional[Dict]`, *optional*):
-            Dict of Optional kwargs to pass when instantiating the model from a string
-        dataset_kwargs: (`Optional[Dict]`, *optional*):
-            Dict of Optional kwargs to pass when creating packed or non-packed datasets
-        eval_packing: (`Optional[bool]`, *optional*):
-            Whether to pack the eval dataset as well. Defaults to `packing` if `None` is passed.
     """
 
     _tag_names = ["trl", "sft"]
 
+    @_deprecate_arguments(
+        version="1.0.0",
+        deprecated_args=[
+            "dataset_text_field",
+            "packing",
+            "max_seq_length",
+            "dataset_num_proc",
+            "dataset_batch_size",
+            "neftune_noise_alpha",
+            "model_init_kwargs",
+            "dataset_kwargs",
+            "eval_packing",
+            "num_of_sequences",
+            "chars_per_token",
+        ],
+        custom_message="Deprecated positional argument(s) used in SFTTrainer, please use the SFTConfig to set these arguments instead.",
+    )
     def __init__(
         self,
         model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
-        args: Optional[TrainingArguments] = None,
+        args: Optional[SFTConfig] = None,
         data_collator: Optional[DataCollator] = None,  # type: ignore
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
@@ -152,10 +141,22 @@ class SFTTrainer(Trainer):
         dataset_kwargs: Optional[Dict] = None,
         eval_packing: Optional[bool] = None,
     ):
-        if model_init_kwargs is None:
+        if model_init_kwargs is not None:
+            warnings.warn(
+                "You passed `model_init_kwargs` to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
+            )
+            args.model_init_kwargs = model_init_kwargs
+        if args.model_init_kwargs is None:
             model_init_kwargs = {}
         elif not isinstance(model, str):
-            raise ValueError("You passed model_kwargs to the SFTTrainer. But your model is already instantiated.")
+            raise ValueError("You passed model_init_kwargs to the SFTConfig, but your model is already instantiated.")
+        else:
+            model_init_kwargs = args.model_init_kwargs
+            model_init_kwargs["torch_dtype"] = (
+                model_init_kwargs["torch_dtype"]
+                if model_init_kwargs["torch_dtype"] in ["auto", None]
+                else getattr(torch, model_init_kwargs["torch_dtype"])
+            )
 
         if infinite is not None:
             warnings.warn(
@@ -169,7 +170,18 @@ class SFTTrainer(Trainer):
             )
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
 
-        if packing and data_collator is not None and isinstance(data_collator, DataCollatorForCompletionOnlyLM):
+        if packing:
+            warnings.warn(
+                "You passed a `packing` argument to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
+            )
+            args.packing = packing
+        if eval_packing is not None:
+            warnings.warn(
+                "You passed a `eval_packing` argument to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
+            )
+            args.eval_packing = eval_packing
+
+        if args.packing and data_collator is not None and isinstance(data_collator, DataCollatorForCompletionOnlyLM):
             raise ValueError(
                 "You passed a `DataCollatorForCompletionOnlyLM` to the SFTTrainer. This is not compatible with the `packing` argument."
             )
@@ -239,7 +251,13 @@ class SFTTrainer(Trainer):
             if getattr(tokenizer, "pad_token", None) is None:
                 tokenizer.pad_token = tokenizer.eos_token
 
-        if max_seq_length is None:
+        if max_seq_length is not None:
+            warnings.warn(
+                "You passed a `max_seq_length` argument to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
+            )
+            args.max_seq_length = max_seq_length
+
+        if args.max_seq_length is None:
             # to overcome some issues with broken tokenizers
             max_seq_length = min(tokenizer.model_max_length, 1024)
 
@@ -247,21 +265,37 @@ class SFTTrainer(Trainer):
                 f"You didn't pass a `max_seq_length` argument to the SFTTrainer, this will default to {max_seq_length}"
             )
 
-        self.dataset_num_proc = dataset_num_proc
-        self.dataset_batch_size = dataset_batch_size
+        if dataset_num_proc is not None:
+            warnings.warn(
+                "You passed a `dataset_num_proc` argument to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
+            )
+            args.dataset_num_proc = dataset_num_proc
+        self.dataset_num_proc = args.dataset_num_proc
+
+        if dataset_batch_size != args.dataset_batch_size:
+            warnings.warn(
+                "You passed a `dataset_batch_size` argument to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
+            )
+            args.dataset_batch_size = dataset_batch_size
+        self.dataset_batch_size = args.dataset_batch_size
 
         self._trainer_supports_neftune = hasattr(args, "neftune_noise_alpha")
-
         if neftune_noise_alpha is not None and self._trainer_supports_neftune:
             args.neftune_noise_alpha = neftune_noise_alpha
             warnings.warn(
-                "You passed a `neftune_noise_alpha` argument to the SFTTrainer, the value you passed will override the one in the `TrainingArguments`."
+                "You passed a `neftune_noise_alpha` argument to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
             )
             # self.neftune_noise_alpha is done at Trainer level
         elif not self._trainer_supports_neftune:
             self.neftune_noise_alpha = neftune_noise_alpha
 
-        if formatting_func is None and dataset_text_field is None:
+        if dataset_text_field is not None:
+            warnings.warn(
+                "You passed a `dataset_text_field` argument to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
+            )
+            args.dataset_text_field = dataset_text_field
+
+        if formatting_func is None and args.dataset_text_field is None:
             # check if dataset has ChatML format or instruction format and is supported
             # if not stays #None
             formatting_func = get_formatting_func_from_dataset(train_dataset, tokenizer)
@@ -272,50 +306,67 @@ class SFTTrainer(Trainer):
                 else:
                     dataset_kwargs["add_special_tokens"] = False
 
-        if not packing:
-            if dataset_text_field is None and formatting_func is None:
+        if not args.packing:
+            if args.dataset_text_field is None and formatting_func is None:
                 raise ValueError(
-                    "You passed `packing=False` to the SFTTrainer, but you didn't pass a `dataset_text_field` or `formatting_func` argument."
+                    "You passed `packing=False` to the SFTTrainer/SFTConfig, but you didn't pass a `dataset_text_field` or `formatting_func` argument."
                 )
 
             if data_collator is None:
                 data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
+        if num_of_sequences != args.num_of_sequences:
+            warnings.warn(
+                "You passed a `num_of_sequences` argument to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
+            )
+            args.num_of_sequences = num_of_sequences
+
+        if chars_per_token != args.chars_per_token:
+            warnings.warn(
+                "You passed a `chars_per_token` argument to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
+            )
+            args.chars_per_token = chars_per_token
+
         # Pre-process the datasets only once per node. The remaining processes will use the cache.
         with PartialState().local_main_process_first():
-            if dataset_kwargs is None:
-                dataset_kwargs = {}
+            if dataset_kwargs is not None:
+                warnings.warn(
+                    "You passed a `dataset_kwargs` argument to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
+                )
+                args.dataset_kwargs = dataset_kwargs
+            if args.dataset_kwargs is None:
+                args.dataset_kwargs = {}
             if train_dataset is not None:
                 train_dataset = self._prepare_dataset(
                     train_dataset,
                     tokenizer,
-                    packing,
-                    dataset_text_field,
-                    max_seq_length,
+                    args.packing,
+                    args.dataset_text_field,
+                    args.max_seq_length,
                     formatting_func,
-                    num_of_sequences,
-                    chars_per_token,
+                    args.num_of_sequences,
+                    args.chars_per_token,
                     remove_unused_columns=args.remove_unused_columns if args is not None else True,
-                    **dataset_kwargs,
+                    **args.dataset_kwargs,
                 )
             if eval_dataset is not None:
                 _multiple = isinstance(eval_dataset, dict)
                 _eval_datasets = eval_dataset if _multiple else {"singleton": eval_dataset}
 
-                eval_packing = packing if eval_packing is None else eval_packing
+                eval_packing = args.packing if args.eval_packing is None else args.eval_packing
 
                 for _eval_dataset_name, _eval_dataset in _eval_datasets.items():
                     _eval_datasets[_eval_dataset_name] = self._prepare_dataset(
                         _eval_dataset,
                         tokenizer,
                         eval_packing,
-                        dataset_text_field,
-                        max_seq_length,
+                        args.dataset_text_field,
+                        args.max_seq_length,
                         formatting_func,
-                        num_of_sequences,
-                        chars_per_token,
+                        args.num_of_sequences,
+                        args.chars_per_token,
                         remove_unused_columns=args.remove_unused_columns if args is not None else True,
-                        **dataset_kwargs,
+                        **args.dataset_kwargs,
                     )
                 if not _multiple:
                     eval_dataset = _eval_datasets["singleton"]
@@ -344,12 +395,12 @@ class SFTTrainer(Trainer):
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
 
-        if self.args.max_steps > 0 and packing:
+        if self.args.max_steps > 0 and args.packing:
             warnings.warn(
-                "You passed `packing=True` to the SFTTrainer, and you are training your model with `max_steps` strategy. The dataset will be iterated until the `max_steps` are reached."
+                "You passed `packing=True` to the SFTTrainer/SFTConfig, and you are training your model with `max_steps` strategy. The dataset will be iterated until the `max_steps` are reached."
             )
             self.train_dataset.infinite = True
-        elif self.args.max_steps == -1 and packing:
+        elif self.args.max_steps == -1 and args.packing:
             self.train_dataset.infinite = False
 
         if any(isinstance(callback, RichProgressCallback) for callback in self.callback_handler.callbacks):

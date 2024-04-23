@@ -25,7 +25,7 @@ _import_structure = {
 
 
 if TYPE_CHECKING:
-    from .cli_utils import SftScriptArguments, init_zero_verbose, DPOScriptArguments, TrlParser, YamlConfigParser
+    from .cli_utils import SFTScriptArguments, init_zero_verbose, DPOScriptArguments, TrlParser, YamlConfigParser
 else:
     import sys
 

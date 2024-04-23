@@ -140,13 +140,10 @@ def init_zero_verbose():
 
 
 @dataclass
-class SftScriptArguments:
+class SFTScriptArguments:
     dataset_name: str = field(default="timdettmers/openassistant-guanaco", metadata={"help": "the dataset name"})
-    dataset_text_field: str = field(default=None, metadata={"help": "the text field of the dataset"})
-    dataset_train_name: str = field(default="train", metadata={"help": "the name of the training set of the dataset"})
-    dataset_test_name: str = field(default="test", metadata={"help": "the name of the training set of the dataset"})
-    max_seq_length: int = field(default=512, metadata={"help": "The maximum sequence length for SFT Trainer"})
-    packing: bool = field(default=False, metadata={"help": "Whether to apply data packing or not during training"})
+    dataset_train_split: str = field(default="train", metadata={"help": "The dataset split to train on"})
+    dataset_test_split: str = field(default="test", metadata={"help": "The dataset split to evaluate on"})
     config: str = field(default=None, metadata={"help": "Path to the optional config file"})
     gradient_checkpointing_use_reentrant: bool = field(
         default=False, metadata={"help": "Whether to apply `use_reentrant` for gradient_checkpointing"}
@@ -267,7 +264,7 @@ class TrlParser(HfArgumentParser):
             if dataclass_obj.__class__.__name__ == "TrainingArguments":
                 training_args = dataclass_obj
                 training_args_index = i
-            elif dataclass_obj.__class__.__name__ in ("SftScriptArguments", "DPOScriptArguments"):
+            elif dataclass_obj.__class__.__name__ in ("SFTScriptArguments", "DPOScriptArguments"):
                 trl_args = dataclass_obj
             else:
                 ...
