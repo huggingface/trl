@@ -34,36 +34,8 @@ from ..models import SUPPORTED_ARCHITECTURES, create_reference_model
 INVALID_LOGPROB = 1.0
 
 
-"""
-python -i trl/trainer/ppov2_trainer.py \
-    --learning_rate 3e-6 \
-    --output_dir models/minimal/ppo \
-    --per_device_train_batch_size 1 \
-    --gradient_accumulation_steps 64 \
-    --lr_scheduler_type linear \
-"""
-
-
 @dataclass
 class RLOOConfig(TrainingArguments):
-    # various batch sizes
-    batch_size: Optional[int] = None
-    """The batch size across devices (HF's `per_device_train_batch_size` * `world_size` * `gradient_accumulation_steps`)"""
-    nminibatches: int = 1
-    """Number of minibatches to split a batch into"""
-    local_mini_batch_size: Optional[int] = None
-    """the mini batch size per GPU"""
-    mini_batch_size: Optional[int] = None
-    """the mini batch size across GPUs"""
-    local_eval_batch_size: int = 2
-    """per rank eval batch size"""
-    local_rollout_forward_batch_size: int = 64
-    """per rank no grad forward pass in the rollout phase"""
-    # PR TODO: understand this param
-
-    # other args
-    base_model: str = "EleutherAI/pythia-160m"
-    """the name of the pretrained model to use"""
     response_length: int = 53
     """the length of the response"""
     truncate_token: Optional[Literal["eos"]] = None
@@ -76,36 +48,22 @@ class RLOOConfig(TrainingArguments):
     """the reward value for responses that do not contain `truncate_token_id`"""
     non_eos_penalty: bool = False
     """whether to penalize responses that do not contain `truncate_token_id`"""
-    offload: bool = False
-    """Whether to offload ref policy and reward model to CPU"""
-    reward_model_path: str = "EleutherAI/pythia-160m"
-    """the path to the reward model"""
-    sft_model_path: str = "EleutherAI/pythia-160m"
-    """the path to the sft model"""
 
-    # ppo args
-    nminibatches: int = 1
-    """the number of minibatches to split a batch into"""
-    noptepochs: int = 4
-    """the number of epochs to train"""
-    vf_coef: float = 0.1
-    """the value function coefficient"""
     cliprange: float = 0.2
     """the clip range"""
-    cliprange_value: float = 0.2
-    """the clip range for the value function"""
-    gamma: float = 1
-    """the discount factor"""
-    lam: float = 0.95
-    """the lambda value for GAE"""
-    whiten_rewards: bool = False
-    """whether to whiten the rewards"""
     kl_coef: float = 0.05
     """the KL coefficient"""
 
     # rloo args
     rloo_k: int = 4
     """REINFORCE Leave-One-Out (RLOO) number of online samples per prompt"""
+
+
+"""
+PR TODO: class ModelWithRewardsConfig(ModelConfig)
+- reward_model_path
+- sft_model_path
+"""
 
 
 # taken from https://github.com/vwxyzjn/direct-preference-optimization/blob/f8b8c0f49dc92a430bae41585f9d467d3618fe2f/utils.py#L99
@@ -273,7 +231,7 @@ class RLOOTrainer(Trainer):
         inputs = self._prepare_inputs(inputs)
 
         queries = inputs["input_ids"].to(device)
-        queries = queries.repeat(args.rloo_k, 1)
+        queries = queries.repeat(self.args.rloo_k, 1)
         context_length = queries.shape[1]
         query_responses = []
         responses = []
@@ -282,8 +240,8 @@ class RLOOTrainer(Trainer):
         ref_logprobs = []
         scores = []
         sequence_lengths = []
-        for i in range(0, queries.shape[0], args.local_rollout_forward_batch_size):
-            query = queries[i : i + args.local_rollout_forward_batch_size]
+        for i in range(0, queries.shape[0]):
+            query = queries[i]
             query_response, logits = generate(
                 accelerator.unwrap_model(model),
                 query,
@@ -301,7 +259,7 @@ class RLOOTrainer(Trainer):
             with torch.no_grad(), self.optional_peft_ctx():
                 ref_output = forward(self.ref_model, query_response, tokenizer)
             ref_logits = ref_output.logits[:, context_length - 1 : -1]
-            ref_logits /= args.temperature + 1e-7
+            ref_logits /= self.args.temperature + 1e-7
             ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
             ref_logprob = torch.gather(ref_all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
             del ref_output, ref_logits, ref_all_logprob
@@ -310,8 +268,8 @@ class RLOOTrainer(Trainer):
             # Response Processing 1. truncate response after the
             # first occurrence of `truncate_token_id`
             postprocessed_response = response
-            if args.truncate_token_id:
-                postprocessed_response = truncate_response(args, tokenizer, response)
+            if self.args.truncate_token_id:
+                postprocessed_response = truncate_response(self.args, tokenizer, response)
 
             # Response Processing 2. run reward model on the truncated responses
             postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
@@ -353,8 +311,8 @@ class RLOOTrainer(Trainer):
         # responses not passing that filter will receive a low (fixed) score
         # only query humans on responses that pass that filter
         contain_eos_token = torch.any(postprocessed_responses == tokenizer.eos_token_id, dim=-1)
-        if args.non_eos_penalty:
-            scores = torch.where(contain_eos_token, scores, torch.full_like(scores, args.penalty_reward_value))
+        if self.args.non_eos_penalty:
+            scores = torch.where(contain_eos_token, scores, torch.full_like(scores, self.args.penalty_reward_value))
         accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
 
         # be very careful with `padding_mask_p1`;
@@ -366,7 +324,7 @@ class RLOOTrainer(Trainer):
 
         # 4. compute rewards
         kl = logprobs - ref_logprobs
-        non_score_reward = (-args.kl_coef * kl).sum(1)
+        non_score_reward = (-self.args.kl_coef * kl).sum(1)
         rlhf_reward = scores - non_score_reward
 
         # we generated `self.args.rloo_k` many responses per prompt
@@ -385,7 +343,7 @@ class RLOOTrainer(Trainer):
         with accelerator.accumulate(model):
             output = forward(model, query_responses, tokenizer)
             logits = output.logits[:, context_length - 1 : -1]
-            logits /= args.temperature + 1e-7
+            logits /= self.args.temperature + 1e-7
             new_all_logprobs = F.log_softmax(logits, dim=-1)
             new_logprobs = torch.gather(new_all_logprobs, 2, responses.unsqueeze(-1)).squeeze(-1)
             new_logprobs = torch.masked_fill(
@@ -398,7 +356,7 @@ class RLOOTrainer(Trainer):
             ratio = torch.exp(logprobs_diff)
             # print(f"{ratio=}")
             pg_losses = -advantages * ratio
-            pg_losses2 = -advantages * torch.clamp(ratio, 1.0 - args.cliprange, 1.0 + args.cliprange)
+            pg_losses2 = -advantages * torch.clamp(ratio, 1.0 - self.args.cliprange, 1.0 + self.args.cliprange)
             pg_loss_max = torch.max(pg_losses, pg_losses2)
             pg_loss = pg_loss_max.mean()
             pg_clipfrac = (pg_losses2 > pg_losses).float().mean()
