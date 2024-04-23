@@ -31,8 +31,6 @@ from transformers.trainer_callback import CallbackHandler, DefaultFlowCallback
 
 from ..models import SUPPORTED_ARCHITECTURES, create_reference_model, PreTrainedModelWrapper
 
-from ppo_trainer import PPOTrainer
-
 
 INVALID_LOGPROB = 1.0
 
