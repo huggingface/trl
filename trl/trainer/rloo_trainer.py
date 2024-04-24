@@ -300,7 +300,7 @@ class RLOOTrainer(Trainer):
                 self.accelerator.unwrap_model(model),
                 query,
                 self.tokenizer,
-                generation_config,
+                self.train_generation_config,
             )
             response = query_response[:, context_length:]
 
