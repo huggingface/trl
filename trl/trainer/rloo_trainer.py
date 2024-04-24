@@ -172,6 +172,8 @@ class RLOOTrainer(Trainer):
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
 
         assert (reward_model is not None) != (reward_fn is not None), "Must set either reward_model or reward_fn, but not both"
+        if reward_model is not None and "score" not in dir(reward_model):
+            raise TypeError(f"Reward model of type {type(reward_model)} has no score function.")
         self.reward_model = reward_model
         self.reward_fn = reward_fn
 
