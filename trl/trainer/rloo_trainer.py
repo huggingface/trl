@@ -104,7 +104,7 @@ def get_reward_model_reward(reward_model, query_responses, tokenizer, context_le
 
 def generate(lm_backbone, queries, tokenizer, generation_config):
     """generate in a way that does not affect padding tokens"""
-    context_length = queries.shape[1]
+    context_length = queries.shape[0]
     attention_mask = queries != tokenizer.pad_token_id
     input_ids = torch.masked_fill(queries, ~attention_mask, 0)
     output = lm_backbone.generate(
