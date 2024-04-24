@@ -297,28 +297,18 @@ class RLOOTrainer(Trainer):
             self.tokenizer,
             self.train_generation_config,
         )
-        print("query_responses", query_responses.shape)
-        print("logits", logits.shape)
-
         responses = torch.stack([query_response[context_length:] for query_response in query_responses], dim=0)
 
         all_logprobs = F.log_softmax(logits, dim=-1)
-        print("all_logprobs", all_logprobs.shape)
         logprobs = torch.gather(all_logprobs, -1, responses.unsqueeze(-1)).squeeze(-1)
-        print("logprobs", logprobs.shape)
         del logits, all_logprobs
 
         with torch.no_grad(), self.optional_peft_ctx():
             ref_output_logits = forward(self.ref_model, query_responses, self.tokenizer).logits
-        print("ref_output_logits", ref_output_logits.shape)
         ref_logits = ref_output_logits[:, context_length - 1 : -1]
-        print("ref_logits", ref_logits.shape)
         ref_logits /= self.args.temperature + 1e-7
-        print("ref_logits", ref_logits.shape)
         ref_all_logprobs = F.log_softmax(ref_logits, dim=-1)
-        print("ref_all_logprob", ref_all_logprobs.shape)
         ref_logprobs = torch.gather(ref_all_logprobs, -1, responses.unsqueeze(-1)).squeeze(-1)
-        print("ref_logprobs", ref_logprobs.shape)
         del ref_output_logits, ref_logits, ref_all_logprobs
 
         # Response Processing 1. truncate response after the
@@ -326,13 +316,10 @@ class RLOOTrainer(Trainer):
         postprocessed_responses = responses
         if self.args.truncate_token_id:
             postprocessed_responses = truncate_response(self.args, self.tokenizer, responses)
-        print("postprocessed_responses", postprocessed_responses.shape)
 
         # Response Processing 2. run reward model on the truncated responses
         postprocessed_query_responses = torch.cat((queries, postprocessed_responses), 1)
-        print("postprocessed_query_responses", postprocessed_query_responses.shape)
         sequence_lengths = first_true_indices(postprocessed_responses == self.tokenizer.pad_token_id) - 1
-        print("sequence_lengths", sequence_lengths.shape)
         if self.reward_model:
             scores = get_reward_model_reward(
                 self.reward_model,
@@ -346,7 +333,6 @@ class RLOOTrainer(Trainer):
                 self.tokenizer,
                 context_length
             )
-        print("scores", scores.shape)
 
         torch.cuda.empty_cache()
 
@@ -368,6 +354,10 @@ class RLOOTrainer(Trainer):
         # 4. compute rewards
         kl = logprobs - ref_logprobs
         non_score_reward = (-self.args.kl_coef * kl).sum(1)
+        print("scores", scores)
+        print("non_score_reward", non_score_reward)
+        print("scores.shape", scores.shape)
+        print("non_score_reward", non_score_reward.shape)
         rlhf_reward = scores - non_score_reward
 
         # we generated `self.args.rloo_k` many responses per prompt
