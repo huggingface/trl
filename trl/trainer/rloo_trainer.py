@@ -289,7 +289,7 @@ class RLOOTrainer(Trainer):
         print(queries.shape)
         queries = queries.repeat(self.args.rloo_k, 1)
         print("w/ repeats", queries.shape)
-        context_length = queries.shape[0]
+        context_length = queries.shape[1]
         query_responses = []
         responses = []
         postprocessed_responses = []
@@ -297,7 +297,7 @@ class RLOOTrainer(Trainer):
         ref_logprobs = []
         scores = []
         sequence_lengths = []
-        for i in range(0, queries.shape[0]):
+        for i in range(0, queries.shape[1]):
             query = queries[i]
             query_response, logits = generate(
                 self.accelerator.unwrap_model(model),
