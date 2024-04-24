@@ -82,7 +82,7 @@ def disable_dropout(model: torch.nn.Module):
 def get_reward_model_reward(reward_model, query_responses, tokenizer, context_length):
     attention_mask = query_responses != tokenizer.pad_token_id
     # position_ids = attention_mask.cumsum(1) - attention_mask.long()  # exclusive cumsum
-    lm_backbone = getattr(reward_model, model.base_model_prefix)
+    lm_backbone = getattr(reward_model, reward_model.base_model_prefix)
     input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
     output = lm_backbone(
         input_ids=input_ids,
