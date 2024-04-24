@@ -99,7 +99,7 @@ def get_reward_model_reward(reward_model, query_responses, tokenizer, context_le
     return reward_logits[
         torch.arange(reward_logits.size(0), device=reward_logits.device),
         sequence_lengths,
-    ].squeeze(-1),
+    ].squeeze(-1)
 
 
 def generate(lm_backbone, queries, tokenizer, generation_config):
