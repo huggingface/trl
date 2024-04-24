@@ -289,82 +289,63 @@ class RLOOTrainer(Trainer):
         queries = queries.repeat(self.args.rloo_k, 1)
 
         context_length = queries.shape[1]
-        group_query_response, group_logits = generate(
+        query_responses, logits = generate(
             self.accelerator.unwrap_model(model),
             queries,
             self.tokenizer,
             self.train_generation_config,
         )
+        print("query_responses", query_responses.shape)
+        print("logits", logits.shape)
+
+        responses = torch.stack([query_response[context_length:] for query_response in query_responses], dim=0)
+
+        all_logprobs = F.log_softmax(logits, dim=-1)
+        print("all_logprobs", all_logprobs.shape)
+        logprobs = torch.gather(all_logprobs, -1, responses.unsqueeze(-1)).squeeze(-1)
+        print("logprobs", logprobs.shape)
+        del logits, all_logprob
+
         with torch.no_grad(), self.optional_peft_ctx():
-            group_ref_output = forward(self.ref_model, group_query_response, self.tokenizer)
-            group_ref_output_logits = group_ref_output.logits
+            ref_output_logits = forward(self.ref_model, query_response, self.tokenizer).logits
+        print("ref_output_logits", ref_output_logits.shape)
+        ref_logits = ref_output_logits[:, context_length - 1 : -1]
+        print("ref_logits", ref_logits.shape)
+        ref_logits /= self.args.temperature + 1e-7
+        print("ref_logits", ref_logits.shape)
+        ref_all_logprobs = F.log_softmax(ref_logits, dim=-1)
+        print("ref_all_logprob", ref_all_logprob.shape)
+        ref_logprobs = torch.gather(ref_all_logprobs, -1, responses.unsqueeze(-1)).squeeze(-1)
+        print("ref_logprobs", ref_logprobs.shape)
+        del ref_output_logits, ref_logits, ref_all_logprob
 
-        postprocessed_responses = []
-        logprobs = []
-        ref_logprobs = []
-        scores = []
-        sequence_lengths = []
-        for query, query_response, logits, ref_output_logits in zip(queries, group_query_response, group_logits, group_ref_output_logits):
+        # Response Processing 1. truncate response after the
+        # first occurrence of `truncate_token_id`
+        postprocessed_responses = responses
+        if self.args.truncate_token_id:
+            postprocessed_responses = truncate_response(self.args, self.tokenizer, responses)
+        print("postprocessed_responses", postprocessed_responses.shape)
 
-            response = query_response[context_length:]
+        # Response Processing 2. run reward model on the truncated responses
+        postprocessed_query_response = torch.cat((queries, postprocessed_response), 1)
+        print("postprocessed_query_response", postprocessed_query_response.shape)
+        sequence_lengths = first_true_indices(postprocessed_responses == self.tokenizer.pad_token_id) - 1
+        print("sequence_lengths", sequence_lengths.shape)
+        if self.reward_model:
+            scores = get_reward_model_reward(
+                self.reward_model,
+                postprocessed_query_responses,
+                self.tokenizer,
+                context_length
+            )
+        else:
+            scores = self.reward_fn(
+                postprocessed_query_responses,
+                self.tokenizer,
+                context_length
+            )
+        print("scores", scores.shape)
 
-            # use the logits during generation directly, instead of using the following
-            all_logprob = F.log_softmax(logits, dim=-1)
-            print("query_response", query_response.shape)
-            print("response", response.shape)
-            print("logits", logits.shape)
-            print("all_logprob", all_logprob.shape)
-            logprob = torch.gather(all_logprob, -1, response.unsqueeze(-1)).squeeze(-1)
-            del logits, all_logprob
-            torch.cuda.empty_cache()
-
-            ref_logits = ref_output_logits[:, context_length - 1 : -1]
-            ref_logits /= self.args.temperature + 1e-7
-            ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
-            ref_logprob = torch.gather(ref_all_logprob, -1, response.unsqueeze(-1)).squeeze(-1)
-            del ref_output_logits, ref_logits, ref_all_logprob
-            torch.cuda.empty_cache()
-
-            # Response Processing 1. truncate response after the
-            # first occurrence of `truncate_token_id`
-            postprocessed_response = response
-            if self.args.truncate_token_id:
-                postprocessed_response = truncate_response(self.args, self.tokenizer, response)
-
-            # Response Processing 2. run reward model on the truncated responses
-            postprocessed_query_response = torch.cat((query, postprocessed_response), 0)
-            sequence_length = first_true_indices(postprocessed_response == self.tokenizer.pad_token_id) - 1
-            if self.reward_model:
-                score = get_reward_model_reward(
-                    self.reward_model,
-                    postprocessed_query_response,
-                    self.tokenizer,
-                    context_length
-                )
-            else:
-                self.reward_fn(
-                    postprocessed_query_response,
-                    self.tokenizer,
-                    context_length
-                )
-
-            query_responses.append(query_response)
-            responses.append(response)
-            postprocessed_responses.append(postprocessed_response)
-            logprobs.append(logprob)
-            ref_logprobs.append(ref_logprob)
-            sequence_lengths.append(sequence_length)
-            scores.append(score)
-
-        query_responses = torch.cat(query_responses, 0)
-        responses = torch.cat(responses, 0)
-        postprocessed_responses = torch.cat(postprocessed_responses, 0)
-        logprobs = torch.cat(logprobs, 0)
-        ref_logprobs = torch.cat(ref_logprobs, 0)
-        print(f"{(ref_logprobs - logprobs).exp()=}")
-        sequence_lengths = torch.cat(sequence_lengths, 0)
-        scores = torch.cat(scores, 0)
-        del (logprob, ref_logprob, score)
         torch.cuda.empty_cache()
 
         # Response Processing 3. filter response. Ensure that the sample contains truncate_token_id
