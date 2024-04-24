@@ -228,7 +228,7 @@ class RLOOTrainer(Trainer):
         # disable `pad_token_id` and `eos_token_id` because we just want to
         # generate tokens without truncation / padding
         self.train_generation_config.eos_token_id = None
-        self.train_generation_config.pad_eos_token_id = None
+        self.train_generation_config.pad_token_id = None
 
 
         super().__init__(
