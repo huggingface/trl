@@ -321,7 +321,7 @@ class RLOOTrainer(Trainer):
             ref_logits = ref_output_logits[:, context_length - 1 : -1]
             ref_logits /= self.args.temperature + 1e-7
             ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
-            ref_logprob = torch.gather(ref_all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
+            ref_logprob = torch.gather(ref_all_logprob, -1, response.unsqueeze(-1)).squeeze(-1)
             del ref_output, ref_logits, ref_all_logprob
             torch.cuda.empty_cache()
 
