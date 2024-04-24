@@ -358,7 +358,7 @@ class RLOOTrainer(Trainer):
         print("non_score_reward", non_score_reward)
         print("scores.shape", scores.shape)
         print("non_score_reward", non_score_reward.shape)
-        rlhf_reward = scores - non_score_reward
+        rlhf_reward = scores - non_score_reward.unsqueeze(1)
 
         # we generated `self.args.rloo_k` many responses per prompt
         # now we can implement the RLOO loss by subtracting the reward of
