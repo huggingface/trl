@@ -283,9 +283,11 @@ class RLOOTrainer(Trainer):
         https://github.com/huggingface/transformers/blob/8c12690cecbb97e187861e386f7a0ac790e4236c/src/transformers/trainer.py#L3112
         """
         model.train()
+
         inputs = self._prepare_inputs(inputs)
         queries = inputs["input_ids"].to(self.accelerator.device)
         queries = queries.repeat(self.args.rloo_k, 1)
+
         context_length = queries.shape[1]
         group_query_response, group_logits = generate(
             self.accelerator.unwrap_model(model),
@@ -293,13 +295,15 @@ class RLOOTrainer(Trainer):
             self.tokenizer,
             self.train_generation_config,
         )
+        with torch.no_grad(), self.optional_peft_ctx():
+            group_ref_output = forward(self.ref_model, group_query_response, self.tokenizer)
 
         postprocessed_responses = []
         logprobs = []
         ref_logprobs = []
         scores = []
         sequence_lengths = []
-        for query_response, logits in zip(group_query_response, group_logits):
+        for query_response, logits, ref_output in zip(group_query_response, group_logits, group_ref_output):
 
             response = query_response[context_length:]
 
@@ -313,8 +317,6 @@ class RLOOTrainer(Trainer):
             del logits, all_logprob
             torch.cuda.empty_cache()
 
-            with torch.no_grad(), self.optional_peft_ctx():
-                ref_output = forward(self.ref_model, query_response, self.tokenizer)
             ref_logits = ref_output.logits[:, context_length - 1 : -1]
             ref_logits /= self.args.temperature + 1e-7
             ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
