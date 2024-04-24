@@ -297,7 +297,7 @@ class RLOOTrainer(Trainer):
         for i in range(0, queries.shape[0]):
             query = queries[i]
             query_response, logits = generate(
-                accelerator.unwrap_model(model),
+                self.accelerator.unwrap_model(model),
                 query,
                 tokenizer,
                 generation_config,
@@ -367,7 +367,7 @@ class RLOOTrainer(Trainer):
         contain_eos_token = torch.any(postprocessed_responses == tokenizer.eos_token_id, dim=-1)
         if self.args.non_eos_penalty:
             scores = torch.where(contain_eos_token, scores, torch.full_like(scores, self.args.penalty_reward_value))
-        accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
+        self.accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
 
         # be very careful with `padding_mask_p1`;
         # see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
@@ -394,7 +394,7 @@ class RLOOTrainer(Trainer):
         torch.cuda.empty_cache()
 
         # calculate loss
-        with accelerator.accumulate(model):
+        with self.accelerator.accumulate(model):
             output = forward(model, query_responses, tokenizer)
             logits = output.logits[:, context_length - 1 : -1]
             logits /= self.args.temperature + 1e-7
@@ -415,7 +415,7 @@ class RLOOTrainer(Trainer):
             pg_loss = pg_loss_max.mean()
             pg_clipfrac = (pg_losses2 > pg_losses).float().mean()
             loss = pg_loss
-            accelerator.backward(loss)
+            self.accelerator.backward(loss)
             optimizer.step()
             optimizer.zero_grad()
             with torch.no_grad():
@@ -435,7 +435,7 @@ class RLOOTrainer(Trainer):
 
         with torch.no_grad():
             rlhf_reward_mean = self.accelerator.gather(rlhf_reward).mean().item()
-            accelerator.print(f"{rlhf_reward_mean=}")
+            self.accelerator.print(f"{rlhf_reward_mean=}")
             mean_kl = kl.sum(1).mean()
             mean_entropy = (-logprobs).sum(1).mean()
             # PR TODO: why is this metric removed?
