@@ -37,6 +37,46 @@ if is_peft_available():
     from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
 
 
+class ReferenceModelManager:
+    def __init__(
+            self,
+            accelerator,
+            ref_model: Optional[PreTrainedModelWrapper] = None,
+            model: Optional[PreTrainedModelWrapper] = None,
+    ):
+        self.accelerator = accelerator
+        self.is_peft_model = getattr(model, "is_peft_model", False)
+
+        if isinstance(ref_model, SUPPORTED_ARCHITECTURES):
+            self.ref_model = ref_model
+            self.ref_model.to(self.accelerator.device)
+        elif ref_model is None and not self.is_peft_model:
+            self.ref_model = create_reference_model(self.model)
+            self.ref_model.to(self.accelerator.device)
+        elif self.is_peft_model:
+            self.ref_model = None
+            self.model = model
+        else:
+            raise ValueError(
+                f"ref_model must be a PreTrainedModelWrapper or `None` "
+                f"got {type(ref_model)} "
+                f"- supported architectures are: {SUPPORTED_ARCHITECTURES} "
+            )
+
+    def __enter__(self):
+        if self.ref_model is not None:
+            return self.ref_model
+        elif self.is_peft_model:
+            return self.accelerator.unwrap_model(self.model).pretrained_model.disable_adapter
+        else:
+            raise ValueError
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if self.ref_model is None and self.is_peft_model:
+            self.optional_peft_ctx.__exit__(exc_type, exc_value, traceback)
+
+
+
 INVALID_LOGPROB = 1.0
 
 
@@ -168,9 +208,6 @@ class RLOOTrainer(Trainer):
             **kwargs
     ) -> None:
 
-        self.ref_model = ref_model
-        self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
-
         assert (reward_model is not None) != (reward_fn is not None), "Must set either reward_model or reward_fn, but not both"
         if reward_model is not None and "score" not in dir(reward_model):
             raise TypeError(f"Reward model of type {type(reward_model)} has no score function.")
@@ -202,54 +239,36 @@ class RLOOTrainer(Trainer):
             **kwargs,
         )
 
-        self._prepare_multigpu()
-
-        #########################
-        # Prepare reference model
-        #########################
-        self.is_peft_model = getattr(self.model, "is_peft_model", False)
-        if isinstance(ref_model, SUPPORTED_ARCHITECTURES):
-            self.ref_model = ref_model
-        elif ref_model is None and not self.is_peft_model:
-            self.ref_model = create_reference_model(self.model)
-        elif self.is_peft_model:
-            self.ref_model = None
-        else:
-            raise ValueError(
-                f"ref_model must be a PreTrainedModelWrapper or `None` "
-                f"got {type(ref_model)} "
-                f"- supported architectures are: {SUPPORTED_ARCHITECTURES} "
-            )
-        self.optional_peft_ctx = (
-            self.accelerator.unwrap_model(self.model).pretrained_model.disable_adapter
-            if self.is_peft_model
-            else nullcontext
+        ref_model = self._prepare_multigpu(ref_model)
+        self.ref_model_mgr = ReferenceModelManager(
+            self.accelerator,
+            ref_model=ref_model,
+            model=model,
         )
 
-        # PR TODO: what about multi-gpu here?
+        # PR TODO: what about multi-gpu here? Shouldn't we _prepare_multigpu(reward_model) as well?
         self.reward_model.to(self.model.device)
-        self.ref_model.to(self.model.device)
 
         #########
         # disable dropout
         #########
         # PR TODO: review the below, I'm not sure why we disable dropout
         disable_dropout(self.model)
-        if self.ref_model is not None:
-            disable_dropout(self.ref_model)
+        #if self.ref_model is not None:
+        #    disable_dropout(self.ref_model)
         if self.reward_model is not None:
             disable_dropout(self.reward_model)
 
 
-    def _prepare_multigpu(self):
+    def _prepare_multigpu(self, model):
         # Deepspeed Zero-3 does not support precompute_ref_log_probs
-        if self.ref_model is None:
-            return
+        if model is None:
+            return model
         elif self.is_deepspeed_enabled:
-            self.ref_model = self._prepare_deepspeed(self.ref_model)
+            return self._prepare_deepspeed(model)
         else:
-            self.ref_model = self.accelerator.prepare_model(
-                self.ref_model,
+            return self.accelerator.prepare_model(
+                model,
                 evaluation_mode=True
             )
 
@@ -307,9 +326,9 @@ class RLOOTrainer(Trainer):
         logprobs = torch.gather(all_logprobs, -1, responses.unsqueeze(-1)).squeeze(-1)
         del logits, all_logprobs
 
-        with torch.no_grad(), self.optional_peft_ctx():
-            ref_model = self.model if self.is_peft_model else self.ref_model
-            ref_output_logits = forward(ref_model, query_responses, self.tokenizer).logits
+        with torch.no_grad():
+            with self.ref_model_mgr() as ref_model:
+                ref_output_logits = forward(ref_model, query_responses, self.tokenizer).logits
         ref_logits = ref_output_logits[:, context_length - 1 : -1]
         ref_logits /= self.args.temperature + 1e-7
         ref_all_logprobs = F.log_softmax(ref_logits, dim=-1)
