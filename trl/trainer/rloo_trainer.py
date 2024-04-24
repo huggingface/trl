@@ -51,7 +51,7 @@ class ReferenceModelManager:
             self.ref_model = ref_model
             self.ref_model.to(self.accelerator.device)
         elif ref_model is None and not self.is_peft_model:
-            self.ref_model = create_reference_model(self.model)
+            self.ref_model = create_reference_model(model)
             self.ref_model.to(self.accelerator.device)
         elif self.is_peft_model:
             self.ref_model = None
