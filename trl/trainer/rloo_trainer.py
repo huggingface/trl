@@ -297,13 +297,14 @@ class RLOOTrainer(Trainer):
         )
         with torch.no_grad(), self.optional_peft_ctx():
             group_ref_output = forward(self.ref_model, group_query_response, self.tokenizer)
+            group_ref_output_logits = group_ref_output.logits
 
         postprocessed_responses = []
         logprobs = []
         ref_logprobs = []
         scores = []
         sequence_lengths = []
-        for query_response, logits, ref_output in zip(group_query_response, group_logits, group_ref_output):
+        for query_response, logits, ref_output_logits in zip(group_query_response, group_logits, group_ref_output_logits):
 
             response = query_response[context_length:]
 
@@ -317,7 +318,7 @@ class RLOOTrainer(Trainer):
             del logits, all_logprob
             torch.cuda.empty_cache()
 
-            ref_logits = ref_output.logits[:, context_length - 1 : -1]
+            ref_logits = ref_output_logits[:, context_length - 1 : -1]
             ref_logits /= self.args.temperature + 1e-7
             ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
             ref_logprob = torch.gather(ref_all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
