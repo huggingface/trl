@@ -286,7 +286,7 @@ class RLOOTrainer(Trainer):
         inputs = self._prepare_inputs(inputs)
         queries = inputs["input_ids"].to(self.accelerator.device)
         queries = queries.repeat(self.args.rloo_k, 1)
-        context_length = queries.shape[1]
+        context_length = queries.shape[0]
         query_responses = []
         responses = []
         postprocessed_responses = []
