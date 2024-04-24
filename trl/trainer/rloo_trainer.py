@@ -299,7 +299,7 @@ class RLOOTrainer(Trainer):
             query_response, logits = generate(
                 self.accelerator.unwrap_model(model),
                 query,
-                tokenizer,
+                self.tokenizer,
                 generation_config,
             )
             response = query_response[:, context_length:]
@@ -311,7 +311,7 @@ class RLOOTrainer(Trainer):
             torch.cuda.empty_cache()
 
             with torch.no_grad(), self.optional_peft_ctx():
-                ref_output = forward(self.ref_model, query_response, tokenizer)
+                ref_output = forward(self.ref_model, query_response, self.tokenizer)
             ref_logits = ref_output.logits[:, context_length - 1 : -1]
             ref_logits /= self.args.temperature + 1e-7
             ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
@@ -323,22 +323,22 @@ class RLOOTrainer(Trainer):
             # first occurrence of `truncate_token_id`
             postprocessed_response = response
             if self.args.truncate_token_id:
-                postprocessed_response = truncate_response(self.args, tokenizer, response)
+                postprocessed_response = truncate_response(self.args, self.tokenizer, response)
 
             # Response Processing 2. run reward model on the truncated responses
             postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
-            sequence_length = first_true_indices(postprocessed_response == tokenizer.pad_token_id) - 1
+            sequence_length = first_true_indices(postprocessed_response == self.tokenizer.pad_token_id) - 1
             if self.reward_model:
                 score = get_reward_model_reward(
                     self.reward_model,
                     postprocessed_query_response,
-                    tokenizer,
+                    self.tokenizer,
                     context_length
                 )
             else:
                 self.reward_fn(
                     postprocessed_query_response,
-                    tokenizer,
+                    self.tokenizer,
                     context_length
                 )
 
@@ -364,7 +364,7 @@ class RLOOTrainer(Trainer):
         # Response Processing 3. filter response. Ensure that the sample contains truncate_token_id
         # responses not passing that filter will receive a low (fixed) score
         # only query humans on responses that pass that filter
-        contain_eos_token = torch.any(postprocessed_responses == tokenizer.eos_token_id, dim=-1)
+        contain_eos_token = torch.any(postprocessed_responses == self.tokenizer.eos_token_id, dim=-1)
         if self.args.non_eos_penalty:
             scores = torch.where(contain_eos_token, scores, torch.full_like(scores, self.args.penalty_reward_value))
         self.accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
@@ -395,7 +395,7 @@ class RLOOTrainer(Trainer):
 
         # calculate loss
         with self.accelerator.accumulate(model):
-            output = forward(model, query_responses, tokenizer)
+            output = forward(model, query_responses, self.tokenizer)
             logits = output.logits[:, context_length - 1 : -1]
             logits /= self.args.temperature + 1e-7
             new_all_logprobs = F.log_softmax(logits, dim=-1)
@@ -455,7 +455,7 @@ class RLOOTrainer(Trainer):
                 "policy/entropy_avg": self.accelerator.gather(entropy).mean().item(),
                 "val/ratio": self.accelerator.gather(new_ratio).mean().item(),
                 "val/ratio_var": self.accelerator.gather(ratio_stats).var().item(),
-                "val/num_eos_tokens": (responses == tokenizer.eos_token_id).sum().item(),
+                "val/num_eos_tokens": (responses == self.tokenizer.eos_token_id).sum().item(),
             })
 
         del kl, mean_kl, mean_entropy, scores
