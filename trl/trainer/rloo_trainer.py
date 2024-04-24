@@ -304,7 +304,7 @@ class RLOOTrainer(Trainer):
         print("all_logprobs", all_logprobs.shape)
         logprobs = torch.gather(all_logprobs, -1, responses.unsqueeze(-1)).squeeze(-1)
         print("logprobs", logprobs.shape)
-        del logits, all_logprob
+        del logits, all_logprobs
 
         with torch.no_grad(), self.optional_peft_ctx():
             ref_output_logits = forward(self.ref_model, query_response, self.tokenizer).logits
@@ -314,10 +314,10 @@ class RLOOTrainer(Trainer):
         ref_logits /= self.args.temperature + 1e-7
         print("ref_logits", ref_logits.shape)
         ref_all_logprobs = F.log_softmax(ref_logits, dim=-1)
-        print("ref_all_logprob", ref_all_logprob.shape)
+        print("ref_all_logprob", ref_all_logprobs.shape)
         ref_logprobs = torch.gather(ref_all_logprobs, -1, responses.unsqueeze(-1)).squeeze(-1)
         print("ref_logprobs", ref_logprobs.shape)
-        del ref_output_logits, ref_logits, ref_all_logprob
+        del ref_output_logits, ref_logits, ref_all_logprobs
 
         # Response Processing 1. truncate response after the
         # first occurrence of `truncate_token_id`
