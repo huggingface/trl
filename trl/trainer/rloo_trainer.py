@@ -308,7 +308,8 @@ class RLOOTrainer(Trainer):
         del logits, all_logprobs
 
         with torch.no_grad(), self.optional_peft_ctx():
-            ref_output_logits = forward(self.ref_model, query_responses, self.tokenizer).logits
+            ref_model = self.model if self.is_peft_model else self.ref_model
+            ref_output_logits = forward(ref_model, query_responses, self.tokenizer).logits
         ref_logits = ref_output_logits[:, context_length - 1 : -1]
         ref_logits /= self.args.temperature + 1e-7
         ref_all_logprobs = F.log_softmax(ref_logits, dim=-1)
