@@ -285,27 +285,23 @@ class RLOOTrainer(Trainer):
         model.train()
         inputs = self._prepare_inputs(inputs)
         queries = inputs["input_ids"].to(self.accelerator.device)
-        print(queries)
-        print(queries.shape)
         queries = queries.repeat(self.args.rloo_k, 1)
-        print("w/ repeats", queries.shape)
         context_length = queries.shape[1]
-        query_responses = []
-        responses = []
+        group_query_response, group_logits = generate(
+            self.accelerator.unwrap_model(model),
+            queries,
+            self.tokenizer,
+            self.train_generation_config,
+        )
+
         postprocessed_responses = []
         logprobs = []
         ref_logprobs = []
         scores = []
         sequence_lengths = []
-        for i in range(0, queries.shape[1]):
-            query = queries[i]
-            query_response, logits = generate(
-                self.accelerator.unwrap_model(model),
-                query,
-                self.tokenizer,
-                self.train_generation_config,
-            )
-            response = query_response[:, context_length:]
+        for query_response, logitss in zip(group_query_response, group_logits):
+
+            response = query_response[context_length:]
 
             # use the logits during generation directly, instead of using the following
             all_logprob = F.log_softmax(logits, dim=-1)
