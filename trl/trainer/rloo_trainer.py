@@ -304,7 +304,7 @@ class RLOOTrainer(Trainer):
         ref_logprobs = []
         scores = []
         sequence_lengths = []
-        for query_response, logits, ref_output_logits in zip(group_query_response, group_logits, group_ref_output_logits):
+        for query, query_response, logits, ref_output_logits in zip(query, group_query_response, group_logits, group_ref_output_logits):
 
             response = query_response[context_length:]
 
