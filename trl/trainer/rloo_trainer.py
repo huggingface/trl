@@ -305,6 +305,10 @@ class RLOOTrainer(Trainer):
 
             # use the logits during generation directly, instead of using the following
             all_logprob = F.log_softmax(logits, dim=-1)
+            print("query_response", query_response)
+            print("response", response)
+            print("logits", logits)
+            print("all_logprob", all_logprob)
             logprob = torch.gather(all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
             del logits, all_logprob
             torch.cuda.empty_cache()
