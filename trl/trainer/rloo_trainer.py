@@ -284,7 +284,7 @@ class RLOOTrainer(Trainer):
         """
         model.train()
         inputs = self._prepare_inputs(inputs)
-        queries = torch.tensor(inputs["input_ids"]).to(device)
+        queries = inputs["input_ids"].to(self.accelerator.device)
         queries = queries.repeat(self.args.rloo_k, 1)
         context_length = queries.shape[1]
         query_responses = []
