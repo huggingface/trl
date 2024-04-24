@@ -307,7 +307,7 @@ class RLOOTrainer(Trainer):
         del logits, all_logprobs
 
         with torch.no_grad(), self.optional_peft_ctx():
-            ref_output_logits = forward(self.ref_model, query_response, self.tokenizer).logits
+            ref_output_logits = forward(self.ref_model, query_responses, self.tokenizer).logits
         print("ref_output_logits", ref_output_logits.shape)
         ref_logits = ref_output_logits[:, context_length - 1 : -1]
         print("ref_logits", ref_logits.shape)
@@ -327,8 +327,8 @@ class RLOOTrainer(Trainer):
         print("postprocessed_responses", postprocessed_responses.shape)
 
         # Response Processing 2. run reward model on the truncated responses
-        postprocessed_query_response = torch.cat((queries, postprocessed_response), 1)
-        print("postprocessed_query_response", postprocessed_query_response.shape)
+        postprocessed_query_responses = torch.cat((queries, postprocessed_responses), 1)
+        print("postprocessed_query_responses", postprocessed_query_responses.shape)
         sequence_lengths = first_true_indices(postprocessed_responses == self.tokenizer.pad_token_id) - 1
         print("sequence_lengths", sequence_lengths.shape)
         if self.reward_model:
