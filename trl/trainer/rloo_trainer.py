@@ -226,6 +226,10 @@ class RLOOTrainer(Trainer):
             else nullcontext
         )
 
+        # PR TODO: what about multi-gpu here?
+        self.reward_model.to(self.model.device)
+        self.ref_model.to(self.model.device)
+
         #########
         # disable dropout
         #########
