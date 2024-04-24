@@ -344,7 +344,7 @@ class RLOOTrainer(Trainer):
             scores = torch.where(contain_eos_token, scores, torch.full_like(scores, self.args.penalty_reward_value))
         self.accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
 
-        # be very careful with `padding_mask_p1`;
+        # be very careful with `padding_mask`;
         # see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
         response_idxs = torch.arange(responses.shape[1], device=responses.device).repeat(responses.shape[0], 1)
         padding_mask = response_idxs > sequence_lengths.unsqueeze(1)
@@ -380,7 +380,7 @@ class RLOOTrainer(Trainer):
             new_all_logprobs = F.log_softmax(logits, dim=-1)
             new_logprobs = torch.gather(new_all_logprobs, 2, responses.unsqueeze(-1)).squeeze(-1)
             new_logprobs = torch.masked_fill(
-                new_logprobs, padding_mask[micro_batch_inds], INVALID_LOGPROB
+                new_logprobs, padding_mask, INVALID_LOGPROB
             )
             new_ratio = (new_logprobs - logprobs).exp()
             new_logprobs = new_logprobs.sum(1)
