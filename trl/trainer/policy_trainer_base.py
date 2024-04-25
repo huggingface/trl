@@ -191,7 +191,7 @@ class PolicyTrainerBase(Trainer):
         """generate in a way that does not affect padding tokens"""
         context_length = queries.shape[0]
         attention_mask = queries != self.tokenizer.pad_token_id
-        input_ids = torch.masked_fill(queenries, ~attention_mask, 0)
+        input_ids = torch.masked_fill(queries, ~attention_mask, 0)
         output = lm_backbone.generate(
             input_ids=input_ids,
             attention_mask=attention_mask,
