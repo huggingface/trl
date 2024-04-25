@@ -159,7 +159,7 @@ class RLOOTrainer(PolicyTrainerBase):
         del logits, all_logprobs
 
         with torch.no_grad():
-            with self.ref_model_mgr() as ref_model:
+            with self.ref_model_mgr as ref_model:
                 ref_output_logits = forward(ref_model, query_responses, self.tokenizer).logits
         ref_logits = ref_output_logits[:, context_length - 1 : -1]
         ref_logits /= self.args.temperature + 1e-7
