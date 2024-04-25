@@ -272,7 +272,8 @@ class RLOOTrainer(PolicyTrainerBase):
                 "objective/entropy": self.accelerator.gather(mean_entropy).mean().item(),
                 "objective/rlhf_reward": self.accelerator.gather(rlhf_reward).mean().item(),
                 "objective/scores": self.accelerator.gather(scores.mean()).mean().item(),
-                "policy/approxkl_avg": self.accelerator.gather(approxkl).mean().item(),
+                # PR TODO: add approxkl_avg
+                #"policy/approxkl_avg": self.accelerator.gather(approxkl).mean().item(),
                 "policy/clipfrac_avg": self.accelerator.gather(pg_clipfrac).mean().item(),
                 "loss/policy_avg": self.accelerator.gather(pg_loss).mean().item(),
                 "loss/value_avg": self.accelerator.gather(vf_loss_stats).mean().item(),
