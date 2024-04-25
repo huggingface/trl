@@ -49,7 +49,7 @@ _import_structure = {
     "rloo_trainer": ["RLOOTrainer", "RLOOConfig"],
     "sft_trainer": ["SFTTrainer"],
     "base": ["BaseTrainer"],
-    "policy_trainer_base": ["PolicyTrainerBase"],
+    "policy_trainer_base": ["PolicyTrainerBase", "PolicyTrainerArguments"],
     "ddpo_config": ["DDPOConfig"],
 }
 
