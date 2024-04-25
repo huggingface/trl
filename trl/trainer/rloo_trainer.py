@@ -48,6 +48,18 @@ class RLOOConfig(PolicyTrainerArguments):
     """REINFORCE Leave-One-Out (RLOO) number of online samples per prompt"""
 
 
+def first_true_indices(bools, dtype=torch.long):
+    """
+    Takes an N-dimensional bool tensor and returns an (N-1)-dimensional tensor of integers giving
+    the position of the first True in each "row".
+
+    Returns the length of the rows (bools.size(-1)) if no element is True in a given row.
+    """
+    row_len = bools.size(-1)
+    zero_or_index = row_len * (~bools).type(dtype) + torch.arange(row_len, dtype=dtype, device=bools.device)
+    return torch.min(zero_or_index, dim=-1).values
+
+
 class RLOOTrainer(PolicyTrainerBase):
 
     def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
