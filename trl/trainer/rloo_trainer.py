@@ -262,9 +262,10 @@ class RLOOTrainer(PolicyTrainerBase):
             pg_loss = pg_loss_max.mean()
             pg_clipfrac = (pg_losses2 > pg_losses).float().mean()
             loss = pg_loss
+            # TODO: this violates gradient accumulation
             self.accelerator.backward(loss)
-            optimizer.step()
-            optimizer.zero_grad()
+            self.optimizer.step()
+            self.optimizer.zero_grad()
             with torch.no_grad():
                 prob_dist = torch.nn.functional.softmax(logits, dim=-1)
                 entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1)
