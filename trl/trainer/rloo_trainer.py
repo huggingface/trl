@@ -193,7 +193,8 @@ class RLOOTrainer(PolicyTrainerBase):
         contain_eos_token = torch.any(postprocessed_responses == self.tokenizer.eos_token_id, dim=-1)
         if self.args.non_eos_penalty:
             scores = torch.where(contain_eos_token, scores, torch.full_like(scores, self.args.penalty_reward_value))
-        self.accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
+        # PR TODO: this is from original, but maybe it should be logged somewhere?
+        #self.accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
 
         # be very careful with `padding_mask`;
         # see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
@@ -218,7 +219,6 @@ class RLOOTrainer(PolicyTrainerBase):
                     other_response_rlhf_rewards.append(rlhf_reward[j])
             advantages[i] = rlhf_reward[i] - torch.stack(other_response_rlhf_rewards).mean(0)
         torch.cuda.empty_cache()
-
 
         # calculate loss
         with self.accelerator.accumulate(model):
@@ -248,15 +248,13 @@ class RLOOTrainer(PolicyTrainerBase):
                 entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1)
                 approxkl = 0.5 * (logprobs_diff**2).mean()
 
-        # del everything and empty cache
-        # fmt: off
-
         with torch.no_grad():
             rlhf_reward_mean = self.accelerator.gather(rlhf_reward).mean().item()
-            self.accelerator.print(f"{rlhf_reward_mean=}")
+            # PR TODO: this is from original, but maybe it should be logged somewhere?
+            #self.accelerator.print(f"{rlhf_reward_mean=}")
             mean_kl = kl.sum(1).mean()
             mean_entropy = (-logprobs).sum(1).mean()
-            # PR TODO: why is this metric removed?
+            # PR TODO: why is this metric removed in the original
             # mean_non_score_reward = non_score_reward.sum(1).mean()
             # "objective/non_score_reward"
 
