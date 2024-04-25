@@ -227,7 +227,7 @@ class RLOOTrainer(PolicyTrainerBase):
             for j in range(0, len(advantages)):
                 if i != j:
                     other_response_rlhf_rewards.append(rlhf_reward[j])
-            advantages[i] = rlhf_reward[i] - torch.stack(other_response_rlhf_rewards).mean()
+            advantages[i] = rlhf_reward[i] - torch.stack(other_response_rlhf_rewards).mean(0)
         torch.cuda.empty_cache()
 
         print("advantages.shape",advantages.shape)
