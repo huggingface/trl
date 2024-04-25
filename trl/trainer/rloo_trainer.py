@@ -202,6 +202,7 @@ class RLOOTrainer(PolicyTrainerBase):
 
         print("logprobs.shape", logprobs.shape)
         print("ref_logprobs.shape", ref_logprobs.shape)
+        print("scores.shape",scores.shape)
         # 4. compute rewards
         kl = logprobs - ref_logprobs
         non_score_reward = (-self.args.kl_coef * kl).sum(1)
