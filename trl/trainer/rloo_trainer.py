@@ -282,11 +282,11 @@ class RLOOTrainer(PolicyTrainerBase):
             mean_entropy = (-logprobs).sum(1).mean()
             # PR TODO: why is this metric removed?
             # mean_non_score_reward = non_score_reward.sum(1).mean()
+            # "objective/non_score_reward"
 
             self.log({
                 "objective/kl": self.accelerator.gather(mean_kl).mean().item(),
                 "objective/entropy": self.accelerator.gather(mean_entropy).mean().item(),
-                "objective/non_score_reward": self.accelerator.gather(mean_non_score_reward).mean().item(),
                 "objective/rlhf_reward": self.accelerator.gather(rlhf_reward).mean().item(),
                 "objective/scores": self.accelerator.gather(scores.mean()).mean().item(),
                 "policy/approxkl_avg": self.accelerator.gather(approxkl).mean().item(),
