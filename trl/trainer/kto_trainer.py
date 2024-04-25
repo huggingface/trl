@@ -526,6 +526,7 @@ class KTOTrainer(Trainer):
                 "truncation_mode": self.truncation_mode,
                 "label_pad_token_id": self.label_pad_token_id,
                 "max_prompt_length": self.max_prompt_length,
+                "max_completion_length": self.max_completion_length,
             }
             train_dataset = train_dataset.map(
                 _process_tokens,
@@ -566,6 +567,7 @@ class KTOTrainer(Trainer):
                     "truncation_mode": self.truncation_mode,
                     "label_pad_token_id": self.label_pad_token_id,
                     "max_prompt_length": self.max_prompt_length,
+                    "max_completion_length": self.max_completion_length,
                 }
                 eval_dataset = eval_dataset.map(
                     _process_tokens,
