@@ -136,8 +136,11 @@ class RLOOTrainer(PolicyTrainerBase):
         model.train()
 
         inputs = self._prepare_inputs(inputs)
+        print("inputs.shape", inputs.shape)
         queries = inputs["input_ids"].to(self.accelerator.device)
+        print("queries.shape 0", queries.shape)
         queries = queries.repeat(self.args.rloo_k, 1)
+        print("queries.shape 1", queries.shape)
 
         context_length = queries.shape[1]
         query_responses, logits = self.generate(
@@ -145,10 +148,14 @@ class RLOOTrainer(PolicyTrainerBase):
             queries,
             self.train_generation_config,
         )
+        print("query_responses.shape", query_responses.shape)
         responses = torch.stack([query_response[context_length:] for query_response in query_responses], dim=0)
+        print("responses.shape", responses.shape)
 
         all_logprobs = F.log_softmax(logits, dim=-1)
+        print("all_logprobs.shape", all_logprobs.shape)
         logprobs = torch.gather(all_logprobs, -1, responses.unsqueeze(-1)).squeeze(-1)
+        print("logprobs.shape", logprobs.shape)
         del logits, all_logprobs
 
         with torch.no_grad():
