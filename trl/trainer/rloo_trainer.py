@@ -116,11 +116,6 @@ class RLOOTrainer(PolicyTrainerBase):
         kl = logprobs - ref_logprobs
         non_score_reward = (-self.args.kl_coef * kl).sum(1)
         rlhf_reward = scores + non_score_reward.unsqueeze(1)
-        print("non_score_reward", non_score_reward)
-        print("scores", scores)
-        print("rlhf_reward", rlhf_reward)
-        print("rlhf_reward.mean()", rlhf_reward.mean())
-
 
         # we generated `self.args.rloo_k` many responses per prompt
         # now we can implement the RLOO loss by subtracting the reward of
