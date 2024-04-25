@@ -136,7 +136,7 @@ class RLOOTrainer(PolicyTrainerBase):
         model.train()
 
         inputs = self._prepare_inputs(inputs)
-        queries = inputs["input_ids"].to(self.accelerator.device)
+1        queries = inputs["input_ids"].to(self.accelerator.device)
         print("queries.shape 0", queries.shape)
         queries = queries.repeat(self.args.rloo_k, 1)
         print("queries.shape 1", queries.shape)
@@ -148,6 +148,7 @@ class RLOOTrainer(PolicyTrainerBase):
             self.train_generation_config,
         )
         print("query_responses.shape", query_responses.shape)
+        print("logits.shape", logits.shape)
         responses = torch.stack([query_response[context_length:] for query_response in query_responses], dim=0)
         print("responses.shape", responses.shape)
 
