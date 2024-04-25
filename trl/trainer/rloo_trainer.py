@@ -30,7 +30,7 @@ from transformers import (
 
 from ..models import SUPPORTED_ARCHITECTURES, create_reference_model, PreTrainedModelWrapper
 
-from . import PolicyTrainerBase
+from . import PolicyTrainerBase, PolicyTrainerArguments
 
 from ..import_utils import is_peft_available
 
@@ -39,94 +39,13 @@ INVALID_LOGPROB = 1.0
 
 
 @dataclass
-class RLOOConfig(TrainingArguments):
-    response_length: int = 53
-    """the length of the response"""
-    truncate_token: Optional[Literal["eos"]] = None
-    """the truncate token"""
-    truncate_token_id: Optional[int] = None
-    """the truncation token id"""
-    temperature: float = 0.7
-    """the sampling temperature"""
-    penalty_reward_value: int = -1
-    """the reward value for responses that do not contain `truncate_token_id`"""
-    non_eos_penalty: bool = False
-    """whether to penalize responses that do not contain `truncate_token_id`"""
-
+class RLOOConfig(PolicyTrainerArguments):
     cliprange: float = 0.2
     """the clip range"""
     kl_coef: float = 0.05
     """the KL coefficient"""
-
-    # rloo args
     rloo_k: int = 4
     """REINFORCE Leave-One-Out (RLOO) number of online samples per prompt"""
-
-
-"""
-PR TODO: class ModelWithRewardsConfig(ModelConfig)
-- reward_model_path
-- sft_model_path
-"""
-
-
-
-def get_reward_model_reward(reward_model, query_responses, tokenizer, context_length):
-    attention_mask = query_responses != tokenizer.pad_token_id
-    # position_ids = attention_mask.cumsum(1) - attention_mask.long()  # exclusive cumsum
-    lm_backbone = getattr(reward_model, reward_model.base_model_prefix)
-    input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
-    output = lm_backbone(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        # position_ids=position_ids,
-        return_dict=True,
-        output_hidden_states=True,
-    )
-    reward_logits = reward_model.score(output.hidden_states[-1])
-    sequence_lengths = (
-        first_true_indices(query_responses[:, context_length:] == tokenizer.pad_token_id) - 1 + context_length
-    )
-
-    # https://github.com/huggingface/transformers/blob/dc68a39c8111217683bf49a4912d0c9018bab33d/src/transformers/models/gpt2/modeling_gpt2.py#L1454
-    result = reward_logits[
-        torch.arange(reward_logits.size(0), device=reward_logits.device),
-        sequence_lengths,
-    ].squeeze(-1)
-    return result
-
-
-def first_true_indices(bools, dtype=torch.long):
-    """
-    Takes an N-dimensional bool tensor and returns an (N-1)-dimensional tensor of integers giving
-    the position of the first True in each "row".
-
-    Returns the length of the rows (bools.size(-1)) if no element is True in a given row.
-    """
-    row_len = bools.size(-1)
-    zero_or_index = row_len * (~bools).type(dtype) + torch.arange(row_len, dtype=dtype, device=bools.device)
-    return torch.min(zero_or_index, dim=-1).values
-
-
-def truncate_response(args, tokenizer, responses):
-    trunc_idxs = first_true_indices(responses == args.truncate_token_id).unsqueeze(-1)
-    new_size = [1] * (len(responses.size()) - 1) + [responses.shape[1]]
-    idxs = torch.arange(responses.shape[1], device=responses.device).view(*new_size)
-    postprocessed_responses = torch.masked_fill(responses, idxs > trunc_idxs, tokenizer.pad_token_id)
-    return postprocessed_responses
-
-
-def forward(model, query_responses, tokenizer):
-    attention_mask = query_responses != tokenizer.pad_token_id
-    # position_ids = attention_mask.cumsum(1) - attention_mask.long()
-    input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
-    return model(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        # position_ids=position_ids,
-        return_dict=True,
-        output_hidden_states=True,
-    )
 
 
 class RLOOTrainer(PolicyTrainerBase):
@@ -155,7 +74,7 @@ class RLOOTrainer(PolicyTrainerBase):
 
         with torch.no_grad():
             with self.ref_model_mgr as ref_model:
-                ref_output_logits = forward(ref_model, query_responses, self.tokenizer).logits
+                ref_output_logits = self.forward(ref_model, query_responses).logits
         ref_logits = ref_output_logits[:, context_length - 1 : -1]
         ref_logits /= self.args.temperature + 1e-7
         ref_all_logprobs = F.log_softmax(ref_logits, dim=-1)
@@ -166,25 +85,15 @@ class RLOOTrainer(PolicyTrainerBase):
         # first occurrence of `truncate_token_id`
         postprocessed_responses = responses
         if self.args.truncate_token_id:
-            postprocessed_responses = truncate_response(self.args, self.tokenizer, responses)
+            postprocessed_responses = self.truncate_response(responses)
 
         # Response Processing 2. run reward model on the truncated responses
         postprocessed_query_responses = torch.cat((queries, postprocessed_responses), 1)
         sequence_lengths = first_true_indices(postprocessed_responses == self.tokenizer.pad_token_id) - 1
-        if self.reward_model:
-            scores = get_reward_model_reward(
-                self.reward_model,
-                postprocessed_query_responses,
-                self.tokenizer,
-                context_length
-            )
-        else:
-            scores = self.reward_fn(
-                postprocessed_query_responses,
-                self.tokenizer,
-                context_length
-            )
-
+        _, scores, _ = self.get_reward(
+            postprocessed_query_responses,
+            context_length
+        )
         torch.cuda.empty_cache()
 
         # Response Processing 3. filter response. Ensure that the sample contains truncate_token_id
@@ -226,7 +135,7 @@ class RLOOTrainer(PolicyTrainerBase):
         torch.cuda.empty_cache()
 
         # calculate loss
-        output = forward(model, query_responses, self.tokenizer)
+        output = self.forward(model, query_responses)
         logits = output.logits[:, context_length - 1 : -1]
         logits /= self.args.temperature + 1e-7
         new_all_logprobs = F.log_softmax(logits, dim=-1)
@@ -242,10 +151,9 @@ class RLOOTrainer(PolicyTrainerBase):
         pg_loss_max = torch.max(pg_losses, pg_losses2)
         pg_loss = pg_loss_max.mean()
         pg_clipfrac = (pg_losses2 > pg_losses).float().mean()
-        loss = pg_loss
 
         # backprop
-        self.accelerator.backward(loss)
+        self.accelerator.backward(pg_loss)
 
         # log metrics
         with torch.no_grad():
@@ -283,17 +191,17 @@ class RLOOTrainer(PolicyTrainerBase):
             "val/num_eos_tokens": (responses == self.tokenizer.eos_token_id).sum().item(),
         })
 
-        ret = loss.detach() / self.args.gradient_accumulation_steps
+        loss = pg_loss.detach()
 
         del (
             output, logits, new_all_logprobs, new_logprobs,
             logprobs_diff, ratio, pg_losses, pg_losses2,
-            pg_loss, loss, pg_clipfrac, prob_dist, entropy, approxkl,
+            pg_loss, pg_clipfrac, prob_dist, entropy, approxkl,
             kl, mean_kl, mean_entropy, scores
         )
         torch.cuda.empty_cache()
 
-        return ret
+        return loss
 
 
 if __name__ == "__main__":

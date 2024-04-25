@@ -40,6 +40,43 @@ if is_peft_available():
     from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
 
 
+@dataclass
+class PolicyTrainerArguments(TrainingArguments):
+    response_length: int = 53
+    """the length of the response"""
+    truncate_token: Optional[Literal["eos"]] = None
+    """the truncate token"""
+    truncate_token_id: Optional[int] = None
+    """the truncation token id"""
+    temperature: float = 0.7
+    """the sampling temperature"""
+    penalty_reward_value: int = -1
+    """the reward value for responses that do not contain `truncate_token_id`"""
+    non_eos_penalty: bool = False
+    """whether to penalize responses that do not contain `truncate_token_id`"""
+
+"""
+PR TODO: class ModelWithRewardsConfig(ModelConfig)
+- reward_model_path
+- sft_model_path
+"""
+
+
+def first_true_indices(bools, dtype=torch.long):
+    """
+    Takes an N-dimensional bool tensor and returns an (N-1)-dimensional tensor of integers giving
+    the position of the first True in each "row".
+
+    Returns the length of the rows (bools.size(-1)) if no element is True in a given row.
+    """
+    row_len = bools.size(-1)
+    zero_or_index = row_len * (~bools).type(dtype) + torch.arange(row_len, dtype=dtype, device=bools.device)
+    return torch.min(zero_or_index, dim=-1).values
+
+
+# PR TODO: maybe this isn't necessary? This may be handled already by the accelerator, as it prepares
+#          any model type object in Accelerator._prepare_deepspeed
+# https://github.com/huggingface/accelerate/blob/main/src/accelerate/accelerator.py#L1530
 def _prepare_deepspeed(self, accelerator, model: PreTrainedModelWrapper, evaluation_mode):
     # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
     deepspeed_plugin = accelerator.state.deepspeed_plugin
@@ -74,6 +111,12 @@ def _prepare_deepspeed(self, accelerator, model: PreTrainedModelWrapper, evaluat
 
 
 class ReferenceModelManager:
+    """
+    Context manager to prepare and manage the reference model.
+    - If it doesn't exist create a reference model
+      - OR use the base model with adapters disabled if base model uses PEFT
+    - Distribute the model to the accelerator
+    """
     def __init__(
             self,
             accelerator,
@@ -132,6 +175,7 @@ class ReferenceModelManager:
 
 
 # PR TODO: determine why disable_dropout existed, and if it's necessary, readd it
+# https://github.com/huggingface/trl/pull/1540/files/c54f111836a0e8b3af2fd6338a2decbe74b7d494#r1580194071
 
 
 class PolicyTrainerBase(Trainer):
@@ -213,6 +257,58 @@ class PolicyTrainerBase(Trainer):
         logits = torch.stack(output.scores, 1)
         query_responses = torch.cat((queries, output.sequences[:, context_length:]), dim=1)
         return query_responses, logits
+
+    def forward(self, model, query_responses):
+        attention_mask = query_responses != self.tokenizer.pad_token_id
+        # position_ids = attention_mask.cumsum(1) - attention_mask.long()
+        input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
+        return model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            # position_ids=position_ids,
+            return_dict=True,
+            output_hidden_states=True,
+        )
+
+    def get_reward(self, reward_model, query_responses, context_length):
+        attention_mask = query_responses != self.tokenizer.pad_token_id
+        # position_ids = attention_mask.cumsum(1) - attention_mask.long()  # exclusive cumsum
+        lm_backbone = getattr(reward_model, reward_model.base_model_prefix)
+        input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
+        output = lm_backbone(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            # position_ids=position_ids,
+            return_dict=True,
+            output_hidden_states=True,
+        )
+        reward_logits = reward_model.score(output.hidden_states[-1])
+        sequence_lengths = (
+            first_true_indices(
+                query_responses[:, context_length:] == self.tokenizer.pad_token_id
+            ) - 1 + context_length
+        )
+
+        # https://github.com/huggingface/transformers/blob/dc68a39c8111217683bf49a4912d0c9018bab33d/src/transformers/models/gpt2/modeling_gpt2.py#L1454
+        return (
+            reward_logits,
+            reward_logits[
+                torch.arange(reward_logits.size(0), device=reward_logits.device),
+                sequence_lengths,
+            ].squeeze(-1),
+            sequence_lengths,
+        )
+
+    def truncate_response(self, responses):
+        trunc_idxs = first_true_indices(responses == self.args.truncate_token_id).unsqueeze(-1)
+        new_size = [1] * (len(responses.size()) - 1) + [responses.shape[1]]
+        idxs = torch.arange(responses.shape[1], device=responses.device).view(*new_size)
+        postprocessed_responses = torch.masked_fill(
+            responses, idxs > trunc_idxs,
+            self.tokenizer.pad_token_id
+        )
+        return postprocessed_responses
+
 
     def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         raise NotImplementedError
