@@ -169,6 +169,9 @@ class PolicyTrainerBase(Trainer):
             # PR TODO: review this??
             self.train_generation_config.eos_token_id = None
             self.train_generation_config.pad_token_id = None
+        else:
+            self.train_generation_config.eos_token_id = tokenizer.eos_token_id
+            self.train_generation_config.pad_token_id = tokenizer.pad_token_id
 
 
         super().__init__(
