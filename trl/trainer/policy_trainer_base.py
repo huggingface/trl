@@ -190,13 +190,10 @@ class PolicyTrainerBase(Trainer):
     def generate(self, lm_backbone, queries, generation_config):
         """generate in a way that does not affect padding tokens"""
         context_length = queries.shape[1]
-        print("queries", queries)
         print("queries.shape", queries.shape)
         attention_mask = queries != self.tokenizer.pad_token_id
-        print("attention_mask", attention_mask)
         print("attention_mask.shape", attention_mask.shape)
         input_ids = torch.masked_fill(queries, ~attention_mask, 0)
-        print("input_ids", input_ids)
         print("input_ids.shape", input_ids.shape)
         output = lm_backbone.generate(
             input_ids=input_ids,
@@ -207,13 +204,11 @@ class PolicyTrainerBase(Trainer):
             return_dict_in_generate=True,
             output_scores=True,
         )
-        print("output", output)
+        print("output.sequences.shape", output.sequences.shape)
         logits = torch.stack(output.scores, 1)
-        print("logits", logits)
         print("logits.shape", logits.shape)
 
         query_responses = torch.cat((queries, output.sequences[:, context_length:]), dim=1)
-        print("query_responses", query_responses)
         print("query_responses.shape", query_responses.shape)
 
         return query_responses, logits
