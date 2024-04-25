@@ -87,16 +87,12 @@ def get_reward_model_reward(reward_model, query_responses, tokenizer, context_le
     sequence_lengths = (
         first_true_indices(query_responses[:, context_length:] == tokenizer.pad_token_id) - 1 + context_length
     )
-    print("query_responses.shape", query_responses.shape)
-    print("sequence_lengths.shape", sequence_lengths.shape)
-    print("reward_logits.shape", reward_logits.shape)
-    print("reward_logits.size(0)", reward_logits.size(0))
+
     # https://github.com/huggingface/transformers/blob/dc68a39c8111217683bf49a4912d0c9018bab33d/src/transformers/models/gpt2/modeling_gpt2.py#L1454
     result = reward_logits[
         torch.arange(reward_logits.size(0), device=reward_logits.device),
         sequence_lengths,
     ].squeeze(-1)
-    print("result.shape", result.shape)
     return result
 
 
@@ -206,17 +202,10 @@ class RLOOTrainer(PolicyTrainerBase):
         logprobs = torch.masked_fill(logprobs, padding_mask, INVALID_LOGPROB)
         ref_logprobs = torch.masked_fill(ref_logprobs, padding_mask, INVALID_LOGPROB)
 
-        print("logprobs.shape", logprobs.shape)
-        print("ref_logprobs.shape", ref_logprobs.shape)
-        print("scores.shape",scores.shape)
         # 4. compute rewards
         kl = logprobs - ref_logprobs
         non_score_reward = (-self.args.kl_coef * kl).sum(1)
         rlhf_reward = scores - non_score_reward.unsqueeze(1)
-
-        print("kl.shape",kl.shape)
-        print("non_score_reward.shape",non_score_reward.shape)
-        print("rlhf_reward.shape",rlhf_reward.shape)
 
         # we generated `self.args.rloo_k` many responses per prompt
         # now we can implement the RLOO loss by subtracting the reward of
@@ -230,7 +219,6 @@ class RLOOTrainer(PolicyTrainerBase):
             advantages[i] = rlhf_reward[i] - torch.stack(other_response_rlhf_rewards).mean(0)
         torch.cuda.empty_cache()
 
-        print("advantages.shape",advantages.shape)
 
         # calculate loss
         with self.accelerator.accumulate(model):
@@ -244,12 +232,7 @@ class RLOOTrainer(PolicyTrainerBase):
             )
             new_ratio = (new_logprobs - logprobs).exp()
             logprobs_diff = new_logprobs.sum(1) - logprobs.sum(1)
-            print("logprobs_diff.shape", logprobs_diff.shape)
             ratio = torch.exp(logprobs_diff)
-            print("ratio.shape", ratio.shape)
-            # print(f"{ratio=}")
-            print("advantages.shape", advantages.shape)
-            print("ratio.shape", ratio.shape)
             pg_losses = -advantages * ratio
             pg_losses2 = -advantages * torch.clamp(ratio, 1.0 - self.args.cliprange, 1.0 + self.args.cliprange)
             pg_loss_max = torch.max(pg_losses, pg_losses2)
