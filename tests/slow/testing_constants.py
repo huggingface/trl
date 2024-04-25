@@ -14,7 +14,7 @@
 
 # TODO: push them under trl-org
 MODELS_TO_TEST = [
-    "HuggingFaceM4/tiny-random-LlamaForCausalLM",
+    "trl-internal-testing/tiny-random-LlamaForCausalLM",
     "HuggingFaceM4/tiny-random-MistralForCausalLM",
 ]
 

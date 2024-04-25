@@ -498,7 +498,7 @@ class PPOTrainer(BaseTrainer):
 
             if generate_ref_response:
                 with unwrap_model_for_generation(
-                    self.model, self.accelerator, is_peft_model=self.is_peft_model
+                    ref_model, self.accelerator, is_peft_model=self.is_peft_model
                 ) as unwrapped_model:
                     ref_response = unwrapped_model.generate(
                         input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs
