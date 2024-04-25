@@ -28,6 +28,9 @@ from transformers import (
     PreTrainedTokenizerBase
 )
 
+from trl.models.utils import unwrap_model_for_generation
+
+
 from ..models import SUPPORTED_ARCHITECTURES, create_reference_model, PreTrainedModelWrapper
 
 
@@ -192,20 +195,21 @@ class PolicyTrainerBase(Trainer):
         # PR TODO: what about multi-gpu here? Shouldn't we _prepare_multigpu(reward_model) as well?
         self.reward_model.to(self.model.device)
 
-    def generate(self, lm_backbone, queries, generation_config):
+    def generate(self, model, queries, generation_config):
         """generate in a way that does not affect padding tokens"""
-        context_length = queries.shape[1]
-        attention_mask = queries != self.tokenizer.pad_token_id
-        input_ids = torch.masked_fill(queries, ~attention_mask, 0)
-        output = lm_backbone.generate(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            # position_ids=attention_mask.cumsum(1) - attention_mask.long(), # not needed: already adjusted in generations
-            # https://github.com/huggingface/transformers/blob/ac33aeeeee2a7a89b89c93c2962e6feb90daef0a/src/transformers/models/gpt2/modeling_gpt2.py#L1227-L1250
-            generation_config=generation_config,
-            return_dict_in_generate=True,
-            output_scores=True,
-        )
+        with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+            context_length = queries.shape[1]
+            attention_mask = queries != self.tokenizer.pad_token_id
+            input_ids = torch.masked_fill(queries, ~attention_mask, 0)
+            output = unwrapped_model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                # position_ids=attention_mask.cumsum(1) - attention_mask.long(), # not needed: already adjusted in generations
+                # https://github.com/huggingface/transformers/blob/ac33aeeeee2a7a89b89c93c2962e6feb90daef0a/src/transformers/models/gpt2/modeling_gpt2.py#L1227-L1250
+                generation_config=generation_config,
+                return_dict_in_generate=True,
+                output_scores=True,
+            )
         logits = torch.stack(output.scores, 1)
         query_responses = torch.cat((queries, output.sequences[:, context_length:]), dim=1)
         return query_responses, logits

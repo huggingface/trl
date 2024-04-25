@@ -143,7 +143,7 @@ class RLOOTrainer(PolicyTrainerBase):
 
         context_length = queries.shape[1]
         query_responses, logits = self.generate(
-            self.accelerator.unwrap_model(model),
+            self.model,
             queries,
             self.train_generation_config,
         )
@@ -206,7 +206,7 @@ class RLOOTrainer(PolicyTrainerBase):
         # 4. compute rewards
         kl = logprobs - ref_logprobs
         non_score_reward = (-self.args.kl_coef * kl).sum(1)
-        rlhf_reward = scores - non_score_reward.unsqueeze(1)
+        rlhf_reward = scores + non_score_reward.unsqueeze(1)
 
         # we generated `self.args.rloo_k` many responses per prompt
         # now we can implement the RLOO loss by subtracting the reward of
