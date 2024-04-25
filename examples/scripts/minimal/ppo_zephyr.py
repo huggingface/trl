@@ -1,5 +1,5 @@
-from collections import defaultdict
 import multiprocessing
+import shutil
 
 import pandas as pd
 from datasets import load_dataset
@@ -9,7 +9,6 @@ from transformers import (
     AutoModelForCausalLM,
     AutoModelForSequenceClassification,
     AutoTokenizer,
-    GenerationConfig,
     HfArgumentParser,
     PreTrainedModel,
 )
@@ -24,15 +23,18 @@ python -i examples/scripts/minimal/ppo_zephyr.py \
     --per_device_train_batch_size 64 \
     --gradient_accumulation_steps 1 \
     --total_episodes 10000 \
-    --base_model EleutherAI/pythia-1b-deduped \
+    --base_model HuggingFaceH4/mistral-7b-sft-beta \
+    --sft_model_path HuggingFaceH4/mistral-7b-sft-beta \
+    --reward_model_path weqweasdas/RM-Mistral-7B \
     --non_eos_penalty \
-    
+    --truncate_token eos \
+
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/minimal/ppo_zephyr.py \
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \
     --learning_rate 3e-6 \
-    --output_dir models/minimal/ppo_zephyr1 \
+    --output_dir models/minimal/ppo_zephyr4 \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 32 \
     --total_episodes 200000 \
@@ -61,6 +63,9 @@ def print_rich_table(df: pd.DataFrame) -> Table:
 if __name__ == "__main__":
     parser = HfArgumentParser(PPOConfig)
     args = parser.parse_args_into_dataclasses()[0]
+    # remove output_dir if exists
+    shutil.rmtree(args.output_dir, ignore_errors=True)
+
     ################
     # Model & Tokenizer
     ################
@@ -91,9 +96,10 @@ if __name__ == "__main__":
     raw_datasets = load_dataset("HuggingFaceH4/ultrachat_200k")
     train_dataset = raw_datasets["train_sft"]
     eval_dataset = raw_datasets["test_sft"]
+    # train_dataset = train_dataset.select(range(1000))
+    # eval_dataset = eval_dataset.select(range(1000))
 
     dataset_text_field = "prompt"
-    # raise
     def prepare_dataset(dataset, tokenizer):
         """pre-tokenize the dataset before training; only collate during training"""
 
@@ -108,7 +114,7 @@ if __name__ == "__main__":
         return dataset.map(
             tokenize,
             remove_columns=dataset.column_names,
-            num_proc=1, # multiprocessing.cpu_count(),
+            num_proc=multiprocessing.cpu_count(),
             load_from_cache_file=False,
         )
     train_dataset = prepare_dataset(train_dataset, tokenizer)
@@ -128,14 +134,6 @@ if __name__ == "__main__":
         value_model=value_model,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        train_generation_config=GenerationConfig(
-            max_new_tokens=args.response_length,
-            min_new_tokens=args.response_length,
-            temperature=(args.temperature + 1e-7),
-            top_k=0.0,
-            top_p=1.0,
-            do_sample=True,
-        ),
     )
     trainer.train()
     trainer.save_model(args.output_dir)

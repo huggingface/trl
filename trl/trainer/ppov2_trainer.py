@@ -60,8 +60,6 @@ class PPOConfig(TrainingArguments):
     # various batch sizes
     world_size: Optional[int] = None
     """The number of processes (GPUs) to use"""
-    num_train_epochs: int = 1
-    """Number of epochs to train"""
     num_updates: Optional[int] = None
     """The number of updates to train"""
     total_episodes: Optional[int] = 1000000
@@ -137,7 +135,7 @@ def print_rich_table(df: pd.DataFrame) -> Table:
 
 
 # taken from https://github.com/vwxyzjn/direct-preference-optimization/blob/f8b8c0f49dc92a430bae41585f9d467d3618fe2f/utils.py#L99
-def disable_dropout(model: torch.nn.Module):
+def disable_dropout(model: torch.nn.Module) -> None:
     """Disable dropout in a model."""
     for module in model.modules():
         if isinstance(module, torch.nn.Dropout):
@@ -496,7 +494,6 @@ class PPOTrainer(Trainer):
         tokenizer = self.tokenizer
         dataloader = self.dataloader
         device = accelerator.device
-        # torch.backends.cudnn.deterministic = True # TODO: check if cudnn matters
 
         def repeat_generator():
             while True:

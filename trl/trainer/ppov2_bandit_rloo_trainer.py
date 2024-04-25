@@ -26,6 +26,8 @@ from transformers import (
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer_callback import CallbackHandler, DefaultFlowCallback
 
+from trl.models.utils import unwrap_model_for_generation
+
 
 INVALID_LOGPROB = 1.0
 
@@ -55,8 +57,6 @@ class PPOConfig(TrainingArguments):
     # various batch sizes
     world_size: Optional[int] = None
     """The number of processes (GPUs) to use"""
-    num_train_epochs: int = 1
-    """Number of epochs to train"""
     num_updates: Optional[int] = None
     """The number of updates to train"""
     total_episodes: Optional[int] = 1000000
@@ -67,7 +67,7 @@ class PPOConfig(TrainingArguments):
     """The batch size per GPU (HF's `per_device_train_batch_size` * `gradient_accumulation_steps`)"""
     batch_size: Optional[int] = None
     """The batch size across devices (HF's `per_device_train_batch_size` * `world_size` * `gradient_accumulation_steps`)"""
-    nminibatches: int = 1
+    num_mini_batches: int = 1
     """Number of minibatches to split a batch into"""
     local_mini_batch_size: Optional[int] = None
     """the mini batch size per GPU"""
@@ -101,9 +101,9 @@ class PPOConfig(TrainingArguments):
     """the path to the sft model"""
 
     # ppo args
-    nminibatches: int = 1
+    num_mini_batches: int = 1
     """the number of minibatches to split a batch into"""
-    noptepochs: int = 4
+    num_ppo_epochs: int = 4
     """the number of epochs to train"""
     vf_coef: float = 0.1
     """the value function coefficient"""
@@ -126,47 +126,11 @@ class PPOConfig(TrainingArguments):
 
 
 # taken from https://github.com/vwxyzjn/direct-preference-optimization/blob/f8b8c0f49dc92a430bae41585f9d467d3618fe2f/utils.py#L99
-def disable_dropout(model: torch.nn.Module):
+def disable_dropout(model: torch.nn.Module) -> None:
     """Disable dropout in a model."""
     for module in model.modules():
         if isinstance(module, torch.nn.Dropout):
             module.p = 0
-
-
-def masked_mean(values, mask, axis=None):
-    """Compute mean of tensor with a masked values."""
-    if axis is not None:
-        return (values * mask).sum(axis=axis) / mask.sum(axis=axis)
-    else:
-        return (values * mask).sum() / mask.sum()
-
-
-def masked_var(values, mask, unbiased=True):
-    """Compute variance of tensor with masked values."""
-    mean = masked_mean(values, mask)
-    centered_values = values - mean
-    variance = masked_mean(centered_values**2, mask)
-    if unbiased:
-        mask_sum = mask.sum()
-        if mask_sum == 0:
-            raise ValueError(
-                "The sum of the mask is zero, which can happen when `mini_batch_size=1`;"
-                "try increase the `mini_batch_size` or `gradient_accumulation_steps`"
-            )
-        # note that if mask_sum == 1, then there is a division by zero issue
-        # to avoid it you just need to use a larger minibatch_size
-        bessel_correction = mask_sum / (mask_sum - 1)
-        variance = variance * bessel_correction
-    return variance
-
-
-def masked_whiten(values, mask, shift_mean=True):
-    """Whiten values with masked values."""
-    mean, var = masked_mean(values, mask), masked_var(values, mask, False)
-    whitened = (values - mean) * torch.rsqrt(var + 1e-8)
-    if not shift_mean:
-        whitened += mean
-    return whitened
 
 
 def get_reward(model, query_responses, tokenizer, context_length):
@@ -346,11 +310,11 @@ class PPOTrainer(Trainer):
         accelerator = Accelerator(gradient_accumulation_steps=args.gradient_accumulation_steps)
         self.accelerator = accelerator
         args.world_size = accelerator.num_processes
-        args.local_batch_size = args.per_device_train_batch_size * args.gradient_accumulation_steps * args.nminibatches
+        args.local_batch_size = args.per_device_train_batch_size * args.gradient_accumulation_steps * args.num_mini_batches
         args.micro_batch_size = int(args.per_device_train_batch_size * args.world_size)
         args.batch_size = int(args.local_batch_size * args.world_size)
-        args.mini_batch_size = exact_div(args.batch_size, args.nminibatches)
-        args.local_mini_batch_size = exact_div(args.local_batch_size, args.nminibatches)
+        args.mini_batch_size = exact_div(args.batch_size, args.num_mini_batches)
+        args.local_mini_batch_size = exact_div(args.local_batch_size, args.num_mini_batches)
         if args.whiten_rewards:
             assert (
                 args.local_mini_batch_size >= 8
@@ -401,18 +365,6 @@ class PPOTrainer(Trainer):
 
     # def get_train_dataloader(self) -> DataLoader:
 
-    def save_model(self, output_dir: Optional[str] = None):
-        """
-        Copied from Trainer.save_model, simplified.
-        By default we only save the policy and not the value network.
-        """
-        unwrapped: PreTrainedModel = self.accelerator.unwrap_model(self.model)
-        if output_dir is None:
-            output_dir = self.args.output_dir
-        state_dict = self.accelerator.get_state_dict(unwrapped)
-        if self.args.should_save:
-            self._save(output_dir, state_dict=state_dict)
-
     def train(self):
         args = self.args
         accelerator = self.accelerator
@@ -432,7 +384,6 @@ class PPOTrainer(Trainer):
         )
 
         device = accelerator.device
-        torch.backends.cudnn.deterministic = True # TODO: check if cudnn matters
 
         # sync random states for DataLoader(shuffle=True) before `accelerator.prepare`
         # see https://gist.github.com/vwxyzjn/2581bff1e48e185e0b85b6dfe1def79c
@@ -467,7 +418,7 @@ class PPOTrainer(Trainer):
         accelerator.print("===training policy===")
         global_step = 0
         start_time = time.time()
-        stats_shape = (args.noptepochs, args.nminibatches, args.gradient_accumulation_steps)
+        stats_shape = (args.num_ppo_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
         approxkl_stats = torch.zeros(stats_shape, device=device)
         pg_clipfrac_stats = torch.zeros(stats_shape, device=device)
         pg_loss_stats = torch.zeros(stats_shape, device=device)
@@ -493,12 +444,13 @@ class PPOTrainer(Trainer):
                 sequence_lengths = []
                 for i in range(0, queries.shape[0], args.local_rollout_forward_batch_size):
                     query = queries[i : i + args.local_rollout_forward_batch_size]
-                    query_response, logits = generate(
-                        accelerator.unwrap_model(model),
-                        query,
-                        tokenizer,
-                        generation_config,
-                    )
+                    with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+                        query_response, logits = generate(
+                            unwrapped_model,
+                            query,
+                            tokenizer,
+                            generation_config,
+                        )
                     response = query_response[:, context_length:]
 
                     # use the logits during generation directly, instead of using the following
@@ -560,7 +512,7 @@ class PPOTrainer(Trainer):
                 # 4. compute rewards
                 kl = logprobs - ref_logprobs
                 non_score_reward = (-args.kl_coef * kl).sum(1)
-                rlhf_reward = scores - non_score_reward
+                rlhf_reward = scores + non_score_reward
 
                 # we generated `self.args.rloo_k` many responses per prompt
                 # now we can implement the RLOO loss by subtracting the reward of
@@ -577,7 +529,7 @@ class PPOTrainer(Trainer):
                 torch.cuda.empty_cache()
 
             # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
-            for ppo_epoch_idx in range(args.noptepochs):
+            for ppo_epoch_idx in range(args.num_ppo_epochs):
                 b_inds = np.random.permutation(args.local_batch_size)
                 minibatch_idx = 0
                 for mini_batch_start in range(0, args.local_batch_size, args.local_mini_batch_size):
