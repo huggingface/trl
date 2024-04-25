@@ -102,7 +102,9 @@ class RLOOTrainer(PolicyTrainerBase):
         # Response Processing 2. run reward model on the truncated responses
         postprocessed_query_responses = torch.cat((queries, postprocessed_responses), 1)
         sequence_lengths = first_true_indices(postprocessed_responses == self.tokenizer.pad_token_id) - 1
+
         _, scores, _ = self.get_reward(
+            self.reward_model,
             postprocessed_query_responses,
             context_length
         )
