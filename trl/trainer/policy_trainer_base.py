@@ -165,8 +165,10 @@ class PolicyTrainerBase(Trainer):
         self.eval_generation_config = eval_generation_config or default_generation_config
         # disable `pad_token_id` and `eos_token_id` because we just want to
         # generate tokens without truncation / padding
-        self.train_generation_config.eos_token_id = None
-        self.train_generation_config.pad_token_id = None
+        if False:
+            # PR TODO: review this??
+            self.train_generation_config.eos_token_id = None
+            self.train_generation_config.pad_token_id = None
 
 
         super().__init__(
