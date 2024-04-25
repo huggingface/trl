@@ -87,7 +87,6 @@ def get_reward_model_reward(reward_model, query_responses, tokenizer, context_le
     sequence_lengths = (
         first_true_indices(query_responses[:, context_length:] == tokenizer.pad_token_id) - 1 + context_length
     )
-    print("context_length.shape", context_length.shape)
     print("query_responses.shape", query_responses.shape)
     print("sequence_lengths.shape", sequence_lengths.shape)
     print("reward_logits.shape", reward_logits.shape)
