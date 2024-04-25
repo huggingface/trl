@@ -268,12 +268,16 @@ class RLOOTrainer(PolicyTrainerBase):
                 "policy/approxkl_avg": self.accelerator.gather(approxkl).mean().item(),
                 "policy/clipfrac_avg": self.accelerator.gather(pg_clipfrac).mean().item(),
                 "loss/policy_avg": self.accelerator.gather(pg_loss).mean().item(),
-                # PR TODO: this doesn't do anything
+                # PR TODO: this isn't calculated in the original
                 #"loss/value_avg": self.accelerator.gather(vf_loss_stats).mean().item(),
-                "val/clipfrac_avg": self.accelerator.gather(vf_clipfrac_stats).mean().item(),
-                "policy/entropy_avg": self.accelerator.gather(entropy).mean().item(),
+                #"val/clipfrac_avg": self.accelerator.gather(vf_clipfrac_stats).mean().item(),
+
+                # PR TODO: how does this differ from mean_entropy
+                #"policy/entropy_avg": self.accelerator.gather(entropy).mean().item(),
                 "val/ratio": self.accelerator.gather(new_ratio).mean().item(),
-                "val/ratio_var": self.accelerator.gather(ratio_stats).var().item(),
+
+                # PR TODO
+                #"val/ratio_var": self.accelerator.gather(ratio_stats).var().item(),
                 "val/num_eos_tokens": (responses == self.tokenizer.eos_token_id).sum().item(),
             })
 
