@@ -87,11 +87,18 @@ def get_reward_model_reward(reward_model, query_responses, tokenizer, context_le
     sequence_lengths = (
         first_true_indices(query_responses[:, context_length:] == tokenizer.pad_token_id) - 1 + context_length
     )
+    print("context_length.shape", context_length.shape)
+    print("query_responses.shape", query_responses.shape)
+    print("sequence_lengths.shape", sequence_lengths.shape)
+    print("reward_logits.shape", reward_logits.shape)
+    print("reward_logits.size(0)", reward_logits.size(0))
     # https://github.com/huggingface/transformers/blob/dc68a39c8111217683bf49a4912d0c9018bab33d/src/transformers/models/gpt2/modeling_gpt2.py#L1454
-    return reward_logits[
+    result = reward_logits[
         torch.arange(reward_logits.size(0), device=reward_logits.device),
         sequence_lengths,
     ].squeeze(-1)
+    print("result.shape", result.shape)
+    return result
 
 
 def first_true_indices(bools, dtype=torch.long):
