@@ -143,6 +143,7 @@ class RLOOTrainer(PolicyTrainerBase):
         query_responses, logits = self.generate(
             self.accelerator.unwrap_model(model),
             queries,
+            self.generation_config,
         )
         responses = torch.stack([query_response[context_length:] for query_response in query_responses], dim=0)
 

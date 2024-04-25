@@ -187,7 +187,7 @@ class PolicyTrainerBase(Trainer):
         # PR TODO: what about multi-gpu here? Shouldn't we _prepare_multigpu(reward_model) as well?
         self.reward_model.to(self.model.device)
 
-    def generate(self, lm_backbone, queries):
+    def generate(self, lm_backbone, queries, generation_config):
         """generate in a way that does not affect padding tokens"""
         context_length = queries.shape[0]
         attention_mask = queries != self.tokenizer.pad_token_id
@@ -197,7 +197,7 @@ class PolicyTrainerBase(Trainer):
             attention_mask=attention_mask,
             # position_ids=attention_mask.cumsum(1) - attention_mask.long(), # not needed: already adjusted in generations
             # https://github.com/huggingface/transformers/blob/ac33aeeeee2a7a89b89c93c2962e6feb90daef0a/src/transformers/models/gpt2/modeling_gpt2.py#L1227-L1250
-            generation_config=self.generation_config,
+            generation_config=generation_config,
             return_dict_in_generate=True,
             output_scores=True,
         )
