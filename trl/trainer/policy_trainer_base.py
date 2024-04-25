@@ -272,13 +272,11 @@ class PolicyTrainerBase(Trainer):
 
     def get_reward(self, reward_model, query_responses, context_length):
         attention_mask = query_responses != self.tokenizer.pad_token_id
-        # position_ids = attention_mask.cumsum(1) - attention_mask.long()  # exclusive cumsum
         lm_backbone = getattr(reward_model, reward_model.base_model_prefix)
         input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
         output = lm_backbone(
             input_ids=input_ids,
             attention_mask=attention_mask,
-            # position_ids=position_ids,
             return_dict=True,
             output_hidden_states=True,
         )
