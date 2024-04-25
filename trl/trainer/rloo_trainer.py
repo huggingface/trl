@@ -136,7 +136,6 @@ class RLOOTrainer(PolicyTrainerBase):
         model.train()
 
         inputs = self._prepare_inputs(inputs)
-        print("inputs.shape", inputs.shape)
         queries = inputs["input_ids"].to(self.accelerator.device)
         print("queries.shape 0", queries.shape)
         queries = queries.repeat(self.args.rloo_k, 1)
