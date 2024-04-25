@@ -243,13 +243,8 @@ class RLOOTrainer(PolicyTrainerBase):
                 new_logprobs, padding_mask, INVALID_LOGPROB
             )
             new_ratio = (new_logprobs - logprobs).exp()
-            print("new_ratio.shape", new_ratio.shape)
             new_logprobs = new_logprobs.sum(1)
-            print("new_logprobs.shape", new_logprobs.shape)
-            print("logprobs.shape 0", logprobs.shape)
-            logprobs = logprobs.sum(1)
-            print("logprobs.shape 1", logprobs.shape)
-            logprobs_diff = new_logprobs - logprobs
+            logprobs_diff = new_logprobs.sum(1) - logprobs.sum(1)
             print("logprobs_diff.shape", logprobs_diff.shape)
             ratio = torch.exp(logprobs_diff)
             print("ratio.shape", ratio.shape)
