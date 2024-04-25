@@ -250,13 +250,6 @@ class RLOOTrainer(PolicyTrainerBase):
 
         # del everything and empty cache
         # fmt: off
-        del (
-            output, logits, new_all_logprobs, new_logprobs,
-            logprobs_diff, ratio, pg_losses, pg_losses2,
-            pg_loss, loss, pg_clipfrac, prob_dist, entropy, approxkl,
-        )
-        # fmt: on
-        torch.cuda.empty_cache()
 
         with torch.no_grad():
             rlhf_reward_mean = self.accelerator.gather(rlhf_reward).mean().item()
@@ -273,7 +266,7 @@ class RLOOTrainer(PolicyTrainerBase):
                 "objective/rlhf_reward": self.accelerator.gather(rlhf_reward).mean().item(),
                 "objective/scores": self.accelerator.gather(scores.mean()).mean().item(),
                 # PR TODO: add approxkl_avg
-                #"policy/approxkl_avg": self.accelerator.gather(approxkl).mean().item(),
+                "policy/approxkl_avg": self.accelerator.gather(approxkl).mean().item(),
                 "policy/clipfrac_avg": self.accelerator.gather(pg_clipfrac).mean().item(),
                 "loss/policy_avg": self.accelerator.gather(pg_loss).mean().item(),
                 "loss/value_avg": self.accelerator.gather(vf_loss_stats).mean().item(),
@@ -284,6 +277,11 @@ class RLOOTrainer(PolicyTrainerBase):
                 "val/num_eos_tokens": (responses == self.tokenizer.eos_token_id).sum().item(),
             })
 
+        del (
+            output, logits, new_all_logprobs, new_logprobs,
+            logprobs_diff, ratio, pg_losses, pg_losses2,
+            pg_loss, loss, pg_clipfrac, prob_dist, entropy, approxkl,
+        )
         del kl, mean_kl, mean_entropy, scores
         torch.cuda.empty_cache()
 
