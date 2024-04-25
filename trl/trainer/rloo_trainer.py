@@ -200,10 +200,16 @@ class RLOOTrainer(PolicyTrainerBase):
         logprobs = torch.masked_fill(logprobs, padding_mask, INVALID_LOGPROB)
         ref_logprobs = torch.masked_fill(ref_logprobs, padding_mask, INVALID_LOGPROB)
 
+        print("logprobs.shape", logprobs.shape)
+        print("ref_logprobs.shape", ref_logprobs.shape)
         # 4. compute rewards
         kl = logprobs - ref_logprobs
         non_score_reward = (-self.args.kl_coef * kl).sum(1)
         rlhf_reward = scores - non_score_reward.unsqueeze(1)
+
+        print("kl.shape",kl.shape)
+        print("non_score_reward.shape",non_score_reward.shape)
+        print("rlhf_reward.shape",rlhf_reward.shape)
 
         # we generated `self.args.rloo_k` many responses per prompt
         # now we can implement the RLOO loss by subtracting the reward of
@@ -216,6 +222,8 @@ class RLOOTrainer(PolicyTrainerBase):
                     other_response_rlhf_rewards.append(rlhf_reward[j])
             advantages[i] = rlhf_reward[i] - torch.stack(other_response_rlhf_rewards).mean()
         torch.cuda.empty_cache()
+
+        print("advantages.shape",advantages.shape)
 
         # calculate loss
         with self.accelerator.accumulate(model):
