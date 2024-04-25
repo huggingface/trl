@@ -189,7 +189,7 @@ class PolicyTrainerBase(Trainer):
 
     def generate(self, lm_backbone, queries, generation_config):
         """generate in a way that does not affect padding tokens"""
-        context_length = queries.shape[0]
+        context_length = queries.shape[1]
         print("queries", queries)
         print("queries.shape", queries.shape)
         attention_mask = queries != self.tokenizer.pad_token_id
