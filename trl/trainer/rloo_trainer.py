@@ -281,6 +281,8 @@ class RLOOTrainer(PolicyTrainerBase):
                 "val/num_eos_tokens": (responses == self.tokenizer.eos_token_id).sum().item(),
             })
 
+        ret = loss.detach() / self.args.gradient_accumulation_steps
+
         del (
             output, logits, new_all_logprobs, new_logprobs,
             logprobs_diff, ratio, pg_losses, pg_losses2,
@@ -289,7 +291,7 @@ class RLOOTrainer(PolicyTrainerBase):
         del kl, mean_kl, mean_entropy, scores
         torch.cuda.empty_cache()
 
-        return loss.detach() / self.args.gradient_accumulation_steps
+        return ret
 
 
 if __name__ == "__main__":
