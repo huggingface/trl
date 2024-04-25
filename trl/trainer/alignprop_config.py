@@ -9,9 +9,9 @@ from ..import_utils import is_bitsandbytes_available, is_torchvision_available
 
 
 @dataclass
-class DDPOConfig:
+class AlignPropConfig:
     """
-    Configuration class for DDPOTrainer
+    Configuration class for AlignPropTrainer
     """
 
     # common parameters
@@ -53,10 +53,6 @@ class DDPOConfig:
     """Eta parameter for the DDIM sampler."""
     sample_guidance_scale: float = 5.0
     """Classifier-free guidance weight."""
-    sample_batch_size: int = 1
-    """Batch size (per GPU!) to use for sampling."""
-    sample_num_batches_per_epoch: int = 2
-    """Number of batches to sample per epoch."""
     train_batch_size: int = 1
     """Batch size (per GPU!) to use for training."""
     train_use_8bit_adam: bool = False
@@ -75,28 +71,15 @@ class DDPOConfig:
     """Number of gradient accumulation steps."""
     train_max_grad_norm: float = 1.0
     """Maximum gradient norm for gradient clipping."""
-    train_num_inner_epochs: int = 1
-    """Number of inner epochs per outer epoch."""
-    train_cfg: bool = True
-    """Whether or not to use classifier-free guidance during training."""
-    train_adv_clip_max: float = 5
-    """Clip advantages to the range."""
-    train_clip_range: float = 1e-4
-    """The PPO clip range."""
-    train_timestep_fraction: float = 1.0
-    """The fraction of timesteps to train on."""
-    per_prompt_stat_tracking: bool = False
-    """Whether to track statistics for each prompt separately."""
-    per_prompt_stat_tracking_buffer_size: int = 16
-    """Number of reward values to store in the buffer for each prompt."""
-    per_prompt_stat_tracking_min_count: int = 16
-    """The minimum number of reward values to store in the buffer."""
-    async_reward_computation: bool = False
-    """Whether to compute rewards asynchronously."""
-    max_workers: int = 2
-    """The maximum number of workers to use for async reward computation."""
     negative_prompts: Optional[str] = ""
     """Comma-separated list of prompts to use as negative examples."""
+    truncated_backprop_rand: bool = True
+    """Truncated Randomized Backpropation randomizes truncation to different diffusion timesteps"""
+    truncated_backprop_timestep: int = 49
+    """Absolute timestep to which the gradients are being backpropagated. If truncated_backprop_rand is False"""
+    truncated_rand_backprop_minmax: tuple = (0,50)
+    """Range of diffusion timesteps for randomized truncated backprop."""
+    
 
     def to_dict(self):
         output_dict = {}

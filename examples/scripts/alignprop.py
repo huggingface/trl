@@ -25,6 +25,7 @@ python examples/scripts/ddpo.py \
     --log_with="wandb"
 """
 import os
+import torchvision
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -34,7 +35,7 @@ from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError
 from transformers import CLIPModel, CLIPProcessor, HfArgumentParser
 
-from trl import DDPOConfig, DDPOTrainer, DefaultDDPOStableDiffusionPipeline
+from trl import AlignPropConfig, AlignPropTrainer, DefaultDDPOStableDiffusionPipeline
 from trl.import_utils import is_npu_available, is_xpu_available
 
 
@@ -72,7 +73,6 @@ class MLP(nn.Module):
             nn.Linear(16, 1),
         )
 
-    @torch.no_grad()
     def forward(self, embed):
         return self.layers(embed)
 
@@ -87,7 +87,9 @@ class AestheticScorer(torch.nn.Module):
     def __init__(self, *, dtype, model_id, model_filename):
         super().__init__()
         self.clip = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
-        self.processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
+        self.normalize = torchvision.transforms.Normalize(mean=[0.48145466, 0.4578275, 0.40821073],
+                                                    std=[0.26862954, 0.26130258, 0.27577711])   
+        self.target_size = 224        
         self.mlp = MLP()
         try:
             cached_path = hf_hub_download(model_id, model_filename)
@@ -98,15 +100,15 @@ class AestheticScorer(torch.nn.Module):
         self.dtype = dtype
         self.eval()
 
-    @torch.no_grad()
     def __call__(self, images):
         device = next(self.parameters()).device
-        inputs = self.processor(images=images, return_tensors="pt")
-        inputs = {k: v.to(self.dtype).to(device) for k, v in inputs.items()}
-        embed = self.clip.get_image_features(**inputs)
+        images = torchvision.transforms.Resize(self.target_size)(images)
+        images = self.normalize(images).to(self.dtype).to(device)
+        embed = self.clip.get_image_features(pixel_values=images)
         # normalize embedding
         embed = embed / torch.linalg.vector_norm(embed, dim=-1, keepdim=True)
-        return self.mlp(embed).squeeze(1)
+        reward = self.mlp(embed).squeeze(1)        
+        return reward
 
 
 def aesthetic_scorer(hub_model_id, model_filename):
@@ -123,7 +125,7 @@ def aesthetic_scorer(hub_model_id, model_filename):
         scorer = scorer.cuda()
 
     def _fn(images, prompts, metadata):
-        images = (images * 255).round().clamp(0, 255).to(torch.uint8)
+        images = (images).clamp(0, 1)
         scores = scorer(images)
         return scores, {}
 
@@ -166,13 +168,13 @@ def prompt_fn():
     return np.random.choice(animals), {}
 
 
-def image_outputs_logger(image_data, global_step, accelerate_logger):
+
+def image_outputs_logger(image_pair_data, global_step, accelerate_logger):
     # For the sake of this example, we will only log the last batch of images
     # and associated data
     result = {}
-    images, prompts, _, rewards, _ = image_data[-1]
-
-    for i, image in enumerate(images):
+    images, prompts, rewards = [image_pair_data['images'],image_pair_data['prompts'],image_pair_data['rewards']]
+    for i, image in enumerate(images[:4]):
         prompt = prompts[i]
         reward = rewards[i].item()
         result[f"{prompt:.25} | {reward:.2f}"] = image.unsqueeze(0).float()
@@ -184,9 +186,9 @@ def image_outputs_logger(image_data, global_step, accelerate_logger):
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser((ScriptArguments, DDPOConfig))
-    args, ddpo_config = parser.parse_args_into_dataclasses()
-    ddpo_config.project_kwargs = {
+    parser = HfArgumentParser((ScriptArguments, AlignPropConfig))
+    args, alignprop_config = parser.parse_args_into_dataclasses()
+    alignprop_config.project_kwargs = {
         "logging_dir": "./logs",
         "automatic_checkpoint_naming": True,
         "total_limit": 5,
@@ -197,8 +199,8 @@ if __name__ == "__main__":
         args.pretrained_model, pretrained_model_revision=args.pretrained_revision, use_lora=args.use_lora
     )
 
-    trainer = DDPOTrainer(
-        ddpo_config,
+    trainer = AlignPropTrainer(
+        alignprop_config,
         aesthetic_scorer(args.hf_hub_aesthetic_model_id, args.hf_hub_aesthetic_model_filename),
         prompt_fn,
         pipeline,
