@@ -135,7 +135,7 @@ class PolicyTrainerBase(Trainer):
     def __init__(
             self,
             model: Optional[PreTrainedModelWrapper],
-            args: RLOOConfig,
+            args: TrainingArguments,
             train_dataset: Union[Dataset, "datasets.Dataset"],
             reward_model: Optional[PreTrainedModelWrapper] = None,
             reward_fn: Callable = None,
