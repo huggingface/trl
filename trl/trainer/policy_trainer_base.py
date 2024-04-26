@@ -32,7 +32,7 @@ from trl.models.utils import unwrap_model_for_generation
 
 
 from ..models import SUPPORTED_ARCHITECTURES, create_reference_model, PreTrainedModelWrapper
-
+from .utils import disable_dropout_in_model
 
 from ..import_utils import is_peft_available
 
@@ -152,10 +152,8 @@ class ReferenceModelManager:
 
         if isinstance(ref_model, SUPPORTED_ARCHITECTURES):
             self.ref_model = ref_model
-            self.ref_model.to(self.accelerator.device)
         elif ref_model is None and not self.is_peft_model:
             self.ref_model = create_reference_model(model)
-            self.ref_model.to(self.accelerator.device)
         elif self.is_peft_model:
             self.ref_model = None
             self.model = model
@@ -206,7 +204,7 @@ class PolicyTrainerBase(Trainer):
         # Disable dropout ensures logprobs during generation aren't different from forward pass
         # https://github.com/huggingface/trl/pull/1586#discussion_r1579533825
         for m in [model, ref_model, reward_model]:
-            self._disable_dropout(m)
+            disable_dropout_in_model(m)
 
 
         assert (reward_model is not None) != (reward_fn is not None), "Must set either reward_model or reward_fn, but not both"
