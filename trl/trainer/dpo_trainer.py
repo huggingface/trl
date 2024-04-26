@@ -138,6 +138,12 @@ class DPOTrainer(Trainer):
             If True, we ignore the _provided_ reference model and implicitly use a reference model that assigns equal probability to all responses.
         force_use_ref_model (`bool`, defaults to `False`):
             In case one passes a PEFT model for the active model and you want to use a different model for the ref_model, set this flag to `True`.
+        sync_ref_model ('bool', defaults to `False`):
+            The flag for syncing reference model during training from the [TR-DPO](https://arxiv.org/pdf/2404.09656) paper
+        ref_model_mixup_alpha ('float', defaults to 1.0):
+            The alpha parameter from the [TR-DPO](https://arxiv.org/pdf/2404.09656) paper
+        ref_model_sync_steps ('int', defaults to 2):
+            The tau parameter from the [TR-DPO](https://arxiv.org/pdf/2404.09656) paper
     """
 
     _tag_names = ["trl", "dpo"]
@@ -178,7 +184,7 @@ class DPOTrainer(Trainer):
         reference_free: bool = False,
         force_use_ref_model: bool = False,
         sync_ref_model: bool = False,
-        mixup_alpha: float = 1.0,
+        ref_model_mixup_alpha: float = 1.0,
         ref_model_sync_steps: int = 2,
     ):
         if model_init_kwargs is None:
@@ -434,7 +440,7 @@ class DPOTrainer(Trainer):
         if sync_ref_model:
             self.add_callback(SyncRefModelCallback(self.accelerator,
                                                    self.ref_model,
-                                                   mixup_alpha=mixup_alpha,
+                                                   ref_model_mixup_alpha=ref_model_mixup_alpha,
                                                    ref_model_sync_steps=ref_model_sync_steps))
 
     def _prepare_deepspeed(self, model: PreTrainedModelWrapper):

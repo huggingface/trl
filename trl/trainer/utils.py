@@ -62,10 +62,10 @@ class SyncRefModelCallback(TrainerCallback):
         self,
         ref_model: Union[PreTrainedModel, nn.Module],
         accelerator: Optional[Accelerator],
-        mixup_alpha: float,
+        ref_model_mixup_alpha: float,
         ref_model_sync_steps: int,
     ):
-        self.mixup_alpha = mixup_alpha
+        self.ref_model_mixup_alpha = ref_model_mixup_alpha
         self.ref_model_sync_steps = ref_model_sync_steps
         self.accelerator = accelerator
         self.ref_model = ref_model
@@ -88,9 +88,9 @@ class SyncRefModelCallback(TrainerCallback):
         if ref_model is not None and self.global_step % self.ref_model_sync_steps == 0:
             if self.accelerator:
                 unwrapped_model = accelerator.unwrap_model(model)
-                self.sync_target_model(unwrapped_model, self.ref_model, self.mixup_alpha)
+                self.sync_target_model(unwrapped_model, self.ref_model, self.ref_model_mixup_alpha)
             else:
-                self.sync_target_model(model, self.ref_model, self.mixup_alpha)
+                self.sync_target_model(model, self.ref_model, self.ref_model_mixup_alpha)
 
 
 class FixedKLController:
