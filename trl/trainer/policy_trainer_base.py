@@ -166,7 +166,7 @@ class ReferenceModelManager:
                 f"- supported architectures are: {SUPPORTED_ARCHITECTURES} "
             )
 
-        if self.ref_model is not None:
+        if self.ref_model is not None and not self.is_peft_model:
             print(type(self.ref_model))
             self.ref_model = _prepare_multigpu(self.ref_model, self.accelerator, is_deepspeed_enabled)
 
