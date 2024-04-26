@@ -110,6 +110,22 @@ def _prepare_deepspeed(self, accelerator, model: PreTrainedModelWrapper, evaluat
     return model
 
 
+def _prepare_multigpu(model, accelerator, is_deepspeed_enabled: bool):
+    if model is None:
+        return
+    elif is_deepspeed_enabled:
+        return _prepare_deepspeed(
+            accelerator,
+            model,
+            evaluation_mode=True
+        )
+    else:
+        return accelerator.prepare_model(
+            model,
+            evaluation_mode=True
+        )
+
+
 class ReferenceModelManager:
     """
     Context manager to prepare and manage the reference model.
@@ -143,22 +159,8 @@ class ReferenceModelManager:
                 f"- supported architectures are: {SUPPORTED_ARCHITECTURES} "
             )
 
-        self._prepare_multigpu(is_deepspeed_enabled)
-
-    def _prepare_multigpu(self, is_deepspeed_enabled: bool):
-        if self.ref_model is None:
-            return
-        elif is_deepspeed_enabled:
-            self.ref_model = _prepare_deepspeed(
-                self.accelerator,
-                self.ref_model,
-                evaluation_mode=True
-            )
-        else:
-            self.ref_model = self.accelerator.prepare_model(
-                self.ref_model,
-                evaluation_mode=True
-            )
+        if self.ref_model is not None:
+            self.ref_model = _prepare_multigpu(self.ref_model, is_deepspeed_enabled)
 
     def __enter__(self):
         if self.ref_model is not None:
@@ -236,8 +238,12 @@ class PolicyTrainerBase(Trainer):
             is_deepspeed_enabled=self.is_deepspeed_enabled,
         )
 
-        # PR TODO: what about multi-gpu here? Shouldn't we _prepare_multigpu(reward_model) as well?
-        self.reward_model.to(self.model.device)
+        self.reward_model.to(self.accelerator.device)
+        self.reward_model = _prepare_multigpu(
+            self.reward_model,
+            self.accelerator,
+            self.is_deepspeed_enabled
+        )
 
     def generate(self, model, queries, generation_config):
         """generate in a way that does not affect padding tokens"""
