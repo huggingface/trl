@@ -19,14 +19,15 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
-from accelerate import PartialState
+from accelerate import Accelerator, AcceleratorState, PartialState
+from accelerate.utils import is_deepspeed_available
 from rich.console import Console, Group
 from rich.live import Live
 from rich.panel import Panel
 from rich.progress import Progress
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import IterableDataset
-from transformers import BitsAndBytesConfig, DataCollatorForLanguageModeling, PreTrainedTokenizerBase
+from transformers import BitsAndBytesConfig, DataCollatorForLanguageModeling, PreTrainedModel, PreTrainedTokenizerBase
 from transformers.trainer import TrainerCallback
 from transformers.trainer_utils import has_length
 
@@ -36,6 +37,10 @@ from ..trainer.model_config import ModelConfig
 
 if is_peft_available():
     from peft import LoraConfig, PeftConfig
+
+
+if is_deepspeed_available():
+    import deepspeed
 
 
 class AdaptiveKLController:
@@ -57,10 +62,9 @@ class AdaptiveKLController:
 
 
 class SyncRefModelCallback(TrainerCallback):
-
     def __init__(
         self,
-        ref_model: Union[PreTrainedModel, nn.Module],
+        ref_model: Union[PreTrainedModel, torch.nn.Module],
         accelerator: Optional[Accelerator],
         ref_model_mixup_alpha: float,
         ref_model_sync_steps: int,
@@ -84,10 +88,12 @@ class SyncRefModelCallback(TrainerCallback):
         else:
             cls._sync_target_model(model, target_model, alpha)
 
-    def on_step_end(self, args, state, control, model):
-        if ref_model is not None and self.global_step % self.ref_model_sync_steps == 0:
+    def on_step_end(self, args, state, control, **kwargs):
+        model: PreTrainedModel = kwargs["model"]
+
+        if self.ref_model is not None and self.global_step % self.ref_model_sync_steps == 0:
             if self.accelerator:
-                unwrapped_model = accelerator.unwrap_model(model)
+                unwrapped_model = self.accelerator.unwrap_model(model)
                 self.sync_target_model(unwrapped_model, self.ref_model, self.ref_model_mixup_alpha)
             else:
                 self.sync_target_model(model, self.ref_model, self.ref_model_mixup_alpha)

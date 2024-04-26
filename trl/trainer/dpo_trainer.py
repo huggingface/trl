@@ -25,7 +25,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from accelerate import Accelerator, AcceleratorState, PartialState
+from accelerate import PartialState
 from accelerate.utils import is_deepspeed_available, tqdm
 from datasets import Dataset
 from torch.utils.data import DataLoader
@@ -426,7 +426,9 @@ class DPOTrainer(Trainer):
                     "No reference model and model is not a Peft model. Try setting `precompute_ref_log_probs=True`"
                 )
             if sync_ref_model:
-                raise ValueError("You currently cannot use `ref_model=None` with TR-DPO method. Please provide `ref_model`.")
+                raise ValueError(
+                    "You currently cannot use `ref_model=None` with TR-DPO method. Please provide `ref_model`."
+                )
         else:
             if self.is_deepspeed_enabled:
                 self.ref_model = self._prepare_deepspeed(self.ref_model)
@@ -435,13 +437,19 @@ class DPOTrainer(Trainer):
 
         if sync_ref_model:
             if precompute_ref_log_probs:
-                raise ValueError("You cannot use `precompute_ref_log_probs=True` with TR-DPO method. Please set `precompute_ref_log_probs=False`.")
+                raise ValueError(
+                    "You cannot use `precompute_ref_log_probs=True` with TR-DPO method. Please set `precompute_ref_log_probs=False`."
+                )
 
         if sync_ref_model:
-            self.add_callback(SyncRefModelCallback(self.accelerator,
-                                                   self.ref_model,
-                                                   ref_model_mixup_alpha=ref_model_mixup_alpha,
-                                                   ref_model_sync_steps=ref_model_sync_steps))
+            self.add_callback(
+                SyncRefModelCallback(
+                    self.accelerator,
+                    self.ref_model,
+                    ref_model_mixup_alpha=ref_model_mixup_alpha,
+                    ref_model_sync_steps=ref_model_sync_steps,
+                )
+            )
 
     def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
         # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
