@@ -141,7 +141,14 @@ class ReferenceModelManager:
             is_deepspeed_enabled: bool = False
     ):
         self.accelerator = accelerator
-        self.is_peft_model = getattr(model, "is_peft_model", False)
+        if not is_peft_available():
+            self.is_peft_model = False
+        else:
+            from peft.peft_model import PeftModelForCausalLM
+            self.is_peft_model = (
+                getattr(model, "is_peft_model", False)
+                or isinstance(ref_model, PeftModelForCausalLM)
+            )
 
         if isinstance(ref_model, SUPPORTED_ARCHITECTURES):
             self.ref_model = ref_model
