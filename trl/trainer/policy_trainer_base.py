@@ -201,10 +201,13 @@ class PolicyTrainerBase(Trainer):
             **kwargs
     ) -> None:
 
+        # PR TODO: dpo_trainer.py is a great reference for preparing a model and ref model with peft
+
         # Disable dropout ensures logprobs during generation aren't different from forward pass
         # https://github.com/huggingface/trl/pull/1586#discussion_r1579533825
         for m in [model, ref_model, reward_model]:
-            disable_dropout_in_model(m)
+            if m is not None:
+                disable_dropout_in_model(m)
 
 
         assert (reward_model is not None) != (reward_fn is not None), "Must set either reward_model or reward_fn, but not both"
