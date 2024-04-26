@@ -13,7 +13,7 @@ from transformers import (
     PreTrainedModel,
 )
 
-from trl.trainer.ppov2_bandit_rloo_trainer import PPOConfig, PPOTrainer
+from trl.trainer.rloo_trainer import RLOOConfig, RLOOTrainer
 
 
 """
@@ -26,11 +26,11 @@ python examples/scripts/minimal/ppo_bandit_rloo.py \
     --total_episodes 10000 \
     --base_model EleutherAI/pythia-1b-deduped \
     --non_eos_penalty \
-# run REINFORCE w/ RLOO; `--epochs 1 --nminibatches 1` in PPO is equivalent to REINFORCE
+# run REINFORCE w/ RLOO; `--epochs 1 --num_mini_batches 1` in PPO is equivalent to REINFORCE
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/minimal/ppo_bandit_rloo_large.py \
-    --noptepochs 1 \
-    --nminibatches 1 \
+    --num_ppo_epochs 1 \
+    --num_mini_batches 1 \
     --rloo_k 4 \
     --learning_rate 3e-6 \
     --output_dir models/minimal/ppo \
@@ -57,7 +57,7 @@ def print_rich_table(df: pd.DataFrame) -> Table:
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser(PPOConfig)
+    parser = HfArgumentParser(RLOOConfig)
     print("========")
     args = parser.parse_args_into_dataclasses()[0]
     ################
@@ -118,7 +118,7 @@ if __name__ == "__main__":
     ################
     # Training
     ################
-    trainer = PPOTrainer(
+    trainer = RLOOTrainer(
         args=args,
         tokenizer=tokenizer,
         policy=policy,

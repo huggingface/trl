@@ -1,15 +1,17 @@
+from collections import defaultdict
 import os
 import time
 from dataclasses import dataclass
 from typing import Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from accelerate import Accelerator
 from accelerate.state import AcceleratorState
-from accelerate.utils import broadcast
+from accelerate.utils import broadcast, gather_object
 from datasets import Dataset
 from torch.utils.data import DataLoader
 from transformers import (
@@ -27,6 +29,7 @@ from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer_callback import CallbackHandler, DefaultFlowCallback
 
 from trl.models.utils import unwrap_model_for_generation
+from trl.trainer.utils import print_rich_table
 
 
 INVALID_LOGPROB = 1.0
@@ -43,7 +46,7 @@ python -i trl/trainer/ppov2_trainer.py \
 
 
 @dataclass
-class PPOConfig(TrainingArguments):
+class RLOOConfig(TrainingArguments):
     # common args
     exp_name: str = os.path.basename(__file__)[: -len(".py")]
     """the name of this experiment"""
@@ -77,6 +80,8 @@ class PPOConfig(TrainingArguments):
     """per rank eval batch size"""
     local_rollout_forward_batch_size: int = 64
     """per rank no grad forward pass in the rollout phase"""
+    num_sample_generations: int = 10
+    """the number of debugging samples generations (i.e., `generate_completions` calls) throughout training"""
 
     # other args
     base_model: str = "EleutherAI/pythia-160m"
@@ -265,19 +270,17 @@ def prepare_deepspeed3(model, accelerator):
     return model
 
 
-class PPOTrainer(Trainer):
+class RLOOTrainer(Trainer):
     def __init__(
         self,
-        args: PPOConfig,
+        args: RLOOConfig,
         tokenizer: PreTrainedTokenizer,
         policy: nn.Module,
         ref_policy: nn.Module,
         reward_model: nn.Module,
         train_dataset: Dataset,
-        train_generation_config: GenerationConfig,
         data_collator: Optional[DataCollatorWithPadding] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
-        eval_generation_config: Optional[GenerationConfig] = None,
         # less commonly used
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         # compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
@@ -295,12 +298,8 @@ class PPOTrainer(Trainer):
         self.reward_model = reward_model
         self.train_dataset = train_dataset
         self.train_dataset_len = len(train_dataset)
-        self.train_generation_config = train_generation_config
         self.data_collator = data_collator
         self.eval_dataset = eval_dataset
-        self.eval_generation_config = eval_generation_config
-        if eval_generation_config is None:
-            self.eval_generation_config = train_generation_config
         self.optimizer, self.lr_scheduler = optimizers
         self.callbacks = callbacks
 
@@ -326,6 +325,8 @@ class PPOTrainer(Trainer):
         time_int = broadcast(time_tensor, 0).item()  # avoid different timestamps across processes
         args.run_name = f"{args.exp_name}__{args.seed}__{time_int}"
         self.local_seed = args.seed + accelerator.process_index * 100003  # Prime
+        if args.num_sample_generations > 0:
+            self.sample_generations_freq = max(1, args.num_updates // args.num_sample_generations)
 
         #########
         # disable dropout
@@ -362,34 +363,54 @@ class PPOTrainer(Trainer):
         self.control = TrainerControl()
         self.is_deepspeed_enabled = getattr(self.accelerator.state, "deepspeed_plugin", None) is not None
         self.is_fsdp_enabled = getattr(self.accelerator.state, "fsdp_plugin", None) is not None
+        # Create distant repo and output directory if needed
+        self.hub_model_id = None
+        if self.args.push_to_hub:
+            self.init_hf_repo()
+        if self.args.should_save:
+            os.makedirs(self.args.output_dir, exist_ok=True)
+        self.backup_model = None
 
-    # def get_train_dataloader(self) -> DataLoader:
-
-    def train(self):
-        args = self.args
-        accelerator = self.accelerator
-        local_seed = self.local_seed
-        optimizer = self.optimizer
-        model = self.model
-        ref_policy = self.ref_policy
-        reward_model = self.reward_model
-        tokenizer = self.tokenizer
-
-        dataloader = DataLoader(
+        #########
+        ### setup dataloader
+        #########
+        self.dataloader = DataLoader(
             self.train_dataset,
             batch_size=args.local_batch_size,
             shuffle=True,
             collate_fn=DataCollatorWithPadding(tokenizer),
             drop_last=True,  # needed; otherwise the last batch will be of ragged shape
         )
-
-        device = accelerator.device
-
         # sync random states for DataLoader(shuffle=True) before `accelerator.prepare`
         # see https://gist.github.com/vwxyzjn/2581bff1e48e185e0b85b6dfe1def79c
         torch.manual_seed(args.seed)
-        model, optimizer, dataloader = accelerator.prepare(model, optimizer, dataloader)
-        torch.manual_seed(local_seed)  # reset the local seed again
+        self.model, self.optimizer, self.dataloader = accelerator.prepare(self.model, self.optimizer, self.dataloader)
+        torch.manual_seed(self.local_seed)  # reset the local seed again
+
+        self.eval_dataloader = DataLoader(
+            self.eval_dataset,
+            batch_size=args.per_device_eval_batch_size,
+            collate_fn=DataCollatorWithPadding(self.tokenizer),
+            drop_last=True,
+        ) # no need to shuffle eval dataset
+        self.eval_dataloader = accelerator.prepare(self.eval_dataloader)
+
+    def get_train_dataloader(self) -> DataLoader:
+        return self.dataloader
+    
+    def get_eval_dataloader(self) -> DataLoader:
+        return self.eval_dataloader
+
+    def train(self):
+        args = self.args
+        accelerator = self.accelerator
+        optimizer = self.optimizer
+        model = self.model
+        ref_policy = self.ref_policy
+        reward_model = self.reward_model
+        tokenizer = self.tokenizer
+        dataloader = self.dataloader
+        device = accelerator.device
 
         def repeat_generator():
             while True:
@@ -427,7 +448,7 @@ class PPOTrainer(Trainer):
         entropy_stats = torch.zeros(stats_shape, device=device)
         ratio_stats = torch.zeros(stats_shape, device=device)
         model.train()
-        for _ in range(1, args.num_updates + 1):
+        for update in range(1, args.num_updates + 1):
             global_step += 1 * args.batch_size
             self.lr_scheduler.step()
             data = next(iter_dataloader)
@@ -489,7 +510,7 @@ class PPOTrainer(Trainer):
                 postprocessed_responses = torch.cat(postprocessed_responses, 0)
                 logprobs = torch.cat(logprobs, 0)
                 ref_logprobs = torch.cat(ref_logprobs, 0)
-                print(f"{(ref_logprobs - logprobs).exp()=}")
+                # print(f"{(ref_logprobs - logprobs).exp()=}")
                 sequence_lengths = torch.cat(sequence_lengths, 0)
                 scores = torch.cat(scores, 0)
                 del (logprob, ref_logprob, score)
@@ -629,6 +650,52 @@ class PPOTrainer(Trainer):
             del kl, mean_kl, mean_entropy, scores
             torch.cuda.empty_cache()
 
+            if args.num_sample_generations > 0 and (update - 1) % self.sample_generations_freq == 0:
+                self.generate_completions(sampling=True)
+
+    def generate_completions(self, sampling: bool = False):
+        args = self.args
+        generation_config = GenerationConfig(
+            max_new_tokens=self.args.response_length,
+            temperature=(0.01 + 1e-7),
+            top_k=0.0,
+            top_p=1.0,
+            do_sample=True,
+        )
+
+        table = defaultdict(list)
+        for batch in self.eval_dataloader:
+            query = batch["input_ids"]
+            name = f"trained {args.base_model}"
+            with torch.no_grad():
+                context_length = query.shape[1]
+                with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
+                    query_response, _ = generate(
+                        unwrapped_model,
+                        query,
+                        self.tokenizer,
+                        generation_config,
+                    )
+                response = query_response[:, context_length:]
+                postprocessed_response = response
+                if args.truncate_token_id:
+                    postprocessed_response = truncate_response(args, self.tokenizer, response)
+                table["query"].extend(gather_object(self.tokenizer.batch_decode(query, skip_special_tokens=True)))
+                table[name].extend(gather_object(self.tokenizer.batch_decode(postprocessed_response)))
+
+                postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
+                _, score, _ = get_reward(self.reward_model, postprocessed_query_response, self.tokenizer, context_length)
+                table["score"].extend(self.accelerator.gather(score).float().cpu().numpy())
+
+            if sampling:
+                break
+        df = pd.DataFrame(table)
+        if self.accelerator.process_index == 0:
+            print_rich_table(df.iloc[0 : 0 + 5])
+        if "wandb" in args.report_to:
+            import wandb
+            if wandb.run is not None:
+                wandb.log({"completions": wandb.Table(dataframe=df)})
 
 if __name__ == "__main__":
 
