@@ -56,6 +56,49 @@ class AdaptiveKLController:
         self.value *= mult
 
 
+class SyncRefModelCallback(TrainerCallback):
+
+    def __init__(
+        self,
+        ref_model: Union[PreTrainedModel, nn.Module],
+        accelerator: Optional[Accelerator],
+        mixup_alpha: float,
+        ref_model_sync_steps: int,
+    ):
+        self.mixup_alpha = mixup_alpha
+        self.ref_model_sync_steps = ref_model_sync_steps
+        self.accelerator = accelerator
+        self.ref_model = ref_model
+
+    @staticmethod
+    def _sync_target_model(model, target_model, alpha):
+        for target_param, copy_param in zip(
+                target_model.parameters(), model.parameters()
+        ):
+            target_param.data.copy_(
+                (alpha * copy_param.data) + (1.0 - alpha) * target_param.data
+            )
+
+    @classmethod
+    def sync_target_model(cls, model, target_model, alpha):
+        if AcceleratorState().deepspeed_plugin.zero_stage == 3:
+            with deepspeed.zero.GatheredParameters(
+                    list(model.parameters()), modifier_rank=0
+            ):
+                if deepspeed.comm.get_rank() == 0:
+                    cls._sync_target_model(model, target_model, alpha)
+        else:
+            cls._sync_target_model(model, target_model, alpha)
+
+    def on_step_end(self, args, state, control, model):
+        if ref_model is not None and self.global_step % self.ref_model_sync_steps == 0:
+            if self.accelerator:
+                unwrapped_model = accelerator.unwrap_model(model)
+                self.sync_target_model(unwrapped_model, self.ref_model, self.mixup_alpha)
+            else:
+                self.sync_target_model(model, self.ref_model, self.mixup_alpha)
+
+
 class FixedKLController:
     """Fixed KL controller."""
 
