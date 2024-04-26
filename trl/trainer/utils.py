@@ -208,6 +208,116 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
         return batch
 
 
+class DataCollatorForMultiTurnCompletions(DataCollatorForLanguageModeling):
+    """
+    Data collator used for multi-turn assistant completion tasks. It ensures that the loss is calculated only on the responses
+    made by the assistant, while ignoring the user prompts or or other inputs.
+
+    Args:
+        user_template (Union[str, List[int]]): The template or token IDs that indicate the start of a user prompt or input. typically something like
+            '### Response:\n'. It can also be passed as tokenized ids, which can be useful when using a tokenizer that encodes the response
+            differently if it does not have proper context.
+        assistant_template (Union[str, List[int]]): The template or token IDs that indicate the start of an assistant response. typically something like
+            '### Human:\n'. Useful for assistant-style conversation datasets. It can also be passed as tokenized ids.
+        mlm (bool, optional, defaults to False): Whether or not to use masked language modeling in the underlying
+            `DataCollatorForLanguageModeling` class. Note that this option currently has no effect but is present 
+            for flexibility and backwards-compatibility.
+        ignore_index (int, optional, defaults to -100): The index to use to ignore the non-response tokens.
+
+    Example usage:
+
+    ```python
+    from datasets import load_dataset
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from trl import SFTTrainer, DataCollatorForMultiTurnCompletions
+    
+    # Load and prepare your dataset
+    dataset = ...
+    
+    model_id = "<your model id>"
+
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    model = AutoModelForCausalLM.from_pretrained(model_id)
+    
+    # If the dataset text field contains multi-turn conversation in `chatml` format.
+    
+    user_template = "<|im_start|>user\n"
+    assistant_template="<|im_start|>assistant\n"
+    
+    collator = DataCollatorForMultiTurnCompletions(user_template=user_template, assistant_template=assistant_template, tokenizer=tokenizer, mlm=False)
+
+    trainer = SFTTrainer(
+        model,
+        train_dataset=dataset,
+        dataset_text_field="text",
+        data_collator=collator,
+    )
+
+    trainer.train()
+
+    ```
+
+    This data collator can be used with a multi-turn conversational dataset, where each instance contains multiple
+    user prompts and assistant responses. The collator will identify the assistant responses based on the provided
+    templates (or token IDs), and mask out the user prompts during the loss calculation. This ensures that the model
+    is trained to generate appropriate responses based on the user input, while ignoring its own previous responses.
+    """
+    def __init__(
+        self,
+        user_template: Union[str, List[int]],
+        assistant_template: Union[str, List[int]],
+        *args,
+        mlm: bool = False,
+        ignore_index: int = -100,
+        **kwargs,
+    ):
+        super().__init__(*args, mlm=mlm, **kwargs)
+
+        self.user_template = user_template
+        if isinstance(user_template, str):
+            self.user_token_ids = self.tokenizer.encode(self.user_template, add_special_tokens=False)
+        else:
+            self.user_token_ids = user_template
+
+        self.assistant_template = assistant_template
+        if isinstance(assistant_template, str):
+            self.assistant_token_ids = self.tokenizer.encode(self.assistant_template, add_special_tokens=False)
+        else:
+            self.assistant_token_ids = assistant_template
+
+        self.ignore_index = ignore_index
+
+    def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
+        batch = super().torch_call(examples)
+        input_ids = batch["input_ids"]
+        labels = input_ids.clone()
+
+        for i in range(input_ids.size(0)):
+            assistant_response_idxs = []
+            for start_idx in np.where(labels[i] == self.assistant_token_ids[0])[0]:
+                if self.assistant_token_ids == labels[i][start_idx:start_idx + len(self.assistant_token_ids)].tolist():
+                    end_idx = start_idx + len(self.assistant_token_ids)
+                    while end_idx < labels.size(1) and labels[i][end_idx] != self.user_token_ids[0]:
+                        end_idx += 1
+                    assistant_response_idxs.append((start_idx, end_idx))
+
+            if len(assistant_response_idxs) == 0:
+                warnings.warn(
+                    f"Could not find response key `{self.assistant_template}` in the "
+                    f'following instance: {self.tokenizer.decode(input_ids[i])} '
+                    f"This instance will be ignored in loss calculation. "
+                    f"Note, if this happens often, consider increasing the `max_seq_length`."
+                )
+                labels[i, :] = self.ignore_index
+            else:
+                labels[i, :] = self.ignore_index
+                for start, end in assistant_response_idxs:
+                    labels[i, start + 1:end] = input_ids[i, start + 1:end]
+                    labels[i, start] = self.ignore_index
+
+        return {"input_ids": input_ids, "labels": labels}
+
+
 @dataclass
 class RewardDataCollatorWithPadding:
     r"""
