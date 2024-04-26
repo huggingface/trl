@@ -124,6 +124,10 @@ def is_npu_available() -> bool:
     return hasattr(torch, "npu") and torch.npu.is_available()
 
 
+def is_pairm_available() -> bool:
+    return find_spec("wandb") is not None
+
+
 class _LazyModule(ModuleType):
     """
     Module class that surfaces all objects but only performs associated imports when the objects are requested.

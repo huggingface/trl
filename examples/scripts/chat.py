@@ -220,7 +220,7 @@ def load_model_and_tokenizer(args):
         trust_remote_code=args.trust_remote_code,
         attn_implementation=args.attn_implementation,
         torch_dtype=torch_dtype,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
+        device_map="auto" if torch.cuda.is_available() else None,
         quantization_config=quantization_config,
     )
     model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path, **model_kwargs)

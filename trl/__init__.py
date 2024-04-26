@@ -51,6 +51,8 @@ _import_structure = {
         "RewardTrainer",
         "SFTConfig",
         "SFTTrainer",
+        "WinRateCallback",
+        "MockJudge",
     ],
     "commands": [],
     "commands.cli_utils": ["init_zero_verbose", "SFTScriptArguments", "DPOScriptArguments", "TrlParser"],

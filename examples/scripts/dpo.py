@@ -68,7 +68,7 @@ if TRL_USE_RICH:
 
 import torch
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 
 from trl import (
     DPOConfig,
@@ -78,6 +78,8 @@ from trl import (
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
+    WinRateCallback,
+    MockJudge,
 )
 
 
@@ -145,7 +147,7 @@ if __name__ == "__main__":
     ds = load_dataset(args.dataset_name)
     if args.sanity_check:
         for key in ds:
-            ds[key] = ds[key].select(range(50))
+            ds[key] = ds[key].select(range(1000))
 
     def process(row):
         row["chosen"] = tokenizer.apply_chat_template(row["chosen"], tokenize=False)
@@ -174,6 +176,21 @@ if __name__ == "__main__":
             peft_config=get_peft_config(model_config),
             callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
         )
+
+    win_rate_callback = WinRateCallback(
+        prompt_dataset=eval_dataset.shuffle(seed=42).select(range(100)),
+        judge=MockJudge(),
+        generation_config=GenerationConfig(
+            temperature=0.9,
+            do_sample=True,
+            num_return_sequences=1,
+            pad_token_id=tokenizer.pad_token_id,
+            eos_token_id=tokenizer.eos_token_id,
+            max_new_tokens=512,
+        ),
+        trainer=trainer,
+    )
+    trainer.add_callback(win_rate_callback)
 
     trainer.train()
 
