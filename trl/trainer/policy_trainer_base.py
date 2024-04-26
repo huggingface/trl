@@ -147,7 +147,7 @@ class ReferenceModelManager:
             from peft.peft_model import PeftModelForCausalLM
             self.is_peft_model = (
                 getattr(model, "is_peft_model", False)
-                or isinstance(ref_model, PeftModelForCausalLM)
+                or isinstance(model, PeftModelForCausalLM)
             )
 
         if isinstance(ref_model, SUPPORTED_ARCHITECTURES):
