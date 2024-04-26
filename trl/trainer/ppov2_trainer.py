@@ -3,6 +3,7 @@ import os
 import time
 from dataclasses import dataclass
 from typing import Dict, List, Literal, Optional, Tuple, Union
+import gc
 
 import numpy as np
 import pandas as pd
@@ -728,7 +729,7 @@ class PPOTrainer(Trainer):
                     # fmt: off
                     del (
                         output, vpred_temp, logits, new_all_logprobs, new_logprobs, vpred, vpredclipped,
-                        vf_losses1, vf_losses2, vf_loss, vf_clipfrac, logprobs_diff, ratio, pg_losses, pg_losses2,
+                        vf_losses1, vf_losses2, vf_loss, vf_clipfrac, logprobs_diff, ratio, pg_losses, pg_losses2, pg_loss_max,
                         pg_loss, loss, pg_clipfrac, prob_dist, entropy, approxkl, mb_return,
                         mb_advantage, mb_values, mb_responses, mb_query_responses, mb_logprobs,
                     )
@@ -768,11 +769,16 @@ class PPOTrainer(Trainer):
                 metrics["episode"] = global_step
                 self.state.epoch = global_step / self.train_dataset_len  # used by self.log
                 self.log(metrics)
-            del kl, mean_kl, mean_entropy, mean_non_score_reward, scores
+            del kl, mean_kl, mean_entropy, mean_non_score_reward, scores, metrics, non_score_reward
             torch.cuda.empty_cache()
+            gc.collect()
 
             if args.num_sample_generations > 0 and (update - 1) % self.sample_generations_freq == 0:
                 self.generate_completions(sampling=True)
+                torch.cuda.empty_cache()
+            del query_responses, responses, postprocessed_responses, logprobs, ref_logprobs, values, sequence_lengths, contain_eos_token, sequence_lengths_p1, response_idxs, padding_mask, padding_mask_p1, rewards, actual_start, actual_end, advantages, returns
+
+            torch.cuda.empty_cache()
 
     def generate_completions(self, sampling: bool = False):
         args = self.args
