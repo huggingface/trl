@@ -112,7 +112,7 @@ def _prepare_deepspeed(self, accelerator, model: PreTrainedModelWrapper, evaluat
 
 def _prepare_multigpu(model, accelerator, is_deepspeed_enabled: bool):
     if model is None:
-        return
+        return model
     elif is_deepspeed_enabled:
         return _prepare_deepspeed(
             accelerator,
@@ -167,6 +167,7 @@ class ReferenceModelManager:
             )
 
         if self.ref_model is not None:
+            print(type(self.ref_model))
             self.ref_model = _prepare_multigpu(self.ref_model, self.accelerator, is_deepspeed_enabled)
 
     def __enter__(self):
