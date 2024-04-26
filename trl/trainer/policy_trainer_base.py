@@ -160,7 +160,7 @@ class ReferenceModelManager:
             )
 
         if self.ref_model is not None:
-            self.ref_model = _prepare_multigpu(self.ref_model, is_deepspeed_enabled)
+            self.ref_model = _prepare_multigpu(self.ref_model, self.accelerator, is_deepspeed_enabled)
 
     def __enter__(self):
         if self.ref_model is not None:
