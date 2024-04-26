@@ -168,13 +168,20 @@ class ReferenceModelManager:
             self.ref_model = _prepare_multigpu(self.ref_model, self.accelerator, is_deepspeed_enabled)
 
     def __enter__(self):
+        self.optional_peft_ctx = None
         if self.ref_model is not None:
             return self.ref_model
         elif self.is_peft_model:
-            with self.accelerator.unwrap_model(self.model).disable_adapter():
+            self.optional_peft_ctx = self.accelerator.unwrap_model(self.model).disable_adapter()
+            with self.optional_peft_ctx:
                 return self.ref_model
         else:
             raise ValueError
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if self.optional_peft_ctx is not None:
+            self.optional_peft_ctx.__exit__(exc_type, exc_value, traceback)
+
 
 
 # PR TODO: determine why disable_dropout existed, and if it's necessary, readd it
