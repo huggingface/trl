@@ -72,19 +72,13 @@ class SyncRefModelCallback(TrainerCallback):
 
     @staticmethod
     def _sync_target_model(model, target_model, alpha):
-        for target_param, copy_param in zip(
-                target_model.parameters(), model.parameters()
-        ):
-            target_param.data.copy_(
-                (alpha * copy_param.data) + (1.0 - alpha) * target_param.data
-            )
+        for target_param, copy_param in zip(target_model.parameters(), model.parameters()):
+            target_param.data.copy_((alpha * copy_param.data) + (1.0 - alpha) * target_param.data)
 
     @classmethod
     def sync_target_model(cls, model, target_model, alpha):
         if AcceleratorState().deepspeed_plugin.zero_stage == 3:
-            with deepspeed.zero.GatheredParameters(
-                    list(model.parameters()), modifier_rank=0
-            ):
+            with deepspeed.zero.GatheredParameters(list(model.parameters()), modifier_rank=0):
                 if deepspeed.comm.get_rank() == 0:
                     cls._sync_target_model(model, target_model, alpha)
         else:

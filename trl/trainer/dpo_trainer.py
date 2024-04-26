@@ -420,7 +420,7 @@ class DPOTrainer(Trainer):
                     "No reference model and model is not a Peft model. Try setting `precompute_ref_log_probs=True`"
                 )
             if sync_ref_model:
-                raise ValueError("Адаптеры не поддерживаем")
+                raise ValueError("You currently cannot use `ref_model=None` with TR-DPO method. Please provide `ref_model`.")
         else:
             if self.is_deepspeed_enabled:
                 self.ref_model = self._prepare_deepspeed(self.ref_model)
@@ -429,7 +429,7 @@ class DPOTrainer(Trainer):
 
         if sync_ref_model:
             if precompute_ref_log_probs:
-                raise ValueError("Не работает с прекомпьют логпроб")
+                raise ValueError("You cannot use `precompute_ref_log_probs=True` with TR-DPO method. Please set `precompute_ref_log_probs=False`.")
 
         if sync_ref_model:
             self.add_callback(SyncRefModelCallback(self.accelerator,
