@@ -171,14 +171,10 @@ class ReferenceModelManager:
         if self.ref_model is not None:
             return self.ref_model
         elif self.is_peft_model:
-            return self.accelerator.unwrap_model(self.model).disable_adapter
+            with self.accelerator.unwrap_model(self.model).disable_adapter():
+                return self.ref_model
         else:
             raise ValueError
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        if self.ref_model is None and self.is_peft_model:
-            self.optional_peft_ctx.__exit__(exc_type, exc_value, traceback)
-
 
 
 # PR TODO: determine why disable_dropout existed, and if it's necessary, readd it
