@@ -42,9 +42,9 @@ INVALID_LOGPROB = 1.0
 class RLOOConfig(PolicyTrainerArguments):
     cliprange: float = 0.2
     """the clip range"""
-    kl_coef: float = 0.05
+    kl_coef: float = 0.10
     """the KL coefficient"""
-    rloo_k: int = 4
+    rloo_k: int = 2
     """REINFORCE Leave-One-Out (RLOO) number of online samples per prompt"""
 
 
