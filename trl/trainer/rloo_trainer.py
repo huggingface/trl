@@ -1,4 +1,5 @@
 from copy import deepcopy
+import gc
 import os
 import time
 from dataclasses import dataclass
@@ -104,6 +105,7 @@ class RLOOTrainer(PolicyTrainerBase):
         sequence_lengths = first_true_indices(postprocessed_responses == self.tokenizer.pad_token_id) - 1
 
         # clear cache before get_reward call
+        gc.collect()
         torch.cuda.empty_cache()
 
         _, scores, _ = self.get_reward(

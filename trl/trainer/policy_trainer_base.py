@@ -195,6 +195,12 @@ class PolicyTrainerBase(Trainer):
             **kwargs
     ) -> None:
 
+        # Disable dropout ensures logprobs during generation aren't different from forward pass
+        # https://github.com/huggingface/trl/pull/1586#discussion_r1579533825
+        for m in [model, ref_model, reward_model]:
+            self._disable_dropout(m)
+
+
         assert (reward_model is not None) != (reward_fn is not None), "Must set either reward_model or reward_fn, but not both"
         if reward_model is not None and "score" not in dir(reward_model):
             raise TypeError(f"Reward model of type {type(reward_model)} has no score function.")
@@ -245,6 +251,14 @@ class PolicyTrainerBase(Trainer):
         #    self.accelerator,
         #    self.is_deepspeed_enabled
         #)
+
+    @staticmethod
+    def _disable_dropout(model):
+        if model is None:
+            return
+        for module in model.modules():
+            if isinstance(module, torch.nn.Dropout):
+                module.p = 0
 
     def generate(self, model, queries, generation_config):
         """generate in a way that does not affect padding tokens"""
