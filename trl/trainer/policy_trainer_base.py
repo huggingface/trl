@@ -238,12 +238,13 @@ class PolicyTrainerBase(Trainer):
             is_deepspeed_enabled=self.is_deepspeed_enabled,
         )
 
-        self.reward_model.to(self.accelerator.device)
-        self.reward_model = _prepare_multigpu(
-            self.reward_model,
-            self.accelerator,
-            self.is_deepspeed_enabled
-        )
+        # PR TOOD: accelerate with reward model
+        #self.reward_model.to(self.accelerator.device)
+        #self.reward_model = _prepare_multigpu(
+        #    self.reward_model,
+        #    self.accelerator,
+        #    self.is_deepspeed_enabled
+        #)
 
     def generate(self, model, queries, generation_config):
         """generate in a way that does not affect padding tokens"""
