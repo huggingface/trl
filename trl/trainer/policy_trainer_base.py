@@ -171,7 +171,7 @@ class ReferenceModelManager:
         if self.ref_model is not None:
             return self.ref_model
         elif self.is_peft_model:
-            return self.accelerator.unwrap_model(self.model).pretrained_model.disable_adapter
+            return self.accelerator.unwrap_model(self.model).disable_adapter
         else:
             raise ValueError
 
@@ -186,6 +186,10 @@ class ReferenceModelManager:
 
 
 class PolicyTrainerBase(Trainer):
+    """
+    Base class for implementing a policy training algorithm.
+    # PR TODO: document arguments
+    """
     def __init__(
             self,
             model: Optional[PreTrainedModelWrapper],
@@ -199,6 +203,15 @@ class PolicyTrainerBase(Trainer):
             tokenizer: Optional[PreTrainedTokenizerBase] = None,
             **kwargs
     ) -> None:
+
+        # PR TODO: subclass with RewardTrainerBase which accepts a reward_model or reward_fn
+        # PR TODO: add str model and str ref model setup code from dpo_trainer.py
+
+
+        # PR TODO: class variable which determines whether ref logprobs are generated either
+        #          - once per batch
+        #          - once per update
+        #          - once per run (see dpo_trainer.py precompute_ref_log_probs)
 
         # Disable dropout ensures logprobs during generation aren't different from forward pass
         # https://github.com/huggingface/trl/pull/1586#discussion_r1579533825
