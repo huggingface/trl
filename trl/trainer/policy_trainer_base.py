@@ -314,7 +314,11 @@ class PolicyTrainerBase(Trainer):
 
     def get_reward(self, reward_model, query_responses, context_length):
         attention_mask = query_responses != self.tokenizer.pad_token_id
-        lm_backbone = getattr(reward_model, reward_model.base_model_prefix)
+
+        # PR TODO: figure out why we had to get base_model_prefix
+        # lm_backbone = getattr(reward_model, reward_model.base_model_prefix)
+        lm_backbone = reward_model
+
         input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
         output = lm_backbone(
             input_ids=input_ids,
