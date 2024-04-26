@@ -103,6 +103,9 @@ class RLOOTrainer(PolicyTrainerBase):
         postprocessed_query_responses = torch.cat((queries, postprocessed_responses), 1)
         sequence_lengths = first_true_indices(postprocessed_responses == self.tokenizer.pad_token_id) - 1
 
+        # clear cache before get_reward call
+        torch.cuda.empty_cache()
+
         _, scores, _ = self.get_reward(
             self.reward_model,
             postprocessed_query_responses,
