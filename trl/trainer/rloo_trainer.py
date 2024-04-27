@@ -61,6 +61,20 @@ def first_true_indices(bools, dtype=torch.long):
     return torch.min(zero_or_index, dim=-1).values
 
 
+class eval_mode:
+    def __init__(self, model):
+        self.model = model
+
+    def __enter__(self):
+        self.was_training = self.model.training
+        if self.was_training:
+            self.model.eval()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.was_training:
+            self.model.train()
+
+
 class RLOOTrainer(PolicyTrainerBase):
 
     def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
@@ -87,7 +101,8 @@ class RLOOTrainer(PolicyTrainerBase):
 
         with torch.no_grad():
             with self.ref_model_mgr as ref_model:
-                ref_output_logits = self.forward(ref_model, query_responses).logits
+                with eval_mode(ref_model) as _ref_model:
+                    ref_output_logits = self.forward(_ref_model, query_responses).logits
         ref_logits = ref_output_logits[:, context_length - 1 : -1]
         ref_logits /= self.args.temperature + 1e-7
         ref_all_logprobs = F.log_softmax(ref_logits, dim=-1)
@@ -108,18 +123,19 @@ class RLOOTrainer(PolicyTrainerBase):
         gc.collect()
         torch.cuda.empty_cache()
 
-        _, scores, _ = self.get_reward(
-            self.reward_model,
-            postprocessed_query_responses,
-            context_length
-        )
+        with eval_mode(self.reward_model) as _reward_model:
+            _, scores, _ = self.get_reward(
+                _reward_model,
+                postprocessed_query_responses,
+                context_length
+            )
         torch.cuda.empty_cache()
 
         # Response Processing 3. filter response. Ensure that the sample contains truncate_token_id
         # responses not passing that filter will receive a low (fixed) score
         # only query humans on responses that pass that filter
         contain_eos_token = torch.any(postprocessed_responses == self.tokenizer.eos_token_id, dim=-1)
-        if self.args.non_eos_penalty:
+        if self.args.non_eos_penalty:1
             scores = torch.where(contain_eos_token, scores, torch.full_like(scores, self.args.penalty_reward_value))
         # PR TODO: this is from original, but maybe it should be logged somewhere?
         #self.accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")

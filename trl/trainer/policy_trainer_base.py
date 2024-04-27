@@ -63,6 +63,20 @@ PR TODO: class ModelWithRewardsConfig(ModelConfig)
 """
 
 
+class eval_mode:
+    def __init__(self, model):
+        self.model = model
+
+    def __enter__(self):
+        self.was_training = self.model.training
+        if self.was_training:
+            self.model.eval()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.was_training:
+            self.model.train()
+
+
 def first_true_indices(bools, dtype=torch.long):
     """
     Takes an N-dimensional bool tensor and returns an (N-1)-dimensional tensor of integers giving
@@ -317,29 +331,31 @@ class PolicyTrainerBase(Trainer):
         attention_mask = query_responses != self.tokenizer.pad_token_id
         # position_ids = attention_mask.cumsum(1) - attention_mask.long()
         input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
-        return model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            # position_ids=position_ids,
-            return_dict=True,
-            output_hidden_states=True,
-        )
+        with eval_model(model) as _model:
+            return _model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                # position_ids=position_ids,
+                return_dict=True,
+                output_hidden_states=True,
+            )
 
     def get_reward(self, reward_model, query_responses, context_length):
         attention_mask = query_responses != self.tokenizer.pad_token_id
 
         # PR TODO: figure out why we had to get base_model_prefix
         # lm_backbone = getattr(reward_model, reward_model.base_model_prefix)
-        lm_backbone = reward_model
 
         input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
-        output = lm_backbone(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            return_dict=True,
-            output_hidden_states=True,
-        )
-        reward_logits = reward_model.score(output.hidden_states[-1])
+
+        with eval_model(reward_model) as _reward_model:
+            output = _reward_model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                return_dict=True,
+                output_hidden_states=True,
+            )
+            reward_logits = _reward_model.score(output.hidden_states[-1])
         sequence_lengths = (
             first_true_indices(
                 query_responses[:, context_length:] == self.tokenizer.pad_token_id
