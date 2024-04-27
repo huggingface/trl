@@ -120,7 +120,7 @@ class RLOOTrainer(PolicyTrainerBase):
         # responses not passing that filter will receive a low (fixed) score
         # only query humans on responses that pass that filter
         contain_eos_token = torch.any(postprocessed_responses == self.tokenizer.eos_token_id, dim=-1)
-        if self.args.non_eos_penalty:1
+        if self.args.non_eos_penalty:
             scores = torch.where(contain_eos_token, scores, torch.full_like(scores, self.args.penalty_reward_value))
         # PR TODO: this is from original, but maybe it should be logged somewhere?
         #self.accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
