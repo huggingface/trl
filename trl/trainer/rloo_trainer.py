@@ -63,7 +63,12 @@ def first_true_indices(bools, dtype=torch.long):
 
 class RLOOTrainer(PolicyTrainerBase):
 
-    def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
+    def compute_loss(
+        self,
+        model: Union[PreTrainedModel, nn.Module],
+        inputs: Dict[str, Union[torch.Tensor, Any]],
+        return_outputs=False,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
         """
         https://github.com/huggingface/transformers/blob/8c12690cecbb97e187861e386f7a0ac790e4236c/src/transformers/trainer.py#L3112
         """
@@ -186,7 +191,8 @@ class RLOOTrainer(PolicyTrainerBase):
             # mean_non_score_reward = non_score_reward.sum(1).mean()
             # "objective/non_score_reward"
 
-        self.log({
+
+        metrics = {
             "objective/kl": self.accelerator.gather(mean_kl).mean().item(),
             "objective/entropy": self.accelerator.gather(mean_entropy).mean().item(),
             "objective/rlhf_reward": self.accelerator.gather(rlhf_reward).mean().item(),
@@ -205,10 +211,11 @@ class RLOOTrainer(PolicyTrainerBase):
             # PR TODO
             #"val/ratio_var": self.accelerator.gather(ratio_stats).var().item(),
             "val/num_eos_tokens": (responses == self.tokenizer.eos_token_id).sum().item(),
-        })
+        }
 
-        loss = pg_loss.detach()
+        self.store_metrics(metrics)
 
+        loss = loss.to(self.args.device)
         del (
             output, logits, new_all_logprobs, new_logprobs,
             logprobs_diff, ratio, pg_losses, pg_losses2,
@@ -217,8 +224,9 @@ class RLOOTrainer(PolicyTrainerBase):
         )
         torch.cuda.empty_cache()
 
+        if return_outputs:
+            return (loss, metrics)
         return loss
-
 
 if __name__ == "__main__":
     pass
