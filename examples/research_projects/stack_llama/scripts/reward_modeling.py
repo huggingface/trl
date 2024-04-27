@@ -15,6 +15,7 @@ from transformers import (
     Trainer,
     TrainerCallback,
     TrainingArguments,
+    set_seed,
 )
 from transformers.utils import PaddingStrategy
 
@@ -89,11 +90,14 @@ class ScriptArguments:
         default=False,
         metadata={"help": "Whether to run eval after the first step"},
     )
+    seed: Optional[int] = field(
+        default=0, metadata={"help": "Random seed that will be set at the beginning of training."}
+    )
 
 
 parser = HfArgumentParser(ScriptArguments)
 script_args = parser.parse_args_into_dataclasses()[0]
-
+set_seed(script_args.seed)
 # Load the human stack-exchange-paired dataset for tuning the reward model.
 train_dataset = load_dataset("lvwerra/stack-exchange-paired", data_dir="data/reward", split="train")
 if script_args.train_subset > 0:
@@ -129,7 +133,10 @@ training_args = TrainingArguments(
     logging_steps=10,
     optim=script_args.optim,
     lr_scheduler_type=script_args.lr_scheduler_type,
+    seed=script_args.seed,
 )
+
+
 # Load the value-head model and tokenizer.
 tokenizer_name = script_args.tokenizer_name if script_args.tokenizer_name is not None else script_args.model_name
 tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_auth_token=True)

@@ -1,0 +1,13 @@
+examples:
+  llama:
+    text: There is a Llama in my lawn, how can I get rid of it?
+  code:
+    text: Write a Python function that integrates any Python function f(x) numerically over an arbitrary interval [x_start, x_end].
+  helicopter:
+    text: How many helicopters can a human eat in one sitting?
+  numbers: 
+    text: Count to 10 but skip every number ending with an 'e'
+  birds: 
+    text: Why aren't birds real?
+  socks:
+    text: Why is it important to eat socks after meditating?

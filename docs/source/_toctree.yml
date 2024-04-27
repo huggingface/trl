@@ -5,6 +5,8 @@
     title: Quickstart
   - local: installation
     title: Installation
+  - local: clis
+    title: Get started with Command Line Interfaces (CLIs)
   - local: how_to_train
     title: PPO Training FAQ
   - local: use_model
@@ -29,8 +31,14 @@
     title: Best of N Sampling
   - local: dpo_trainer
     title: DPO Trainer
+  - local: kto_trainer
+    title: KTO Trainer
+  - local: cpo_trainer
+    title: CPO Trainer
   - local: ddpo_trainer
     title: Denoising Diffusion Policy Optimization
+  - local: orpo_trainer
+    title: ORPO Trainer
   - local: iterative_sft_trainer
     title: Iterative Supervised Fine-Tuning
   - local: text_environments

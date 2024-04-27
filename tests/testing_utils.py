@@ -19,6 +19,7 @@ from trl import (
     is_bitsandbytes_available,
     is_diffusers_available,
     is_peft_available,
+    is_pil_available,
     is_wandb_available,
     is_xpu_available,
 )
@@ -51,6 +52,15 @@ def require_diffusers(test_case):
     return test_case
 
 
+def requires_pil(test_case):
+    """
+    Decorator marking a test that requires PIL. Skips the test if pil is not available.
+    """
+    if not is_pil_available():
+        test_case = unittest.skip("test requires PIL")(test_case)
+    return test_case
+
+
 def require_wandb(test_case, required: bool = True):
     """
     Decorator marking a test that requires wandb. Skips the test if wandb is not available.
@@ -76,6 +86,15 @@ def require_torch_multi_gpu(test_case):
     """
     if torch.cuda.device_count() < 2:
         test_case = unittest.skip("test requires multiple GPUs")(test_case)
+    return test_case
+
+
+def require_torch_gpu(test_case):
+    """
+    Decorator marking a test that requires GPUs. Skips the test if there is no GPU.
+    """
+    if not torch.cuda.is_available():
+        test_case = unittest.skip("test requires GPU")(test_case)
     return test_case
 
 

@@ -68,13 +68,13 @@ class DDPOTrainerTester(unittest.TestCase):
         clip_range = 0.0001
         ratio = torch.tensor([1.0])
         loss = self.trainer.loss(advantage, clip_range, ratio)
-        self.assertEqual(loss.item(), 1.0)
+        assert loss.item() == 1.0
 
     def test_generate_samples(self):
         samples, output_pairs = self.trainer._generate_samples(1, 2)
-        self.assertEqual(len(samples), 1)
-        self.assertEqual(len(output_pairs), 1)
-        self.assertEqual(len(output_pairs[0][0]), 2)
+        assert len(samples) == 1
+        assert len(output_pairs) == 1
+        assert len(output_pairs[0][0]) == 2
 
     def test_calculate_loss(self):
         samples, _ = self.trainer._generate_samples(1, 2)
@@ -87,16 +87,16 @@ class DDPOTrainerTester(unittest.TestCase):
         prompt_embeds = sample["prompt_embeds"]
         advantage = torch.tensor([1.0], device=prompt_embeds.device)
 
-        self.assertEqual(latents.shape, (1, 4, 64, 64))
-        self.assertEqual(next_latents.shape, (1, 4, 64, 64))
-        self.assertEqual(log_probs.shape, (1,))
-        self.assertEqual(timesteps.shape, (1,))
-        self.assertEqual(prompt_embeds.shape, (2, 77, 32))
+        assert latents.shape == (1, 4, 64, 64)
+        assert next_latents.shape == (1, 4, 64, 64)
+        assert log_probs.shape == (1,)
+        assert timesteps.shape == (1,)
+        assert prompt_embeds.shape == (2, 77, 32)
         loss, approx_kl, clipfrac = self.trainer.calculate_loss(
             latents, timesteps, next_latents, log_probs, advantage, prompt_embeds
         )
 
-        self.assertTrue(torch.isfinite(loss.cpu()))
+        assert torch.isfinite(loss.cpu())
 
 
 @require_diffusers

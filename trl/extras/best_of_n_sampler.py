@@ -7,7 +7,7 @@ from ..core import set_seed
 from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper
 
 
-class BestOfNSampler(object):
+class BestOfNSampler:
     def __init__(
         self,
         model: PreTrainedModelWrapper,

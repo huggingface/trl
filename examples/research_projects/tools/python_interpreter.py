@@ -1,4 +1,3 @@
-# coding=utf-8
 # Copyright 2023 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -61,9 +60,9 @@ def exact_match_reward(responses, answers=None):
             if match_pattern:
                 predicted_number = float(match_pattern[0])
             if predicted_number is not None:
-                if np.abs((predicted_number - float(answer))) < 0.1:
+                if np.abs(predicted_number - float(answer)) < 0.1:
                     reward += 1.0
-        except:  # noqa
+        except Exception:
             pass
         rewards.append(torch.tensor(reward))
     return rewards

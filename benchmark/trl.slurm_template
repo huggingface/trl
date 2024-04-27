@@ -1,16 +1,19 @@
 #!/bin/bash
 #SBATCH --job-name=trl
-#SBATCH --partition=production-cluster
+#SBATCH --partition=hopper-prod
 #SBATCH --gpus-per-task={{gpus_per_task}}
 #SBATCH --cpus-per-gpu={{cpus_per_gpu}}
 #SBATCH --ntasks={{ntasks}}
 #SBATCH --output=slurm/logs/%x_%j.out
 #SBATCH --array={{array}}
-#SBATCH --exclude=ip-26-0-156-239,ip-26-0-148-151,ip-26-0-146-212,ip-26-0-145-137,ip-26-0-146-249,ip-26-0-146-149,ip-26-0-147-233,ip-26-0-145-154,ip-26-0-144-35,ip-26-0-144-189,ip-26-0-146-183,ip-26-0-147-120,ip-26-0-144-95,ip-26-0-145-193
+##SBATCH --exclude=ip-26-0-149-199
+
+module load cuda/12.1
+
 {{nodes}}
 
 seeds={{seeds}}
 seed=${seeds[$SLURM_ARRAY_TASK_ID % {{len_seeds}}]}
 
 echo "Running task $SLURM_ARRAY_TASK_ID with seed: $seed"
-srun {{command}} --ppo_config.seed $seed
+srun {{command}} --seed $seed

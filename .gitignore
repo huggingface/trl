@@ -144,3 +144,6 @@ checklink/cookies.txt
 nbs/wandb/
 examples/notebooks/wandb/
 wandb/
+
+# cli scripts that are symlinked from `examples/scripts`
+trl/commands/scripts/

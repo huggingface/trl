@@ -71,7 +71,7 @@ The `trl` library is powered by `accelerate`. As such it is best to configure an
 
 ```bash
 accelerate config # will prompt you to define the training configuration
-accelerate launch scripts/gpt2-sentiment_peft.py # launches training
+accelerate launch examples/scripts/ppo.py --use_peft # launch`es training
 ```
 
 ## Using `trl` + `peft` and Data Parallelism
@@ -140,5 +140,5 @@ python PATH_TO_SCRIPT
 You can easily fine-tune Llama2 model using `SFTTrainer` and the official script! For example to fine-tune llama2-7b on the Guanaco dataset, run (tested on a single NVIDIA T4-16GB):
 
 ```bash
-python examples/scripts/sft.py --model_name meta-llama/Llama-2-7b-hf --dataset_name timdettmers/openassistant-guanaco --load_in_4bit --use_peft --batch_size 4 --gradient_accumulation_steps 2
+python examples/scripts/sft.py --output_dir sft_openassistant-guanaco  --model_name meta-llama/Llama-2-7b-hf --dataset_name timdettmers/openassistant-guanaco --load_in_4bit --use_peft --per_device_train_batch_size 4 --gradient_accumulation_steps 2
 ```

@@ -1,4 +1,3 @@
-# coding=utf-8
 # Copyright 2023 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -114,7 +113,7 @@ dataset = dataset.shuffle(local_seed)
 
 def data_generator():
     for i in range(len(dataset)):
-        yield dataset[i]["question"], [item for item in dataset[i]["answer"]["normalized_aliases"]]
+        yield dataset[i]["question"], list(dataset[i]["answer"]["normalized_aliases"])
 
 
 gen = data_generator()
@@ -123,7 +122,7 @@ gen = iter(gen)
 
 def generate_data(n):
     tasks, answers = [], []
-    for i in range(n):
+    for _i in range(n):
         q, a = next(gen)
         tasks.append(q)
         answers.append(a)
@@ -143,10 +142,14 @@ def exact_match_reward(responses, answers=None):
     return rewards
 
 
+def tool_fn(x):
+    # limit the amount of tokens
+    return tool(x).split("\n")[1][:600]
+
+
 # text env
 tool = load_tool("vwxyzjn/pyserini-wikipedia-kilt-doc")
-# limit the amount if tokens
-tool_fn = lambda x: tool(x).split("\n")[1][:600]  # noqa
+
 text_env = TextEnvironment(
     model,
     tokenizer,
@@ -184,8 +187,6 @@ for i in range(args.iterations):
         "answer": [", ".join(item) for item in answers],
     }
     all_rewards = ppo_trainer.accelerator.gather(torch.tensor(rewards, device=ppo_trainer.accelerator.device))
-    ppo_trainer.log_stats(
-        train_stats, texts, [item for item in all_rewards], columns_to_log=["query", "response", "answer"]
-    )
+    ppo_trainer.log_stats(train_stats, texts, list(all_rewards), columns_to_log=["query", "response", "answer"])
     if i % 100 == 0:
         ppo_trainer.save_pretrained(f"models/{args.model_name}_{args.seed}_{i}_triviaqa")

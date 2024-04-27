@@ -59,7 +59,7 @@ class BestOfNSamplerTester(unittest.TestCase):
 
         for q, expected_length in various_queries_formats:
             results = best_of_n.generate(q)
-            self.assertIsInstance(results, list)
+            assert isinstance(results, list)
             assert len(results) == expected_length
 
     def test_different_sample_sizes_and_n_candidates_values(self):

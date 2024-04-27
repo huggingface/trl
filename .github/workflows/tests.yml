@@ -5,6 +5,13 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+    paths:
+      # Run only when relevant files are modified
+      - "trl/**.py"
+      - "examples/**.py"
+      - "scripts/**.py"
+      - ".github/**.yml"
+      - "tests/**.py"
 
 jobs:
   check_code_quality:
@@ -47,7 +54,7 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         # cpu version of pytorch
-        pip install -e ".[test, peft, diffusers]"
+        pip install ".[test, peft, diffusers]"
     - name: Test with pytest
       run: |
         make test

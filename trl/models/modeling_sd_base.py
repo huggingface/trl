@@ -22,10 +22,10 @@ import numpy as np
 import torch
 from diffusers import DDIMScheduler, StableDiffusionPipeline, UNet2DConditionModel
 from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import rescale_noise_cfg
-from diffusers.utils import convert_state_dict_to_diffusers
 
 from ..core import randn_tensor
 from ..import_utils import is_peft_available
+from .sd_utils import convert_state_dict_to_diffusers
 
 
 if is_peft_available():
@@ -34,7 +34,7 @@ if is_peft_available():
 
 
 @dataclass
-class DDPOPipelineOutput(object):
+class DDPOPipelineOutput:
     """
     Output class for the diffusers pipeline to be finetuned with the DDPO trainer
 
@@ -54,7 +54,7 @@ class DDPOPipelineOutput(object):
 
 
 @dataclass
-class DDPOSchedulerOutput(object):
+class DDPOSchedulerOutput:
     """
     Output class for the diffusers scheduler to be finetuned with the DDPO trainer
 
@@ -69,7 +69,7 @@ class DDPOSchedulerOutput(object):
     log_probs: torch.Tensor
 
 
-class DDPOStableDiffusionPipeline(object):
+class DDPOStableDiffusionPipeline:
     """
     Main class for the diffusers pipeline to be finetuned with the DDPO trainer
     """

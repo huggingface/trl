@@ -1,6 +1,4 @@
-# coding=utf-8
-# coding=utf-8
-# Copyright 2023 The HuggingFace Team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 from dataclasses import dataclass
 from typing import Optional
 
@@ -37,7 +36,3 @@ class RewardConfig(TrainingArguments):
 
     max_length: Optional[int] = None
     """The maximum length of the sequences in the batch. This argument is required if you want to use the default data collator."""
-    gradient_checkpointing: Optional[bool] = True
-    """If True, use gradient checkpointing to save memory at the expense of slower backward pass."""
-    gradient_checkpointing_kwargs: Optional[dict] = None
-    """Keyword arguments to pass to the gradient checkpointing function."""

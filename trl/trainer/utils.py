@@ -19,11 +19,23 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
+from accelerate import PartialState
+from rich.console import Console, Group
+from rich.live import Live
+from rich.panel import Panel
+from rich.progress import Progress
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import IterableDataset
-from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizerBase
+from transformers import BitsAndBytesConfig, DataCollatorForLanguageModeling, PreTrainedTokenizerBase
+from transformers.trainer import TrainerCallback
+from transformers.trainer_utils import has_length
 
-from ..import_utils import is_unsloth_available
+from ..import_utils import is_peft_available, is_unsloth_available, is_xpu_available
+from ..trainer.model_config import ModelConfig
+
+
+if is_peft_available():
+    from peft import LoraConfig, PeftConfig
 
 
 class AdaptiveKLController:
@@ -61,11 +73,11 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
     calculated on the completion made by the assistant.
 
     Args:
-        instruction_template (`Optional[str]`): the template form that indicates the start of the human instruction, typically something like
-            '### Human:\n'. Useful for assistant-style conversation datasets
         response_template (`Union[str, List[int]]`): the template form that indicates the start of the response, typically something like
             '### Response:\n'. It can also be passed as tokenized ids, which can be useful when using a tokenizer that encodes the response
             differently if it does not have proper context.
+        instruction_template (`Union[str, List[int]]`): the template form that indicates the start of the human instruction, typically something like
+            '### Human:\n'. Useful for assistant-style conversation datasets. It can also be passed as tokenized ids.
         mlm (`bool`, *optional*, defaults to `False`): Whether or not to use masked language modeling in the underlying
             `DataCollatorForLanguageModeling` class. Note that this option currently has no effect but is present
              for flexibility and backwards-compatibility.
@@ -76,7 +88,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
     def __init__(
         self,
         response_template: Union[str, List[int]],
-        instruction_template: Union[str, List[int]] = None,
+        instruction_template: Optional[Union[str, List[int]]] = None,
         *args,
         mlm: bool = False,
         ignore_index: int = -100,
@@ -304,10 +316,16 @@ class DPODataCollatorWithPadding:
                     to_pad = [torch.LongTensor(ex[k]) for ex in features]
 
                     if (k.startswith("prompt")) and (k.endswith("input_ids")):
+                        if self.pad_token_id is None:
+                            raise ValueError(
+                                "Padding is enabled, but the tokenizer is not configured with a padding token."
+                                " Explicitly set `tokenizer.pad_token` (e.g. `tokenizer.pad_token = tokenizer.eos_token`)"
+                                " before calling the trainer."
+                            )
                         padding_value = self.pad_token_id
                     elif k.endswith("_attention_mask"):
                         padding_value = 0
-                    elif (k.startswith("chosen")) or (k.startswith("rejected")) or ("decoder" in k):
+                    elif k.startswith(("chosen", "rejected", "completion")) or ("decoder" in k):
                         padding_value = self.label_pad_token_id
                     else:
                         raise ValueError(f"Unexpected key in batch '{k}'")
@@ -319,6 +337,12 @@ class DPODataCollatorWithPadding:
                     else:
                         to_pad = [torch.LongTensor(ex[k]) for ex in features]
                     if k.endswith("_input_ids"):
+                        if self.pad_token_id is None:
+                            raise ValueError(
+                                "Padding is enabled, but the tokenizer is not configured with a padding token."
+                                " Explicitly set `tokenizer.pad_token` (e.g. `tokenizer.pad_token = tokenizer.eos_token`)"
+                                " before calling the trainer."
+                            )
                         padding_value = self.pad_token_id
                     elif k.endswith("_labels"):
                         padding_value = self.label_pad_token_id
@@ -355,7 +379,7 @@ class ConstantLengthDataset(IterableDataset):
                 Name of the field in the dataset that contains the text. Used only if `formatting_func` is `None`.
             formatting_func (`Callable`, **optional**):
                 Function that formats the text before tokenization. Usually it is recommended to have follows a certain
-                pattern such as `"### Question: {question}\n ### Answer: {answer}\n"`
+                pattern such as `"### Question: {question} ### Answer: {answer}"`
             infinite (`bool`, *optional*, defaults to `False`):
                 If True the iterator is reset after dataset reaches end else stops.
             seq_length (`int`, *optional*, defaults to `1024`):
@@ -767,3 +791,130 @@ def trl_sanitze_kwargs_for_tagging(model, tag_names, kwargs=None):
             tag_names.append(kwargs["tags"])
             kwargs["tags"] = tag_names
     return kwargs
+
+
+def get_quantization_config(model_config: ModelConfig) -> Optional[BitsAndBytesConfig]:
+    if model_config.load_in_4bit:
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=model_config.torch_dtype,  # For consistency with model weights, we use the same value as `torch_dtype`
+            bnb_4bit_quant_type=model_config.bnb_4bit_quant_type,
+            bnb_4bit_use_double_quant=model_config.use_bnb_nested_quant,
+        )
+    elif model_config.load_in_8bit:
+        quantization_config = BitsAndBytesConfig(
+            load_in_8bit=True,
+        )
+    else:
+        quantization_config = None
+
+    return quantization_config
+
+
+def get_kbit_device_map() -> Optional[Dict[str, int]]:
+    if is_xpu_available():
+        return {"": f"xpu:{PartialState().local_process_index}"}
+    elif torch.cuda.is_available():
+        return {"": PartialState().local_process_index}
+    else:
+        return None
+
+
+def get_peft_config(model_config: ModelConfig) -> "Optional[PeftConfig]":
+    if model_config.use_peft is False:
+        return None
+
+    if not is_peft_available():
+        raise ValueError(
+            "You need to have PEFT library installed in your environment, make sure to install `peft`. "
+            "Make sure to run `pip install -U peft`."
+        )
+
+    peft_config = LoraConfig(
+        r=model_config.lora_r,
+        lora_alpha=model_config.lora_alpha,
+        lora_dropout=model_config.lora_dropout,
+        bias="none",
+        task_type=model_config.lora_task_type,
+        target_modules=model_config.lora_target_modules,
+        modules_to_save=model_config.lora_modules_to_save,
+    )
+
+    return peft_config
+
+
+class RichProgressCallback(TrainerCallback):
+    """
+    A [`TrainerCallback`] that displays the progress of training or evaluation using Rich.
+    """
+
+    def __init__(self):
+        self.training_bar = None
+        self.prediction_bar = None
+
+        self.training_task_id = None
+        self.prediction_task_id = None
+
+        self.rich_group = None
+        self.rich_console = None
+
+        self.training_status = None
+        self.current_step = None
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        if state.is_world_process_zero:
+            self.training_bar = Progress()
+            self.prediction_bar = Progress()
+
+            self.rich_console = Console()
+
+            self.training_status = self.rich_console.status("Nothing to log yet ...")
+
+            self.rich_group = Live(Panel(Group(self.training_bar, self.prediction_bar, self.training_status)))
+            self.rich_group.start()
+
+            self.training_task_id = self.training_bar.add_task("[blue]Training the model", total=state.max_steps)
+            self.current_step = 0
+
+    def on_step_end(self, args, state, control, **kwargs):
+        if state.is_world_process_zero:
+            self.training_bar.update(self.training_task_id, advance=state.global_step - self.current_step, update=True)
+            self.current_step = state.global_step
+
+    def on_prediction_step(self, args, state, control, eval_dataloader=None, **kwargs):
+        if state.is_world_process_zero and has_length(eval_dataloader):
+            if self.prediction_task_id is None:
+                self.prediction_task_id = self.prediction_bar.add_task(
+                    "[blue]Predicting on the evaluation dataset", total=len(eval_dataloader)
+                )
+            self.prediction_bar.update(self.prediction_task_id, advance=1, update=True)
+
+    def on_evaluate(self, args, state, control, **kwargs):
+        if state.is_world_process_zero:
+            if self.prediction_task_id is not None:
+                self.prediction_bar.remove_task(self.prediction_task_id)
+                self.prediction_task_id = None
+
+    def on_predict(self, args, state, control, **kwargs):
+        if state.is_world_process_zero:
+            if self.prediction_task_id is not None:
+                self.prediction_bar.remove_task(self.prediction_task_id)
+                self.prediction_task_id = None
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if state.is_world_process_zero and self.training_bar is not None:
+            _ = logs.pop("total_flos", None)
+            self.training_status.update(f"[bold green]Status = {str(logs)}")
+
+    def on_train_end(self, args, state, control, **kwargs):
+        if state.is_world_process_zero:
+            self.rich_group.stop()
+
+            self.training_bar = None
+            self.prediction_bar = None
+            self.training_task_id = None
+            self.prediction_task_id = None
+            self.rich_group = None
+            self.rich_console = None
+            self.training_status = None
+            self.current_step = None

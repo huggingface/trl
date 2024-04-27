@@ -1,4 +1,3 @@
-# coding=utf-8
 # Copyright 2023 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -146,7 +145,7 @@ dataset = build_dataset(config, input_min_text_length=min_input_length, input_ma
 
 
 def collator(data):
-    return dict((key, [d[key] for d in data]) for key in data[0])
+    return {key: [d[key] for d in data] for key in data[0]}
 
 
 # set seed before initializing value head for deterministic eval
@@ -218,7 +217,7 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
         response_tensors.append(response.squeeze()[-gen_len:])
     batch["response"] = [tokenizer.decode(r.squeeze()) for r in response_tensors]
 
-    # Compute sentiment score # noqa
+    # Compute sentiment score
     texts = batch["response"]
     toxicity_inputs = toxicity_tokenizer(texts, padding=True, truncation=True, return_tensors="pt").to(
         ppo_trainer.accelerator.device

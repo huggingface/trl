@@ -22,7 +22,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
-from transformers import top_k_top_p_filtering
+from transformers.generation import TopKLogitsWarper, TopPLogitsWarper
 
 from .import_utils import is_npu_available, is_xpu_available
 
@@ -30,10 +30,46 @@ from .import_utils import is_npu_available, is_xpu_available
 try:
     from collections.abc import Mapping
 except ImportError:
-    from collections import Mapping
+    from collections.abc import Mapping
 
 
 WANDB_PADDING = -1
+
+
+def top_k_top_p_filtering(
+    logits: torch.FloatTensor,
+    top_k: int = 0,
+    top_p: float = 1.0,
+    filter_value: float = -float("Inf"),
+    min_tokens_to_keep: int = 1,
+) -> torch.FloatTensor:
+    """
+    Filter a distribution of logits using top-k and/or nucleus (top-p) filtering.
+
+    Args:
+        logits: logits distribution shape (batch size, vocabulary size)
+        top_k (`int`, *optional*, defaults to 0):
+            If > 0, only keep the top k tokens with highest probability (top-k filtering)
+        top_p (`float`, *optional*, defaults to 1.0):
+            If < 1.0, only keep the top tokens with cumulative probability >= top_p (nucleus filtering). Nucleus
+            filtering is described in Holtzman et al. (http://arxiv.org/abs/1904.09751)
+        min_tokens_to_keep (`int`, *optional*, defaults to 1):
+            Minimumber of tokens we keep per batch example in the output.
+
+    From: https://gist.github.com/thomwolf/1a5a29f6962089e871b94cbd09daf317
+    """
+
+    if top_k > 0:
+        logits = TopKLogitsWarper(top_k=top_k, filter_value=filter_value, min_tokens_to_keep=min_tokens_to_keep)(
+            None, logits
+        )
+
+    if 0 <= top_p <= 1.0:
+        logits = TopPLogitsWarper(top_p=top_p, filter_value=filter_value, min_tokens_to_keep=min_tokens_to_keep)(
+            None, logits
+        )
+
+    return logits
 
 
 def flatten_dict(nested: Dict, sep: str = "/") -> Dict:
@@ -80,7 +116,7 @@ def stack_dicts(stats_dicts: List[Dict]) -> Dict:
 
 def add_suffix(input_dict: Dict, suffix: str) -> Dict:
     """Add suffix to dict keys."""
-    return dict((k + suffix, v) for k, v in input_dict.items())
+    return {k + suffix: v for k, v in input_dict.items()}
 
 
 def pad_to_size(tensor: torch.Tensor, size: int, dim: int = 1, padding: int = 50256) -> torch.Tensor:
@@ -113,7 +149,7 @@ def whiten(values: torch.Tensor, shift_mean: bool = True) -> torch.Tensor:
     return whitened
 
 
-def masked_mean(values: torch.Tensor, mask: torch.Tensor, axis: bool = None) -> torch.Tensor:
+def masked_mean(values: torch.Tensor, mask: torch.Tensor, axis: Optional[bool] = None) -> torch.Tensor:
     """Compute mean of tensor with a masked values."""
     if axis is not None:
         return (values * mask).sum(axis=axis) / mask.sum(axis=axis)
@@ -194,7 +230,7 @@ def respond_to_batch(
 ) -> torch.LongTensor:
     """Sample text from language model."""
     input_ids = queries
-    for i in range(txt_len):
+    for _i in range(txt_len):
         # Get Logits
         outputs = model(input_ids)
         next_token_logits = outputs[0][:, -1, :]
@@ -236,7 +272,7 @@ class LengthSampler:
         return np.random.choice(self.values)
 
 
-class PPODecorators(object):
+class PPODecorators:
     optimize_device_cache = False
 
     @classmethod
