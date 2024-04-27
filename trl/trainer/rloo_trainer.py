@@ -110,7 +110,7 @@ class RLOOTrainer(PolicyTrainerBase):
 
 
         _, scores, _ = self.get_reward(
-            _reward_model,
+            self.reward_model,
             postprocessed_query_responses,
             context_length
         )
