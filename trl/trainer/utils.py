@@ -672,8 +672,8 @@ def peft_module_casting(model, dtype):
                     module = module.to(dtype)
 
 
-peft_module_casting_to_bf16 = lambda model: peft_module_casting(dtype=torch.bfloat16)
-peft_module_casting_to_fp16 = lambda model: peft_module_casting(dtype=torch.float16)
+peft_module_casting_to_bf16 = lambda model: peft_module_casting(model, dtype=torch.bfloat16)
+peft_module_casting_to_fp16 = lambda model: peft_module_casting(model, dtype=torch.float16)
 
 
 def trl_sanitze_kwargs_for_tagging(model, tag_names, kwargs=None):
