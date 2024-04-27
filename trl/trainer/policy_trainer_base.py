@@ -225,11 +225,6 @@ class PolicyTrainerBase(Trainer):
         # PR TODO: subclass with RewardTrainerBase which accepts a reward_model or reward_fn
         # PR TODO: add str model and str ref model setup code from dpo_trainer.py
 
-        # PR TODO: review this hack
-        model.gradient_checkpointing_enable()
-        model.enable_input_require_grads()
-
-
         # PR TODO: class variable which determines whether ref logprobs are generated either
         #          - once per batch
         #          - once per update
