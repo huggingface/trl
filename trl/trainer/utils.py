@@ -658,18 +658,22 @@ def neftune_post_forward_hook(module, input, output):
     return output
 
 
-def peft_module_casting_to_bf16(model):
+def peft_module_casting(model, dtype):
     from peft.tuners.tuners_utils import BaseTunerLayer
 
     for name, module in model.named_modules():
         if isinstance(module, BaseTunerLayer):
-            module = module.to(torch.bfloat16)
+            module = module.to(dtype)
         elif isinstance(module, torch.nn.LayerNorm) or "norm" in name:
             module = module.to(torch.float32)
         elif any(x in name for x in ["lm_head", "embed_tokens", "wte", "wpe"]):
             if hasattr(module, "weight"):
                 if module.weight.dtype == torch.float32:
-                    module = module.to(torch.bfloat16)
+                    module = module.to(dtype)
+
+
+peft_module_casting_to_bf16 = lambda model: peft_module_casting(dtype=torch.bfloat16)
+peft_module_casting_to_fp16 = lambda model: peft_module_casting(dtype=torch.float16)
 
 
 def trl_sanitze_kwargs_for_tagging(model, tag_names, kwargs=None):

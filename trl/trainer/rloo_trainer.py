@@ -167,7 +167,8 @@ class RLOOTrainer(PolicyTrainerBase):
         pg_clipfrac = (pg_losses2 > pg_losses).float().mean()
 
         # backprop
-        self.accelerator.backward(pg_loss)
+        with self._cast_base_model_ctx:
+            self.accelerator.backward(pg_loss)
 
         # log metrics
         with torch.no_grad():

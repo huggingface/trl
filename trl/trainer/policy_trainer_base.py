@@ -32,7 +32,8 @@ from trl.models.utils import unwrap_model_for_generation
 
 
 from ..models import SUPPORTED_ARCHITECTURES, create_reference_model, PreTrainedModelWrapper
-from .utils import disable_dropout_in_model
+from .utils import disable_dropout_in_model, peft_module_casting_to_bf16, peft_module_casting_to_fp16,
+
 
 from ..import_utils import is_peft_available
 
@@ -249,6 +250,18 @@ class PolicyTrainerBase(Trainer):
             self.train_generation_config.eos_token_id = tokenizer.eos_token_id
             self.train_generation_config.pad_token_id = tokenizer.pad_token_id
 
+
+        # handle casting self.model
+        if getattr(model, "is_loaded_in_4bit", False):
+            self._cast_base_model_ctx = torch.cuda.amp.autocast
+            if args.bf16:
+                peft_module_casting_to_bf16(model)
+            elif args.fp16:
+                peft_module_casting_to_fp16(model)
+            else:
+                raise ValueError
+        else:
+            self._cast_base_model_ctx = nullcontext
 
         super().__init__(
             model=model,
