@@ -27,6 +27,7 @@ python examples/scripts/reward_modeling.py \
     --evaluation_strategy="steps" \
     --max_length=512 \
 """
+import warnings
 
 import torch
 from datasets import load_dataset
@@ -63,6 +64,12 @@ if __name__ == "__main__":
     model = AutoModelForSequenceClassification.from_pretrained(
         model_config.model_name_or_path, num_labels=1, **model_kwargs
     )
+
+    if model_config.lora_task_type != "SEQ_CLS":
+        warnings.warn(
+            "You are using a `task_type` that is different than `SEQ_CLS` for PEFT. This will lead to silent bugs"
+            " Make sure to pass --lora_task_type SEQ_CLS when using this script."
+        )
 
     ################
     # Dataset

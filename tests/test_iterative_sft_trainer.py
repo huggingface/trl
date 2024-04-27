@@ -13,6 +13,7 @@
 # limitations under the License.
 import tempfile
 import unittest
+from functools import partial
 
 import torch
 from datasets import Dataset
@@ -31,15 +32,27 @@ class IterativeTrainerTester(unittest.TestCase):
         cls.tokenizer.pad_token = cls.tokenizer.eos_token
 
         # get t5 as seq2seq example:
-        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration-correct-vocab"
+        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration-correct-vocab-calibrated"
         cls.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         cls.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
     def _init_tensor_dummy_dataset(self):
         dummy_dataset_dict = {
-            "input_ids": [torch.tensor([5303, 3621]), torch.tensor([3666, 1438, 318]), torch.tensor([5303, 3621])],
-            "attention_mask": [torch.tensor([1, 1]), torch.tensor([1, 1, 1]), torch.tensor([1, 1])],
-            "labels": [torch.tensor([5303, 3621]), torch.tensor([3666, 1438, 318]), torch.tensor([5303, 3621])],
+            "input_ids": [
+                torch.tensor([5303, 3621, 3666, 1438, 318]),
+                torch.tensor([3666, 1438, 318, 3666, 1438, 318]),
+                torch.tensor([5303, 3621, 3666, 1438, 318]),
+            ],
+            "attention_mask": [
+                torch.tensor([1, 1, 1, 1, 1]),
+                torch.tensor([1, 1, 1, 1, 1, 1]),
+                torch.tensor([1, 1, 1, 1, 1]),
+            ],
+            "labels": [
+                torch.tensor([5303, 3621, 3666, 1438, 318]),
+                torch.tensor([3666, 1438, 318, 3666, 1438, 318]),
+                torch.tensor([5303, 3621, 3666, 1438, 318]),
+            ],
         }
 
         dummy_dataset = Dataset.from_dict(dummy_dataset_dict)
@@ -94,11 +107,10 @@ class IterativeTrainerTester(unittest.TestCase):
                 tokenizer = self.t5_tokenizer
 
             args = TrainingArguments(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=2,
+                output_dir=tmp_dir, per_device_train_batch_size=2, max_steps=2, learning_rate=1e-3
             )
             iterative_trainer = IterativeSFTTrainer(model=model, args=args, tokenizer=tokenizer)
+            iterative_trainer.optimizer.zero_grad = partial(iterative_trainer.optimizer.zero_grad, set_to_none=False)
 
             iterative_trainer.step(**inputs)
 

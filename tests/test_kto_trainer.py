@@ -21,6 +21,7 @@ from pytest import mark
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
 from trl import KTOConfig, KTOTrainer
+from trl.trainer.kto_trainer import _get_kl_dataset, _process_tokens, _tokenize
 
 from .testing_utils import require_no_wandb, require_peft
 
@@ -76,13 +77,15 @@ class KTOTrainerTester(unittest.TestCase):
 
     @parameterized.expand(
         [
-            ["gpt2", True],
+            ["gpt2", True, True],
+            ["gpt2", True, False],
             # ["t5", True],
-            ["gpt2", False],
+            ["gpt2", False, True],
+            ["gpt2", False, False],
             # ["t5", False],
         ]
     )
-    def test_kto_trainer(self, name, pre_compute):
+    def test_kto_trainer(self, name, pre_compute, eval_dataset):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = KTOConfig(
                 output_dir=tmp_dir,
@@ -113,7 +116,7 @@ class KTOTrainerTester(unittest.TestCase):
                 args=training_args,
                 tokenizer=tokenizer,
                 train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                eval_dataset=dummy_dataset if eval_dataset else None,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -128,6 +131,87 @@ class KTOTrainerTester(unittest.TestCase):
                 # check the params have changed - ignore 0 biases
                 if param.sum() != 0:
                     self.assertFalse(torch.equal(param, new_param))
+
+    def test_tokenize_and_process_tokens(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = KTOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=1,
+                learning_rate=9e-1,
+                evaluation_strategy="steps",
+                beta=0.1,
+            )
+
+            dummy_dataset = self._init_dummy_dataset()
+
+            trainer = KTOTrainer(
+                model=self.model,
+                ref_model=self.ref_model,
+                args=training_args,
+                tokenizer=self.tokenizer,
+                train_dataset=dummy_dataset,
+                eval_dataset=dummy_dataset,
+            )
+
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                tokenized_dataset = dummy_dataset.map(
+                    _tokenize,
+                    fn_kwargs={"tokenizer": trainer.tokenizer},
+                    batched=True,
+                    batch_size=2,
+                )
+                self.assertListEqual(tokenized_dataset["prompt"], dummy_dataset["prompt"])
+                self.assertListEqual(tokenized_dataset["completion"], dummy_dataset["completion"])
+                self.assertListEqual(tokenized_dataset["label"], dummy_dataset["label"])
+                self.assertListEqual(tokenized_dataset["prompt_input_ids"][0], [10814, 11])
+                self.assertListEqual(tokenized_dataset["prompt_attention_mask"][0], [1, 1])
+                self.assertListEqual(tokenized_dataset["answer_input_ids"][0], [5968, 1219, 72, 3621, 284, 1826, 345])
+                self.assertListEqual(tokenized_dataset["answer_attention_mask"][0], [1, 1, 1, 1, 1, 1, 1])
+
+                # Test reversal of (prompt, completion) pairs for KL dataset
+                tokenized_kl_dataset = tokenized_dataset.map(_get_kl_dataset, batched=True, batch_size=2)
+                self.assertListEqual(
+                    tokenized_kl_dataset["prompt_input_ids"][0], tokenized_dataset["prompt_input_ids"][0]
+                )
+                self.assertListEqual(
+                    tokenized_kl_dataset["prompt_attention_mask"][0], tokenized_dataset["prompt_attention_mask"][0]
+                )
+                self.assertListEqual(
+                    tokenized_kl_dataset["answer_input_ids"][0], tokenized_dataset["answer_input_ids"][1]
+                )
+                self.assertListEqual(
+                    tokenized_kl_dataset["answer_attention_mask"][0], tokenized_dataset["answer_attention_mask"][1]
+                )
+
+                fn_kwargs = {
+                    "prefix": "",
+                    "is_encoder_decoder": trainer.is_encoder_decoder,
+                    "tokenizer": trainer.tokenizer,
+                    "max_length": trainer.max_length,
+                    "truncation_mode": trainer.truncation_mode,
+                    "label_pad_token_id": trainer.label_pad_token_id,
+                    "max_prompt_length": trainer.max_prompt_length,
+                }
+                processed_dataset = tokenized_dataset.map(_process_tokens, fn_kwargs=fn_kwargs, num_proc=2)
+                self.assertListEqual(processed_dataset["prompt"], dummy_dataset["prompt"])
+                self.assertListEqual(processed_dataset["completion"], dummy_dataset["completion"])
+                self.assertListEqual(processed_dataset["label"], dummy_dataset["label"])
+                self.assertListEqual(processed_dataset["prompt_input_ids"][0], [50256, 10814, 11])
+                self.assertListEqual(processed_dataset["prompt_attention_mask"][0], [1, 1, 1])
+                self.assertListEqual(
+                    processed_dataset["completion_input_ids"][0],
+                    [50256, 10814, 11, 5968, 1219, 72, 3621, 284, 1826, 345, 50256],
+                )
+                self.assertListEqual(
+                    processed_dataset["completion_attention_mask"][0], [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+                )
+                self.assertListEqual(
+                    processed_dataset["completion_labels"][0],
+                    [-100, -100, -100, 5968, 1219, 72, 3621, 284, 1826, 345, 50256],
+                )
 
     def test_kto_trainer_without_providing_ref_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

@@ -20,9 +20,15 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 import torch
 from accelerate import PartialState
+from rich.console import Console, Group
+from rich.live import Live
+from rich.panel import Panel
+from rich.progress import Progress
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import IterableDataset
 from transformers import BitsAndBytesConfig, DataCollatorForLanguageModeling, PreTrainedTokenizerBase
+from transformers.trainer import TrainerCallback
+from transformers.trainer_utils import has_length
 
 from ..import_utils import is_peft_available, is_unsloth_available, is_xpu_available
 from ..trainer.model_config import ModelConfig
@@ -520,6 +526,109 @@ class RunningMoments:
         return xs_mean.item(), (xs_var * xs_count / (xs_count - 1)).float().sqrt().item()
 
 
+@dataclass
+class PtxData:
+    r"""
+    Data class to store input data for ppo_ptx loss calculation.
+    Args:
+        input_ids (List[`torch.LongTensor`]):
+            List of tensors containing the input_ids (if not provided, text will be used)
+        attention_mask (List[`torch.LongTensor`], , *optional*, default to 'None'):
+            List of tensors containing the attention_mask
+        labels (List[`torch.FloatTensor`], *optional*, default to 'None'):
+            List of tensors containing the labels (if set to None, will default to input_ids)
+        texts (List[`str`], *optional*, default to 'None'):
+            List of strings containing the text input (if not provided, input_ids will directly be used)
+        texts_labels (List[`str`], *optional*, default to 'None'):
+            List of strings containing the text labels (if set to None, will default to text)
+    """
+    input_ids: List[torch.LongTensor]
+    attention_mask: Optional[List[torch.LongTensor]] = None
+    labels: Optional[List[torch.LongTensor]] = None
+    texts: Optional[List[str]] = None
+    texts_labels: Optional[List[str]] = None
+
+
+@dataclass
+class PtxDataArgs:
+    r"""
+    Dataclass for storing parameters for ppo_ptx input data preparation.
+    Argss:
+        max_length (int, *optional*, default to 'None'):
+            Maximum length of the input sequence. If None, will default to the model's max_length
+        truncation_mode (str, *optional*, default to 'keep_end'):
+            Truncation mode to use. Can be one of 'keep_end', 'keep_start'
+    """
+    max_length: Optional[int] = None
+    truncation_mode: Optional[str] = "keep_end"
+
+
+@dataclass
+class PtxLossArgs:
+    r"""
+    Dataclass for storing parameters for ppo_ptx loss calculation
+    Args:
+        ptx_coef (float, *optional*, default to '0.0'):
+            Coefficient for the ptx loss
+    """
+    ptx_coef: Optional[float] = 0.0
+
+
+class MiniBatchCycleIter:
+    """
+    Cycle sliding window iterator on batch data.
+
+        Args:
+            b_sliding_wsize (`int`, *optional*, defaults to `0`):
+                The number of samples to include in a ptx data mini batch.
+            b_data_dict (`Dict[str, torch.Tensor]`, *optional*, defaults to None):
+                Batch data dict
+            b_shuffle (`bool`, *optional*, defaults to False):
+                Whether to shuffle the batch data indices
+    """
+
+    def __init__(
+        self,
+        b_sliding_wsize: Optional[int] = 0,
+        b_data_dict: Optional[Dict[str, torch.Tensor]] = None,
+        b_shuffle: Optional[bool] = True,
+    ):
+        self.b_data_dict = b_data_dict
+        self.b_data_keys = list(b_data_dict.keys()) if b_data_dict is not None else []
+        self.b_sliding_wsize = b_sliding_wsize
+        self.b_shuffle = b_shuffle
+        self.b_w_inds = np.array([])
+        self.b_w_start_idx = 0
+
+    def __next__(self):
+        if not self.b_data_dict:
+            return {}
+
+        if self.b_w_start_idx >= len(self.b_w_inds):
+            self.reset()
+
+        b_mini_bch_data_dict = {}
+
+        mini_batch_w_inds = self.b_w_inds[self.b_w_start_idx : self.b_w_start_idx + self.b_sliding_wsize]
+        self.b_w_start_idx += self.b_sliding_wsize
+        if len(mini_batch_w_inds) > 0:
+            for k in self.b_data_keys:
+                b_mini_bch_data_dict[k] = self.b_data_dict[k][mini_batch_w_inds]
+
+        return b_mini_bch_data_dict
+
+    def __iter__(self):
+        self.b_w_inds = np.array([])
+        self.b_w_start_idx = 0
+        return self
+
+    def reset(self):
+        # Reset the start index of the sliding window and recreate the sliding window indices
+        self.b_w_start_idx = 0
+        batch_size = self.b_data_dict[self.b_data_keys[0]].shape[0]
+        self.b_w_inds = np.random.permutation(batch_size) if self.b_shuffle else np.arange(batch_size)
+
+
 @torch.no_grad()
 def get_global_statistics(accelerator, xs: torch.Tensor, mask=None, device="cpu") -> Tuple[float, float, int]:
     """
@@ -726,12 +835,89 @@ def get_peft_config(model_config: ModelConfig) -> "Optional[PeftConfig]":
         lora_alpha=model_config.lora_alpha,
         lora_dropout=model_config.lora_dropout,
         bias="none",
-        task_type="CAUSAL_LM",
+        task_type=model_config.lora_task_type,
         target_modules=model_config.lora_target_modules,
         modules_to_save=model_config.lora_modules_to_save,
     )
 
     return peft_config
+
+
+class RichProgressCallback(TrainerCallback):
+    """
+    A [`TrainerCallback`] that displays the progress of training or evaluation using Rich.
+    """
+
+    def __init__(self):
+        self.training_bar = None
+        self.prediction_bar = None
+
+        self.training_task_id = None
+        self.prediction_task_id = None
+
+        self.rich_group = None
+        self.rich_console = None
+
+        self.training_status = None
+        self.current_step = None
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        if state.is_world_process_zero:
+            self.training_bar = Progress()
+            self.prediction_bar = Progress()
+
+            self.rich_console = Console()
+
+            self.training_status = self.rich_console.status("Nothing to log yet ...")
+
+            self.rich_group = Live(Panel(Group(self.training_bar, self.prediction_bar, self.training_status)))
+            self.rich_group.start()
+
+            self.training_task_id = self.training_bar.add_task("[blue]Training the model", total=state.max_steps)
+            self.current_step = 0
+
+    def on_step_end(self, args, state, control, **kwargs):
+        if state.is_world_process_zero:
+            self.training_bar.update(self.training_task_id, advance=state.global_step - self.current_step, update=True)
+            self.current_step = state.global_step
+
+    def on_prediction_step(self, args, state, control, eval_dataloader=None, **kwargs):
+        if state.is_world_process_zero and has_length(eval_dataloader):
+            if self.prediction_task_id is None:
+                self.prediction_task_id = self.prediction_bar.add_task(
+                    "[blue]Predicting on the evaluation dataset", total=len(eval_dataloader)
+                )
+            self.prediction_bar.update(self.prediction_task_id, advance=1, update=True)
+
+    def on_evaluate(self, args, state, control, **kwargs):
+        if state.is_world_process_zero:
+            if self.prediction_task_id is not None:
+                self.prediction_bar.remove_task(self.prediction_task_id)
+                self.prediction_task_id = None
+
+    def on_predict(self, args, state, control, **kwargs):
+        if state.is_world_process_zero:
+            if self.prediction_task_id is not None:
+                self.prediction_bar.remove_task(self.prediction_task_id)
+                self.prediction_task_id = None
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if state.is_world_process_zero and self.training_bar is not None:
+            _ = logs.pop("total_flos", None)
+            self.training_status.update(f"[bold green]Status = {str(logs)}")
+
+    def on_train_end(self, args, state, control, **kwargs):
+        if state.is_world_process_zero:
+            self.rich_group.stop()
+
+            self.training_bar = None
+            self.prediction_bar = None
+            self.training_task_id = None
+            self.prediction_task_id = None
+            self.rich_group = None
+            self.rich_console = None
+            self.training_status = None
+            self.current_step = None
 
 
 def get_exp_cap(value, decimal=4):

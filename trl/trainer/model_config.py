@@ -61,6 +61,9 @@ class ModelConfig:
         default=None,
         metadata={"help": ("Model layers to unfreeze & train")},
     )
+    lora_task_type: str = field(
+        default="CAUSAL_LM", metadata={"help": "The task_type to pass for LoRA (use SEQ_CLS for reward modeling)"}
+    )
     load_in_8bit: bool = field(
         default=False, metadata={"help": "use 8 bit precision for the base model - works only with LoRA"}
     )
@@ -82,3 +85,6 @@ class ModelConfig:
     def __post_init__(self):
         if self.load_in_8bit and self.load_in_4bit:
             raise ValueError("You can't use 8 bit and 4 bit precision at the same time")
+
+        if self.lora_target_modules == ["all-linear"]:
+            self.lora_target_modules = "all-linear"

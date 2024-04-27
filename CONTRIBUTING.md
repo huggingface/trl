@@ -5,7 +5,7 @@
 Before you start contributing make sure you installed all the dev tools:
 
 ```bash
-pip install -e ".[dev]"
+make dev
 ```
 
 ## Did you find a bug?

@@ -43,7 +43,7 @@ class ScriptArguments:
     )
 
     gradient_checkpointing_use_reentrant: Optional[bool] = field(
-        default=True, metadata={"help": "whether to use reentrant for gradient checkpointing"}
+        default=False, metadata={"help": "whether to use reentrant for gradient checkpointing"}
     )
 
     lora_alpha: Optional[float] = field(default=16, metadata={"help": "the lora alpha parameter"})
@@ -59,6 +59,10 @@ class ScriptArguments:
 
     output_dir: Optional[str] = field(default="./results", metadata={"help": "the output directory"})
     log_freq: Optional[int] = field(default=1, metadata={"help": "the logging frequency"})
+    load_in_4bit: Optional[bool] = field(default=True, metadata={"help": "whether to load the model in 4bit"})
+    model_dtype: Optional[str] = field(
+        default="float16", metadata={"help": "model_dtype[float16, bfloat16, float] for loading."}
+    )
 
     # instrumentation
     sanity_check: Optional[bool] = field(default=False, metadata={"help": "only train on 1000 samples"})
@@ -134,11 +138,17 @@ if __name__ == "__main__":
     set_seed(script_args.seed)
 
     # 1. load a pretrained model
+    torch_dtype = torch.float
+    if script_args.model_dtype == "float16":
+        torch_dtype = torch.float16
+    elif script_args.model_dtype == "bfloat16":
+        torch_dtype = torch.bfloat16
+
     model = AutoModelForCausalLM.from_pretrained(
         script_args.model_name_or_path,
         low_cpu_mem_usage=True,
-        torch_dtype=torch.float16,
-        load_in_4bit=True,
+        torch_dtype=torch_dtype,
+        load_in_4bit=script_args.load_in_4bit,
         device_map={"": Accelerator().local_process_index},
     )
     model.config.use_cache = False
