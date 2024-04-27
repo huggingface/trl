@@ -310,6 +310,8 @@ class PolicyTrainerBase(Trainer):
         #    self.is_deepspeed_enabled
         #)
 
+        self._stored_metrics = defaultdict(lambda: defaultdict(list))
+
     @staticmethod
     def _disable_dropout(model):
         if model is None:
