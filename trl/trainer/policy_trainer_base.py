@@ -235,6 +235,7 @@ class PolicyTrainerBase(Trainer):
         for m in [model, ref_model, reward_model]:
             if m is not None:
                 disable_dropout_in_model(m)
+        # PR TODO: eval_mode might obviate the above
 
         assert (reward_model is not None) != (reward_fn is not None), "Must set either reward_model or reward_fn, but not both"
         if reward_model is not None and "score" not in dir(reward_model):
@@ -263,6 +264,16 @@ class PolicyTrainerBase(Trainer):
             self.train_generation_config.eos_token_id = tokenizer.eos_token_id
             self.train_generation_config.pad_token_id = tokenizer.pad_token_id
 
+
+        # Fix RuntimeError: element 0 of tensors does not require grad and does not have a grad_fn
+        if getattr(args, "gradient_checkpointing", False):
+            # For backward compatibility with older versions of transformers
+            if hasattr(model, "enable_input_require_grads"):
+                model.enable_input_require_grads()
+            else:
+                def make_inputs_require_grad(module, input, output):
+                    output.requires_grad_(True)
+                model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
 
         # handle casting self.model
         if getattr(model, "is_loaded_in_4bit", False):
