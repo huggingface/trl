@@ -1,3 +1,4 @@
+from collections import defaultdict
 from copy import deepcopy
 import os
 import time
@@ -352,7 +353,7 @@ class PolicyTrainerBase(Trainer):
                 output_hidden_states=True,
             )
 
-    def get_reward(self, reward_model, query_responses, context_length):
+    de fget_reward(self, reward_model, query_responses, context_length):
         attention_mask = query_responses != self.tokenizer.pad_token_id
 
         # PR TODO: figure out why we had to get base_model_prefix

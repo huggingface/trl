@@ -80,7 +80,7 @@ class RLOOTrainer(PolicyTrainerBase):
 
         context_length = queries.shape[1]
         query_responses, logits = self.generate(
-            self.model,
+            model,
             queries,
             self.train_generation_config,
         )
