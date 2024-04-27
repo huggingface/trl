@@ -32,7 +32,7 @@ from trl.models.utils import unwrap_model_for_generation
 
 
 from ..models import SUPPORTED_ARCHITECTURES, create_reference_model, PreTrainedModelWrapper
-from .utils import disable_dropout_in_model, peft_module_casting_to_bf16, peft_module_casting_to_fp16,
+from .utils import disable_dropout_in_model, peft_module_casting_to_bf16, peft_module_casting_to_fp16
 
 
 from ..import_utils import is_peft_available
