@@ -355,7 +355,7 @@ class PolicyTrainerBase(Trainer):
                 return_dict=True,
                 output_hidden_states=True,
             )
-            reward_logits = _reward_model.score(output.hidden_states[-1])
+            reward_logits = reward_model.score(output.hidden_states[-1])
         sequence_lengths = (
             first_true_indices(
                 query_responses[:, context_length:] == self.tokenizer.pad_token_id
