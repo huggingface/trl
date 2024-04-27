@@ -331,7 +331,7 @@ class PolicyTrainerBase(Trainer):
         attention_mask = query_responses != self.tokenizer.pad_token_id
         # position_ids = attention_mask.cumsum(1) - attention_mask.long()
         input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
-        with eval_model(model) as _model:
+        with eval_mode(model) as _model:
             return _model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
@@ -348,7 +348,7 @@ class PolicyTrainerBase(Trainer):
 
         input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
 
-        with eval_model(reward_model) as _reward_model:
+        with eval_mode(reward_model) as _reward_model:
             output = _reward_model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
