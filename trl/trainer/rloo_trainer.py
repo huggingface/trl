@@ -172,10 +172,6 @@ class RLOOTrainer(PolicyTrainerBase):
         pg_loss = pg_loss_max.mean()
         pg_clipfrac = (pg_losses2 > pg_losses).float().mean()
 
-        # backprop
-        with self._cast_base_model_ctx():
-            self.accelerator.backward(pg_loss)
-
         # log metrics
         with torch.no_grad():
             prob_dist = torch.nn.functional.softmax(logits, dim=-1)
@@ -215,7 +211,7 @@ class RLOOTrainer(PolicyTrainerBase):
 
         self.store_metrics(metrics)
 
-        loss = loss.to(self.args.device)
+        loss = pg_loss.to(self.args.device)
         del (
             output, logits, new_all_logprobs, new_logprobs,
             logprobs_diff, ratio, pg_losses, pg_losses2,
