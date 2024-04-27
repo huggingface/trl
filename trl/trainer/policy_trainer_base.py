@@ -332,7 +332,7 @@ class PolicyTrainerBase(Trainer):
         # position_ids = attention_mask.cumsum(1) - attention_mask.long()
         input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
         with eval_mode(model):
-            return _model(
+            return model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 # position_ids=position_ids,
@@ -349,7 +349,7 @@ class PolicyTrainerBase(Trainer):
         input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
 
         with eval_mode(reward_model):
-            output = _reward_model(
+            output = reward_model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 return_dict=True,
