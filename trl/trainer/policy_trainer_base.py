@@ -360,14 +360,14 @@ class PolicyTrainerBase(Trainer):
 
         input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
 
-        with eval_mode(reward_model), torch.no_grad():
-            output = reward_model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                return_dict=True,
-                output_hidden_states=True,
-            )
-            reward_logits = reward_model.score(output.hidden_states[-1])
+        #with eval_mode(reward_model):
+        output = reward_model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            return_dict=True,
+            output_hidden_states=True,
+        )
+        reward_logits = reward_model.score(output.hidden_states[-1])
         sequence_lengths = (
             first_true_indices(
                 query_responses[:, context_length:] == self.tokenizer.pad_token_id
