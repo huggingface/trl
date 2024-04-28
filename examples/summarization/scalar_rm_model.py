@@ -125,8 +125,16 @@ class ScalarModel(PreTrainedModel):
         return_dict = kwargs.pop("return_dict", None)
         if not return_dict:
             return_values = (reward,) + output[1:]
+            # assume loss is None
+            return return_values
 
-        return SequenceClassifierOutputWithPast(loss=None, logits=reward)
+        return SequenceClassifierOutputWithPast(
+            loss=None,
+            logits=reward,
+            past_key_values=output.past_key_values,
+            hidden_states=output.hidden_states,
+            attentions=output.attentions,
+        )
 
 
 def first_true_indices(bools, dtype=torch.long):

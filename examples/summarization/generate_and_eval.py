@@ -8,7 +8,14 @@ from datasets import Dataset, builder, load_dataset
 from huggingface_hub import list_repo_refs
 from peft import PeftModelForCausalLM
 from scalar_rm_model import ScalarModel, ScalarModelConfig
-from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, Trainer, TrainingArguments
+from transformers import (
+    AutoModelForCausalLM,
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+    HfArgumentParser,
+    Trainer,
+    TrainingArguments,
+)
 from vllm import LLM, SamplingParams
 from vllm.model_executor.parallel_utils.parallel_state import destroy_model_parallel
 
@@ -183,28 +190,36 @@ def evaluate(args, reference, generations, model_name=None):
     tokenizer = AutoTokenizer.from_pretrained(args.gold_tokenizer_name)
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
 
-    scalar_model_config = ScalarModelConfig.from_pretrained(
-        args.gold_model_name,
-        revision=args.gold_model_revision,
-    )
-    # hack to remove the path
-    # models/EleutherAI/pythia-6.9b-deduped/sft_model_55513 -> EleutherAI/pythia-6.9b-deduped
-    if scalar_model_config.base_model.startswith("models/"):
-        original_model = scalar_model_config.base_config["_name_or_path"].split("/")[2]
-        sft_model = f"vwxyzjn/EleutherAI_{original_model}__sft__tldr"
-        scalar_model_config.base_config["_name_or_path"] = sft_model
-        scalar_model_config.base_model = sft_model
-        _, seed, _ = args.gold_model_revision.split("__")
-        scalar_model_config.base_model_revision = f"sft__{seed}__1708611267"
+    if args.gold_model_name.startswith("vwxyzjn"):
+        # ScalarModel
+        scalar_model_config = ScalarModelConfig.from_pretrained(
+            args.gold_model_name,
+            revision=args.gold_model_revision,
+        )
+        # hack to remove the path
+        # models/EleutherAI/pythia-6.9b-deduped/sft_model_55513 -> EleutherAI/pythia-6.9b-deduped
+        if scalar_model_config.base_model.startswith("models/"):
+            original_model = scalar_model_config.base_config["_name_or_path"].split("/")[2]
+            sft_model = f"vwxyzjn/EleutherAI_{original_model}__sft__tldr"
+            scalar_model_config.base_config["_name_or_path"] = sft_model
+            scalar_model_config.base_model = sft_model
+            _, seed, _ = args.gold_model_revision.split("__")
+            scalar_model_config.base_model_revision = f"sft__{seed}__1708611267"
 
-    # quantization_config = get_quantization_config(model_config)
-    model = ScalarModel.from_pretrained(
-        args.gold_model_name,
-        revision=args.gold_model_revision,
-        config=scalar_model_config,
-        torch_dtype=torch_dtype,
-        use_flash_attention_2=args.flash_attention,
-    )
+        # quantization_config = get_quantization_config(model_config)
+        model = ScalarModel.from_pretrained(
+            args.gold_model_name,
+            revision=args.gold_model_revision,
+            config=scalar_model_config,
+            torch_dtype=torch_dtype,
+            use_flash_attention_2=args.flash_attention,
+        )
+    else:
+        model = AutoModelForSequenceClassification.from_pretrained(
+            args.gold_model_name,
+            revision=args.gold_model_revision,
+            torch_dtype=torch_dtype,
+        )
 
     model.config.pad_token_id = tokenizer.pad_token_id
 
@@ -243,7 +258,7 @@ def evaluate(args, reference, generations, model_name=None):
     dataset = dataset.map(tokenize_and_add_eos(tokenizer, "reference", args.max_length))
 
     ref_results = trainer.predict(dataset)
-    ref_rewards = ref_results.predictions
+    ref_rewards = ref_results.predictions[0]
 
     step = 0
     for step_str, query_response in generations.items():
@@ -252,7 +267,7 @@ def evaluate(args, reference, generations, model_name=None):
 
         print(f"Evaluating {step_str}")
         results = trainer.predict(dataset)
-        gen_rewards = results.predictions
+        gen_rewards = results.predictions[0]
 
         win_rate = (gen_rewards > ref_rewards).mean().item()
         norm_reward = (gen_rewards - ref_rewards).mean().item()
