@@ -167,8 +167,6 @@ class RLOOTrainer(PolicyTrainerBase):
                 torch.cuda.empty_cache()
 
             # calculate loss
-            print("detecting nan before")
-            detect_nan(model)
             output = self.forward(model, query_responses)
             print("detecting nan after")
             detect_nan(model)
