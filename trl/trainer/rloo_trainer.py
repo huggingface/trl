@@ -181,6 +181,9 @@ class RLOOTrainer(PolicyTrainerBase):
                 pg_loss = pg_loss_max.mean()
                 pg_clipfrac = (pg_losses2 > pg_losses).float().mean()
 
+                # PR TODO: Remove
+                print("loss.grad_fn", pg_loss.grad_fn)
+
         # log metrics
         with torch.no_grad():
             prob_dist = torch.nn.functional.softmax(logits, dim=-1)
@@ -221,6 +224,10 @@ class RLOOTrainer(PolicyTrainerBase):
         self.store_metrics(metrics)
 
         loss = pg_loss.to(self.args.device)
+
+        # PR TODO: Remove
+        print("new device loss.grad_fn", loss.grad_fn)
+
 
         # PR TODO: delete the commented if it truly is what's detaching the graph
         """
