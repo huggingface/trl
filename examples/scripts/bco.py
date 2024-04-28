@@ -57,10 +57,13 @@ python examples/scripts/bco.py \
 import logging
 from typing import Literal
 from dataclasses import dataclass
+from functools import partial
 
-from accelerate import PartialState
+import torch
+import torch.nn.functional as F
+from accelerate import PartialState, Accelerator
 from datasets import load_dataset, Dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
+from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, PreTrainedModel
 
 from trl import KTOConfig, KTOTrainer, ModelConfig, get_peft_config, setup_chat_format
 
@@ -131,6 +134,29 @@ def build_helpfulness_dataset(llm_name: str) -> Dataset:
 
     return dataset
 
+def embed_prompt(input_ids: torch.LongTensor, attention_mask: torch.LongTensor, model: PreTrainedModel):
+    """
+    Borrowed from https://huggingface.co/nomic-ai/nomic-embed-text-v1.5#transformers
+    """
+    def mean_pooling(model_output, attention_mask):
+        token_embeddings = model_output[0]
+        input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+        return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(
+            input_mask_expanded.sum(1), min=1e-9
+        )
+
+    with torch.no_grad():
+        model_output = model(input_ids=input_ids, attention_mask=attention_mask)
+        embeddings = mean_pooling(model_output, attention_mask)
+
+    matryoshka_dim = 512
+    # normalize embeddings
+    embeddings = F.normalize(embeddings, p=2, dim=1)
+    embeddings = F.layer_norm(embeddings, normalized_shape=(embeddings.shape[1],))
+    embeddings = embeddings[:, :matryoshka_dim]
+
+    return embeddings
+
 
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, KTOConfig, ModelConfig))
@@ -161,6 +187,20 @@ if __name__ == "__main__":
     with PartialState().local_main_process_first():
         formatted_dataset = dataset.map(format_dataset, batched=False, num_proc=8)
 
+    accelerator = Accelerator()
+    embedding_model = AutoModel.from_pretrained(
+        "nomic-ai/nomic-embed-text-v1.5",
+        trust_remote_code=True,
+        safe_serialization=True,
+        torch_dtype=torch.bfloat16,
+        device_map="auto",
+    )
+    embedding_model = accelerator.prepare_model(embedding_model)
+    embedding_tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+    embedding_func = partial(
+        embed_prompt, model=embedding_model,
+    )
+
     # Initialize the KTO trainer
     kto_trainer = KTOTrainer(
         model,
@@ -170,6 +210,8 @@ if __name__ == "__main__":
         eval_dataset=formatted_dataset["test"],
         tokenizer=tokenizer,
         peft_config=get_peft_config(model_args),
+        embedding_func=embedding_func,
+        embedding_tokenizer=embedding_tokenizer,
     )
 
     # Train and push the model to the Hub
