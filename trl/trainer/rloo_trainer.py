@@ -72,6 +72,7 @@ class RLOOTrainer(PolicyTrainerBase):
         """
         https://github.com/huggingface/transformers/blob/8c12690cecbb97e187861e386f7a0ac790e4236c/src/transformers/trainer.py#L3112
         """
+        print("computing loss")
         model.train()
 
         inputs = self._prepare_inputs(inputs)
