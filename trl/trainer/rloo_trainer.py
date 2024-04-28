@@ -49,16 +49,11 @@ class RLOOConfig(PolicyTrainerArguments):
     """REINFORCE Leave-One-Out (RLOO) number of online samples per prompt"""
 
 
-# PR TODO: remove this debugger
-def detect_nan(net):
-    for name, param in net.named_parameters():
-        if param.grad is None:
-            print(name, "is None")
-        elif torch.isnan(param.grad).any():
-            print(name, "nan gradient found")
-        else:
-            print(name, "has good grad")
-
+# PR TODO: remove this logger
+def log_grad_metrics(model):
+    print (f"No. of params: {len([p for p in list(model.parameters())])}")
+    print (f"No. of params with grad updated: {len([p for p in list(model.parameters()) if p.grad])}")
+    print (f"No. of params with requires grad updated: {len([p for p in list(model.parameters()) if p.requires_grad])}")
 
 
 def first_true_indices(bools, dtype=torch.long):
@@ -175,10 +170,10 @@ class RLOOTrainer(PolicyTrainerBase):
                 assert model.training, "model is incorrectly in eval mode"
                 assert torch.is_grad_enabled(), "grad is disabled, but we need to calculate grad"
 
+                log_grad_metrics(model)
+
                 # calculate gradients and loss
                 output = self.forward(model, query_responses)
-                print("detecting nan after")
-                detect_nan(model)
                 logits = output.logits[:, context_length - 1 : -1]
                 logits /= self.args.temperature + 1e-7
                 new_all_logprobs = F.log_softmax(logits, dim=-1)
