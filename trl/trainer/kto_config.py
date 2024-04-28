@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, Optional, Literal
 
 from transformers import TrainingArguments
 
@@ -82,3 +82,5 @@ class KTOConfig(TrainingArguments):
     model_init_kwargs: Optional[Dict] = None
     ref_model_init_kwargs: Optional[Dict] = None
     dataset_num_proc: Optional[int] = None
+
+    loss_type: Literal["kto", "bco"] = "kto"
