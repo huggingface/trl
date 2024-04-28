@@ -230,6 +230,9 @@ class RLOOTrainer(PolicyTrainerBase):
         self.store_metrics(metrics)
 
         loss = pg_loss.to(self.args.device)
+
+        # PR TODO: delete the commented if it truly is what's detaching the graph
+        """
         del (
             output, logits, new_all_logprobs, new_logprobs,
             logprobs_diff, ratio, pg_losses, pg_losses2,
@@ -237,6 +240,7 @@ class RLOOTrainer(PolicyTrainerBase):
             kl, mean_kl, mean_entropy, scores
         )
         torch.cuda.empty_cache()
+        """
 
         if return_outputs:
             return (loss, metrics)
