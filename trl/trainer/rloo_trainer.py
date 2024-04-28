@@ -170,25 +170,26 @@ class RLOOTrainer(PolicyTrainerBase):
                     advantages[i] = rlhf_reward[i] - torch.stack(other_response_rlhf_rewards).mean(0)
                 torch.cuda.empty_cache()
 
-            # calculate loss
-            output = self.forward(model, query_responses)
-            print("detecting nan after")
-            detect_nan(model)
-            logits = output.logits[:, context_length - 1 : -1]
-            logits /= self.args.temperature + 1e-7
-            new_all_logprobs = F.log_softmax(logits, dim=-1)
-            new_logprobs = torch.gather(new_all_logprobs, 2, responses.unsqueeze(-1)).squeeze(-1)
-            new_logprobs = torch.masked_fill(
-                new_logprobs, padding_mask, INVALID_LOGPROB
-            )
-            new_ratio = (new_logprobs - logprobs).exp()
-            logprobs_diff = new_logprobs.sum(1) - logprobs.sum(1)
-            ratio = torch.exp(logprobs_diff)
-            pg_losses = -advantages * ratio
-            pg_losses2 = -advantages * torch.clamp(ratio, 1.0 - self.args.cliprange, 1.0 + self.args.cliprange)
-            pg_loss_max = torch.max(pg_losses, pg_losses2)
-            pg_loss = pg_loss_max.mean()
-            pg_clipfrac = (pg_losses2 > pg_losses).float().mean()
+            with self.accelerator.accumulate(model):
+                # calculate loss
+                output = self.forward(model, query_responses)
+                print("detecting nan after")
+                detect_nan(model)
+                logits = output.logits[:, context_length - 1 : -1]
+                logits /= self.args.temperature + 1e-7
+                new_all_logprobs = F.log_softmax(logits, dim=-1)
+                new_logprobs = torch.gather(new_all_logprobs, 2, responses.unsqueeze(-1)).squeeze(-1)
+                new_logprobs = torch.masked_fill(
+                    new_logprobs, padding_mask, INVALID_LOGPROB
+                )
+                new_ratio = (new_logprobs - logprobs).exp()
+                logprobs_diff = new_logprobs.sum(1) - logprobs.sum(1)
+                ratio = torch.exp(logprobs_diff)
+                pg_losses = -advantages * ratio
+                pg_losses2 = -advantages * torch.clamp(ratio, 1.0 - self.args.cliprange, 1.0 + self.args.cliprange)
+                pg_loss_max = torch.max(pg_losses, pg_losses2)
+                pg_loss = pg_loss_max.mean()
+                pg_clipfrac = (pg_losses2 > pg_losses).float().mean()
 
         # log metrics
         with torch.no_grad():
