@@ -236,7 +236,6 @@ class PolicyTrainerBase(Trainer):
         for m in [model, ref_model, reward_model]:
             if m is not None:
                 disable_dropout_in_model(m)
-        # PR TODO: eval_mode might obviate the above
 
         assert (reward_model is not None) != (reward_fn is not None), "Must set either reward_model or reward_fn, but not both"
         if reward_model is not None and "score" not in dir(reward_model):
@@ -415,7 +414,7 @@ class PolicyTrainerBase(Trainer):
         train_eval = "train" if "loss" in logs else "eval"
         # Add averaged stored metrics to logs
         for key, metrics in self._stored_metrics[train_eval].items():
-            logs[key] = torch.tensor(metrics).mean().item()
+            logs[key] = torch.tensor(metrics).to(dtype=torch.float32).mean().item()
         del self._stored_metrics[train_eval]
         return super().log(logs)
 
