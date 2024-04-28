@@ -52,8 +52,12 @@ class RLOOConfig(PolicyTrainerArguments):
 # PR TODO: remove this debugger
 def detect_nan(net):
     for name, param in net.named_parameters():
-        if torch.isnan(param.grad).any():
+        if param.grad is None:
+            print(name, "is None")
+        elif torch.isnan(param.grad).any():
             print(name, "nan gradient found")
+        else:
+            print(name, "has good grad")
 
 
 
