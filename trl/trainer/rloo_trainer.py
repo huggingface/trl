@@ -49,13 +49,6 @@ class RLOOConfig(PolicyTrainerArguments):
     """REINFORCE Leave-One-Out (RLOO) number of online samples per prompt"""
 
 
-# PR TODO: remove this logger
-def log_grad_metrics(model):
-    print (f"No. of params: {len([p for p in list(model.parameters())])}")
-    print (f"No. of params with grad updated: {len([p for p in list(model.parameters()) if p.grad])}")
-    print (f"No. of params with requires grad updated: {len([p for p in list(model.parameters()) if p.requires_grad])}")
-
-
 def first_true_indices(bools, dtype=torch.long):
     """
     Takes an N-dimensional bool tensor and returns an (N-1)-dimensional tensor of integers giving
@@ -135,11 +128,11 @@ class RLOOTrainer(PolicyTrainerBase):
                 # Response Processing 3. filter response. Ensure that the sample contains truncate_token_id
                 # responses not passing that filter will receive a low (fixed) score
                 # only query humans on responses that pass that filter
-                contain_eos_token = torch.any(postprocessed_responses == self.tokenizer.eos_token_id, dim=-1)
                 if self.args.non_eos_penalty:
+                    contain_eos_token = torch.any(postprocessed_responses == self.tokenizer.eos_token_id, dim=-1)
                     scores = torch.where(contain_eos_token, scores, torch.full_like(scores, self.args.penalty_reward_value))
-                # PR TODO: this is from original, but maybe it should be logged somewhere?
-                #self.accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
+                    # PR TODO: remove this debug statement
+                    self.accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
 
                 # be very careful with `padding_mask`;
                 # see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
@@ -169,8 +162,6 @@ class RLOOTrainer(PolicyTrainerBase):
                 # ensure gradients can be set
                 assert model.training, "model is incorrectly in eval mode"
                 assert torch.is_grad_enabled(), "grad is disabled, but we need to calculate grad"
-
-                log_grad_metrics(model)
 
                 # calculate gradients and loss
                 output = self.forward(model, query_responses)
