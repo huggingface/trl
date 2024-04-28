@@ -225,6 +225,8 @@ class RLOOTrainer(PolicyTrainerBase):
 
         loss = pg_loss.to(self.args.device)
 
+        import pdb;pdb.set_trace()
+
         # PR TODO: Remove
         print("new device loss.grad_fn", loss.grad_fn)
 
