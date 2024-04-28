@@ -171,7 +171,11 @@ class RLOOTrainer(PolicyTrainerBase):
                 torch.cuda.empty_cache()
 
             with self.accelerator.accumulate(model):
-                # calculate loss
+                # ensure gradients can be set
+                assert model.training, "model is incorrectly in eval mode"
+                assert torch.is_grad_enabled(), "grad is disabled, but we need to calculate grad"
+
+                # calculate gradients and loss
                 output = self.forward(model, query_responses)
                 print("detecting nan after")
                 detect_nan(model)
