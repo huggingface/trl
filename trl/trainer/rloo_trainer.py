@@ -181,9 +181,6 @@ class RLOOTrainer(PolicyTrainerBase):
                 pg_loss = pg_loss_max.mean()
                 pg_clipfrac = (pg_losses2 > pg_losses).float().mean()
 
-                # PR TODO: Remove
-                print("loss.grad_fn", pg_loss.grad_fn)
-
         # log metrics
         with torch.no_grad():
             prob_dist = torch.nn.functional.softmax(logits, dim=-1)
@@ -225,13 +222,8 @@ class RLOOTrainer(PolicyTrainerBase):
 
         loss = pg_loss.to(self.args.device)
 
-        import pdb;pdb.set_trace()
-
-        # PR TODO: Remove
-        print("new device loss.grad_fn", loss.grad_fn)
-
-
         # PR TODO: delete the commented if it truly is what's detaching the graph
+        # it probably isn't a problem, I saw issues with LoRA_MLPBackward w/ Unsloth
         """
         del (
             output, logits, new_all_logprobs, new_logprobs,
