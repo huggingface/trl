@@ -84,3 +84,8 @@ class KTOConfig(TrainingArguments):
     dataset_num_proc: Optional[int] = None
 
     loss_type: Literal["kto", "bco"] = "kto"
+
+    # BCO config
+    prompt_sample_size: int = 1024
+    min_density_ratio: float = 0.5
+    max_density_ratio: float = 10.0

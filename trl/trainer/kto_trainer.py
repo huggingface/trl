@@ -29,6 +29,8 @@ import torch.nn.functional as F
 from accelerate import PartialState
 from accelerate.utils import is_deepspeed_available, tqdm
 from datasets import Dataset, concatenate_datasets, interleave_datasets
+from sklearn.linear_model import LogisticRegression
+from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, SequentialSampler
 from transformers import (
     AutoModelForCausalLM,
@@ -75,8 +77,8 @@ def _get_kl_dataset(batch: Dict[str, List[Any]]) -> Dict[str, List[Any]]:
     return batch
 
 
-def _tokenize(batch: Dict[str, List[Any]], tokenizer: "PreTrainedTokenizer") -> Dict[str, List[Any]]:
-    """Tokenize a batch from a KTO specific dataset."""
+def _tokenize(batch: Dict[str, List[Any]], tokenizer: "PreTrainedTokenizer", embedding_tokenizer: Optional["PreTrainedTokenizer"] = None) -> Dict[str, List[Any]]:
+    """Tokenize a batch from a KTO/BCO specific dataset."""
     prompt_tokenized = tokenizer(batch["prompt"], add_special_tokens=False)
     prompt_input_ids = prompt_tokenized["input_ids"]
     prompt_attention_mask = prompt_tokenized["attention_mask"]
@@ -118,11 +120,16 @@ def _tokenize(batch: Dict[str, List[Any]], tokenizer: "PreTrainedTokenizer") -> 
     answer_input_ids = [f[r:] for f, r in zip(full_input_ids, response_token_ids_start_idx)]
     answer_attention_mask = [f[r:] for f, r in zip(full_attention_mask, response_token_ids_start_idx)]
 
+    if embedding_tokenizer is not None:
+        embedding_tokenized = embedding_tokenizer(batch["prompt"], truncation=True, add_special_tokens=False)
+
     return dict(
         prompt_input_ids=prompt_input_ids,
         prompt_attention_mask=prompt_attention_mask,
         answer_input_ids=answer_input_ids,
         answer_attention_mask=answer_attention_mask,
+        embedding_input_ids=embedding_tokenized["input_ids"],
+        embedding_attention_mask=embedding_tokenized["attention_mask"],
     )
 
 
@@ -283,6 +290,8 @@ class KTOTrainer(Trainer):
         compute_metrics: Optional[Callable[[EvalLoopOutput], Dict]] = None,
         model_adapter_name: Optional[str] = None,
         ref_adapter_name: Optional[str] = None,
+        embedding_func: Optional[Callable] = None,
+        embedding_tokenizer: Optional[PreTrainedTokenizerBase] = None,
     ):
         if type(args) == TrainingArguments:
             raise ValueError("Please use `KTOConfig` instead TrainingArguments.")
@@ -494,6 +503,9 @@ class KTOTrainer(Trainer):
         self.undesirable_weight = args.undesirable_weight
 
         self.loss_type = args.loss_type
+        # Underlying Distribution Matching argument
+        self.embedding_func = embedding_func
+        self.embedding_tokenizer = embedding_tokenizer
 
         with PartialState().local_main_process_first():
             # Shuffle the datasets
@@ -503,7 +515,7 @@ class KTOTrainer(Trainer):
             # Tokenize and prepare the training datasets
             train_dataset = train_dataset.map(
                 _tokenize,
-                fn_kwargs={"tokenizer": self.tokenizer},
+                fn_kwargs={"tokenizer": self.tokenizer, "embedding_tokenizer": self.embedding_tokenizer},
                 batched=True,
                 desc="Tokenizing train dataset",
             )
@@ -552,7 +564,7 @@ class KTOTrainer(Trainer):
                 # Tokenize
                 eval_dataset = eval_dataset.map(
                     _tokenize,
-                    fn_kwargs={"tokenizer": self.tokenizer},
+                    fn_kwargs={"tokenizer": self.tokenizer, "embedding_tokenizer": self.embedding_tokenizer},
                     batched=True,
                     desc="Tokenizing eval dataset",
                 )
@@ -670,6 +682,114 @@ class KTOTrainer(Trainer):
 
         if self.loss_type == "bco":
             self.running = RunningMoments(self.accelerator)
+
+        if self.embedding_func is None:
+            return
+
+        chosen_embeddings = self._get_sample_prompt_embeddings(desirable, sample_size=self.args.prompt_sample_size)
+        rejected_embeddings = self._get_sample_prompt_embeddings(undesirable, sample_size=self.args.prompt_sample_size)
+
+        embeddings = torch.cat((chosen_embeddings, rejected_embeddings), dim=0)
+        labels = torch.cat(
+            (torch.ones_like(chosen_embeddings[:, 0]), torch.zeros_like(rejected_embeddings[:, 0])), dim=0
+        )
+
+        self.clf = LogisticRegression(class_weight="balanced").fit(embeddings.cpu().numpy(), labels.cpu().numpy())
+
+    @property
+    def match_underlying_distribution(self):
+        return self.embedding_func is not None and self.embedding_tokenizer is not None
+
+    def _get_chosen_prob(self, prompt_embeddings: torch.FloatTensor) -> torch.FloatTensor:
+        """
+        Calculates the probability if the given prompt embedding is from desirable dataset.
+        This function calculates the probability in the process and ensemble across processes.
+        """
+        dtype = prompt_embeddings.dtype
+        device = prompt_embeddings.device
+        sample_size = prompt_embeddings.shape[0]
+
+        padded_prompt_embeddings = self.accelerator.pad_across_processes(prompt_embeddings)
+        nonzero = padded_prompt_embeddings.sum(dim=1) != 0
+        prompt_embeddings = self.accelerator.gather(padded_prompt_embeddings)
+
+        prob = self.clf.predict_proba(prompt_embeddings.cpu().numpy())[:, 1]
+        prob = torch.as_tensor(prob, dtype=dtype, device=device)
+        prob = self.accelerator.reduce(prob, reduction="mean")
+
+        rank = self.accelerator.process_index
+        prob = prob[sample_size * rank : sample_size * (rank + 1)]
+        prob = prob[nonzero]
+
+        return prob
+
+    def _vectorize_prompt(self, input_ids: torch.LongTensor, attention_mask: torch.LongTensor) -> torch.FloatTensor:
+        """
+        Replaces tokenizer.pad_token_id to embedding_tokenizer.pad_token_id
+        and applies self.embedding_func
+        """
+        input_ids = torch.where(
+            input_ids == self.tokenizer.pad_token_id,
+            self.embedding_tokenizer.pad_token_id,
+            input_ids,
+        )
+
+        with torch.no_grad():
+            embeddings = self.embedding_func(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+            )
+
+        return embeddings
+
+    def _get_prompt_embeddings(
+        self, batch: Dict[str, Union[List, torch.LongTensor]]
+    ) -> Tuple[torch.FloatTensor, torch.FloatTensor]:
+        """Extract embeddings from frozen embedding model"""
+
+        if not self.match_underlying_distribution:
+            return None, None
+
+        embeddings = self._vectorize_prompt(
+            input_ids=batch["embedding_input_ids"],
+            attention_mask=batch["embedding_attention_mask"],
+        )
+
+        chosen_idx = [i for i in range(len(batch["label"])) if batch["label"][i] is True]
+        rejected_idx = [i for i in range(len(batch["label"])) if batch["label"][i] is False]
+
+        chosen_embeddings = embeddings[chosen_idx, ...]
+        rejected_embeddings = embeddings[rejected_idx, ...]
+
+        return (chosen_embeddings, rejected_embeddings)
+
+    def _get_sample_prompt_embeddings(self, dataset: Dataset, sample_size: int = 512) -> torch.FloatTensor:
+        """
+        Sample instances from dataset and get prompt embeddings.
+        Used for density ratio classifier training.
+        """
+        n_samples = min(len(dataset), sample_size)
+        rand_indices = np.random.choice(len(dataset), size=(n_samples,))
+
+        batch = dataset.select(rand_indices)
+        input_ids = pad_sequence(
+            [torch.as_tensor(ids) for ids in batch["embedding_input_ids"]],
+            batch_first=True,
+            padding_value=self.embedding_tokenizer.pad_token_id,
+        ).to(self.accelerator.device)
+        attention_mask = pad_sequence(
+            [torch.as_tensor(ids) for ids in batch["embedding_attention_mask"]],
+            batch_first=True,
+            padding_value=0,
+        ).to(self.accelerator.device)
+
+        with torch.no_grad():
+            embeddings = self.embedding_func(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+            )
+
+        return embeddings
 
     def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
         # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
@@ -1036,13 +1156,23 @@ class KTOTrainer(Trainer):
 
         return losses, chosen_rewards, rejected_rewards, kl
 
+    def _get_udm_weight(self, rejected_embeddings: torch.FloatTensor) -> torch.FloatTensor:
+        prob_desirable = self._get_chosen_prob(rejected_embeddings)
+        min_ratio = self.args.min_density_ratio
+        max_ratio = self.args.max_density_ratio
+        
+        weight = (prob_desirable / (1 - prob_desirable + 1e-8)).clamp(min=min_ratio, max=max_ratio)
+
+        return weight
+
     def bco_loss(
         self,
         policy_chosen_logps: torch.FloatTensor,
         policy_rejected_logps: torch.FloatTensor,
         reference_chosen_logps: torch.FloatTensor,
         reference_rejected_logps: torch.FloatTensor,
-        weight_type: Literal["uniform", "density_ratio"] = "uniform",
+        chosen_embeddings: Optional[torch.FloatTensor],
+        rejected_embeddings: Optional[torch.FloatTensor],
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         """Compute the BCO loss for a batch of policy and reference model log probabilities.
 
@@ -1051,9 +1181,8 @@ class KTOTrainer(Trainer):
             policy_rejected_logps: Log probabilities of the policy model for the rejected responses. Shape: (num(rejected) in batch_size,)
             reference_chosen_logps: Log probabilities of the reference model for the chosen responses. Shape: (num(chosen) in batch_size,)
             reference_rejected_logps: Log probabilities of the reference model for the rejected responses. Shape: (num(rejected) in batch_size,)
-            weight_type: Whether to apply importance sampling.
-                    `uniform` assigns weight one across all samples and `density_ratio` assigns estimated density ratio of p^+ (x) / p^- (x)
-                    where p^+ (x) denotes the probability of the prompt x coming from thumbs-up dataset and p^- (x) denotes the probability of the prompt x coming from thumbs-down dataset.
+            chosen_embeddings: embeddings of desirable prompts
+            rejected_embeddings: embeddings of undesirable prompts
 
         Returns:
             A tuple of four tensors: (losses, chosen_rewards, rejected_rewards, KL).
@@ -1076,10 +1205,15 @@ class KTOTrainer(Trainer):
         chosen_losses = -F.logsigmoid(chosen_rewards - rewards_mean)
         rejected_losses = -F.logsigmoid(-(rejected_rewards - rewards_mean))
 
-        if weight_type == "uniform":
-            losses = torch.cat((chosen_losses, rejected_losses), dim=0)
+        if self.match_underlying_distribution:
+            chosen_weight = torch.ones_like(chosen_losses)
+            rejected_weight = self._get_udm_weight(rejected_embeddings)
+
+            losses = torch.cat(
+                (chosen_weight * chosen_losses, rejected_weight * rejected_losses), dim=0
+            )
         else:
-            raise NotImplementedError
+            losses = torch.cat((chosen_losses, rejected_losses), dim=0)
         
         return losses, chosen_rewards, rejected_rewards, torch.as_tensor(rewards_mean)
 
@@ -1138,12 +1272,15 @@ class KTOTrainer(Trainer):
                 reference_KL_logps,
             )
         elif self.loss_type == "bco":
+            chosen_embeddings, rejected_embeddings = self._get_prompt_embeddings(batch)
+
             losses, chosen_rewards, rejected_rewards, kl = self.bco_loss(
                 policy_chosen_logps,
                 policy_rejected_logps,
                 reference_chosen_logps,
                 reference_rejected_logps,
-                weight_type="uniform",
+                chosen_embeddings,
+                rejected_embeddings,
             )
 
         num_chosen = torch.Tensor([len(chosen_rewards)]).to(self.accelerator.device)
