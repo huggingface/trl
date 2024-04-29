@@ -120,17 +120,24 @@ def _tokenize(batch: Dict[str, List[Any]], tokenizer: "PreTrainedTokenizer", emb
     answer_input_ids = [f[r:] for f, r in zip(full_input_ids, response_token_ids_start_idx)]
     answer_attention_mask = [f[r:] for f, r in zip(full_attention_mask, response_token_ids_start_idx)]
 
-    if embedding_tokenizer is not None:
-        embedding_tokenized = embedding_tokenizer(batch["prompt"], truncation=True, add_special_tokens=False)
-
-    return dict(
+    output = dict(
         prompt_input_ids=prompt_input_ids,
         prompt_attention_mask=prompt_attention_mask,
         answer_input_ids=answer_input_ids,
         answer_attention_mask=answer_attention_mask,
-        embedding_input_ids=embedding_tokenized["input_ids"],
-        embedding_attention_mask=embedding_tokenized["attention_mask"],
     )
+
+    if embedding_tokenizer is not None:
+        embedding_tokenized = embedding_tokenizer(batch["prompt"], truncation=True, add_special_tokens=False)
+
+        output.update(
+            {
+                "embedding_input_ids": embedding_tokenized["input_ids"],
+                "embedding_attention_mask": embedding_tokenized["attention_mask"],
+            }
+        )
+
+    return output
 
 
 def _process_tokens(example: Dict[str, Any], model: "PreTrainedModel" = None, **kwargs) -> Dict:
