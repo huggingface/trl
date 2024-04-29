@@ -62,6 +62,7 @@ def first_true_indices(bools, dtype=torch.long):
 
 
 class RLOOTrainer(PolicyTrainerBase):
+    _tag_names = ["trl", "rloo"]
 
     def compute_loss(
         self,

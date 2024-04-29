@@ -304,6 +304,11 @@ class PolicyTrainerBase(Trainer):
             is_deepspeed_enabled=self.is_deepspeed_enabled,
         )
 
+        # Add tags for models that have been loaded with the correct transformers version
+        if hasattr(self.model, "add_model_tags"):
+            self.model.add_model_tags(self._tag_names)
+
+
         # PR TOOD: accelerate with reward model
         #self.reward_model.to(self.accelerator.device)
         #self.reward_model = _prepare_multigpu(
