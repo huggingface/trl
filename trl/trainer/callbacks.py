@@ -1,3 +1,5 @@
+from typing import List
+
 from accelerate.utils import gather_object
 from datasets import Dataset
 from tqdm import tqdm
@@ -18,12 +20,12 @@ from ..models.utils import unwrap_model_for_generation
 class WinRateCallback(TrainerCallback):
     def __init__(
         self,
-        prompt_dataset: Dataset,
+        prompts: List[str],
         generation_config: GenerationConfig,
         judge,
         trainer,
     ):
-        self.prompt_dataset = prompt_dataset
+        self.prompts = prompts
         self.generation_config = generation_config
         self.completions = []
         self.judge = judge
@@ -35,7 +37,7 @@ class WinRateCallback(TrainerCallback):
         tokenizer = kwargs["tokenizer"]
         accelerator = self.trainer.accelerator
 
-        with accelerator.split_between_processes(self.prompt_dataset, apply_padding=True) as prompts:
+        with accelerator.split_between_processes(self.prompts, apply_padding=True) as prompts:
             # local_dataset = Dataset.from_dict(prompts)
 
             with unwrap_model_for_generation(model, accelerator) as unwrapped_model:
@@ -59,7 +61,7 @@ class WinRateCallback(TrainerCallback):
         tokenizer = kwargs["tokenizer"]
         accelerator = self.trainer.accelerator
 
-        with accelerator.split_between_processes(self.prompt_dataset, apply_padding=True) as prompts:
+        with accelerator.split_between_processes(self.prompts, apply_padding=True) as prompts:
             annotation_batch = {"prompts": prompts, "completions": []}
 
             with unwrap_model_for_generation(model, accelerator) as unwrapped_model:
@@ -90,10 +92,9 @@ class WinRateCallback(TrainerCallback):
             )  # maybe just map the original dataset for logging
             results_dict = gather_object(results_dict)
 
+        # Logging
         if accelerator.is_main_process:
-            # log to wandb
-
-            dataset_len = len(self.prompt_dataset)
+            dataset_len = len(self.prompts)
             results_dataset = Dataset.from_list(results_dict).select(range(dataset_len))
 
             win_rate = sum([r == 0 for r in results_dataset["results"]]) / len(results_dataset)
@@ -105,7 +106,6 @@ class WinRateCallback(TrainerCallback):
                 policy = [c[0] for c in results_dataset["completions"]]
                 ref = [c[1] for c in results_dataset["completions"]]
                 chosen_indices = results_dataset["results"]
-
                 self.trainer.log(
                     {
                         "winrate_generations": wandb.Table(
