@@ -81,7 +81,7 @@ class RLOOTrainer(PolicyTrainerBase):
 
         context_length = queries.shape[1]
 
-        with self.accelerator.autocast(cache_enabled=True, dtype=torch.bfloat16):
+        with torch.cuda.amp.autocast():
             with torch.no_grad():
                 query_responses, logits = self.generate(
                     model,
