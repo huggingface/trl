@@ -265,6 +265,8 @@ class PolicyTrainerBase(Trainer):
             self.train_generation_config.pad_token_id = tokenizer.pad_token_id
 
 
+        # PR TODO: does this error still exist with unsloth?
+        """
         # Fix RuntimeError: element 0 of tensors does not require grad and does not have a grad_fn
         if getattr(args, "gradient_checkpointing", False):
             # For backward compatibility with older versions of transformers
@@ -274,7 +276,7 @@ class PolicyTrainerBase(Trainer):
                 def make_inputs_require_grad(module, input, output):
                     output.requires_grad_(True)
                 model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
-
+        """
         # handle casting self.model
         if getattr(model, "is_loaded_in_4bit", False):
             self._cast_base_model_ctx = torch.cuda.amp.autocast
