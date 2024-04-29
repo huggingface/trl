@@ -47,6 +47,8 @@ _import_structure = {
     "sft_trainer": ["SFTTrainer"],
     "base": ["BaseTrainer"],
     "ddpo_config": ["DDPOConfig"],
+    "callbacks": ["WinRateCallback"],
+    "judges": ["MockJudge"],
 }
 
 try:
