@@ -57,12 +57,6 @@ class PolicyTrainerArguments(TrainingArguments):
     non_eos_penalty: bool = False
     """whether to penalize responses that do not contain `truncate_token_id`"""
 
-"""
-PR TODO: class ModelWithRewardsConfig(ModelConfig)
-- reward_model_path
-- sft_model_path
-"""
-
 
 class eval_mode:
     def __init__(self, model):
@@ -142,6 +136,108 @@ def _prepare_multigpu(model, accelerator, is_deepspeed_enabled: bool):
         )
 
 
+def prepare_model_and_ref_model(
+        model: Optional[Union[PreTrainedModel, nn.Module, str]],
+        ref_model: Optional[Union[PreTrainedModel, nn.Module, str]],
+        model_init_kwargs: Optional[Dict],
+        ref_model_init_kwargs: Optional[Dict],
+        peft_config: Optional[Dict],
+        force_use_ref_model: bool,
+        args: Optional[TrainingArguments],
+):
+    """
+    Adapted from dpo_trainer.py
+    Allow user to pass a model or model URI + init kwargs + optional peft_config
+    Return a fully initialized model and ref_model
+    """
+    if model_init_kwargs is None:
+        model_init_kwargs = {}
+    elif not isinstance(model, str):
+        raise ValueError("You passed model_init_kwargs to the trainer. But model is already instantiated.")
+
+    if ref_model_init_kwargs is None:
+        ref_model_init_kwargs = {}
+    elif not isinstance(ref_model, str):
+        raise ValueError(
+            "You passed ref_model_init_kwargs to the trainer. But your ref_model is already instantiated."
+        )
+
+    if isinstance(model, str):
+        warnings.warn(
+            "You passed a model_id to the trainer. This will automatically create an "
+            "`AutoModelForCausalLM` or a `PeftModel` (if you passed a `peft_config`) for you."
+        )
+        model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
+
+    if isinstance(ref_model, str):
+        warnings.warn(
+            "You passed a ref model_id to the trainer. This will automatically create an "
+            "`AutoModelForCausalLM`"
+        )
+        ref_model = AutoModelForCausalLM.from_pretrained(ref_model, **ref_model_init_kwargs)
+
+    if not is_peft_available() and peft_config is not None:
+        raise ValueError(
+            "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
+        )
+    elif is_peft_available() and peft_config is not None:
+        # if model is a peft model and we have a peft_config, we merge and unload it first
+        if isinstance(model, PeftModel):
+            model = model.merge_and_unload()
+
+        if ref_model is not None and not force_use_ref_model:
+            raise ValueError(
+                "You passed both a ref_model and a peft_config. For training PEFT adapters there is no need to pass a reference"
+                " model. Please pass `ref_model=None` in case you want to train PEFT adapters, or pass a ref_model with `force_use_ref_model=True` in trainer's init."
+                " if you want to use a different ref_model."
+            )
+
+        if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
+            _support_gc_kwargs = hasattr(
+                args, "gradient_checkpointing_kwargs"
+            ) and "gradient_checkpointing_kwargs" in list(
+                inspect.signature(prepare_model_for_kbit_training).parameters
+            )
+
+            prepare_model_kwargs = {"use_gradient_checkpointing": args.gradient_checkpointing}
+
+            if _support_gc_kwargs:
+                prepare_model_kwargs["gradient_checkpointing_kwargs"] = args.gradient_checkpointing_kwargs
+
+            model = prepare_model_for_kbit_training(model, **prepare_model_kwargs)
+        elif getattr(args, "gradient_checkpointing", False):
+            # For backward compatibility with older versions of transformers
+            if hasattr(model, "enable_input_require_grads"):
+                model.enable_input_require_grads()
+            else:
+
+                def make_inputs_require_grad(module, input, output):
+                    output.requires_grad_(True)
+
+                model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
+
+        # get peft model with the given config
+        model = get_peft_model(model, peft_config)
+        if args.bf16 and getattr(model, "is_loaded_in_4bit", False):
+            peft_module_casting_to_bf16(model)
+
+    # For models that use gradient_checkpointing, we need to attach a hook that enables input
+    # to explicitly have `requires_grad=True`, otherwise training will either silently
+    # fail or completely fail.
+    elif getattr(args, "gradient_checkpointing", False):
+        # For backward compatibility with older versions of transformers
+        if hasattr(model, "enable_input_require_grads"):
+            model.enable_input_require_grads()
+        else:
+
+            def make_inputs_require_grad(module, input, output):
+                output.requires_grad_(True)
+
+            model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
+
+    return model, ref_model
+
+
 class ReferenceModelManager:
     """
     Context manager to prepare and manage the reference model.
@@ -200,10 +296,6 @@ class ReferenceModelManager:
 
 
 
-# PR TODO: determine why disable_dropout existed, and if it's necessary, readd it
-# https://github.com/huggingface/trl/pull/1540/files/c54f111836a0e8b3af2fd6338a2decbe74b7d494#r1580194071
-
-
 class PolicyTrainerBase(Trainer):
     """
     Base class for implementing a policy training algorithm.
@@ -212,19 +304,32 @@ class PolicyTrainerBase(Trainer):
     def __init__(
             self,
             model: Optional[PreTrainedModelWrapper],
-            args: TrainingArguments,
-            train_dataset: Union[Dataset, "datasets.Dataset"],
+            ref_model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
+            args: Optional[TrainingArguments] = None,
+            train_dataset: Optional[Dataset] = None,
             reward_model: Optional[PreTrainedModelWrapper] = None,
             reward_fn: Callable = None,
             ref_model: Optional[PreTrainedModelWrapper] = None,
             train_generation_config: Optional[GenerationConfig] = None,
             eval_generation_config: Optional[GenerationConfig] = None,
             tokenizer: Optional[PreTrainedTokenizerBase] = None,
+            model_init_kwargs: Optional[Dict] = None,
+            ref_model_init_kwargs: Optional[Dict] = None,
+            force_use_ref_model: bool = False,
             **kwargs
     ) -> None:
 
+        model, ref_model = prepare_model_and_ref_model(
+            model=model,
+            ref_model=ref_model,
+            model_init_kwargs=model_init_kwargs,
+            ref_model_init_kwargs=ref_model_init_kwargs,
+            peft_config=peft_config,
+            force_use_ref_model=force_use_ref_model,
+            args=args,
+        )
+
         # PR TODO: subclass with RewardTrainerBase which accepts a reward_model or reward_fn
-        # PR TODO: add str model and str ref model setup code from dpo_trainer.py
 
         # PR TODO: class variable which determines whether ref logprobs are generated either
         #          - once per batch
@@ -265,29 +370,11 @@ class PolicyTrainerBase(Trainer):
             self.train_generation_config.pad_token_id = tokenizer.pad_token_id
 
 
-        # PR TODO: does this error still exist with unsloth?
-        """
-        # Fix RuntimeError: element 0 of tensors does not require grad and does not have a grad_fn
-        if getattr(args, "gradient_checkpointing", False):
-            # For backward compatibility with older versions of transformers
-            if hasattr(model, "enable_input_require_grads"):
-                model.enable_input_require_grads()
-            else:
-                def make_inputs_require_grad(module, input, output):
-                    output.requires_grad_(True)
-                model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
-        """
         # handle casting self.model
-        if getattr(model, "is_loaded_in_4bit", False):
-            self._cast_base_model_ctx = torch.cuda.amp.autocast
-            if args.bf16:
-                peft_module_casting_to_bf16(model)
-            elif args.fp16:
-                peft_module_casting_to_fp16(model)
-            else:
-                raise ValueError
+        if args.bf16 and getattr(model, "is_loaded_in_4bit", False):
+            self.cast_model_ctx = lambda: torch.cuda.amp.autocast(dtype=torch.bfloat16)
         else:
-            self._cast_base_model_ctx = nullcontext
+            self.cast_model_ctx = nullcontext
 
         super().__init__(
             model=model,
