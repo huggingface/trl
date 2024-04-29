@@ -77,9 +77,9 @@ from trl import (
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
-    WinRateCallback,
-    MockJudge
 )
+
+from trl.trainer import WinRateCallback, MockJudge, PairRMJudge
 
 
 if TRL_USE_RICH:
@@ -95,9 +95,9 @@ if __name__ == "__main__":
         training_args.disable_tqdm = True
         console = Console()
 
-    ################
+    ###################
     # Model & Tokenizer
-    ################
+    ###################
     torch_dtype = (
         model_config.torch_dtype
         if model_config.torch_dtype in ["auto", None]
@@ -178,21 +178,27 @@ if __name__ == "__main__":
             callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
         )
 
-        prompts = ["Hello", "Who are you?", "What is your name?"]
-        prompt_dataset = [tokenizer.apply_chat_template([{"role": "user", "content": p}], tokenize=False, add_generation_prompt=True) for p in prompts]
+        judge = PairRMJudge()
+        prompts_ds = load_dataset(args.dataset_name, split="test[:32]")
+        prompts_ds = prompts_ds.map(
+            lambda x: {
+                "prompt": tokenizer.apply_chat_template(x["chosen"][:-1], tokenize=False, add_generation_prompt=True)
+            }
+        )
+        # prompt_dataset = [tokenizer.apply_chat_template([{"role": "user", "content": p}], tokenize=False, add_generation_prompt=True) for p in prompts]
         win_rate_callback = WinRateCallback(
-        prompt_dataset=prompt_dataset,
-        judge=MockJudge(),
-        generation_config=GenerationConfig(
-            temperature=0.9,
-            do_sample=True,
-            num_return_sequences=1,
-            pad_token_id=tokenizer.pad_token_id,
-            eos_token_id=tokenizer.eos_token_id,
-            max_new_tokens=512,
-        ),
-        trainer=trainer,
-    )
+            prompt_dataset=prompts_ds["prompt"],
+            judge=judge,
+            generation_config=GenerationConfig(
+                temperature=0.9,
+                do_sample=True,
+                num_return_sequences=1,
+                pad_token_id=tokenizer.pad_token_id,
+                eos_token_id=tokenizer.eos_token_id,
+                max_new_tokens=512,
+            ),
+            trainer=trainer,
+        )
     trainer.add_callback(win_rate_callback)
 
     trainer.train()

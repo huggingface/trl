@@ -1,6 +1,4 @@
-import time
-
-import torch
+from accelerate.utils import gather_object
 from datasets import Dataset
 from tqdm import tqdm
 from transformers import (
@@ -13,8 +11,9 @@ from transformers import (
 )
 
 import wandb
-from accelerate.utils import gather_object
+
 from ..models.utils import unwrap_model_for_generation
+
 
 class WinRateCallback(TrainerCallback):
     def __init__(
@@ -42,9 +41,7 @@ class WinRateCallback(TrainerCallback):
             with unwrap_model_for_generation(model, accelerator) as unwrapped_model:
                 unwrapped_model.eval()
                 for prompt in tqdm(prompts, desc="Generating ref completions for win rate"):
-                    tokenized_prompt = tokenizer(
-                        prompt, return_tensors="pt"
-                    ).to(model.device)
+                    tokenized_prompt = tokenizer(prompt, return_tensors="pt").to(model.device)
                     generation = unwrapped_model.generate(
                         **tokenized_prompt,
                         generation_config=self.generation_config,
@@ -67,12 +64,8 @@ class WinRateCallback(TrainerCallback):
 
             with unwrap_model_for_generation(model, accelerator) as unwrapped_model:
                 unwrapped_model.eval()
-                for i, prompt in enumerate(
-                    tqdm(prompts, desc="Generating completions for win rate")
-                ):
-                    tokenized_prompt = tokenizer(
-                        prompt, return_tensors="pt"
-                    ).to(model.device)
+                for i, prompt in enumerate(tqdm(prompts, desc="Generating completions for win rate")):
+                    tokenized_prompt = tokenizer(prompt, return_tensors="pt").to(model.device)
                     generations = unwrapped_model.generate(
                         **tokenized_prompt,
                         generation_config=self.generation_config,
