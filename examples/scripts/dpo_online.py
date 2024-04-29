@@ -14,20 +14,22 @@
 # limitations under the License.
 """
 # regular:
-python examples/scripts/dpo.py \
+accelerate launch --config_file=examples/accelerate_configs/multi_gpu.yaml examples/scripts/dpo_online.py \
     --dataset_name=trl-internal-testing/hh-rlhf-trl-style \
-    --model_name_or_path=gpt2 \
+    --dataset_num_proc=4 \
+    --model_name_or_path=Qwen/Qwen1.5-0.5B-Chat \
     --per_device_train_batch_size 4 \
     --learning_rate 1e-3 \
     --gradient_accumulation_steps 1 \
     --logging_steps 10 \
     --eval_steps 500 \
-    --output_dir="dpo_anthropic_hh" \
+    --output_dir="scratch/dpo_anthropic_hh" \
     --warmup_steps 150 \
     --report_to wandb \
     --bf16 \
     --logging_first_step \
-    --no_remove_unused_columns
+    --no_remove_unused_columns \
+    --sanity_check
 
 # peft:
 python examples/scripts/dpo.py \
@@ -148,7 +150,7 @@ if __name__ == "__main__":
     ds = load_dataset(args.dataset_name)
     if args.sanity_check:
         for key in ds:
-            ds[key] = ds[key].select(range(1000))
+            ds[key] = ds[key].select(range(1_000))
 
     def process(row):
         row["chosen"] = tokenizer.apply_chat_template(row["chosen"], tokenize=False)
@@ -185,9 +187,8 @@ if __name__ == "__main__":
                 "prompt": tokenizer.apply_chat_template(x["chosen"][:-1], tokenize=False, add_generation_prompt=True)
             }
         )
-        # prompt_dataset = [tokenizer.apply_chat_template([{"role": "user", "content": p}], tokenize=False, add_generation_prompt=True) for p in prompts]
         win_rate_callback = WinRateCallback(
-            prompt_dataset=prompts_ds["prompt"],
+            prompts=prompts_ds["prompt"],
             judge=judge,
             generation_config=GenerationConfig(
                 temperature=0.9,

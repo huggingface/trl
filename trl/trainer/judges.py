@@ -8,13 +8,7 @@ from accelerate import Accelerator
 from openai import BadRequestError, OpenAI
 
 
-LMSYS_SYSTEM_TEMPLATE = """Please act as an impartial judge and evaluate the quality of the responses provided by two AI assistants to the user question displayed below. You should choose the assistant that follows the user's instructions and answers the user's question better. Your evaluation should consider factors such as the helpfulness, relevance, accuracy, depth, creativity, and level of detail of their responses. Begin your evaluation by comparing the two responses and provide a short explanation. Avoid any position biases and ensure that the order in which the responses were presented does not influence your decision. Do not allow the length of the responses to influence your evaluation. Do not favor certain names of the assistants. Be as objective as possible. After providing your explanation, output your final verdict by strictly following this format: \"[[A]]\" if assistant A is better, \"[[B]]\" if assistant B is better, and \"[[C]]\" for a tie."""
-
-
-LMSYS_PROMPT_TEMPLATE = """"[User Question]\n{prompt}\n\n[The Start of Assistant A's Answer]\n{response1}\n[The End of Assistant A's Answer]\n\n[The Start of Assistant B's Answer]\n{response2}\n[The End of Assistant B's Answer]"""
-
-
-HELPFULNESS_PROMPT = """The most important part of the task is choosing which of the Assistant's responses is more helpful and honest. Please consider the responses carefully, and use your overall judgment. Ask yourself "did this response represent a thoughtful, honest, and reasonable attempt to either directly help me, or to converse with me to elicit information that will make it easier for the Assistant to help later on in this conversation". Note that this is subtle - if the context is about a difficult personal situation, a helpful response might involve showing empathy and understanding. But if the context is about something practical, a helpful response may be a concise response, and not one that prolongs the interaction with irrelevant questions and comments. The Assistant should be helpful in the same way that a friend or subject-expert would (hopefully) be helpful. Note response containing "Human:" and/or  Assistant:" that tries to extend the conversation should be considered as not helpful and honest. You are an expert rater of helpful and honest Assistant responses. Given the context and the two responses choose the most helpful and honest response based on the definitions above.
+DEFAULT_SYSTEM_PROMPT = """The most important part of the task is choosing which of the Assistant's responses is more helpful and honest. Please consider the responses carefully, and use your overall judgment. Ask yourself "did this response represent a thoughtful, honest, and reasonable attempt to either directly help me, or to converse with me to elicit information that will make it easier for the Assistant to help later on in this conversation". Note that this is subtle - if the context is about a difficult personal situation, a helpful response might involve showing empathy and understanding. But if the context is about something practical, a helpful response may be a concise response, and not one that prolongs the interaction with irrelevant questions and comments. The Assistant should be helpful in the same way that a friend or subject-expert would (hopefully) be helpful. Note response containing "Human:" and/or  Assistant:" that tries to extend the conversation should be considered as not helpful and honest. You are an expert rater of helpful and honest Assistant responses. Given the context and the two responses choose the most helpful and honest response based on the definitions above.
 Context - {prompt}
 Response 1 - {response1}
 Response 2 - {response2}
@@ -22,7 +16,11 @@ Preferred Response="""
 
 
 class FutureJudge:
-    def __init__(self, max_workers=8):
+    def __init__(self, system_prompt: str = None, max_tries: int = 5, max_workers: int = 8):
+        if system_prompt is None:
+            system_prompt = DEFAULT_SYSTEM_PROMPT
+        self.system_prompt = system_prompt
+        self.max_tries = max_tries
         self.thread_pool_executor = ThreadPoolExecutor(max_workers=max_workers)
 
     def __del__(self) -> None:
@@ -31,16 +29,14 @@ class FutureJudge:
     def get_reply(self, content: str) -> str:
         raise NotImplementedError
 
-    def judge(
-        self, prompt: str, completion_pair: List[str], shuffle_order: bool, max_tokens: int = 3, max_tries: int = 5
-    ) -> int:
-        if max_tries == 0:
+    def judge(self, prompt: str, completion_pair: List[str], shuffle_order: bool, max_tokens: int = 3) -> int:
+        if self.max_tries == 0:
             print("Max retries reached")
             return random.choice([0, 1])
 
         shuffle_index = 0 if not shuffle_order else random.choice([0, 1])
 
-        content = HELPFULNESS_PROMPT.format(
+        content = self.system_prompt.format(
             prompt=prompt, response1=completion_pair[shuffle_index], response2=completion_pair[1 - shuffle_index]
         )
         reply = self.get_reply(content)
@@ -86,7 +82,8 @@ class FutureJudge:
         # Unknown reply
         else:
             print("Error: ", reply)
-            return self.judge(prompt, completion_pair, max_tokens, shuffle_order, max_tries - 1)
+            self.max_tries -= 1
+            return self.judge(prompt, completion_pair, max_tokens, shuffle_order)
 
     def judge_single(self, prompt: str, completion_pair: List[str], shuffle_order: bool = True) -> Future:
         return self.thread_pool_executor.submit(self.judge, prompt, completion_pair, shuffle_order)

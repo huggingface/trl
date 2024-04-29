@@ -12,9 +12,11 @@ from transformers import (
     is_wandb_available,
 )
 
-import wandb
-
 from ..models.utils import unwrap_model_for_generation
+
+
+if is_wandb_available():
+    import wandb
 
 
 class WinRateCallback(TrainerCallback):
@@ -66,7 +68,7 @@ class WinRateCallback(TrainerCallback):
 
             with unwrap_model_for_generation(model, accelerator) as unwrapped_model:
                 unwrapped_model.eval()
-                for i, prompt in enumerate(tqdm(prompts, desc="Generating completions for win rate")):
+                for idx, prompt in enumerate(tqdm(prompts, desc="Generating completions for win rate")):
                     tokenized_prompt = tokenizer(prompt, return_tensors="pt").to(model.device)
                     generations = unwrapped_model.generate(
                         **tokenized_prompt,
@@ -77,7 +79,7 @@ class WinRateCallback(TrainerCallback):
                     text_generations = tokenizer.batch_decode(generations, skip_special_tokens=True)
 
                     response0 = text_generations[0]
-                    response1 = self.ref_completions[i]
+                    response1 = self.ref_completions[idx]
 
                     annotation_batch["completions"].append([response0, response1])
                 unwrapped_model.train()
