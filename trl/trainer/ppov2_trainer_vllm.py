@@ -124,6 +124,7 @@ class PPOConfig(TrainingArguments):
     """whether to whiten the rewards"""
     kl_coef: float = 0.05
     """the KL coefficient"""
+    remove_duplicate_response_pad_tokens: bool = False
 
 
 def print_rich_table(df: pd.DataFrame) -> Table:
@@ -545,6 +546,7 @@ class PPOTrainer(Trainer):
         vf_clipfrac_stats = torch.zeros(stats_shape, device=device)
         entropy_stats = torch.zeros(stats_shape, device=device)
         ratio_stats = torch.zeros(stats_shape, device=device)
+        g_responses = torch.zeros((args.batch_size, args.response_length), device=device, dtype=torch.long)
         model.train()
         for update in range(1, args.num_updates + 1):
             global_step += 1 * args.batch_size
@@ -562,17 +564,14 @@ class PPOTrainer(Trainer):
                 scores = []
                 sequence_lengths = []
                 with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
-
-                    g_queries = accelerator.gather(queries)
-                    g_queries_responses = torch.zeros((queries.shape[0], context_length + args.response_length), device=device, dtype=torch.long)
-                    g_queries_responses[:, :context_length] = queries
+                    g_queries_list = gather_object(queries.tolist())
+                    
                     if accelerator.is_main_process:
                         print("🔥🔥🔥 Loading weights using shared memory;"
                             "we expect the generations to be completely different")
                         start_time = time.time()
                         self.llmp.load_weights(unwrapped_model.policy.named_parameters())
                         print(f"Time to load weights: {time.time() - start_time:.2f} seconds")
-                        g_queries_list = g_queries.tolist()
                         g_queries_list = [[inneritem for inneritem in item if inneritem != tokenizer.pad_token_id]  for item in g_queries_list]
                         outputs = self.llm.generate(prompt_token_ids=g_queries_list, sampling_params=self.sampling_params)
                         padded_response_token_ids = []
@@ -580,18 +579,22 @@ class PPOTrainer(Trainer):
                             token_ids = output.outputs[0].token_ids
                             padded_token_ids = token_ids + [tokenizer.pad_token_id] * (args.response_length - len(token_ids))
                             padded_response_token_ids.append(padded_token_ids)
-
                         padded_response_token_ids = torch.tensor(padded_response_token_ids, device=device)
-                        g_queries_responses[:, context_length:] = padded_response_token_ids
+                    #     g_responses[:] = padded_response_token_ids
 
-                    broadcast(g_queries_responses, 0) # broadcast to all processes
-                    queries_responses = g_queries_responses[accelerator.local_process_index * queries.shape[0]: (accelerator.local_process_index + 1) * queries.shape[0]]
-
+                    broadcast(g_responses, 0)
+                    local_responses = g_responses[accelerator.local_process_index * queries.shape[0]: (accelerator.local_process_index + 1) * queries.shape[0]]
+                    # if args.remove_duplicate_response_pad_tokens: # NOTE: micro optimization: remove the pad to longest
+                    #     local_responses = local_responses[:, :(local_responses != tokenizer.pad_token_id).sum(1).max()]
+                    queries_responses = torch.cat((queries, local_responses), 1)
                     for i in range(0, queries.shape[0], args.local_rollout_forward_batch_size):
                         query = queries[i : i + args.local_rollout_forward_batch_size]
                         query_response = queries_responses[i : i + args.local_rollout_forward_batch_size]
                         response = query_response[:, context_length:]
+                        print(f"{accelerator.local_process_index=}, {(query_response != tokenizer.pad_token_id).sum(1)=}, {query_response.max()=}")
+                        # breakpoint()
 
+                        # TODO: check the responses in other processes
                         output = forward(unwrapped_model.policy, query_response, tokenizer)
                         logits = output.logits[:, context_length - 1 : -1]
                         logits /= args.temperature + 1e-7
@@ -830,22 +833,22 @@ class PPOTrainer(Trainer):
         )
 
         table = defaultdict(list)
+        g_responses = torch.zeros((args.per_device_eval_batch_size * args.world_size, args.response_length), device=device, dtype=torch.long)
         for batch in self.eval_dataloader:
             queries = batch["input_ids"]
             name = f"trained {args.base_model}"
             with torch.no_grad():
                 context_length = queries.shape[1]
                 with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
-                    g_queries = accelerator.gather(queries)
-                    g_queries_responses = torch.zeros((queries.shape[0], context_length + args.response_length), device=device, dtype=torch.long)
-                    g_queries_responses[:, :context_length] = queries
+
+                    g_queries_list = gather_object(queries.tolist())
+                    
                     if accelerator.is_main_process:
                         print("🔥🔥🔥 Loading weights using shared memory;"
                             "we expect the generations to be completely different")
                         start_time = time.time()
                         self.llmp.load_weights(unwrapped_model.policy.named_parameters())
                         print(f"Time to load weights: {time.time() - start_time:.2f} seconds")
-                        g_queries_list = g_queries.tolist()
                         g_queries_list = [[inneritem for inneritem in item if inneritem != tokenizer.pad_token_id]  for item in g_queries_list]
                         outputs = self.llm.generate(prompt_token_ids=g_queries_list, sampling_params=generation_config)
                         padded_response_token_ids = []
@@ -855,10 +858,11 @@ class PPOTrainer(Trainer):
                             padded_response_token_ids.append(padded_token_ids)
 
                         padded_response_token_ids = torch.tensor(padded_response_token_ids, device=device)
-                        g_queries_responses[:, context_length:] = padded_response_token_ids
 
-                    broadcast(g_queries_responses, 0) # broadcast to all processes
-                    queries_responses = g_queries_responses[accelerator.local_process_index * queries.shape[0]: (accelerator.local_process_index + 1) * queries.shape[0]]
+                        g_responses[:] = padded_response_token_ids
+
+                    broadcast(g_responses, 0)
+                    queries_responses = torch.cat((queries, g_responses[accelerator.local_process_index * queries.shape[0]: (accelerator.local_process_index + 1) * queries.shape[0]]), 1)
 
                 response = queries_responses[:, context_length:]
                 postprocessed_response = response
