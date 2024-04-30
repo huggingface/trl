@@ -178,7 +178,7 @@ if __name__ == "__main__":
         trainer = OnlineDPOTrainer(
             model,
             model_ref,
-            annotator=PairRMJudge(),
+            annotator_cls=PairRMJudge,
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
