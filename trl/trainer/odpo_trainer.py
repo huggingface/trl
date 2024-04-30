@@ -60,6 +60,13 @@ def prepare_model_for_generation(model, accelerator):
         unwrapped_model.config.use_cache = False
 
 class OnlineDPOTrainer(DPOTrainer):
+    def __init__(self, *args, annotator=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if annotator is None:
+            self.annotator = MockJudge()
+        else:
+            self.annotator = annotator
+    
     def compute_loss(
         self,
         model: Union[PreTrainedModel, nn.Module],

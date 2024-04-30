@@ -178,6 +178,7 @@ if __name__ == "__main__":
         trainer = OnlineDPOTrainer(
             model,
             model_ref,
+            annotator=PairRMJudge(),
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
@@ -185,9 +186,6 @@ if __name__ == "__main__":
             peft_config=get_peft_config(model_config),
             callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
         )
-
-        annotator = PairRMJudge()
-        trainer.annotator = annotator
         # prompts_ds = load_dataset(args.dataset_name, split="test[:32]")
         # prompts_ds = prompts_ds.map(
         #     lambda x: {
