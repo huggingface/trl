@@ -70,7 +70,7 @@ if TRL_USE_RICH:
 import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
-
+from trl.trainer import OnlineDPOTrainer
 from trl import (
     DPOConfig,
     DPOTrainer,
@@ -82,7 +82,6 @@ from trl import (
 )
 
 from trl.trainer import WinRateCallback, MockJudge, PairRMJudge
-
 
 if TRL_USE_RICH:
     logging.basicConfig(format=FORMAT, datefmt="[%X]", handlers=[RichHandler()], level=logging.INFO)
@@ -121,7 +120,7 @@ if __name__ == "__main__":
         model_ref = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, **model_kwargs)
     else:
         model_ref = None
-    tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path)
+    tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path, revision=model_config.model_revision)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     if tokenizer.bos_token is None:
@@ -169,7 +168,7 @@ if __name__ == "__main__":
     # Training
     ################
     with init_context:
-        trainer = DPOTrainer(
+        trainer = OnlineDPOTrainer(
             model,
             model_ref,
             args=training_args,
@@ -180,27 +179,27 @@ if __name__ == "__main__":
             callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
         )
 
-        judge = PairRMJudge()
-        prompts_ds = load_dataset(args.dataset_name, split="test[:32]")
-        prompts_ds = prompts_ds.map(
-            lambda x: {
-                "prompt": tokenizer.apply_chat_template(x["chosen"][:-1], tokenize=False, add_generation_prompt=True)
-            }
-        )
-        win_rate_callback = WinRateCallback(
-            prompts=prompts_ds["prompt"],
-            judge=judge,
-            generation_config=GenerationConfig(
-                temperature=0.9,
-                do_sample=True,
-                num_return_sequences=1,
-                pad_token_id=tokenizer.pad_token_id,
-                eos_token_id=tokenizer.eos_token_id,
-                max_new_tokens=512,
-            ),
-            trainer=trainer,
-        )
-    trainer.add_callback(win_rate_callback)
+        annotator = PairRMJudge()
+        # prompts_ds = load_dataset(args.dataset_name, split="test[:32]")
+        # prompts_ds = prompts_ds.map(
+        #     lambda x: {
+        #         "prompt": tokenizer.apply_chat_template(x["chosen"][:-1], tokenize=False, add_generation_prompt=True)
+        #     }
+        # )
+    #     win_rate_callback = WinRateCallback(
+    #         prompts=prompts_ds["prompt"],
+    #         judge=judge,
+    #         generation_config=GenerationConfig(
+    #             temperature=0.9,
+    #             do_sample=True,
+    #             num_return_sequences=1,
+    #             pad_token_id=tokenizer.pad_token_id,
+    #             eos_token_id=tokenizer.eos_token_id,
+    #             max_new_tokens=512,
+    #         ),
+    #         trainer=trainer,
+    #     )
+    # trainer.add_callback(win_rate_callback)
 
     trainer.train()
 

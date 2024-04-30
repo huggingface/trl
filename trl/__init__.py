@@ -117,6 +117,7 @@ if TYPE_CHECKING:
         RewardTrainer,
         SFTConfig,
         SFTTrainer,
+        OnlineDPOTrainer,
     )
     from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config, RichProgressCallback
     from .commands.cli_utils import init_zero_verbose, SFTScriptArguments, DPOScriptArguments, TrlParser

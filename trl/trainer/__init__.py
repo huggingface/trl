@@ -31,6 +31,7 @@ _import_structure = {
     ],
     "dpo_config": ["DPOConfig"],
     "dpo_trainer": ["DPOTrainer"],
+    "odpo_trainer": ["OnlineDPOTrainer"],
     "cpo_config": ["CPOConfig"],
     "cpo_trainer": ["CPOTrainer"],
     "iterative_sft_trainer": ["IterativeSFTTrainer"],
@@ -94,6 +95,8 @@ if TYPE_CHECKING:
     from .reward_trainer import RewardTrainer, compute_accuracy
     from .sft_config import SFTConfig
     from .sft_trainer import SFTTrainer
+    from .odpo_trainer import OnlineDPOTrainer
+    from .judges import PairRMJudge, MockJudge, OpenAIJudge, WinRateCallback
 
     try:
         if not is_diffusers_available():
