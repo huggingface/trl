@@ -1,10 +1,12 @@
 import os
 import random
+from abc import ABC, abstractmethod
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import List
 
 import llm_blender
 from accelerate import Accelerator
+from huggingface_hub import InferenceClient
 from openai import BadRequestError, OpenAI
 
 
@@ -15,7 +17,34 @@ Response 2 - {response2}
 Preferred Response="""
 
 
-class FutureJudge:
+class BaseJudge(ABC):
+    """Base class for local judges."""
+
+    def shuffle_pairs(self, pairs: List[List[str]]):
+        """Shuffles each pair of completions to mitigate positional bias."""
+        shuffled_pairs = []
+        for pair in pairs:
+            shuffled_pair = pair.copy()
+            random.shuffle(shuffled_pair)
+            shuffled_pairs.append(shuffled_pair)
+        return shuffled_pairs
+
+    @abstractmethod
+    def judge_single(self, prompt: str, completion_pair: List[str]) -> int:
+        raise NotImplementedError("Judge subclasses must implement this method.")
+
+    def judge_batch(self, prompts: List[str], completion_pairs: List[List[str]]) -> List[int]:
+        results = []
+        shuffled_completion_pairs = self.shuffle_pairs(completion_pairs)
+        for prompt, completion_pair in zip(prompts, shuffled_completion_pairs):
+            result = self.judge_single(prompt, completion_pair)
+            results.append(result)
+        return results
+
+
+class BaseAPIJudge:
+    """Base class for judges running via an API."""
+
     def __init__(self, system_prompt: str = None, max_tries: int = 5, max_workers: int = 8):
         if system_prompt is None:
             system_prompt = DEFAULT_SYSTEM_PROMPT
@@ -101,7 +130,27 @@ class FutureJudge:
         return results
 
 
-class OpenAIJudge(FutureJudge):
+class HuggingFaceJudge(BaseAPIJudge):
+    def __init__(self, max_workers=8, model="meta-llama/Meta-Llama-3-70B-Instruct"):
+        super().__init__(max_workers=max_workers)
+        self.client = InferenceClient(model=model)
+        self.model_name = model
+
+    def get_reply(self, content: str) -> str:
+        try:
+            response = self.client.chat_completion(
+                messages=[{"role": "user", "content": content}],
+                max_tokens=50,
+            )
+            reply = response.choices[0].message.content
+            return reply
+        except BadRequestError as e:
+            print("BadRequestError", e)
+            print("Content: ", content)
+            return random.choice(["0", "1"])
+
+
+class OpenAIJudge(BaseAPIJudge):
     def __init__(self, max_workers=8, model_name="gpt-4-turbo-preview"):
         super().__init__(max_workers=max_workers)
         self.client = OpenAI(api_key=os.environ["OPENAI_API_KEY"], max_retries=5)
@@ -122,26 +171,23 @@ class OpenAIJudge(FutureJudge):
             return random.choice(["0", "1"])
 
 
-class PairRMJudge:
+class PairRMJudge(BaseJudge):
+    """Judge based on PairRM model from AllenAI.
+
+    See: https://huggingface.co/llm-blender/PairRM
+    """
+
     def __init__(self):
-        # from: https://huggingface.co/llm-blender/PairRM
         self.blender = llm_blender.Blender()
         self.blender.loadranker("llm-blender/PairRM", device=Accelerator().device)
 
-    def judge_batch(self, prompts: List[str], completion_pairs: List[List[str]]) -> List[int]:
-        results = []
-        for prompt, completion_pair in zip(prompts, completion_pairs):
-            ranks = self.blender.rank([prompt], [completion_pair])
-            ranks = ranks - 1  # 0-indexed
-            results.append(ranks[0][0])  # TODO: add order shuffling
-
-        return results
+    def judge_single(self, prompt: str, completion_pair: List[str]) -> int:
+        ranks = self.blender.rank([prompt], [completion_pair])
+        # PairRM is 1-indexed, so we subtract 1 to make it 0-indexed
+        ranks -= 1
+        return ranks[0][0]
 
 
-class MockJudge:
-    def judge_batch(self, prompts: List[str], completion_pairs: List[List[str]]) -> List[int]:
-        results = []
-        for _, _ in zip(prompts, completion_pairs):
-            results.append(random.choice([0, 1]))
-
-        return results
+class MockJudge(BaseJudge):
+    def judge_single(self, prompt: str, completion_pair: List[str]) -> int:
+        return random.choice([0, 1])
