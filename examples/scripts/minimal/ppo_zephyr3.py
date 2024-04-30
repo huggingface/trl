@@ -28,9 +28,26 @@ python -i examples/scripts/minimal/ppo_zephyr3.py \
     --reward_model_path EleutherAI/pythia-1b-deduped  \
     --non_eos_penalty \
     --truncate_token eos \
-    --response_length 1024 \
+    --response_length 512 \
 
-accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.7.yaml \
+accelerate launch --num_processes 7 examples/scripts/minimal/ppo_zephyr3.py \
+    --num_ppo_epochs 1 \
+    --num_mini_batches 1 \
+    --learning_rate 3e-6 \
+    --output_dir models/minimal/ppo_zephyr310 \
+    --per_device_train_batch_size 1 \
+    --gradient_accumulation_steps 32 \
+    --total_episodes 200000 \
+    --base_model HuggingFaceH4/mistral-7b-sft-beta \
+    --sft_model_path HuggingFaceH4/mistral-7b-sft-beta \
+    --reward_model_path EleutherAI/pythia-160m \
+    --local_rollout_forward_batch_size 2 \
+    --kl_coef 0.10 \
+    --non_eos_penalty \
+    --truncate_token eos \
+    --response_length 128 \
+
+accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.7.yaml \
     examples/scripts/minimal/ppo_zephyr3.py \
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \
@@ -42,8 +59,8 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.7.ya
     --base_model HuggingFaceH4/mistral-7b-sft-beta \
     --sft_model_path HuggingFaceH4/mistral-7b-sft-beta \
     --reward_model_path weqweasdas/RM-Mistral-7B \
-    --local_rollout_forward_batch_size 32 \
-    --deepspeed2 \
+    --local_rollout_forward_batch_size 8 \
+    --deepspeed3 \
     --kl_coef 0.10 \
     --non_eos_penalty \
     --truncate_token eos \
@@ -83,22 +100,24 @@ if __name__ == "__main__":
         )
     value_model: PreTrainedModel = AutoModelForSequenceClassification.from_pretrained(
         args.reward_model_path,
+        attn_implementation="flash_attention_2",
         num_labels=1,
     )
     reward_model: PreTrainedModel = AutoModelForSequenceClassification.from_pretrained(
         args.reward_model_path,
+        attn_implementation="flash_attention_2",
         num_labels=1,
     )
-    ref_policy = AutoModelForCausalLM.from_pretrained(args.sft_model_path)
-    policy = AutoModelForCausalLM.from_pretrained(args.sft_model_path)
+    ref_policy = AutoModelForCausalLM.from_pretrained(args.sft_model_path, attn_implementation="flash_attention_2")
+    policy = AutoModelForCausalLM.from_pretrained(args.sft_model_path, attn_implementation="flash_attention_2")
     ################
     # Dataset
     ################
     raw_datasets = load_dataset("HuggingFaceH4/ultrachat_200k")
     train_dataset = raw_datasets["train_sft"]
     eval_dataset = raw_datasets["test_sft"]
-    train_dataset = train_dataset.select(range(1000))
-    eval_dataset = eval_dataset.select(range(1000))
+    # train_dataset = train_dataset.select(range(1000))
+    # eval_dataset = eval_dataset.select(range(1000))
 
     dataset_text_field = "prompt"
     def prepare_dataset(dataset, tokenizer):
@@ -116,7 +135,7 @@ if __name__ == "__main__":
             tokenize,
             remove_columns=dataset.column_names,
             num_proc=multiprocessing.cpu_count(),
-            load_from_cache_file=False,
+            # load_from_cache_file=False,
         )
     train_dataset = prepare_dataset(train_dataset, tokenizer)
     eval_dataset = prepare_dataset(eval_dataset, tokenizer)

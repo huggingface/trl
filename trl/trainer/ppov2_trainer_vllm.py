@@ -577,10 +577,11 @@ class PPOTrainer(Trainer):
                         padded_response_token_ids = []
                         for output in outputs:
                             token_ids = output.outputs[0].token_ids
-                            padded_token_ids = token_ids + [tokenizer.pad_token_id] * (args.response_length - len(token_ids))
+                            DUMMY_PAD_TOKEN = 0 # we can't use tokenizer.pad_token_id because it's outside vocab and `torch.gather(all_logprob, 2, response.unsqueeze(-1))` will error out
+                            padded_token_ids = token_ids + [DUMMY_PAD_TOKEN] * (args.response_length - len(token_ids))
                             padded_response_token_ids.append(padded_token_ids)
                         padded_response_token_ids = torch.tensor(padded_response_token_ids, device=device)
-                    #     g_responses[:] = padded_response_token_ids
+                        g_responses[:] = padded_response_token_ids
 
                     broadcast(g_responses, 0)
                     local_responses = g_responses[accelerator.local_process_index * queries.shape[0]: (accelerator.local_process_index + 1) * queries.shape[0]]
@@ -591,8 +592,7 @@ class PPOTrainer(Trainer):
                         query = queries[i : i + args.local_rollout_forward_batch_size]
                         query_response = queries_responses[i : i + args.local_rollout_forward_batch_size]
                         response = query_response[:, context_length:]
-                        print(f"{accelerator.local_process_index=}, {(query_response != tokenizer.pad_token_id).sum(1)=}, {query_response.max()=}")
-                        # breakpoint()
+                        # print(f"{accelerator.local_process_index=}, {(query_response != tokenizer.pad_token_id).sum(1)=}, {query_response.max()=}")
 
                         # TODO: check the responses in other processes
                         output = forward(unwrapped_model.policy, query_response, tokenizer)
@@ -644,7 +644,6 @@ class PPOTrainer(Trainer):
                 del (logprob, ref_logprob, full_value, value, score, unwrapped_model)
                 torch.cuda.empty_cache()
                 gc.collect()
-
                 # Response Processing 3. filter response. Ensure that the sample contains truncate_token_id
                 # responses not passing that filter will receive a low (fixed) score
                 # only query humans on responses that pass that filter
@@ -688,9 +687,9 @@ class PPOTrainer(Trainer):
                 returns = advantages + values
                 advantages = masked_whiten(advantages, ~padding_mask)
                 advantages = torch.masked_fill(advantages, padding_mask, 0)
-                accelerator.print("rewards====", rewards[0])
-                accelerator.print("advantages====", advantages[0])
-                accelerator.print("values====", values[0])
+                # accelerator.print("rewards====", rewards[0])
+                # accelerator.print("advantages====", advantages[0])
+                # accelerator.print("values====", values[0])
                 torch.cuda.empty_cache()
 
             # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
@@ -775,13 +774,13 @@ class PPOTrainer(Trainer):
                     )
                     # fmt: on
                     torch.cuda.empty_cache()
-                accelerator.print(
-                    f"ppo_epoch_idx: {ppo_epoch_idx}",
-                    f"approxkl: {approxkl_stats[:ppo_epoch_idx + 1].mean().item():.4f}",
-                    f"pg_loss: {pg_loss_stats[:ppo_epoch_idx + 1].mean().item():.4f}",
-                    f"pg_clipfrac: {pg_clipfrac_stats[:ppo_epoch_idx + 1].mean().item():.4f}",
-                    f"ratio: {ratio_stats[:ppo_epoch_idx + 1].mean().item():.4f}",
-                )
+                # accelerator.print(
+                #     f"ppo_epoch_idx: {ppo_epoch_idx}",
+                #     f"approxkl: {approxkl_stats[:ppo_epoch_idx + 1].mean().item():.4f}",
+                #     f"pg_loss: {pg_loss_stats[:ppo_epoch_idx + 1].mean().item():.4f}",
+                #     f"pg_clipfrac: {pg_clipfrac_stats[:ppo_epoch_idx + 1].mean().item():.4f}",
+                #     f"ratio: {ratio_stats[:ppo_epoch_idx + 1].mean().item():.4f}",
+                # )
             with torch.no_grad():
                 mean_kl = kl.sum(1).mean()
                 mean_entropy = (-logprobs).sum(1).mean()
