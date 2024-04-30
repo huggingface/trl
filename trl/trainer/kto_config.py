@@ -16,6 +16,8 @@ from typing import Dict, Literal, Optional
 
 from transformers import TrainingArguments
 
+from ..import_utils import is_sklearn_available
+
 
 @dataclass
 class KTOConfig(TrainingArguments):
@@ -97,3 +99,10 @@ class KTOConfig(TrainingArguments):
     prompt_sample_size: int = 1024
     min_density_ratio: float = 0.5
     max_density_ratio: float = 10.0
+
+    def __post_init__(self):
+        if self.loss_type == "bco" and not is_sklearn_available():
+            raise ImportError(
+                "You need to install scikit-learn to use loss_type='bco' "
+                "You can install it with `pip install scikit-learn`."
+            )

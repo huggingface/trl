@@ -29,7 +29,6 @@ import torch.nn.functional as F
 from accelerate import PartialState
 from accelerate.utils import is_deepspeed_available, tqdm
 from datasets import Dataset, concatenate_datasets, interleave_datasets
-from sklearn.linear_model import LogisticRegression
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, SequentialSampler
 from transformers import (
@@ -43,7 +42,7 @@ from transformers import (
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput, has_length
 
-from ..import_utils import is_peft_available, is_wandb_available
+from ..import_utils import is_peft_available, is_sklearn_available, is_wandb_available
 from ..models import PreTrainedModelWrapper, create_reference_model
 from .kto_config import KTOConfig
 from .utils import (
@@ -62,6 +61,9 @@ if is_peft_available():
 
 if is_wandb_available():
     import wandb
+
+if is_sklearn_available():
+    from sklearn.linear_model import LogisticRegression
 
 if is_deepspeed_available():
     import deepspeed
