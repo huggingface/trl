@@ -101,6 +101,8 @@ class KTOConfig(TrainingArguments):
     max_density_ratio: float = 10.0
 
     def __post_init__(self):
+        super().__post_init__()
+
         if self.loss_type == "bco" and not is_sklearn_available():
             raise ImportError(
                 "You need to install scikit-learn to use loss_type='bco' "
