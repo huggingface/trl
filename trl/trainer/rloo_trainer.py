@@ -64,6 +64,8 @@ def first_true_indices(bools, dtype=torch.long):
 class RLOOTrainer(PolicyTrainerBase):
     _tag_names = ["trl", "rloo"]
 
+
+
     def compute_loss(
         self,
         model: Union[PreTrainedModel, nn.Module],
@@ -91,6 +93,7 @@ class RLOOTrainer(PolicyTrainerBase):
                 responses = torch.stack([query_response[context_length:] for query_response in query_responses], dim=0)
 
                 all_logprobs = F.log_softmax(logits, dim=-1)
+                # PR TODO: review gathering along dimension -1
                 logprobs = torch.gather(all_logprobs, -1, responses.unsqueeze(-1)).squeeze(-1)
                 del logits, all_logprobs
 
@@ -100,8 +103,10 @@ class RLOOTrainer(PolicyTrainerBase):
                 ref_logits = ref_output_logits[:, context_length - 1 : -1]
                 ref_logits /= self.args.temperature + 1e-7
                 ref_all_logprobs = F.log_softmax(ref_logits, dim=-1)
+                # PR TODO: review gathering along dimension -1
                 ref_logprobs = torch.gather(ref_all_logprobs, -1, responses.unsqueeze(-1)).squeeze(-1)
                 del ref_output_logits, ref_logits, ref_all_logprobs
+                torch.cuda.empty_cache()
 
                 # Response Processing 1. truncate response after the
                 # first occurrence of `truncate_token_id`
@@ -159,6 +164,7 @@ class RLOOTrainer(PolicyTrainerBase):
                 torch.cuda.empty_cache()
 
             with self.accelerator.accumulate(model):
+                # PR TODO: remove this assertion when stable
                 # ensure gradients can be set
                 assert model.training, "model is incorrectly in eval mode"
                 assert torch.is_grad_enabled(), "grad is disabled, but we need to calculate grad"

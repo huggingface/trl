@@ -329,8 +329,6 @@ class PolicyTrainerBase(Trainer):
             args=args,
         )
 
-        # PR TODO: subclass with RewardTrainerBase which accepts a reward_model or reward_fn
-
         # PR TODO: class variable which determines whether ref logprobs are generated either
         #          - once per batch
         #          - once per update
@@ -342,6 +340,8 @@ class PolicyTrainerBase(Trainer):
             if m is not None:
                 disable_dropout_in_model(m)
 
+        # PR TODO: subclass with RewardTrainerBase which accepts a reward_model or reward_fn
+        #          remove the below from this class
         assert (reward_model is not None) != (reward_fn is not None), "Must set either reward_model or reward_fn, but not both"
         if reward_model is not None and "score" not in dir(reward_model):
             raise TypeError(f"Reward model of type {type(reward_model)} has no score function.")
