@@ -154,13 +154,9 @@ if __name__ == "__main__":
 
     for key in ds:
         ds[key] = ds[key].remove_columns(["chosen", "rejected", "score_chosen", "score_rejected"])
-    def filter_message_length(example):
-        return len(example["messages"]) > 1 
-    
-    ds = ds.filter(filter_message_length)
     
     def process(row):
-        row["prompt"] = tokenizer.apply_chat_template(row["messages"][:-1], tokenize=False, add_generation_prompt=True)
+        row["prompt"] = tokenizer.apply_chat_template(row["messages"], tokenize=False, add_generation_prompt=True)
         return row
 
     ds = ds.map(
