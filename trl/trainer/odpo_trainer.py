@@ -126,27 +126,27 @@ class OnlineDPOTrainer(DPOTrainer):
             response1 = text_generations[i * 2 + 1]
             annotation_batch["prompts"].append(prompt)
             annotation_batch["completions"].append([response0, response1])
-
+        results = self.annotator.judge_batch(annotation_batch["prompts"], annotation_batch["completions"])
         # TODO: Make this is a bit cleaner
         # if type(self.annotator) is FutureAnnotator:
         #     # annotate the responses with the GPT3.5 annotator
         #     results = self.annotator.judge_batch(annotation_batch["prompts"], annotation_batch["completions"])
 
         # elif type(self.annotator) is PairRMAnnotator:
-        convs_a = []
-        convs_b = []
-        for i in range(self._train_batch_size):
-            response0 = inputs["messages"][i][:]
-            response1 = inputs["messages"][i][:]
-            response0.append({"role": "assistant", "content": text_generations[i * 2]})
-            response1.append({"role": "assistant", "content": text_generations[i * 2 + 1]})
-            if response0[0]["role"] == "system":  #  PAIRRM is not compatible with system prompts
-                response0 = response0[1:]
-                response1 = response1[1:]
+        # convs_a = []
+        # convs_b = []
+        # for i in range(self._train_batch_size):
+        #     response0 = inputs["messages"][i][:-1]
+        #     response1 = inputs["messages"][i][:-1]
+        #     response0.append({"role": "assistant", "content": text_generations[i * 2]})
+        #     response1.append({"role": "assistant", "content": text_generations[i * 2 + 1]})
+        #     if response0[0]["role"] == "system":  #  PAIRRM is not compatible with system prompts
+        #         response0 = response0[1:]
+        #         response1 = response1[1:]
 
-            convs_a.append(response0)
-            convs_b.append(response1)
-        results = self.annotator.judge_batch(convs_a, convs_b)
+        #     convs_a.append(response0)
+        #     convs_b.append(response1)
+        # results = self.annotator.judge_batch(convs_a, convs_b)
         # else:
         #     raise ValueError("Unknown Annotator", self.annotator)
 
@@ -160,11 +160,11 @@ class OnlineDPOTrainer(DPOTrainer):
             sample = {
                 "prompt": prompt.removeprefix(
                     self.tokenizer.bos_token
-                ),  # the BOS token is added again in the tokenize_row method
+                ),  # the BOS token was added again in the tokenize_row method
                 "chosen": chosen,
                 "rejected": rejected,
             }
-            # call the parent classes tokenize row that works with prompt, chosen, selected
+            # call the parent classes tokenize row that works with prompt, chosen, rejected
             sample_tokenized = super().tokenize_row(sample, self.model)
             optimization_batch.append(sample_tokenized)
 

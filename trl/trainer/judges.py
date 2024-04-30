@@ -129,13 +129,16 @@ class PairRMJudge:
         self.blender.loadranker("llm-blender/PairRM", device=Accelerator().device)
 
     def judge_batch(self, prompts: List[str], completion_pairs: List[List[str]]) -> List[int]:
-        results = []
-        for prompt, completion_pair in zip(prompts, completion_pairs):
-            ranks = self.blender.rank([prompt], [completion_pair])
-            ranks = ranks - 1  # 0-indexed
-            results.append(ranks[0][0])  # TODO: add order shuffling
+        results = self.blender.rank(prompts, completion_pairs)
+        
+        
+        
+        # for prompt, completion_pair in zip(prompts, completion_pairs):
+        #     ranks = self.blender.rank([prompt], [completion_pair])
+        #     ranks = ranks - 1  # 0-indexed
+        #     results.append(ranks[0][0])  # TODO: add order shuffling
 
-        return results
+        return [r[0]-1 for r in results]
 
 
 class MockJudge:

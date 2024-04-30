@@ -126,7 +126,7 @@ if __name__ == "__main__":
     if tokenizer.bos_token is None:
         tokenizer.bos_token = tokenizer.eos_token
     if tokenizer.chat_template is None:
-        tokenizer.chat_template = "{% for message in messages %}{{message['role'] + ': ' + message['content'] + '\n\n'}}{% endfor %}{{ eos_token }}"
+        tokenizer.chat_template = "{% for message in messages %}\n{% if message['role'] == 'user' %}\n{{ '<|user|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'system' %}\n{{ '<|system|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'assistant' %}\n{{ '<|assistant|>\n'  + message['content'] + eos_token }}\n{% endif %}\n{% if loop.last and add_generation_prompt %}\n{{ '<|assistant|>' }}\n{% endif %}\n{% endfor %}"
     if args.ignore_bias_buffers:
         # torch distributed hack
         model._ddp_params_and_buffers_to_ignore = [
@@ -152,15 +152,15 @@ if __name__ == "__main__":
             ds[key] = ds[key].select(range(1_000))
 
 
-    # for key in ds:
-    #     ds[key] = ds[key].remove_columns(["chosen", "rejected", "score_chosen", "score_rejected"])
+    for key in ds:
+        ds[key] = ds[key].remove_columns(["chosen", "rejected", "score_chosen", "score_rejected"])
     def filter_message_length(example):
         return len(example["messages"]) > 1 
     
     ds = ds.filter(filter_message_length)
     
     def process(row):
-        row["gen_prompt"] = tokenizer.apply_chat_template(row["messages"][:-1], tokenize=False, add_generation_prompt=True)
+        row["prompt"] = tokenizer.apply_chat_template(row["messages"][:-1], tokenize=False, add_generation_prompt=True)
         return row
 
     ds = ds.map(
