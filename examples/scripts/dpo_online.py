@@ -151,9 +151,16 @@ if __name__ == "__main__":
         for key in ds:
             ds[key] = ds[key].select(range(1_000))
 
+
+    # for key in ds:
+    #     ds[key] = ds[key].remove_columns(["chosen", "rejected", "score_chosen", "score_rejected"])
+    def filter_message_length(example):
+        return len(example["messages"]) > 1 
+    
+    ds = ds.filter(filter_message_length)
+    
     def process(row):
-        row["chosen"] = tokenizer.apply_chat_template(row["chosen"], tokenize=False)
-        row["rejected"] = tokenizer.apply_chat_template(row["rejected"], tokenize=False)
+        row["gen_prompt"] = tokenizer.apply_chat_template(row["messages"][:-1], tokenize=False, add_generation_prompt=True)
         return row
 
     ds = ds.map(
@@ -180,6 +187,7 @@ if __name__ == "__main__":
         )
 
         annotator = PairRMJudge()
+        trainer.annotator = annotator
         # prompts_ds = load_dataset(args.dataset_name, split="test[:32]")
         # prompts_ds = prompts_ds.map(
         #     lambda x: {

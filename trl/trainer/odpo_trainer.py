@@ -88,7 +88,7 @@ class OnlineDPOTrainer(DPOTrainer):
     def generate_annotate(self, model, inputs):
         # TODO: Make this part of the ODPOConfig class?
         generation_config = GenerationConfig(
-            temperature=self.args.temperature,
+            temperature=0.9,
             do_sample=True,
             num_return_sequences=2,  # Generate 2 reponses for each prompt
             pad_token_id=self.tokenizer.pad_token_id,
