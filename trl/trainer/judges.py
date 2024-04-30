@@ -181,10 +181,11 @@ class PairRMJudge(BaseJudge):
         self.blender = llm_blender.Blender()
         self.blender.loadranker("llm-blender/PairRM", device=Accelerator().device)
 
-    def judge_batch(self, prompts: List[str], completion_pairs: List[List[str]]) -> List[int]:
-        results = self.blender.rank(prompts, completion_pairs)
-        
-        return [r[0]-1 for r in results]
+    def judge_single(self, prompt: str, completion_pair: List[str]) -> int:
+        ranks = self.blender.rank([prompt], [completion_pair])
+        # PairRM is 1-indexed, so we subtract 1 to make it 0-indexed
+        ranks -= 1
+        return ranks[0][0]
 
 
 class MockJudge(BaseJudge):
