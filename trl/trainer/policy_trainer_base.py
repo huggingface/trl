@@ -512,6 +512,26 @@ class PolicyTrainerBase(Trainer):
         del self._stored_metrics[train_eval]
         return super().log(logs)
 
+    def time_metric_ctx(self, timer_name: str, printlog=True):
+        from time import perf_counter
+        timer_metric_name = f"timer/{timer_name}"
+        class catchtime:
+            def __enter__(s):
+                s.start = perf_counter()
+            def __exit__(s, type, value, traceback):
+                runtime = perf_counter() - s.start
+                if printlog:
+                    readout = f'{timer_metric_name}: {runtime:.3f} seconds'
+                self.store_metrics({timer_metric_name: runtime})
+        return catchtime()
+
+
+    def training_step(self, *args, **kwargs):
+        """time logged training step"""
+        with self.time_metric_ctx("training_step"):
+            return super().training_step(*args, **kwargs)
+
+
 
 if __name__ == "__main__":
     pass

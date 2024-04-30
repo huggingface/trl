@@ -84,12 +84,14 @@ class RLOOTrainer(PolicyTrainerBase):
         context_length = queries.shape[1]
 
         with self.cast_model_ctx():
-            with torch.no_grad():
-                query_responses, logits = self.generate(
-                    model,
-                    queries,
-                    self.train_generation_config,
-                )
+            with torch.no_grad(), with self.time_metric_ctx("calc_advantages")::
+                with self.time_metric_ctx("generate"):
+                    query_responses, logits = self.generate(
+                        model,
+                        queries,
+                        self.train_generation_config,
+                    )
+
                 responses = torch.stack([query_response[context_length:] for query_response in query_responses], dim=0)
 
                 all_logprobs = F.log_softmax(logits, dim=-1)
@@ -98,8 +100,9 @@ class RLOOTrainer(PolicyTrainerBase):
                 del logits, all_logprobs
 
 
-                with self.ref_model_mgr as ref_model:
-                    ref_output_logits = self.forward(ref_model, query_responses).logits
+                with self.time_metric_ctx("ref_model_forward"):
+                    with self.ref_model_mgr as ref_model:
+                        ref_output_logits = self.forward(ref_model, query_responses).logits
                 ref_logits = ref_output_logits[:, context_length - 1 : -1]
                 ref_logits /= self.args.temperature + 1e-7
                 ref_all_logprobs = F.log_softmax(ref_logits, dim=-1)
@@ -122,12 +125,12 @@ class RLOOTrainer(PolicyTrainerBase):
                 gc.collect()
                 torch.cuda.empty_cache()
 
-
-                _, scores, _ = self.get_reward(
-                    self.reward_model,
-                    postprocessed_query_responses,
-                    context_length
-                )
+                with self.time_metric_ctx("get_reward"):
+                    _, scores, _ = self.get_reward(
+                        self.reward_model,
+                        postprocessed_query_responses,
+                        context_length
+                    )
                 torch.cuda.empty_cache()
 
                 # Response Processing 3. filter response. Ensure that the sample contains truncate_token_id
@@ -163,14 +166,15 @@ class RLOOTrainer(PolicyTrainerBase):
                     advantages[i] = rlhf_reward[i] - torch.stack(other_response_rlhf_rewards).mean(0)
                 torch.cuda.empty_cache()
 
-            with self.accelerator.accumulate(model):
+            with self.accelerator.accumulate(model), with self.time_metric_ctx("calc_loss"):
                 # PR TODO: remove this assertion when stable
                 # ensure gradients can be set
                 assert model.training, "model is incorrectly in eval mode"
                 assert torch.is_grad_enabled(), "grad is disabled, but we need to calculate grad"
 
                 # calculate gradients and loss
-                output = self.forward(model, query_responses)
+                with self.time_metric_ctx("model_forward"):
+                    output = self.forward(model, query_responses)
                 logits = output.logits[:, context_length - 1 : -1]
                 logits /= self.args.temperature + 1e-7
                 new_all_logprobs = F.log_softmax(logits, dim=-1)
