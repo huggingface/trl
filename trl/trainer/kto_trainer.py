@@ -77,7 +77,11 @@ def _get_kl_dataset(batch: Dict[str, List[Any]]) -> Dict[str, List[Any]]:
     return batch
 
 
-def _tokenize(batch: Dict[str, List[Any]], tokenizer: "PreTrainedTokenizer", embedding_tokenizer: Optional["PreTrainedTokenizer"] = None) -> Dict[str, List[Any]]:
+def _tokenize(
+    batch: Dict[str, List[Any]],
+    tokenizer: "PreTrainedTokenizer",
+    embedding_tokenizer: Optional["PreTrainedTokenizer"] = None,
+) -> Dict[str, List[Any]]:
     """Tokenize a batch from a KTO/BCO specific dataset."""
     prompt_tokenized = tokenizer(batch["prompt"], add_special_tokens=False)
     prompt_input_ids = prompt_tokenized["input_ids"]
@@ -1167,7 +1171,7 @@ class KTOTrainer(Trainer):
         prob_desirable = self._get_chosen_prob(rejected_embeddings)
         min_ratio = self.args.min_density_ratio
         max_ratio = self.args.max_density_ratio
-        
+
         weight = (prob_desirable / (1 - prob_desirable + 1e-8)).clamp(min=min_ratio, max=max_ratio)
 
         return weight
@@ -1216,12 +1220,10 @@ class KTOTrainer(Trainer):
             chosen_weight = torch.ones_like(chosen_losses)
             rejected_weight = self._get_udm_weight(rejected_embeddings)
 
-            losses = torch.cat(
-                (chosen_weight * chosen_losses, rejected_weight * rejected_losses), dim=0
-            )
+            losses = torch.cat((chosen_weight * chosen_losses, rejected_weight * rejected_losses), dim=0)
         else:
             losses = torch.cat((chosen_losses, rejected_losses), dim=0)
-        
+
         return losses, chosen_rewards, rejected_rewards, torch.as_tensor(rewards_mean)
 
     def get_batch_loss_metrics(

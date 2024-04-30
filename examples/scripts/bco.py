@@ -55,14 +55,14 @@ python examples/scripts/bco.py \
 """
 
 import logging
-from typing import Literal
 from dataclasses import dataclass
 from functools import partial
+from typing import Literal
 
 import torch
 import torch.nn.functional as F
-from accelerate import PartialState, Accelerator
-from datasets import load_dataset, Dataset
+from accelerate import Accelerator, PartialState
+from datasets import Dataset, load_dataset
 from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, PreTrainedModel
 
 from trl import KTOConfig, KTOTrainer, ModelConfig, get_peft_config, setup_chat_format
@@ -83,6 +83,7 @@ def build_helpfulness_dataset(llm_name: str) -> Dataset:
     Filter `llm_name` completions and binarize given their helpfulness score.
     If helpfulness score is 5, it is desirable. Otherwise, it is undesirable.
     """
+
     def get_model_rating(example, metric: str, llm_name: str):
         try:
             model_index = example["models"].index(llm_name)
@@ -134,16 +135,16 @@ def build_helpfulness_dataset(llm_name: str) -> Dataset:
 
     return dataset
 
+
 def embed_prompt(input_ids: torch.LongTensor, attention_mask: torch.LongTensor, model: PreTrainedModel):
     """
     Borrowed from https://huggingface.co/nomic-ai/nomic-embed-text-v1.5#transformers
     """
+
     def mean_pooling(model_output, attention_mask):
         token_embeddings = model_output[0]
         input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
-        return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(
-            input_mask_expanded.sum(1), min=1e-9
-        )
+        return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
 
     with torch.no_grad():
         model_output = model(input_ids=input_ids, attention_mask=attention_mask)
@@ -181,7 +182,9 @@ if __name__ == "__main__":
 
     # Apply chat template
     def format_dataset(example):
-        example["prompt"] = tokenizer.apply_chat_template(example["prompt"], tokenize=False, add_generation_prompt=True)
+        example["prompt"] = tokenizer.apply_chat_template(
+            example["prompt"], tokenize=False, add_generation_prompt=True
+        )
         return example
 
     with PartialState().local_main_process_first():
@@ -198,7 +201,8 @@ if __name__ == "__main__":
     embedding_model = accelerator.prepare_model(embedding_model)
     embedding_tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
     embedding_func = partial(
-        embed_prompt, model=embedding_model,
+        embed_prompt,
+        model=embedding_model,
     )
 
     # Initialize the KTO trainer

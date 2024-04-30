@@ -20,7 +20,7 @@ from accelerate import Accelerator
 from datasets import Dataset
 from parameterized import parameterized
 from pytest import mark
-from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer, AutoModel
+from transformers import AutoModel, AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
 from trl import KTOConfig, KTOTrainer
 from trl.trainer.kto_trainer import _get_kl_dataset, _process_tokens, _tokenize
@@ -282,7 +282,7 @@ class KTOTrainerTester(unittest.TestCase):
                 outputs = model(input_ids=input_ids, attention_mask=attention_mask)
 
                 return outputs.last_hidden_state.mean(dim=1)
-            
+
             embedding_model = Accelerator().prepare_model(self.embedding_model)
             embedding_func = partial(embed_prompt, model=embedding_model)
 
