@@ -1,0 +1,40 @@
+# dpo2
+pseudo_dataset_name: mnoukhov/summarize_from_feedback_tldr3_unlabelled_vllm_dpo_costa_2.8b_bf16.yml_6e799
+pseudo_dataset_split: train[:20000]
+train_split: train[:1]
+## costa stuff
+model_name: vwxyzjn/EleutherAI_pythia-2.8b-deduped__sft__tldr
+model_revision: sft__55513__1708611267
+dataset_name: vwxyzjn/summarize_from_feedback_oai_preprocessing_1706381144
+tokenizer_name: EleutherAI/pythia-1b-deduped
+prompt_field: query
+eval_split: validation
+max_prompt_length: 512
+max_target_length: 131
+max_length: 640
+lr_scheduler_type: cosine
+## hub stuff
+push_to_hub: True
+push_to_hub_organization: mnoukhov
+## training stuff
+gold_eval: ppl
+eval_steps: 0.33
+save_steps: 0.33
+beta: 0.05
+max_steps: -1
+num_train_epochs: 1
+load_in_8bit: False
+bf16: True
+fp16: False
+learning_rate: 1e-5
+use_peft: True
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.
+load_in_8bit: False
+gradient_checkpointing: True
+gradient_checkpointing_use_reentrant: False
+gradient_accumulation_steps: 4
+per_device_train_batch_size: 16
+per_device_eval_batch_size: 8
+eval_first_step: False

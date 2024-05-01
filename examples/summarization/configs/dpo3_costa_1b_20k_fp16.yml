@@ -1,0 +1,35 @@
+## dpo 2 
+pseudo_dataset_name: 
+train_split: train[:1]
+max_prompt_length: 512
+max_target_length: 131
+max_length: 640
+lr_scheduler_type: cosine
+## costa stuff
+model_name: vwxyzjn/EleutherAI_pythia-1b-deduped__sft__tldr
+model_revision: sft__55513__1706646024
+dataset_name: vwxyzjn/summarize_from_feedback_oai_preprocessing_1706381144
+tokenizer_name: EleutherAI/pythia-1b-deduped
+prompt_field: query
+eval_split: validation
+## hub stuff
+push_to_hub: True
+push_to_hub_organization: mnoukhov
+## training stuff
+gold_eval: ppl
+eval_steps: 0.2
+save_steps: 0.2
+beta: 0.05
+max_steps: -1
+num_train_epochs: 1
+load_in_8bit: False
+bf16: False
+fp16: True
+learning_rate: 3e-5
+use_peft: True
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.
+gradient_accumulation_steps: 4
+per_device_train_batch_size: 4
+per_device_eval_batch_size: 4
