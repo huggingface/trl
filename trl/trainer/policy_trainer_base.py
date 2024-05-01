@@ -87,7 +87,7 @@ class fast_eval_mode:
         self.inference_context.__enter__()
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-`        self.inference_context.__exit__(exc_type, exc_val, exc_tb)
+        self.inference_context.__exit__(exc_type, exc_val, exc_tb)
         if self.was_training:
             self.model.train()
             if self.use_unsloth:
