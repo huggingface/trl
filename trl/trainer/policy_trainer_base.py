@@ -36,10 +36,13 @@ from ..models import SUPPORTED_ARCHITECTURES, create_reference_model, PreTrained
 from .utils import disable_dropout_in_model, peft_module_casting_to_bf16, peft_module_casting_to_fp16
 
 
-from ..import_utils import is_peft_available
+from ..import_utils import is_peft_available, is_unsloth_available
 
 if is_peft_available():
     from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
+
+if is_unsloth_available():
+    from unsloth import FastLanguageModel
 
 
 @dataclass
@@ -58,7 +61,18 @@ class PolicyTrainerArguments(TrainingArguments):
     """whether to penalize responses that do not contain `truncate_token_id`"""
 
 
-class eval_mode:
+class fast_eval_mode:
+    """
+    Convert to model.eval(), then revert to previous state
+
+    Behavior
+    - Disable gradients via torch.inference_mode()
+    - Disable dropout layers
+    - Freeze BatchNorm
+    `"""
+
+    use_unsloth = is_unsloth_available()
+
     def __init__(self, model):
         self.model = model
 
@@ -66,10 +80,18 @@ class eval_mode:
         self.was_training = self.model.training
         if self.was_training:
             self.model.eval()
+            if self.use_unsloth:
+                FastLanguageModel.for_inference(model)
+
+        self.inference_context = torch.inference_mode()
+        self.inference_context.__enter__()
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+`        self.inference_context.__exit__(exc_type, exc_val, exc_tb)
         if self.was_training:
             self.model.train()
+            if self.use_unsloth:
+                FastLanguageModel.for_training(model)
 
 
 def first_true_indices(bools, dtype=torch.long):
