@@ -20,9 +20,11 @@ class FDivergenceType(Enum):
     JS_DIVERGENCE = "js_divergence"
     ALPHA_DIVERGENCE = "alpha_divergence"
 
+
 class FDivergenceConstants:
     ALPHA_DIVERGENCE_COEF_KEY = "alpha_divergence_coef"
     ALPHA_DIVERGENCE_COEF_DEFAULT = 1.0
+
 
 @dataclass
 class DPOConfig(TrainingArguments):
