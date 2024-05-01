@@ -66,7 +66,7 @@ class fast_eval_mode:
     Convert to model.eval(), then revert to previous state
 
     Behavior
-    - Disable gradients via torch.inference_mode()
+    - DOESNT disable grad
     - Disable dropout layers
     - Freeze BatchNorm
     `"""
@@ -83,11 +83,7 @@ class fast_eval_mode:
             if self.use_unsloth:
                 FastLanguageModel.for_inference(model)
 
-        self.inference_context = torch.inference_mode()
-        self.inference_context.__enter__()
-
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.inference_context.__exit__(exc_type, exc_val, exc_tb)
         if self.was_training:
             self.model.train()
             if self.use_unsloth:
@@ -436,10 +432,10 @@ class PolicyTrainerBase(Trainer):
             if isinstance(module, torch.nn.Dropout):
                 module.p = 0
 
-    def generate(self, model, queries, generation_config, requires_grad=False):
+    def generate(self, model, queries, generation_config, requires_grad=True):
         """generate in a way that does not affect padding tokens"""
         with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
-            with (fast_eval_mode(model) if requires_grad else nullcontext):
+            with (fast_eval_mode(unwrapped_model) if requires_grad else nullcontext):
                 context_length = queries.shape[1]
                 attention_mask = queries != self.tokenizer.pad_token_id
                 input_ids = torch.masked_fill(queries, ~attention_mask, 0)

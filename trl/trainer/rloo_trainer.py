@@ -84,7 +84,7 @@ class RLOOTrainer(PolicyTrainerBase):
         context_length = queries.shape[1]
 
         with self.cast_model_ctx():
-            with torch.no_grad(), self.time_metric_ctx("calc_advantages"):
+            with torch.inference_mode(), self.time_metric_ctx("calc_advantages"):
                 # PR TODO: refactor into a function shared by ppov2 which calculates sequences and logprobs
                 #          see DPOTrainer.concatenated_forward
                 with self.time_metric_ctx("generate"):
@@ -194,7 +194,7 @@ class RLOOTrainer(PolicyTrainerBase):
                 pg_clipfrac = (pg_losses2 > pg_losses).float().mean()
 
         # log metrics
-        with torch.no_grad():
+        with torch.inference_mode():
             prob_dist = torch.nn.functional.softmax(logits, dim=-1)
             entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1)
             approxkl = 0.5 * (logprobs_diff**2).mean()
