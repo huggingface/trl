@@ -1,6 +1,6 @@
 model_name: mnoukhov/pythia410m-tldr-sft
 dataset_name: mnoukhov/openai_summarize_comparisons_tldrprompt_relabel1b
-gold_model_name: mnoukhov/pythia1b-sft-rm-tldrprompt
+# gold_model_name: mnoukhov/pythia1b-sft-rm-tldrprompt
 max_prompt_length: 512
 max_target_length: 131
 max_length: 640
@@ -9,7 +9,7 @@ lr_scheduler_type: cosine
 push_to_hub: True
 push_to_hub_organization: mnoukhov
 ## training stuff
-gold_eval: full
+gold_eval: ppl
 eval_steps: 0.2
 save_steps: 0.2
 beta: 0.05

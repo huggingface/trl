@@ -1,0 +1,12 @@
+output_dir: summarize_from_feedback_tldr3_generated_relabel_20k_dpo1b_pythia410m_fp16.yml_8174d
+dataset_name: mnoukhov/summarize_from_feedback_tldr_3_filtered_oai_preprocessing_1706381144_unlabelled
+model_name: mnoukhov/dpo1b_pythia410m_fp16.yml_8174d56c779a903d54c7c6c2e3c950f3
+lora_model: True
+tokenizer_name: mnoukhov/pythia410m-tldr-sft
+train_split: train[:20000]
+batch_size: 4
+max_prompt_length: 512
+max_new_tokens: 128
+temperature: 0.7
+top_p: 1.0
+dtype: bfloat16
