@@ -84,7 +84,7 @@ class RLOOTrainer(PolicyTrainerBase):
         context_length = queries.shape[1]
 
         with self.cast_model_ctx():
-            with torch.no_grad(), self.time_metric_ctx("calc_advantages")::
+            with torch.no_grad(), self.time_metric_ctx("calc_advantages"):
                 # PR TODO: refactor into a function shared by ppov2 which calculates sequences and logprobs
                 #          see DPOTrainer.concatenated_forward
                 with self.time_metric_ctx("generate"):
