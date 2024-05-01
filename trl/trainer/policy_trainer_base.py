@@ -336,6 +336,7 @@ class PolicyTrainerBase(Trainer):
             tokenizer: Optional[PreTrainedTokenizerBase] = None,
             model_init_kwargs: Optional[Dict] = None,
             ref_model_init_kwargs: Optional[Dict] = None,
+            peft_config: Optional = None,
             force_use_ref_model: bool = False,
             **kwargs
     ) -> None:
