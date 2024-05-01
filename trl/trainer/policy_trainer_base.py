@@ -436,21 +436,22 @@ class PolicyTrainerBase(Trainer):
             if isinstance(module, torch.nn.Dropout):
                 module.p = 0
 
-    def generate(self, model, queries, generation_config):
+    def generate(self, model, queries, generation_config, requires_grad=False):
         """generate in a way that does not affect padding tokens"""
         with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
-            context_length = queries.shape[1]
-            attention_mask = queries != self.tokenizer.pad_token_id
-            input_ids = torch.masked_fill(queries, ~attention_mask, 0)
-            output = unwrapped_model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                # position_ids=attention_mask.cumsum(1) - attention_mask.long(), # not needed: already adjusted in generations
-                # https://github.com/huggingface/transformers/blob/ac33aeeeee2a7a89b89c93c2962e6feb90daef0a/src/transformers/models/gpt2/modeling_gpt2.py#L1227-L1250
-                generation_config=generation_config,
-                return_dict_in_generate=True,
-                output_scores=True,
-            )
+            with (fast_eval_mode(model) if requires_grad else nullcontext):
+                context_length = queries.shape[1]
+                attention_mask = queries != self.tokenizer.pad_token_id
+                input_ids = torch.masked_fill(queries, ~attention_mask, 0)
+                output = unwrapped_model.generate(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    # position_ids=attention_mask.cumsum(1) - attention_mask.long(), # not needed: already adjusted in generations
+                    # https://github.com/huggingface/transformers/blob/ac33aeeeee2a7a89b89c93c2962e6feb90daef0a/src/transformers/models/gpt2/modeling_gpt2.py#L1227-L1250
+                    generation_config=generation_config,
+                    return_dict_in_generate=True,
+                    output_scores=True,
+                )
         logits = torch.stack(output.scores, 1)
         query_responses = torch.cat((queries, output.sequences[:, context_length:]), dim=1)
         return query_responses, logits
@@ -534,7 +535,7 @@ class PolicyTrainerBase(Trainer):
         del self._stored_metrics[train_eval]
         return super().log(logs)
 
-    def time_metric_ctx(self, timer_name: str, printlog=True):
+    def time_metric_ctx(self, timer_name: str):
         from time import perf_counter
         timer_metric_name = f"timer/{timer_name}"
         class catchtime:
@@ -542,8 +543,6 @@ class PolicyTrainerBase(Trainer):
                 s.start = perf_counter()
             def __exit__(s, type, value, traceback):
                 runtime = perf_counter() - s.start
-                if printlog:
-                    readout = f'{timer_metric_name}: {runtime:.3f} seconds'
                 self.store_metrics({timer_metric_name: runtime})
         return catchtime()
 
