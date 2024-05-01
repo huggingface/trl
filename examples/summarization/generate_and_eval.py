@@ -234,7 +234,8 @@ def evaluate(args, reference, generations, model_name=None):
     def tokenize_and_add_eos(tokenizer, text_column, max_length):
         def fn(example):
             text = example[text_column]
-            if not text.endswith(tokenizer.eos_token):
+            ends_with_eos = text.endswith(tokenizer.eos_token)
+            if not ends_with_eos:
                 text += tokenizer.eos_token
 
             tokenized = tokenizer(

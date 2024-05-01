@@ -1,0 +1,14 @@
+model_name: mnoukhov/dpo1b_pythia410m_costa_fp16.yml_14242dab1dd6adda1d4bc4462be2480f
+wandb_log_id: model_name
+base_model_name: mnoukhov/pythia410m-tldr-sft
+# base_model_revision: sft__55513__1706646024
+gen_dtype: bfloat16
+tokenizer_name: mnoukhov/pythia410m-tldr-sft
+dataset_name: vwxyzjn/summarize_from_feedback_tldr_3_filtered_oai_preprocessing_1706381144
+gold_model_name: mnoukhov/pythia1b-sft-rm-tldrprompt
+eval_batch_size: 8
+# gold_model_revision: reward__55513__1708628552
+eval_dtype: bfloat16
+max_new_tokens: 128
+max_length: 640
+temperature: 0.010001

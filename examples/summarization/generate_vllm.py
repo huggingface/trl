@@ -60,12 +60,11 @@ def prepare_vllm_model(script_args):
     tokenizer.padding_side = "left"
 
     if script_args.lora_model:
+        # peft model that needs to be merged
         if script_args.base_model_name is not None:
-            # peft model that needs to be merged
             base_model = AutoModelForCausalLM.from_pretrained(
                 script_args.base_model_name, revision=script_args.base_model_revision
             )
-            # merge the model and save
             model = PeftModelForCausalLM.from_pretrained(
                 base_model, script_args.model_name, revision=script_args.revision, device="cpu"
             )
@@ -73,6 +72,7 @@ def prepare_vllm_model(script_args):
             model = AutoPeftModelForCausalLM.from_pretrained(
                 script_args.model_name, revision=script_args.revision, device="cpu"
             )
+        # merge the model and save
         merged = model.merge_and_unload()
         model_save_path = f"/home/toolkit/trl_results/{script_args.model_name}_merged/{script_args.revision}"
         merged.save_pretrained(model_save_path)

@@ -1,11 +1,13 @@
 ## dpo 2 
-pseudo_dataset_name: mnoukhov/summarize_from_feedback_tldr3_generated_20k_relabel_pythia1b_dpo_temp0.7_length128
+pseudo_dataset_name: mnoukhov/summarize_from_feedback_tldr3_unlabelled_vllm_dpo2_costa_1b_fp16.yml_bfcef
+pseudo_dataset_split: train[:20000]
 train_split: train[:1]
 max_prompt_length: 512
 max_target_length: 131
 max_length: 640
 lr_scheduler_type: cosine
 ## costa stuff
+# model_name: mnoukhov/EleutherAI_pythia-1b-deduped__sft__tldr_dpo_costa_1b_fp16.yml_3d94f50_b9ff2_merged
 model_name: vwxyzjn/EleutherAI_pythia-1b-deduped__sft__tldr
 model_revision: sft__55513__1706646024
 dataset_name: vwxyzjn/summarize_from_feedback_oai_preprocessing_1706381144
