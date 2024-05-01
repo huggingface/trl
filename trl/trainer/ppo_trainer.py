@@ -18,7 +18,7 @@ import time
 import typing
 import warnings
 from contextlib import nullcontext
-from typing import Callable, Dict, List, Optional, Union
+from typing import Callable, List, Optional, Union
 
 import datasets
 import numpy as np
@@ -32,7 +32,6 @@ from packaging import version
 from torch.optim import Adam
 from transformers import (
     DataCollatorForLanguageModeling,
-    DataCollatorForSeq2Seq,
     PreTrainedTokenizer,
     PreTrainedTokenizerBase,
     PreTrainedTokenizerFast,
@@ -157,9 +156,6 @@ class PPOTrainer(BaseTrainer):
         data_collator: Optional[typing.Callable] = None,
         num_shared_layers: Optional[int] = None,
         lr_scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
-        ptx_data_collator: Optional[typing.Callable] = None,
-        ptx_data_args: Optional[PtxDataArgs] = None,
-        ptx_loss_args: Optional[PtxLossArgs] = None,
     ):
         """
         Initialize PPOTrainer.
@@ -186,12 +182,6 @@ class PPOTrainer(BaseTrainer):
                 used only if `ref_model` is `None`.
             lr_scheduler (Optional[`torch.optim.lr_scheduler`]):
                 Learning rate scheduler used for training.
-            ptx_data_collator (Optional[function]):
-                Data collator function for ppo_ptx model input data.
-            ptx_data_args (Optional[PtxDataArgs]):
-                Input data instance for ppo_ptx.
-            ptx_loss_args (Optional[PtxLossArgs]):
-                Parameters for ppo_ptx loss calculation.
         """
         super().__init__(config)
 
@@ -322,38 +312,18 @@ class PPOTrainer(BaseTrainer):
             self.accelerator.state, "deepspeed_plugin"
         )
 
-        if ptx_data_collator is None:
-            if self.is_encoder_decoder:
-                warnings.warn(
-                    "No ptx data collator is provided. Using 'DataCollatorForSeq2Seq' with"
-                    "'labels_pad_token_id' set to '-100' and 'pad_to_multiple_of' set to 8."
-                )
-                self.ptx_data_collator = DataCollatorForSeq2Seq(
-                    tokenizer, label_pad_token_id=-100, pad_to_multiple_of=8
-                )
-            else:
-                warnings.warn("No ptx data collator is provided. Using 'DataCollatorForLanguageModeling'")
-                self.ptx_data_collator = self.data_collator
-        else:
-            self.ptx_data_collator = ptx_data_collator
-
-        self.ptx_data_args = ptx_data_args if ptx_data_args is not None else PtxDataArgs()
-        self.ptx_loss_args = ptx_loss_args if ptx_loss_args is not None else PtxLossArgs()
-
         (
             self.model,
             self.optimizer,
             self.data_collator,
             self.dataloader,
             self.lr_scheduler,
-            self.ptx_data_collator,
         ) = self.accelerator.prepare(
             self.model,
             self.optimizer,
             self.data_collator,
             self.dataloader,
             self.lr_scheduler,
-            self.ptx_data_collator,
         )
         if is_deepspeed_used:
             # Quantized models are already set on the correct device
@@ -661,7 +631,6 @@ class PPOTrainer(BaseTrainer):
         responses: List[torch.LongTensor],
         scores: List[torch.FloatTensor],
         response_masks: Optional[List[torch.LongTensor]] = None,
-        ptx_data: Optional[PtxData] = None,
     ):
         """
         Run a PPO optimisation step given a list of queries, model responses, and rewards.
@@ -675,8 +644,7 @@ class PPOTrainer(BaseTrainer):
                 List of tensors containing the scores.
             response_masks (List[`torch.FloatTensor`], *optional*)):
                 List of tensors containing masks of the response tokens.
-            ptx_data (PtxData, *optional*)):
-                Data instance for ppo_ptx loss calculation.
+
         Returns:
             `dict[str, Any]`: A summary of the training statistics
         """
@@ -685,9 +653,6 @@ class PPOTrainer(BaseTrainer):
         queries, responses, scores, response_masks = self._step_safety_checker(
             bs, queries, responses, scores, response_masks
         )
-
-        self.preprocess_ptx_data(ptx_data)
-
         scores = torch.tensor(scores, device=self.current_device)
         if self.config.use_score_scaling:
             # Score scaling
@@ -722,8 +687,6 @@ class PPOTrainer(BaseTrainer):
 
         model_inputs = self.prepare_model_inputs(queries, responses)
 
-        ptx_model_inputs = self.prepare_ptx_model_inputs(ptx_data)
-
         if self.is_distributed:
             pad_first = self.tokenizer.padding_side == "left"
 
@@ -736,18 +699,6 @@ class PPOTrainer(BaseTrainer):
             model_inputs["attention_mask"] = self.accelerator.pad_across_processes(
                 model_inputs["attention_mask"], dim=1, pad_index=0, pad_first=pad_first
             )
-            # Pad across process for input data of ppo_ptx
-            if ptx_model_inputs:
-                ptx_model_inputs["input_ids"] = self.accelerator.pad_across_processes(
-                    ptx_model_inputs["input_ids"],
-                    dim=1,
-                    pad_index=self.tokenizer.pad_token_id,
-                    pad_first=pad_first,
-                )
-                ptx_model_inputs["attention_mask"] = self.accelerator.pad_across_processes(
-                    ptx_model_inputs["attention_mask"], dim=1, pad_index=0, pad_first=pad_first
-                )
-
             if self.is_encoder_decoder:
                 model_inputs["decoder_input_ids"] = self.accelerator.pad_across_processes(
                     model_inputs["decoder_input_ids"],
@@ -812,23 +763,12 @@ class PPOTrainer(BaseTrainer):
             "masks": masks,
             "advantages": advantages,
             "returns": returns,
-            "ptx_model_inputs": {},
         }
         batch_dict.update(model_inputs)
-        if ptx_model_inputs is not None:
-            batch_dict["ptx_model_inputs"].update(ptx_model_inputs)
 
         t = time.time()
         all_stats = []
         early_stop = False
-        # Mini batch iterator on ptx data in a cycling fashion
-        ptx_mini_batch_iterator = iter(
-            MiniBatchCycleIter(
-                self.config.ptx_mini_batch_size,
-                b_data_dict=batch_dict["ptx_model_inputs"],
-            )
-        )
-
         for _ in range(self.config.ppo_epochs):
             if early_stop:
                 break
@@ -849,14 +789,9 @@ class PPOTrainer(BaseTrainer):
                         "responses": [batch_dict["responses"][i] for i in mini_batch_inds],
                         "advantages": batch_dict["advantages"][mini_batch_inds],
                         "returns": batch_dict["returns"][mini_batch_inds],
-                        "ptx_model_inputs": {},
                     }
                     for k in model_inputs_names:
                         mini_batch_dict[k] = batch_dict[k][mini_batch_inds]
-
-                    ptx_mini_batch_dict = next(ptx_mini_batch_iterator)
-                    mini_batch_dict["ptx_model_inputs"].update(ptx_mini_batch_dict)
-
                     with self.accelerator.accumulate(self.model):
                         model_inputs = {k: mini_batch_dict[k] for k in model_inputs_names}
 
@@ -876,7 +811,6 @@ class PPOTrainer(BaseTrainer):
                             mini_batch_dict["masks"],
                             mini_batch_dict["advantages"],
                             mini_batch_dict["returns"],
-                            mini_batch_dict["ptx_model_inputs"],
                         )
                         all_stats.append(train_stats)
 
@@ -1014,91 +948,6 @@ class PPOTrainer(BaseTrainer):
         input_data.pop("labels", None)  # we don't want to compute LM losses
         return input_data
 
-    def preprocess_ptx_data(self, ptx_data: Optional[PtxData] = None):
-        """
-        Pre-process ppo_ptx data instance, including:
-            1) Tokenize texts and texts_labels if they are not None
-            2) Safety check
-
-        Args:
-            ptx_data (PtxData, *optional*)):
-                ppo_ptx data instance
-        """
-        if ptx_data is None:
-            return
-
-        texts = ptx_data.texts
-        texts_labels = ptx_data.texts_labels
-
-        if texts is not None:
-            model_inputs = self.tokenizer(
-                texts, max_length=self.ptx_data_args.max_length, truncation=True, padding=True, return_tensors="pt"
-            )
-
-            ptx_data.input_ids, ptx_data.attention_mask = model_inputs["input_ids"], model_inputs["attention_mask"]
-
-        if texts_labels is not None:
-            ptx_data.labels = self.tokenizer(
-                texts, max_length=self.ptx_data_args.max_length, truncation=True, padding=True, return_tensors="pt"
-            )["input_ids"]
-
-        if ptx_data.labels is None:
-            warnings.warn("No ptx labels are provided. Setting ptx labels to ptx input_ids")
-            ptx_data.labels = ptx_data.input_ids
-
-        IterativeSFTTrainer._step_safety_checker(
-            ptx_data.input_ids, ptx_data.attention_mask, ptx_data.labels, ptx_data.texts, ptx_data.texts_labels
-        )
-
-    def prepare_ptx_model_inputs(self, ptx_data: Optional[PtxData] = None):
-        """
-        Convert ppo_ptx data instance into model inputs via data collator and optional truncation.
-
-        Args:
-            ptx_data (PtxData, *optional*)):
-                ppo_ptx data instance
-
-        Returns:
-            'Dict[string, any]': A dictionary of model inputs after data collator and optional truncation.
-        """
-        if ptx_data is None:
-            return None
-
-        data_collator = self.ptx_data_collator
-        input_ids = ptx_data.input_ids
-        attention_mask = ptx_data.attention_mask
-        labels = ptx_data.labels
-        if attention_mask is None:
-            attention_mask = [torch.ones_like(ids) for ids in input_ids]
-
-        if self.is_encoder_decoder:
-            input_data = data_collator(
-                [
-                    {"input_ids": ids, "attention_mask": att, "labels": lab}
-                    for ids, att, lab in zip(input_ids, attention_mask, labels)
-                ]
-            ).to(self.current_device)
-
-            input_data.pop("decoder_input_ids", None)  # This is directly computed inside the model
-
-            input_data["labels"][input_data["labels"] == self.tokenizer.pad_token_id] = -100
-
-        else:
-            input_data = data_collator(
-                [{"input_ids": ids, "attention_mask": att} for ids, att in zip(input_ids, attention_mask)]
-            ).to(self.current_device)
-
-        # truncate in case the user has provided input_ids, attention_mask and labels
-        if self.ptx_data_args.max_length is not None:
-            if self.ptx_data_args.truncation_mode == "keep_start":
-                input_data = {k: v[:, : self.ptx_data_args.max_length] for k, v in input_data.items()}
-            elif self.ptx_data_args.truncation_mode == "keep_end":
-                input_data = {k: v[:, -self.ptx_data_args.max_length :] for k, v in input_data.items()}
-            else:
-                raise ValueError(f"Unknown truncation mode: {self.ptx_data_args.truncation_mode}")
-
-        return input_data
-
     @PPODecorators.empty_device_cache()
     def batched_forward_pass(
         self,
@@ -1201,7 +1050,6 @@ class PPOTrainer(BaseTrainer):
         mask: torch.LongTensor,
         advantages: torch.FloatTensor,
         returns: torch.FloatTensor,
-        ptx_model_inputs: Optional[Dict[str, torch.Tensor]] = None,
     ):
         """
         Train one PPO minibatch
@@ -1217,8 +1065,7 @@ class PPOTrainer(BaseTrainer):
                 Encoded responses, shape [mini_batch_size, response_length]
             model_input (`torch.LongTensor`):
                 Concatenated queries and responses, shape [mini_batch_size, query_length+response_length]
-            ptx_model_inputs (`Dict[string, torch.Tensor]`, *optional*, defaults to `None`):
-                Inputs data for ptx loss (e.g. `input_ids`, `attention_mask`, `labels`) from prepare_ptx_model_inputs()
+
         Returns:
             train_stats (dict[str, `torch.Tensor`]):
                 Dictionary of training statistics
@@ -1228,15 +1075,6 @@ class PPOTrainer(BaseTrainer):
             old_logprobs, values, logits, vpreds, logprobs, mask, advantages, returns
         )
         loss = loss_p + loss_v
-
-        # Pretrain data distribution loss
-        ptx_loss = self.compute_ptx_loss(ptx_model_inputs)
-        if torch.is_tensor(ptx_loss):
-            loss += self.ptx_loss_args.ptx_coef * ptx_loss
-        else:
-            ptx_loss = torch.zeros_like(loss)
-        train_stats["loss/ptx"] = ptx_loss.detach()
-
         self.accelerator.backward(loss)
         if self.config.max_grad_norm is not None:
             if self.accelerator.sync_gradients:
@@ -1417,40 +1255,6 @@ class PPOTrainer(BaseTrainer):
             ),
         )
         return pg_loss, self.config.vf_coef * vf_loss, flatten_dict(stats)
-
-    def compute_ptx_loss(self, ptx_model_inputs: Optional[Dict[str, torch.Tensor]] = None):
-        """
-        Calculate ptx loss(loss of prediction in pretrained data distribution).
-
-        Args:
-            ptx_model_inputs (Dict[str, torch.Tensor], *optional*, defaults to 'None' )):
-               Input data to self.model to compute ptx loss
-
-        Returns:
-               torch.FloatTensor: ptx loss tensor OR None if no input data or ptx_loss coef is not above 0.
-        """
-        ptx_loss = None
-        if self.ptx_loss_args.ptx_coef > 0 and ptx_model_inputs:
-            ptx_outputs = self.model(**ptx_model_inputs)
-            if isinstance(ptx_outputs, tuple) or isinstance(ptx_outputs, list):
-                # If output from model.forward() is a tuple or list, return loss from the 2nd element
-                if len(ptx_outputs) > 1:
-                    ptx_loss = ptx_outputs[1]
-            elif isinstance(ptx_outputs, dict):
-                # If output from model.forward() is a dict, return loss from the key 'loss'
-                ptx_loss = ptx_outputs.get("loss")
-            elif hasattr(ptx_outputs, "loss"):
-                # If output from model.forward() is a class obj with 'loss' attribute, return loss from the attribute
-                ptx_loss = getattr(ptx_outputs, "loss")
-            else:
-                # warn users
-                warnings.warn(
-                    f"The loss attribute is not found in the output from the model forward pass the pretrained data."
-                    "We support tuple | list | dict | class obj with 'loss' attribute as output from model forward pass."
-                    "Please check the model forward output class, otherwise we could not backprop from ptx loss."
-                    f"Current model forward output class is {type(ptx_outputs)}"
-                )
-        return ptx_loss
 
     def record_step_stats(self, kl_coef: float, **data):
         """

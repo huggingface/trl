@@ -9,7 +9,7 @@ from datasets import Dataset, load_dataset
 from peft import LoraConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, TrainingArguments, set_seed
 
-from trl import DPOConfig, DPOTrainer
+from trl import DPOTrainer
 
 
 # Define and parse arguments.
@@ -177,7 +177,7 @@ if __name__ == "__main__":
     )
 
     # 4. initialize training arguments:
-    training_args = DPOConfig(
+    training_args = TrainingArguments(
         per_device_train_batch_size=script_args.per_device_train_batch_size,
         per_device_eval_batch_size=script_args.per_device_eval_batch_size,
         max_steps=script_args.max_steps,

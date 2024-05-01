@@ -96,10 +96,6 @@ class PPOConfig:
     """DEPRECATED: use `mini_batch_size` instead, which does the same thing."""
     mini_batch_size: int = 128
     """Number of samples optimized in each mini batch"""
-    ptx_batch_size: Optional[int] = None
-    """Number of samples from pretrained data (for ppo_ptx loss) in each batch. If None, set to batch_size"""
-    ptx_mini_batch_size: Optional[int] = None
-    """Number of samples from pretrained data (for ppo_ptx loss) optimized in each mini batch. If None, set to mini_batch_size"""
     gradient_accumulation_steps: int = 1
     """The number of gradient accumulation steps"""
     world_size: tyro.conf.Suppress[int] = None
@@ -155,16 +151,6 @@ class PPOConfig:
                 "Note that using `forward_batch_size` is deprecated, use `mini_batch_size` instead. By setting it you overwrite `mini_batch_size` which affects both the batch size during forward passes and also the mini batch size for PPO optimization."
             )
             self.mini_batch_size = self.forward_batch_size
-
-        if self.ptx_batch_size is None:
-            warnings.warn(f"Note that `ptx_batch_size` is not set, set to `batch_size` {self.batch_size} instead.")
-            self.ptx_batch_size = self.batch_size
-
-        if self.ptx_mini_batch_size is None:
-            warnings.warn(
-                f"Note that `ptx_mini_batch_size` is not set, set to `mini_batch_size` {self.mini_batch_size} instead."
-            )
-            self.ptx_mini_batch_size = self.mini_batch_size
 
         self.backward_batch_size = self.mini_batch_size * self.gradient_accumulation_steps
         exact_div(
