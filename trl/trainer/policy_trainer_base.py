@@ -81,13 +81,13 @@ class fast_eval_mode:
         if self.was_training:
             self.model.eval()
             if self.use_unsloth:
-                FastLanguageModel.for_inference(model)
+                FastLanguageModel.for_inference(self.model)
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.was_training:
             self.model.train()
             if self.use_unsloth:
-                FastLanguageModel.for_training(model)
+                FastLanguageModel.for_training(self.model)
 
 
 def first_true_indices(bools, dtype=torch.long):
