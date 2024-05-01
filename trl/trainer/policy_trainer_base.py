@@ -331,7 +331,6 @@ class PolicyTrainerBase(Trainer):
             train_dataset: Optional[Dataset] = None,
             reward_model: Optional[PreTrainedModelWrapper] = None,
             reward_fn: Callable = None,
-            ref_model: Optional[PreTrainedModelWrapper] = None,
             train_generation_config: Optional[GenerationConfig] = None,
             eval_generation_config: Optional[GenerationConfig] = None,
             tokenizer: Optional[PreTrainedTokenizerBase] = None,
