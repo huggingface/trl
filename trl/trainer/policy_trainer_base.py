@@ -293,8 +293,7 @@ class ReferenceModelManager:
             return self.ref_model
         elif self.is_peft_model:
             self.optional_peft_ctx = self.accelerator.unwrap_model(self.model).disable_adapter()
-            with self.optional_peft_ctx:
-                return self.model
+            return self.model
         else:
             raise ValueError
 
