@@ -41,9 +41,6 @@ from ..import_utils import is_peft_available, is_unsloth_available
 if is_peft_available():
     from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
 
-if is_unsloth_available():
-    from unsloth import FastLanguageModel
-
 
 @dataclass
 class PolicyTrainerArguments(TrainingArguments):
@@ -71,7 +68,6 @@ class fast_eval_mode:
     - Freeze BatchNorm
     `"""
 
-    use_unsloth = is_unsloth_available()
 
     def __init__(self, model):
         self.model = model
@@ -80,14 +76,10 @@ class fast_eval_mode:
         self.was_training = self.model.training
         if self.was_training:
             self.model.eval()
-            if self.use_unsloth:
-                FastLanguageModel.for_inference(self.model)
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.was_training:
             self.model.train()
-            if self.use_unsloth:
-                FastLanguageModel.for_training(self.model)
 
 
 def first_true_indices(bools, dtype=torch.long):
@@ -311,6 +303,17 @@ class ReferenceModelManager:
     def __exit__(self, exc_type, exc_value, traceback):
         if self.optional_peft_ctx is not None:
             self.optional_peft_ctx.__exit__(exc_type, exc_value, traceback)
+
+
+# PR TODO: move this experiment somewhere if successful
+def faster_inference_model(model):
+    model.generation_config.cache_implementation = "static"
+    compiled_model = torch.compile(model, mode="reduce-overhead", fullgraph=True)
+    """
+    use this?
+    with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=False):
+    """
+
 
 
 
