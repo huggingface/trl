@@ -81,7 +81,7 @@ class RLOOTrainer(PolicyTrainerBase):
 
         context_length = queries.shape[1]
 
-        with torch.cuda.amp.autocast(dtype=torch.bfloat16):#self.cast_model_ctx():
+        with self.cast_model_ctx():
             with torch.no_grad(), self.time_metric_ctx("calc_advantages"):
                 # PR TODO: refactor into a function shared by ppov2 which calculates sequences and logprobs
                 #          see DPOTrainer.concatenated_forward
@@ -179,9 +179,10 @@ class RLOOTrainer(PolicyTrainerBase):
                 logits /= self.args.temperature + 1e-7
                 new_all_logprobs = F.log_softmax(logits, dim=-1)
                 new_logprobs = torch.gather(new_all_logprobs, 2, responses.unsqueeze(-1)).squeeze(-1)
-                new_logprobs = torch.masked_fill(
-                    new_logprobs, padding_mask, INVALID_LOGPROB
-                )
+                # PR TODO: Revert
+                #new_logprobs = torch.masked_fill(
+                #    new_logprobs, padding_mask, INVALID_LOGPROB
+                #)
                 new_ratio = (new_logprobs - logprobs).exp()
                 logprobs_diff = new_logprobs.sum(1) - logprobs.sum(1)
                 ratio = torch.exp(logprobs_diff)
