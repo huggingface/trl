@@ -264,7 +264,7 @@ class RLOOTrainer(PolicyTrainerBase):
 
             loss = pg_loss.to(self.args.device)
 
-            add_check_nan_inf_hook(loss)
+            add_check_nan_inf_hook(loss.grad_fn)
 
             # PR TODO: delete the commented if it truly is what's detaching the graph
             # it probably isn't a problem, I saw issues with LoRA_MLPBackward w/ Unsloth
