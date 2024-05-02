@@ -65,26 +65,21 @@ def first_true_indices(bools, dtype=torch.long):
 def add_check_nan_inf_hook(tensor):
     """
     Adds a hook to the tensor's gradient function to check for NaNs or Infs.
-    This will recursively add hooks to all the gradients in the computational graph that led to the tensor.
+    It will recursively add hooks to all functions in the graph leading up to this tensor.
     """
-
-    # Function to attach to the module that checks for NaNs or Infs in gradients
+    # Function to attach to the tensor that checks for NaNs or Infs in gradients
     def check_nan_inf(grad):
         if torch.isnan(grad).any() or torch.isinf(grad).any():
             print(f"NaN or Inf found in gradients: {grad}")
-            print(f"Occurred at: {tensor.grad_fn.__name__}")  # Print the name of the grad_fn
+            print(f"Occurred at: {tensor.grad_fn.__class__.__name__}")  # Print the name of the grad_fn class
         return grad
 
-    # If this tensor already has a grad_fn, we can hook into it
+    # If this tensor has a grad_fn, add a hook and recurse on inputs
     if tensor.grad_fn:
-        # Adding the hook to the grad_fn
         tensor.register_hook(check_nan_inf)
-
-        # Recursively apply this function to all next functions (inputs to this function)
-        for next_fn in tensor.grad_fn.next_functions:
-            if next_fn[0] is not None:
-                add_check_nan_inf_hook(next_fn[0].output)  # Recursive call
-
+        for next_fn, _ in tensor.grad_fn.next_functions:
+            if next_fn is not None:
+                add_check_nan_inf_hook(next_fn.variable)  # Recursively call on the tensor associated with next_fn
 
 
 class RLOOTrainer(PolicyTrainerBase):
