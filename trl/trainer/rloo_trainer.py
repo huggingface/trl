@@ -62,24 +62,30 @@ def first_true_indices(bools, dtype=torch.long):
 
 
 # PR TODO: remove this debug fn
-def add_check_nan_inf_hook(tensor):
+def add_check_nan_inf_hook(grad_fn, visited=None):
     """
     Adds a hook to the tensor's gradient function to check for NaNs or Infs.
     It will recursively add hooks to all functions in the graph leading up to this tensor.
     """
-    # Function to attach to the tensor that checks for NaNs or Infs in gradients
+    if visited is None:
+        visited = set()
+
+    # Function to check for NaNs or Infs in gradients
     def check_nan_inf(grad):
         if torch.isnan(grad).any() or torch.isinf(grad).any():
             print(f"NaN or Inf found in gradients: {grad}")
-            print(f"Occurred at: {tensor.grad_fn.__class__.__name__}")  # Print the name of the grad_fn class
+            print(f"Occurred at: {grad_fn.__class__.__name__}")  # Print the name of the grad_fn class
         return grad
 
-    # If this tensor has a grad_fn, add a hook and recurse on inputs
-    if tensor.grad_fn:
-        tensor.register_hook(check_nan_inf)
-        for next_fn, _ in tensor.grad_fn.next_functions:
+    # Avoid processing the same grad_fn multiple times
+    if grad_fn not in visited:
+        visited.add(grad_fn)
+        # Register the hook to the grad_fn
+        grad_fn.register_hook(check_nan_inf)
+        # Recursively apply this function to all grad_fn in next_functions
+        for next_fn, _ in grad_fn.next_functions:
             if next_fn is not None:
-                add_check_nan_inf_hook(next_fn.variable)  # Recursively call on the tensor associated with next_fn
+                add_check_nan_inf_hook(next_fn, visited)
 
 
 class RLOOTrainer(PolicyTrainerBase):
