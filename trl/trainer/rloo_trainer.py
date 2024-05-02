@@ -103,7 +103,8 @@ class RLOOTrainer(PolicyTrainerBase):
                 ref_logits = ref_output_logits[:, context_length - 1 : -1]
                 ref_logits /= self.args.temperature + 1e-7
                 ref_logprobs = logprobs_from_logits(ref_logits, responses, gather=True)
-                del logits, ref_logits, ref_output_logits, ref_logits, ref_all_logprobs
+                # PR TODO: uncomment
+                #del active_logits, ref_logits, ref_output_logits, ref_logits, ref_all_logprobs
                 torch.cuda.empty_cache()
 
                 # Response Processing 1. truncate response after the
