@@ -61,62 +61,8 @@ def first_true_indices(bools, dtype=torch.long):
     return torch.min(zero_or_index, dim=-1).values
 
 
-# PR TODO: remove this debug fn
-def add_check_nan_inf_hook(grad_fn, visited=None):
-    """
-    Adds a hook to a gradient function to check for NaNs or Infs in the gradients.
-    It recursively adds hooks to all previous gradient functions in the computation graph.
-    """
-    if visited is None:
-        visited = set()
-
-    # Avoid processing the same grad_fn multiple times
-    if grad_fn in visited:
-        return
-    visited.add(grad_fn)
-
-    # Function to attach to the module that checks for NaNs or Infs in gradients
-    def check_nan_inf(grad_inputs, grad_outputs):
-        for grad, direction_name in [(grad_inputs, "grad_inputs"), (grad_outputs, "grad_outputs")]:
-            if isinstance(grad, tuple):
-                continue
-            if torch.isnan(grad).any() or torch.isinf(grad).any():
-                print(f"({direction_name}) NaN or Inf found in gradients: {grad}")
-                print(f"\tOccurred at: {grad_fn.__class__.__name__}")
-        return None
-
-    # Register the hook to the grad_fn
-    if grad_fn is not None:
-        grad_fn.register_hook(check_nan_inf)
-        # Recursively apply this function to all grad_fn in next_functions
-        for next_fn, _ in grad_fn.next_functions:
-            if next_fn is not None:
-                add_check_nan_inf_hook(next_fn, visited)
-def recursive_grad_check(tensor, visited=set()):
-    if tensor in visited:
-        return
-    visited.add(tensor)
-
-    if tensor.grad is not None:
-        if check_tensor(tensor.grad):
-            print(f"NaN or Inf found in gradients of tensor with grad_fn {tensor.grad_fn}")
-            pdb.set_trace()  # Start debugger when condition is met
-
-    # Check the data of the tensor itself if it's a leaf node
-    if tensor.is_leaf and check_tensor(tensor):
-        print(f"NaN or Inf found in leaf tensor with value {tensor}")
-        pdb.set_trace()  # Start debugger when condition is met
-
-    if hasattr(tensor, 'grad_fn') and tensor.grad_fn is not None:
-        for next_tensor in tensor.grad_fn.next_functions:
-            if next_tensor[0] is not None:
-                recursive_grad_check(next_tensor[0].variable, visited)
-
-
 class RLOOTrainer(PolicyTrainerBase):
     _tag_names = ["trl", "rloo"]
-
-
 
     def compute_loss(
         self,
@@ -285,12 +231,6 @@ class RLOOTrainer(PolicyTrainerBase):
             self.store_metrics(metrics)
 
             loss = pg_loss.to(self.args.device)
-
-            # PR TODO: remove this log
-            if torch.isnan(grad).any() or torch.isinf(grad).any():
-                import pdb;pdb.set_trace()
-            recursive_grad_check(loss)
-            add_check_nan_inf_hook(loss.grad_fn)
 
             # PR TODO: delete the commented if it truly is what's detaching the graph
             # it probably isn't a problem, I saw issues with LoRA_MLPBackward w/ Unsloth
