@@ -94,10 +94,6 @@ class RLOOTrainer(PolicyTrainerBase):
                         queries,
                         self.train_generation_config,
                     )
-
-                # PR TODO: why is generate output logits distinct from forward() logits??????
-                active_logits = self.forward(model, query_responses).logits
-
                 responses = query_responses[:, context_length:]
                 logprobs = logprobs_from_logits(active_logits, responses, gather=True)
 
@@ -205,7 +201,6 @@ class RLOOTrainer(PolicyTrainerBase):
                 print("Gradient Calc - pg_losses Min:", pg_losses.min().item(), "Max:", pg_losses.max().item(), "Contains NaN or Inf:", torch.isnan(pg_losses).any().item() or torch.isinf(pg_losses).any().item())
                 print("Gradient Calc - pg_loss Value:", pg_loss.item(), "Contains NaN or Inf:", torch.isnan(pg_loss).any().item() or torch.isinf(pg_loss).any().item())
 
-                import pdb;pdb.set_trace()
 
             # log metrics
             with torch.no_grad():

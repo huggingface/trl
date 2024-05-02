@@ -436,7 +436,7 @@ class PolicyTrainerBase(Trainer):
                     # https://github.com/huggingface/transformers/blob/ac33aeeeee2a7a89b89c93c2962e6feb90daef0a/src/transformers/models/gpt2/modeling_gpt2.py#L1227-L1250
                     generation_config=generation_config,
                     return_dict_in_generate=True,
-                    output_scores=True,
+                    output_logits=True,
                 )
         logits = torch.stack(output.scores, 1)
         query_responses = torch.cat((queries, output.sequences[:, context_length:]), dim=1)
