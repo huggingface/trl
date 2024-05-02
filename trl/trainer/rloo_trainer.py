@@ -193,62 +193,62 @@ class RLOOTrainer(PolicyTrainerBase):
                 pg_loss = pg_loss_max.mean()
                 pg_clipfrac = (pg_losses2 > pg_losses).float().mean()
 
-        # log metrics
-        with torch.no_grad():
-            prob_dist = torch.nn.functional.softmax(logits, dim=-1)
-            entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1)
-            approxkl = 0.5 * (logprobs_diff**2).mean()
+            # log metrics
+            with torch.no_grad():
+                prob_dist = torch.nn.functional.softmax(logits, dim=-1)
+                entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1)
+                approxkl = 0.5 * (logprobs_diff**2).mean()
 
-            rlhf_reward_mean = self.accelerator.gather(rlhf_reward).mean().item()
-            # PR TODO: this is from original, but maybe it should be logged somewhere?
-            #self.accelerator.print(f"{rlhf_reward_mean=}")
-            mean_kl = kl.sum(1).mean()
-            mean_entropy = (-logprobs).sum(1).mean()
-            # PR TODO: why is this metric removed in the original
-            # mean_non_score_reward = non_score_reward.sum(1).mean()
-            # "objective/non_score_reward"
+                rlhf_reward_mean = self.accelerator.gather(rlhf_reward).mean().item()
+                # PR TODO: this is from original, but maybe it should be logged somewhere?
+                #self.accelerator.print(f"{rlhf_reward_mean=}")
+                mean_kl = kl.sum(1).mean()
+                mean_entropy = (-logprobs).sum(1).mean()
+                # PR TODO: why is this metric removed in the original
+                # mean_non_score_reward = non_score_reward.sum(1).mean()
+                # "objective/non_score_reward"
 
 
-        metrics = {
-            "objective/kl": self.accelerator.gather(mean_kl).mean().item(),
-            "objective/entropy": self.accelerator.gather(mean_entropy).mean().item(),
-            "objective/rlhf_reward": self.accelerator.gather(rlhf_reward).mean().item(),
-            "objective/scores": self.accelerator.gather(scores.mean()).mean().item(),
-            "policy/approxkl_avg": self.accelerator.gather(approxkl).mean().item(),
-            "policy/clipfrac_avg": self.accelerator.gather(pg_clipfrac).mean().item(),
-            "loss/policy_avg": self.accelerator.gather(pg_loss).mean().item(),
-            # PR TODO: this isn't calculated in the original
-            #"loss/value_avg": self.accelerator.gather(vf_loss_stats).mean().item(),
-            #"val/clipfrac_avg": self.accelerator.gather(vf_clipfrac_stats).mean().item(),
+            metrics = {
+                "objective/kl": self.accelerator.gather(mean_kl).mean().item(),
+                "objective/entropy": self.accelerator.gather(mean_entropy).mean().item(),
+                "objective/rlhf_reward": self.accelerator.gather(rlhf_reward).mean().item(),
+                "objective/scores": self.accelerator.gather(scores.mean()).mean().item(),
+                "policy/approxkl_avg": self.accelerator.gather(approxkl).mean().item(),
+                "policy/clipfrac_avg": self.accelerator.gather(pg_clipfrac).mean().item(),
+                "loss/policy_avg": self.accelerator.gather(pg_loss).mean().item(),
+                # PR TODO: this isn't calculated in the original
+                #"loss/value_avg": self.accelerator.gather(vf_loss_stats).mean().item(),
+                #"val/clipfrac_avg": self.accelerator.gather(vf_clipfrac_stats).mean().item(),
 
-            # PR TODO: how does this differ from mean_entropy
-            #"policy/entropy_avg": self.accelerator.gather(entropy).mean().item(),
-            "val/ratio": self.accelerator.gather(new_ratio).mean().item(),
+                # PR TODO: how does this differ from mean_entropy
+                #"policy/entropy_avg": self.accelerator.gather(entropy).mean().item(),
+                "val/ratio": self.accelerator.gather(new_ratio).mean().item(),
 
-            # PR TODO
-            #"val/ratio_var": self.accelerator.gather(ratio_stats).var().item(),
-            "val/num_eos_tokens": (responses == self.tokenizer.eos_token_id).sum().item(),
-        }
+                # PR TODO
+                #"val/ratio_var": self.accelerator.gather(ratio_stats).var().item(),
+                "val/num_eos_tokens": (responses == self.tokenizer.eos_token_id).sum().item(),
+            }
 
-        self.store_metrics(metrics)
+            self.store_metrics(metrics)
 
-        loss = pg_loss.to(self.args.device)
+            loss = pg_loss.to(self.args.device)
 
-        # PR TODO: delete the commented if it truly is what's detaching the graph
-        # it probably isn't a problem, I saw issues with LoRA_MLPBackward w/ Unsloth
-        """
-        del (
-            output, logits, new_all_logprobs, new_logprobs,
-            logprobs_diff, ratio, pg_losses, pg_losses2,
-            pg_loss, pg_clipfrac, prob_dist, entropy, approxkl,
-            kl, mean_kl, mean_entropy, scores
-        )
-        torch.cuda.empty_cache()
-        """
+            # PR TODO: delete the commented if it truly is what's detaching the graph
+            # it probably isn't a problem, I saw issues with LoRA_MLPBackward w/ Unsloth
+            """
+            del (
+                output, logits, new_all_logprobs, new_logprobs,
+                logprobs_diff, ratio, pg_losses, pg_losses2,
+                pg_loss, pg_clipfrac, prob_dist, entropy, approxkl,
+                kl, mean_kl, mean_entropy, scores
+            )
+            torch.cuda.empty_cache()
+            """
 
-        if return_outputs:
-            return (loss, metrics)
-        return loss
+            if return_outputs:
+                return (loss, metrics)
+            return loss
 
 if __name__ == "__main__":
     pass
