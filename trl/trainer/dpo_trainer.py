@@ -1028,9 +1028,14 @@ class DPOTrainer(Trainer):
             losses = -F.logsigmoid((self.beta * chosen_logratios) - delta) - F.logsigmoid(
                 -(self.beta * rejected_logratios - delta)
             )
+        elif self.loss_type == "sppo":
+            a = self.beta * (policy_chosen_logps - reference_chosen_logps)
+            b = self.beta * (policy_rejected_logps - reference_rejected_logps)
+
+            losses = (a - 0.5) ** 2 + (b + 0.5) ** 2
         else:
             raise ValueError(
-                f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'kto_pair', 'bco_pair']"
+                f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'kto_pair', 'bco_pair', 'sppo']"
             )
 
         chosen_rewards = (
