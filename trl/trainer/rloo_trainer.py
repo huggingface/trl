@@ -155,7 +155,9 @@ class RLOOTrainer(PolicyTrainerBase):
 
                 # 4. compute rewards
                 kl = logprobs - ref_logprobs
-                print("Log Probabilities - kl Min:", ref_logprobs.min().item(), "Max:", ref_logprobs.max().item(), "Contains NaN or Inf:", torch.isnan(ref_logprobs).any().item() or torch.isinf(ref_logprobs).any().ite                non_score_reward = (-self.args.kl_coef * kl).sum(1)
+                print("Log Probabilities - kl Min:", ref_logprobs.min().item(), "Max:", ref_logprobs.max().item(), "Contains NaN or Inf:", torch.isnan(ref_logprobs).any().item() or torch.isinf(ref_logprobs).any().item())
+
+                non_score_reward = (-self.args.kl_coef * kl).sum(1)
                 rlhf_reward = scores + non_score_reward.unsqueeze(1)
 
                 # we generated `self.args.rloo_k` many responses per prompt
