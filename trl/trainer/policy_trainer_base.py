@@ -299,7 +299,8 @@ class ReferenceModelManager:
 
     def __exit__(self, exc_type, exc_value, traceback):
         if self.optional_peft_ctx is not None:
-            self.optional_peft_ctx.__exit__(exc_type, exc_value, traceback)
+            with self.optional_peft_ctx:
+                pass  # teardown
 
 
 class PolicyTrainerBase(Trainer):
