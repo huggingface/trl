@@ -83,7 +83,7 @@ class RLOOTrainer(PolicyTrainerBase):
 
         context_length = queries.shape[1]
 
-        with self.cast_model_ctx():
+        if True:#with self.cast_model_ctx():
             with torch.no_grad(), self.time_metric_ctx("calc_advantages"):
                 # PR TODO: refactor into a function shared by ppov2 which calculates sequences and logprobs
                 #          see DPOTrainer.concatenated_forward
@@ -168,7 +168,7 @@ class RLOOTrainer(PolicyTrainerBase):
                     advantages[i] = rlhf_reward[i] - torch.stack(other_response_rlhf_rewards).mean(0)
                 torch.cuda.empty_cache()
 
-            with self.accelerator.accumulate(model), self.time_metric_ctx("calc_loss"):
+            with self.time_metric_ctx("calc_loss"):
                 # PR TODO: remove this assertion when stable
                 # ensure gradients can be set
                 assert model.training, "model is incorrectly in eval mode"
