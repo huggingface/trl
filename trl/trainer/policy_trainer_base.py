@@ -423,7 +423,8 @@ class PolicyTrainerBase(Trainer):
 
     def generate(self, model, queries, generation_config, requires_grad=True):
         """generate in a way that does not affect padding tokens"""
-        with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+        if True:  # with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+            unwrapped_model = model
             with (fast_eval_mode(unwrapped_model) if requires_grad else nullcontext):
                 context_length = queries.shape[1]
                 attention_mask = queries != self.tokenizer.pad_token_id
