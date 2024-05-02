@@ -92,6 +92,25 @@ def add_check_nan_inf_hook(grad_fn, visited=None):
         for next_fn, _ in grad_fn.next_functions:
             if next_fn is not None:
                 add_check_nan_inf_hook(next_fn, visited)
+def recursive_grad_check(tensor, visited=set()):
+    if tensor in visited:
+        return
+    visited.add(tensor)
+
+    if tensor.grad is not None:
+        if check_tensor(tensor.grad):
+            print(f"NaN or Inf found in gradients of tensor with grad_fn {tensor.grad_fn}")
+            pdb.set_trace()  # Start debugger when condition is met
+
+    # Check the data of the tensor itself if it's a leaf node
+    if tensor.is_leaf and check_tensor(tensor):
+        print(f"NaN or Inf found in leaf tensor with value {tensor}")
+        pdb.set_trace()  # Start debugger when condition is met
+
+    if hasattr(tensor, 'grad_fn') and tensor.grad_fn is not None:
+        for next_tensor in tensor.grad_fn.next_functions:
+            if next_tensor[0] is not None:
+                recursive_grad_check(next_tensor[0].variable, visited)
 
 
 class RLOOTrainer(PolicyTrainerBase):
@@ -267,6 +286,10 @@ class RLOOTrainer(PolicyTrainerBase):
 
             loss = pg_loss.to(self.args.device)
 
+            # PR TODO: remove this log
+            if torch.isnan(grad).any() or torch.isinf(grad).any():
+                import pdb;pdb.set_trace()
+            recursive_grad_check(loss)
             add_check_nan_inf_hook(loss.grad_fn)
 
             # PR TODO: delete the commented if it truly is what's detaching the graph
