@@ -4,10 +4,17 @@ from abc import ABC, abstractmethod
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import List
 
-import llm_blender
 from accelerate import Accelerator
 from huggingface_hub import InferenceClient
-from openai import BadRequestError, OpenAI
+
+from ..import_utils import is_llmblender_available, is_openai_available
+
+
+if is_llmblender_available():
+    import llm_blender
+
+if is_openai_available():
+    from openai import BadRequestError, OpenAI
 
 
 DEFAULT_SYSTEM_PROMPT = """The most important part of the task is choosing which of the Assistant's responses is more helpful and honest. Please consider the responses carefully, and use your overall judgment. Ask yourself "did this response represent a thoughtful, honest, and reasonable attempt to either directly help me, or to converse with me to elicit information that will make it easier for the Assistant to help later on in this conversation". Note that this is subtle - if the context is about a difficult personal situation, a helpful response might involve showing empathy and understanding. But if the context is about something practical, a helpful response may be a concise response, and not one that prolongs the interaction with irrelevant questions and comments. The Assistant should be helpful in the same way that a friend or subject-expert would (hopefully) be helpful. Note response containing "Human:" and/or  Assistant:" that tries to extend the conversation should be considered as not helpful and honest. You are an expert rater of helpful and honest Assistant responses. Given the context and the two responses choose the most helpful and honest response based on the definitions above.
@@ -18,9 +25,9 @@ Preferred Response="""
 
 
 class BaseJudge(ABC):
-    """Base class for local judges."""
+    """Base class for local LLM judges."""
 
-    def shuffle_pairs(self, pairs: List[List[str]]):
+    def shuffle_pairs(self, pairs: List[List[str]]) -> List[List[str]]:
         """Shuffles each pair of completions to mitigate positional bias."""
         shuffled_pairs = []
         for pair in pairs:
@@ -31,20 +38,23 @@ class BaseJudge(ABC):
 
     @abstractmethod
     def judge_single(self, prompt: str, completion_pair: List[str]) -> int:
+        """Judge a single completion pair."""
         raise NotImplementedError("Judge subclasses must implement this method.")
 
     def judge_batch(self, prompts: List[str], completion_pairs: List[List[str]]) -> List[int]:
+        """Judge a batch of completion pairs."""
         results = []
-        shuffled_completion_pairs = self.shuffle_pairs(completion_pairs)
-        for prompt, completion_pair in zip(prompts, shuffled_completion_pairs):
+        completion_pairs = self.shuffle_pairs(completion_pairs)
+        for prompt, completion_pair in zip(prompts, completion_pairs):
             result = self.judge_single(prompt, completion_pair)
             results.append(result)
         return results
 
 
 class BaseAPIJudge:
-    """Base class for judges running via an API."""
+    """Base class for LLM judges reached via an API."""
 
+    # TODO: add max_requests parameter to limit the number of requests made
     def __init__(self, system_prompt: str = None, max_tries: int = 5, max_workers: int = 8):
         if system_prompt is None:
             system_prompt = DEFAULT_SYSTEM_PROMPT
@@ -141,6 +151,7 @@ class HuggingFaceJudge(BaseAPIJudge):
             response = self.client.chat_completion(
                 messages=[{"role": "user", "content": content}],
                 max_tokens=50,
+                stop=["<|eot_id|>"],  # For llama-3 models
             )
             reply = response.choices[0].message.content
             return reply
@@ -152,6 +163,8 @@ class HuggingFaceJudge(BaseAPIJudge):
 
 class OpenAIJudge(BaseAPIJudge):
     def __init__(self, max_workers=8, model_name="gpt-4-turbo-preview"):
+        if not is_openai_available():
+            raise ValueError("OpenAI client is not installed. Please install it with 'pip install openai'.")
         super().__init__(max_workers=max_workers)
         self.client = OpenAI(api_key=os.environ["OPENAI_API_KEY"], max_retries=5)
         self.model_name = model_name
@@ -172,12 +185,14 @@ class OpenAIJudge(BaseAPIJudge):
 
 
 class PairRMJudge(BaseJudge):
-    """Judge based on PairRM model from AllenAI.
+    """LLM judge based on the PairRM model from AllenAI.
 
     See: https://huggingface.co/llm-blender/PairRM
     """
 
     def __init__(self):
+        if not is_llmblender_available():
+            raise ValueError("llm-blender is not installed. Please install it with 'pip install llm-blender'.")
         self.blender = llm_blender.Blender()
         self.blender.loadranker("llm-blender/PairRM", device=Accelerator().device)
 

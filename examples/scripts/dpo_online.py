@@ -199,6 +199,7 @@ if __name__ == "__main__":
                 max_new_tokens=512,
             ),
             trainer=trainer,
+            # batch_size=4,
         )
     trainer.add_callback(win_rate_callback)
 
