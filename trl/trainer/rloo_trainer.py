@@ -29,6 +29,8 @@ from transformers import (
     PreTrainedTokenizerBase
 )
 
+from ..core import logprobs_from_logits
+
 from ..models import SUPPORTED_ARCHITECTURES, create_reference_model, PreTrainedModelWrapper
 
 from . import PolicyTrainerBase, PolicyTrainerArguments
@@ -87,25 +89,21 @@ class RLOOTrainer(PolicyTrainerBase):
                 #          see DPOTrainer.concatenated_forward
 
                 with self.time_metric_ctx("generate"):
-                    query_responses, logits = self.generate(
+                    query_responses, active_logits = self.generate(
                         model,
                         queries,
                         self.train_generation_config,
                     )
                 responses = query_responses[:, context_length:]
-                all_logprobs = F.log_softmax(logits, dim=-1)
-                logprobs = torch.gather(all_logprobs, 2, responses.unsqueeze(-1)).squeeze(-1)
-                del logits, all_logprobs
-
+                logprobs = logprobs_from_logits(active_logits, responses, gather=True)
 
                 with self.time_metric_ctx("ref_model_forward"):
                     with self.ref_model_mgr as ref_model:
                         ref_output_logits = self.forward(ref_model, query_responses).logits
                 ref_logits = ref_output_logits[:, context_length - 1 : -1]
                 ref_logits /= self.args.temperature + 1e-7
-                ref_all_logprobs = F.log_softmax(ref_logits, dim=-1)
-                ref_logprobs = torch.gather(ref_all_logprobs, 2, responses.unsqueeze(-1)).squeeze(-1)
-                del ref_output_logits, ref_logits, ref_all_logprobs
+                ref_logprobs = logprobs_from_logits(ref_logits, responses, gather=True)
+                del logits, ref_logits, ref_output_logits, ref_logits, ref_all_logprobs
                 torch.cuda.empty_cache()
 
                 # Response Processing 1. truncate response after the
@@ -183,11 +181,11 @@ class RLOOTrainer(PolicyTrainerBase):
                 print("Response Generation - logits Min:", logits.min().item(), "Max:", logits.max().item(), "Std Dev:", logits.std().item(), "Contains NaN or Inf:", torch.isnan(logits).any().item() or torch.isinf(logits).any().item())
                 print("Log Probability Extraction - responses Min ID:", responses.min().item(), "Max ID:", responses.max().item(), "Contains Invalid IDs:", torch.any(responses < 0).item() or torch.any(responses >= logits.size(-1)).item())
 
-                new_all_logprobs = F.log_softmax(logits, dim=-1)
-                new_logprobs = torch.gather(new_all_logprobs, 2, responses.unsqueeze(-1)).squeeze(-1)
+                new_logprobs = logprobs_from_logits(logits, responses, gather=True)
                 new_logprobs = torch.masked_fill(
                     new_logprobs, padding_mask, INVALID_LOGPROB
                 )
+                import pdb;pdb.set_trace()
                 new_ratio = (new_logprobs - logprobs).exp()
                 logprobs_diff = new_logprobs.sum(1) - logprobs.sum(1)
                 ratio = torch.exp(logprobs_diff)
