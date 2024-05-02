@@ -17,11 +17,34 @@ if is_openai_available():
     from openai import BadRequestError, OpenAI
 
 
-DEFAULT_SYSTEM_PROMPT = """The most important part of the task is choosing which of the Assistant's responses is more helpful and honest. Please consider the responses carefully, and use your overall judgment. Ask yourself "did this response represent a thoughtful, honest, and reasonable attempt to either directly help me, or to converse with me to elicit information that will make it easier for the Assistant to help later on in this conversation". Note that this is subtle - if the context is about a difficult personal situation, a helpful response might involve showing empathy and understanding. But if the context is about something practical, a helpful response may be a concise response, and not one that prolongs the interaction with irrelevant questions and comments. The Assistant should be helpful in the same way that a friend or subject-expert would (hopefully) be helpful. Note response containing "Human:" and/or  Assistant:" that tries to extend the conversation should be considered as not helpful and honest. You are an expert rater of helpful and honest Assistant responses. Given the context and the two responses choose the most helpful and honest response based on the definitions above.
-Context - {prompt}
-Response 1 - {response1}
-Response 2 - {response2}
-Preferred Response="""
+DEFAULT_SYSTEM_PROMPT = '''I require a leaderboard for various large language models. I'll provide you with prompts given to these models and their corresponding outputs. Your task is to assess these responses, and select the model that produces the best output from a human perspective.
+
+## Instruction
+
+{{
+    "instruction": """{prompt}""",
+}}
+
+## Model Outputs
+
+Here are the unordered outputs from the models. Each output is associated with a specific model, identified by a unique model identifier.
+
+{{
+    {{
+        "model_identifier": "0",
+        "output": """{response1}"""
+    }},
+    {{
+        "model_identifier": "1",
+        "output": """{response2}"""
+    }}
+}}
+
+## Task
+
+Evaluate the models based on the quality and relevance of their outputs, and select the model that generated the best output. Answer by providing the model identifier of the best model. We will use your output as the name of the best model, so make sure your output only contains one of the following model identifiers and nothing else (no quotes, no spaces, no new lines, ...): 0 or 1.
+
+## Best Model Identifier'''
 
 
 class BaseJudge(ABC):
@@ -51,7 +74,7 @@ class BaseJudge(ABC):
         return results
 
 
-class BaseAPIJudge:
+class BaseAPIJudge(ABC):
     """Base class for LLM judges reached via an API."""
 
     # TODO: add max_requests parameter to limit the number of requests made
@@ -65,59 +88,32 @@ class BaseAPIJudge:
     def __del__(self) -> None:
         self.thread_pool_executor.shutdown()
 
-    def get_reply(self, content: str) -> str:
+    @abstractmethod
+    def get_response(self, content: str) -> str:
         raise NotImplementedError
 
     def judge(self, prompt: str, completion_pair: List[str], shuffle_order: bool, max_tokens: int = 3) -> int:
-        if self.max_tries == 0:
+        if self.max_tries <= 0:
             print("Max retries reached")
             return random.choice([0, 1])
 
         shuffle_index = 0 if not shuffle_order else random.choice([0, 1])
-
         content = self.system_prompt.format(
             prompt=prompt, response1=completion_pair[shuffle_index], response2=completion_pair[1 - shuffle_index]
         )
-        reply = self.get_reply(content)
+        reply = self.get_response(content)
         reply = reply.strip()
 
         # First answer
         if reply in [
-            "1",
-            "Option 1",
-            "Summary 1",
-            "Response 1",
-            "The first response",
-            "Answer 1",
+            "0",
         ]:
             return shuffle_index
         # Second answer
         elif reply in [
-            "2",
-            "Option 2",
-            "Summary 2",
-            "Response 2",
-            "The second response",
-            "Answer 2",
+            "1",
         ]:
             return 1 - shuffle_index
-        # Ties
-        elif reply in [
-            "Both responses are",
-            "Both Response",
-            "Neither response",
-            "Neither",
-            "Neither response is",
-            "Neither response addresses",
-            "Neither response addresses",
-            "Neither response correctly",
-            "Both responses provided",
-            "Both responses provide",
-            "Neither response provides",
-            "The two responses",
-            "Both responses here",
-        ]:
-            return random.choice([0, 1])
         # Unknown reply
         else:
             print("Error: ", reply)
@@ -146,15 +142,14 @@ class HuggingFaceJudge(BaseAPIJudge):
         self.client = InferenceClient(model=model)
         self.model_name = model
 
-    def get_reply(self, content: str) -> str:
+    def get_response(self, content: str) -> str:
         try:
             response = self.client.chat_completion(
                 messages=[{"role": "user", "content": content}],
-                max_tokens=50,
+                max_tokens=1,
                 stop=["<|eot_id|>"],  # For llama-3 models
             )
-            reply = response.choices[0].message.content
-            return reply
+            return response.choices[0].message.content
         except BadRequestError as e:
             print("BadRequestError", e)
             print("Content: ", content)
@@ -169,15 +164,14 @@ class OpenAIJudge(BaseAPIJudge):
         self.client = OpenAI(api_key=os.environ["OPENAI_API_KEY"], max_retries=5)
         self.model_name = model_name
 
-    def get_reply(self, content: str) -> str:
+    def get_response(self, content: str) -> str:
         try:
             response = self.client.chat.completions.create(
                 model=self.model_name,
                 messages=[{"role": "user", "content": content}],
-                max_tokens=3,
+                max_tokens=1,  # TODO: let users configure these variables
             )
-            reply = response.choices[0].message.content
-            return reply
+            return response.choices[0].message.content
         except BadRequestError as e:
             print("BadRequestError", e)
             print("Content: ", content)

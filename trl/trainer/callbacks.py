@@ -45,7 +45,13 @@ class WinRateCallback(TrainerCallback):
             with unwrap_model_for_generation(model, accelerator) as unwrapped_model:
                 unwrapped_model.eval()
                 for prompt in tqdm(prompts, desc="Generating ref completions for win rate"):
-                    tokenized_prompt = tokenizer(prompt, return_tensors="pt").to(model.device)
+                    # tokenized_prompt = tokenizer(prompt, return_tensors="pt").to(model.device)
+                    tokenized_prompt = tokenizer.apply_chat_template(
+                        [{"role": "user", "content": prompt}],
+                        add_generation_prompt=True,
+                        return_tensors="pt",
+                        return_dict=True,
+                    ).to(model.device)
                     generation = unwrapped_model.generate(
                         **tokenized_prompt,
                         generation_config=self.generation_config,
@@ -69,7 +75,13 @@ class WinRateCallback(TrainerCallback):
             with unwrap_model_for_generation(model, accelerator) as unwrapped_model:
                 unwrapped_model.eval()
                 for idx, prompt in enumerate(tqdm(prompts, desc="Generating completions for win rate")):
-                    tokenized_prompt = tokenizer(prompt, return_tensors="pt").to(model.device)
+                    # tokenized_prompt = tokenizer(prompt, return_tensors="pt").to(model.device)
+                    tokenized_prompt = tokenizer.apply_chat_template(
+                        [{"role": "user", "content": prompt}],
+                        add_generation_prompt=True,
+                        return_tensors="pt",
+                        return_dict=True,
+                    ).to(model.device)
                     generations = unwrapped_model.generate(
                         **tokenized_prompt,
                         generation_config=self.generation_config,

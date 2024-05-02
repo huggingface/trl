@@ -81,7 +81,7 @@ from trl import (
     get_quantization_config,
 )
 
-from trl.trainer import WinRateCallback, MockJudge, PairRMJudge
+from trl.trainer import WinRateCallback, MockJudge, PairRMJudge, HuggingFaceJudge
 
 
 if TRL_USE_RICH:
@@ -180,13 +180,13 @@ if __name__ == "__main__":
             callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
         )
 
-        judge = PairRMJudge()
-        prompts_ds = load_dataset(args.dataset_name, split="test[:32]")
-        prompts_ds = prompts_ds.map(
-            lambda x: {
-                "prompt": tokenizer.apply_chat_template(x["chosen"][:-1], tokenize=False, add_generation_prompt=True)
-            }
-        )
+        judge = HuggingFaceJudge()
+        prompts_ds = load_dataset(args.dataset_name, split="test").shuffle(seed=42).select(range(16))
+        # prompts_ds = prompts_ds.map(
+        #     lambda x: {
+        #         "prompt": tokenizer.apply_chat_template(x["chosen"][:-1], tokenize=False, add_generation_prompt=True)
+        #     }
+        # )
         win_rate_callback = WinRateCallback(
             prompts=prompts_ds["prompt"],
             judge=judge,
