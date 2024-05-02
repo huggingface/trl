@@ -152,6 +152,7 @@ class RLOOTrainer(PolicyTrainerBase):
                 print("Log Probabilities - logprobs Min:", logprobs.min().item(), "Max:", logprobs.max().item(), "Contains NaN or Inf:", torch.isnan(logprobs).any().item() or torch.isinf(logprobs).any().item())
                 print("Log Probabilities - ref_logprobs Min:", ref_logprobs.min().item(), "Max:", ref_logprobs.max().item(), "Contains NaN or Inf:", torch.isnan(ref_logprobs).any().item() or torch.isinf(ref_logprobs).any().item())
 
+                import pdb;pdb.set_trace()
 
                 # 4. compute rewards
                 kl = logprobs - ref_logprobs
