@@ -1035,7 +1035,7 @@ class DPOTrainer(Trainer):
             losses = (a - 0.5) ** 2 + (b + 0.5) ** 2
         else:
             raise ValueError(
-                f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'kto_pair', 'bco_pair']"
+                f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'kto_pair', 'bco_pair', 'sppo']"
             )
 
         chosen_rewards = (
