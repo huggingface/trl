@@ -101,7 +101,7 @@ class RLOOTrainer(PolicyTrainerBase):
                     with self.ref_model_mgr as ref_model:
                         ref_output_logits = self.forward(ref_model, query_responses).logits
                 ref_logits = ref_output_logits[:, context_length - 1 : -1]
-                ref_logits /= self.args.temperature + 1e-7
+                ref_logits /= max(self.args.temperature, 1e-7)
                 ref_logprobs = logprobs_from_logits(ref_logits, responses, gather=True)
                 # PR TODO: uncomment
                 #del active_logits, ref_logits, ref_output_logits, ref_logits, ref_all_logprobs
@@ -177,7 +177,7 @@ class RLOOTrainer(PolicyTrainerBase):
                 with self.time_metric_ctx("model_forward"):
                     output = self.forward(model, query_responses)
                 logits = output.logits[:, context_length - 1 : -1]
-                logits /= self.args.temperature + 1e-7
+                logits /= max(self.args.temperature, 1e-7)
 
                 print("Response Generation - logits Min:", logits.min().item(), "Max:", logits.max().item(), "Std Dev:", logits.std().item(), "Contains NaN or Inf:", torch.isnan(logits).any().item() or torch.isinf(logits).any().item())
                 print("Log Probability Extraction - responses Min ID:", responses.min().item(), "Max ID:", responses.max().item(), "Contains Invalid IDs:", torch.any(responses < 0).item() or torch.any(responses >= logits.size(-1)).item())
