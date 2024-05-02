@@ -78,6 +78,8 @@ def add_check_nan_inf_hook(grad_fn, visited=None):
     # Function to attach to the module that checks for NaNs or Infs in gradients
     def check_nan_inf(grad_inputs, grad_outputs):
         for grad, direction_name in [(grad_inputs, "grad_inputs"), (grad_outputs, "grad_outputs")]:
+            if isintance(grad, tuple):
+                continue
             if torch.isnan(grad).any() or torch.isinf(grad).any():
                 print(f"({direction_name}) NaN or Inf found in gradients: {grad}")
                 print(f"\tOccurred at: {grad_fn.__class__.__name__}")
