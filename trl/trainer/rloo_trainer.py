@@ -146,8 +146,8 @@ class RLOOTrainer(PolicyTrainerBase):
                 # see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
                 response_idxs = torch.arange(responses.shape[1], device=responses.device).repeat(responses.shape[0], 1)
                 padding_mask = response_idxs > sequence_lengths.unsqueeze(1)
-                logprobs = torch.masked_fill(logprobs, padding_mask, INVALID_LOGPROB)
-                ref_logprobs = torch.masked_fill(ref_logprobs, padding_mask, INVALID_LOGPROB)
+                #logprobs = torch.masked_fill(logprobs, padding_mask, INVALID_LOGPROB)
+                #ref_logprobs = torch.masked_fill(ref_logprobs, padding_mask, INVALID_LOGPROB)
 
                 # 4. compute rewards
                 kl = logprobs - ref_logprobs
@@ -179,9 +179,9 @@ class RLOOTrainer(PolicyTrainerBase):
                 logits /= self.args.temperature + 1e-7
                 new_all_logprobs = F.log_softmax(logits, dim=-1)
                 new_logprobs = torch.gather(new_all_logprobs, 2, responses.unsqueeze(-1)).squeeze(-1)
-                new_logprobs = torch.masked_fill(
-                    new_logprobs, padding_mask, INVALID_LOGPROB
-                )
+                #new_logprobs = torch.masked_fill(
+                #    new_logprobs, padding_mask, INVALID_LOGPROB
+                #)
                 new_ratio = (new_logprobs - logprobs).exp()
                 logprobs_diff = new_logprobs.sum(1) - logprobs.sum(1)
                 ratio = torch.exp(logprobs_diff)
@@ -191,8 +191,6 @@ class RLOOTrainer(PolicyTrainerBase):
                 pg_loss = pg_loss_max.mean()
                 pg_clipfrac = (pg_losses2 > pg_losses).float().mean()
 
-            # PR TODO: remove comment out
-            """
             # log metrics
             with torch.no_grad():
                 prob_dist = torch.nn.functional.softmax(logits, dim=-1)
@@ -230,12 +228,9 @@ class RLOOTrainer(PolicyTrainerBase):
                 "val/num_eos_tokens": (responses == self.tokenizer.eos_token_id).sum().item(),
             }
 
-
             self.store_metrics(metrics)
-            """
-            #loss = pg_loss.to(self.args.device)
-            # PR TODO: revert
-            loss = pg_loss
+
+            loss = pg_loss.to(self.args.device)
 
             # PR TODO: delete the commented if it truly is what's detaching the graph
             # it probably isn't a problem, I saw issues with LoRA_MLPBackward w/ Unsloth
