@@ -201,6 +201,7 @@ class RLOOTrainer(PolicyTrainerBase):
                 print("Gradient Calc - pg_losses Min:", pg_losses.min().item(), "Max:", pg_losses.max().item(), "Contains NaN or Inf:", torch.isnan(pg_losses).any().item() or torch.isinf(pg_losses).any().item())
                 print("Gradient Calc - pg_loss Value:", pg_loss.item(), "Contains NaN or Inf:", torch.isnan(pg_loss).any().item() or torch.isinf(pg_loss).any().item())
 
+                import pdb;pdb.set_trace()
 
             # log metrics
             with torch.no_grad():
