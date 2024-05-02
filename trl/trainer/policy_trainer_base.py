@@ -50,7 +50,7 @@ class PolicyTrainerArguments(TrainingArguments):
     """the truncate token"""
     truncate_token_id: Optional[int] = None
     """the truncation token id"""
-    temperature: float = 0.7
+    temperature: float = 1.0
     """the sampling temperature"""
     penalty_reward_value: int = -1
     """the reward value for responses that do not contain `truncate_token_id`"""

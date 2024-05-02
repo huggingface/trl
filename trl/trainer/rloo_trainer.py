@@ -85,18 +85,16 @@ class RLOOTrainer(PolicyTrainerBase):
             with torch.no_grad(), self.time_metric_ctx("calc_advantages"):
                 # PR TODO: refactor into a function shared by ppov2 which calculates sequences and logprobs
                 #          see DPOTrainer.concatenated_forward
+
                 with self.time_metric_ctx("generate"):
                     query_responses, logits = self.generate(
                         model,
                         queries,
                         self.train_generation_config,
                     )
-
-                responses = torch.stack([query_response[context_length:] for query_response in query_responses], dim=0)
-
+                responses = query_responses[:, context_length:]
                 all_logprobs = F.log_softmax(logits, dim=-1)
-                # PR TODO: review gathering along dimension -1
-                logprobs = torch.gather(all_logprobs, -1, responses.unsqueeze(-1)).squeeze(-1)
+                logprobs = torch.gather(all_logprobs, 2, responses.unsqueeze(-1)).squeeze(-1)
                 del logits, all_logprobs
 
 
@@ -106,8 +104,7 @@ class RLOOTrainer(PolicyTrainerBase):
                 ref_logits = ref_output_logits[:, context_length - 1 : -1]
                 ref_logits /= self.args.temperature + 1e-7
                 ref_all_logprobs = F.log_softmax(ref_logits, dim=-1)
-                # PR TODO: review gathering along dimension -1
-                ref_logprobs = torch.gather(ref_all_logprobs, -1, responses.unsqueeze(-1)).squeeze(-1)
+                ref_logprobs = torch.gather(ref_all_logprobs, 2, responses.unsqueeze(-1)).squeeze(-1)
                 del ref_output_logits, ref_logits, ref_all_logprobs
                 torch.cuda.empty_cache()
 
