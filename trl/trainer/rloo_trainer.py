@@ -186,7 +186,6 @@ class RLOOTrainer(PolicyTrainerBase):
                 new_logprobs = torch.masked_fill(
                     new_logprobs, padding_mask, INVALID_LOGPROB
                 )
-                import pdb;pdb.set_trace()
                 new_ratio = (new_logprobs - logprobs).exp()
                 logprobs_diff = new_logprobs.sum(1) - logprobs.sum(1)
                 ratio = torch.exp(logprobs_diff)
