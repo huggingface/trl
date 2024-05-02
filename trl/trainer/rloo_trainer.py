@@ -83,7 +83,7 @@ def add_check_nan_inf_hook(grad_fn, visited=None):
             if torch.isnan(grad).any() or torch.isinf(grad).any():
                 print(f"({direction_name}) NaN or Inf found in gradients: {grad}")
                 print(f"\tOccurred at: {grad_fn.__class__.__name__}")
-        return grad_inputs, grad_outputs
+        return None
 
     # Register the hook to the grad_fn
     if grad_fn is not None:
