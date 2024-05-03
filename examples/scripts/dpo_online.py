@@ -15,7 +15,7 @@
 """
 # regular:
 accelerate launch --config_file=examples/accelerate_configs/multi_gpu.yaml examples/scripts/dpo_online.py \
-    --dataset_name=trl-internal-testing/hh-rlhf-trl-style \
+    --dataset_name=trl-internal-testing/hh-rlhf-helpful-base-trl-style \
     --dataset_num_proc=4 \
     --model_name_or_path=Qwen/Qwen1.5-0.5B-Chat \
     --per_device_train_batch_size 4 \
@@ -33,7 +33,7 @@ accelerate launch --config_file=examples/accelerate_configs/multi_gpu.yaml examp
 
 # peft:
 python examples/scripts/dpo.py \
-    --dataset_name=trl-internal-testing/hh-rlhf-trl-style \
+    --dataset_name=trl-internal-testing/hh-rlhf-helpful-base-trl-style \
     --model_name_or_path=gpt2 \
     --per_device_train_batch_size 4 \
     --learning_rate 1e-3 \
