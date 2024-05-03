@@ -164,6 +164,11 @@ class RLOOTrainer(PolicyTrainerBase):
             # we generated `self.args.rloo_k` many responses per prompt
             # now we can implement the RLOO loss by subtracting the reward of
             # a response by the average rewards of other `rloo_k - 1` responses
+            rlhf_mean = rlhf_reward.mean()
+            n = rlhf_reward.size(0)
+            mean_other = (total_mean * n - rlhf_reward) / (n - 1)
+            _advantages = rlhf_reward - mean_other
+
             advantages = torch.zeros_like(rlhf_reward)
             for i in range(0, len(advantages)):
                 other_response_rlhf_rewards = []
@@ -172,6 +177,13 @@ class RLOOTrainer(PolicyTrainerBase):
                         other_response_rlhf_rewards.append(rlhf_reward[j])
                 advantages[i] = rlhf_reward[i] - torch.stack(other_response_rlhf_rewards).mean(0)
             torch.cuda.empty_cache()
+
+        print("kl", kl)
+        print("rlhf_reward", rlhf_reward)
+        print("non_score_reward", non_score_reward)
+        print("advantages", advantages)
+        print("_advantages", _advantages)
+
 
         with self.time_metric_ctx("calc_loss"):
             # PR TODO: remove this assertion when stable
@@ -238,9 +250,8 @@ class RLOOTrainer(PolicyTrainerBase):
 
         self.store_metrics(metrics)
 
-        loss = pg_loss.to(self.args.device) * 1e2
+        loss = pg_loss.to(self.args.device)
         print("loss", loss)
-        print("pg_loss", pg_loss)
 
         # PR TODO: delete the commented if it truly is what's detaching the graph
         # it probably isn't a problem, I saw issues with LoRA_MLPBackward w/ Unsloth
