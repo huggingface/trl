@@ -214,8 +214,7 @@ def _process_tokens(example: Dict[str, Any], model: "PreTrainedModel" = None, **
         batch[f"{kwargs['prefix']}prompt_input_ids"] = all_tokens["prompt_input_ids"]
         batch[f"{kwargs['prefix']}prompt_attention_mask"] = all_tokens["prompt_attention_mask"]
         batch[f"{kwargs['prefix']}completion_input_ids"] = (
-            all_tokens["prompt_input_ids"]
-            + all_tokens["answer_input_ids"]
+            all_tokens["prompt_input_ids"] + all_tokens["answer_input_ids"]
         )
         batch[f"{kwargs['prefix']}completion_attention_mask"] = (
             all_tokens["prompt_attention_mask"] + all_tokens["answer_attention_mask"]
@@ -226,21 +225,18 @@ def _process_tokens(example: Dict[str, Any], model: "PreTrainedModel" = None, **
             batch[f"{kwargs['prefix']}prompt_input_ids"] = [bos_token_id] + batch[
                 f"{kwargs['prefix']}prompt_input_ids"
             ]
-            batch[f"{kwargs['prefix']}prompt_attention_mask"] = [1] + batch[
-                f"{kwargs['prefix']}prompt_attention_mask"
+            batch[f"{kwargs['prefix']}prompt_attention_mask"] = [1] + batch[f"{kwargs['prefix']}prompt_attention_mask"]
+            batch[f"{kwargs['prefix']}completion_input_ids"] = [bos_token_id] + batch[
+                f"{kwargs['prefix']}completion_input_ids"
             ]
-            batch[f"{kwargs['prefix']}completion_input_ids"] = (
-                [bos_token_id]
-                + batch[f"{kwargs['prefix']}completion_input_ids"]
-            )
-            batch[f"{kwargs['prefix']}completion_attention_mask"] = (
-                [1] + batch[f"{kwargs['prefix']}completion_attention_mask"]
-            )
+            batch[f"{kwargs['prefix']}completion_attention_mask"] = [1] + batch[
+                f"{kwargs['prefix']}completion_attention_mask"
+            ]
         # add EOS, which affects only the full completion
         if eos_token_id != all_tokens["answer_input_ids"][-1]:
-            batch[f"{kwargs['prefix']}completion_input_ids"] = batch[
-                f"{kwargs['prefix']}completion_input_ids"
-            ] + [eos_token_id]
+            batch[f"{kwargs['prefix']}completion_input_ids"] = batch[f"{kwargs['prefix']}completion_input_ids"] + [
+                eos_token_id
+            ]
             batch[f"{kwargs['prefix']}completion_attention_mask"] = batch[
                 f"{kwargs['prefix']}completion_attention_mask"
             ] + [1]
