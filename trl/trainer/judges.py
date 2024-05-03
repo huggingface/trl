@@ -6,6 +6,8 @@ from typing import List
 
 from accelerate import Accelerator
 from huggingface_hub import InferenceClient
+import logging
+from requests import HTTPError
 
 from ..import_utils import is_llmblender_available, is_openai_available
 
@@ -90,11 +92,11 @@ class BaseAPIJudge(ABC):
 
     @abstractmethod
     def get_response(self, content: str) -> str:
-        raise NotImplementedError
+        raise NotImplementedError("Judge subclasses must implement this method.")
 
-    def judge(self, prompt: str, completion_pair: List[str], shuffle_order: bool, max_tokens: int = 1) -> int:
+    def judge(self, prompt: str, completion_pair: List[str], shuffle_order: bool) -> int:
         if self.max_tries <= 0:
-            print("Max retries reached")
+            logging.info(f"Max retries reached for prompt {prompt}. Returning random choice.")
             return random.choice([0, 1])
 
         shuffle_index = 0 if not shuffle_order else random.choice([0, 1])
@@ -116,9 +118,9 @@ class BaseAPIJudge(ABC):
             return 1 - shuffle_index
         # Unknown reply
         else:
-            print("Error: ", reply)
+            logging.info(f"Judge gave response {reply} instead of the expected 0 or 1. Retrying.")
             self.max_tries -= 1
-            return self.judge(prompt, completion_pair, max_tokens, shuffle_order)
+            return self.judge(prompt, completion_pair, shuffle_order)
 
     def judge_single(self, prompt: str, completion_pair: List[str], shuffle_order: bool = True) -> Future:
         return self.thread_pool_executor.submit(self.judge, prompt, completion_pair, shuffle_order)
@@ -150,9 +152,8 @@ class HuggingFaceJudge(BaseAPIJudge):
                 stop=["<|eot_id|>"],  # For llama-3 models
             )
             return response.choices[0].message.content
-        except BadRequestError as e:
-            print("BadRequestError", e)
-            print("Content: ", content)
+        except HTTPError as e:
+            logging.info(f"Unable to reach the Hugging Face API due to error: {e}\nReturning random choice (0,1)")
             return random.choice(["0", "1"])
 
 
@@ -173,8 +174,7 @@ class OpenAIJudge(BaseAPIJudge):
             )
             return response.choices[0].message.content
         except BadRequestError as e:
-            print("BadRequestError", e)
-            print("Content: ", content)
+            logging.info(f"Unable to reach to OpenAI API due to error: {e}\nReturning random choice (0,1)")
             return random.choice(["0", "1"])
 
 
