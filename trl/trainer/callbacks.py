@@ -26,42 +26,47 @@ class WinRateCallback(TrainerCallback):
         generation_config: GenerationConfig,
         judge,
         trainer,
+        batch_size: int = 4,
     ):
-        self.prompts = prompts
+        self.prompts = [
+            trainer.tokenizer.apply_chat_template(
+                [{"role": "user", "content": p}], tokenize=False, add_generation_prompt=True
+            )
+            for p in prompts
+        ]
         self.generation_config = generation_config
         self.completions = []
         self.judge = judge
         self.ref_completions = []
         self.trainer = trainer
+        self.batch_size = batch_size
 
     def on_train_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         model = self.trainer.model_wrapped
         tokenizer = kwargs["tokenizer"]
+        tokenizer.padding_side = "left"
         accelerator = self.trainer.accelerator
 
         with accelerator.split_between_processes(self.prompts, apply_padding=True) as prompts:
-            # local_dataset = Dataset.from_dict(prompts)
-
             with unwrap_model_for_generation(model, accelerator) as unwrapped_model:
                 unwrapped_model.eval()
-                for prompt in tqdm(prompts, desc="Generating ref completions for win rate"):
-                    # tokenized_prompt = tokenizer(prompt, return_tensors="pt").to(model.device)
-                    tokenized_prompt = tokenizer.apply_chat_template(
-                        [{"role": "user", "content": prompt}],
-                        add_generation_prompt=True,
-                        return_tensors="pt",
-                        return_dict=True,
-                    ).to(model.device)
-                    generation = unwrapped_model.generate(
-                        **tokenized_prompt,
+                for idx in tqdm(
+                    range(0, len(prompts), self.batch_size), desc="Generating reference model completions for win rate"
+                ):
+                    batch = prompts[idx : idx + self.batch_size]
+                    tokenized_batch = tokenizer(batch, return_tensors="pt", padding=True, truncation=True).to(
+                        model.device
+                    )
+                    generations = unwrapped_model.generate(
+                        **tokenized_batch,
                         generation_config=self.generation_config,
                     )
-                    padded_prompt_length = tokenized_prompt.input_ids.shape[1]
-                    generation = generation[:, padded_prompt_length:]
-                    text_generations = tokenizer.batch_decode(generation, skip_special_tokens=True)
+                    for prompt, generation in zip(tokenized_batch.input_ids, generations):
+                        # Remove prompt from generation
+                        generation = generation[len(prompt) :]
+                        completion = tokenizer.decode(generation, skip_special_tokens=True)
+                        self.ref_completions.append(completion)
 
-                    ref_response = text_generations[0]
-                    self.ref_completions.append(ref_response)
                 unwrapped_model.train()
 
     def on_evaluate(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
@@ -74,27 +79,24 @@ class WinRateCallback(TrainerCallback):
 
             with unwrap_model_for_generation(model, accelerator) as unwrapped_model:
                 unwrapped_model.eval()
-                for idx, prompt in enumerate(tqdm(prompts, desc="Generating completions for win rate")):
-                    # tokenized_prompt = tokenizer(prompt, return_tensors="pt").to(model.device)
-                    tokenized_prompt = tokenizer.apply_chat_template(
-                        [{"role": "user", "content": prompt}],
-                        add_generation_prompt=True,
-                        return_tensors="pt",
-                        return_dict=True,
-                    ).to(model.device)
+                for idx in tqdm(range(0, len(prompts), self.batch_size), desc="Generating completions for win rate"):
+                    batch = prompts[idx : idx + self.batch_size]
+                    tokenized_batch = tokenizer(batch, return_tensors="pt", padding=True, truncation=True).to(
+                        model.device
+                    )
                     generations = unwrapped_model.generate(
-                        **tokenized_prompt,
+                        **tokenized_batch,
                         generation_config=self.generation_config,
                     )
-                    padded_prompt_length = tokenized_prompt.input_ids.shape[1]
-                    generations = generations[:, padded_prompt_length:]
-                    text_generations = tokenizer.batch_decode(generations, skip_special_tokens=True)
+                    for batch_idx, (prompt, generation) in enumerate(zip(tokenized_batch.input_ids, generations)):
+                        # Remove prompt from generation
+                        generation = generation[len(prompt) :]
+                        response_0 = tokenizer.decode(generation, skip_special_tokens=True)
+                        response_1 = self.ref_completions[idx + batch_idx]
+                        annotation_batch["completions"].append([response_0, response_1])
 
-                    response0 = text_generations[0]
-                    response1 = self.ref_completions[idx]
-
-                    annotation_batch["completions"].append([response0, response1])
                 unwrapped_model.train()
+
             # TODO, rerun with order or responses swapped and average
             results_dict = self.judge.judge_batch(annotation_batch["prompts"], annotation_batch["completions"])
             results_dict = Dataset.from_dict(

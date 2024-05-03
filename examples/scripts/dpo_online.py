@@ -182,24 +182,18 @@ if __name__ == "__main__":
 
         judge = HuggingFaceJudge()
         prompts_ds = load_dataset(args.dataset_name, split="test").shuffle(seed=42).select(range(64))
-        # prompts_ds = prompts_ds.map(
-        #     lambda x: {
-        #         "prompt": tokenizer.apply_chat_template(x["chosen"][:-1], tokenize=False, add_generation_prompt=True)
-        #     }
-        # )
         win_rate_callback = WinRateCallback(
             prompts=prompts_ds["prompt"],
             judge=judge,
             generation_config=GenerationConfig(
                 temperature=0.9,
                 do_sample=True,
-                num_return_sequences=1,
                 pad_token_id=tokenizer.pad_token_id,
                 eos_token_id=tokenizer.eos_token_id,
                 max_new_tokens=512,
             ),
             trainer=trainer,
-            # batch_size=4,
+            batch_size=4,
         )
     trainer.add_callback(win_rate_callback)
 

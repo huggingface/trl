@@ -1,3 +1,4 @@
+import logging
 import os
 import random
 from abc import ABC, abstractmethod
@@ -6,7 +7,6 @@ from typing import List
 
 from accelerate import Accelerator
 from huggingface_hub import InferenceClient
-import logging
 from requests import HTTPError
 
 from ..import_utils import is_llmblender_available, is_openai_available
@@ -96,7 +96,9 @@ class BaseAPIJudge(ABC):
 
     def judge(self, prompt: str, completion_pair: List[str], shuffle_order: bool) -> int:
         if self.max_tries <= 0:
-            logging.info(f"Max retries reached for prompt {prompt}. Returning random choice.")
+            logging.info(
+                f"Max retries reached for prompt:\n\n{prompt}\nand completion pair:\n\n{completion_pair}\n\nReturning random choice."
+            )
             return random.choice([0, 1])
 
         shuffle_index = 0 if not shuffle_order else random.choice([0, 1])
@@ -106,19 +108,16 @@ class BaseAPIJudge(ABC):
         reply = self.get_response(content)
         reply = reply.strip()
 
-        # First answer
         if reply in [
             "0",
         ]:
             return shuffle_index
-        # Second answer
         elif reply in [
             "1",
         ]:
             return 1 - shuffle_index
-        # Unknown reply
         else:
-            logging.info(f"Judge gave response {reply} instead of the expected 0 or 1. Retrying.")
+            logging.info(f"Judge gave response `{reply}` instead of the expected 0 or 1. Retrying.")
             self.max_tries -= 1
             return self.judge(prompt, completion_pair, shuffle_order)
 
