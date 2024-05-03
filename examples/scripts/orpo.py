@@ -64,7 +64,8 @@ from trl import ModelConfig, ORPOConfig, ORPOTrainer, get_peft_config
 @dataclass
 class ScriptArguments:
     dataset: str = field(
-        default="trl-internal-testing/hh-rlhf-trl-style", metadata={"help": "The name of the dataset to use."}
+        default="trl-internal-testing/hh-rlhf-helpful-base-trl-style",
+        metadata={"help": "The name of the dataset to use."},
     )
 
 

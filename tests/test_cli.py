@@ -32,7 +32,7 @@ def test_sft_cli():
 def test_dpo_cli():
     try:
         subprocess.run(
-            "trl dpo --max_steps 1 --output_dir tmp-dpo --model_name_or_path trl-internal-testing/tiny-random-LlamaForCausalLM --dataset_name trl-internal-testing/hh-rlhf-trl-style --learning_rate 1e-4 --lr_scheduler_type cosine --sanity_check",
+            "trl dpo --max_steps 1 --output_dir tmp-dpo --model_name_or_path trl-internal-testing/tiny-random-LlamaForCausalLM --dataset_name trl-internal-testing/hh-rlhf-helpful-base-trl-style --learning_rate 1e-4 --lr_scheduler_type cosine --sanity_check",
             shell=True,
             check=True,
         )
