@@ -592,9 +592,9 @@ class PPOTrainer(Trainer):
                         postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
                         sequence_length = first_true_indices(postprocessed_response == tokenizer.pad_token_id) - 1
                         unwrapped_value_model = accelerator.unwrap_model(model).value_model
-                        full_value, _, _ = get_reward(unwrapped_value_model, query_response, tokenizer, context_length, self.rm_bias)
+                        full_value, _, _ = get_reward(unwrapped_value_model, query_response, tokenizer, context_length)
                         value = full_value[:, context_length - 1 : -1].squeeze(-1)
-                        _, score, _ = get_reward(reward_model, postprocessed_query_response, tokenizer, context_length, self.rm_bias)
+                        _, score, _ = get_reward(reward_model, postprocessed_query_response, tokenizer, context_length)
 
                         query_responses.append(query_response)
                         responses.append(response)
