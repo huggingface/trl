@@ -164,9 +164,9 @@ class RLOOTrainer(PolicyTrainerBase):
             # we generated `self.args.rloo_k` many responses per prompt
             # now we can implement the RLOO loss by subtracting the reward of
             # a response by the average rewards of other `rloo_k - 1` responses
-            rlhf_mean = rlhf_reward.mean()
+            rlhf_sum = rlhf_reward.sum(dim=0, keepdim=True)
             n = rlhf_reward.size(0)
-            mean_other = (rlhf_mean * n - rlhf_reward) / (n - 1)
+            mean_other = (total_sum - rlhf_reward) / (n - 1)
             advantages = rlhf_reward - mean_other
 
             _advantages = torch.zeros_like(rlhf_reward)
@@ -181,8 +181,8 @@ class RLOOTrainer(PolicyTrainerBase):
         print("kl", kl.mean())
         print("rlhf_reward", rlhf_reward.mean())
         print("non_score_reward", non_score_reward.mean())
-        print("advantages", advantages.mean())
-        print("_advantages", _advantages.mean())
+        print("advantages[0]", advantages[0])
+        print("_advantages[0]", _advantages[0])
 
 
         with self.time_metric_ctx("calc_loss"):
