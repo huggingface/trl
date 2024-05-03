@@ -547,53 +547,53 @@ class PPOTrainer(Trainer):
                 values = []
                 scores = []
                 sequence_lengths = []
-                for i in range(0, queries.shape[0], args.local_rollout_forward_batch_size):
-                    query = queries[i : i + args.local_rollout_forward_batch_size]
-                    with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+                with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+                    for i in range(0, queries.shape[0], args.local_rollout_forward_batch_size):
+                        query = queries[i : i + args.local_rollout_forward_batch_size]
                         query_response, logits = generate(
                             unwrapped_model.policy,
                             query,
                             tokenizer,
                             generation_config,
                         )
-                    response = query_response[:, context_length:]
+                        response = query_response[:, context_length:]
 
-                    # use the logits during generation directly, instead of using the following
-                    all_logprob = F.log_softmax(logits, dim=-1)
-                    logprob = torch.gather(all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
-                    del logits, all_logprob
-                    torch.cuda.empty_cache()
+                        # use the logits during generation directly, instead of using the following
+                        all_logprob = F.log_softmax(logits, dim=-1)
+                        logprob = torch.gather(all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
+                        del logits, all_logprob
+                        torch.cuda.empty_cache()
 
-                    ref_output = forward(ref_policy, query_response, tokenizer)
-                    ref_logits = ref_output.logits[:, context_length - 1 : -1]
-                    ref_logits /= args.temperature + 1e-7
-                    ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
-                    ref_logprob = torch.gather(ref_all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
-                    del ref_output, ref_logits, ref_all_logprob
-                    torch.cuda.empty_cache()
+                        ref_output = forward(ref_policy, query_response, tokenizer)
+                        ref_logits = ref_output.logits[:, context_length - 1 : -1]
+                        ref_logits /= args.temperature + 1e-7
+                        ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
+                        ref_logprob = torch.gather(ref_all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
+                        del ref_output, ref_logits, ref_all_logprob
+                        torch.cuda.empty_cache()
 
-                    # Response Processing 1. truncate response after the first occurrence of `truncate_token_id`
-                    postprocessed_response = response
-                    if args.truncate_token_id:
-                        postprocessed_response = truncate_response(args, tokenizer, response)
+                        # Response Processing 1. truncate response after the first occurrence of `truncate_token_id`
+                        postprocessed_response = response
+                        if args.truncate_token_id:
+                            postprocessed_response = truncate_response(args, tokenizer, response)
 
-                    # Response Processing 2. run reward model on the truncated responses
-                    postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
-                    sequence_length = first_true_indices(postprocessed_response == tokenizer.pad_token_id) - 1
-                    full_value, _, _ = get_reward(
-                        accelerator.unwrap_model(model).value_model, query_response, tokenizer, context_length
-                    )
-                    value = full_value[:, context_length - 1 : -1].squeeze(-1)
-                    _, score, _ = get_reward(reward_model, postprocessed_query_response, tokenizer, context_length)
+                        # Response Processing 2. run reward model on the truncated responses
+                        postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
+                        sequence_length = first_true_indices(postprocessed_response == tokenizer.pad_token_id) - 1
+                        full_value, _, _ = get_reward(
+                            accelerator.unwrap_model(model).value_model, query_response, tokenizer, context_length
+                        )
+                        value = full_value[:, context_length - 1 : -1].squeeze(-1)
+                        _, score, _ = get_reward(reward_model, postprocessed_query_response, tokenizer, context_length)
 
-                    query_responses.append(query_response)
-                    responses.append(response)
-                    postprocessed_responses.append(postprocessed_response)
-                    logprobs.append(logprob)
-                    ref_logprobs.append(ref_logprob)
-                    values.append(value)
-                    sequence_lengths.append(sequence_length)
-                    scores.append(score)
+                        query_responses.append(query_response)
+                        responses.append(response)
+                        postprocessed_responses.append(postprocessed_response)
+                        logprobs.append(logprob)
+                        ref_logprobs.append(ref_logprob)
+                        values.append(value)
+                        sequence_lengths.append(sequence_length)
+                        scores.append(score)
                 query_responses = torch.cat(query_responses, 0)
                 responses = torch.cat(responses, 0)
                 postprocessed_responses = torch.cat(postprocessed_responses, 0)
@@ -602,8 +602,9 @@ class PPOTrainer(Trainer):
                 values = torch.cat(values, 0)
                 sequence_lengths = torch.cat(sequence_lengths, 0)
                 scores = torch.cat(scores, 0)
-                del (logprob, ref_logprob, full_value, value, score)
+                del (logprob, ref_logprob, full_value, value, score, unwrapped_model)
                 torch.cuda.empty_cache()
+                gc.collect()
 
                 # Response Processing 3. filter response. Ensure that the sample contains truncate_token_id
                 # responses not passing that filter will receive a low (fixed) score

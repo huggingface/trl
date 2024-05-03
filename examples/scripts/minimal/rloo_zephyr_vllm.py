@@ -2,10 +2,7 @@ from collections import defaultdict
 import multiprocessing
 import shutil
 
-import pandas as pd
 from datasets import load_dataset
-from rich.console import Console
-from rich.table import Table
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForSequenceClassification,
@@ -14,53 +11,45 @@ from transformers import (
     PreTrainedModel,
 )
 import matplotlib.pyplot as plt
-from trl.trainer.rloo_trainer import RLOOConfig, RLOOTrainer
+from trl.trainer.rloo_trainer_vllm import RLOOConfig, RLOOTrainer
 
 
 """
-python -i examples/scripts/minimal/ppo_bandit_rloo_large_zephyr.py \
+python -i examples/scripts/minimal/rloo_zephyr_vllm.py \
     --learning_rate 3e-6 \
-    --output_dir models/minimal/ppo_bandit_rloo_large_zephyr \
-    --per_device_train_batch_size 64 \
-    --gradient_accumulation_steps 1 \
+    --output_dir models/minimal/rloo_zephyr_vllm \
+    --per_device_train_batch_size 1 \
+    --gradient_accumulation_steps 32 \
+    --local_rollout_forward_batch_size 8 \
     --total_episodes 10000 \
-    --base_model HuggingFaceH4/mistral-7b-sft-beta \
-    --sft_model_path HuggingFaceH4/mistral-7b-sft-beta \
-    --reward_model_path weqweasdas/RM-Mistral-7B \
+    --base_model EleutherAI/pythia-1b-deduped \
+    --sft_model_path EleutherAI/pythia-1b-deduped  \
+    --reward_model_path EleutherAI/pythia-1b-deduped  \
     --non_eos_penalty \
     --truncate_token eos \
+    --response_length 512 \
 
 # run REINFORCE w/ RLOO; `--epochs 1 --num_mini_batches 1` in PPO is equivalent to REINFORCE
-accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/scripts/minimal/ppo_bandit_rloo_large_zephyr.py \
+accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.7.yaml \
+    examples/scripts/minimal/rloo_zephyr_vllm.py \
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \
     --rloo_k 2 \
     --learning_rate 3e-6 \
-    --output_dir models/minimal/ppo_bandit_rloo_large_zephyr_full \
+    --output_dir models/minimal/rloo_zephyr_vllm_k2_seed1 \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 32 \
+    --local_rollout_forward_batch_size 8 \
     --total_episodes 200000 \
     --base_model HuggingFaceH4/mistral-7b-sft-beta \
     --sft_model_path HuggingFaceH4/mistral-7b-sft-beta \
     --reward_model_path weqweasdas/RM-Mistral-7B \
-    --local_rollout_forward_batch_size 32 \
     --deepspeed3 \
-    --kl_coef 0.10 \
+    --kl_coef 0.15 \
     --non_eos_penalty \
     --truncate_token eos \
-    --response_length 128 \
+    --response_length 1024 \
 """
-
-
-def print_rich_table(df: pd.DataFrame) -> Table:
-    console = Console()
-    table = Table(show_lines=True)
-    for column in df.columns:
-        table.add_column(column)
-    for _, row in df.iterrows():
-        table.add_row(*row.astype(str).tolist())
-    console.print(table)
 
 
 if __name__ == "__main__":
@@ -118,7 +107,7 @@ if __name__ == "__main__":
             tokenize,
             remove_columns=dataset.column_names,
             num_proc=multiprocessing.cpu_count(),
-            load_from_cache_file=False,
+            # load_from_cache_file=False,
         )
     train_dataset = prepare_dataset(train_dataset, tokenizer)
     eval_dataset = prepare_dataset(eval_dataset, tokenizer)
