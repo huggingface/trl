@@ -167,9 +167,9 @@ class RLOOTrainer(PolicyTrainerBase):
             rlhf_mean = rlhf_reward.mean()
             n = rlhf_reward.size(0)
             mean_other = (rlhf_mean * n - rlhf_reward) / (n - 1)
-            _advantages = rlhf_reward - mean_other
+            advantages = rlhf_reward - mean_other
 
-            advantages = torch.zeros_like(rlhf_reward)
+            _advantages = torch.zeros_like(rlhf_reward)
             for i in range(0, len(advantages)):
                 other_response_rlhf_rewards = []
                 for j in range(0, len(advantages)):
@@ -178,11 +178,11 @@ class RLOOTrainer(PolicyTrainerBase):
                 advantages[i] = rlhf_reward[i] - torch.stack(other_response_rlhf_rewards).mean(0)
             torch.cuda.empty_cache()
 
-        print("kl", kl)
-        print("rlhf_reward", rlhf_reward)
-        print("non_score_reward", non_score_reward)
-        print("advantages", advantages)
-        print("_advantages", _advantages)
+        print("kl", kl.mean())
+        print("rlhf_reward", rlhf_reward.mean())
+        print("non_score_reward", non_score_reward.mean())
+        print("advantages", advantages.mean())
+        print("_advantages", _advantages.mean())
 
 
         with self.time_metric_ctx("calc_loss"):
