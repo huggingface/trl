@@ -103,6 +103,7 @@ class RLOOTrainer(PolicyTrainerBase):
                 active_logits /= max(self.args.temperature, 1e-7)
                 logprobs = logprobs_from_logits(active_logits, responses, gather=True)
 
+                # PR TODO: remove this check
                 if not (_ == active_logits).all():
                     print("model.generate() logits differ from model.forward() logits")
 
@@ -176,81 +177,81 @@ class RLOOTrainer(PolicyTrainerBase):
                     advantages[i] = rlhf_reward[i] - torch.stack(other_response_rlhf_rewards).mean(0)
                 torch.cuda.empty_cache()
 
-            with self.time_metric_ctx("calc_loss"):
-                # PR TODO: remove this assertion when stable
-                # ensure gradients can be set
-                assert model.training, "model is incorrectly in eval mode"
-                assert torch.is_grad_enabled(), "grad is disabled, but we need to calculate grad"
+        with self.time_metric_ctx("calc_loss"):
+            # PR TODO: remove this assertion when stable
+            # ensure gradients can be set
+            assert model.training, "model is incorrectly in eval mode"
+            assert torch.is_grad_enabled(), "grad is disabled, but we need to calculate grad"
 
-                # calculate gradients and loss
-                with self.time_metric_ctx("model_forward"):
-                    output = self.forward(model, query_responses)
-                logits = output.logits[:, context_length - 1 : -1]
-                logits /= max(self.args.temperature, 1e-7)
+            # calculate gradients and loss
+            with self.time_metric_ctx("model_forward"):
+                output = self.forward(model, query_responses)
+            logits = output.logits[:, context_length - 1 : -1]
+            logits /= max(self.args.temperature, 1e-7)
 
-                print("Response Generation - logits Min:", logits.min().item(), "Max:", logits.max().item(), "Std Dev:", logits.std().item(), "Contains NaN or Inf:", torch.isnan(logits).any().item() or torch.isinf(logits).any().item())
-                print("Log Probability Extraction - responses Min ID:", responses.min().item(), "Max ID:", responses.max().item(), "Contains Invalid IDs:", torch.any(responses < 0).item() or torch.any(responses >= logits.size(-1)).item())
+            print("Response Generation - logits Min:", logits.min().item(), "Max:", logits.max().item(), "Std Dev:", logits.std().item(), "Contains NaN or Inf:", torch.isnan(logits).any().item() or torch.isinf(logits).any().item())
+            print("Log Probability Extraction - responses Min ID:", responses.min().item(), "Max ID:", responses.max().item(), "Contains Invalid IDs:", torch.any(responses < 0).item() or torch.any(responses >= logits.size(-1)).item())
 
-                new_logprobs = logprobs_from_logits(logits, responses, gather=True)
-                new_logprobs = torch.masked_fill(
-                    new_logprobs, padding_mask, INVALID_LOGPROB
-                )
-                new_ratio = (new_logprobs - logprobs).exp()
-                logprobs_diff = new_logprobs.sum(1) - logprobs.sum(1)
-                ratio = torch.exp(logprobs_diff)
-                pg_losses = -advantages * ratio
-                pg_losses2 = -advantages * torch.clamp(ratio, 1.0 - self.args.cliprange, 1.0 + self.args.cliprange)
-                pg_loss_max = torch.max(pg_losses, pg_losses2)
-                pg_loss = pg_loss_max.mean()
-                pg_clipfrac = (pg_losses2 > pg_losses).float().mean()
+            new_logprobs = logprobs_from_logits(logits, responses, gather=True)
+            new_logprobs = torch.masked_fill(
+                new_logprobs, padding_mask, INVALID_LOGPROB
+            )
+            new_ratio = (new_logprobs - logprobs).exp()
+            logprobs_diff = new_logprobs.sum(1) - logprobs.sum(1)
+            ratio = torch.exp(logprobs_diff)
+            pg_losses = -advantages * ratio
+            pg_losses2 = -advantages * torch.clamp(ratio, 1.0 - self.args.cliprange, 1.0 + self.args.cliprange)
+            pg_loss_max = torch.max(pg_losses, pg_losses2)
+            pg_loss = pg_loss_max.mean()
+            pg_clipfrac = (pg_losses2 > pg_losses).float().mean()
 
-                print("Gradient Calc - new_logprobs Min:", new_logprobs.min().item(), "Max:", new_logprobs.max().item(), "Contains NaN:", torch.isnan(new_logprobs).any().item())
-                print("Gradient Calc - logprobs Min:", logprobs.min().item(), "Max:", logprobs.max().item(), "Contains NaN:", torch.isnan(logprobs).any().item())
-                print("Gradient Calc - ratio Min:", ratio.min().item(), "Max:", ratio.max().item(), "Contains NaN or Inf:", torch.isnan(ratio).any().item() or torch.isinf(ratio).any().item())
-                print("Gradient Calc - pg_losses Min:", pg_losses.min().item(), "Max:", pg_losses.max().item(), "Contains NaN or Inf:", torch.isnan(pg_losses).any().item() or torch.isinf(pg_losses).any().item())
-                print("Gradient Calc - pg_loss Value:", pg_loss.item(), "Contains NaN or Inf:", torch.isnan(pg_loss).any().item() or torch.isinf(pg_loss).any().item())
-
-
-            # log metrics
-            with torch.no_grad():
-                prob_dist = torch.nn.functional.softmax(logits, dim=-1)
-                entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1)
-                approxkl = 0.5 * (logprobs_diff**2).mean()
-
-                rlhf_reward_mean = self.accelerator.gather(rlhf_reward).mean().item()
-                # PR TODO: this is from original, but maybe it should be logged somewhere?
-                #self.accelerator.print(f"{rlhf_reward_mean=}")
-                mean_kl = kl.sum(1).mean()
-                mean_entropy = (-logprobs).sum(1).mean()
-                # PR TODO: why is this metric removed in the original
-                # mean_non_score_reward = non_score_reward.sum(1).mean()
-                # "objective/non_score_reward"
+            print("Gradient Calc - new_logprobs Min:", new_logprobs.min().item(), "Max:", new_logprobs.max().item(), "Contains NaN:", torch.isnan(new_logprobs).any().item())
+            print("Gradient Calc - logprobs Min:", logprobs.min().item(), "Max:", logprobs.max().item(), "Contains NaN:", torch.isnan(logprobs).any().item())
+            print("Gradient Calc - ratio Min:", ratio.min().item(), "Max:", ratio.max().item(), "Contains NaN or Inf:", torch.isnan(ratio).any().item() or torch.isinf(ratio).any().item())
+            print("Gradient Calc - pg_losses Min:", pg_losses.min().item(), "Max:", pg_losses.max().item(), "Contains NaN or Inf:", torch.isnan(pg_losses).any().item() or torch.isinf(pg_losses).any().item())
+            print("Gradient Calc - pg_loss Value:", pg_loss.item(), "Contains NaN or Inf:", torch.isnan(pg_loss).any().item() or torch.isinf(pg_loss).any().item())
 
 
-            metrics = {
-                "objective/kl": self.accelerator.gather(mean_kl).mean().item(),
-                "objective/entropy": self.accelerator.gather(mean_entropy).mean().item(),
-                "objective/rlhf_reward": self.accelerator.gather(rlhf_reward).mean().item(),
-                "objective/scores": self.accelerator.gather(scores.mean()).mean().item(),
-                "policy/approxkl_avg": self.accelerator.gather(approxkl).mean().item(),
-                "policy/clipfrac_avg": self.accelerator.gather(pg_clipfrac).mean().item(),
-                "loss/policy_avg": self.accelerator.gather(pg_loss).mean().item(),
-                # PR TODO: this isn't calculated in the original
-                #"loss/value_avg": self.accelerator.gather(vf_loss_stats).mean().item(),
-                #"val/clipfrac_avg": self.accelerator.gather(vf_clipfrac_stats).mean().item(),
+        # log metrics
+        with torch.no_grad():
+            prob_dist = torch.nn.functional.softmax(logits, dim=-1)
+            entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1)
+            approxkl = 0.5 * (logprobs_diff**2).mean()
 
-                # PR TODO: how does this differ from mean_entropy
-                #"policy/entropy_avg": self.accelerator.gather(entropy).mean().item(),
-                "val/ratio": self.accelerator.gather(new_ratio).mean().item(),
+            rlhf_reward_mean = self.accelerator.gather(rlhf_reward).mean().item()
+            # PR TODO: this is from original, but maybe it should be logged somewhere?
+            #self.accelerator.print(f"{rlhf_reward_mean=}")
+            mean_kl = kl.sum(1).mean()
+            mean_entropy = (-logprobs).sum(1).mean()
+            # PR TODO: why is this metric removed in the original
+            # mean_non_score_reward = non_score_reward.sum(1).mean()
+            # "objective/non_score_reward"
 
-                # PR TODO
-                #"val/ratio_var": self.accelerator.gather(ratio_stats).var().item(),
-                "val/num_eos_tokens": (responses == self.tokenizer.eos_token_id).sum().item(),
-            }
 
-            self.store_metrics(metrics)
+        metrics = {
+            "objective/kl": self.accelerator.gather(mean_kl).mean().item(),
+            "objective/entropy": self.accelerator.gather(mean_entropy).mean().item(),
+            "objective/rlhf_reward": self.accelerator.gather(rlhf_reward).mean().item(),
+            "objective/scores": self.accelerator.gather(scores.mean()).mean().item(),
+            "policy/approxkl_avg": self.accelerator.gather(approxkl).mean().item(),
+            "policy/clipfrac_avg": self.accelerator.gather(pg_clipfrac).mean().item(),
+            "loss/policy_avg": self.accelerator.gather(pg_loss).mean().item(),
+            # PR TODO: this isn't calculated in the original
+            #"loss/value_avg": self.accelerator.gather(vf_loss_stats).mean().item(),
+            #"val/clipfrac_avg": self.accelerator.gather(vf_clipfrac_stats).mean().item(),
 
-            loss = pg_loss.to(self.args.device)
+            # PR TODO: how does this differ from mean_entropy
+            #"policy/entropy_avg": self.accelerator.gather(entropy).mean().item(),
+            "val/ratio": self.accelerator.gather(new_ratio).mean().item(),
+
+            # PR TODO
+            #"val/ratio_var": self.accelerator.gather(ratio_stats).var().item(),
+            "val/num_eos_tokens": (responses == self.tokenizer.eos_token_id).sum().item(),
+        }
+
+        self.store_metrics(metrics)
+
+        loss = pg_loss.to(self.args.device)
 
             # PR TODO: delete the commented if it truly is what's detaching the graph
             # it probably isn't a problem, I saw issues with LoRA_MLPBackward w/ Unsloth
