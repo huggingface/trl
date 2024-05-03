@@ -460,7 +460,6 @@ class PPOTrainer(Trainer):
         else:
             ref_policy = ref_policy.to(self.accelerator.device)
             self.reward_model = self.reward_model.to(self.accelerator.device)
-        self.rm_bias = self.normalize_reward()
 
 
     def get_train_dataloader(self) -> DataLoader:
