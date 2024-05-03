@@ -156,13 +156,8 @@ class RLOOTrainer(PolicyTrainerBase):
             logprobs = torch.masked_fill(logprobs, padding_mask, INVALID_LOGPROB)
             ref_logprobs = torch.masked_fill(ref_logprobs, padding_mask, INVALID_LOGPROB)
 
-            print("Log Probabilities - logprobs Min:", logprobs.min().item(), "Max:", logprobs.max().item(), "Contains NaN or Inf:", torch.isnan(logprobs).any().item() or torch.isinf(logprobs).any().item())
-            print("Log Probabilities - ref_logprobs Min:", ref_logprobs.min().item(), "Max:", ref_logprobs.max().item(), "Contains NaN or Inf:", torch.isnan(ref_logprobs).any().item() or torch.isinf(ref_logprobs).any().item())
-
             # 4. compute rewards
             kl = logprobs - ref_logprobs
-            print("Log Probabilities - kl Min:", ref_logprobs.min().item(), "Max:", ref_logprobs.max().item(), "Contains NaN or Inf:", torch.isnan(ref_logprobs).any().item() or torch.isinf(ref_logprobs).any().item())
-
             non_score_reward = (-self.args.kl_coef * kl).sum(1)
             rlhf_reward = scores + non_score_reward.unsqueeze(1)
 
@@ -191,9 +186,6 @@ class RLOOTrainer(PolicyTrainerBase):
             logits = output.logits[:, context_length - 1 : -1]
             logits /= max(self.args.temperature, 1e-7)
 
-            print("Response Generation - logits Min:", logits.min().item(), "Max:", logits.max().item(), "Std Dev:", logits.std().item(), "Contains NaN or Inf:", torch.isnan(logits).any().item() or torch.isinf(logits).any().item())
-            print("Log Probability Extraction - responses Min ID:", responses.min().item(), "Max ID:", responses.max().item(), "Contains Invalid IDs:", torch.any(responses < 0).item() or torch.any(responses >= logits.size(-1)).item())
-
             new_logprobs = logprobs_from_logits(logits, responses, gather=True)
             new_logprobs = torch.masked_fill(
                 new_logprobs, padding_mask, INVALID_LOGPROB
@@ -206,13 +198,6 @@ class RLOOTrainer(PolicyTrainerBase):
             pg_loss_max = torch.max(pg_losses, pg_losses2)
             pg_loss = pg_loss_max.mean()
             pg_clipfrac = (pg_losses2 > pg_losses).float().mean()
-
-            print("Gradient Calc - new_logprobs Min:", new_logprobs.min().item(), "Max:", new_logprobs.max().item(), "Contains NaN:", torch.isnan(new_logprobs).any().item())
-            print("Gradient Calc - logprobs Min:", logprobs.min().item(), "Max:", logprobs.max().item(), "Contains NaN:", torch.isnan(logprobs).any().item())
-            print("Gradient Calc - ratio Min:", ratio.min().item(), "Max:", ratio.max().item(), "Contains NaN or Inf:", torch.isnan(ratio).any().item() or torch.isinf(ratio).any().item())
-            print("Gradient Calc - pg_losses Min:", pg_losses.min().item(), "Max:", pg_losses.max().item(), "Contains NaN or Inf:", torch.isnan(pg_losses).any().item() or torch.isinf(pg_losses).any().item())
-            print("Gradient Calc - pg_loss Value:", pg_loss.item(), "Contains NaN or Inf:", torch.isnan(pg_loss).any().item() or torch.isinf(pg_loss).any().item())
-
 
         # log metrics
         with torch.no_grad():
@@ -254,6 +239,8 @@ class RLOOTrainer(PolicyTrainerBase):
         self.store_metrics(metrics)
 
         loss = pg_loss.to(self.args.device)
+        print("loss", loss)
+        print("pg_loss", pg_loss)
 
         # PR TODO: delete the commented if it truly is what's detaching the graph
         # it probably isn't a problem, I saw issues with LoRA_MLPBackward w/ Unsloth
