@@ -15,7 +15,7 @@
 """
 # regular:
 python examples/scripts/dpo.py \
-    --dataset_name=trl-internal-testing/hh-rlhf-trl-style \
+    --dataset_name=trl-internal-testing/hh-rlhf-helpful-base-trl-style \
     --model_name_or_path=gpt2 \
     --per_device_train_batch_size 4 \
     --learning_rate 1e-3 \
@@ -31,7 +31,7 @@ python examples/scripts/dpo.py \
 
 # peft:
 python examples/scripts/dpo.py \
-    --dataset_name=trl-internal-testing/hh-rlhf-trl-style \
+    --dataset_name=trl-internal-testing/hh-rlhf-helpful-base-trl-style \
     --model_name_or_path=gpt2 \
     --per_device_train_batch_size 4 \
     --learning_rate 1e-3 \

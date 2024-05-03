@@ -20,7 +20,7 @@ from ..import_utils import _LazyModule, OptionalDependencyNotAvailable
 
 
 _import_structure = {
-    "cli_utils": ["SftArgumentParser", "init_zero_verbose", "DPOScriptArguments", "TrlParser", "YamlConfigParser"],
+    "cli_utils": ["SFTScriptArguments", "init_zero_verbose", "DPOScriptArguments", "TrlParser", "YamlConfigParser"],
 }
 
 

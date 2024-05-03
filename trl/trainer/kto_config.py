@@ -12,9 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, Literal, Optional
 
 from transformers import TrainingArguments
+
+from ..import_utils import is_sklearn_available
 
 
 @dataclass
@@ -58,6 +60,14 @@ class KTOConfig(TrainingArguments):
             Dict of Optional kwargs to pass when instantiating the ref model from a string.
         dataset_num_proc: (`Optional[int]`, *optional*, defaults to `None`):
             Number of processes to use for processing the datasets.
+        loss_type: (`Literal["kto", "bco"]`, *optional*):
+            The type of loss to use. Either `"kto"` the default KTO loss, `"bco"` loss from [BCO](https://arxiv.org/abs/2404.04656) paper.
+        prompt_sample_size: (`int`, defaults to 1024):
+            Number of prompts that are fed to density ratio classifier.
+        min_density_ratio: (`float`, defaults to 0.5):
+            The minimum value of the density ratio. The estimated density ratio is clamped to this value.
+        max_density_ratio: (`float`, defaults to 10.0):
+            The maximum value of the density ratio. The estimated density ratio is clamped to this value.
     """
 
     max_length: Optional[int] = None
@@ -82,3 +92,19 @@ class KTOConfig(TrainingArguments):
     model_init_kwargs: Optional[Dict] = None
     ref_model_init_kwargs: Optional[Dict] = None
     dataset_num_proc: Optional[int] = None
+
+    loss_type: Literal["kto", "bco"] = "kto"
+
+    # BCO config
+    prompt_sample_size: int = 1024
+    min_density_ratio: float = 0.5
+    max_density_ratio: float = 10.0
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        if self.loss_type == "bco" and not is_sklearn_available():
+            raise ImportError(
+                "You need to install scikit-learn to use loss_type='bco' "
+                "You can install it with `pip install scikit-learn`."
+            )
