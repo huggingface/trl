@@ -166,7 +166,7 @@ class RLOOTrainer(PolicyTrainerBase):
             # a response by the average rewards of other `rloo_k - 1` responses
             rlhf_sum = rlhf_reward.sum(dim=0, keepdim=True)
             n = rlhf_reward.size(0)
-            mean_other = (total_sum - rlhf_reward) / (n - 1)
+            mean_other = (rlhf_sum - rlhf_reward) / (n - 1)
             advantages = rlhf_reward - mean_other
 
             _advantages = torch.zeros_like(rlhf_reward)
