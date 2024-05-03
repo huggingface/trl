@@ -89,13 +89,22 @@ class RLOOTrainer(PolicyTrainerBase):
                 #          see DPOTrainer.concatenated_forward
 
                 with self.time_metric_ctx("generate"):
-                    query_responses, active_logits = self.generate(
+                    query_responses, _ = self.generate(
                         model,
                         queries,
                         self.train_generation_config,
                     )
                 responses = query_responses[:, context_length:]
+
+
+                with self.time_metric_ctx("active_model_forward"):
+                    active_output_logits = self.forward(model, query_responses).logits
+                active_logits = active_output_logits[:, context_length - 1 : -1]
+                active_logits /= max(self.args.temperature, 1e-7)
                 logprobs = logprobs_from_logits(active_logits, responses, gather=True)
+
+                if not (_ == active_logits):
+                    print("model.generate() logits differ from model.forward() logits")
 
                 with self.time_metric_ctx("ref_model_forward"):
                     with self.ref_model_mgr as ref_model:
