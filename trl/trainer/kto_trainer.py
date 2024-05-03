@@ -1096,12 +1096,23 @@ class KTOTrainer(Trainer):
                     labels=batch["KL_completion_labels"],
                 ).logits
 
-            completion_logits = model(
-                batch["prompt_input_ids"],
-                attention_mask=batch["prompt_attention_mask"],
-                decoder_input_ids=batch.get("completion_decoder_input_ids"),
-                labels=batch["completion_labels"],
-            ).logits
+            if hasattr(model, "num_experts"):
+                output = model(
+                    batch["completion_input_ids"],
+                    attention_mask=batch["completion_attention_mask"],
+                    decoder_input_ids=batch.get("completion_decoder_input_ids"),
+                    labels=batch["completion_labels"],
+                    output_router_logits=True,
+                )
+                completion_logits = output.logits
+                aux_loss = output.aux_loss
+            else:
+                completion_logits = model(
+                    batch["prompt_input_ids"],
+                    attention_mask=batch["prompt_attention_mask"],
+                    decoder_input_ids=batch.get("completion_decoder_input_ids"),
+                    labels=batch["completion_labels"],
+                ).logits
         else:
             with torch.no_grad():
                 KL_logits = model(
@@ -1109,10 +1120,20 @@ class KTOTrainer(Trainer):
                     attention_mask=batch["KL_completion_attention_mask"],
                 ).logits
 
-            completion_logits = model(
-                batch["completion_input_ids"],
-                attention_mask=batch["completion_attention_mask"],
-            ).logits
+            if hasattr(model, "num_experts"):
+                output = model(
+                    batch["completion_input_ids"],
+                    attention_mask=batch["completion_attention_mask"],
+                    output_router_logits=True,
+                )
+                completion_logits = output.logits
+                aux_loss = output.aux_loss
+
+            else:
+                completion_logits = model(
+                    batch["completion_input_ids"],
+                    attention_mask=batch["completion_attention_mask"],
+                ).logits
 
         completion_logps = self.get_batch_logps(
             completion_logits,
@@ -1145,7 +1166,10 @@ class KTOTrainer(Trainer):
         chosen_logits = completion_logits[chosen_idx, ...]
         rejected_logits = completion_logits[rejected_idx, ...]
 
-        return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, KL_logps)
+        if hasattr(model, "num_experts"):
+            return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, KL_logps, aux_loss)
+        else:
+            return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, KL_logps)
 
     def kto_loss(
         self,
@@ -1268,13 +1292,16 @@ class KTOTrainer(Trainer):
         metrics = {}
         batch = {k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in batch.items()}
 
+        policy_forward = self.forward(model, batch)
         (
             policy_chosen_logps,
             policy_rejected_logps,
             policy_chosen_logits,
             policy_rejected_logits,
             policy_KL_logps,
-        ) = self.forward(model, batch)
+        ) = policy_forward[:5]
+        if hasattr(model, "num_experts"):
+            aux_loss = policy_forward[5]
 
         # if reference_logps in batch use them, otherwise use the reference model
         if "reference_logps" in batch:
@@ -1294,7 +1321,7 @@ class KTOTrainer(Trainer):
                             _,
                             _,
                             reference_KL_logps,
-                        ) = self.forward(self.model, batch)
+                        ) = self.forward(self.model, batch)[:5]
                 else:
                     (
                         reference_chosen_logps,
@@ -1302,7 +1329,7 @@ class KTOTrainer(Trainer):
                         _,
                         _,
                         reference_KL_logps,
-                    ) = self.forward(self.ref_model, batch)
+                    ) = self.forward(self.ref_model, batch)[:5]
 
         if self.loss_type == "kto":
             losses, chosen_rewards, rejected_rewards, kl = self.kto_loss(
@@ -1343,7 +1370,11 @@ class KTOTrainer(Trainer):
 
         metrics["kl"] = kl.item()
 
-        return losses.nanmean(), metrics
+        loss = losses.nanmean()
+        if hasattr(model, "num_experts"):
+            loss += aux_loss
+
+        return loss, metrics
 
     def compute_loss(
         self,
