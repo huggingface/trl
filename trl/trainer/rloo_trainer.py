@@ -238,7 +238,7 @@ class RLOOTrainer(PolicyTrainerBase):
 
         self.store_metrics(metrics)
 
-        loss = pg_loss.to(self.args.device) * 1e5
+        loss = pg_loss.to(self.args.device) * 1e2
         print("loss", loss)
         print("pg_loss", pg_loss)
 
