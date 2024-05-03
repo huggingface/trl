@@ -88,7 +88,7 @@ class RLOOTrainer(PolicyTrainerBase):
             #          see DPOTrainer.concatenated_forward
 
             with self.time_metric_ctx("generate"):
-                self.cast_model_ctx(),
+                with self.cast_model_ctx():
                     query_responses, _ = self.generate(
                         model,
                         queries,
