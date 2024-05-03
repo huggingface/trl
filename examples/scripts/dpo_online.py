@@ -181,7 +181,7 @@ if __name__ == "__main__":
         )
 
         judge = HuggingFaceJudge()
-        prompts_ds = load_dataset(args.dataset_name, split="test").shuffle(seed=42).select(range(16))
+        prompts_ds = load_dataset(args.dataset_name, split="test").shuffle(seed=42).select(range(64))
         # prompts_ds = prompts_ds.map(
         #     lambda x: {
         #         "prompt": tokenizer.apply_chat_template(x["chosen"][:-1], tokenize=False, add_generation_prompt=True)

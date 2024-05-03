@@ -92,7 +92,7 @@ class BaseAPIJudge(ABC):
     def get_response(self, content: str) -> str:
         raise NotImplementedError
 
-    def judge(self, prompt: str, completion_pair: List[str], shuffle_order: bool, max_tokens: int = 3) -> int:
+    def judge(self, prompt: str, completion_pair: List[str], shuffle_order: bool, max_tokens: int = 1) -> int:
         if self.max_tries <= 0:
             print("Max retries reached")
             return random.choice([0, 1])
