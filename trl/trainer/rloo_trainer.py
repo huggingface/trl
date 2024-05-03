@@ -103,7 +103,7 @@ class RLOOTrainer(PolicyTrainerBase):
                 active_logits /= max(self.args.temperature, 1e-7)
                 logprobs = logprobs_from_logits(active_logits, responses, gather=True)
 
-                if not (_ == active_logits):
+                if not (_ == active_logits).all():
                     print("model.generate() logits differ from model.forward() logits")
 
                 with self.time_metric_ctx("ref_model_forward"):
