@@ -83,99 +83,100 @@ class RLOOTrainer(PolicyTrainerBase):
 
         context_length = queries.shape[1]
 
-        with self.cast_model_ctx():
-            with torch.no_grad(), self.time_metric_ctx("calc_advantages"):
-                # PR TODO: refactor into a function shared by ppov2 which calculates sequences and logprobs
-                #          see DPOTrainer.concatenated_forward
+        with torch.no_grad(), self.time_metric_ctx("calc_advantages"):
+            # PR TODO: refactor into a function shared by ppov2 which calculates sequences and logprobs
+            #          see DPOTrainer.concatenated_forward
 
-                with self.time_metric_ctx("generate"):
+            with self.time_metric_ctx("generate"):
+                self.cast_model_ctx(),
                     query_responses, _ = self.generate(
                         model,
                         queries,
                         self.train_generation_config,
                     )
-                responses = query_responses[:, context_length:]
+            responses = query_responses[:, context_length:]
 
 
-                with self.time_metric_ctx("active_model_forward"):
+            with self.time_metric_ctx("active_model_forward"):
+                with self.cast_model_ctx():
                     active_output_logits = self.forward(model, query_responses).logits
-                active_logits = active_output_logits[:, context_length - 1 : -1]
-                active_logits /= max(self.args.temperature, 1e-7)
-                logprobs = logprobs_from_logits(active_logits, responses, gather=True)
+            active_logits = active_output_logits[:, context_length - 1 : -1]
+            active_logits /= max(self.args.temperature, 1e-7)
+            logprobs = logprobs_from_logits(active_logits, responses, gather=True)
 
-                # PR TODO: remove this check
-                if not (_ == active_logits).all():
-                    print("model.generate() logits differ from model.forward() logits")
+            # PR TODO: remove this check
+            if not (_ == active_logits).all():
+                print("model.generate() logits differ from model.forward() logits")
 
-                with self.time_metric_ctx("ref_model_forward"):
-                    with self.ref_model_mgr as ref_model:
-                        ref_output_logits = self.forward(ref_model, query_responses).logits
-                ref_logits = ref_output_logits[:, context_length - 1 : -1]
-                ref_logits /= max(self.args.temperature, 1e-7)
-                ref_logprobs = logprobs_from_logits(ref_logits, responses, gather=True)
-                # PR TODO: uncomment
-                #del active_logits, ref_logits, ref_output_logits, ref_logits, ref_all_logprobs
-                torch.cuda.empty_cache()
+            with self.time_metric_ctx("ref_model_forward"):
+                with self.cast_model_ctx(), self.ref_model_mgr as ref_model:
+                    ref_output_logits = self.forward(ref_model, query_responses).logits
+            ref_logits = ref_output_logits[:, context_length - 1 : -1]
+            ref_logits /= max(self.args.temperature, 1e-7)
+            ref_logprobs = logprobs_from_logits(ref_logits, responses, gather=True)
+            # PR TODO: uncomment
+            #del active_logits, ref_logits, ref_output_logits, ref_logits, ref_all_logprobs
+            torch.cuda.empty_cache()
 
-                # Response Processing 1. truncate response after the
-                # first occurrence of `truncate_token_id`
-                postprocessed_responses = responses
-                if self.args.truncate_token_id:
-                    postprocessed_responses = self.truncate_response(responses)
+            # Response Processing 1. truncate response after the
+            # first occurrence of `truncate_token_id`
+            postprocessed_responses = responses
+            if self.args.truncate_token_id:
+                postprocessed_responses = self.truncate_response(responses)
 
-                # Response Processing 2. run reward model on the truncated responses
-                postprocessed_query_responses = torch.cat((queries, postprocessed_responses), 1)
-                sequence_lengths = first_true_indices(postprocessed_responses == self.tokenizer.pad_token_id) - 1
+            # Response Processing 2. run reward model on the truncated responses
+            postprocessed_query_responses = torch.cat((queries, postprocessed_responses), 1)
+            sequence_lengths = first_true_indices(postprocessed_responses == self.tokenizer.pad_token_id) - 1
 
-                # clear cache before get_reward call
-                gc.collect()
-                torch.cuda.empty_cache()
+            # clear cache before get_reward call
+            gc.collect()
+            torch.cuda.empty_cache()
 
-                with self.time_metric_ctx("get_reward"):
-                    _, scores, _ = self.get_reward(
-                        self.reward_model,
-                        postprocessed_query_responses,
-                        context_length
-                    )
-                torch.cuda.empty_cache()
+            with self.time_metric_ctx("get_reward"):
+                _, scores, _ = self.get_reward(
+                    self.reward_model,
+                    postprocessed_query_responses,
+                    context_length
+                )
+            torch.cuda.empty_cache()
 
-                # Response Processing 3. filter response. Ensure that the sample contains truncate_token_id
-                # responses not passing that filter will receive a low (fixed) score
-                # only query humans on responses that pass that filter
-                if self.args.non_eos_penalty:
-                    contain_eos_token = torch.any(postprocessed_responses == self.tokenizer.eos_token_id, dim=-1)
-                    scores = torch.where(contain_eos_token, scores, torch.full_like(scores, self.args.penalty_reward_value))
-                    # PR TODO: remove this debug statement
-                    self.accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
+            # Response Processing 3. filter response. Ensure that the sample contains truncate_token_id
+            # responses not passing that filter will receive a low (fixed) score
+            # only query humans on responses that pass that filter
+            if self.args.non_eos_penalty:
+                contain_eos_token = torch.any(postprocessed_responses == self.tokenizer.eos_token_id, dim=-1)
+                scores = torch.where(contain_eos_token, scores, torch.full_like(scores, self.args.penalty_reward_value))
+                # PR TODO: remove this debug statement
+                self.accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
 
-                # be very careful with `padding_mask`;
-                # see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
-                response_idxs = torch.arange(responses.shape[1], device=responses.device).repeat(responses.shape[0], 1)
-                padding_mask = response_idxs > sequence_lengths.unsqueeze(1)
-                logprobs = torch.masked_fill(logprobs, padding_mask, INVALID_LOGPROB)
-                ref_logprobs = torch.masked_fill(ref_logprobs, padding_mask, INVALID_LOGPROB)
+            # be very careful with `padding_mask`;
+            # see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
+            response_idxs = torch.arange(responses.shape[1], device=responses.device).repeat(responses.shape[0], 1)
+            padding_mask = response_idxs > sequence_lengths.unsqueeze(1)
+            logprobs = torch.masked_fill(logprobs, padding_mask, INVALID_LOGPROB)
+            ref_logprobs = torch.masked_fill(ref_logprobs, padding_mask, INVALID_LOGPROB)
 
-                print("Log Probabilities - logprobs Min:", logprobs.min().item(), "Max:", logprobs.max().item(), "Contains NaN or Inf:", torch.isnan(logprobs).any().item() or torch.isinf(logprobs).any().item())
-                print("Log Probabilities - ref_logprobs Min:", ref_logprobs.min().item(), "Max:", ref_logprobs.max().item(), "Contains NaN or Inf:", torch.isnan(ref_logprobs).any().item() or torch.isinf(ref_logprobs).any().item())
+            print("Log Probabilities - logprobs Min:", logprobs.min().item(), "Max:", logprobs.max().item(), "Contains NaN or Inf:", torch.isnan(logprobs).any().item() or torch.isinf(logprobs).any().item())
+            print("Log Probabilities - ref_logprobs Min:", ref_logprobs.min().item(), "Max:", ref_logprobs.max().item(), "Contains NaN or Inf:", torch.isnan(ref_logprobs).any().item() or torch.isinf(ref_logprobs).any().item())
 
-                # 4. compute rewards
-                kl = logprobs - ref_logprobs
-                print("Log Probabilities - kl Min:", ref_logprobs.min().item(), "Max:", ref_logprobs.max().item(), "Contains NaN or Inf:", torch.isnan(ref_logprobs).any().item() or torch.isinf(ref_logprobs).any().item())
+            # 4. compute rewards
+            kl = logprobs - ref_logprobs
+            print("Log Probabilities - kl Min:", ref_logprobs.min().item(), "Max:", ref_logprobs.max().item(), "Contains NaN or Inf:", torch.isnan(ref_logprobs).any().item() or torch.isinf(ref_logprobs).any().item())
 
-                non_score_reward = (-self.args.kl_coef * kl).sum(1)
-                rlhf_reward = scores + non_score_reward.unsqueeze(1)
+            non_score_reward = (-self.args.kl_coef * kl).sum(1)
+            rlhf_reward = scores + non_score_reward.unsqueeze(1)
 
-                # we generated `self.args.rloo_k` many responses per prompt
-                # now we can implement the RLOO loss by subtracting the reward of
-                # a response by the average rewards of other `rloo_k - 1` responses
-                advantages = torch.zeros_like(rlhf_reward)
-                for i in range(0, len(advantages)):
-                    other_response_rlhf_rewards = []
-                    for j in range(0, len(advantages)):
-                        if i != j:
-                            other_response_rlhf_rewards.append(rlhf_reward[j])
-                    advantages[i] = rlhf_reward[i] - torch.stack(other_response_rlhf_rewards).mean(0)
-                torch.cuda.empty_cache()
+            # we generated `self.args.rloo_k` many responses per prompt
+            # now we can implement the RLOO loss by subtracting the reward of
+            # a response by the average rewards of other `rloo_k - 1` responses
+            advantages = torch.zeros_like(rlhf_reward)
+            for i in range(0, len(advantages)):
+                other_response_rlhf_rewards = []
+                for j in range(0, len(advantages)):
+                    if i != j:
+                        other_response_rlhf_rewards.append(rlhf_reward[j])
+                advantages[i] = rlhf_reward[i] - torch.stack(other_response_rlhf_rewards).mean(0)
+            torch.cuda.empty_cache()
 
         with self.time_metric_ctx("calc_loss"):
             # PR TODO: remove this assertion when stable
@@ -185,7 +186,8 @@ class RLOOTrainer(PolicyTrainerBase):
 
             # calculate gradients and loss
             with self.time_metric_ctx("model_forward"):
-                output = self.forward(model, query_responses)
+                with self.cast_model_ctx():
+                    output = self.forward(model, query_responses)
             logits = output.logits[:, context_length - 1 : -1]
             logits /= max(self.args.temperature, 1e-7)
 
@@ -253,21 +255,21 @@ class RLOOTrainer(PolicyTrainerBase):
 
         loss = pg_loss.to(self.args.device)
 
-            # PR TODO: delete the commented if it truly is what's detaching the graph
-            # it probably isn't a problem, I saw issues with LoRA_MLPBackward w/ Unsloth
-            """
-            del (
-                output, logits, new_all_logprobs, new_logprobs,
-                logprobs_diff, ratio, pg_losses, pg_losses2,
-                pg_loss, pg_clipfrac, prob_dist, entropy, approxkl,
-                kl, mean_kl, mean_entropy, scores
-            )
-            torch.cuda.empty_cache()
-            """
+        # PR TODO: delete the commented if it truly is what's detaching the graph
+        # it probably isn't a problem, I saw issues with LoRA_MLPBackward w/ Unsloth
+        """
+        del (
+            output, logits, new_all_logprobs, new_logprobs,
+            logprobs_diff, ratio, pg_losses, pg_losses2,
+            pg_loss, pg_clipfrac, prob_dist, entropy, approxkl,
+            kl, mean_kl, mean_entropy, scores
+        )
+        torch.cuda.empty_cache()
+        """
 
-            if return_outputs:
-                return (loss, metrics)
-            return loss
+        if return_outputs:
+            return (loss, metrics)
+        return loss
 
 if __name__ == "__main__":
     pass
