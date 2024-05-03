@@ -165,7 +165,7 @@ def masked_whiten(values, mask, shift_mean=True):
     return whitened
 
 
-def get_reward(model, query_responses, tokenizer, context_length):
+def get_reward(model, query_responses, tokenizer, context_length, bias=0.0):
     attention_mask = query_responses != tokenizer.pad_token_id
     # position_ids = attention_mask.cumsum(1) - attention_mask.long()  # exclusive cumsum
     lm_backbone = getattr(model, model.base_model_prefix)
@@ -177,7 +177,7 @@ def get_reward(model, query_responses, tokenizer, context_length):
         return_dict=True,
         output_hidden_states=True,
     )
-    reward_logits = model.score(output.hidden_states[-1])
+    reward_logits = model.score(output.hidden_states[-1]) - bias
     sequence_lengths = (
         first_true_indices(query_responses[:, context_length:] == tokenizer.pad_token_id) - 1 + context_length
     )
@@ -314,6 +314,18 @@ def prepare_deepspeed3(model, accelerator):
     return model
 
 
+class MultiColumnPadCollator:
+    def __init__(self, tokenizer):
+        self.tokenizer = tokenizer
+
+    def __call__(self, examples):
+        max_lengths = [max(len(x[k]) for x in examples) for k in examples[0]]
+        padded = {}
+        for i, k in enumerate(examples[0]):
+            padded[k] = torch.LongTensor([[self.tokenizer.pad_token_id] * (max_lengths[i] - len(x[k])) + x[k] for x in examples])
+        return padded
+
+
 class PPOTrainer(Trainer):
     def __init__(
         self,
@@ -347,6 +359,7 @@ class PPOTrainer(Trainer):
         self.eval_dataset = eval_dataset
         self.optimizer, self.lr_scheduler = optimizers
         self.callbacks = callbacks
+        self.rm_bias = 0.0
 
         #########
         # calculate various batch sizes
@@ -383,7 +396,6 @@ class PPOTrainer(Trainer):
             args.truncate_token_id = tokenizer.eos_token_id
         self.model = PolicyAndValueWrapper(policy, value_model)
         self.create_optimizer_and_scheduler(num_training_steps=args.num_updates)
-
         #########
         ### trainer specifics
         #########
@@ -416,7 +428,7 @@ class PPOTrainer(Trainer):
             self.train_dataset,
             batch_size=args.local_batch_size,
             shuffle=True,
-            collate_fn=DataCollatorWithPadding(tokenizer),
+            collate_fn=MultiColumnPadCollator(tokenizer),
             drop_last=True,  # needed; otherwise the last batch will be of ragged shape
         )
         # sync random states for DataLoader(shuffle=True) before `accelerator.prepare`
@@ -428,10 +440,18 @@ class PPOTrainer(Trainer):
         self.eval_dataloader = DataLoader(
             self.eval_dataset,
             batch_size=args.per_device_eval_batch_size,
-            collate_fn=DataCollatorWithPadding(self.tokenizer),
+            collate_fn=MultiColumnPadCollator(self.tokenizer),
             drop_last=True,
         ) # no need to shuffle eval dataset
         self.eval_dataloader = accelerator.prepare(self.eval_dataloader)
+        self.rm_norm_dataloader = DataLoader(
+            self.train_dataset,
+            batch_size=args.per_device_eval_batch_size,
+            collate_fn=MultiColumnPadCollator(self.tokenizer),
+            drop_last=True,
+        ) # no need to shuffle rm norm dataset
+        self.rm_norm_dataloader = accelerator.prepare(self.rm_norm_dataloader)
+
 
         #########
         ### vllm
@@ -451,6 +471,7 @@ class PPOTrainer(Trainer):
         else:
             print("waiting for vllm to spin up...")
         accelerator.wait_for_everyone()
+
         if args.deepspeed2:
             self.reward_model = prepare_deepspeed2(self.reward_model, args.per_device_train_batch_size)
             ref_policy = prepare_deepspeed2(ref_policy, args.per_device_train_batch_size)
@@ -491,6 +512,31 @@ class PPOTrainer(Trainer):
             self._save(output_dir, state_dict=policy_state_dict)
         if not _internal_call:
             self.model = self.backup_model
+
+    def normalize_reward(self) -> torch.Tensor:
+        """iterate through the SFT dataset and ensure the mean of SFT demonstrations is 0"""
+        device = self.accelerator.device
+        with torch.no_grad():
+            j = 0
+            sum_scores = torch.zeros(self.args.local_rollout_forward_batch_size, device=device)
+            for data in tqdm(self.rm_norm_dataloader):
+                queries = data["input_ids"].to(device)
+                context_length = queries.shape[1]
+                query_responses = data["complete_input_ids"].to(device)
+                for i in range(0, queries.shape[0], self.args.local_rollout_forward_batch_size):
+                    query_response = query_responses[i : i + self.args.local_rollout_forward_batch_size]
+                    _, score, _ = get_reward(self.reward_model, query_response, self.tokenizer, context_length)
+                    sum_scores += score
+                    j += 1
+        average_scores = (sum_scores / j).mean()
+        g_average_scores = self.accelerator.gather(average_scores)
+        rm_mean = torch.tensor(g_average_scores.mean(), device=device)
+        print(f"🔥🔥🔥 mean reward of the SFT dataset: {rm_mean.item()}")
+        del sum_scores, average_scores, g_average_scores, query_responses, context_length, queries, score
+        torch.cuda.empty_cache()
+        gc.collect()
+        return rm_mean
+
 
     def train(self):
         args = self.args
@@ -685,6 +731,7 @@ class PPOTrainer(Trainer):
                             mb_logprobs = logprobs[micro_batch_inds]
 
                             output, vpred_temp = forward(model, mb_query_responses, tokenizer)
+                            vpred_temp -= self.rm_bias
                             logits = output.logits[:, context_length - 1 : -1]
                             logits /= args.temperature + 1e-7
                             new_all_logprobs = F.log_softmax(logits, dim=-1)
@@ -789,6 +836,8 @@ class PPOTrainer(Trainer):
                 self.generate_completions(sampling=True)
                 torch.cuda.empty_cache()
             del query_responses, responses, postprocessed_responses, logprobs, ref_logprobs, values, sequence_lengths, contain_eos_token, sequence_lengths_p1, response_idxs, padding_mask, padding_mask_p1, rewards, actual_start, actual_end, advantages, returns
+            torch.cuda.empty_cache()
+            gc.collect()
             torch.cuda.empty_cache()
 
     def generate_completions(self, sampling: bool = False):
