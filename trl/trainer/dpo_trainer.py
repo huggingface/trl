@@ -46,11 +46,11 @@ from .dpo_config import DPOConfig, FDivergenceConstants, FDivergenceType
 from .utils import (
     DPODataCollatorWithPadding,
     RunningMoments,
+    cap_exp,
     disable_dropout_in_model,
     pad_to_length,
     peft_module_casting_to_bf16,
     trl_sanitze_kwargs_for_tagging,
-    cap_exp,
 )
 
 
@@ -480,9 +480,7 @@ class DPOTrainer(Trainer):
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
         self.f_divergence_type = args.f_divergence_type
-        self.f_divergence_params = {
-            FDivergenceConstants.ALPHA_DIVERGENCE_COEF_KEY: args.f_alpha_divergence_coef
-        }
+        self.f_divergence_params = {FDivergenceConstants.ALPHA_DIVERGENCE_COEF_KEY: args.f_alpha_divergence_coef}
 
         if dataset_num_proc is not None:
             warnings.warn(
@@ -984,9 +982,11 @@ class DPOTrainer(Trainer):
             The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
         """
         chosen_logratios = policy_chosen_logps.to(self.accelerator.device) - (
-            not self.reference_free) * reference_chosen_logps.to(self.accelerator.device)
+            not self.reference_free
+        ) * reference_chosen_logps.to(self.accelerator.device)
         rejected_logratios = policy_rejected_logps.to(self.accelerator.device) - (
-            not self.reference_free) * reference_rejected_logps.to(self.accelerator.device)
+            not self.reference_free
+        ) * reference_rejected_logps.to(self.accelerator.device)
 
         if self.f_divergence_type == FDivergenceType.ALPHA_DIVERGENCE.value:
             # The alpha-divergence formula: (1 - u^-alpha) / alpha
@@ -1017,7 +1017,7 @@ class DPOTrainer(Trainer):
                 #       = log(u[w]) - log(u[l]) - (log(1 + u[w]) - log(1 + u[l]))
                 # where u[w] and u[l] are the policy/reference probability ratios
                 # for the chosen and rejected samples, respectively.
-                logits -= (F.softplus(chosen_logratios) - F.softplus(rejected_logratios))
+                logits -= F.softplus(chosen_logratios) - F.softplus(rejected_logratios)
 
         # The beta is a temperature parameter for the DPO loss, typically something in the range of 0.1 to 0.5.
         # We ignore the reference model as beta -> 0. The label_smoothing parameter encodes our uncertainty about the labels and

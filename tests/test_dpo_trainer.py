@@ -702,11 +702,9 @@ class DPOTrainerTester(unittest.TestCase):
             policy_rejected_logps = torch.FloatTensor([810.5, 0.2])
             reference_chosen_logps = torch.FloatTensor([-610.0, -0.1])
             reference_rejected_logps = torch.FloatTensor([110.6, 0.5])
-            losses, _, _ = trainer.dpo_loss(policy_chosen_logps,
-                                            policy_rejected_logps,
-                                            reference_chosen_logps,
-                                            reference_rejected_logps)
-
+            losses, _, _ = trainer.dpo_loss(
+                policy_chosen_logps, policy_rejected_logps, reference_chosen_logps, reference_rejected_logps
+            )
             assert torch.isfinite(losses).cpu().numpy().all()
 
     def test_dpo_loss_js_div_f(self):
@@ -746,9 +744,7 @@ class DPOTrainerTester(unittest.TestCase):
             policy_rejected_logps = torch.FloatTensor([95.5, 0.2])
             reference_chosen_logps = torch.FloatTensor([-610.0, -0.1])
             reference_rejected_logps = torch.FloatTensor([5.5, 0.5])
-            losses, _, _ = trainer.dpo_loss(policy_chosen_logps,
-                                            policy_rejected_logps,
-                                            reference_chosen_logps,
-                                            reference_rejected_logps)
-
+            losses, _, _ = trainer.dpo_loss(
+                policy_chosen_logps, policy_rejected_logps, reference_chosen_logps, reference_rejected_logps
+            )
             assert torch.isfinite(losses).cpu().numpy().all()
