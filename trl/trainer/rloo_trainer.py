@@ -66,6 +66,15 @@ def first_true_indices(bools, dtype=torch.long):
 class RLOOTrainer(PolicyTrainerBase):
     _tag_names = ["trl", "rloo"]
 
+    def calc_logprobs(self, model, query_responses, context_length):
+        responses = query_responses[:, context_length:]
+        output_logits = self.forward(generation_model, query_responses).logits
+        response_logits = gen_output_logits[:, context_length - 1 : -1]
+        response_logits /= max(self.args.temperature, 1e-7)
+        response_logprobs = logprobs_from_logits(response_logits, responses, gather=True)
+        return response_logits, response_logprobs
+
+
     def compute_loss(
         self,
         model: Union[PreTrainedModel, nn.Module],
@@ -75,7 +84,7 @@ class RLOOTrainer(PolicyTrainerBase):
         """
         https://github.com/huggingface/transformers/blob/8c12690cecbb97e187861e386f7a0ac790e4236c/src/transformers/trainer.py#L3112
         """
-        model.train()
+        model = None  # ensure we're not using the passed model
 
         inputs = self._prepare_inputs(inputs)
         queries = inputs["input_ids"].to(self.accelerator.device)
@@ -87,46 +96,35 @@ class RLOOTrainer(PolicyTrainerBase):
             # PR TODO: refactor into a function shared by ppov2 which calculates sequences and logprobs
             #          see DPOTrainer.concatenated_forward
 
-            with self.time_metric_ctx("generate"):
-                with self.cast_model_ctx():
-                    query_responses, _ = self.generate(
-                        model,
-                        queries,
-                        self.train_generation_config,
+            with self.cast_model_ctx():
+                with self.model_manager("generation") as generation_model:
+                    with self.time_metric_ctx("generate"):
+                        query_responses = self.generate(
+                            generation_model,
+                            queries,
+                            self.train_generation_config,
+                        )
+                        responses = query_responses[:, context_length:]
+
+                    _, gen_logprobs = self.calc_logprobs(
+                        generation_model, query_responses, context_length
                     )
-            responses = query_responses[:, context_length:]
 
+                self.model_manager("ref") as ref_model:
+                    _, ref_logprobs = self.calc_logprobs(
+                        ref_model, query_responses, context_length
+                    )
 
-            with self.time_metric_ctx("active_model_forward"):
-                with self.cast_model_ctx():
-                    active_output_logits = self.forward(model, query_responses).logits
-            active_logits = active_output_logits[:, context_length - 1 : -1]
-            active_logits /= max(self.args.temperature, 1e-7)
-            logprobs = logprobs_from_logits(active_logits, responses, gather=True)
-
-            # PR TODO: remove this check
-            if not (_ == active_logits).all():
-                print("model.generate() logits differ from model.forward() logits")
-
-            with self.time_metric_ctx("ref_model_forward"):
-                with self.cast_model_ctx(), self.ref_model_mgr as ref_model:
-                    ref_output_logits = self.forward(ref_model, query_responses).logits
-            ref_logits = ref_output_logits[:, context_length - 1 : -1]
-            ref_logits /= max(self.args.temperature, 1e-7)
-            ref_logprobs = logprobs_from_logits(ref_logits, responses, gather=True)
-            # PR TODO: uncomment
-            #del active_logits, ref_logits, ref_output_logits, ref_logits, ref_all_logprobs
-            torch.cuda.empty_cache()
-
-            # Response Processing 1. truncate response after the
-            # first occurrence of `truncate_token_id`
+            # Response Processing 1. truncate response after the first occurrence of `truncate_token_id`
             postprocessed_responses = responses
             if self.args.truncate_token_id:
                 postprocessed_responses = self.truncate_response(responses)
 
             # Response Processing 2. run reward model on the truncated responses
             postprocessed_query_responses = torch.cat((queries, postprocessed_responses), 1)
-            sequence_lengths = first_true_indices(postprocessed_responses == self.tokenizer.pad_token_id) - 1
+            sequence_lengths = first_true_indices(
+                postprocessed_responses == self.tokenizer.pad_token_id
+            ) - 1
 
             # clear cache before get_reward call
             gc.collect()
@@ -138,6 +136,7 @@ class RLOOTrainer(PolicyTrainerBase):
                     postprocessed_query_responses,
                     context_length
                 )
+            gc.collect()
             torch.cuda.empty_cache()
 
             # Response Processing 3. filter response. Ensure that the sample contains truncate_token_id
@@ -153,11 +152,11 @@ class RLOOTrainer(PolicyTrainerBase):
             # see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
             response_idxs = torch.arange(responses.shape[1], device=responses.device).repeat(responses.shape[0], 1)
             padding_mask = response_idxs > sequence_lengths.unsqueeze(1)
-            logprobs = torch.masked_fill(logprobs, padding_mask, INVALID_LOGPROB)
+            gen_logprobs = torch.masked_fill(gen_logprobs, padding_mask, INVALID_LOGPROB)
             ref_logprobs = torch.masked_fill(ref_logprobs, padding_mask, INVALID_LOGPROB)
 
             # 4. compute rewards
-            kl = logprobs - ref_logprobs
+            kl = gen_logprobs - ref_logprobs
             non_score_reward = (-self.args.kl_coef * kl).sum(1)
             rlhf_reward = scores + non_score_reward.unsqueeze(1)
 
@@ -178,32 +177,25 @@ class RLOOTrainer(PolicyTrainerBase):
                 advantages[i] = rlhf_reward[i] - torch.stack(other_response_rlhf_rewards).mean(0)
             torch.cuda.empty_cache()
 
-        print("kl", kl.mean())
-        print("rlhf_reward", rlhf_reward.mean())
-        print("non_score_reward", non_score_reward.mean())
+        print("kl[0]", kl[0])
+        print("rlhf_reward[]", rlhf_reward[0])
+        print("non_score_reward[0]", non_score_reward[0])
         print("advantages[0]", advantages[0])
         print("_advantages[0]", _advantages[0])
 
 
+        # calculate gradients and loss
         with self.time_metric_ctx("calc_loss"):
-            # PR TODO: remove this assertion when stable
-            # ensure gradients can be set
-            assert model.training, "model is incorrectly in eval mode"
-            assert torch.is_grad_enabled(), "grad is disabled, but we need to calculate grad"
 
-            # calculate gradients and loss
-            with self.time_metric_ctx("model_forward"):
-                with self.cast_model_ctx():
-                    output = self.forward(model, query_responses)
-            logits = output.logits[:, context_length - 1 : -1]
-            logits /= max(self.args.temperature, 1e-7)
-
-            new_logprobs = logprobs_from_logits(logits, responses, gather=True)
-            new_logprobs = torch.masked_fill(
-                new_logprobs, padding_mask, INVALID_LOGPROB
+            with self.cast_model_ctx(), self.model_manager("active") as active_model:
+                active_logits, active_logprobs = self.calc_logprobs(
+                    active_model, query_responses, context_length
+                )
+            active_logprobs = torch.masked_fill(
+                active_logprobs, padding_mask, INVALID_LOGPROB
             )
-            new_ratio = (new_logprobs - logprobs).exp()
-            logprobs_diff = new_logprobs.sum(1) - logprobs.sum(1)
+            new_ratio = (active_logprobs - gen_logprobs).exp()
+            logprobs_diff = active_logprobs.sum(1) - gen_logprobs.sum(1)
             ratio = torch.exp(logprobs_diff)
             pg_losses = -advantages * ratio
             pg_losses2 = -advantages * torch.clamp(ratio, 1.0 - self.args.cliprange, 1.0 + self.args.cliprange)
@@ -213,57 +205,27 @@ class RLOOTrainer(PolicyTrainerBase):
 
         # log metrics
         with torch.no_grad():
-            prob_dist = torch.nn.functional.softmax(logits, dim=-1)
-            entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1)
-            approxkl = 0.5 * (logprobs_diff**2).mean()
+            prob_dist = torch.nn.functional.softmax(active_logits, dim=-1)
+            entropy_avg = torch.logsumexp(active_logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1)
 
-            rlhf_reward_mean = self.accelerator.gather(rlhf_reward).mean().item()
-            # PR TODO: this is from original, but maybe it should be logged somewhere?
-            #self.accelerator.print(f"{rlhf_reward_mean=}")
-            mean_kl = kl.sum(1).mean()
-            mean_entropy = (-logprobs).sum(1).mean()
-            # PR TODO: why is this metric removed in the original
-            # mean_non_score_reward = non_score_reward.sum(1).mean()
-            # "objective/non_score_reward"
-
-
-        metrics = {
-            "objective/kl": self.accelerator.gather(mean_kl).mean().item(),
-            "objective/entropy": self.accelerator.gather(mean_entropy).mean().item(),
-            "objective/rlhf_reward": self.accelerator.gather(rlhf_reward).mean().item(),
-            "objective/scores": self.accelerator.gather(scores.mean()).mean().item(),
-            "policy/approxkl_avg": self.accelerator.gather(approxkl).mean().item(),
-            "policy/clipfrac_avg": self.accelerator.gather(pg_clipfrac).mean().item(),
-            "loss/policy_avg": self.accelerator.gather(pg_loss).mean().item(),
-            # PR TODO: this isn't calculated in the original
-            #"loss/value_avg": self.accelerator.gather(vf_loss_stats).mean().item(),
-            #"val/clipfrac_avg": self.accelerator.gather(vf_clipfrac_stats).mean().item(),
-
-            # PR TODO: how does this differ from mean_entropy
-            #"policy/entropy_avg": self.accelerator.gather(entropy).mean().item(),
-            "val/ratio": self.accelerator.gather(new_ratio).mean().item(),
-
-            # PR TODO
-            #"val/ratio_var": self.accelerator.gather(ratio_stats).var().item(),
-            "val/num_eos_tokens": (responses == self.tokenizer.eos_token_id).sum().item(),
-        }
-
-        self.store_metrics(metrics)
+            self.store_metrics({
+                "objective/kl": kl.sum(1).mean(),
+                "objective/entropy": (-gen_logprobs).sum(1).mean(),
+                "objective/rlhf_reward": rlhf_reward.mean(),
+                "objective/scores": self.accelerator.gather(scores.mean()).mean().item(),
+                "policy/approxkl_avg": 0.5 * (logprobs_diff**2).mean(),
+                "loss/policy_avg": self.accelerator.gather(pg_loss).mean().item(),
+                "val/ratio": new_ratio.mean(),
+                "val/ratio_var": new_ratio.mean().var(),
+                "val/num_eos_tokens": (responses == self.tokenizer.eos_token_id).sum().item(),
+                "policy/clipfrac_avg": self.accelerator.gather(pg_clipfrac).mean().item(),
+                "policy/entropy_avg": entropy_avg
+            })
 
         loss = pg_loss.to(self.args.device)
         print("loss", loss)
 
-        # PR TODO: delete the commented if it truly is what's detaching the graph
-        # it probably isn't a problem, I saw issues with LoRA_MLPBackward w/ Unsloth
-        """
-        del (
-            output, logits, new_all_logprobs, new_logprobs,
-            logprobs_diff, ratio, pg_losses, pg_losses2,
-            pg_loss, pg_clipfrac, prob_dist, entropy, approxkl,
-            kl, mean_kl, mean_entropy, scores
-        )
-        torch.cuda.empty_cache()
-        """
+        # PR TODO: decorator which calls gc.collect(); torch.cuda.empty_cache()
 
         if return_outputs:
             return (loss, metrics)
