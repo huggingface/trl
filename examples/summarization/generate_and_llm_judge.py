@@ -259,7 +259,11 @@ def llm_as_a_judge(args, prompts, reference, generations, model_name=None):
 
         comparisons, preferred = [], []
         for llm_judge_completion in llm_judge_texts:
-            comparisons.append(llm_judge_completion.split("Comparison:")[1].split("Preferred:")[0].strip())
+            if "Comparison:" in llm_judge_completion:
+                comparisons.append(llm_judge_completion.split("Comparison:")[1].split("Preferred:")[0].strip())
+            else:
+                comparisons.append("")
+
             if "Preferred:" in llm_judge_completion:
                 preferred.append(llm_judge_completion.split("Preferred:")[1].strip())
             else:
