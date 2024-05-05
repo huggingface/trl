@@ -1,6 +1,6 @@
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Literal, Optional, Tuple, Union, Dict
 
 import torch.nn as nn
 from accelerate.utils import is_deepspeed_available
