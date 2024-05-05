@@ -58,7 +58,7 @@ class PolicyTrainerArguments(TrainingArguments):
     non_eos_penalty: bool = False
     """whether to penalize responses that do not contain `truncate_token_id`"""
 
-    update_generation_steps: Optional[int] = None
+    update_generation_steps: Optional[int] = 256
     """Number of steps between updating the generation model. If None, once per epoch"""
 
 
@@ -494,13 +494,16 @@ class PolicyTrainerBase(Trainer):
                 batch_extras = self.generate_batch_extras(
                     self.model, batch["input_ids"]
                 )
-                print("type(batch)", type(batch))
                 batch.update(batch_extras)
+                # PR TODO: clean this
+                gc.collect()
+                torch.cuda.empty_cache()
+                print("batch keys", batch.keys())
             return batch
         return DynamicDataLoader(
             dataloader,
             mutate_fn,
-            num_steps=self._train_batch_size * self.args.gradient_accumulation_steps
+            num_steps=self.args.update_generation_steps * self.args.gradient_accumulation_steps
         )
 
     @staticmethod
@@ -513,9 +516,9 @@ class PolicyTrainerBase(Trainer):
 
     def generate(self, model, queries, generation_config, requires_grad=True):
         """generate in a way that does not affect padding tokens"""
-        if True:  # with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+        if True:  # with unwrap_model_for_genera[tion(model, self.accelerator) as unwrapped_model:
             unwrapped_model = model
-            with (fast_eval_mode(unwrapped_model) if requires_grad else nullcontext):
+            with fast_eval_mode(unwrapped_model):
                 context_length = queries.shape[1]
                 attention_mask = queries != self.tokenizer.pad_token_id
                 input_ids = torch.masked_fill(queries, ~attention_mask, 0)
