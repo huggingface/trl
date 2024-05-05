@@ -235,9 +235,6 @@ class ModelManager:
             base_model: Optional[PreTrainedModelWrapper] = None,
     ):
         self.base_model = base_model
-        self.ref_adapter_name =  ref_adapter_name
-
-        self._unwrap_model_ctx = None
 
         # PR TODO: we assume the model is a peft model by default, needs some tweaking for other use cases
         """
