@@ -339,7 +339,6 @@ class ReferenceModelManager:
             )
 
         if self.ref_model is not None and not self.is_peft_model:
-            print(type(self.ref_model))
             self.ref_model = _prepare_multigpu(self.ref_model, self.accelerator, is_deepspeed_enabled)
 
     def __enter__(self):
@@ -488,7 +487,7 @@ class PolicyTrainerBase(Trainer):
     def get_train_dataloader(self):
         dataloader = super().get_train_dataloader()
         def mutate_fn(batches):
-            for batch in tqdm(batches, desc="mutating batch"):
+            for batch in tqdm(batches, desc="mutating batches"):
                 batch_extras = self.generate_batch_extras(
                     self.model, batch["input_ids"]
                 )
@@ -496,8 +495,7 @@ class PolicyTrainerBase(Trainer):
                 # PR TODO: clean this
                 gc.collect()
                 torch.cuda.empty_cache()
-                print("batch keys", batch.keys())
-            return batch
+            return batches
         return DynamicDataLoader(
             dataloader,
             mutate_fn,
