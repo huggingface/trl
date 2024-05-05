@@ -110,7 +110,7 @@ class RLOOTrainer(PolicyTrainerBase):
                         generation_model, query_responses, context_length
                     )
 
-                self.model_manager("ref") as ref_model:
+                with self.model_manager("ref") as ref_model:
                     _, ref_logprobs = self.calc_logprobs(
                         ref_model, query_responses, context_length
                     )
