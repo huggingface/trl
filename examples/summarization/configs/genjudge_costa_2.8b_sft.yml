@@ -1,0 +1,10 @@
+model_name: vwxyzjn/EleutherAI_pythia-2.8b-deduped__sft__tldr
+model_revisions: ["sft__55513__1708611267"]
+gen_dtype: bfloat16
+wandb_log_id: EleutherAI_pythia-2.8b-deduped__sft__tldr_55513
+tokenizer_name: EleutherAI/pythia-1b-deduped
+dataset_name: vwxyzjn/summarize_from_feedback_tldr_3_filtered_oai_preprocessing_1706381144
+llm_judge_model_name: meta-llama/Meta-Llama-3-8B-Instruct
+llm_judge_dtype: bfloat16
+max_new_tokens: 128
+temperature: 0.010001
