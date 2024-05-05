@@ -7,6 +7,7 @@ from typing import Dict, List, Literal, Optional, Tuple, Union, Callable, Any
 import warnings
 from contextlib import nullcontext
 from tqdm import tqdm
+import gc
 
 import numpy as np
 import torch
