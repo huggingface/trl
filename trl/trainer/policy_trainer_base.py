@@ -263,37 +263,31 @@ ppp-
 """
 
 
-class UpdateTrainGenerationSamplesCallback(TrainerCallback):
-    def __init__(self, model, steps, batch_size):
-        self.model = model
-        self.steps = steps
-        self.batch_size = batch_size
+class DynamicDataLoader:
+    """
+    Augment the base_dataloader with num_steps lookahead
+    """
+    def __init__(self, base_dataloader, mutate_fn, num_steps):
+        self.base_dataloader = base_dataloader
+        self.mutate_fn = mutate_fn
+        self.num_steps = num_steps
 
-    def on_step_begin(self, args, state, control, **kwargs):
-        if state.global_step % self.steps == 0:
-            dataloader = kwargs['dataloader']
-            for i, batch in enumerate(dataloader):
-                inputs = batch['input_ids']
-                attention_mask = batch['attention_mask']
-                outputs = self.model.generate(inputs, attention_mask=attention_mask)
-                queries = self.model.tokenizer.batch_decode(inputs, skip_special_tokens=True)
-                query_responses = self.model.tokenizer.batch_decode(outputs, skip_special_tokens=True)
-                context_lengths = attention_mask.sum(dim=1).tolist()
-                generation_logprobs = self.model(**batch).logits.max(dim=-1)[0].detach().numpy().tolist()
+    def __iter__(self):
+        batch_buffer = []
+        for batch in self.base_dataloader:
+            batch_buffer.append(batch)
+            if len(batch_buffer) >= self.num_steps:
+                # When the buffer reaches the specified number of steps, apply the mutation function
+                batch_buffer = self.mutate_fn(batch_buffer)
+                # Yield batches one by one from the mutated buffer
+                while batch_buffer:
+                    yield batch_buffer.pop(0)
+        # If there are any remaining batches after the last full set, yield them as well
+        while batch_buffer:
+            yield batch_buffer.pop(0)
 
-                # Modify the dataset with new fields
-                batch.update({
-                    'queries': queries,
-                    'query_responses': query_responses,
-                    'context_length': context_lengths,
-                    'generation_logprobs': generation_logprobs
-                })
-
-                # Example of how to replace the batch in the dataloader, this will depend on your DataLoader setup
-                dataloader.dataset[i] = batch
-
-                if i >= self.batch_size:
-                    break
+    def __len__(self):
+        return len(self.base_dataloader)
 
 
 class ReferenceModelManager:
@@ -386,11 +380,6 @@ class PolicyTrainerBase(Trainer):
             args=args,
         )
 
-        # PR TODO: class variable which determines whether ref logprobs are generated either
-        #          - once per batch
-        #          - once per update
-        #          - once per run (see dpo_trainer.py precompute_ref_log_probs)
-
         # Disable dropout ensures logprobs during generation aren't different from forward pass
         # https://github.com/huggingface/trl/pull/1586#discussion_r1579533825
         for m in [model, ref_model, reward_model]:
@@ -441,17 +430,6 @@ class PolicyTrainerBase(Trainer):
             **kwargs,
         )
 
-        # Add callback to update generation model
-        update_train_gen_cb = UpdateTrainGenerationSamplesCallback(
-            model=self.model,
-            steps=(
-                self.args.update_generation_steps or
-                len(self.get_train_dataloader()) / self.args.gradient_accumulation_steps
-            ),
-            batch_size=self._train_batch_size
-        )
-        self.add_callback(update_train_gen_cb)
-
         self.ref_model_mgr = ReferenceModelManager(
             self.accelerator,
             ref_model=ref_model,
@@ -473,6 +451,40 @@ class PolicyTrainerBase(Trainer):
         #)
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
+
+
+    def get_batch_responses_and_logprobs(self, model, input_ids):
+        queries = inputs["input_ids"].to(self.accelerator.device)
+        context_length = queries.shape[1]
+        query_responses = self.generate(
+            model,
+            queries,
+            self.train_generation_config,
+        )
+        responses = query_responses[:, context_length:]
+        generation_logprobs = self.calc_logprobs(
+            model, query_responses, context_length
+        )
+        return {
+            "queries": queries,
+            "context_length": context_length,
+            "query_responses": query_responses,
+            "responses": responses,
+            "generation_logprobs": generation_logprobs
+        }
+
+    def get_train_dataloader(self):
+        dataloader = super().get_train_dataloader()
+        def mutate_fn(batches):
+            for batch in batches:
+                batch["queries"] = self.get_batch_responses_and_logprobs(
+                    self.model, batch["input_ids"]
+                )
+        return DynamicDataLoader(
+            dataloader,
+            mutate_fn,
+            num_steps=self._train_batch_size * self.args.gradient_accumulation_steps
+        )
 
     @staticmethod
     def _disable_dropout(model):
