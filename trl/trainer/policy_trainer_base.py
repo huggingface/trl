@@ -274,17 +274,14 @@ class DynamicDataLoader:
             base_dataloader,
             mutate_fn,
             num_steps,
-            tqdm_label="Applying DynamicDataLoader mutation",
     ):
         self.base_dataloader = base_dataloader
         self.mutate_fn = mutate_fn
         self.num_steps = num_steps
-        self.tqdm_label = tqdm_label
 
     def __iter__(self):
         batch_buffer = []
-        tqdm_iter = tqdm(self.base_dataloader, desc=self.tqdm_label, total=self.num_steps)
-        for batch in tqdm_iter:
+        for batch in self.base_dataloader:
             batch_buffer.append(batch)
             if len(batch_buffer) >= self.num_steps:
                 # When the buffer reaches the specified number of steps, apply the mutation function
@@ -293,7 +290,6 @@ class DynamicDataLoader:
                 while batch_buffer:
                     yield batch_buffer.pop(0)
                 # reset tqdm while not changing position in dataloader
-                tqdm_iter.reset(total=self.num_steps)
 
         # If there are any remaining batches after the last full set, yield them as well
         while batch_buffer:
@@ -471,27 +467,28 @@ class PolicyTrainerBase(Trainer):
     def generate_batch_extras(self, model, input_ids):
         queries = input_ids.to(self.accelerator.device)
         context_length = queries.shape[1]
-        query_responses = self.generate(
-            model,
-            queries,
-            self.train_generation_config,
-        )
-        responses = query_responses[:, context_length:]
-        generation_logits, generation_logprobs = self.calc_logprobs(
-            model, query_responses, context_length
-        )
+        with torch.no_grad():
+            query_responses = self.generate(
+                model,
+                queries,
+                self.train_generation_config,
+            )
+            responses = query_responses[:, context_length:]
+            generation_logits, generation_logprobs = self.calc_logprobs(
+                model, query_responses, context_length
+            )
         return {
-            "queries": queries,
-            "query_responses": query_responses,
-            "responses": responses,
-            "generation_logits": generation_logits,
-            "generation_logprobs": generation_logprobs,
+            "queries": queries.detach().cpu(),
+            "query_responses": query_responses.detach().cpu(),
+            "responses": responses.detach().cpu(),
+            "generation_logits": generation_logits.detach().cpu(),
+            "generation_logprobs": generation_logprobs.detach().cpu(),
         }
 
     def get_train_dataloader(self):
         dataloader = super().get_train_dataloader()
         def mutate_fn(batches):
-            for batch in batches:
+            for batch in tqdm(batches, desc="mutating batch"):
                 batch_extras = self.generate_batch_extras(
                     self.model, batch["input_ids"]
                 )
