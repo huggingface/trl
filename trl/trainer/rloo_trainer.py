@@ -85,7 +85,7 @@ class RLOOTrainer(PolicyTrainerBase):
             # PR TODO: refactor into a function shared by ppov2 which calculates sequences and logprobs
             #          see DPOTrainer.concatenated_forward
 
-            with self.cast_model_ctx(), with self.ref_model_mgr as ref_model:
+            with self.cast_model_ctx(), self.ref_model_mgr as ref_model:
                 _, ref_logprobs = self.calc_logprobs(
                     ref_model, query_responses, context_length
                 )
