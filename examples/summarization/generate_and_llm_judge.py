@@ -4,6 +4,7 @@ import random
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+import pandas as pd
 import torch
 from datasets import builder, load_dataset
 from huggingface_hub import list_repo_refs
@@ -90,8 +91,6 @@ def generate(script_args):
         max_tokens=script_args.max_new_tokens,
         top_p=script_args.top_p,
         n=1,
-        # include_stop_str_in_output=True,
-        # skip_special_tokens=False,
     )
 
     refs = list_repo_refs(script_args.model_name, repo_type="model")
@@ -171,7 +170,12 @@ def generate(script_args):
             print(sampling_params, file=f)
 
     print(f"generated {len(gens)} steps")
-    reference = dataset["reference_response"]
+    reference = []
+    for ref_response in dataset["reference_response"]:
+        if ref_response.endswith("<|endoftext|>"):
+            ref_response = ref_response.split("<|endoftext|>")[0]
+
+        reference.append(ref_response.strip())
 
     return prompts, reference, gens
 
@@ -190,11 +194,11 @@ def create_llm_judge_prompts(tokenizer, prompts, reference, generated, seed):
     for prompt, ref, gen in zip(prompts, reference, generated):
         generated_idx = random.randint(0, 1)
         if generated_idx == 0:
-            response0 = gen
-            response1 = ref
+            response0 = gen.strip()
+            response1 = ref.strip()
         else:
-            response0 = ref
-            response1 = gen
+            response0 = ref.strip()
+            response1 = gen.strip()
 
         query = TEMPLATE.format(post=prompt, response0=response0, response1=response1)
         messages = [
@@ -258,18 +262,24 @@ def llm_as_a_judge(args, prompts, reference, generations, model_name=None):
             comparisons.append(llm_judge_completion.split("Comparison:")[1].split("Preferred:")[0].strip())
             preferred.append(llm_judge_completion.split("Preferred:")[1].strip())
 
-        wins = []
-        fails = []
+        full_convo = [prompt + text for prompt, text in zip(llm_judge_prompts, llm_judge_texts)]
+
+        winner = []
+        win_sum = 0
+        num_fails = 0
         for pref, gen_idx in zip(preferred, generated_indices):
             if pref == OPTIONS[gen_idx]:
-                wins.append(1)
+                winner.append("ours")
+                win_sum += 1
             elif pref == OPTIONS[1 - gen_idx]:
-                wins.append(0)
+                winner.append("reference")
             else:
-                fails.append(pref)
+                winner.append("fail")
+                num_fails += 1
 
-        win_rate = sum(wins) / len(wins)
-        print(f"Failed to get preference from {len(fails)} examples out of {len(preferred)}")
+        win_rate = win_sum / (len(preferred) - num_fails)
+        if num_fails > 0:
+            print(f"Failed to get preference from {num_fails} examples out of {len(preferred)}")
 
         if step_str.startswith("step"):
             step_str = step_str.removeprefix("step")
@@ -283,39 +293,50 @@ def llm_as_a_judge(args, prompts, reference, generations, model_name=None):
         if log_to_wandb:
             wandb.log(
                 {
-                    "gold/win_rate": win_rate,
+                    "llm_judge/win_rate": win_rate,
                     "train/global_step": step,
                 }
             )
 
         print(f"step {step}: win-rate {win_rate}")
 
+        if args.output_dir is not None:
+            df = pd.DataFrame(
+                {
+                    "prompt": prompts,
+                    "reference": reference,
+                    "generated": generated,
+                    "winner": winner,
+                    "llm_prompt": llm_judge_prompts,
+                    "full_conov": full_convo,
+                    "generated_idx": generated_indices,
+                }
+            )
+            df.to_csv(os.path.join(args.output_dir, f"step{step}.csv"))
+
+
+def main(generate_args, eval_args):
+    eval_args.num_gpus = generate_args.num_gpus
+    eval_args.output_dir = generate_args.output_dir
+
+    print("GENERATING")
+    prompts, reference, generations = generate(generate_args)
+    # dataset = load_dataset(generate_args.dataset_name, split=generate_args.split)
+    # generations = {"step0": dataset["query_reference_response"]}
+    # prompts = dataset["query"]
+    # reference = dataset["reference_response"]
+    # generations = {"step0": dataset["reference_response"]}
+    print("EVALUATING")
+    llm_as_a_judge(eval_args, prompts, reference, generations, generate_args.model_name)
+
 
 def main_args_dict(args_dict):
     parser = HfArgumentParser([GenerateScriptArguments, LLMJudgeArguments])
     generate_args, eval_args = parser.parse_dict(args_dict)
-    eval_args.num_gpus = generate_args.num_gpus
-
-    print("GENERATING")
-    # prompts, reference, generations = generate(generate_args)
-    dataset = load_dataset(generate_args.dataset_name, split=generate_args.split)
-    generations = {"step0": dataset["query_reference_response"]}
-    prompts = dataset["query"]
-    reference = dataset["reference_response"]
-    generations = {"step0": dataset["reference_response"]}
-    print("EVALUATING")
-    llm_as_a_judge(eval_args, prompts, reference, generations, generate_args.model_name)
+    main(generate_args, eval_args)
 
 
 if __name__ == "__main__":
     parser = HfArgumentParser([GenerateScriptArguments, LLMJudgeArguments])
     generate_args, eval_args = parser.parse_args_into_dataclasses()
-    eval_args.num_gpus = generate_args.num_gpus
-
-    print("GENERATING")
-    prompts, reference, generations = generate(generate_args)
-    # dataset = load_dataset(generate_args.dataset_name, split=generate_args.train_split)
-    # generations = {"step0": dataset["query_reference_response"]}
-    # reference = dataset["query_reference_response"]
-    print("EVALUATING")
-    llm_as_a_judge(eval_args, prompts, reference, generations)
+    main(generate_args, eval_args)
