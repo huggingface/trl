@@ -1,0 +1,15 @@
+# model_revisions: ['sft__55513__1708611267']
+model_name: mnoukhov/dpo2_costa_1b_20k_fp16.yml_91ead4b5862c14e701bb164c36d54628
+model_revisions: ['step1']
+base_model_name: vwxyzjn/EleutherAI_pythia-1b-deduped__sft__tldr
+base_model_revision: sft__55513__1706646024
+tokenizer_name: EleutherAI/pythia-1b-deduped 
+# wandb_log_id: null
+# model_name: mnoukhov/EleutherAI_pythia-1b-deduped__sft__tldr_dpo_20konly_1b_fp16.yml_24e9f83_merged
+# model_revisions: ['step1']
+# wandb_log_id: 06936e8694635c9d13ec2d47abdeb0aa
+split: validation[:10]
+dataset_name: vwxyzjn/summarize_from_feedback_tldr_3_filtered_oai_preprocessing_1706381144
+llm_judge_model_name: meta-llama/Meta-Llama-3-8B-Instruct
+llm_judge_dtype: bfloat16
+max_new_tokens: 128
