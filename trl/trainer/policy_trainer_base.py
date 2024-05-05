@@ -237,7 +237,7 @@ def _prepare_multigpu(model, accelerator, is_deepspeed_enabled: bool):
         )
 
 # PR TODO: Implement original workflow as follows
--"""
+"""
 -There are three models forwards() considered in each step
 -- ref_model: Never changes
 -- update_model: changes every update step (originally was after multiple epochs, I expect fractions of an epoch to work better. Will have to validate to ensure this is true.)
