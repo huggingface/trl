@@ -2,6 +2,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Optional, Tuple, Union
 
+import torch.nn as nn
 from accelerate.utils import is_deepspeed_available
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
