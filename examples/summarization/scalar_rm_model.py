@@ -6,6 +6,8 @@ import torch
 import torch.nn as nn
 from accelerate import PartialState
 from datasets import builder, load_dataset
+from gpt_reward_modeling import GPTRewardDataCollatorWithPadding, GPTRewardTrainer
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import (
     AutoConfig,
@@ -16,10 +18,12 @@ from transformers import (
     PretrainedConfig,
     PreTrainedModel,
     Trainer,
+    TrainingArguments,
 )
 from transformers.modeling_outputs import SequenceClassifierOutputWithPast
 
-from trl import ModelConfig, RewardConfig
+
+# from trl import ModelConfig, RewardConfig
 
 
 builder.has_sufficient_disk_space = lambda needed_bytes, directory=".": True
@@ -29,41 +33,16 @@ tqdm.pandas()
 
 @dataclass
 class ScriptArguments:
-    """
-    The name of the Casual LM model we wish to fine with RewardTrainer
-    """
-
-    dataset_name: Optional[str] = field(
-        default="mnoukhov/dpo_20konly_1b_fp16.yml_1a838_generations", metadata={"help": "the dataset name"}
-    )
+    dataset_name: Optional[str] = field(default=None)
+    dataset_split: Optional[str] = field(default=None)
+    wandb_log_id: Optional[str] = field(default=None)
+    model_name: Optional[str] = field(default="EleutherAI/pythia-410m", metadata={"help": "the model name"})
+    model_revision: Optional[str] = field(default=None)
     tokenizer_name: Optional[str] = field(default=None, metadata={"help": "the tokenizer name"})
-
-
-def get_kbit_device_map() -> Optional[Dict[str, int]]:
-    # if is_xpu_available():
-    #     return {"": f"xpu:{PartialState().local_process_index}"}
-    if torch.cuda.is_available():
-        return {"": PartialState().local_process_index}
-    else:
-        return None
-
-
-def get_quantization_config(model_config: ModelConfig) -> Optional[BitsAndBytesConfig]:
-    if model_config.load_in_4bit:
-        quantization_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype=model_config.torch_dtype,  # For consistency with model weights, we use the same value as `torch_dtype`
-            bnb_4bit_quant_type=model_config.bnb_4bit_quant_type,
-            bnb_4bit_use_double_quant=model_config.use_bnb_nested_quant,
-        )
-    elif model_config.load_in_8bit:
-        quantization_config = BitsAndBytesConfig(
-            load_in_8bit=True,
-        )
-    else:
-        quantization_config = None
-
-    return quantization_config
+    eval_dtype: Optional[str] = field(default="auto")
+    eval_batch_size: Optional[int] = field(default=16)
+    max_length: Optional[int] = field(default=512)
+    flash_attention: Optional[bool] = field(default=False)
 
 
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
@@ -149,25 +128,100 @@ def first_true_indices(bools, dtype=torch.long):
     return torch.min(zero_or_index, dim=-1).values
 
 
-if __name__ == "__main__":
-    parser = HfArgumentParser((RewardConfig, ModelConfig, ScriptArguments))
-    reward_config, model_config, script_args = parser.parse_args_into_dataclasses()
-    reward_config.gradient_checkpointing_kwargs = dict(use_reentrant=False)
+def relabel_with_preds(batch: Dict[str, List]):
+    relabel_batch = {
+        "prompt": [],
+        "chosen": [],
+        "rejected": [],
+        "pred_chosen": [],
+        "pred_rejected": [],
+    }
+    for prompt, chosen, rejected, pred_chosen, pred_rejected in zip(
+        batch["prompt"],
+        batch["chosen"],
+        batch["rejected"],
+        batch["pred_chosen"],
+        batch["pred_rejected"],
+    ):
+        relabel_batch["prompt"].append(prompt)
+        if pred_chosen >= pred_rejected:
+            relabel_batch["chosen"].append(chosen)
+            relabel_batch["rejected"].append(rejected)
+            relabel_batch["pred_chosen"].append(pred_chosen)
+            relabel_batch["pred_rejected"].append(pred_rejected)
+        else:
+            relabel_batch["chosen"].append(rejected)
+            relabel_batch["rejected"].append(chosen)
+            relabel_batch["pred_chosen"].append(pred_rejected)
+            relabel_batch["pred_rejected"].append(pred_chosen)
 
-    ################
-    # Model & Tokenizer
-    ################
-    torch_dtype = (
-        model_config.torch_dtype
-        if model_config.torch_dtype in ["auto", None]
-        else getattr(torch, model_config.torch_dtype)
-    )
-    tokenizer = AutoTokenizer.from_pretrained(script_args.tokenizer_name)
+    return relabel_batch
+
+
+def prepare_dataset(args, dataset, tokenizer):
+    original_columns = dataset.column_names
+
+    def preprocess_function(examples):
+        new_examples = {
+            "input_ids_chosen": [],
+            "attention_mask_chosen": [],
+            "input_ids_rejected": [],
+            "attention_mask_rejected": [],
+        }
+        for prompt, chosen, rejected in zip(examples["prompt"], examples["chosen"], examples["rejected"]):
+            full_chosen = prompt + chosen
+            if not full_chosen.endswith(tokenizer.eos_token):
+                full_chosen += tokenizer.eos_token
+
+            full_rejected = prompt + rejected
+            if not full_rejected.endswith(tokenizer.eos_token):
+                full_rejected += tokenizer.eos_token
+
+            chosen_tokenized = tokenizer(
+                full_chosen,
+                padding="max_length",
+                max_length=args.max_length,
+                truncation=True,
+            )
+
+            rejected_tokenized = tokenizer(
+                full_rejected,
+                padding="max_length",
+                max_length=args.max_length,
+                truncation=True,
+            )
+
+            # guarantee that last token is EOS if truncated
+            token_length = sum(chosen_tokenized["attention_mask"])
+            if token_length == args.max_length:
+                chosen_tokenized["input_ids"][-1] = tokenizer.eos_token_id
+
+            token_length = sum(rejected_tokenized["attention_mask"])
+            if token_length == args.max_length:
+                rejected_tokenized["input_ids"][-1] = tokenizer.eos_token_id
+
+            new_examples["input_ids_chosen"].append(chosen_tokenized["input_ids"])
+            new_examples["attention_mask_chosen"].append(chosen_tokenized["attention_mask"])
+            new_examples["input_ids_rejected"].append(rejected_tokenized["input_ids"])
+            new_examples["attention_mask_rejected"].append(rejected_tokenized["attention_mask"])
+
+        return new_examples
+
+    dataset = dataset.map(preprocess_function, batched=True, remove_columns=original_columns)
+
+    return dataset
+
+
+if __name__ == "__main__":
+    parser = HfArgumentParser(ScriptArguments)
+    args = parser.parse_args_into_dataclasses()[0]
+    torch_dtype = args.eval_dtype if args.eval_dtype in ["auto", None] else getattr(torch, args.eval_dtype)
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_name)
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
 
     scalar_model_config = ScalarModelConfig.from_pretrained(
-        model_config.model_name_or_path,
-        revision=model_config.model_revision,
+        args.model_name,
+        revision=args.model_revision,
     )
     # hack to remove the path
     # models/EleutherAI/pythia-6.9b-deduped/sft_model_55513 -> EleutherAI/pythia-6.9b-deduped
@@ -176,42 +230,39 @@ if __name__ == "__main__":
         sft_model = f"vwxyzjn/EleutherAI_{original_model}__sft__tldr"
         scalar_model_config.base_config["_name_or_path"] = sft_model
         scalar_model_config.base_model = sft_model
-        scalar_model_config.base_model_revision = "sft__55513__1706646024"
+        _, seed, _ = args.model_revision.split("__")
+        scalar_model_config.base_model_revision = f"sft__{seed}__1708611267"
 
-    quantization_config = get_quantization_config(model_config)
+    # quantization_config = get_quantization_config(model_config)
     model = ScalarModel.from_pretrained(
-        model_config.model_name_or_path,
-        revision=model_config.model_revision,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
-        quantization_config=quantization_config,
+        args.model_name,
+        revision=args.model_revision,
         config=scalar_model_config,
+        torch_dtype=torch_dtype,
+        use_flash_attention_2=args.flash_attention,
     )
 
-    trainer = Trainer(
+    model.config.pad_token_id = tokenizer.pad_token_id
+
+    ## get reference continuation rewards
+    dataset = load_dataset(args.dataset_name, split=args.dataset_split)
+    dataset = prepare_dataset(args, dataset, tokenizer)
+
+    data_collator = GPTRewardDataCollatorWithPadding(tokenizer, max_length=args.max_length)
+
+    training_args = TrainingArguments(per_device_eval_batch_size=int(args.eval_batch_size), output_dir=".")
+
+    trainer = GPTRewardTrainer(
         model=model,
         tokenizer=tokenizer,
-        args=reward_config,
+        args=training_args,
+        max_length=args.max_length,
+        data_collator=data_collator,
     )
 
-    datasets = []
-    epochs = [1] + list(range(1000, 10000, 1000))
-    for epoch in epochs:
-        dataset = load_dataset(script_args.dataset_name, revision=str(epoch), split="train[:100]")
+    outputs = trainer.predict(dataset)
+    preds = outputs.predictions
 
-        dataset = dataset.map(
-            lambda example: tokenizer(
-                example["generations"] + "<|endoftext|>",
-                padding="max_length",
-                max_length=reward_config.max_length,
-                truncation=True,
-            ),
-            batched=True,
-        )
+    import pdb
 
-        results = trainer.predict(dataset)
-        # raw_datasets = raw_datasets.filter(
-        #     lambda x: len(x["input_ids_chosen"]) <= reward_config.max_length
-        #     and len(x["input_ids_rejected"]) <= reward_config.max_length
-        # )
-        # train_dataset = raw_datasets["train"]
-        # eval_dataset = raw_datasets["test"]
+    pdb.set_trace()

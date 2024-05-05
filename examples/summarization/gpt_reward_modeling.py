@@ -345,161 +345,164 @@ def prepare_dataset(args, dataset, tokenizer, num_proc=2):
     return dataset
 
 
-parser = HfArgumentParser(ScriptArguments)
-script_args = parser.parse_args_into_dataclasses()[0]
+if __name__ == "__main__":
+    parser = HfArgumentParser(ScriptArguments)
+    script_args = parser.parse_args_into_dataclasses()[0]
 
-model, tokenizer = create_and_prepare_model(script_args)
-if script_args.mode != "eval":
-    train_data = load_dataset(script_args.dataset_name, split=script_args.train_split)
-    train_dataset = prepare_dataset(script_args, train_data, tokenizer)
-else:
-    train_dataset = None
+    model, tokenizer = create_and_prepare_model(script_args)
+    if script_args.mode != "eval":
+        train_data = load_dataset(script_args.dataset_name, split=script_args.train_split)
+        train_dataset = prepare_dataset(script_args, train_data, tokenizer)
+    else:
+        train_dataset = None
 
-if script_args.eval_split is not None and script_args.eval_split != "None":
-    eval_data = load_dataset(script_args.dataset_name, split=script_args.eval_split)
-    eval_dataset = prepare_dataset(script_args, eval_data, tokenizer)
-else:
-    eval_dataset = None
+    if script_args.eval_split is not None and script_args.eval_split != "None":
+        eval_data = load_dataset(script_args.dataset_name, split=script_args.eval_split)
+        eval_dataset = prepare_dataset(script_args, eval_data, tokenizer)
+    else:
+        eval_dataset = None
 
-# don't include gradient_checkpointing here, see trl#728
-training_args = TrainingArguments(
-    output_dir=script_args.output_dir,
-    per_device_train_batch_size=script_args.per_device_train_batch_size,
-    per_device_eval_batch_size=script_args.per_device_eval_batch_size,
-    bf16=script_args.bf16,
-    fp16=script_args.fp16,
-    num_train_epochs=script_args.num_train_epochs,
-    gradient_accumulation_steps=script_args.gradient_accumulation_steps,
-    learning_rate=script_args.learning_rate,
-    report_to=script_args.log_with,
-    remove_unused_columns=False,
-    lr_scheduler_type=script_args.lr_scheduler_type,
-    weight_decay=script_args.weight_decay,
-    optim=script_args.optimizer_type,
-    warmup_steps=script_args.num_warmup_steps,
-    logging_steps=script_args.logging_steps,
-    evaluation_strategy=("steps" if script_args.eval_steps is not None else "epoch"),
-    eval_steps=script_args.eval_steps,
-    save_strategy="epoch",
-    gradient_checkpointing=script_args.gradient_checkpointing,
-    ddp_find_unused_parameters=False,
-)
+    # don't include gradient_checkpointing here, see trl#728
+    training_args = TrainingArguments(
+        output_dir=script_args.output_dir,
+        per_device_train_batch_size=script_args.per_device_train_batch_size,
+        per_device_eval_batch_size=script_args.per_device_eval_batch_size,
+        bf16=script_args.bf16,
+        fp16=script_args.fp16,
+        num_train_epochs=script_args.num_train_epochs,
+        gradient_accumulation_steps=script_args.gradient_accumulation_steps,
+        learning_rate=script_args.learning_rate,
+        report_to=script_args.log_with,
+        remove_unused_columns=False,
+        lr_scheduler_type=script_args.lr_scheduler_type,
+        weight_decay=script_args.weight_decay,
+        optim=script_args.optimizer_type,
+        warmup_steps=script_args.num_warmup_steps,
+        logging_steps=script_args.logging_steps,
+        evaluation_strategy=("steps" if script_args.eval_steps is not None else "epoch"),
+        eval_steps=script_args.eval_steps,
+        save_strategy="epoch",
+        gradient_checkpointing=script_args.gradient_checkpointing,
+        ddp_find_unused_parameters=False,
+    )
 
-data_collator = GPTRewardDataCollatorWithPadding(tokenizer, max_length=script_args.seq_length, pad_to_multiple_of=8)
+    data_collator = GPTRewardDataCollatorWithPadding(
+        tokenizer, max_length=script_args.seq_length, pad_to_multiple_of=8
+    )
 
-trainer = GPTRewardTrainer(
-    model=model,
-    tokenizer=tokenizer,
-    args=training_args,
-    train_dataset=train_dataset,
-    eval_dataset=eval_dataset,
-    max_length=script_args.seq_length,
-    data_collator=data_collator,
-)
+    trainer = GPTRewardTrainer(
+        model=model,
+        tokenizer=tokenizer,
+        args=training_args,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
+        max_length=script_args.seq_length,
+        data_collator=data_collator,
+    )
 
-if script_args.mode == "train":
-    print("Training")
-    trainer.train()
-    trainer.evaluate()
+    if script_args.mode == "train":
+        print("Training")
+        trainer.train()
+        trainer.evaluate()
 
-    print("Saving last checkpoint of the model")
-    trainer.save_model(script_args.output_dir)
+        print("Saving last checkpoint of the model")
+        trainer.save_model(script_args.output_dir)
 
-    output_dir = os.path.join(script_args.output_dir, "final_checkpoint")
-    trainer.model.save_pretrained(output_dir)
-elif script_args.mode == "eval":
-    print("Evaluating")
-    # results = trainer.evaluate()
-    results = trainer.evaluate()
-    print(results)
-elif script_args.mode == "relabel":
+        output_dir = os.path.join(script_args.output_dir, "final_checkpoint")
+        trainer.model.save_pretrained(output_dir)
+    elif script_args.mode == "eval":
+        print("Evaluating")
+        # results = trainer.evaluate()
+        results = trainer.evaluate()
+        print(results)
+    elif script_args.mode == "relabel":
 
-    def relabel_with_preds(batch: Dict[str, List]):
-        relabel_batch = {
-            "prompt": [],
-            "chosen": [],
-            "rejected": [],
-            "pred_chosen": [],
-            "pred_rejected": [],
-        }
-        for prompt, chosen, rejected, pred_chosen, pred_rejected in zip(
-            batch["prompt"],
-            batch["chosen"],
-            batch["rejected"],
-            batch["pred_chosen"],
-            batch["pred_rejected"],
-        ):
-            relabel_batch["prompt"].append(prompt)
-            if pred_chosen >= pred_rejected:
-                relabel_batch["chosen"].append(chosen)
-                relabel_batch["rejected"].append(rejected)
-                relabel_batch["pred_chosen"].append(pred_chosen)
-                relabel_batch["pred_rejected"].append(pred_rejected)
-            else:
-                relabel_batch["chosen"].append(rejected)
-                relabel_batch["rejected"].append(chosen)
-                relabel_batch["pred_chosen"].append(pred_rejected)
-                relabel_batch["pred_rejected"].append(pred_chosen)
+        def relabel_with_preds(batch: Dict[str, List]):
+            relabel_batch = {
+                "prompt": [],
+                "chosen": [],
+                "rejected": [],
+                "pred_chosen": [],
+                "pred_rejected": [],
+            }
+            for prompt, chosen, rejected, pred_chosen, pred_rejected in zip(
+                batch["prompt"],
+                batch["chosen"],
+                batch["rejected"],
+                batch["pred_chosen"],
+                batch["pred_rejected"],
+            ):
+                relabel_batch["prompt"].append(prompt)
+                if pred_chosen >= pred_rejected:
+                    relabel_batch["chosen"].append(chosen)
+                    relabel_batch["rejected"].append(rejected)
+                    relabel_batch["pred_chosen"].append(pred_chosen)
+                    relabel_batch["pred_rejected"].append(pred_rejected)
+                else:
+                    relabel_batch["chosen"].append(rejected)
+                    relabel_batch["rejected"].append(chosen)
+                    relabel_batch["pred_chosen"].append(pred_rejected)
+                    relabel_batch["pred_rejected"].append(pred_chosen)
 
-        return relabel_batch
+            return relabel_batch
 
-    relabel_dataset = DatasetDict()
-    for split, pred_dataset in [("train", train_dataset), ("test", eval_dataset)]:
-        if pred_dataset is None:
-            continue
-        trainer.accelerator.print(f"Prediction {split}")
-        preds, _, metrics = trainer.predict(pred_dataset)
-        trainer.accelerator.print(f"metrics {metrics}")
+        relabel_dataset = DatasetDict()
+        for split, pred_dataset in [("train", train_dataset), ("test", eval_dataset)]:
+            if pred_dataset is None:
+                continue
+            trainer.accelerator.print(f"Prediction {split}")
+            preds, _, metrics = trainer.predict(pred_dataset)
+            trainer.accelerator.print(f"metrics {metrics}")
 
-        if trainer.accelerator.is_local_main_process:
-            print("Relabelling Dataset and Saving")
-            ds_split = script_args.train_split if split == "train" else script_args.eval_split
-            dataset = load_dataset(script_args.dataset_name, split=ds_split)
-            dataset = dataset.add_column("pred_chosen", preds[:, 0])
-            dataset = dataset.add_column("pred_rejected", preds[:, 1])
+            if trainer.accelerator.is_local_main_process:
+                print("Relabelling Dataset and Saving")
+                ds_split = script_args.train_split if split == "train" else script_args.eval_split
+                dataset = load_dataset(script_args.dataset_name, split=ds_split)
+                dataset = dataset.add_column("pred_chosen", preds[:, 0])
+                dataset = dataset.add_column("pred_rejected", preds[:, 1])
 
-            dataset = dataset.map(relabel_with_preds, batched=True)
+                dataset = dataset.map(relabel_with_preds, batched=True)
 
-            dataset._info.description = f"{script_args.dataset_name} relabelled with {script_args.model_name}"
-            relabel_dataset[split] = dataset
-
-    if trainer.accelerator.is_local_main_process:
-        print("Saving")
-        relabel_dataset.save_to_disk(script_args.output_dir)
-        print("Pushing")
-        relabel_dataset.push_to_hub(os.path.basename(script_args.output_dir))
-elif script_args.mode == "predict":
-    relabel_dataset = DatasetDict()
-    for split, pred_dataset in [("train", train_dataset), ("test", eval_dataset)]:
-        if pred_dataset is None:
-            continue
-        trainer.accelerator.print(f"Prediction {split}")
-        preds, _, metrics = trainer.predict(pred_dataset)
-        trainer.accelerator.print(f"metrics {metrics}")
+                dataset._info.description = f"{script_args.dataset_name} relabelled with {script_args.model_name}"
+                relabel_dataset[split] = dataset
 
         if trainer.accelerator.is_local_main_process:
-            print("Relabelling Dataset and Saving")
-            ds_split = script_args.train_split if split == "train" else script_args.eval_split
-            dataset = load_dataset(script_args.dataset_name, split=ds_split)
-            model_basename = script_args.model_name.rsplit("/", 1)[-1]
-            dataset = dataset.add_column(f"pred_chosen_{model_basename}", preds[:, 0])
-            dataset = dataset.add_column(f"pred_rejected_{model_basename}", preds[:, 1])
+            print("Saving")
+            relabel_dataset.save_to_disk(script_args.output_dir)
+            print("Pushing")
+            relabel_dataset.push_to_hub(os.path.basename(script_args.output_dir))
+    elif script_args.mode == "predict":
+        relabel_dataset = DatasetDict()
+        for split, pred_dataset in [("train", train_dataset), ("test", eval_dataset)]:
+            if pred_dataset is None:
+                continue
+            trainer.accelerator.print(f"Prediction {split}")
+            preds, _, metrics = trainer.predict(pred_dataset)
+            trainer.accelerator.print(f"metrics {metrics}")
 
-            dataset._info.description = f"{script_args.dataset_name} relabelled with {script_args.model_name}"
-            relabel_dataset[split] = dataset
+            if trainer.accelerator.is_local_main_process:
+                print("Relabelling Dataset and Saving")
+                ds_split = script_args.train_split if split == "train" else script_args.eval_split
+                dataset = load_dataset(script_args.dataset_name, split=ds_split)
+                model_basename = script_args.model_name.rsplit("/", 1)[-1]
+                dataset = dataset.add_column(f"pred_chosen_{model_basename}", preds[:, 0])
+                dataset = dataset.add_column(f"pred_rejected_{model_basename}", preds[:, 1])
 
-    if trainer.accelerator.is_local_main_process:
-        print("Saving")
-        relabel_dataset.save_to_disk(script_args.output_dir)
-        print("Pushing")
-        relabel_dataset.push_to_hub(os.path.basename(script_args.output_dir))
-else:
-    raise Exception(f"incorrect mode {script_args.mode}")
-    # TODO this freezes for some reason
-    # for split, dataset in relabel_dataset.items():
-    #     if trainer.accelerator.is_local_main_process:
-    #         eval_dataset = prepare_dataset(script_args, dataset, tokenizer)
-    #     trainer.accelerator.print(f"Re-evaluating relabel {split} dataset of size {len(dataset)}")
-    #     trainer.accelerator.wait_for_everyone()
-    #     results = trainer.evaluate(eval_dataset)
-    #     trainer.accelerator.print(results)
+                dataset._info.description = f"{script_args.dataset_name} relabelled with {script_args.model_name}"
+                relabel_dataset[split] = dataset
+
+        if trainer.accelerator.is_local_main_process:
+            print("Saving")
+            relabel_dataset.save_to_disk(script_args.output_dir)
+            print("Pushing")
+            relabel_dataset.push_to_hub(os.path.basename(script_args.output_dir))
+    else:
+        raise Exception(f"incorrect mode {script_args.mode}")
+        # TODO this freezes for some reason
+        # for split, dataset in relabel_dataset.items():
+        #     if trainer.accelerator.is_local_main_process:
+        #         eval_dataset = prepare_dataset(script_args, dataset, tokenizer)
+        #     trainer.accelerator.print(f"Re-evaluating relabel {split} dataset of size {len(dataset)}")
+        #     trainer.accelerator.wait_for_everyone()
+        #     results = trainer.evaluate(eval_dataset)
+        #     trainer.accelerator.print(results)
