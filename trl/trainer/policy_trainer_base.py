@@ -261,13 +261,10 @@ class ModelManager:
             )
         """
 
-    def __enter__(self, adapter_name):
+    def __call__(self, adapter_name):
         self.base_model.set_adapter(adapter_name)
-        return self.base_model
-
-    def __exit__(self, exc_type, exc_value, traceback):
+        yield self.base_model
         self.base_model.disable_adapters()
-
 
 
 # PR TODO: Implement original workflow as follows
