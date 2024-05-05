@@ -453,7 +453,7 @@ class PolicyTrainerBase(Trainer):
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
 
-    def get_batch_responses_and_logprobs(self, model, input_ids):
+    def generate_batch_extras(self, model, input_ids):
         queries = input_ids.to(self.accelerator.device)
         context_length = queries.shape[1]
         query_responses = self.generate(
@@ -462,24 +462,27 @@ class PolicyTrainerBase(Trainer):
             self.train_generation_config,
         )
         responses = query_responses[:, context_length:]
-        generation_logprobs = self.calc_logprobs(
+        generation_logits, generation_logprobs = self.calc_logprobs(
             model, query_responses, context_length
         )
         return {
             "queries": queries,
-            "context_length": context_length,
             "query_responses": query_responses,
             "responses": responses,
-            "generation_logprobs": generation_logprobs
+            "generation_logits": generation_logits,
+            "generation_logprobs": generation_logprobs,
         }
 
     def get_train_dataloader(self):
         dataloader = super().get_train_dataloader()
         def mutate_fn(batches):
             for batch in batches:
-                batch["queries"] = self.get_batch_responses_and_logprobs(
+                batch_extras = self.generate_batch_extras(
                     self.model, batch["input_ids"]
                 )
+                print("type(batch)", type(batch))
+                batch.update(batch_extras)
+            return batch
         return DynamicDataLoader(
             dataloader,
             mutate_fn,

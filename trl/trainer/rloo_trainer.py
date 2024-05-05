@@ -54,6 +54,10 @@ class RLOOConfig(PolicyTrainerArguments):
 class RLOOTrainer(PolicyTrainerBase):
     _tag_names = ["trl", "rloo"]
 
+    def generate_batch_extras(self, model, input_ids):
+        input_ids = input_ids.repeat(self.args.rloo_k, 1)
+        return super().generate_batch_extras(model, input_ids)
+
     def calc_logprobs(self, model, query_responses, context_length):
         responses = query_responses[:, context_length:]
         output_logits = self.forward(generation_model, query_responses).logits
@@ -72,33 +76,19 @@ class RLOOTrainer(PolicyTrainerBase):
         """
         https://github.com/huggingface/transformers/blob/8c12690cecbb97e187861e386f7a0ac790e4236c/src/transformers/trainer.py#L3112
         """
-        queries = inputs["input_ids"].to(self.accelerator.device)
-        queries = queries.repeat(self.args.rloo_k, 1)
-
+        queries = inputs["queries"].to(self.accelerator.device)
         context_length = queries.shape[1]
-
+        query_responses = inputs["query_responses"].to(self.accelerator.device)
+        responses = inputs["responses"].to(self.accelerator.device)
+        gen_logprobs = inputs["generation_logprobs"].to(self.accelerator.device)
         with torch.no_grad(), self.time_metric_ctx("calc_advantages"):
             # PR TODO: refactor into a function shared by ppov2 which calculates sequences and logprobs
             #          see DPOTrainer.concatenated_forward
 
-            with self.cast_model_ctx():
-                with self.ref_model_mgr as generation_model:
-                    with self.time_metric_ctx("generate"):
-                        query_responses = self.generate(
-                            generation_model,
-                            queries,
-                            self.train_generation_config,
-                        )
-                        responses = query_responses[:, context_length:]
-
-                    _, gen_logprobs = self.calc_logprobs(
-                        generation_model, query_responses, context_length
-                    )
-
-                with self.ref_model_mgr as ref_model:
-                    _, ref_logprobs = self.calc_logprobs(
-                        ref_model, query_responses, context_length
-                    )
+            with self.cast_model_ctx(), with self.ref_model_mgr as ref_model:
+                _, ref_logprobs = self.calc_logprobs(
+                    ref_model, query_responses, context_length
+                )
 
             # Response Processing 1. truncate response after the first occurrence of `truncate_token_id`
             postprocessed_responses = responses
