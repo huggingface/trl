@@ -508,11 +508,9 @@ class PolicyTrainerBase(Trainer):
                     generation_config=generation_config,
                     return_dict_in_generate=True,
                     # PR TODO: https://github.com/huggingface/trl/pull/1540/files#r1588004580
-                    output_logits=True,
                 )
-        logits = torch.stack(output.logits, 1)
         query_responses = torch.cat((queries, output.sequences[:, context_length:]), dim=1)
-        return query_responses, logits
+        return query_responses
 
     def forward(self, model, query_responses):
         attention_mask = query_responses != self.tokenizer.pad_token_id
