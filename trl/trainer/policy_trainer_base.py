@@ -454,7 +454,7 @@ class PolicyTrainerBase(Trainer):
 
 
     def get_batch_responses_and_logprobs(self, model, input_ids):
-        queries = inputs["input_ids"].to(self.accelerator.device)
+        queries = input_ids.to(self.accelerator.device)
         context_length = queries.shape[1]
         query_responses = self.generate(
             model,
