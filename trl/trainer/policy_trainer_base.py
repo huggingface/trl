@@ -234,7 +234,6 @@ class ModelManager:
             self,
             base_model: Optional[PreTrainedModelWrapper] = None,
     ):
-        self.accelerator = accelerator
         self.base_model = base_model
         self.ref_adapter_name =  ref_adapter_name
 
@@ -386,10 +385,7 @@ class PolicyTrainerBase(Trainer):
             **kwargs,
         )
 
-        self.model_manager = ModelManager(
-            self.accelerator,
-            model=model,
-        )
+        self.model_manager = ModelManager(model)
 
 
         """
