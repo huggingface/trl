@@ -154,3 +154,105 @@ def unwrap_model_for_generation(
             add_hooks(model)
     else:
         yield unwrapped_model
+
+
+def prepare_model_and_ref_model(
+        model: Optional[Union[PreTrainedModel, nn.Module, str]],
+        ref_model: Optional[Union[PreTrainedModel, nn.Module, str]],
+        model_init_kwargs: Optional[Dict],
+        ref_model_init_kwargs: Optional[Dict],
+        peft_config: Optional[Dict],
+        force_use_ref_model: bool,
+        args: Optional[TrainingArguments],
+):
+    """
+    Adapted from dpo_trainer.py
+    Allow user to pass a model or model URI + init kwargs + optional peft_config
+    Return a fully initialized model and ref_model
+    """
+    if model_init_kwargs is None:
+        model_init_kwargs = {}
+    elif not isinstance(model, str):
+        raise ValueError("You passed model_init_kwargs to the trainer. But model is already instantiated.")
+
+    if ref_model_init_kwargs is None:
+        ref_model_init_kwargs = {}
+    elif not isinstance(ref_model, str):
+        raise ValueError(
+            "You passed ref_model_init_kwargs to the trainer. But your ref_model is already instantiated."
+        )
+
+    if isinstance(model, str):
+        warnings.warn(
+            "You passed a model_id to the trainer. This will automatically create an "
+            "`AutoModelForCausalLM` or a `PeftModel` (if you passed a `peft_config`) for you."
+        )
+        model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
+
+    if isinstance(ref_model, str):
+        warnings.warn(
+            "You passed a ref model_id to the trainer. This will automatically create an "
+            "`AutoModelForCausalLM`"
+        )
+        ref_model = AutoModelForCausalLM.from_pretrained(ref_model, **ref_model_init_kwargs)
+
+    if not is_peft_available() and peft_config is not None:
+        raise ValueError(
+            "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
+        )
+    elif is_peft_available() and peft_config is not None:
+        # if model is a peft model and we have a peft_config, we merge and unload it first
+        if isinstance(model, PeftModel):
+            model = model.merge_and_unload()
+
+        if ref_model is not None and not force_use_ref_model:
+            raise ValueError(
+                "You passed both a ref_model and a peft_config. For training PEFT adapters there is no need to pass a reference"
+                " model. Please pass `ref_model=None` in case you want to train PEFT adapters, or pass a ref_model with `force_use_ref_model=True` in trainer's init."
+                " if you want to use a different ref_model."
+            )
+
+        if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
+            _support_gc_kwargs = hasattr(
+                args, "gradient_checkpointing_kwargs"
+            ) and "gradient_checkpointing_kwargs" in list(
+                inspect.signature(prepare_model_for_kbit_training).parameters
+            )
+
+            prepare_model_kwargs = {"use_gradient_checkpointing": args.gradient_checkpointing}
+
+            if _support_gc_kwargs:
+                prepare_model_kwargs["gradient_checkpointing_kwargs"] = args.gradient_checkpointing_kwargs
+
+            model = prepare_model_for_kbit_training(model, **prepare_model_kwargs)
+        elif getattr(args, "gradient_checkpointing", False):
+            # For backward compatibility with older versions of transformers
+            if hasattr(model, "enable_input_require_grads"):
+                model.enable_input_require_grads()
+            else:
+
+                def make_inputs_require_grad(module, input, output):
+                    output.requires_grad_(True)
+
+                model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
+
+        # get peft model with the given config
+        model = get_peft_model(model, peft_config)
+        if args.bf16 and getattr(model, "is_loaded_in_4bit", False):
+            peft_module_casting_to_bf16(model)
+
+    # For models that use gradient_checkpointing, we need to attach a hook that enables input
+    # to explicitly have `requires_grad=True`, otherwise training will either silently
+    # fail or completely fail.
+    elif getattr(args, "gradient_checkpointing", False):
+        # For backward compatibility with older versions of transformers
+        if hasattr(model, "enable_input_require_grads"):
+            model.enable_input_require_grads()
+        else:
+
+            def make_inputs_require_grad(module, input, output):
+                output.requires_grad_(True)
+
+            model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
+
+    return model, ref_model

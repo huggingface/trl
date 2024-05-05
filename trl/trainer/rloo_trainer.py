@@ -51,18 +51,6 @@ class RLOOConfig(PolicyTrainerArguments):
     """REINFORCE Leave-One-Out (RLOO) number of online samples per prompt"""
 
 
-def first_true_indices(bools, dtype=torch.long):
-    """
-    Takes an N-dimensional bool tensor and returns an (N-1)-dimensional tensor of integers giving
-    the position of the first True in each "row".
-
-    Returns the length of the rows (bools.size(-1)) if no element is True in a given row.
-    """
-    row_len = bools.size(-1)
-    zero_or_index = row_len * (~bools).type(dtype) + torch.arange(row_len, dtype=dtype, device=bools.device)
-    return torch.min(zero_or_index, dim=-1).values
-
-
 class RLOOTrainer(PolicyTrainerBase):
     _tag_names = ["trl", "rloo"]
 
@@ -84,9 +72,6 @@ class RLOOTrainer(PolicyTrainerBase):
         """
         https://github.com/huggingface/transformers/blob/8c12690cecbb97e187861e386f7a0ac790e4236c/src/transformers/trainer.py#L3112
         """
-        model = None  # ensure we're not using the passed model
-
-        inputs = self._prepare_inputs(inputs)
         queries = inputs["input_ids"].to(self.accelerator.device)
         queries = queries.repeat(self.args.rloo_k, 1)
 
@@ -97,7 +82,7 @@ class RLOOTrainer(PolicyTrainerBase):
             #          see DPOTrainer.concatenated_forward
 
             with self.cast_model_ctx():
-                with self.model_manager("generation") as generation_model:
+                with self.ref_model_mgr as generation_model:
                     with self.time_metric_ctx("generate"):
                         query_responses = self.generate(
                             generation_model,
@@ -110,7 +95,7 @@ class RLOOTrainer(PolicyTrainerBase):
                         generation_model, query_responses, context_length
                     )
 
-                with self.model_manager("ref") as ref_model:
+                with self.ref_model_mgr as ref_model:
                     _, ref_logprobs = self.calc_logprobs(
                         ref_model, query_responses, context_length
                     )
@@ -122,7 +107,7 @@ class RLOOTrainer(PolicyTrainerBase):
 
             # Response Processing 2. run reward model on the truncated responses
             postprocessed_query_responses = torch.cat((queries, postprocessed_responses), 1)
-            sequence_lengths = first_true_indices(
+            sequence_lengths = self.first_true_indices(
                 postprocessed_responses == self.tokenizer.pad_token_id
             ) - 1
 
@@ -187,9 +172,9 @@ class RLOOTrainer(PolicyTrainerBase):
         # calculate gradients and loss
         with self.time_metric_ctx("calc_loss"):
 
-            with self.cast_model_ctx(), self.model_manager("active") as active_model:
+            with self.cast_model_ctx():
                 active_logits, active_logprobs = self.calc_logprobs(
-                    active_model, query_responses, context_length
+                    model, query_responses, context_length
                 )
             active_logprobs = torch.masked_fill(
                 active_logprobs, padding_mask, INVALID_LOGPROB

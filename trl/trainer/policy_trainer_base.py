@@ -1,5 +1,4 @@
 from collections import defaultdict
-from contextlib import contextmanager
 from copy import deepcopy
 import os
 import time
@@ -30,7 +29,7 @@ from transformers import (
     PreTrainedTokenizerBase
 )
 
-from trl.models.utils import unwrap_model_for_generation
+from trl.models.utils import unwrap_model_for_generation, prepare_model_and_ref_model
 
 
 from ..models import SUPPORTED_ARCHITECTURES, create_reference_model, PreTrainedModelWrapper
@@ -58,6 +57,9 @@ class PolicyTrainerArguments(TrainingArguments):
     non_eos_penalty: bool = False
     """whether to penalize responses that do not contain `truncate_token_id`"""
 
+    update_generation_model_step: Optional[int] = None
+    """Number of steps between updating the generation model. If None, once per epoch"""
+
 
 class fast_eval_mode:
     """
@@ -79,18 +81,6 @@ class fast_eval_mode:
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.was_training:
             self.model.train()
-
-
-def first_true_indices(bools, dtype=torch.long):
-    """
-    Takes an N-dimensional bool tensor and returns an (N-1)-dimensional tensor of integers giving
-    the position of the first True in each "row".
-
-    Returns the length of the rows (bools.size(-1)) if no element is True in a given row.
-    """
-    row_len = bools.size(-1)
-    zero_or_index = row_len * (~bools).type(dtype) + torch.arange(row_len, dtype=dtype, device=bools.device)
-    return torch.min(zero_or_index, dim=-1).values
 
 
 # PR TODO: maybe this isn't necessary? This may be handled already by the accelerator, as it prepares
@@ -144,101 +134,81 @@ def _prepare_multigpu(model, accelerator, is_deepspeed_enabled: bool):
             evaluation_mode=True
         )
 
+# PR TODO: Implement original workflow as follows
+-"""
+-There are three models forwards() considered in each step
+-- ref_model: Never changes
+-- update_model: changes every update step (originally was after multiple epochs, I expect fractions of an epoch to work better. Will have to validate to ensure this is true.)
+-- active_model: changes every step automatically via trainer.py
+-
+-Caveat: We will specify update_generation_model_steps which will adjust the generation model some fraction or multiple of the number of epochs
+ppp-
+-generation only uses update_model
+-
+-- while iterating over steps for num_train_epochs
+-- using callback: if update_generation_model_steps set the `update_model` adapter to a copy of `active_model` adapter
+-- for each step
+-  - generate with update_model
+-  - apply forward pass with ref_model, update_model, and active_model
+-
 
-def prepare_model(
-        model: Optional[Union[PreTrainedModel, nn.Module, str]],
-        model_init_kwargs: Optional[Dict],
-        peft_config: Optional[Dict],
-        args: Optional[TrainingArguments],
-):
+-Work
+-- 0) Implement ModelManager
+-- 1) Implement Callback classes to sync update_model (add comment that we can augment this to prefill with generated samples, but by default generate at runtime)
+-- 2) Update rloo_trainer.py to use the three models
+-- Important: Design with consideration that the generation step could take place within vllm
+-  - this can be done with a "get_generated" call, which makes an easy in-place option for retrieving pre-calculated
+"""
+
+
+class UpdateTrainGenerationSamplesCallback(TrainerCallback):
+    def __init__(self, model, steps, batch_size):
+        self.model = model
+        self.steps = steps
+        self.batch_size = batch_size
+
+    def on_step_begin(self, args, state, control, **kwargs):
+        if state.global_step % self.steps == 0:
+            dataloader = kwargs['dataloader']
+            for i, batch in enumerate(dataloader):
+                inputs = batch['input_ids']
+                attention_mask = batch['attention_mask']
+                outputs = self.model.generate(inputs, attention_mask=attention_mask)
+                queries = self.model.tokenizer.batch_decode(inputs, skip_special_tokens=True)
+                query_responses = self.model.tokenizer.batch_decode(outputs, skip_special_tokens=True)
+                context_lengths = attention_mask.sum(dim=1).tolist()
+                generation_logprobs = self.model(**batch).logits.max(dim=-1)[0].detach().numpy().tolist()
+
+                # Modify the dataset with new fields
+                batch.update({
+                    'queries': queries,
+                    'query_responses': query_responses,
+                    'context_length': context_lengths,
+                    'generation_logprobs': generation_logprobs
+                })
+
+                # Example of how to replace the batch in the dataloader, this will depend on your DataLoader setup
+                dataloader.dataset[i] = batch
+
+                if i >= self.batch_size:
+                    break
+
+
+class ReferenceModelManager:
     """
-    Adapted from dpo_trainer.py
-    Allow user to pass a model or model URI + init kwargs + optional peft_config
-    Return a fully initialized model and ref_model
-    """
-    if model_init_kwargs is None:
-        model_init_kwargs = {}
-    elif not isinstance(model, str):
-        raise ValueError("You passed model_init_kwargs to the trainer. But model is already instantiated.")
-
-    if isinstance(model, str):
-        warnings.warn(
-            "You passed a model_id to the trainer. This will automatically create an "
-            "`AutoModelForCausalLM` or a `PeftModel` (if you passed a `peft_config`) for you."
-        )
-        model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
-
-    if not is_peft_available() and peft_config is not None:
-        raise ValueError(
-            "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
-        )
-    elif is_peft_available() and peft_config is not None:
-        # if model is a peft model and we have a peft_config, we merge and unload it first
-        if isinstance(model, PeftModel):
-            model = model.merge_and_unload()
-
-
-        if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
-            _support_gc_kwargs = hasattr(
-                args, "gradient_checkpointing_kwargs"
-            ) and "gradient_checkpointing_kwargs" in list(
-                inspect.signature(prepare_model_for_kbit_training).parameters
-            )
-
-            prepare_model_kwargs = {"use_gradient_checkpointing": args.gradient_checkpointing}
-
-            if _support_gc_kwargs:
-                prepare_model_kwargs["gradient_checkpointing_kwargs"] = args.gradient_checkpointing_kwargs
-
-            model = prepare_model_for_kbit_training(model, **prepare_model_kwargs)
-        elif getattr(args, "gradient_checkpointing", False):
-            # For backward compatibility with older versions of transformers
-            if hasattr(model, "enable_input_require_grads"):
-                model.enable_input_require_grads()
-            else:
-
-                def make_inputs_require_grad(module, input, output):
-                    output.requires_grad_(True)
-
-                model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
-
-        # get peft model with the given config
-        model = get_peft_model(model, peft_config)
-        if args.bf16 and getattr(model, "is_loaded_in_4bit", False):
-            peft_module_casting_to_bf16(model)
-
-    # For models that use gradient_checkpointing, we need to attach a hook that enables input
-    # to explicitly have `requires_grad=True`, otherwise training will either silently
-    # fail or completely fail.
-    elif getattr(args, "gradient_checkpointing", False):
-        # For backward compatibility with older versions of transformers
-        if hasattr(model, "enable_input_require_grads"):
-            model.enable_input_require_grads()
-        else:
-
-            def make_inputs_require_grad(module, input, output):
-                output.requires_grad_(True)
-
-            model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
-
-    return model
-
-
-class ModelManager:
-    """
-    Context manager to prepare and manage multiple models.
-    Intended for Policy Trainers where there is a ref model, updated model, and active model.
-
-    Sets the appropriate adapter to get the model for the given context
+    Context manager to prepare and manage the reference model.
+    - If it doesn't exist create a reference model
+      - OR use the base model with adapters disabled if base model uses PEFT
+    - Distribute the model to the accelerator
     """
     def __init__(
             self,
-            base_model: Optional[PreTrainedModelWrapper] = None,
+            accelerator,
+            ref_model: Optional[PreTrainedModelWrapper] = None,
+            model: Optional[PreTrainedModelWrapper] = None,
+            is_deepspeed_enabled: bool = False
     ):
-        self.base_model = base_model
-
-        # PR TODO: we assume the model is a peft model by default, needs some tweaking for other use cases
-        """
+        self.accelerator = accelerator
         if not is_peft_available():
             self.is_peft_model = False
         else:
@@ -260,43 +230,25 @@ class ModelManager:
                 f"got {type(ref_model)} "
                 f"- supported architectures are: {SUPPORTED_ARCHITECTURES} "
             )
-        """
 
-    @contextmanager
-    def __call__(self, adapter_name):
-        self.base_model.set_adapter(adapter_name)
-        yield self.base_model
-        self.base_model.disable_adapters()
+        if self.ref_model is not None and not self.is_peft_model:
+            print(type(self.ref_model))
+            self.ref_model = _prepare_multigpu(self.ref_model, self.accelerator, is_deepspeed_enabled)
 
+    def __enter__(self):
+        self.optional_peft_ctx = None
+        if self.ref_model is not None:
+            return self.ref_model
+        elif self.is_peft_model:
+            self.optional_peft_ctx = self.accelerator.unwrap_model(self.model).disable_adapter()
+            return self.model
+        else:
+            raise ValueError
 
-# PR TODO: Implement original workflow as follows
-"""
-There are three models forwards() considered in each step
-- ref_model: Never changes
-- update_model: changes every update step (originally was after multiple epochs, I expect fractions of an epoch to work better. Will have to validate to ensure this is true.)
-- active_model: changes every step automatically via trainer.py
-
-Caveat: We will specify update_generation_model_steps which will adjust the generation model some fraction or multiple of the number of epochs
-
-generation only uses update_model
-
-- while iterating over steps for num_train_epochs
-- using callback: if update_generation_model_steps set the `update_model` adapter to a copy of `active_model` adapter
-- for each step
-  - generate with update_model
-  - apply forward pass with ref_model, update_model, and active_model
-
-
-Work
-- 0) Implement ModelManager
-- 1) Implement Callback classes to sync update_model (add comment that we can augment this to prefill with generated samples, but by default generate at runtime)
-- 2) Update rloo_trainer.py to use the three models
-- Important: Design with consideration that the generation step could take place within vllm
-  - this can be done with a "get_generated" call, which makes an easy in-place option for retrieving pre-calculated
-"""
-
-
-# PR TODO: fix unsloth via https://github.com/unslothai/unsloth/issues/304#issuecomment-2093325602
+    def __exit__(self, exc_type, exc_value, traceback):
+        if self.optional_peft_ctx is not None:
+            with self.optional_peft_ctx:
+                pass  # teardown
 
 
 class PolicyTrainerBase(Trainer):
@@ -307,6 +259,7 @@ class PolicyTrainerBase(Trainer):
     def __init__(
             self,
             model: Optional[PreTrainedModelWrapper],
+            ref_model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
             args: Optional[TrainingArguments] = None,
             train_dataset: Optional[Dataset] = None,
             reward_model: Optional[PreTrainedModelWrapper] = None,
@@ -315,14 +268,19 @@ class PolicyTrainerBase(Trainer):
             eval_generation_config: Optional[GenerationConfig] = None,
             tokenizer: Optional[PreTrainedTokenizerBase] = None,
             model_init_kwargs: Optional[Dict] = None,
+            ref_model_init_kwargs: Optional[Dict] = None,
             peft_config: Optional = None,
+            force_use_ref_model: bool = False,
             **kwargs
     ) -> None:
 
-        model = prepare_model(
+        model, ref_model = prepare_model_and_ref_model(
             model=model,
+            ref_model=ref_model,
             model_init_kwargs=model_init_kwargs,
+            ref_model_init_kwargs=ref_model_init_kwargs,
             peft_config=peft_config,
+            force_use_ref_model=force_use_ref_model,
             args=args,
         )
 
@@ -333,7 +291,7 @@ class PolicyTrainerBase(Trainer):
 
         # Disable dropout ensures logprobs during generation aren't different from forward pass
         # https://github.com/huggingface/trl/pull/1586#discussion_r1579533825
-        for m in [model, reward_model]:
+        for m in [model, ref_model, reward_model]:
             if m is not None:
                 disable_dropout_in_model(m)
 
@@ -381,22 +339,23 @@ class PolicyTrainerBase(Trainer):
             **kwargs,
         )
 
-        self.model_manager = ModelManager(model)
-
-
-        """
         # Add callback to update generation model
-        if self.args.update_generation_model_steps is None:
-            update_gen_model_cb = UpdateGenerationModelOnEpochCallback(
-                model_manager=self.model_manager
-            )
-        else:
-            update_gen_model_cb = UpdateGenerationModelCallback(
-                model_manager=self.model_manager,
-                steps=self.args.update_generation_model_step
-            )
-        self.add_callback(update_gen_model_cb)
-        """
+        update_train_gen_cb = UpdateTrainGenerationSamplesCallback(
+            model=self.model,
+            steps=(
+                self.args.update_generation_step or
+                len(self.get_train_dataloader()) / self.args.gradient_accumulation_steps
+            ),
+            batch_size=self._train_batch_size
+        )
+        self.add_callback(update_train_gen_cb)
+
+        self.ref_model_mgr = ReferenceModelManager(
+            self.accelerator,
+            ref_model=ref_model,
+            model=model,
+            is_deepspeed_enabled=self.is_deepspeed_enabled,
+        )
 
         # Add tags for models that have been loaded with the correct transformers version
         if hasattr(self.model, "add_model_tags"):
@@ -421,19 +380,25 @@ class PolicyTrainerBase(Trainer):
             if isinstance(module, torch.nn.Dropout):
                 module.p = 0
 
-    def generate(self, model, queries, generation_config):
+    def generate(self, model, queries, generation_config, requires_grad=True):
         """generate in a way that does not affect padding tokens"""
-        context_length = queries.shape[1]
-        attention_mask = queries != self.tokenizer.pad_token_id
-        input_ids = torch.masked_fill(queries, ~attention_mask, 0)
-        with fast_eval_mode(model):
-            output = model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                generation_config=generation_config,
-            )
+        if True:  # with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+            unwrapped_model = model
+            with (fast_eval_mode(unwrapped_model) if requires_grad else nullcontext):
+                context_length = queries.shape[1]
+                attention_mask = queries != self.tokenizer.pad_token_id
+                input_ids = torch.masked_fill(queries, ~attention_mask, 0)
+                output = unwrapped_model.generate(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    generation_config=generation_config,
+                    return_dict_in_generate=True,
+                    # PR TODO: https://github.com/huggingface/trl/pull/1540/files#r1588004580
+                    output_logits=True,
+                )
+        logits = torch.stack(output.logits, 1)
         query_responses = torch.cat((queries, output.sequences[:, context_length:]), dim=1)
-        return query_responses
+        return query_responses, logits
 
     def forward(self, model, query_responses):
         attention_mask = query_responses != self.tokenizer.pad_token_id
@@ -481,7 +446,7 @@ class PolicyTrainerBase(Trainer):
         )
 
     def truncate_response(self, responses):
-        trunc_idxs = first_true_indices(responses == self.args.truncate_token_id).unsqueeze(-1)
+        trunc_idxs = self.first_true_indices(responses == self.args.truncate_token_id).unsqueeze(-1)
         new_size = [1] * (len(responses.size()) - 1) + [responses.shape[1]]
         idxs = torch.arange(responses.shape[1], device=responses.device).view(*new_size)
         postprocessed_responses = torch.masked_fill(
@@ -491,10 +456,27 @@ class PolicyTrainerBase(Trainer):
         return postprocessed_responses
 
 
-    #def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
-    #    raise NotImplementedError
+    @staticmethod
+    def first_true_indices(bools, dtype=torch.long):
+        """
+        Takes an N-dimensional bool tensor and returns an (N-1)-dimensional tensor of integers giving
+        the position of the first True in each "row".
 
-    def store_metrics(self, metrics: Dict[str, float], train_eval: Literal["train", "eval"] = "train") -> None:
+        Returns the length of the rows (bools.size(-1)) if no element is True in a given row.
+        """
+        row_len = bools.size(-1)
+        zero_or_index = (
+            row_len * (~bools).type(dtype)
+            + torch.arange(row_len, dtype=dtype, device=bools.device)
+        )
+        return torch.min(zero_or_index, dim=-1).values
+
+
+    def store_metrics(
+            self,
+            metrics: Dict[str, float],
+            train_eval: Literal["train", "eval"] = "train"
+    ) -> None:
         for key, value in metrics.items():
             self._stored_metrics[train_eval][key].append(value)
 
