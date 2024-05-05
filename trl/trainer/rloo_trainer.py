@@ -61,7 +61,7 @@ class RLOOTrainer(PolicyTrainerBase):
     def calc_logprobs(self, model, query_responses, context_length):
         responses = query_responses[:, context_length:]
         output_logits = self.forward(model, query_responses).logits
-        response_logits = gen_output_logits[:, context_length - 1 : -1]
+        response_logits = output_logits[:, context_length - 1 : -1]
         response_logits /= max(self.args.temperature, 1e-7)
         response_logprobs = logprobs_from_logits(response_logits, responses, gather=True)
         return response_logits, response_logprobs
