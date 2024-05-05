@@ -1,4 +1,5 @@
 from collections import defaultdict
+from contextlib import contextmanager
 from copy import deepcopy
 import os
 import time
@@ -261,6 +262,7 @@ class ModelManager:
             )
         """
 
+    @contextmanager
     def __call__(self, adapter_name):
         self.base_model.set_adapter(adapter_name)
         yield self.base_model
