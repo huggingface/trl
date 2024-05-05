@@ -57,7 +57,7 @@ class PolicyTrainerArguments(TrainingArguments):
     non_eos_penalty: bool = False
     """whether to penalize responses that do not contain `truncate_token_id`"""
 
-    update_generation_model_step: Optional[int] = None
+    update_generation_steps: Optional[int] = None
     """Number of steps between updating the generation model. If None, once per epoch"""
 
 
@@ -445,7 +445,7 @@ class PolicyTrainerBase(Trainer):
         update_train_gen_cb = UpdateTrainGenerationSamplesCallback(
             model=self.model,
             steps=(
-                self.args.update_generation_step or
+                self.args.update_generation_steps or
                 len(self.get_train_dataloader()) / self.args.gradient_accumulation_steps
             ),
             batch_size=self._train_batch_size
