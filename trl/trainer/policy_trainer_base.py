@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass
 from typing import Dict, List, Literal, Optional, Tuple, Union, Callable, Any
 import warnings
-from contextlib import nullcontext
+from contextlib import nullcontext, ContextDecorator
 from tqdm import tqdm
 import gc
 
@@ -359,6 +359,21 @@ class ReferenceModelManager:
             self.model.set_adapter("default")
 
 
+class disable_caching(ContextDecorator):  # noqa: N801
+    def __init__(self, model):
+        self.model = model
+        self.prev_value: Any = "UNSET"  # config values may be T/F/None
+
+    def __enter__(self):
+        self.prev_value = self.model.config.use_cache
+        self.model.config.use_cache = False
+
+    def __exit__(self, *exc):
+        if self.prev_value != "UNSET":
+            self.model.config.use_cache = self.prev_value
+        self.prev_value = "UNSET"
+
+
 class PolicyTrainerBase(Trainer):
     """
     Base class for implementing a policy training algorithm.
@@ -532,16 +547,14 @@ class PolicyTrainerBase(Trainer):
 
     def forward(self, model, query_responses):
         attention_mask = query_responses != self.tokenizer.pad_token_id
-        # position_ids = attention_mask.cumsum(1) - attention_mask.long()
         input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
-        #with eval_mode(model):
-        return model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            # position_ids=position_ids,
-            return_dict=True,
-            output_hidden_states=True,
-        )
+        with disable_caching(model):
+            return model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                return_dict=True,
+                output_hidden_states=True,
+            )
 
     def get_reward(self, reward_model, query_responses, context_length):
         attention_mask = query_responses != self.tokenizer.pad_token_id

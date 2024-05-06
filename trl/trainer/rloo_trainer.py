@@ -178,7 +178,7 @@ class RLOOTrainer(PolicyTrainerBase):
                 "policy/approxkl_avg": 0.5 * (logprobs_diff**2).mean(),
                 "loss/policy_avg": self.accelerator.gather(pg_loss).mean().item(),
                 "val/ratio": new_ratio.mean(),
-                "val/ratio_var": new_ratio.mean().var(),
+                #"val/ratio_var": new_ratio.mean().var(),
                 "val/num_eos_tokens": (responses == self.tokenizer.eos_token_id).sum().item(),
                 "policy/clipfrac_avg": self.accelerator.gather(pg_clipfrac).mean().item(),
                 "policy/entropy_avg": entropy_avg
