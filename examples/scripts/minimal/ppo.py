@@ -1,5 +1,3 @@
-from collections import defaultdict
-
 import pandas as pd
 from datasets import load_dataset
 from rich.console import Console
@@ -8,9 +6,7 @@ from transformers import (
     AutoModelForCausalLM,
     AutoModelForSequenceClassification,
     AutoTokenizer,
-    GenerationConfig,
     HfArgumentParser,
-    PreTrainedModel,
 )
 
 from trl.trainer.ppov2_trainer import PPOConfig, PPOTrainer
@@ -25,7 +21,7 @@ python -i examples/scripts/minimal/ppo.py \
     --total_episodes 10000 \
     --base_model EleutherAI/pythia-1b-deduped \
     --non_eos_penalty \
-    
+
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
     examples/scripts/minimal/ppo.py \
     --num_ppo_epochs 1 \
