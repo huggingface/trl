@@ -503,7 +503,7 @@ class PolicyTrainerBase(Trainer):
         # PR TODO: generation_batch_size
         queries = input_ids.to(self.accelerator.device)
         context_length = queries.shape[1]
-        with torch.no_grad():
+        with torch.no_grad(), self.cast_model_ctx():
             query_responses = self.generate(
                 model,
                 queries,
@@ -558,19 +558,17 @@ class PolicyTrainerBase(Trainer):
 
     def generate(self, model, queries, generation_config, requires_grad=True):
         """generate in a way that does not affect padding tokens"""
-        if True:  # with unwrap_model_for_genera[tion(model, self.accelerator) as unwrapped_model:
-            unwrapped_model = model
-            with fast_eval_mode(unwrapped_model):
-                context_length = queries.shape[1]
-                attention_mask = queries != self.tokenizer.pad_token_id
-                input_ids = torch.masked_fill(queries, ~attention_mask, 0)
-                output = unwrapped_model.generate(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    generation_config=generation_config,
-                    return_dict_in_generate=True,
-                    # PR TODO: https://github.com/huggingface/trl/pull/1540/files#r1588004580
-                )
+        with fast_eval_mode(model):
+            context_length = queries.shape[1]
+            attention_mask = queries != self.tokenizer.pad_token_id
+            input_ids = torch.masked_fill(queries, ~attention_mask, 0)
+            output = model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                generation_config=generation_config,
+                return_dict_in_generate=True,
+                # PR TODO: https://github.com/huggingface/trl/pull/1540/files#r1588004580
+            )
         query_responses = torch.cat((queries, output.sequences[:, context_length:]), dim=1)
         return query_responses
 
