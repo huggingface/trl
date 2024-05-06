@@ -13,22 +13,27 @@
 # limitations under the License.
 import random
 import warnings
-from collections import deque
+from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
+import pandas as pd
 import torch
 from accelerate import PartialState
+from accelerate.utils import gather_object
 from rich.console import Console, Group
 from rich.live import Live
 from rich.panel import Panel
 from rich.progress import Progress
+from rich.table import Table
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import IterableDataset
-from transformers import BitsAndBytesConfig, DataCollatorForLanguageModeling, PreTrainedTokenizerBase
+from transformers import BitsAndBytesConfig, DataCollatorForLanguageModeling, GenerationConfig, PreTrainedTokenizerBase
 from transformers.trainer import TrainerCallback
 from transformers.trainer_utils import has_length
+
+from trl.models.utils import unwrap_model_for_generation
 
 from ..import_utils import is_peft_available, is_unsloth_available, is_xpu_available
 from ..trainer.model_config import ModelConfig
@@ -815,3 +820,61 @@ class RichProgressCallback(TrainerCallback):
             self.rich_console = None
             self.training_status = None
             self.current_step = None
+
+
+def print_rich_table(df: pd.DataFrame) -> Table:
+    console = Console()
+    table = Table(show_lines=True)
+    for column in df.columns:
+        table.add_column(column)
+    for _, row in df.iterrows():
+        table.add_row(*row.astype(str).tolist())
+    console.print(table)
+
+
+class GenerateCompletionCallback(TrainerCallback):
+    """
+    A [`TrainerCallback`] that generates completions using the model on the eval dataset
+    """
+
+    def on_evaluate(self, args, state, control, sampling: bool = False, **kwargs):
+        generation_config = GenerationConfig(
+            max_new_tokens=self.args.response_length,
+            temperature=(0.01 + 1e-7),
+            top_k=0.0,
+            top_p=1.0,
+            do_sample=True,
+        )
+
+        table = defaultdict(list)
+        for batch in self.eval_dataloader:
+            query = batch["input_ids"]
+            name = "trained model"
+            with torch.no_grad():
+                context_length = query.shape[1]
+                with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
+                    output = unwrapped_model.generate(
+                        input_ids=query,
+                        attention_mask=query != self.tokenizer.pad_token_id,
+                        # position_ids=attention_mask.cumsum(1) - attention_mask.long(), # not needed: already adjusted in generations
+                        # https://github.com/huggingface/transformers/blob/ac33aeeeee2a7a89b89c93c2962e6feb90daef0a/src/transformers/models/gpt2/modeling_gpt2.py#L1227-L1250
+                        generation_config=generation_config,
+                        return_dict_in_generate=True,
+                        output_scores=True,
+                    )
+
+                response = output.sequences[:, context_length:]
+                postprocessed_response = response
+                table["query"].extend(gather_object(self.tokenizer.batch_decode(query, skip_special_tokens=True)))
+                table[name].extend(gather_object(self.tokenizer.batch_decode(postprocessed_response)))
+
+            if sampling:
+                break
+        df = pd.DataFrame(table)
+        if self.accelerator.process_index == 0:
+            print_rich_table(df.iloc[0 : 0 + 5])
+        if "wandb" in args.report_to:
+            import wandb
+
+            if wandb.run is not None:
+                wandb.log({"completions": wandb.Table(dataframe=df)})
