@@ -106,7 +106,7 @@ class RLOOTrainer(PolicyTrainerBase):
             torch.cuda.empty_cache()
 
             with self.time_metric_ctx("get_reward"):
-                2_, scores, _ = self.get_reward(
+                _, scores, _ = self.get_reward(
                     self.reward_model,
                     postprocessed_query_responses,
                     context_length
