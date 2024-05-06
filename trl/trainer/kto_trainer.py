@@ -186,7 +186,15 @@ def _process_tokens(example: Dict[str, Any], model: "PreTrainedModel" = None, **
             "answer_attention_mask": example["answer_attention_mask"],
         }
 
-        max_length = kwargs["max_length"] - 2
+        # calculate max length by checking if BOS/EOS is already there
+        max_length = kwargs["max_length"]
+        bos_token_id = kwargs["tokenizer"].bos_token_id
+        eos_token_id = kwargs["tokenizer"].eos_token_id
+        if bos_token_id != all_tokens["prompt_input_ids"][0]:
+            max_length -= 1
+        if eos_token_id != all_tokens["answer_input_ids"][-1]:
+            max_length -= 1
+
         # if combined sequence is too long (> max_length - 1 for BOS token - 1 for EOS), truncate the prompt
         if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
             for k in ["prompt_input_ids", "prompt_attention_mask"]:
@@ -202,20 +210,36 @@ def _process_tokens(example: Dict[str, Any], model: "PreTrainedModel" = None, **
             for k in ["answer_input_ids", "answer_attention_mask"]:
                 all_tokens[k] = all_tokens[k][: max_length - kwargs["max_prompt_length"]]
 
-        # for legacy reasons, use the completion_* prefix to now refer to the joint sequence
-        batch[f"{kwargs['prefix']}prompt_input_ids"] = [kwargs["tokenizer"].bos_token_id] + all_tokens[
-            "prompt_input_ids"
-        ]
-        batch[f"{kwargs['prefix']}prompt_attention_mask"] = [1] + all_tokens["prompt_attention_mask"]
+        # all input_ids and attention mask as is. We then check if we need to add BOS/EOS tokens
+        batch[f"{kwargs['prefix']}prompt_input_ids"] = all_tokens["prompt_input_ids"]
+        batch[f"{kwargs['prefix']}prompt_attention_mask"] = all_tokens["prompt_attention_mask"]
         batch[f"{kwargs['prefix']}completion_input_ids"] = (
-            [kwargs["tokenizer"].bos_token_id]
-            + all_tokens["prompt_input_ids"]
-            + all_tokens["answer_input_ids"]
-            + [kwargs["tokenizer"].eos_token_id]
+            all_tokens["prompt_input_ids"] + all_tokens["answer_input_ids"]
         )
         batch[f"{kwargs['prefix']}completion_attention_mask"] = (
-            [1] + all_tokens["prompt_attention_mask"] + all_tokens["answer_attention_mask"] + [1]
+            all_tokens["prompt_attention_mask"] + all_tokens["answer_attention_mask"]
         )
+
+        # add BOS, which affects both prompt and the full completion
+        if len(all_tokens["prompt_input_ids"]) == 0 or bos_token_id != all_tokens["prompt_input_ids"][0]:
+            batch[f"{kwargs['prefix']}prompt_input_ids"] = [bos_token_id] + batch[
+                f"{kwargs['prefix']}prompt_input_ids"
+            ]
+            batch[f"{kwargs['prefix']}prompt_attention_mask"] = [1] + batch[f"{kwargs['prefix']}prompt_attention_mask"]
+            batch[f"{kwargs['prefix']}completion_input_ids"] = [bos_token_id] + batch[
+                f"{kwargs['prefix']}completion_input_ids"
+            ]
+            batch[f"{kwargs['prefix']}completion_attention_mask"] = [1] + batch[
+                f"{kwargs['prefix']}completion_attention_mask"
+            ]
+        # add EOS, which affects only the full completion
+        if len(all_tokens["answer_input_ids"]) == 0 or eos_token_id != all_tokens["answer_input_ids"][-1]:
+            batch[f"{kwargs['prefix']}completion_input_ids"] = batch[f"{kwargs['prefix']}completion_input_ids"] + [
+                eos_token_id
+            ]
+            batch[f"{kwargs['prefix']}completion_attention_mask"] = batch[
+                f"{kwargs['prefix']}completion_attention_mask"
+            ] + [1]
 
         batch[f"{kwargs['prefix']}completion_labels"] = batch[f"{kwargs['prefix']}completion_input_ids"][:]
         batch[f"{kwargs['prefix']}completion_labels"][: len(batch[f"{kwargs['prefix']}prompt_input_ids"])] = [

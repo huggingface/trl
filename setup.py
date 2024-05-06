@@ -106,7 +106,7 @@ try:
         },
         include_package_data=True,
         package_data={"trl": ["commands/scripts/config/*", "commands/scripts/*"]},
-        packages=find_packages(),
+        packages=find_packages(exclude={"tests"}),
         install_requires=REQUIRED_PKGS,
         extras_require=EXTRAS,
         python_requires=">=3.7",
