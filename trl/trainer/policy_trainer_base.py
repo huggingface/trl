@@ -558,7 +558,7 @@ class PolicyTrainerBase(Trainer):
         )
         reward_logits = reward_model.score(output.hidden_states[-1])
         sequence_lengths = (
-            first_true_indices(
+            self.first_true_indices(
                 query_responses[:, context_length:] == self.tokenizer.pad_token_id
             ) - 1 + context_length
         )
