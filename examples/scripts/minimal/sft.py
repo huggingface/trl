@@ -22,6 +22,7 @@ from transformers import (
 
 
 from trl import SFTTrainer, SFTConfig
+from trl.trainer.utils import GenerateCompletionCallback
 
 
 """
@@ -48,9 +49,7 @@ if __name__ == "__main__":
     # Model & Tokenizer
     ################
     tokenizer = AutoTokenizer.from_pretrained(base_model)
-    tokenizer.add_special_tokens({"pad_token": "[PAD]"})
-    left_tokenizer = AutoTokenizer.from_pretrained(base_model, padding_side="left")  # for generation
-    left_tokenizer.pad_token = left_tokenizer.eos_token
+    tokenizer.pad_token = tokenizer.eos_token
     if tokenizer.chat_template is None:
         # a default chat template to simply concatenate the messages
         tokenizer.chat_template = (
@@ -95,10 +94,10 @@ if __name__ == "__main__":
         tokenizer=tokenizer,
         data_collator=data_collator,
     )
-    trainer.train()
+    # trainer.train()
     trainer.save_model(args.output_dir)
     trainer.push_to_hub()
-    # trainer.generate_completions(True)
+    trainer.add_callback(GenerateCompletionCallback())  # optional
     metrics = trainer.evaluate()
     trainer.log_metrics("eval", metrics)
     print(metrics)
