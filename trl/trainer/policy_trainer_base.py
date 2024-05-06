@@ -384,7 +384,7 @@ class PolicyTrainerBase(Trainer):
 
         model, ref_model = prepare_model_and_ref_model(
             model=model,
-            ref_model=ref_model,re
+            ref_model=ref_model,
             model_init_kwargs=model_init_kwargs,
             ref_model_init_kwargs=ref_model_init_kwargs,
             peft_config=peft_config,
