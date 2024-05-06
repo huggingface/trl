@@ -33,7 +33,7 @@ from transformers import (
 
 from trl.models.utils import unwrap_model_for_generation
 
-
+from ..core import logprobs_from_logits
 from ..models import SUPPORTED_ARCHITECTURES, create_reference_model, PreTrainedModelWrapper
 from .utils import disable_dropout_in_model, peft_module_casting_to_bf16, peft_module_casting_to_fp16
 
