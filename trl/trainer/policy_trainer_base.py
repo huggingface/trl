@@ -250,32 +250,6 @@ def cuda_gc(func):
         return result
     return wrapper
 
-# PR TODO: Implement original workflow as follows
-"""
--There are three models forwards() considered in each step
--- ref_model: Never changes
--- update_model: changes every update step (originally was after multiple epochs, I expect fractions of an epoch to work better. Will have to validate to ensure this is true.)
--- active_model: changes every step automatically via trainer.py
--
--Caveat: We will specify update_generation_model_steps which will adjust the generation model some fraction or multiple of the number of epochs
-ppp-
--generation only uses update_model
--
--- while iterating over steps for num_train_epochs
--- using callback: if update_generation_model_steps set the `update_model` adapter to a copy of `active_model` adapter
--- for each step
--  - generate with update_model
--  - apply forward pass with ref_model, update_model, and active_model
--
-
--Work
--- 0) Implement ModelManager
--- 1) Implement Callback classes to sync update_model (add comment that we can augment this to prefill with generated samples, but by default generate at runtime)
--- 2) Update rloo_trainer.py to use the three models
--- Important: Design with consideration that the generation step could take place within vllm
--  - this can be done with a "get_generated" call, which makes an easy in-place option for retrieving pre-calculated
-"""
-
 
 class DynamicDataLoader:
     """
@@ -433,13 +407,8 @@ class PolicyTrainerBase(Trainer):
 
         # force disable `pad_token_id` and `eos_token_id` because we just want to
         # generate tokens without truncation / padding
-        if False:
-            # PR TODO: review this??
-            self.train_generation_config.eos_token_id = None
-            self.train_generation_config.pad_token_id = None
-        else:
-            self.train_generation_config.eos_token_id = tokenizer.eos_token_id
-            self.train_generation_config.pad_token_id = tokenizer.pad_token_id
+        self.train_generation_config.eos_token_id = None
+        self.train_generation_config.pad_token_id = None
 
         if args.truncate_token and args.truncate_token == "eos":
             args.truncate_token_id = tokenizer.eos_token_id
@@ -532,6 +501,7 @@ class PolicyTrainerBase(Trainer):
 
     def get_train_dataloader(self):
         dataloader = super().get_train_dataloader()
+        # PR TODO: generation_batch_size
         def mutate_fn(batches):
             for batch in tqdm(batches, desc="generating batch extras"):
                 batch_extras = self.generate_batch_extras(
@@ -567,9 +537,10 @@ class PolicyTrainerBase(Trainer):
                 attention_mask=attention_mask,
                 generation_config=generation_config,
                 return_dict_in_generate=True,
-                use_cache=False,
-                # PR TODO: https://github.com/huggingface/trl/pull/1540/files#r1588004580
+                # PR TODO: use_cache is faster, but what are the risks? review. use_cache is necessary for forward() but is it necessary for generate
+                # use_cache=False,
             )
+            # PR TODO: only return the response not anything else
         query_responses = torch.cat((queries, output.sequences[:, context_length:]), dim=1)
         return query_responses
 
@@ -588,12 +559,8 @@ class PolicyTrainerBase(Trainer):
     def get_reward(self, reward_model, query_responses, context_length):
         attention_mask = query_responses != self.tokenizer.pad_token_id
 
-        # PR TODO: figure out why we had to get base_model_prefix
-        # lm_backbone = getattr(reward_model, reward_model.base_model_prefix)
-
         input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
 
-        #with eval_mode(reward_model):
         output = reward_model(
             input_ids=input_ids,
             attention_mask=attention_mask,
