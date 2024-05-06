@@ -480,6 +480,25 @@ class PolicyTrainerBase(Trainer):
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
+    def compute_loss(
+        self,
+        model: Union[PreTrainedModel, nn.Module],
+        inputs: Dict[str, Union[torch.Tensor, Any]],
+        return_outputs=False,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
+
+        with self.time_metric_ctx("get_batch_loss"):
+            with self.cast_model_ctx():
+                loss, metrics = self.get_batch_loss_metrics(model, inputs)
+
+        loss = loss.to(self.args.device)
+
+        self.store_metrics(metrics, train_eval="train")
+
+        if return_outputs:
+            return (loss, metrics)
+        return loss
+
     @cuda_gc
     def generate_batch_extras(self, model, input_ids):
         # PR TODO: generation_batch_size

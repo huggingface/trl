@@ -29,8 +29,6 @@ from transformers import (
     PreTrainedTokenizerBase
 )
 
-from ..core import logprobs_from_logits
-
 from ..models import SUPPORTED_ARCHITECTURES, create_reference_model, PreTrainedModelWrapper
 
 from . import PolicyTrainerBase, PolicyTrainerArguments
@@ -58,11 +56,10 @@ class RLOOTrainer(PolicyTrainerBase):
         input_ids = input_ids.repeat(self.args.rloo_k, 1)
         return super().generate_batch_extras(model, input_ids)
 
-    def compute_loss(
+    def get_batch_loss_metrics(
         self,
         model: Union[PreTrainedModel, nn.Module],
         inputs: Dict[str, Union[torch.Tensor, Any]],
-        return_outputs=False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
         """
         PR TODO: appropriate docstring
@@ -75,10 +72,12 @@ class RLOOTrainer(PolicyTrainerBase):
         gen_logprobs = inputs["generation_logprobs"].to(self.accelerator.device)
         context_length = queries.shape[1]
 
-        with torch.no_grad(), self.time_metric_ctx("calc_advantages"):
+        with torch.no_grad():
 
-            with self.cast_model_ctx(), self.ref_model_mgr as ref_model:
-                _, ref_logprobs = self.calc_logprobs(ref_model, query_responses, context_length)
+            with self.ref_model_mgr as ref_model:
+                _, ref_logprobs = self.calc_logprobs(
+                    ref_model, query_responses, context_length
+                )
 
             # Response Processing 1. truncate response after the first occurrence of `truncate_token_id`
             postprocessed_responses = responses
@@ -91,12 +90,11 @@ class RLOOTrainer(PolicyTrainerBase):
                 postprocessed_responses == self.tokenizer.pad_token_id
             ) - 1
 
-            with self.time_metric_ctx("get_reward"):
-                _, scores, _ = self.get_reward(
-                    self.reward_model,
-                    postprocessed_query_responses,
-                    context_length
-                )
+            _, scores, _ = self.get_reward(
+                self.reward_model,
+                postprocessed_query_responses,
+                context_length
+            )
 
             # Response Processing 3. filter response. Ensure that the sample contains truncate_token_id
             # responses not passing that filter will receive a low (fixed) score
@@ -125,31 +123,29 @@ class RLOOTrainer(PolicyTrainerBase):
             advantages = rlhf_reward - mean_other
 
         # calculate gradients and loss
-        with self.time_metric_ctx("calc_loss"), self.cast_model_ctx():
-            active_logits, active_logprobs = self.calc_logprobs(
-                model, query_responses, context_length
-            )
-            active_logprobs = torch.masked_fill(
-                active_logprobs, padding_mask, INVALID_LOGPROB
-            )
-            new_ratio = (active_logprobs - gen_logprobs).exp()
-            logprobs_diff = active_logprobs.sum(1) - gen_logprobs.sum(1)
-            ratio = torch.exp(logprobs_diff)
-            pg_losses = -advantages * ratio
-            pg_losses2 = -advantages * torch.clamp(ratio, 1.0 - self.args.cliprange, 1.0 + self.args.cliprange)
-            pg_loss_max = torch.max(pg_losses, pg_losses2)
-            pg_loss = pg_loss_max.mean()
-            pg_clipfrac = (pg_losses2 > pg_losses).float().mean()
+        active_logits, active_logprobs = self.calc_logprobs(
+            model, query_responses, context_length
+        )
+        active_logprobs = torch.masked_fill(
+            active_logprobs, padding_mask, INVALID_LOGPROB
+        )
+        new_ratio = (active_logprobs - gen_logprobs).exp()
+        logprobs_diff = active_logprobs.sum(1) - gen_logprobs.sum(1)
+        ratio = torch.exp(logprobs_diff)
+        pg_losses = -advantages * ratio
+        pg_losses2 = -advantages * torch.clamp(ratio, 1.0 - self.args.cliprange, 1.0 + self.args.cliprange)
+        pg_loss_max = torch.max(pg_losses, pg_losses2)
+        pg_loss = pg_loss_max.mean()
+        pg_clipfrac = (pg_losses2 > pg_losses).float().mean()
 
-        # log metrics
+        # get metrics
         with torch.no_grad():
             prob_dist = torch.nn.functional.softmax(active_logits, dim=-1)
             entropy_avg = (
                 torch.logsumexp(active_logits, dim=-1)
                 - torch.sum(prob_dist * active_logits, dim=-1)
             ).mean()
-
-            self.store_metrics({
+            metrics = {
                 "objective/kl": kl.sum(1).mean(),
                 "objective/entropy": (-gen_logprobs).sum(1).mean(),
                 "objective/rlhf_reward": rlhf_reward.mean(),
@@ -161,15 +157,10 @@ class RLOOTrainer(PolicyTrainerBase):
                 "val/num_eos_tokens": (responses == self.tokenizer.eos_token_id).sum().item(),
                 "policy/clipfrac_avg": self.accelerator.gather(pg_clipfrac).mean().item(),
                 "policy/entropy_avg": entropy_avg
-            })
+            }
 
-        loss = pg_loss.to(self.args.device)
+        return (pg_loss, metrics)
 
-        # PR TODO: decorator which calls gc.collect(); torch.cuda.empty_cache()
-
-        if return_outputs:
-            return (loss, metrics)
-        return loss
 
 if __name__ == "__main__":
     pass
