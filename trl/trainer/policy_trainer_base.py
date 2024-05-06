@@ -487,9 +487,8 @@ class PolicyTrainerBase(Trainer):
         return_outputs=False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
 
-        with self.time_metric_ctx("get_batch_loss"):
-            with self.cast_model_ctx():
-                loss, metrics = self.get_batch_loss_metrics(model, inputs)
+        with self.cast_model_ctx():
+            loss, metrics = self.get_batch_loss_metrics(model, inputs)
 
         loss = loss.to(self.args.device)
 
@@ -583,6 +582,7 @@ class PolicyTrainerBase(Trainer):
             attention_mask=attention_mask,
             return_dict=True,
             output_hidden_states=True,
+            use_cache=False,
         )
 
     @cuda_gc
