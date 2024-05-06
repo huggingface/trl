@@ -446,14 +446,10 @@ class PolicyTrainerBase(Trainer):
 
 
         # handle casting self.model
-        """
         if args.bf16 and getattr(model, "is_loaded_in_4bit", False):
-            self.cast_model_ctx = lambda: torch.cuda.amp.autocast(dtype=torch.bfloat16)
+            self.cast_model_ctx = torch.cuda.amp.autocast#lambda: torch.cuda.amp.autocast(dtype=torch.bfloat16)
         else:
             self.cast_model_ctx = nullcontext
-        """
-        # PR TODO: remove temporary hack
-        self.cast_model_ctx = lambda: torch.cuda.amp.autocast(dtype=torch.bfloat16)
 
         super().__init__(
             model=model,
