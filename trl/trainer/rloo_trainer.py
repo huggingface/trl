@@ -184,7 +184,7 @@ class RLOOTrainer(PolicyTrainerBase):
             entropy_avg = (
                 torch.logsumexp(active_logits, dim=-1)
                 - torch.sum(prob_dist * active_logits, dim=-1)
-            )
+            ).mean()
 
             self.store_metrics({
                 "objective/kl": kl.sum(1).mean(),
