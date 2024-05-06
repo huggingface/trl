@@ -497,10 +497,7 @@ class ORPOTrainerTester(unittest.TestCase):
                 eval_dataset=dummy_dataset,
             )
 
-            print(f"train_dataset: {trainer.train_dataset[:]}")
-
             for k in trainer.train_dataset.column_names:
-                print(k)
                 self.assertListEqual(trainer.train_dataset[k], self.train_ref[k])
 
             # self.assertDictEqual(trainer.train_dataset[:], self.train_ref[:])

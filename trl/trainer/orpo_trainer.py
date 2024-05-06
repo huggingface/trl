@@ -59,7 +59,7 @@ if is_deepspeed_available():
     import deepspeed
 
 
-def _tokenize(batch: Dict[str, List[Any]], tokenizer: "PreTrainedTokenizer") -> Dict[str, List[Any]]:
+def _tokenize(batch: Dict[str, List[Any]], tokenizer: "PreTrainedTokenizerBase") -> Dict[str, List[Any]]:
     """Tokenize a batch from a binary preference dataset."""
     prompt_tokenized = tokenizer(batch["prompt"], add_special_tokens=False)
     prompt_input_ids = prompt_tokenized["input_ids"]
@@ -146,22 +146,6 @@ def _tokenize(batch: Dict[str, List[Any]], tokenizer: "PreTrainedTokenizer") -> 
 
     rejected_input_ids = [f[r:] for f, r in zip(full_input_ids, response_token_ids_start_idx)]
     rejected_attention_mask = [f[r:] for f, r in zip(prompt_and_rejected_attention_mask, response_token_ids_start_idx)]
-
-    # prompt_input_ids = prompt_tokenized["input_ids"]
-    # prompt_attention_mask = prompt_tokenized["attention_mask"]
-
-    # chosen_tokenized = tokenizer(batch["chosen"], add_special_tokens=False)
-    # chosen_input_ids = chosen_tokenized["input_ids"]
-    # chosen_attention_mask = chosen_tokenized["attention_mask"]
-
-    # rejected_tokenized = tokenizer(batch["rejected"], add_special_tokens=False)
-    # rejected_input_ids = rejected_tokenized["input_ids"]
-    # rejected_attention_mask = rejected_tokenized["attention_mask"]
-
-    # print("prompt_input_ids", prompt_input_ids)
-    # print("prompt_attention_mask", prompt_attention_mask)
-    # print("chosen_input_ids", chosen_input_ids)
-    # print("chosen_attention_mask", chosen_attention_mask)
 
     return dict(
         prompt_input_ids=prompt_input_ids,
@@ -268,11 +252,8 @@ def _process_tokens(example: Dict[str, Any], model: "PreTrainedModel" = None, **
         batch["rejected_input_ids"] = all_tokens["rejected_input_ids"]
         batch["rejected_attention_mask"] = all_tokens["rejected_attention_mask"]
 
-        # print(f"BATCH: {batch}")
-
-        # # Create labels
+        # Create labels
         batch["chosen_labels"] = chosen_input_ids[:]
-        # print(f"chosen_input_ids: {chosen_input_ids}")
         batch["chosen_labels"][: len(all_tokens["prompt_input_ids"])] = [kwargs["label_pad_token_id"]] * len(
             all_tokens["prompt_input_ids"]
         )
@@ -494,15 +475,14 @@ class ORPOTrainer(Trainer):
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
-        # Compute that only on the main process for faster data processing.
-        # see: https://github.com/huggingface/trl/pull/1255
+        # Preprocess data only on the main process so we can cache the result for other processes.
+        # See: https://github.com/huggingface/trl/pull/1255
         with PartialState().local_main_process_first():
             # Tokenize and preprocess the dataset
             train_dataset = train_dataset.map(
                 _tokenize,
                 fn_kwargs={"tokenizer": self.tokenizer},
                 batched=True,
-                num_proc=args.dataset_num_proc,
                 desc="Tokenizing train dataset",
                 remove_columns=train_dataset.column_names,
             )
@@ -522,12 +502,10 @@ class ORPOTrainer(Trainer):
                 desc="Processing train dataset",
             )
             if eval_dataset is not None:
-                # eval_dataset = eval_dataset.map(self.tokenize_row, num_proc=args.dataset_num_proc)
                 eval_dataset = eval_dataset.map(
                     _tokenize,
                     fn_kwargs={"tokenizer": self.tokenizer},
                     batched=True,
-                    num_proc=args.dataset_num_proc,
                     desc="Tokenizing eval dataset",
                     remove_columns=eval_dataset.column_names,
                 )
@@ -537,10 +515,6 @@ class ORPOTrainer(Trainer):
                     num_proc=args.dataset_num_proc,
                     desc="Processing eval dataset",
                 )
-            # tokenize the dataset
-            # train_dataset = train_dataset.map(self.tokenize_row, num_proc=args.dataset_num_proc)
-            # if eval_dataset is not None:
-            #     eval_dataset = eval_dataset.map(self.tokenize_row, num_proc=args.dataset_num_proc)
 
         super().__init__(
             model=model,
