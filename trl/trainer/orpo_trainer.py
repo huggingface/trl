@@ -645,11 +645,6 @@ class ORPOTrainer(Trainer):
                 elif k.endswith("_attention_mask"):
                     pad_value = 0
                 concatenated_key = k.replace("rejected", "concatenated")
-                print(f"concatenated_key: {concatenated_key}")
-                print(f"concatenated_batch[k]: {concatenated_batch[concatenated_key]}")
-                print(
-                    f"pad_to_length(batch[k], max_length, pad_value=pad_value): {pad_to_length(batch[k], max_length, pad_value=pad_value)}"
-                )
                 concatenated_batch[concatenated_key] = torch.cat(
                     (
                         concatenated_batch[concatenated_key],
