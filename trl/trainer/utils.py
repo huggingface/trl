@@ -33,8 +33,6 @@ from transformers import BitsAndBytesConfig, DataCollatorForLanguageModeling, Ge
 from transformers.trainer import TrainerCallback
 from transformers.trainer_utils import has_length
 
-from trl.models.utils import unwrap_model_for_generation
-
 from ..import_utils import is_peft_available, is_unsloth_available, is_xpu_available
 from ..trainer.model_config import ModelConfig
 
@@ -837,41 +835,49 @@ class GenerateCompletionCallback(TrainerCallback):
     A [`TrainerCallback`] that generates completions using the model on the eval dataset
     """
 
-    def on_evaluate(self, args, state, control, sampling: bool = False, **kwargs):
+    def __init__(self, left_tokenizer: PreTrainedTokenizerBase):
+        self.left_tokenizer = left_tokenizer
+
+    def on_evaluate(self, args, state, control, **kwargs):
+        sampling = True
+        eval_dataloader = kwargs["eval_dataloader"]
+        model = kwargs["model"]
+        tokenizer = kwargs["tokenizer"]
         generation_config = GenerationConfig(
-            max_new_tokens=self.args.response_length,
+            max_new_tokens=args.max_seq_length,
             temperature=(0.01 + 1e-7),
             top_k=0.0,
             top_p=1.0,
             do_sample=True,
+            pad_token_id=tokenizer.pad_token_id,
         )
 
         table = defaultdict(list)
-        for batch in self.eval_dataloader:
+        for batch in eval_dataloader:
             query = batch["input_ids"]
             name = "trained model"
             with torch.no_grad():
                 context_length = query.shape[1]
-                with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
-                    output = unwrapped_model.generate(
-                        input_ids=query,
-                        attention_mask=query != self.tokenizer.pad_token_id,
-                        # position_ids=attention_mask.cumsum(1) - attention_mask.long(), # not needed: already adjusted in generations
-                        # https://github.com/huggingface/transformers/blob/ac33aeeeee2a7a89b89c93c2962e6feb90daef0a/src/transformers/models/gpt2/modeling_gpt2.py#L1227-L1250
-                        generation_config=generation_config,
-                        return_dict_in_generate=True,
-                        output_scores=True,
-                    )
+                # with unwrap_model_for_generation(model, accelerator) as unwrapped_model:
+                output = model.generate(
+                    input_ids=query,
+                    attention_mask=query != tokenizer.pad_token_id,
+                    # position_ids=attention_mask.cumsum(1) - attention_mask.long(), # not needed: already adjusted in generations
+                    # https://github.com/huggingface/transformers/blob/ac33aeeeee2a7a89b89c93c2962e6feb90daef0a/src/transformers/models/gpt2/modeling_gpt2.py#L1227-L1250
+                    generation_config=generation_config,
+                    return_dict_in_generate=True,
+                    output_scores=True,
+                )
 
                 response = output.sequences[:, context_length:]
                 postprocessed_response = response
-                table["query"].extend(gather_object(self.tokenizer.batch_decode(query, skip_special_tokens=True)))
-                table[name].extend(gather_object(self.tokenizer.batch_decode(postprocessed_response)))
+                table["query"].extend(gather_object(tokenizer.batch_decode(query, skip_special_tokens=True)))
+                table[name].extend(gather_object(tokenizer.batch_decode(postprocessed_response)))
 
             if sampling:
                 break
         df = pd.DataFrame(table)
-        if self.accelerator.process_index == 0:
+        if PartialState().process_index == 0:
             print_rich_table(df.iloc[0 : 0 + 5])
         if "wandb" in args.report_to:
             import wandb

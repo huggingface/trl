@@ -99,5 +99,5 @@ if __name__ == "__main__":
     trainer.push_to_hub()
     trainer.add_callback(GenerateCompletionCallback())  # optional
     metrics = trainer.evaluate()
-    trainer.log_metrics("eval", metrics)
-    print(metrics)
+    # trainer.log_metrics("eval", metrics)
+    # print(metrics)
