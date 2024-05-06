@@ -58,15 +58,6 @@ class RLOOTrainer(PolicyTrainerBase):
         input_ids = input_ids.repeat(self.args.rloo_k, 1)
         return super().generate_batch_extras(model, input_ids)
 
-    def calc_logprobs(self, model, query_responses, context_length):
-        responses = query_responses[:, context_length:]
-        output_logits = self.forward(model, query_responses).logits
-        response_logits = output_logits[:, context_length - 1 : -1]
-        response_logits /= max(self.args.temperature, 1e-7)
-        response_logprobs = logprobs_from_logits(response_logits, responses, gather=True)
-        return response_logits, response_logprobs
-
-
     def compute_loss(
         self,
         model: Union[PreTrainedModel, nn.Module],
@@ -74,21 +65,20 @@ class RLOOTrainer(PolicyTrainerBase):
         return_outputs=False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
         """
-        https://github.com/huggingface/transformers/blob/8c12690cecbb97e187861e386f7a0ac790e4236c/src/transformers/trainer.py#L3112
+        PR TODO: appropriate docstring
         """
+
+        # load inputs created by the generation model in generate_batch_extras()
         queries = inputs["queries"].to(self.accelerator.device)
-        context_length = queries.shape[1]
         query_responses = inputs["query_responses"].to(self.accelerator.device)
         responses = inputs["responses"].to(self.accelerator.device)
         gen_logprobs = inputs["generation_logprobs"].to(self.accelerator.device)
+        context_length = queries.shape[1]
+
         with torch.no_grad(), self.time_metric_ctx("calc_advantages"):
-            # PR TODO: refactor into a function shared by ppov2 which calculates sequences and logprobs
-            #          see DPOTrainer.concatenated_forward
 
             with self.cast_model_ctx(), self.ref_model_mgr as ref_model:
-                _, ref_logprobs = self.calc_logprobs(
-                    ref_model, query_responses, context_length
-                )
+                _, ref_logprobs = self.calc_logprobs(ref_model, query_responses, context_length)
 
             # Response Processing 1. truncate response after the first occurrence of `truncate_token_id`
             postprocessed_responses = responses
@@ -101,27 +91,19 @@ class RLOOTrainer(PolicyTrainerBase):
                 postprocessed_responses == self.tokenizer.pad_token_id
             ) - 1
 
-            # clear cache before get_reward call
-            gc.collect()
-            torch.cuda.empty_cache()
-
             with self.time_metric_ctx("get_reward"):
                 _, scores, _ = self.get_reward(
                     self.reward_model,
                     postprocessed_query_responses,
                     context_length
                 )
-            gc.collect()
-            torch.cuda.empty_cache()
 
             # Response Processing 3. filter response. Ensure that the sample contains truncate_token_id
             # responses not passing that filter will receive a low (fixed) score
-            # only query humans on responses that pass that filter
             if self.args.non_eos_penalty:
                 contain_eos_token = torch.any(postprocessed_responses == self.tokenizer.eos_token_id, dim=-1)
-                scores = torch.where(contain_eos_token, scores, torch.full_like(scores, self.args.penalty_reward_value))
-                # PR TODO: remove this debug statement
-                self.accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
+                non_eos_penalty_rewards = torch.full_like(scores, self.args.penalty_reward_value)
+                scores = torch.where(contain_eos_token, scores, non_eos_penalty_rewards)
 
             # be very careful with `padding_mask`;
             # see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
@@ -135,9 +117,8 @@ class RLOOTrainer(PolicyTrainerBase):
             non_score_reward = (-self.args.kl_coef * kl).sum(1)
             rlhf_reward = scores + non_score_reward.unsqueeze(1)
 
-            # we generated `self.args.rloo_k` many responses per prompt
-            # now we can implement the RLOO loss by subtracting the reward of
-            # a response by the average rewards of other `rloo_k - 1` responses
+            # We generated `self.args.rloo_k` responses per prompt
+            # RLOO loss: reward minus avg rewards of other responses
             rlhf_sum = rlhf_reward.sum(dim=0, keepdim=True)
             n = rlhf_reward.size(0)
             mean_other = (rlhf_sum - rlhf_reward) / (n - 1)

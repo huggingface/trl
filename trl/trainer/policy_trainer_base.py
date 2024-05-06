@@ -59,7 +59,7 @@ class PolicyTrainerArguments(TrainingArguments):
     non_eos_penalty: bool = False
     """whether to penalize responses that do not contain `truncate_token_id`"""
 
-    update_generation_steps: Optional[int] = 256
+    update_generation_steps: Optional[int] = 64
     """Number of steps between updating the generation model. If None, once per epoch"""
 
 
@@ -238,6 +238,18 @@ def _prepare_multigpu(model, accelerator, is_deepspeed_enabled: bool):
             evaluation_mode=True
         )
 
+
+def cuda_gc(func):
+    def wrapper(*args, **kwargs):
+        # Run the function
+        result = func(*args, **kwargs)
+        # Perform cleanup actions
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        return result
+    return wrapper
+
 # PR TODO: Implement original workflow as follows
 """
 -There are three models forwards() considered in each step
@@ -392,6 +404,7 @@ class PolicyTrainerBase(Trainer):
             args=args,
         )
 
+
         # Disable dropout ensures logprobs during generation aren't different from forward pass
         # https://github.com/huggingface/trl/pull/1586#discussion_r1579533825
         for m in [model, ref_model, reward_model]:
@@ -406,7 +419,7 @@ class PolicyTrainerBase(Trainer):
         self.reward_model = reward_model
         self.reward_fn = reward_fn
 
-
+        # prepare generation config
         default_generation_config = GenerationConfig(
             max_new_tokens=args.response_length,
             min_new_tokens=args.response_length,
@@ -417,7 +430,8 @@ class PolicyTrainerBase(Trainer):
         )
         self.train_generation_config = train_generation_config or default_generation_config
         self.eval_generation_config = eval_generation_config or default_generation_config
-        # disable `pad_token_id` and `eos_token_id` because we just want to
+
+        # force disable `pad_token_id` and `eos_token_id` because we just want to
         # generate tokens without truncation / padding
         if False:
             # PR TODO: review this??
@@ -426,6 +440,9 @@ class PolicyTrainerBase(Trainer):
         else:
             self.train_generation_config.eos_token_id = tokenizer.eos_token_id
             self.train_generation_config.pad_token_id = tokenizer.pad_token_id
+
+        if args.truncate_token and args.truncate_token == "eos":
+            args.truncate_token_id = tokenizer.eos_token_id
 
 
         # handle casting self.model
@@ -453,7 +470,6 @@ class PolicyTrainerBase(Trainer):
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
 
-
         # PR TOOD: accelerate with reward model
         #self.reward_model.to(self.accelerator.device)
         #self.reward_model = _prepare_multigpu(
@@ -464,8 +480,9 @@ class PolicyTrainerBase(Trainer):
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
-
+    @cuda_gc
     def generate_batch_extras(self, model, input_ids):
+        # PR TODO: generation_batch_size
         queries = input_ids.to(self.accelerator.device)
         context_length = queries.shape[1]
         with torch.no_grad():
@@ -486,10 +503,19 @@ class PolicyTrainerBase(Trainer):
             "generation_logprobs": generation_logprobs.detach().cpu(),
         }
 
+    @cuda_gc
+    def calc_logprobs(self, model, query_responses, context_length):
+        responses = query_responses[:, context_length:]
+        output_logits = self.forward(model, query_responses).logits
+        response_logits = output_logits[:, context_length - 1 : -1]
+        response_logits /= max(self.args.temperature, 1e-7)
+        response_logprobs = logprobs_from_logits(response_logits, responses, gather=True)
+        return response_logits, response_logprobs
+
     def get_train_dataloader(self):
         dataloader = super().get_train_dataloader()
         def mutate_fn(batches):
-            for batch in tqdm(batches, desc="mutating batches"):
+            for batch in tqdm(batches, desc="generating batch extras"):
                 batch_extras = self.generate_batch_extras(
                     self.model, batch["input_ids"]
                 )
@@ -540,6 +566,7 @@ class PolicyTrainerBase(Trainer):
             output_hidden_states=True,
         )
 
+    @cuda_gc
     def get_reward(self, reward_model, query_responses, context_length):
         attention_mask = query_responses != self.tokenizer.pad_token_id
 
