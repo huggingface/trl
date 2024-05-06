@@ -1,47 +1,39 @@
 from collections import defaultdict
+from contextlib import nullcontext
 from copy import deepcopy
-import os
-import time
 from dataclasses import dataclass
-from typing import Dict, List, Literal, Optional, Tuple, Union, Callable, Any
-import warnings
-from contextlib import nullcontext, ContextDecorator
 from tqdm import tqdm
+from typing import Dict, Literal, Optional, Tuple, Union, Callable, Any
 import gc
-
-import numpy as np
+import inspect
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from accelerate import Accelerator
-from accelerate.state import AcceleratorState
-from accelerate.utils import broadcast
+import warnings
+
 from datasets import Dataset
-from torch.utils.data import DataLoader
 from transformers import (
-    DataCollatorWithPadding,
+    AutoModelForCausalLM,
     GenerationConfig,
     PreTrainedModel,
-    PreTrainedTokenizer,
     Trainer,
-    TrainerCallback,
-    TrainerControl,
-    TrainerState,
     TrainingArguments,
     PreTrainedTokenizerBase
 )
 
-from trl.models.utils import unwrap_model_for_generation
+# PR TODO: Determine if this is necessary
+# from trl.models.utils import unwrap_model_for_generation
 
 from ..core import logprobs_from_logits
 from ..models import SUPPORTED_ARCHITECTURES, create_reference_model, PreTrainedModelWrapper
 from .utils import disable_dropout_in_model, peft_module_casting_to_bf16
+from ..import_utils import is_peft_available, is_deepspeed_available
 
-
-from ..import_utils import is_peft_available
 
 if is_peft_available():
-    from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
+    from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
+
+if is_deepspeed_available():
+    import deepspeed
 
 
 @dataclass
@@ -281,8 +273,6 @@ class DynamicDataLoader:
         while batch_buffer:
             yield batch_buffer.pop(0)
 
-        tqdm_iter.close()
-
     def __len__(self):
         return len(self.base_dataloader)
 
@@ -306,8 +296,7 @@ class ReferenceModelManager:
             self.is_peft_model = False
         else:
             self.is_peft_model = (
-                getattr(model, "is_peft_model", False)
-                or isinstance(model, PeftModel)
+                getattr(model, "is_peft_model", False) or isinstance(model, PeftModel)
             )
 
         if isinstance(ref_model, SUPPORTED_ARCHITECTURES):
@@ -378,7 +367,6 @@ class PolicyTrainerBase(Trainer):
             args=args,
         )
 
-
         # Disable dropout ensures logprobs during generation aren't different from forward pass
         # https://github.com/huggingface/trl/pull/1586#discussion_r1579533825
         for m in [model, ref_model, reward_model]:
@@ -412,7 +400,6 @@ class PolicyTrainerBase(Trainer):
 
         if args.truncate_token and args.truncate_token == "eos":
             args.truncate_token_id = tokenizer.eos_token_id
-
 
         # handle casting self.model
         if args.bf16 and getattr(model, "is_loaded_in_4bit", False):
@@ -494,13 +481,14 @@ class PolicyTrainerBase(Trainer):
     def calc_logprobs(self, model, query_responses, context_length):
         responses = query_responses[:, context_length:]
         output_logits = self.forward(model, query_responses).logits
-        response_logits = output_logits[:, context_length - 1 : -1]
+        response_logits = output_logits[:, context_length - 1: -1]
         response_logits /= max(self.args.temperature, 1e-7)
         response_logprobs = logprobs_from_logits(response_logits, responses, gather=True)
         return response_logits, response_logprobs
 
     def get_train_dataloader(self):
         dataloader = super().get_train_dataloader()
+
         # PR TODO: generation_batch_size
         def mutate_fn(batches):
             for batch in tqdm(batches, desc="generating batch extras"):
@@ -594,7 +582,6 @@ class PolicyTrainerBase(Trainer):
         )
         return postprocessed_responses
 
-
     @staticmethod
     def first_true_indices(bools, dtype=torch.long):
         """
@@ -605,11 +592,10 @@ class PolicyTrainerBase(Trainer):
         """
         row_len = bools.size(-1)
         zero_or_index = (
-            row_len * (~bools).type(dtype)
-            + torch.arange(row_len, dtype=dtype, device=bools.device)
+            row_len * (~bools).type(dtype) +
+            torch.arange(row_len, dtype=dtype, device=bools.device)
         )
         return torch.min(zero_or_index, dim=-1).values
-
 
     def store_metrics(
             self,
@@ -638,20 +624,18 @@ class PolicyTrainerBase(Trainer):
     def time_metric_ctx(self, timer_name: str):
         from time import perf_counter
         timer_metric_name = f"timer/{timer_name}"
+
         class catchtime:
             def __enter__(s):
                 s.start = perf_counter()
+
             def __exit__(s, type, value, traceback):
                 runtime = perf_counter() - s.start
                 self.store_metrics({timer_metric_name: runtime})
-        return catchtime()
 
+        return catchtime()
 
     def training_step(self, *args, **kwargs):
         """time logged training step"""
         with self.time_metric_ctx("training_step"):
             return super().training_step(*args, **kwargs)
-
-
-if __name__ == "__main__":
-    pass

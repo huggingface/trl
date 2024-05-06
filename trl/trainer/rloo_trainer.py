@@ -1,39 +1,10 @@
-from copy import deepcopy
-import gc
-import os
-import time
 from dataclasses import dataclass
-from typing import Dict, List, Literal, Optional, Tuple, Union, Callable, Any
-import warnings
-from contextlib import nullcontext
-
-import numpy as np
+from typing import Dict, Tuple, Union, Any
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from accelerate import Accelerator
-from accelerate.state import AcceleratorState
-from accelerate.utils import broadcast
-from datasets import Dataset
-from torch.utils.data import DataLoader
-from transformers import (
-    DataCollatorWithPadding,
-    GenerationConfig,
-    PreTrainedModel,
-    PreTrainedTokenizer,
-    Trainer,
-    TrainerCallback,
-    TrainerControl,
-    TrainerState,
-    TrainingArguments,
-    PreTrainedTokenizerBase
-)
-
-from ..models import SUPPORTED_ARCHITECTURES, create_reference_model, PreTrainedModelWrapper
+from transformers import PreTrainedModel
 
 from . import PolicyTrainerBase, PolicyTrainerArguments
-
-from ..import_utils import is_peft_available
 
 
 INVALID_LOGPROB = 1.0
@@ -142,8 +113,8 @@ class RLOOTrainer(PolicyTrainerBase):
         with torch.no_grad():
             prob_dist = torch.nn.functional.softmax(active_logits, dim=-1)
             entropy_avg = (
-                torch.logsumexp(active_logits, dim=-1)
-                - torch.sum(prob_dist * active_logits, dim=-1)
+                torch.logsumexp(active_logits, dim=-1) -
+                torch.sum(prob_dist * active_logits, dim=-1)
             ).mean()
             metrics = {
                 "objective/kl": kl.sum(1).mean(),
@@ -153,14 +124,10 @@ class RLOOTrainer(PolicyTrainerBase):
                 "policy/approxkl_avg": 0.5 * (logprobs_diff**2).mean(),
                 "loss/policy_avg": self.accelerator.gather(pg_loss).mean().item(),
                 "val/ratio": new_ratio.mean(),
-                #"val/ratio_var": new_ratio.mean().var(),
+                # "val/ratio_var": new_ratio.mean().var(),
                 "val/num_eos_tokens": (responses == self.tokenizer.eos_token_id).sum().item(),
                 "policy/clipfrac_avg": self.accelerator.gather(pg_clipfrac).mean().item(),
                 "policy/entropy_avg": entropy_avg
             }
 
         return (pg_loss, metrics)
-
-
-if __name__ == "__main__":
-    pass
