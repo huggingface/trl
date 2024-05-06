@@ -7,7 +7,6 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
     HfArgumentParser,
-    PreTrainedModel,
 )
 
 from trl.trainer.ppov2_trainer_vllm import PPOConfig, PPOTrainer
@@ -65,15 +64,13 @@ if __name__ == "__main__":
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
     if tokenizer.chat_template is None:
         # a default chat template to simply concatenate the messages
-        tokenizer.chat_template = (
-            "{% for message in messages %}\n{% if message['role'] == 'user' %}\n{{ '<|user|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'system' %}\n{{ '<|system|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'assistant' %}\n{{ '<|assistant|>\n'  + message['content'] + eos_token }}\n{% endif %}\n{% if loop.last and add_generation_prompt %}\n{{ '<|assistant|>' }}\n{% endif %}\n{% endfor %}"
-        )
-    value_model: PreTrainedModel = AutoModelForSequenceClassification.from_pretrained(
+        tokenizer.chat_template = "{% for message in messages %}\n{% if message['role'] == 'user' %}\n{{ '<|user|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'system' %}\n{{ '<|system|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'assistant' %}\n{{ '<|assistant|>\n'  + message['content'] + eos_token }}\n{% endif %}\n{% if loop.last and add_generation_prompt %}\n{{ '<|assistant|>' }}\n{% endif %}\n{% endfor %}"
+    value_model = AutoModelForSequenceClassification.from_pretrained(
         args.reward_model_path,
         attn_implementation="flash_attention_2",
         num_labels=1,
     )
-    reward_model: PreTrainedModel = AutoModelForSequenceClassification.from_pretrained(
+    reward_model = AutoModelForSequenceClassification.from_pretrained(
         args.reward_model_path,
         attn_implementation="flash_attention_2",
         num_labels=1,
@@ -112,6 +109,7 @@ if __name__ == "__main__":
             num_proc=1 if args.debug else multiprocessing.cpu_count(),
             load_from_cache_file=not args.debug,
         )
+
     train_dataset = prepare_dataset(train_dataset, tokenizer)
     eval_dataset = prepare_dataset(eval_dataset, tokenizer)
     # filtering
@@ -134,4 +132,3 @@ if __name__ == "__main__":
     trainer.save_model(args.output_dir)
     trainer.push_to_hub()
     trainer.generate_completions(True)
-

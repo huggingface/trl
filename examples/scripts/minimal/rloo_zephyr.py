@@ -1,4 +1,3 @@
-from collections import defaultdict
 import multiprocessing
 import shutil
 
@@ -13,7 +12,7 @@ from transformers import (
     HfArgumentParser,
     PreTrainedModel,
 )
-import matplotlib.pyplot as plt
+
 from trl.trainer.rloo_trainer import RLOOConfig, RLOOTrainer
 
 
@@ -80,9 +79,7 @@ if __name__ == "__main__":
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
     if tokenizer.chat_template is None:
         # a default chat template to simply concatenate the messages
-        tokenizer.chat_template = (
-            "{% for message in messages %}\n{% if message['role'] == 'user' %}\n{{ '<|user|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'system' %}\n{{ '<|system|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'assistant' %}\n{{ '<|assistant|>\n'  + message['content'] + eos_token }}\n{% endif %}\n{% if loop.last and add_generation_prompt %}\n{{ '<|assistant|>' }}\n{% endif %}\n{% endfor %}"
-        )
+        tokenizer.chat_template = "{% for message in messages %}\n{% if message['role'] == 'user' %}\n{{ '<|user|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'system' %}\n{{ '<|system|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'assistant' %}\n{{ '<|assistant|>\n'  + message['content'] + eos_token }}\n{% endif %}\n{% if loop.last and add_generation_prompt %}\n{{ '<|assistant|>' }}\n{% endif %}\n{% endfor %}"
     value_model: PreTrainedModel = AutoModelForSequenceClassification.from_pretrained(
         args.reward_model_path,
         num_labels=1,
@@ -103,6 +100,7 @@ if __name__ == "__main__":
     # eval_dataset = eval_dataset.select(range(1000))
 
     dataset_text_field = "prompt"
+
     def prepare_dataset(dataset, tokenizer):
         """pre-tokenize the dataset before training; only collate during training"""
 
@@ -120,6 +118,7 @@ if __name__ == "__main__":
             num_proc=multiprocessing.cpu_count(),
             load_from_cache_file=False,
         )
+
     train_dataset = prepare_dataset(train_dataset, tokenizer)
     eval_dataset = prepare_dataset(eval_dataset, tokenizer)
     # filtering
@@ -141,4 +140,3 @@ if __name__ == "__main__":
     trainer.save_model(args.output_dir)
     trainer.push_to_hub()
     trainer.generate_completions(True)
-

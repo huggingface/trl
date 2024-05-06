@@ -1,26 +1,25 @@
-from collections import OrderedDict, defaultdict
+import gc
 import os
 import time
+from collections import OrderedDict, defaultdict
 from dataclasses import dataclass
 from typing import Dict, List, Literal, Optional, Tuple, Union
-import gc
 
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from rich.console import Console
-from rich.table import Table
 from accelerate import Accelerator
 from accelerate.state import AcceleratorState
 from accelerate.utils import broadcast, gather_object
 from datasets import Dataset
+from rich.console import Console
+from rich.table import Table
 from torch.utils.data import DataLoader
 from transformers import (
     DataCollatorWithPadding,
     GenerationConfig,
-    PreTrainedModel,
     PreTrainedTokenizer,
     Trainer,
     TrainerCallback,
@@ -30,6 +29,7 @@ from transformers import (
 )
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer_callback import CallbackHandler, DefaultFlowCallback
+
 from trl.models.utils import unwrap_model_for_generation
 
 
@@ -283,6 +283,7 @@ def forward(model, query_responses, tokenizer):
 
 def prepare_deepspeed2(model, train_micro_batch_size_per_gpu):
     import deepspeed
+
     deepspeed_states = AcceleratorState().deepspeed_plugin
     deepspeed_states.deepspeed_config["train_micro_batch_size_per_gpu"] = train_micro_batch_size_per_gpu
 
@@ -300,6 +301,7 @@ def prepare_deepspeed2(model, train_micro_batch_size_per_gpu):
 
 def prepare_deepspeed3(model, accelerator):
     import deepspeed
+
     # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
     # deepspeed_states = AcceleratorState().deepspeed_plugin
     # deepspeed_states.deepspeed_config["train_micro_batch_size_per_gpu"] = args.batch_size
@@ -350,9 +352,10 @@ class PPOTrainer(Trainer):
         self.tokenizer = tokenizer
         self.policy = policy
 
-        self.policy.generation_config.eos_token_id = None  # disable `pad_token_id` and `eos_token_id` because we just want to
+        self.policy.generation_config.eos_token_id = (
+            None  # disable `pad_token_id` and `eos_token_id` because we just want to
+        )
         self.policy.generation_config.pad_token_id = None  # generate tokens without truncation / padding
-
 
         self.ref_policy = ref_policy
         self.reward_model = reward_model
@@ -370,7 +373,9 @@ class PPOTrainer(Trainer):
         accelerator = Accelerator(gradient_accumulation_steps=args.gradient_accumulation_steps)
         self.accelerator = accelerator
         args.world_size = accelerator.num_processes
-        args.local_batch_size = args.per_device_train_batch_size * args.gradient_accumulation_steps * args.num_mini_batches
+        args.local_batch_size = (
+            args.per_device_train_batch_size * args.gradient_accumulation_steps * args.num_mini_batches
+        )
         args.micro_batch_size = int(args.per_device_train_batch_size * args.world_size)
         args.batch_size = int(args.local_batch_size * args.world_size)
         args.mini_batch_size = exact_div(args.batch_size, args.num_mini_batches)
@@ -453,33 +458,35 @@ class PPOTrainer(Trainer):
             batch_size=args.per_device_eval_batch_size,
             collate_fn=DataCollatorWithPadding(self.tokenizer),
             drop_last=True,
-        ) # no need to shuffle eval dataset
+        )  # no need to shuffle eval dataset
         self.eval_dataloader = accelerator.prepare(self.eval_dataloader)
 
     def get_train_dataloader(self) -> DataLoader:
         return self.dataloader
-    
+
     def get_eval_dataloader(self) -> DataLoader:
         return self.eval_dataloader
 
     def push_to_hub(self, **kwargs):
         """Modified from `Trainer.save_model` to only save the policy and not the value network."""
         self.backup_model = self.model
-        self.model = self.accelerator.unwrap_model(self.model).policy # save only the policy
+        self.model = self.accelerator.unwrap_model(self.model).policy  # save only the policy
         super().push_to_hub(**kwargs)
         self.model = self.backup_model
 
     def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
         """Modified from `Trainer.save_model` to only save the policy and not the value network."""
-        if not _internal_call: # `push_to_hub` already swaps out the self.model with policy
+        if not _internal_call:  # `push_to_hub` already swaps out the self.model with policy
             self.backup_model = self.model
-            self.model = self.accelerator.unwrap_model(self.model).policy # save only the policy
+            self.model = self.accelerator.unwrap_model(self.model).policy  # save only the policy
         if output_dir is None:
             output_dir = self.args.output_dir
         state_dict = self.accelerator.get_state_dict(self.backup_model)
         policy_state_dict = state_dict
         if self.accelerator.is_main_process:
-            policy_state_dict = OrderedDict({k[len("policy."):]: v for k, v in state_dict.items() if k.startswith("policy.")})
+            policy_state_dict = OrderedDict(
+                {k[len("policy.") :]: v for k, v in state_dict.items() if k.startswith("policy.")}
+            )
         if self.args.should_save:
             self._save(output_dir, state_dict=policy_state_dict)
         if not _internal_call:
@@ -777,7 +784,25 @@ class PPOTrainer(Trainer):
             if args.num_sample_generations > 0 and (update - 1) % self.sample_generations_freq == 0:
                 self.generate_completions(sampling=True)
                 torch.cuda.empty_cache()
-            del query_responses, responses, postprocessed_responses, logprobs, ref_logprobs, values, sequence_lengths, contain_eos_token, sequence_lengths_p1, response_idxs, padding_mask, padding_mask_p1, rewards, actual_start, actual_end, advantages, returns
+            del (
+                query_responses,
+                responses,
+                postprocessed_responses,
+                logprobs,
+                ref_logprobs,
+                values,
+                sequence_lengths,
+                contain_eos_token,
+                sequence_lengths_p1,
+                response_idxs,
+                padding_mask,
+                padding_mask_p1,
+                rewards,
+                actual_start,
+                actual_end,
+                advantages,
+                returns,
+            )
 
             torch.cuda.empty_cache()
 
@@ -812,7 +837,9 @@ class PPOTrainer(Trainer):
                 table[name].extend(gather_object(self.tokenizer.batch_decode(postprocessed_response)))
 
                 postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
-                _, score, _ = get_reward(self.reward_model, postprocessed_query_response, self.tokenizer, context_length)
+                _, score, _ = get_reward(
+                    self.reward_model, postprocessed_query_response, self.tokenizer, context_length
+                )
                 table["score"].extend(self.accelerator.gather(score).float().cpu().numpy())
 
             if sampling:
@@ -822,5 +849,6 @@ class PPOTrainer(Trainer):
             print_rich_table(df.iloc[0 : 0 + 5])
         if "wandb" in args.report_to:
             import wandb
+
             if wandb.run is not None:
                 wandb.log({"completions": wandb.Table(dataframe=df)})

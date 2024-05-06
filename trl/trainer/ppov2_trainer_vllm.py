@@ -1,9 +1,9 @@
-from collections import OrderedDict, defaultdict
+import gc
 import os
 import time
+from collections import OrderedDict, defaultdict
 from dataclasses import dataclass
 from typing import Dict, List, Literal, Optional, Tuple, Union
-import gc
 
 import numpy as np
 import pandas as pd
@@ -15,11 +15,8 @@ from accelerate.state import AcceleratorState
 from accelerate.utils import broadcast, gather_object
 from datasets import Dataset
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 from transformers import (
     DataCollatorWithPadding,
-    GenerationConfig,
-    PreTrainedModel,
     PreTrainedTokenizer,
     Trainer,
     TrainerCallback,
@@ -27,16 +24,15 @@ from transformers import (
     TrainerState,
     TrainingArguments,
 )
-from transformers.data.data_collator import pad_without_fast_tokenizer_warning
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer_callback import CallbackHandler, DefaultFlowCallback
+from vllm import SamplingParams, SingleGPULLM
+
 from trl.models.utils import unwrap_model_for_generation
 from trl.trainer.utils import print_rich_table
-from vllm import SamplingParams, SingleGPULLM
 
 
 INVALID_LOGPROB = 1.0
-
 
 
 @dataclass
@@ -176,6 +172,7 @@ def get_reward(model, query_responses, tokenizer, context_length):
         # position_ids=position_ids,
         return_dict=True,
         output_hidden_states=True,
+        use_cache=False,  # otherwise mistral-based RM would error out
     )
     reward_logits = model.score(output.hidden_states[-1])
     sequence_lengths = (
@@ -269,6 +266,7 @@ def forward(model, query_responses, tokenizer):
 
 def prepare_deepspeed2(model, train_micro_batch_size_per_gpu):
     import deepspeed
+
     deepspeed_states = AcceleratorState().deepspeed_plugin
     deepspeed_states.deepspeed_config["train_micro_batch_size_per_gpu"] = train_micro_batch_size_per_gpu
 
@@ -286,6 +284,7 @@ def prepare_deepspeed2(model, train_micro_batch_size_per_gpu):
 
 def prepare_deepspeed3(model, accelerator):
     import deepspeed
+
     # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
     # deepspeed_states = AcceleratorState().deepspeed_plugin
     # deepspeed_states.deepspeed_config["train_micro_batch_size_per_gpu"] = args.batch_size
@@ -335,7 +334,9 @@ class PPOTrainer(Trainer):
         self.args = args
         self.tokenizer = tokenizer
         self.policy = policy
-        self.policy.generation_config.eos_token_id = None  # disable `pad_token_id` and `eos_token_id` because we just want to
+        self.policy.generation_config.eos_token_id = (
+            None  # disable `pad_token_id` and `eos_token_id` because we just want to
+        )
         self.policy.generation_config.pad_token_id = None  # generate tokens without truncation / padding
 
         self.ref_policy = ref_policy
@@ -354,7 +355,9 @@ class PPOTrainer(Trainer):
         accelerator = Accelerator(gradient_accumulation_steps=args.gradient_accumulation_steps)
         self.accelerator = accelerator
         args.world_size = accelerator.num_processes
-        args.local_batch_size = args.per_device_train_batch_size * args.gradient_accumulation_steps * args.num_mini_batches
+        args.local_batch_size = (
+            args.per_device_train_batch_size * args.gradient_accumulation_steps * args.num_mini_batches
+        )
         args.micro_batch_size = int(args.per_device_train_batch_size * args.world_size)
         args.batch_size = int(args.local_batch_size * args.world_size)
         args.mini_batch_size = exact_div(args.batch_size, args.num_mini_batches)
@@ -372,7 +375,6 @@ class PPOTrainer(Trainer):
         self.local_seed = args.seed + accelerator.process_index * 100003  # Prime
         if args.num_sample_generations > 0:
             self.sample_generations_freq = max(1, args.num_updates // args.num_sample_generations)
-
 
         #########
         # setup model, optimizer, and others
@@ -430,7 +432,7 @@ class PPOTrainer(Trainer):
             batch_size=args.per_device_eval_batch_size,
             collate_fn=DataCollatorWithPadding(self.tokenizer),
             drop_last=True,
-        ) # no need to shuffle eval dataset
+        )  # no need to shuffle eval dataset
         self.eval_dataloader = accelerator.prepare(self.eval_dataloader)
 
         #########
@@ -443,11 +445,9 @@ class PPOTrainer(Trainer):
             include_stop_str_in_output=True,
         )
         if accelerator.is_main_process:
-            self.llm = SingleGPULLM(model=args.base_model,
-                            tensor_parallel_size=1,
-                            device="cuda:7")
+            self.llm = SingleGPULLM(model=args.base_model, tensor_parallel_size=1, device="cuda:7")
             self.llmp = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-            print(f"🔥🔥🔥 vllm loaded")
+            print("🔥🔥🔥 vllm loaded")
         else:
             print("waiting for vllm to spin up...")
         accelerator.wait_for_everyone()
@@ -461,31 +461,32 @@ class PPOTrainer(Trainer):
             ref_policy = ref_policy.to(self.accelerator.device)
             self.reward_model = self.reward_model.to(self.accelerator.device)
 
-
     def get_train_dataloader(self) -> DataLoader:
         return self.dataloader
-    
+
     def get_eval_dataloader(self) -> DataLoader:
         return self.eval_dataloader
 
     def push_to_hub(self, **kwargs):
         """Modified from `Trainer.save_model` to only save the policy and not the value network."""
         self.backup_model = self.model
-        self.model = self.accelerator.unwrap_model(self.model).policy # save only the policy
+        self.model = self.accelerator.unwrap_model(self.model).policy  # save only the policy
         super().push_to_hub(**kwargs)
         self.model = self.backup_model
 
     def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
         """Modified from `Trainer.save_model` to only save the policy and not the value network."""
-        if not _internal_call: # `push_to_hub` already swaps out the self.model with policy
+        if not _internal_call:  # `push_to_hub` already swaps out the self.model with policy
             self.backup_model = self.model
-            self.model = self.accelerator.unwrap_model(self.model).policy # save only the policy
+            self.model = self.accelerator.unwrap_model(self.model).policy  # save only the policy
         if output_dir is None:
             output_dir = self.args.output_dir
         state_dict = self.accelerator.get_state_dict(self.backup_model)
         policy_state_dict = state_dict
         if self.accelerator.is_main_process:
-            policy_state_dict = OrderedDict({k[len("policy."):]: v for k, v in state_dict.items() if k.startswith("policy.")})
+            policy_state_dict = OrderedDict(
+                {k[len("policy.") :]: v for k, v in state_dict.items() if k.startswith("policy.")}
+            )
         if self.args.should_save:
             self._save(output_dir, state_dict=policy_state_dict)
         if not _internal_call:
@@ -507,7 +508,6 @@ class PPOTrainer(Trainer):
                 yield from dataloader
 
         iter_dataloader = iter(repeat_generator())
-
 
         accelerator.print("===training policy===")
         global_step = 0
@@ -539,26 +539,36 @@ class PPOTrainer(Trainer):
                 sequence_lengths = []
                 with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
                     g_queries_list = gather_object(queries.tolist())
-                    
+
                     if accelerator.is_main_process:
-                        print("🔥🔥🔥 Loading weights using shared memory;"
-                            "we expect the generations to be completely different")
+                        print(
+                            "🔥🔥🔥 Loading weights using shared memory;"
+                            "we expect the generations to be completely different"
+                        )
                         start_time = time.time()
                         self.llmp.load_weights(unwrapped_model.policy.named_parameters())
                         print(f"Time to load weights: {time.time() - start_time:.2f} seconds")
-                        g_queries_list = [[inneritem for inneritem in item if inneritem != tokenizer.pad_token_id]  for item in g_queries_list]
-                        outputs = self.llm.generate(prompt_token_ids=g_queries_list, sampling_params=self.sampling_params)
+                        g_queries_list = [
+                            [inneritem for inneritem in item if inneritem != tokenizer.pad_token_id]
+                            for item in g_queries_list
+                        ]
+                        outputs = self.llm.generate(
+                            prompt_token_ids=g_queries_list, sampling_params=self.sampling_params
+                        )
                         padded_response_token_ids = []
                         for output in outputs:
                             token_ids = output.outputs[0].token_ids
-                            DUMMY_PAD_TOKEN = 0 # we can't use tokenizer.pad_token_id because it's outside vocab and `torch.gather(all_logprob, 2, response.unsqueeze(-1))` will error out
+                            DUMMY_PAD_TOKEN = 0  # we can't use tokenizer.pad_token_id because it's outside vocab and `torch.gather(all_logprob, 2, response.unsqueeze(-1))` will error out
                             padded_token_ids = token_ids + [DUMMY_PAD_TOKEN] * (args.response_length - len(token_ids))
                             padded_response_token_ids.append(padded_token_ids)
                         padded_response_token_ids = torch.tensor(padded_response_token_ids, device=device)
                         g_responses[:] = padded_response_token_ids
 
                     broadcast(g_responses, 0)
-                    local_responses = g_responses[accelerator.local_process_index * queries.shape[0]: (accelerator.local_process_index + 1) * queries.shape[0]]
+                    local_responses = g_responses[
+                        accelerator.local_process_index * queries.shape[0] : (accelerator.local_process_index + 1)
+                        * queries.shape[0]
+                    ]
                     # if args.remove_duplicate_response_pad_tokens: # NOTE: micro optimization: remove the pad to longest
                     #     local_responses = local_responses[:, :(local_responses != tokenizer.pad_token_id).sum(1).max()]
                     queries_responses = torch.cat((queries, local_responses), 1)
@@ -787,7 +797,25 @@ class PPOTrainer(Trainer):
             if args.num_sample_generations > 0 and (update - 1) % self.sample_generations_freq == 0:
                 self.generate_completions(sampling=True)
                 torch.cuda.empty_cache()
-            del query_responses, responses, postprocessed_responses, logprobs, ref_logprobs, values, sequence_lengths, contain_eos_token, sequence_lengths_p1, response_idxs, padding_mask, padding_mask_p1, rewards, actual_start, actual_end, advantages, returns
+            del (
+                query_responses,
+                responses,
+                postprocessed_responses,
+                logprobs,
+                ref_logprobs,
+                values,
+                sequence_lengths,
+                contain_eos_token,
+                sequence_lengths_p1,
+                response_idxs,
+                padding_mask,
+                padding_mask_p1,
+                rewards,
+                actual_start,
+                actual_end,
+                advantages,
+                returns,
+            )
             torch.cuda.empty_cache()
 
     def generate_completions(self, sampling: bool = False):
@@ -803,28 +831,36 @@ class PPOTrainer(Trainer):
         )
 
         table = defaultdict(list)
-        g_responses = torch.zeros((args.per_device_eval_batch_size * args.world_size, args.response_length), device=device, dtype=torch.long)
+        g_responses = torch.zeros(
+            (args.per_device_eval_batch_size * args.world_size, args.response_length), device=device, dtype=torch.long
+        )
         for batch in self.eval_dataloader:
             queries = batch["input_ids"]
             name = f"trained {args.base_model}"
             with torch.no_grad():
                 context_length = queries.shape[1]
                 with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
-
                     g_queries_list = gather_object(queries.tolist())
-                    
+
                     if accelerator.is_main_process:
-                        print("🔥🔥🔥 Loading weights using shared memory;"
-                            "we expect the generations to be completely different")
+                        print(
+                            "🔥🔥🔥 Loading weights using shared memory;"
+                            "we expect the generations to be completely different"
+                        )
                         start_time = time.time()
                         self.llmp.load_weights(unwrapped_model.policy.named_parameters())
                         print(f"Time to load weights: {time.time() - start_time:.2f} seconds")
-                        g_queries_list = [[inneritem for inneritem in item if inneritem != tokenizer.pad_token_id]  for item in g_queries_list]
+                        g_queries_list = [
+                            [inneritem for inneritem in item if inneritem != tokenizer.pad_token_id]
+                            for item in g_queries_list
+                        ]
                         outputs = self.llm.generate(prompt_token_ids=g_queries_list, sampling_params=generation_config)
                         padded_response_token_ids = []
                         for output in outputs:
                             token_ids = output.outputs[0].token_ids
-                            padded_token_ids = token_ids + [tokenizer.pad_token_id] * (args.response_length - len(token_ids))
+                            padded_token_ids = token_ids + [tokenizer.pad_token_id] * (
+                                args.response_length - len(token_ids)
+                            )
                             padded_response_token_ids.append(padded_token_ids)
 
                         padded_response_token_ids = torch.tensor(padded_response_token_ids, device=device)
@@ -832,7 +868,18 @@ class PPOTrainer(Trainer):
                         g_responses[:] = padded_response_token_ids
 
                     broadcast(g_responses, 0)
-                    queries_responses = torch.cat((queries, g_responses[accelerator.local_process_index * queries.shape[0]: (accelerator.local_process_index + 1) * queries.shape[0]]), 1)
+                    queries_responses = torch.cat(
+                        (
+                            queries,
+                            g_responses[
+                                accelerator.local_process_index * queries.shape[0] : (
+                                    accelerator.local_process_index + 1
+                                )
+                                * queries.shape[0]
+                            ],
+                        ),
+                        1,
+                    )
 
                 response = queries_responses[:, context_length:]
                 postprocessed_response = response
@@ -842,7 +889,9 @@ class PPOTrainer(Trainer):
                 table[name].extend(gather_object(self.tokenizer.batch_decode(postprocessed_response)))
 
                 postprocessed_query_response = torch.cat((queries, postprocessed_response), 1)
-                _, score, _ = get_reward(self.reward_model, postprocessed_query_response, self.tokenizer, context_length)
+                _, score, _ = get_reward(
+                    self.reward_model, postprocessed_query_response, self.tokenizer, context_length
+                )
                 table["score"].extend(self.accelerator.gather(score).float().cpu().numpy())
 
             if sampling:
@@ -852,5 +901,6 @@ class PPOTrainer(Trainer):
             print_rich_table(df.iloc[0 : 0 + 5])
         if "wandb" in args.report_to:
             import wandb
+
             if wandb.run is not None:
                 wandb.log({"completions": wandb.Table(dataframe=df)})

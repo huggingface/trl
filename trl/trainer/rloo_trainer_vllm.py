@@ -1,9 +1,9 @@
-from collections import defaultdict
+import gc
 import os
 import time
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import Dict, List, Literal, Optional, Tuple, Union
-import gc
 
 import numpy as np
 import pandas as pd
@@ -17,8 +17,6 @@ from datasets import Dataset
 from torch.utils.data import DataLoader
 from transformers import (
     DataCollatorWithPadding,
-    GenerationConfig,
-    PreTrainedModel,
     PreTrainedTokenizer,
     Trainer,
     TrainerCallback,
@@ -28,14 +26,13 @@ from transformers import (
 )
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer_callback import CallbackHandler, DefaultFlowCallback
+from vllm import SamplingParams, SingleGPULLM
 
 from trl.models.utils import unwrap_model_for_generation
 from trl.trainer.utils import print_rich_table
-from vllm import SamplingParams, SingleGPULLM
 
 
 INVALID_LOGPROB = 1.0
-
 
 
 @dataclass
@@ -218,6 +215,7 @@ def forward(model, query_responses, tokenizer):
 
 def prepare_deepspeed2(model, train_micro_batch_size_per_gpu):
     import deepspeed
+
     deepspeed_states = AcceleratorState().deepspeed_plugin
     deepspeed_states.deepspeed_config["train_micro_batch_size_per_gpu"] = train_micro_batch_size_per_gpu
 
@@ -235,6 +233,7 @@ def prepare_deepspeed2(model, train_micro_batch_size_per_gpu):
 
 def prepare_deepspeed3(model, accelerator):
     import deepspeed
+
     # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
     # deepspeed_states = AcceleratorState().deepspeed_plugin
     # deepspeed_states.deepspeed_config["train_micro_batch_size_per_gpu"] = args.batch_size
@@ -283,7 +282,9 @@ class RLOOTrainer(Trainer):
         self.args = args
         self.tokenizer = tokenizer
         self.policy = policy
-        self.policy.generation_config.eos_token_id = None  # disable `pad_token_id` and `eos_token_id` because we just want to
+        self.policy.generation_config.eos_token_id = (
+            None  # disable `pad_token_id` and `eos_token_id` because we just want to
+        )
         self.policy.generation_config.pad_token_id = None  # generate tokens without truncation / padding
 
         self.ref_policy = ref_policy
@@ -301,7 +302,9 @@ class RLOOTrainer(Trainer):
         accelerator = Accelerator(gradient_accumulation_steps=args.gradient_accumulation_steps)
         self.accelerator = accelerator
         args.world_size = accelerator.num_processes
-        args.local_batch_size = args.per_device_train_batch_size * args.gradient_accumulation_steps * args.num_mini_batches
+        args.local_batch_size = (
+            args.per_device_train_batch_size * args.gradient_accumulation_steps * args.num_mini_batches
+        )
         args.micro_batch_size = int(args.per_device_train_batch_size * args.world_size)
         args.batch_size = int(args.local_batch_size * args.world_size)
         args.mini_batch_size = exact_div(args.batch_size, args.num_mini_batches)
@@ -376,9 +379,9 @@ class RLOOTrainer(Trainer):
             batch_size=args.per_device_eval_batch_size,
             collate_fn=DataCollatorWithPadding(self.tokenizer),
             drop_last=True,
-        ) # no need to shuffle eval dataset
+        )  # no need to shuffle eval dataset
         self.eval_dataloader = accelerator.prepare(self.eval_dataloader)
-        if self.is_deepspeed_enabled: # need to use for Trainer.save_model / push_to_hub
+        if self.is_deepspeed_enabled:  # need to use for Trainer.save_model / push_to_hub
             self.deepspeed = self.model
 
         #########
@@ -391,11 +394,9 @@ class RLOOTrainer(Trainer):
             include_stop_str_in_output=True,
         )
         if accelerator.is_main_process:
-            self.llm = SingleGPULLM(model=args.base_model,
-                            tensor_parallel_size=1,
-                            device="cuda:7")
+            self.llm = SingleGPULLM(model=args.base_model, tensor_parallel_size=1, device="cuda:7")
             self.llmp = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-            print(f"🔥🔥🔥 vllm loaded")
+            print("🔥🔥🔥 vllm loaded")
         else:
             print("waiting for vllm to spin up...")
         accelerator.wait_for_everyone()
@@ -412,7 +413,7 @@ class RLOOTrainer(Trainer):
 
     def get_train_dataloader(self) -> DataLoader:
         return self.dataloader
-    
+
     def get_eval_dataloader(self) -> DataLoader:
         return self.eval_dataloader
 
@@ -433,7 +434,6 @@ class RLOOTrainer(Trainer):
 
         iter_dataloader = iter(repeat_generator())
 
-
         accelerator.print("===training policy===")
         global_step = 0
         start_time = time.time()
@@ -445,7 +445,9 @@ class RLOOTrainer(Trainer):
         vf_clipfrac_stats = torch.zeros(stats_shape, device=device)
         entropy_stats = torch.zeros(stats_shape, device=device)
         ratio_stats = torch.zeros(stats_shape, device=device)
-        g_responses = torch.zeros((args.batch_size * args.rloo_k, args.response_length), device=device, dtype=torch.long)
+        g_responses = torch.zeros(
+            (args.batch_size * args.rloo_k, args.response_length), device=device, dtype=torch.long
+        )
         model.train()
         for update in range(1, args.num_updates + 1):
             global_step += 1 * args.batch_size
@@ -464,26 +466,36 @@ class RLOOTrainer(Trainer):
                 sequence_lengths = []
                 with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
                     g_queries_list = gather_object(queries.tolist())
-                    
+
                     if accelerator.is_main_process:
-                        print("🔥🔥🔥 Loading weights using shared memory;"
-                            "we expect the generations to be completely different")
+                        print(
+                            "🔥🔥🔥 Loading weights using shared memory;"
+                            "we expect the generations to be completely different"
+                        )
                         start_time = time.time()
                         self.llmp.load_weights(unwrapped_model.named_parameters())
                         print(f"Time to load weights: {time.time() - start_time:.2f} seconds")
-                        g_queries_list = [[inneritem for inneritem in item if inneritem != tokenizer.pad_token_id]  for item in g_queries_list]
-                        outputs = self.llm.generate(prompt_token_ids=g_queries_list, sampling_params=self.sampling_params)
+                        g_queries_list = [
+                            [inneritem for inneritem in item if inneritem != tokenizer.pad_token_id]
+                            for item in g_queries_list
+                        ]
+                        outputs = self.llm.generate(
+                            prompt_token_ids=g_queries_list, sampling_params=self.sampling_params
+                        )
                         padded_response_token_ids = []
                         for output in outputs:
                             token_ids = output.outputs[0].token_ids
-                            DUMMY_PAD_TOKEN = 0 # we can't use tokenizer.pad_token_id because it's outside vocab and `torch.gather(all_logprob, 2, response.unsqueeze(-1))` will error out
+                            DUMMY_PAD_TOKEN = 0  # we can't use tokenizer.pad_token_id because it's outside vocab and `torch.gather(all_logprob, 2, response.unsqueeze(-1))` will error out
                             padded_token_ids = token_ids + [DUMMY_PAD_TOKEN] * (args.response_length - len(token_ids))
                             padded_response_token_ids.append(padded_token_ids)
                         padded_response_token_ids = torch.tensor(padded_response_token_ids, device=device)
                         g_responses[:] = padded_response_token_ids
 
                     broadcast(g_responses, 0)
-                    local_responses = g_responses[accelerator.local_process_index * queries.shape[0]: (accelerator.local_process_index + 1) * queries.shape[0]]
+                    local_responses = g_responses[
+                        accelerator.local_process_index * queries.shape[0] : (accelerator.local_process_index + 1)
+                        * queries.shape[0]
+                    ]
                     # if args.remove_duplicate_response_pad_tokens: # NOTE: micro optimization: remove the pad to longest
                     #     local_responses = local_responses[:, :(local_responses != tokenizer.pad_token_id).sum(1).max()]
                     queries_responses = torch.cat((queries, local_responses), 1)
@@ -685,28 +697,36 @@ class RLOOTrainer(Trainer):
         )
 
         table = defaultdict(list)
-        g_responses = torch.zeros((args.per_device_eval_batch_size * args.world_size, args.response_length), device=device, dtype=torch.long)
+        g_responses = torch.zeros(
+            (args.per_device_eval_batch_size * args.world_size, args.response_length), device=device, dtype=torch.long
+        )
         for batch in self.eval_dataloader:
             queries = batch["input_ids"]
             name = f"trained {args.base_model}"
             with torch.no_grad():
                 context_length = queries.shape[1]
                 with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
-
                     g_queries_list = gather_object(queries.tolist())
-                    
+
                     if accelerator.is_main_process:
-                        print("🔥🔥🔥 Loading weights using shared memory;"
-                            "we expect the generations to be completely different")
+                        print(
+                            "🔥🔥🔥 Loading weights using shared memory;"
+                            "we expect the generations to be completely different"
+                        )
                         start_time = time.time()
                         self.llmp.load_weights(unwrapped_model.named_parameters())
                         print(f"Time to load weights: {time.time() - start_time:.2f} seconds")
-                        g_queries_list = [[inneritem for inneritem in item if inneritem != tokenizer.pad_token_id]  for item in g_queries_list]
+                        g_queries_list = [
+                            [inneritem for inneritem in item if inneritem != tokenizer.pad_token_id]
+                            for item in g_queries_list
+                        ]
                         outputs = self.llm.generate(prompt_token_ids=g_queries_list, sampling_params=generation_config)
                         padded_response_token_ids = []
                         for output in outputs:
                             token_ids = output.outputs[0].token_ids
-                            padded_token_ids = token_ids + [tokenizer.pad_token_id] * (args.response_length - len(token_ids))
+                            padded_token_ids = token_ids + [tokenizer.pad_token_id] * (
+                                args.response_length - len(token_ids)
+                            )
                             padded_response_token_ids.append(padded_token_ids)
 
                         padded_response_token_ids = torch.tensor(padded_response_token_ids, device=device)
@@ -714,7 +734,18 @@ class RLOOTrainer(Trainer):
                         g_responses[:] = padded_response_token_ids
 
                     broadcast(g_responses, 0)
-                    queries_responses = torch.cat((queries, g_responses[accelerator.local_process_index * queries.shape[0]: (accelerator.local_process_index + 1) * queries.shape[0]]), 1)
+                    queries_responses = torch.cat(
+                        (
+                            queries,
+                            g_responses[
+                                accelerator.local_process_index * queries.shape[0] : (
+                                    accelerator.local_process_index + 1
+                                )
+                                * queries.shape[0]
+                            ],
+                        ),
+                        1,
+                    )
 
                 response = queries_responses[:, context_length:]
                 postprocessed_response = response
@@ -724,7 +755,9 @@ class RLOOTrainer(Trainer):
                 table[name].extend(gather_object(self.tokenizer.batch_decode(postprocessed_response)))
 
                 postprocessed_query_response = torch.cat((queries, postprocessed_response), 1)
-                _, score, _ = get_reward(self.reward_model, postprocessed_query_response, self.tokenizer, context_length)
+                _, score, _ = get_reward(
+                    self.reward_model, postprocessed_query_response, self.tokenizer, context_length
+                )
                 table["score"].extend(self.accelerator.gather(score).float().cpu().numpy())
 
             if sampling:
@@ -734,8 +767,10 @@ class RLOOTrainer(Trainer):
             print_rich_table(df.iloc[0 : 0 + 5])
         if "wandb" in args.report_to:
             import wandb
+
             if wandb.run is not None:
                 wandb.log({"completions": wandb.Table(dataframe=df)})
+
 
 if __name__ == "__main__":
 

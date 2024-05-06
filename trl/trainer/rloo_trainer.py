@@ -1,6 +1,6 @@
-from collections import defaultdict
 import os
 import time
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import Dict, List, Literal, Optional, Tuple, Union
 
@@ -17,7 +17,6 @@ from torch.utils.data import DataLoader
 from transformers import (
     DataCollatorWithPadding,
     GenerationConfig,
-    PreTrainedModel,
     PreTrainedTokenizer,
     Trainer,
     TrainerCallback,
@@ -225,6 +224,7 @@ def forward(model, query_responses, tokenizer):
 
 def prepare_deepspeed2(model, train_micro_batch_size_per_gpu):
     import deepspeed
+
     deepspeed_states = AcceleratorState().deepspeed_plugin
     deepspeed_states.deepspeed_config["train_micro_batch_size_per_gpu"] = train_micro_batch_size_per_gpu
 
@@ -242,6 +242,7 @@ def prepare_deepspeed2(model, train_micro_batch_size_per_gpu):
 
 def prepare_deepspeed3(model, accelerator):
     import deepspeed
+
     # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
     # deepspeed_states = AcceleratorState().deepspeed_plugin
     # deepspeed_states.deepspeed_config["train_micro_batch_size_per_gpu"] = args.batch_size
@@ -291,7 +292,9 @@ class RLOOTrainer(Trainer):
         self.tokenizer = tokenizer
         self.policy = policy
 
-        self.policy.generation_config.eos_token_id = None  # disable `pad_token_id` and `eos_token_id` because we just want to
+        self.policy.generation_config.eos_token_id = (
+            None  # disable `pad_token_id` and `eos_token_id` because we just want to
+        )
         self.policy.generation_config.pad_token_id = None  # generate tokens without truncation / padding
 
         self.ref_policy = ref_policy
@@ -309,7 +312,9 @@ class RLOOTrainer(Trainer):
         accelerator = Accelerator(gradient_accumulation_steps=args.gradient_accumulation_steps)
         self.accelerator = accelerator
         args.world_size = accelerator.num_processes
-        args.local_batch_size = args.per_device_train_batch_size * args.gradient_accumulation_steps * args.num_mini_batches
+        args.local_batch_size = (
+            args.per_device_train_batch_size * args.gradient_accumulation_steps * args.num_mini_batches
+        )
         args.micro_batch_size = int(args.per_device_train_batch_size * args.world_size)
         args.batch_size = int(args.local_batch_size * args.world_size)
         args.mini_batch_size = exact_div(args.batch_size, args.num_mini_batches)
@@ -392,12 +397,12 @@ class RLOOTrainer(Trainer):
             batch_size=args.per_device_eval_batch_size,
             collate_fn=DataCollatorWithPadding(self.tokenizer),
             drop_last=True,
-        ) # no need to shuffle eval dataset
+        )  # no need to shuffle eval dataset
         self.eval_dataloader = accelerator.prepare(self.eval_dataloader)
 
     def get_train_dataloader(self) -> DataLoader:
         return self.dataloader
-    
+
     def get_eval_dataloader(self) -> DataLoader:
         return self.eval_dataloader
 
@@ -684,7 +689,9 @@ class RLOOTrainer(Trainer):
                 table[name].extend(gather_object(self.tokenizer.batch_decode(postprocessed_response)))
 
                 postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
-                _, score, _ = get_reward(self.reward_model, postprocessed_query_response, self.tokenizer, context_length)
+                _, score, _ = get_reward(
+                    self.reward_model, postprocessed_query_response, self.tokenizer, context_length
+                )
                 table["score"].extend(self.accelerator.gather(score).float().cpu().numpy())
 
             if sampling:
@@ -694,8 +701,10 @@ class RLOOTrainer(Trainer):
             print_rich_table(df.iloc[0 : 0 + 5])
         if "wandb" in args.report_to:
             import wandb
+
             if wandb.run is not None:
                 wandb.log({"completions": wandb.Table(dataframe=df)})
+
 
 if __name__ == "__main__":
 
