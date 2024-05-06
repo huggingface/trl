@@ -567,6 +567,7 @@ class PolicyTrainerBase(Trainer):
                 attention_mask=attention_mask,
                 generation_config=generation_config,
                 return_dict_in_generate=True,
+                use_cache=False,
                 # PR TODO: https://github.com/huggingface/trl/pull/1540/files#r1588004580
             )
         query_responses = torch.cat((queries, output.sequences[:, context_length:]), dim=1)
