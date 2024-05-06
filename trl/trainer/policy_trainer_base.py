@@ -436,6 +436,7 @@ class PolicyTrainerBase(Trainer):
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
+    @cuda_gc
     def compute_loss(
         self,
         model: Union[PreTrainedModel, nn.Module],
