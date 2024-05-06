@@ -144,12 +144,10 @@ class RLOOTrainer(PolicyTrainerBase):
             advantages = rlhf_reward - mean_other
 
         # calculate gradients and loss
-        with self.time_metric_ctx("calc_loss"):
-
-            with self.cast_model_ctx():
-                active_logits, active_logprobs = self.calc_logprobs(
-                    model, query_responses, context_length
-                )
+        with self.time_metric_ctx("calc_loss"), self.cast_model_ctx():
+            active_logits, active_logprobs = self.calc_logprobs(
+                model, query_responses, context_length
+            )
             active_logprobs = torch.masked_fill(
                 active_logprobs, padding_mask, INVALID_LOGPROB
             )

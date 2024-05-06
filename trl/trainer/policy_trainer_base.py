@@ -359,21 +359,6 @@ class ReferenceModelManager:
             self.model.set_adapter("default")
 
 
-class disable_caching(ContextDecorator):  # noqa: N801
-    def __init__(self, model):
-        self.model = model
-        self.prev_value: Any = "UNSET"  # config values may be T/F/None
-
-    def __enter__(self):
-        self.prev_value = self.model.config.use_cache
-        self.model.config.use_cache = False
-
-    def __exit__(self, *exc):
-        if self.prev_value != "UNSET":
-            self.model.config.use_cache = self.prev_value
-        self.prev_value = "UNSET"
-
-
 class PolicyTrainerBase(Trainer):
     """
     Base class for implementing a policy training algorithm.
@@ -654,10 +639,6 @@ class PolicyTrainerBase(Trainer):
         """time logged training step"""
         with self.time_metric_ctx("training_step"):
             return super().training_step(*args, **kwargs)
-
-    def train(self, *args, **kwargs):
-        with disable_caching(self.model):
-            super().train(*args, **kwargs)
 
 
 if __name__ == "__main__":
