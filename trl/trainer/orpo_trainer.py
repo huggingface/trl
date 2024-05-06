@@ -262,6 +262,33 @@ def _process_tokens(example: Dict[str, Any], model: "PreTrainedModel" = None, **
             all_tokens["prompt_input_ids"]
         )
 
+    else:
+        prompt = example["prompt"]
+        chosen = example["chosen"]
+        rejected = example["rejected"]
+        chosen_tokens = kwargs["tokenizer"](
+            chosen, truncation=True, max_length=kwargs["max_length"], add_special_tokens=True
+        )
+        rejected_tokens = kwargs["tokenizer"](
+            rejected, truncation=True, max_length=kwargs["max_length"], add_special_tokens=True
+        )
+        prompt_tokens = kwargs["tokenizer"](
+            prompt, truncation=True, max_length=kwargs["max_length"], add_special_tokens=True
+        )
+
+        batch["chosen_labels"] = chosen_tokens["input_ids"]
+        batch["rejected_labels"] = rejected_tokens["input_ids"]
+        batch["prompt_input_ids"] = prompt_tokens["input_ids"]
+        batch["prompt_attention_mask"] = prompt_tokens["attention_mask"]
+
+        if model is not None and hasattr(model, "prepare_decoder_input_ids_from_labels"):
+            batch["rejected_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
+                labels=torch.tensor(batch["rejected_labels"])
+            )
+            batch["chosen_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
+                labels=torch.tensor(batch["chosen_labels"])
+            )
+
     return batch
 
 
@@ -479,12 +506,12 @@ class ORPOTrainer(Trainer):
         # See: https://github.com/huggingface/trl/pull/1255
         with PartialState().local_main_process_first():
             # Tokenize and preprocess the dataset
+            train_columns = train_dataset.column_names
             train_dataset = train_dataset.map(
                 _tokenize,
                 fn_kwargs={"tokenizer": self.tokenizer},
                 batched=True,
                 desc="Tokenizing train dataset",
-                remove_columns=train_dataset.column_names,
             )
             # Prepare the datasets
             fn_kwargs = {
@@ -500,20 +527,22 @@ class ORPOTrainer(Trainer):
                 fn_kwargs=fn_kwargs,
                 num_proc=args.dataset_num_proc,
                 desc="Processing train dataset",
+                remove_columns=train_columns,
             )
             if eval_dataset is not None:
+                eval_columns = eval_dataset.column_names
                 eval_dataset = eval_dataset.map(
                     _tokenize,
                     fn_kwargs={"tokenizer": self.tokenizer},
                     batched=True,
                     desc="Tokenizing eval dataset",
-                    remove_columns=eval_dataset.column_names,
                 )
                 eval_dataset = eval_dataset.map(
                     _process_tokens,
                     fn_kwargs=fn_kwargs,
                     num_proc=args.dataset_num_proc,
                     desc="Processing eval dataset",
+                    remove_columns=eval_columns,
                 )
 
         super().__init__(
@@ -616,6 +645,11 @@ class ORPOTrainer(Trainer):
                 elif k.endswith("_attention_mask"):
                     pad_value = 0
                 concatenated_key = k.replace("rejected", "concatenated")
+                print(f"concatenated_key: {concatenated_key}")
+                print(f"concatenated_batch[k]: {concatenated_batch[concatenated_key]}")
+                print(
+                    f"pad_to_length(batch[k], max_length, pad_value=pad_value): {pad_to_length(batch[k], max_length, pad_value=pad_value)}"
+                )
                 concatenated_batch[concatenated_key] = torch.cat(
                     (
                         concatenated_batch[concatenated_key],
