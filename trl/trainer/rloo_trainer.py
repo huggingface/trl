@@ -143,22 +143,6 @@ class RLOOTrainer(PolicyTrainerBase):
             mean_other = (rlhf_sum - rlhf_reward) / (n - 1)
             advantages = rlhf_reward - mean_other
 
-            _advantages = torch.zeros_like(rlhf_reward)
-            for i in range(0, len(advantages)):
-                other_response_rlhf_rewards = []
-                for j in range(0, len(advantages)):
-                    if i != j:
-                        other_response_rlhf_rewards.append(rlhf_reward[j])
-                advantages[i] = rlhf_reward[i] - torch.stack(other_response_rlhf_rewards).mean(0)
-            torch.cuda.empty_cache()
-
-        print("kl[0]", kl[0])
-        print("rlhf_reward[]", rlhf_reward[0])
-        print("non_score_reward[0]", non_score_reward[0])
-        print("advantages[0]", advantages[0])
-        print("_advantages[0]", _advantages[0])
-
-
         # calculate gradients and loss
         with self.time_metric_ctx("calc_loss"):
 
@@ -201,7 +185,6 @@ class RLOOTrainer(PolicyTrainerBase):
             })
 
         loss = pg_loss.to(self.args.device)
-        print("loss", loss)
 
         # PR TODO: decorator which calls gc.collect(); torch.cuda.empty_cache()
 
