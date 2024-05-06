@@ -106,6 +106,47 @@ def _tokenize(batch: Dict[str, List[Any]], tokenizer: "PreTrainedTokenizer") -> 
     chosen_input_ids = [f[r:] for f, r in zip(full_input_ids, response_token_ids_start_idx)]
     chosen_attention_mask = [f[r:] for f, r in zip(prompt_and_chosen_attention_mask, response_token_ids_start_idx)]
 
+    # prompt and rejected now
+    prompt_and_rejected = [prompt + rejected for prompt, rejected in zip(batch["prompt"], batch["rejected"])]
+    prompt_and_rejected_tokenized = tokenizer(prompt_and_rejected, add_special_tokens=False)
+    prompt_and_rejected_input_ids = prompt_and_rejected_tokenized["input_ids"]
+    prompt_and_rejected_attention_mask = prompt_and_rejected_tokenized["attention_mask"]
+
+    rejected_input_ids = [f[len(p) :] for f, p in zip(prompt_and_rejected_input_ids, prompt_input_ids)]
+    rejected_attention_mask = [f[len(p) :] for f, p in zip(prompt_and_rejected_attention_mask, prompt_attention_mask)]
+
+    # Concat tokens to form `enc(a) + enc(a + b)[len(enc(a)):]`
+    full_concat_input_ids = [np.concatenate([p, a]) for p, a in zip(prompt_input_ids, rejected_input_ids)]
+    # Prepare input tokens for token by token comparison
+    full_input_ids = [np.array(f) for f in prompt_and_rejected_input_ids]
+    for full, concat in zip(full_input_ids, full_concat_input_ids):
+        if len(full) != len(concat):
+            raise ValueError(
+                f"Prompt input ids and chosen input ids should have the same length. Found {len(full)} != {len(concat)}"
+            )
+
+    # On some tokenizers, like Llama-2 tokenizer, there are occasions where tokens
+    # can be merged together when tokenizing prompt+answer. This could result
+    # on the last token from the prompt being different when tokenized on its own
+    # vs when done as prompt+answer.
+    response_token_ids_start_idx = [len(p) for p in prompt_input_ids]
+
+    # If tokenized prompt is different than both prompt+answer, then it means the
+    # last token has changed due to merging.
+    for idx, (p, f, r) in enumerate(zip(prompt_input_ids, full_input_ids, response_token_ids_start_idx)):
+        if not np.array_equal(p, f[:r]):
+            response_token_ids_start_idx[idx] -= 1
+
+    prompt_input_ids = [f[:r] for f, r in zip(full_input_ids, response_token_ids_start_idx)]
+    prompt_attention_mask = [f[:r] for f, r in zip(prompt_and_rejected_attention_mask, response_token_ids_start_idx)]
+
+    for p, m in zip(prompt_input_ids, prompt_attention_mask):
+        if len(p) != len(m):
+            raise ValueError("Prompt input ids and attention mask should have the same length.")
+
+    rejected_input_ids = [f[r:] for f, r in zip(full_input_ids, response_token_ids_start_idx)]
+    rejected_attention_mask = [f[r:] for f, r in zip(prompt_and_rejected_attention_mask, response_token_ids_start_idx)]
+
     # prompt_input_ids = prompt_tokenized["input_ids"]
     # prompt_attention_mask = prompt_tokenized["attention_mask"]
 
@@ -113,14 +154,14 @@ def _tokenize(batch: Dict[str, List[Any]], tokenizer: "PreTrainedTokenizer") -> 
     # chosen_input_ids = chosen_tokenized["input_ids"]
     # chosen_attention_mask = chosen_tokenized["attention_mask"]
 
-    rejected_tokenized = tokenizer(batch["rejected"], add_special_tokens=False)
-    rejected_input_ids = rejected_tokenized["input_ids"]
-    rejected_attention_mask = rejected_tokenized["attention_mask"]
+    # rejected_tokenized = tokenizer(batch["rejected"], add_special_tokens=False)
+    # rejected_input_ids = rejected_tokenized["input_ids"]
+    # rejected_attention_mask = rejected_tokenized["attention_mask"]
 
-    print("prompt_input_ids", prompt_input_ids)
-    print("prompt_attention_mask", prompt_attention_mask)
-    print("chosen_input_ids", chosen_input_ids)
-    print("chosen_attention_mask", chosen_attention_mask)
+    # print("prompt_input_ids", prompt_input_ids)
+    # print("prompt_attention_mask", prompt_attention_mask)
+    # print("chosen_input_ids", chosen_input_ids)
+    # print("chosen_attention_mask", chosen_attention_mask)
 
     return dict(
         prompt_input_ids=prompt_input_ids,
@@ -183,9 +224,27 @@ def _process_tokens(example: Dict[str, Any], model: "PreTrainedModel" = None, **
                     : kwargs["max_length"] - kwargs["max_prompt_length"]
                 ]
 
+        # Store chosen/rejected IDs for labels
+        chosen_input_ids = all_tokens["prompt_input_ids"] + all_tokens["chosen_input_ids"]
+        # Add BOS token to head of chosen IDs
+        chosen_input_ids = [kwargs["tokenizer"].bos_token_id] + chosen_input_ids
+        # Append EOS token
+        chosen_input_ids.append(kwargs["tokenizer"].eos_token_id)
+
+        rejected_input_ids = all_tokens["prompt_input_ids"] + all_tokens["rejected_input_ids"]
+        # Add BOS token to head of rejected IDs
+        rejected_input_ids = [kwargs["tokenizer"].bos_token_id] + rejected_input_ids
+        # Append EOS token
+        rejected_input_ids.append(kwargs["tokenizer"].eos_token_id)
+
         # Define chosen input IDs
         all_tokens["chosen_input_ids"] = all_tokens["prompt_input_ids"] + all_tokens["chosen_input_ids"]
         all_tokens["chosen_attention_mask"] = all_tokens["prompt_attention_mask"] + all_tokens["chosen_attention_mask"]
+        # Same for rejected
+        all_tokens["rejected_input_ids"] = all_tokens["prompt_input_ids"] + all_tokens["rejected_input_ids"]
+        all_tokens["rejected_attention_mask"] = (
+            all_tokens["prompt_attention_mask"] + all_tokens["rejected_attention_mask"]
+        )
 
         # Prepend BOS token to prompt
         for k in ["prompt_input_ids", "chosen_input_ids", "rejected_input_ids"]:
@@ -211,15 +270,16 @@ def _process_tokens(example: Dict[str, Any], model: "PreTrainedModel" = None, **
 
         # print(f"BATCH: {batch}")
 
-        # Create labels
-        batch["chosen_labels"] = all_tokens["chosen_input_ids"][:]
-        # batch["chosen_labels"][: len(all_tokens["prompt_input_ids"])] = [kwargs["label_pad_token_id"]] * len(
-        #     all_tokens["prompt_input_ids"]
-        # )
-        batch["rejected_labels"] = all_tokens["rejected_input_ids"][:]
-        # batch["rejected_labels"][: len(all_tokens["prompt_input_ids"])] = [kwargs["label_pad_token_id"]] * len(
-        #     all_tokens["prompt_input_ids"]
-        # )
+        # # Create labels
+        batch["chosen_labels"] = chosen_input_ids[:]
+        # print(f"chosen_input_ids: {chosen_input_ids}")
+        batch["chosen_labels"][: len(all_tokens["prompt_input_ids"])] = [kwargs["label_pad_token_id"]] * len(
+            all_tokens["prompt_input_ids"]
+        )
+        batch["rejected_labels"] = rejected_input_ids[:]
+        batch["rejected_labels"][: len(all_tokens["prompt_input_ids"])] = [kwargs["label_pad_token_id"]] * len(
+            all_tokens["prompt_input_ids"]
+        )
 
     return batch
 
