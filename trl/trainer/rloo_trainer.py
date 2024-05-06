@@ -106,7 +106,7 @@ class RLOOTrainer(PolicyTrainerBase):
             torch.cuda.empty_cache()
 
             with self.time_metric_ctx("get_reward"):
-                _, scores, _ = self.get_reward(
+                2_, scores, _ = self.get_reward(
                     self.reward_model,
                     postprocessed_query_responses,
                     context_length
@@ -181,7 +181,10 @@ class RLOOTrainer(PolicyTrainerBase):
         # log metrics
         with torch.no_grad():
             prob_dist = torch.nn.functional.softmax(active_logits, dim=-1)
-            entropy_avg = torch.logsumexp(active_logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1)
+            entropy_avg = (
+                torch.logsumexp(active_logits, dim=-1)
+                - torch.sum(prob_dist * active_logits, dim=-1)
+            )
 
             self.store_metrics({
                 "objective/kl": kl.sum(1).mean(),
