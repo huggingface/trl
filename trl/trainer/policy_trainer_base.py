@@ -548,13 +548,12 @@ class PolicyTrainerBase(Trainer):
     def forward(self, model, query_responses):
         attention_mask = query_responses != self.tokenizer.pad_token_id
         input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
-        with disable_caching(model):
-            return model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                return_dict=True,
-                output_hidden_states=True,
-            )
+        return model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            return_dict=True,
+            output_hidden_states=True,
+        )
 
     def get_reward(self, reward_model, query_responses, context_length):
         attention_mask = query_responses != self.tokenizer.pad_token_id
@@ -656,6 +655,9 @@ class PolicyTrainerBase(Trainer):
         with self.time_metric_ctx("training_step"):
             return super().training_step(*args, **kwargs)
 
+    def train(self, *args, **kwargs):
+        with disable_caching(self.model):
+            super().train(*args, **kwargs)
 
 
 if __name__ == "__main__":
