@@ -73,8 +73,6 @@ if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, ORPOConfig, ModelConfig))
     args, orpo_args, model_config = parser.parse_args_into_dataclasses()
 
-    print(f"ORPO ARGS: {orpo_args}")
-
     ################
     # Model & Tokenizer
     ################
@@ -87,11 +85,10 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    ds = load_dataset(args.dataset, split="train")
-    ds = ds.train_test_split(test_size=0.1)
-    # if orpo_args.debug:
-    # for key in ds:
-    #     ds[key] = ds[key].select(range(1000))
+    ds = load_dataset(args.dataset)
+    if orpo_args.debug:
+        for key in ds:
+            ds[key] = ds[key].select(range(50))
     if tokenizer.chat_template is None:
         tokenizer.chat_template = "{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"
 
@@ -111,9 +108,6 @@ if __name__ == "__main__":
     ################
     # Training
     ################
-    import time
-
-    start_time = time.time()
     trainer = ORPOTrainer(
         model,
         args=orpo_args,
@@ -122,7 +116,6 @@ if __name__ == "__main__":
         tokenizer=tokenizer,
         peft_config=get_peft_config(model_config),
     )
-    print(f"Time to init trainer: {time.time() - start_time}")
 
     # train and save the model
     trainer.train()
