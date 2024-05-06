@@ -356,7 +356,7 @@ class ReferenceModelManager:
             with self.optional_peft_ctx:
                 pass  # teardown
             # reset adapter back to being the active model
-            self.ref_model.set_adapter("default")
+            self.model.set_adapter("default")
 
 
 class PolicyTrainerBase(Trainer):
