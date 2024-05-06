@@ -59,6 +59,171 @@ if is_deepspeed_available():
     import deepspeed
 
 
+def _tokenize(batch: Dict[str, List[Any]], tokenizer: "PreTrainedTokenizer") -> Dict[str, List[Any]]:
+    """Tokenize a batch from a binary preference dataset."""
+    prompt_tokenized = tokenizer(batch["prompt"], add_special_tokens=False)
+    prompt_input_ids = prompt_tokenized["input_ids"]
+    prompt_attention_mask = prompt_tokenized["attention_mask"]
+
+    # Process prompt & chosen
+    prompt_and_chosen = [prompt + chosen for prompt, chosen in zip(batch["prompt"], batch["chosen"])]
+    prompt_and_chosen_tokenized = tokenizer(prompt_and_chosen, add_special_tokens=False)
+    prompt_and_chosen_input_ids = prompt_and_chosen_tokenized["input_ids"]
+    prompt_and_chosen_attention_mask = prompt_and_chosen_tokenized["attention_mask"]
+
+    chosen_input_ids = [f[len(p) :] for f, p in zip(prompt_and_chosen_input_ids, prompt_input_ids)]
+    chosen_attention_mask = [f[len(p) :] for f, p in zip(prompt_and_chosen_attention_mask, prompt_attention_mask)]
+
+    # Concat tokens to form `enc(a) + enc(a + b)[len(enc(a)):]`
+    full_concat_input_ids = [np.concatenate([p, a]) for p, a in zip(prompt_input_ids, chosen_input_ids)]
+    # Prepare input tokens for token by token comparison
+    full_input_ids = [np.array(f) for f in prompt_and_chosen_input_ids]
+    for full, concat in zip(full_input_ids, full_concat_input_ids):
+        if len(full) != len(concat):
+            raise ValueError(
+                f"Prompt input ids and chosen input ids should have the same length. Found {len(full)} != {len(concat)}"
+            )
+
+    # On some tokenizers, like Llama-2 tokenizer, there are occasions where tokens
+    # can be merged together when tokenizing prompt+answer. This could result
+    # on the last token from the prompt being different when tokenized on its own
+    # vs when done as prompt+answer.
+    response_token_ids_start_idx = [len(p) for p in prompt_input_ids]
+
+    # If tokenized prompt is different than both prompt+answer, then it means the
+    # last token has changed due to merging.
+    for idx, (p, f, r) in enumerate(zip(prompt_input_ids, full_input_ids, response_token_ids_start_idx)):
+        if not np.array_equal(p, f[:r]):
+            response_token_ids_start_idx[idx] -= 1
+
+    prompt_input_ids = [f[:r] for f, r in zip(full_input_ids, response_token_ids_start_idx)]
+    prompt_attention_mask = [f[:r] for f, r in zip(prompt_and_chosen_attention_mask, response_token_ids_start_idx)]
+
+    for p, m in zip(prompt_input_ids, prompt_attention_mask):
+        if len(p) != len(m):
+            raise ValueError("Prompt input ids and attention mask should have the same length.")
+
+    chosen_input_ids = [f[r:] for f, r in zip(full_input_ids, response_token_ids_start_idx)]
+    chosen_attention_mask = [f[r:] for f, r in zip(prompt_and_chosen_attention_mask, response_token_ids_start_idx)]
+
+    # prompt_input_ids = prompt_tokenized["input_ids"]
+    # prompt_attention_mask = prompt_tokenized["attention_mask"]
+
+    # chosen_tokenized = tokenizer(batch["chosen"], add_special_tokens=False)
+    # chosen_input_ids = chosen_tokenized["input_ids"]
+    # chosen_attention_mask = chosen_tokenized["attention_mask"]
+
+    rejected_tokenized = tokenizer(batch["rejected"], add_special_tokens=False)
+    rejected_input_ids = rejected_tokenized["input_ids"]
+    rejected_attention_mask = rejected_tokenized["attention_mask"]
+
+    print("prompt_input_ids", prompt_input_ids)
+    print("prompt_attention_mask", prompt_attention_mask)
+    print("chosen_input_ids", chosen_input_ids)
+    print("chosen_attention_mask", chosen_attention_mask)
+
+    return dict(
+        prompt_input_ids=prompt_input_ids,
+        prompt_attention_mask=prompt_attention_mask,
+        chosen_input_ids=chosen_input_ids,
+        chosen_attention_mask=chosen_attention_mask,
+        rejected_input_ids=rejected_input_ids,
+        rejected_attention_mask=rejected_attention_mask,
+    )
+
+
+def _process_tokens(example: Dict[str, Any], model: "PreTrainedModel" = None, **kwargs) -> Dict:
+    """Process tokens of a binary preference dataset.
+
+    At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
+    in case the prompt + completion responses is/are too long. First
+        we truncate the prompt; if we're still too long, we truncate the completion.
+
+    We also create the labels for the completion responses, which are of length equal to
+        the sum of the length of the prompt and the completion response, with
+        label_pad_token_id  for the prompt tokens.
+    """
+    batch = {}
+
+    if not kwargs["is_encoder_decoder"]:
+        # Check issues below for more details
+        #  1. https://github.com/huggingface/trl/issues/907
+        #  2. https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
+        #  3. https://github.com/LianjiaTech/BELLE/issues/337
+
+        all_tokens = {
+            "prompt_input_ids": example["prompt_input_ids"],
+            "prompt_attention_mask": example["prompt_attention_mask"],
+            "chosen_input_ids": example["chosen_input_ids"],
+            "chosen_attention_mask": example["chosen_attention_mask"],
+            "rejected_input_ids": example["rejected_input_ids"],
+            "rejected_attention_mask": example["rejected_attention_mask"],
+        }
+
+        # If combined sequence is too long, truncate prompt
+        longer_response_length = max(len(all_tokens["chosen_input_ids"]), len(all_tokens["rejected_input_ids"]))
+        for k in ["prompt_input_ids", "chosen_input_ids", "rejected_input_ids"]:
+            if longer_response_length > kwargs["max_length"]:
+                if kwargs["truncation_mode"] == "keep_start":
+                    for k in ["prompt_input_ids", "prompt_attention_mask"]:
+                        all_tokens[k] = all_tokens[k][: kwargs["max_prompt_length"]]
+                elif kwargs["truncation_mode"] == "keep_end":
+                    for k in ["prompt_input_ids", "prompt_attention_mask"]:
+                        all_tokens[k] = all_tokens[k][-kwargs["max_prompt_length"] :]
+                else:
+                    raise ValueError(f"Unknown truncation mode: {kwargs['truncation_mode']}")
+
+        # If that's still too long, truncate the response
+        for k in ["chosen", "rejected"]:
+            if longer_response_length > kwargs["max_length"]:
+                all_tokens[f"{k}_input_ids"] = all_tokens[f"{k}_input_ids"][
+                    : kwargs["max_length"] - kwargs["max_prompt_length"]
+                ]
+                all_tokens[f"{k}_attention_mask"] = all_tokens[f"{k}_attention_mask"][
+                    : kwargs["max_length"] - kwargs["max_prompt_length"]
+                ]
+
+        # Define chosen input IDs
+        all_tokens["chosen_input_ids"] = all_tokens["prompt_input_ids"] + all_tokens["chosen_input_ids"]
+        all_tokens["chosen_attention_mask"] = all_tokens["prompt_attention_mask"] + all_tokens["chosen_attention_mask"]
+
+        # Prepend BOS token to prompt
+        for k in ["prompt_input_ids", "chosen_input_ids", "rejected_input_ids"]:
+            all_tokens[k] = [kwargs["tokenizer"].bos_token_id] + all_tokens[k]
+
+        # Prepend attention masks
+        for k in ["prompt_attention_mask", "chosen_attention_mask", "rejected_attention_mask"]:
+            all_tokens[k] = [1] + all_tokens[k]
+
+        # Add EOS token to end of chosen and rejected
+        for k in ["chosen_input_ids", "rejected_input_ids"]:
+            all_tokens[k].append(kwargs["tokenizer"].eos_token_id)
+        # Append attention mask
+        for k in ["chosen_attention_mask", "rejected_attention_mask"]:
+            all_tokens[k].append(1)
+
+        batch["prompt_input_ids"] = all_tokens["prompt_input_ids"]
+        batch["prompt_attention_mask"] = all_tokens["prompt_attention_mask"]
+        batch["chosen_input_ids"] = all_tokens["chosen_input_ids"]
+        batch["chosen_attention_mask"] = all_tokens["chosen_attention_mask"]
+        batch["rejected_input_ids"] = all_tokens["rejected_input_ids"]
+        batch["rejected_attention_mask"] = all_tokens["rejected_attention_mask"]
+
+        # print(f"BATCH: {batch}")
+
+        # Create labels
+        batch["chosen_labels"] = all_tokens["chosen_input_ids"][:]
+        # batch["chosen_labels"][: len(all_tokens["prompt_input_ids"])] = [kwargs["label_pad_token_id"]] * len(
+        #     all_tokens["prompt_input_ids"]
+        # )
+        batch["rejected_labels"] = all_tokens["rejected_input_ids"][:]
+        # batch["rejected_labels"][: len(all_tokens["prompt_input_ids"])] = [kwargs["label_pad_token_id"]] * len(
+        #     all_tokens["prompt_input_ids"]
+        # )
+
+    return batch
+
+
 class ORPOTrainer(Trainer):
     r"""
     Initialize ORPOTrainer.
@@ -272,10 +437,50 @@ class ORPOTrainer(Trainer):
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
         with PartialState().local_main_process_first():
-            # tokenize the dataset
-            train_dataset = train_dataset.map(self.tokenize_row, num_proc=args.dataset_num_proc)
+            # Tokenize and preprocess the dataset
+            train_dataset = train_dataset.map(
+                _tokenize,
+                fn_kwargs={"tokenizer": self.tokenizer},
+                batched=True,
+                num_proc=args.dataset_num_proc,
+                desc="Tokenizing train dataset",
+                remove_columns=train_dataset.column_names,
+            )
+            # Prepare the datasets
+            fn_kwargs = {
+                "is_encoder_decoder": self.is_encoder_decoder,
+                "tokenizer": self.tokenizer,
+                "max_length": self.max_length,
+                "truncation_mode": self.truncation_mode,
+                "label_pad_token_id": self.label_pad_token_id,
+                "max_prompt_length": self.max_prompt_length,
+            }
+            train_dataset = train_dataset.map(
+                _process_tokens,
+                fn_kwargs=fn_kwargs,
+                num_proc=args.dataset_num_proc,
+                desc="Processing train dataset",
+            )
             if eval_dataset is not None:
-                eval_dataset = eval_dataset.map(self.tokenize_row, num_proc=args.dataset_num_proc)
+                # eval_dataset = eval_dataset.map(self.tokenize_row, num_proc=args.dataset_num_proc)
+                eval_dataset = eval_dataset.map(
+                    _tokenize,
+                    fn_kwargs={"tokenizer": self.tokenizer},
+                    batched=True,
+                    num_proc=args.dataset_num_proc,
+                    desc="Tokenizing eval dataset",
+                    remove_columns=eval_dataset.column_names,
+                )
+                eval_dataset = eval_dataset.map(
+                    _process_tokens,
+                    fn_kwargs=fn_kwargs,
+                    num_proc=args.dataset_num_proc,
+                    desc="Processing eval dataset",
+                )
+            # tokenize the dataset
+            # train_dataset = train_dataset.map(self.tokenize_row, num_proc=args.dataset_num_proc)
+            # if eval_dataset is not None:
+            #     eval_dataset = eval_dataset.map(self.tokenize_row, num_proc=args.dataset_num_proc)
 
         super().__init__(
             model=model,
