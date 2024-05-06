@@ -620,6 +620,7 @@ class PolicyTrainerBase(Trainer):
         train_eval = "train" if "loss" in logs else "eval"
         # Add averaged stored metrics to logs
         for key, metrics in self._stored_metrics[train_eval].items():
+            print(key)
             logs[key] = torch.tensor(metrics).to(dtype=torch.float32).mean().item()
         del self._stored_metrics[train_eval]
         return super().log(logs)
