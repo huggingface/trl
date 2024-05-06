@@ -21,6 +21,7 @@ from pytest import mark
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
 from trl import ORPOConfig, ORPOTrainer
+from trl.trainer.orpo_trainer import _process_tokens, _tokenize
 
 from .testing_utils import require_peft
 
@@ -174,307 +175,6 @@ class ORPOTrainerTester(unittest.TestCase):
                         assert not torch.equal(param, new_param)
 
     def test_tokenize_and_process_tokens(self):
-        # Dataset before refactor
-        self.train_ref = Dataset.from_dict(
-            {
-                "prompt": [
-                    "hello",
-                    "how are you",
-                    "What is your name?",
-                    "What is your name?",
-                    "Which is the best programming language?",
-                    "Which is the best programming language?",
-                    "Which is the best programming language?",
-                    "[INST] How is the stock price? [/INST]",
-                    "[INST] How is the stock price? [/INST] ",
-                ],
-                "chosen": [
-                    "hi nice to meet you",
-                    "I am fine",
-                    "My name is Mary",
-                    "My name is Mary",
-                    "Python",
-                    "Python",
-                    "Python",
-                    "$46 as of 10am EST",
-                    "46 as of 10am EST",
-                ],
-                "rejected": [
-                    "leave me alone",
-                    "I am not fine",
-                    "Whats it to you?",
-                    "I dont have a name",
-                    "Javascript",
-                    "C++",
-                    "Java",
-                    " $46 as of 10am EST",
-                    " 46 as of 10am EST",
-                ],
-                "chosen_input_ids": [
-                    [50256, 12758, 1219, 72, 3621, 284, 1826, 345, 50256],
-                    [50256, 4919, 389, 345, 40, 716, 3734, 50256],
-                    [50256, 2061, 318, 534, 1438, 30, 3666, 1438, 318, 5335, 50256],
-                    [50256, 2061, 318, 534, 1438, 30, 3666, 1438, 318, 5335, 50256],
-                    [50256, 13828, 318, 262, 1266, 8300, 3303, 30, 37906, 50256],
-                    [50256, 13828, 318, 262, 1266, 8300, 3303, 30, 37906, 50256],
-                    [50256, 13828, 318, 262, 1266, 8300, 3303, 30, 37906, 50256],
-                    [
-                        50256,
-                        58,
-                        38604,
-                        60,
-                        1374,
-                        318,
-                        262,
-                        4283,
-                        2756,
-                        30,
-                        46581,
-                        38604,
-                        60,
-                        3,
-                        3510,
-                        355,
-                        286,
-                        838,
-                        321,
-                        17160,
-                        50256,
-                    ],
-                    [
-                        50256,
-                        58,
-                        38604,
-                        60,
-                        1374,
-                        318,
-                        262,
-                        4283,
-                        2756,
-                        30,
-                        46581,
-                        38604,
-                        60,
-                        6337,
-                        355,
-                        286,
-                        838,
-                        321,
-                        17160,
-                        50256,
-                    ],
-                ],
-                "chosen_attention_mask": [
-                    [1, 1, 1, 1, 1, 1, 1, 1, 1],
-                    [1, 1, 1, 1, 1, 1, 1, 1],
-                    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                ],
-                "chosen_labels": [
-                    [-100, 12758, 1219, 72, 3621, 284, 1826, 345, 50256],
-                    [-100, -100, -100, -100, 40, 716, 3734, 50256],
-                    [-100, -100, -100, -100, -100, -100, 3666, 1438, 318, 5335, 50256],
-                    [-100, -100, -100, -100, -100, -100, 3666, 1438, 318, 5335, 50256],
-                    [-100, -100, -100, -100, -100, -100, -100, -100, 37906, 50256],
-                    [-100, -100, -100, -100, -100, -100, -100, -100, 37906, 50256],
-                    [-100, -100, -100, -100, -100, -100, -100, -100, 37906, 50256],
-                    [
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        3,
-                        3510,
-                        355,
-                        286,
-                        838,
-                        321,
-                        17160,
-                        50256,
-                    ],
-                    [
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        6337,
-                        355,
-                        286,
-                        838,
-                        321,
-                        17160,
-                        50256,
-                    ],
-                ],
-                "rejected_input_ids": [
-                    [50256, 12758, 2305, 1015, 502, 3436, 50256],
-                    [50256, 4919, 389, 345, 40, 716, 407, 3734, 50256],
-                    [50256, 2061, 318, 534, 1438, 30, 1199, 1381, 340, 284, 345, 30, 50256],
-                    [50256, 2061, 318, 534, 1438, 30, 40, 17666, 423, 257, 1438, 50256],
-                    [50256, 13828, 318, 262, 1266, 8300, 3303, 30, 41, 16098, 50256],
-                    [50256, 13828, 318, 262, 1266, 8300, 3303, 30, 34, 4880, 50256],
-                    [50256, 13828, 318, 262, 1266, 8300, 3303, 30, 29584, 50256],
-                    [
-                        50256,
-                        58,
-                        38604,
-                        60,
-                        1374,
-                        318,
-                        262,
-                        4283,
-                        2756,
-                        30,
-                        46581,
-                        38604,
-                        60,
-                        720,
-                        3510,
-                        355,
-                        286,
-                        838,
-                        321,
-                        17160,
-                        50256,
-                    ],
-                    [
-                        50256,
-                        58,
-                        38604,
-                        60,
-                        1374,
-                        318,
-                        262,
-                        4283,
-                        2756,
-                        30,
-                        46581,
-                        38604,
-                        60,
-                        220,
-                        6337,
-                        355,
-                        286,
-                        838,
-                        321,
-                        17160,
-                        50256,
-                    ],
-                ],
-                "rejected_attention_mask": [
-                    [1, 1, 1, 1, 1, 1, 1],
-                    [1, 1, 1, 1, 1, 1, 1, 1, 1],
-                    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                ],
-                "rejected_labels": [
-                    [-100, 12758, 2305, 1015, 502, 3436, 50256],
-                    [-100, -100, -100, -100, 40, 716, 407, 3734, 50256],
-                    [-100, -100, -100, -100, -100, -100, 1199, 1381, 340, 284, 345, 30, 50256],
-                    [-100, -100, -100, -100, -100, -100, 40, 17666, 423, 257, 1438, 50256],
-                    [-100, -100, -100, -100, -100, -100, -100, -100, 41, 16098, 50256],
-                    [-100, -100, -100, -100, -100, -100, -100, -100, 34, 4880, 50256],
-                    [-100, -100, -100, -100, -100, -100, -100, -100, 29584, 50256],
-                    [
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        720,
-                        3510,
-                        355,
-                        286,
-                        838,
-                        321,
-                        17160,
-                        50256,
-                    ],
-                    [
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        -100,
-                        6337,
-                        355,
-                        286,
-                        838,
-                        321,
-                        17160,
-                        50256,
-                    ],
-                ],
-                "prompt_input_ids": [
-                    [50256],
-                    [50256, 4919, 389, 345],
-                    [50256, 2061, 318, 534, 1438, 30],
-                    [50256, 2061, 318, 534, 1438, 30],
-                    [50256, 13828, 318, 262, 1266, 8300, 3303, 30],
-                    [50256, 13828, 318, 262, 1266, 8300, 3303, 30],
-                    [50256, 13828, 318, 262, 1266, 8300, 3303, 30],
-                    [50256, 58, 38604, 60, 1374, 318, 262, 4283, 2756, 30, 46581, 38604, 60],
-                    [50256, 58, 38604, 60, 1374, 318, 262, 4283, 2756, 30, 46581, 38604, 60],
-                ],
-                "prompt_attention_mask": [
-                    [1],
-                    [1, 1, 1, 1],
-                    [1, 1, 1, 1, 1, 1],
-                    [1, 1, 1, 1, 1, 1],
-                    [1, 1, 1, 1, 1, 1, 1, 1],
-                    [1, 1, 1, 1, 1, 1, 1, 1],
-                    [1, 1, 1, 1, 1, 1, 1, 1],
-                    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                ],
-            }
-        )
-
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = ORPOConfig(
                 output_dir=tmp_dir,
@@ -497,7 +197,49 @@ class ORPOTrainerTester(unittest.TestCase):
                 eval_dataset=dummy_dataset,
             )
 
-            for k in trainer.train_dataset.column_names:
-                self.assertListEqual(trainer.train_dataset[k], self.train_ref[k])
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                tokenized_dataset = dummy_dataset.map(
+                    _tokenize,
+                    fn_kwargs={"tokenizer": trainer.tokenizer},
+                    batched=True,
+                    batch_size=2,
+                )
+                self.assertListEqual(tokenized_dataset["prompt"], dummy_dataset["prompt"])
+                self.assertListEqual(tokenized_dataset["chosen"], dummy_dataset["chosen"])
+                self.assertListEqual(tokenized_dataset["rejected"], dummy_dataset["rejected"])
+                self.assertListEqual(tokenized_dataset["prompt_input_ids"][0], [])
+                self.assertListEqual(tokenized_dataset["prompt_attention_mask"][0], [])
+                self.assertListEqual(tokenized_dataset["chosen_input_ids"][0], [12758, 1219, 72, 3621, 284, 1826, 345])
+                self.assertListEqual(tokenized_dataset["chosen_attention_mask"][0], [1, 1, 1, 1, 1, 1, 1])
+                self.assertListEqual(tokenized_dataset["rejected_input_ids"][0], [12758, 2305, 1015, 502, 3436])
+                self.assertListEqual(tokenized_dataset["rejected_attention_mask"][0], [1, 1, 1, 1, 1])
 
-            # self.assertDictEqual(trainer.train_dataset[:], self.train_ref[:])
+                fn_kwargs = {
+                    "is_encoder_decoder": trainer.is_encoder_decoder,
+                    "tokenizer": trainer.tokenizer,
+                    "max_length": trainer.max_length,
+                    "truncation_mode": trainer.truncation_mode,
+                    "label_pad_token_id": trainer.label_pad_token_id,
+                    "max_prompt_length": trainer.max_prompt_length,
+                }
+
+                processed_dataset = tokenized_dataset.map(_process_tokens, fn_kwargs=fn_kwargs, num_proc=2)
+                self.assertListEqual(processed_dataset["prompt"], dummy_dataset["prompt"])
+                self.assertListEqual(processed_dataset["chosen"], dummy_dataset["chosen"])
+                self.assertListEqual(processed_dataset["rejected"], dummy_dataset["rejected"])
+                self.assertListEqual(processed_dataset["prompt_input_ids"][0], [50256])
+                self.assertListEqual(processed_dataset["prompt_attention_mask"][0], [1])
+                self.assertListEqual(
+                    processed_dataset["chosen_input_ids"][0], [50256, 12758, 1219, 72, 3621, 284, 1826, 345, 50256]
+                )
+                self.assertListEqual(processed_dataset["chosen_attention_mask"][0], [1, 1, 1, 1, 1, 1, 1, 1, 1])
+                self.assertListEqual(
+                    processed_dataset["chosen_labels"][0], [-100, 12758, 1219, 72, 3621, 284, 1826, 345, 50256]
+                )
+                self.assertListEqual(
+                    processed_dataset["rejected_input_ids"][0], [50256, 12758, 2305, 1015, 502, 3436, 50256]
+                )
+                self.assertListEqual(processed_dataset["rejected_attention_mask"][0], [1, 1, 1, 1, 1, 1, 1])
+                self.assertListEqual(
+                    processed_dataset["rejected_labels"][0], [-100, 12758, 2305, 1015, 502, 3436, 50256]
+                )
