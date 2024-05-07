@@ -29,8 +29,14 @@ from rich.progress import Progress
 from rich.table import Table
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import IterableDataset
-from transformers import BitsAndBytesConfig, DataCollatorForLanguageModeling, GenerationConfig, PreTrainedTokenizerBase
-from transformers.trainer import TrainerCallback
+from transformers import (
+    BitsAndBytesConfig,
+    DataCollatorForLanguageModeling,
+    DataCollatorWithPadding,
+    GenerationConfig,
+    PreTrainedTokenizerBase,
+)
+from transformers.trainer import Trainer, TrainerCallback
 from transformers.trainer_utils import has_length
 
 from ..import_utils import is_peft_available, is_unsloth_available, is_xpu_available
@@ -835,44 +841,47 @@ class GenerateCompletionCallback(TrainerCallback):
     A [`TrainerCallback`] that generates completions using the model on the eval dataset
     """
 
-    def __init__(self, left_tokenizer: PreTrainedTokenizerBase):
+    def __init__(self, left_tokenizer: PreTrainedTokenizerBase, trainer: Trainer):
         self.left_tokenizer = left_tokenizer
+        self.trainer = trainer
+        # prepare genreration dataset
+        self.generation_dataset = self.trainer.eval_dataset
+        self.generation_dataloader = torch.utils.data.DataLoader(
+            self.generation_dataset,
+            batch_size=trainer.args.per_device_eval_batch_size,
+            collate_fn=DataCollatorWithPadding(left_tokenizer),
+            drop_last=True,
+        )
+        self.generation_dataloader = self.trainer.accelerator.prepare(self.generation_dataloader)
 
     def on_evaluate(self, args, state, control, **kwargs):
         sampling = True
-        eval_dataloader = kwargs["eval_dataloader"]
         model = kwargs["model"]
-        tokenizer = kwargs["tokenizer"]
         generation_config = GenerationConfig(
             max_new_tokens=args.max_seq_length,
             temperature=(0.01 + 1e-7),
             top_k=0.0,
             top_p=1.0,
             do_sample=True,
-            pad_token_id=tokenizer.pad_token_id,
+            pad_token_id=self.left_tokenizer.pad_token_id,
         )
 
         table = defaultdict(list)
-        for batch in eval_dataloader:
+        for batch in self.generation_dataloader:
             query = batch["input_ids"]
-            name = "trained model"
             with torch.no_grad():
                 context_length = query.shape[1]
-                # with unwrap_model_for_generation(model, accelerator) as unwrapped_model:
-                output = model.generate(
+                # with unwrap_model_for_generation(model, accelerator) as unwrapped_model: # TODO: this may cause an issue for DS3 models
+                sequences = model.generate(
                     input_ids=query,
-                    attention_mask=query != tokenizer.pad_token_id,
-                    # position_ids=attention_mask.cumsum(1) - attention_mask.long(), # not needed: already adjusted in generations
-                    # https://github.com/huggingface/transformers/blob/ac33aeeeee2a7a89b89c93c2962e6feb90daef0a/src/transformers/models/gpt2/modeling_gpt2.py#L1227-L1250
+                    attention_mask=query != self.left_tokenizer.pad_token_id,
                     generation_config=generation_config,
-                    return_dict_in_generate=True,
-                    output_scores=True,
                 )
 
-                response = output.sequences[:, context_length:]
+                response = sequences[:, context_length:]
                 postprocessed_response = response
-                table["query"].extend(gather_object(tokenizer.batch_decode(query, skip_special_tokens=True)))
-                table[name].extend(gather_object(tokenizer.batch_decode(postprocessed_response)))
+                table["query"].extend(gather_object(self.left_tokenizer.batch_decode(query, skip_special_tokens=True)))
+                table["trained model"].extend(gather_object(self.left_tokenizer.batch_decode(postprocessed_response)))
 
             if sampling:
                 break
