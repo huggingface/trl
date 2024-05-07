@@ -51,10 +51,6 @@ class RLOOConfig(TrainingArguments):
     """the name of this experiment"""
     run_name: Optional[str] = None
     """a unique name of this run"""
-    deepspeed2: bool = False
-    """Whether to use deepspeed to train the model"""
-    deepspeed3: bool = False
-    """Whether to use deepspeed to train the model"""
     sanity_check: bool = False
     """wether to run in debug mode"""
 
@@ -224,33 +220,22 @@ def forward(model, query_responses, tokenizer):
     )
 
 
-def prepare_deepspeed2(model, train_micro_batch_size_per_gpu):
+def prepare_deepspeed(model, per_device_train_batch_size):
     import deepspeed
 
-    deepspeed_states = AcceleratorState().deepspeed_plugin
-    deepspeed_states.deepspeed_config["train_micro_batch_size_per_gpu"] = train_micro_batch_size_per_gpu
-
-    eval_ds_config = {
-        "train_micro_batch_size_per_gpu": deepspeed_states.deepspeed_config["train_micro_batch_size_per_gpu"],
-        "bf16": {"enabled": True},
-        "prescale_gradients": False,
-        "wall_clock_breakdown": False,
-    }
-    model, *_ = deepspeed.initialize(model=model, config=eval_ds_config)
-    model.eval()
-    print("🔥 deepspeed2 is initialized")
-    return model
-
-
-def prepare_deepspeed3(model, accelerator):
-    import deepspeed
-
-    # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
-    # deepspeed_states = AcceleratorState().deepspeed_plugin
-    # deepspeed_states.deepspeed_config["train_micro_batch_size_per_gpu"] = config.batch_size
-    deepspeed_plugin = accelerator.state.deepspeed_plugin
+    deepspeed_plugin = AcceleratorState().deepspeed_plugin
     config_kwargs = deepspeed_plugin.deepspeed_config
-    if model is not None:
+    if config_kwargs["zero_optimization"]["stage"] != 3:
+        config_kwargs["train_micro_batch_size_per_gpu"] = per_device_train_batch_size
+        config_kwargs = {
+            "train_micro_batch_size_per_gpu": config_kwargs["train_micro_batch_size_per_gpu"],
+            "bf16": {"enabled": True},
+            "prescale_gradients": False,
+            "wall_clock_breakdown": False,
+        }
+
+        return model
+    else:
         if hasattr(model, "config"):
             hidden_size = (
                 max(model.config.hidden_sizes)
@@ -267,10 +252,10 @@ def prepare_deepspeed3(model, accelerator):
                         "zero_optimization.stage3_prefetch_bucket_size": 0,
                     }
                 )
-    model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
-    model.eval()
-    print("🔥 deepspeed3 is initialized")
-    return model
+        model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
+        model.eval()
+        print("🔥 deep speed is initialized")
+        return model
 
 
 class RLOOTrainer(Trainer):
@@ -291,6 +276,7 @@ class RLOOTrainer(Trainer):
         callbacks: Optional[List[TrainerCallback]] = None,
     ) -> None:
         self.args = config
+        args = config
         self.tokenizer = tokenizer
         self.policy = policy
 
@@ -424,15 +410,12 @@ class RLOOTrainer(Trainer):
                 yield from dataloader
 
         iter_dataloader = iter(repeat_generator())
-        if args.deepspeed2:
-            reward_model = prepare_deepspeed2(reward_model, args.per_device_train_batch_size)
-            ref_policy = prepare_deepspeed2(ref_policy, args.per_device_train_batch_size)
-        elif args.deepspeed3:
-            reward_model = prepare_deepspeed3(reward_model, accelerator)
-            ref_policy = prepare_deepspeed3(ref_policy, accelerator)
+        if self.is_deepspeed_enabled:
+            self.reward_model = prepare_deepspeed(self.reward_model, args.per_device_train_batch_size)
+            ref_policy = prepare_deepspeed(ref_policy, args.per_device_train_batch_size)
         else:
-            ref_policy = ref_policy.to(device)
-            reward_model = reward_model.to(device)
+            ref_policy = ref_policy.to(self.accelerator.device)
+            self.reward_model = self.reward_model.to(self.accelerator.device)
 
         generation_config = GenerationConfig(
             max_new_tokens=args.response_length,
