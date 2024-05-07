@@ -254,7 +254,6 @@ def prepare_deepspeed(model, per_device_train_batch_size):
                 )
         model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
         model.eval()
-        print("🔥 deep speed is initialized")
         return model
 
 
