@@ -1,0 +1,20 @@
+# This is an example configuration file of TRL CLI, you can use it for 
+# SFT like that: `trl sft --config config.yaml --output_dir test-sft`
+# The YAML file supports environment variables by adding an `env` field
+# as below
+
+# env:
+#   CUDA_VISIBLE_DEVICES: 0
+
+model_name_or_path:
+  trl-internal-testing/tiny-random-LlamaForCausalLM
+dataset_name:
+  imdb
+dataset_text_field:
+  text
+report_to:
+  none
+learning_rate:
+  0.0001
+lr_scheduler_type:
+  cosine

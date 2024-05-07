@@ -13,6 +13,7 @@
 # limitations under the License.
 import sys
 import unittest
+from functools import partial
 from unittest.mock import patch
 
 import pytest
@@ -134,6 +135,7 @@ class TestPeftDependancy(unittest.TestCase):
                 tokenizer=tokenizer,
                 dataset=dummy_dataset,
             )
+            ppo_trainer.optimizer.zero_grad = partial(ppo_trainer.optimizer.zero_grad, set_to_none=False)
             dummy_dataloader = ppo_trainer.dataloader
 
             for query_tensor, response_tensor in dummy_dataloader:

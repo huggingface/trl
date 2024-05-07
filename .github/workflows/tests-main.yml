@@ -32,7 +32,7 @@ jobs:
         pip install -U git+https://github.com/huggingface/peft.git
         pip install -U git+https://github.com/huggingface/transformers.git 
         # cpu version of pytorch
-        pip install -e ".[test, diffusers]"
+        pip install ".[test, diffusers]"
     - name: Test with pytest
       run: |
         make test

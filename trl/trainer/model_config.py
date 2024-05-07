@@ -85,3 +85,6 @@ class ModelConfig:
     def __post_init__(self):
         if self.load_in_8bit and self.load_in_4bit:
             raise ValueError("You can't use 8 bit and 4 bit precision at the same time")
+
+        if self.lora_target_modules == ["all-linear"]:
+            self.lora_target_modules = "all-linear"

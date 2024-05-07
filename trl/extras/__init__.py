@@ -13,4 +13,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from .best_of_n_sampler import BestOfNSampler
+from typing import TYPE_CHECKING
+
+from ..import_utils import _LazyModule
+
+
+_import_structure = {
+    "best_of_n_sampler": ["BestOfNSampler"],
+}
+
+if TYPE_CHECKING:
+    from .best_of_n_sampler import BestOfNSampler
+else:
+    import sys
+
+    sys.modules[__name__] = _LazyModule(__name__, globals()["__file__"], _import_structure, module_spec=__spec__)
