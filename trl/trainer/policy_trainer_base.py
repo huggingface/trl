@@ -1,6 +1,6 @@
 from accelerate.utils import is_deepspeed_available
 from collections import defaultdict
-from contextlib import nullcontext
+from contextlib import nullcontext, contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
 from tqdm import tqdm
@@ -317,6 +317,7 @@ class ReferenceModelManager:
         if self.ref_model is not None and not self.is_peft_model:
             self.ref_model = _prepare_multigpu(self.ref_model, self.accelerator, is_deepspeed_enabled)
 
+    @contextmanager
     def __call__(self):
         if self.ref_model is not None:
             yield self.ref_model
