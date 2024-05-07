@@ -45,7 +45,7 @@ class RLOOTrainer(PolicyTrainerBase):
 
         with torch.no_grad():
 
-            with self.ref_model_mgr as ref_model:
+            with self.ref_model_mgr() as ref_model:
                 print("ref_model.active_adapters", ref_model.active_adapters)
                 _, ref_logprobs = self.calc_logprobs(
                     ref_model, query_responses, context_length

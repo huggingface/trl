@@ -317,22 +317,14 @@ class ReferenceModelManager:
         if self.ref_model is not None and not self.is_peft_model:
             self.ref_model = _prepare_multigpu(self.ref_model, self.accelerator, is_deepspeed_enabled)
 
-    def __enter__(self):
-        self.optional_peft_ctx = None
+    def __call__(self):
         if self.ref_model is not None:
-            return self.ref_model
+            yield self.ref_model
         elif self.is_peft_model:
-            self.optional_peft_ctx = self.model.disable_adapter().__enter__()
-            return self.model
+            with self.model.disable_adapter():
+                yield self.model
         else:
             raise ValueError
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        if self.optional_peft_ctx is not None:
-            # exit the disabled adapter context
-            self.optional_peft_ctx.__exit__(exc_type, exc_value, traceback)
-            # reset adapter back to being the active model
-            self.model.set_adapter("default")
 
 
 class PolicyTrainerBase(Trainer):
