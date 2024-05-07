@@ -44,7 +44,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
     --kl_coef 0.10 \
     --non_eos_penalty \
     --truncate_token eos \
-    --response_length 128 \
+    --response_length 512 \
 """
 
 if __name__ == "__main__":

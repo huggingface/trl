@@ -35,16 +35,6 @@ from trl.trainer.utils import print_rich_table
 INVALID_LOGPROB = 1.0
 
 
-"""
-python -i trl/trainer/ppov2_trainer.py \
-    --learning_rate 3e-6 \
-    --output_dir models/minimal/ppo \
-    --per_device_train_batch_size 1 \
-    --gradient_accumulation_steps 64 \
-    --lr_scheduler_type linear \
-"""
-
-
 @dataclass
 class PPOConfig(TrainingArguments):
     # common config
@@ -177,6 +167,7 @@ def get_reward(model, query_responses, tokenizer, context_length):
         # position_ids=position_ids,
         return_dict=True,
         output_hidden_states=True,
+        use_cache=False,  # otherwise mistral-based RM would error out
     )
     reward_logits = model.score(output.hidden_states[-1])
     sequence_lengths = (
@@ -372,18 +363,10 @@ class PPOTrainer(Trainer):
             self.sample_generations_freq = max(1, args.num_updates // args.num_sample_generations)
 
         #########
-        # disable dropout
+        # setup model, optimizer, and others
         #########
         for module in [policy, ref_policy, value_model, reward_model]:
             disable_dropout(module)
-        policy.generation_config.eos_token_id = (
-            None  # disable `pad_token_id` and `eos_token_id` because we just want to
-        )
-        policy.generation_config.pad_token_id = None  # generate tokens without truncation / padding
-
-        #########
-        # setup model, optimizer, and others
-        #########
         if args.truncate_token and args.truncate_token == "eos":
             args.truncate_token_id = tokenizer.eos_token_id
         self.model = PolicyAndValueWrapper(policy, value_model)
@@ -438,6 +421,13 @@ class PPOTrainer(Trainer):
         )  # no need to shuffle eval dataset
         self.eval_dataloader = accelerator.prepare(self.eval_dataloader)
 
+        if self.is_deepspeed_enabled:
+            self.reward_model = prepare_deepspeed(self.reward_model, args.per_device_train_batch_size)
+            ref_policy = prepare_deepspeed(ref_policy, args.per_device_train_batch_size)
+        else:
+            ref_policy = ref_policy.to(self.accelerator.device)
+            self.reward_model = self.reward_model.to(self.accelerator.device)
+
     def get_train_dataloader(self) -> DataLoader:
         return self.dataloader
 
@@ -485,13 +475,6 @@ class PPOTrainer(Trainer):
                 yield from dataloader
 
         iter_dataloader = iter(repeat_generator())
-        if self.is_deepspeed_enabled:
-            self.reward_model = prepare_deepspeed(self.reward_model, args.per_device_train_batch_size)
-            ref_policy = prepare_deepspeed(ref_policy, args.per_device_train_batch_size)
-        else:
-            ref_policy = ref_policy.to(self.accelerator.device)
-            self.reward_model = self.reward_model.to(self.accelerator.device)
-
         generation_config = GenerationConfig(
             max_new_tokens=args.response_length,
             min_new_tokens=args.response_length,
@@ -561,9 +544,8 @@ class PPOTrainer(Trainer):
                         # Response Processing 2. run reward model on the truncated responses
                         postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
                         sequence_length = first_true_indices(postprocessed_response == tokenizer.pad_token_id) - 1
-                        full_value, _, _ = get_reward(
-                            accelerator.unwrap_model(model).value_model, query_response, tokenizer, context_length
-                        )
+                        unwrapped_value_model = accelerator.unwrap_model(model).value_model
+                        full_value, _, _ = get_reward(unwrapped_value_model, query_response, tokenizer, context_length)
                         value = full_value[:, context_length - 1 : -1].squeeze(-1)
                         _, score, _ = get_reward(reward_model, postprocessed_query_response, tokenizer, context_length)
 
@@ -630,9 +612,6 @@ class PPOTrainer(Trainer):
                 returns = advantages + values
                 advantages = masked_whiten(advantages, ~padding_mask)
                 advantages = torch.masked_fill(advantages, padding_mask, 0)
-                accelerator.print("rewards====", rewards[0])
-                accelerator.print("advantages====", advantages[0])
-                accelerator.print("values====", values[0])
                 torch.cuda.empty_cache()
 
             # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
@@ -717,13 +696,13 @@ class PPOTrainer(Trainer):
                     )
                     # fmt: on
                     torch.cuda.empty_cache()
-                accelerator.print(
-                    f"ppo_epoch_idx: {ppo_epoch_idx}",
-                    f"approxkl: {approxkl_stats[:ppo_epoch_idx + 1].mean().item():.4f}",
-                    f"pg_loss: {pg_loss_stats[:ppo_epoch_idx + 1].mean().item():.4f}",
-                    f"pg_clipfrac: {pg_clipfrac_stats[:ppo_epoch_idx + 1].mean().item():.4f}",
-                    f"ratio: {ratio_stats[:ppo_epoch_idx + 1].mean().item():.4f}",
-                )
+                # accelerator.print(
+                #     f"ppo_epoch_idx: {ppo_epoch_idx}",
+                #     f"approxkl: {approxkl_stats[:ppo_epoch_idx + 1].mean().item():.4f}",
+                #     f"pg_loss: {pg_loss_stats[:ppo_epoch_idx + 1].mean().item():.4f}",
+                #     f"pg_clipfrac: {pg_clipfrac_stats[:ppo_epoch_idx + 1].mean().item():.4f}",
+                #     f"ratio: {ratio_stats[:ppo_epoch_idx + 1].mean().item():.4f}",
+                # )
             with torch.no_grad():
                 mean_kl = kl.sum(1).mean()
                 mean_entropy = (-logprobs).sum(1).mean()
@@ -777,7 +756,6 @@ class PPOTrainer(Trainer):
                 advantages,
                 returns,
             )
-
             torch.cuda.empty_cache()
 
     def generate_completions(self, sampling: bool = False):

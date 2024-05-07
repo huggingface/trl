@@ -320,6 +320,7 @@ class PPOTrainer(Trainer):
         args = config
         self.tokenizer = tokenizer
         self.policy = policy
+
         self.policy.generation_config.eos_token_id = (
             None  # disable `pad_token_id` and `eos_token_id` because we just want to
         )
@@ -652,9 +653,6 @@ class PPOTrainer(Trainer):
                 returns = advantages + values
                 advantages = masked_whiten(advantages, ~padding_mask)
                 advantages = torch.masked_fill(advantages, padding_mask, 0)
-                # accelerator.print("rewards====", rewards[0])
-                # accelerator.print("advantages====", advantages[0])
-                # accelerator.print("values====", values[0])
                 torch.cuda.empty_cache()
 
             # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
@@ -670,8 +668,8 @@ class PPOTrainer(Trainer):
                             micro_batch_end = micro_batch_start + args.per_device_train_batch_size
                             micro_batch_inds = mini_batch_inds[micro_batch_start:micro_batch_end]
                             mb_return = returns[micro_batch_inds]
-                            mb_values = values[micro_batch_inds]
                             mb_advantage = advantages[micro_batch_inds]
+                            mb_values = values[micro_batch_inds]
                             mb_responses = responses[micro_batch_inds]
                             mb_query_responses = query_responses[micro_batch_inds]
                             mb_logprobs = logprobs[micro_batch_inds]
