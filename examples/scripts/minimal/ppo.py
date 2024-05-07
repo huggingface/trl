@@ -1,18 +1,14 @@
-from collections import defaultdict
+import shutil
 
-import pandas as pd
 from datasets import load_dataset
-from rich.console import Console
-from rich.table import Table
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForSequenceClassification,
     AutoTokenizer,
-    GenerationConfig,
     HfArgumentParser,
-    PreTrainedModel,
 )
 
+from trl import ModelConfig
 from trl.trainer.ppov2_trainer import PPOConfig, PPOTrainer
 
 
@@ -23,45 +19,38 @@ python -i examples/scripts/minimal/ppo.py \
     --per_device_train_batch_size 64 \
     --gradient_accumulation_steps 1 \
     --total_episodes 10000 \
-    --base_model EleutherAI/pythia-1b-deduped \
+    --model_name_or_path EleutherAI/pythia-1b-deduped \
     --non_eos_penalty \
-    
-accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
+
+accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/minimal/ppo.py \
+    --output_dir models/minimal/ppo \
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \
     --learning_rate 3e-6 \
-    --output_dir models/minimal/ppo \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 16 \
     --total_episodes 10000 \
-    --base_model EleutherAI/pythia-1b-deduped \
+    --model_name_or_path EleutherAI/pythia-1b-deduped \
     --sft_model_path EleutherAI/pythia-1b-deduped \
     --reward_model_path EleutherAI/pythia-1b-deduped \
     --local_rollout_forward_batch_size 1 \
-    --deepspeed2 \
+    --deepspeed3 \
     --non_eos_penalty \
 """
 
 
-def print_rich_table(df: pd.DataFrame) -> Table:
-    console = Console()
-    table = Table(show_lines=True)
-    for column in df.columns:
-        table.add_column(column)
-    for _, row in df.iterrows():
-        table.add_row(*row.astype(str).tolist())
-    console.print(table)
-
-
 if __name__ == "__main__":
-    parser = HfArgumentParser(PPOConfig)
-    args = parser.parse_args_into_dataclasses()[0]
+    parser = HfArgumentParser(PPOConfig, ModelConfig)
+    config, model_config = parser.parse_args_into_dataclasses()
+    # remove output_dir if exists
+    shutil.rmtree(config.output_dir, ignore_errors=True)
+
     ################
     # Model & Tokenizer
     ################
     tokenizer = AutoTokenizer.from_pretrained(
-        args.base_model,
+        model_config.model_name_or_path,
         padding_side="left",
         trust_remote_code=True,
     )
@@ -71,10 +60,10 @@ if __name__ == "__main__":
         tokenizer.chat_template = (
             "{% for message in messages %}{{' ' + message['content']}}{% endfor %}{{ eos_token }}"
         )
-    value_model = AutoModelForSequenceClassification.from_pretrained(args.reward_model_path, num_labels=1)
-    reward_model = AutoModelForSequenceClassification.from_pretrained(args.reward_model_path, num_labels=1)
-    ref_policy = AutoModelForCausalLM.from_pretrained(args.sft_model_path)
-    policy = AutoModelForCausalLM.from_pretrained(args.sft_model_path)
+    value_model = AutoModelForSequenceClassification.from_pretrained(config.reward_model_path, num_labels=1)
+    reward_model = AutoModelForSequenceClassification.from_pretrained(config.reward_model_path, num_labels=1)
+    ref_policy = AutoModelForCausalLM.from_pretrained(config.sft_model_path)
+    policy = AutoModelForCausalLM.from_pretrained(config.sft_model_path)
     ################
     # Dataset
     ################
@@ -106,7 +95,7 @@ if __name__ == "__main__":
     # Training
     ################
     trainer = PPOTrainer(
-        args=args,
+        config=config,
         tokenizer=tokenizer,
         policy=policy,
         ref_policy=ref_policy,
@@ -116,6 +105,6 @@ if __name__ == "__main__":
         eval_dataset=prepare_dataset(eval_dataset, tokenizer),
     )
     trainer.train()
-    trainer.save_model(args.output_dir)
+    trainer.save_model(config.output_dir)
     trainer.push_to_hub()
     trainer.generate_completions()
