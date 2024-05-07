@@ -322,15 +322,15 @@ class ReferenceModelManager:
         if self.ref_model is not None:
             return self.ref_model
         elif self.is_peft_model:
-            self.optional_peft_ctx = self.accelerator.unwrap_model(self.model).disable_adapter()
+            self.optional_peft_ctx = self.accelerator.unwrap_model(self.model).disable_adapter().__enter__()
             return self.model
         else:
             raise ValueError
 
     def __exit__(self, exc_type, exc_value, traceback):
         if self.optional_peft_ctx is not None:
-            with self.optional_peft_ctx:
-                pass  # teardown
+            # exit the disabled adapter context
+            self.optional_peft_ctx.__exit__(exc_type, exc_value, traceback)
             # reset adapter back to being the active model
             self.model.set_adapter("default")
 
