@@ -290,7 +290,7 @@ class RLOOTrainer(Trainer):
         # model_init: Optional[Callable[[torch.nn.Module], None]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
     ) -> None:
-        self.config = config
+        self.args = config
         self.tokenizer = tokenizer
         self.policy = policy
 
@@ -311,29 +311,29 @@ class RLOOTrainer(Trainer):
         #########
         # calculate various batch sizes
         #########
-        accelerator = Accelerator(gradient_accumulation_steps=config.gradient_accumulation_steps)
+        accelerator = Accelerator(gradient_accumulation_steps=args.gradient_accumulation_steps)
         self.accelerator = accelerator
-        config.world_size = accelerator.num_processes
-        config.local_batch_size = (
-            config.per_device_train_batch_size * config.gradient_accumulation_steps * config.num_mini_batches
+        args.world_size = accelerator.num_processes
+        args.local_batch_size = (
+            args.per_device_train_batch_size * args.gradient_accumulation_steps * args.num_mini_batches
         )
-        config.micro_batch_size = int(config.per_device_train_batch_size * config.world_size)
-        config.batch_size = int(config.local_batch_size * config.world_size)
-        config.mini_batch_size = exact_div(config.batch_size, config.num_mini_batches)
-        config.local_mini_batch_size = exact_div(config.local_batch_size, config.num_mini_batches)
-        if config.whiten_rewards:
+        args.micro_batch_size = int(args.per_device_train_batch_size * args.world_size)
+        args.batch_size = int(args.local_batch_size * args.world_size)
+        args.mini_batch_size = exact_div(args.batch_size, args.num_mini_batches)
+        args.local_mini_batch_size = exact_div(args.local_batch_size, args.num_mini_batches)
+        if args.whiten_rewards:
             assert (
-                config.local_mini_batch_size >= 8
-            ), f"Per-rank minibatch size {config.local_mini_batch_size} is insufficient for whitening"
-        # `per_rank_rollout_batch_size` is our `config.local_batch_size`
-        # `per_rank_minibatch_size` is our `config.local_mini_batch_size`
-        config.num_updates = config.total_episodes // config.batch_size
+                args.local_mini_batch_size >= 8
+            ), f"Per-rank minibatch size {args.local_mini_batch_size} is insufficient for whitening"
+        # `per_rank_rollout_batch_size` is our `args.local_batch_size`
+        # `per_rank_minibatch_size` is our `args.local_mini_batch_size`
+        args.num_updates = args.total_episodes // args.batch_size
         time_tensor = torch.tensor(int(time.time()), device=accelerator.device)
         time_int = broadcast(time_tensor, 0).item()  # avoid different timestamps across processes
-        config.run_name = f"{config.exp_name}__{config.seed}__{time_int}"
-        self.local_seed = config.seed + accelerator.process_index * 100003  # Prime
-        if config.num_sample_generations > 0:
-            self.sample_generations_freq = max(1, config.num_updates // config.num_sample_generations)
+        args.run_name = f"{args.exp_name}__{args.seed}__{time_int}"
+        self.local_seed = args.seed + accelerator.process_index * 100003  # Prime
+        if args.num_sample_generations > 0:
+            self.sample_generations_freq = max(1, args.num_updates // args.num_sample_generations)
 
         #########
         # disable dropout
@@ -348,10 +348,10 @@ class RLOOTrainer(Trainer):
         #########
         # setup model, optimizer, and others
         #########
-        if config.truncate_token and config.truncate_token == "eos":
-            config.truncate_token_id = tokenizer.eos_token_id
+        if args.truncate_token and args.truncate_token == "eos":
+            args.truncate_token_id = tokenizer.eos_token_id
         self.model = policy
-        self.create_optimizer_and_scheduler(num_training_steps=config.num_updates)
+        self.create_optimizer_and_scheduler(num_training_steps=args.num_updates)
 
         #########
         ### trainer specifics
@@ -361,7 +361,7 @@ class RLOOTrainer(Trainer):
             is_world_process_zero=self.is_world_process_zero(),
         )
         DEFAULT_CALLBACKS = [DefaultFlowCallback]
-        default_callbacks = DEFAULT_CALLBACKS + get_reporting_integration_callbacks(self.config.report_to)
+        default_callbacks = DEFAULT_CALLBACKS + get_reporting_integration_callbacks(self.args.report_to)
         if self.callbacks is None:
             self.callbacks = default_callbacks
         self.callback_handler = CallbackHandler(
@@ -372,10 +372,10 @@ class RLOOTrainer(Trainer):
         self.is_fsdp_enabled = getattr(self.accelerator.state, "fsdp_plugin", None) is not None
         # Create distant repo and output directory if needed
         self.hub_model_id = None
-        if self.config.push_to_hub:
+        if self.args.push_to_hub:
             self.init_hf_repo()
-        if self.config.should_save:
-            os.makedirs(self.config.output_dir, exist_ok=True)
+        if self.args.should_save:
+            os.makedirs(self.args.output_dir, exist_ok=True)
         self.backup_model = None
 
         #########
@@ -383,20 +383,20 @@ class RLOOTrainer(Trainer):
         #########
         self.dataloader = DataLoader(
             self.train_dataset,
-            batch_size=config.local_batch_size,
+            batch_size=args.local_batch_size,
             shuffle=True,
             collate_fn=DataCollatorWithPadding(tokenizer),
             drop_last=True,  # needed; otherwise the last batch will be of ragged shape
         )
         # sync random states for DataLoader(shuffle=True) before `accelerator.prepare`
         # see https://gist.github.com/vwxyzjn/2581bff1e48e185e0b85b6dfe1def79c
-        torch.manual_seed(config.seed)
+        torch.manual_seed(args.seed)
         self.model, self.optimizer, self.dataloader = accelerator.prepare(self.model, self.optimizer, self.dataloader)
         torch.manual_seed(self.local_seed)  # reset the local seed again
 
         self.eval_dataloader = DataLoader(
             self.eval_dataset,
-            batch_size=config.per_device_eval_batch_size,
+            batch_size=args.per_device_eval_batch_size,
             collate_fn=DataCollatorWithPadding(self.tokenizer),
             drop_last=True,
         )  # no need to shuffle eval dataset
@@ -409,7 +409,7 @@ class RLOOTrainer(Trainer):
         return self.eval_dataloader
 
     def train(self):
-        config = self.config
+        args = self.args
         accelerator = self.accelerator
         optimizer = self.optimizer
         model = self.model
@@ -424,10 +424,10 @@ class RLOOTrainer(Trainer):
                 yield from dataloader
 
         iter_dataloader = iter(repeat_generator())
-        if config.deepspeed2:
-            reward_model = prepare_deepspeed2(reward_model, config.per_device_train_batch_size)
-            ref_policy = prepare_deepspeed2(ref_policy, config.per_device_train_batch_size)
-        elif config.deepspeed3:
+        if args.deepspeed2:
+            reward_model = prepare_deepspeed2(reward_model, args.per_device_train_batch_size)
+            ref_policy = prepare_deepspeed2(ref_policy, args.per_device_train_batch_size)
+        elif args.deepspeed3:
             reward_model = prepare_deepspeed3(reward_model, accelerator)
             ref_policy = prepare_deepspeed3(ref_policy, accelerator)
         else:
@@ -435,9 +435,9 @@ class RLOOTrainer(Trainer):
             reward_model = reward_model.to(device)
 
         generation_config = GenerationConfig(
-            max_new_tokens=config.response_length,
-            min_new_tokens=config.response_length,
-            temperature=(config.temperature + 1e-7),
+            max_new_tokens=args.response_length,
+            min_new_tokens=args.response_length,
+            temperature=(args.temperature + 1e-7),
             top_k=0.0,
             top_p=1.0,
             do_sample=True,
@@ -446,7 +446,7 @@ class RLOOTrainer(Trainer):
         accelerator.print("===training policy===")
         global_step = 0
         start_time = time.time()
-        stats_shape = (config.num_ppo_epochs, config.num_mini_batches, config.gradient_accumulation_steps)
+        stats_shape = (args.num_ppo_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
         approxkl_stats = torch.zeros(stats_shape, device=device)
         pg_clipfrac_stats = torch.zeros(stats_shape, device=device)
         pg_loss_stats = torch.zeros(stats_shape, device=device)
@@ -455,13 +455,13 @@ class RLOOTrainer(Trainer):
         entropy_stats = torch.zeros(stats_shape, device=device)
         ratio_stats = torch.zeros(stats_shape, device=device)
         model.train()
-        for update in range(1, config.num_updates + 1):
-            global_step += 1 * config.batch_size
+        for update in range(1, args.num_updates + 1):
+            global_step += 1 * args.batch_size
             self.lr_scheduler.step()
             data = next(iter_dataloader)
             with torch.no_grad():
                 queries = data["input_ids"].to(device)
-                queries = queries.repeat(config.rloo_k, 1)
+                queries = queries.repeat(args.rloo_k, 1)
                 context_length = queries.shape[1]
                 query_responses = []
                 responses = []
@@ -470,8 +470,8 @@ class RLOOTrainer(Trainer):
                 ref_logprobs = []
                 scores = []
                 sequence_lengths = []
-                for i in range(0, queries.shape[0], config.local_rollout_forward_batch_size):
-                    query = queries[i : i + config.local_rollout_forward_batch_size]
+                for i in range(0, queries.shape[0], args.local_rollout_forward_batch_size):
+                    query = queries[i : i + args.local_rollout_forward_batch_size]
                     with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
                         query_response, logits = generate(
                             unwrapped_model,
@@ -489,7 +489,7 @@ class RLOOTrainer(Trainer):
 
                     ref_output = forward(ref_policy, query_response, tokenizer)
                     ref_logits = ref_output.logits[:, context_length - 1 : -1]
-                    ref_logits /= config.temperature + 1e-7
+                    ref_logits /= args.temperature + 1e-7
                     ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
                     ref_logprob = torch.gather(ref_all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
                     del ref_output, ref_logits, ref_all_logprob
@@ -497,8 +497,8 @@ class RLOOTrainer(Trainer):
 
                     # Response Processing 1. truncate response after the first occurrence of `truncate_token_id`
                     postprocessed_response = response
-                    if config.truncate_token_id:
-                        postprocessed_response = truncate_response(config, tokenizer, response)
+                    if args.truncate_token_id:
+                        postprocessed_response = truncate_response(args, tokenizer, response)
 
                     # Response Processing 2. run reward model on the truncated responses
                     postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
@@ -527,10 +527,8 @@ class RLOOTrainer(Trainer):
                 # responses not passing that filter will receive a low (fixed) score
                 # only query humans on responses that pass that filter
                 contain_eos_token = torch.any(postprocessed_responses == tokenizer.eos_token_id, dim=-1)
-                if config.non_eos_penalty:
-                    scores = torch.where(
-                        contain_eos_token, scores, torch.full_like(scores, config.penalty_reward_value)
-                    )
+                if args.non_eos_penalty:
+                    scores = torch.where(contain_eos_token, scores, torch.full_like(scores, args.penalty_reward_value))
                 accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
 
                 # be very careful with `padding_mask_p1`; see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
@@ -541,36 +539,34 @@ class RLOOTrainer(Trainer):
 
                 # 4. compute rewards
                 kl = logprobs - ref_logprobs
-                non_score_reward = (-config.kl_coef * kl).sum(1)
+                non_score_reward = (-args.kl_coef * kl).sum(1)
                 rlhf_reward = scores + non_score_reward
 
-                # we generated `self.config.rloo_k` many responses per prompt
+                # we generated `self.args.rloo_k` many responses per prompt
                 # now we can implement the RLOO loss by subtracting the reward of
                 # a response by the average rewards of other `rloo_k - 1` responses
                 advantages = torch.zeros_like(rlhf_reward)
-                for i in range(0, len(advantages), config.local_batch_size):
+                for i in range(0, len(advantages), args.local_batch_size):
                     other_response_rlhf_rewards = []
-                    for j in range(0, len(advantages), config.local_batch_size):
+                    for j in range(0, len(advantages), args.local_batch_size):
                         if i != j:
-                            other_response_rlhf_rewards.append(rlhf_reward[j : j + config.local_batch_size])
-                    advantages[i : i + config.local_batch_size] = rlhf_reward[
-                        i : i + config.local_batch_size
+                            other_response_rlhf_rewards.append(rlhf_reward[j : j + args.local_batch_size])
+                    advantages[i : i + args.local_batch_size] = rlhf_reward[
+                        i : i + args.local_batch_size
                     ] - torch.stack(other_response_rlhf_rewards).mean(0)
                 torch.cuda.empty_cache()
 
             # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
-            for ppo_epoch_idx in range(config.num_ppo_epochs):
-                b_inds = np.random.permutation(config.local_batch_size)
+            for ppo_epoch_idx in range(args.num_ppo_epochs):
+                b_inds = np.random.permutation(args.local_batch_size)
                 minibatch_idx = 0
-                for mini_batch_start in range(0, config.local_batch_size, config.local_mini_batch_size):
-                    mini_batch_end = mini_batch_start + config.local_mini_batch_size
+                for mini_batch_start in range(0, args.local_batch_size, args.local_mini_batch_size):
+                    mini_batch_end = mini_batch_start + args.local_mini_batch_size
                     mini_batch_inds = b_inds[mini_batch_start:mini_batch_end]
                     gradient_accumulation_idx = 0
-                    for micro_batch_start in range(
-                        0, config.local_mini_batch_size, config.per_device_train_batch_size
-                    ):
+                    for micro_batch_start in range(0, args.local_mini_batch_size, args.per_device_train_batch_size):
                         with accelerator.accumulate(model):
-                            micro_batch_end = micro_batch_start + config.per_device_train_batch_size
+                            micro_batch_end = micro_batch_start + args.per_device_train_batch_size
                             micro_batch_inds = mini_batch_inds[micro_batch_start:micro_batch_end]
                             mb_advantage = advantages[micro_batch_inds]
                             mb_responses = responses[micro_batch_inds]
@@ -579,7 +575,7 @@ class RLOOTrainer(Trainer):
 
                             output = forward(model, mb_query_responses, tokenizer)
                             logits = output.logits[:, context_length - 1 : -1]
-                            logits /= config.temperature + 1e-7
+                            logits /= args.temperature + 1e-7
                             new_all_logprobs = F.log_softmax(logits, dim=-1)
                             new_logprobs = torch.gather(new_all_logprobs, 2, mb_responses.unsqueeze(-1)).squeeze(-1)
                             new_logprobs = torch.masked_fill(
@@ -592,9 +588,7 @@ class RLOOTrainer(Trainer):
                             ratio = torch.exp(logprobs_diff)
                             # print(f"{ratio=}")
                             pg_losses = -mb_advantage * ratio
-                            pg_losses2 = -mb_advantage * torch.clamp(
-                                ratio, 1.0 - config.cliprange, 1.0 + config.cliprange
-                            )
+                            pg_losses2 = -mb_advantage * torch.clamp(ratio, 1.0 - args.cliprange, 1.0 + args.cliprange)
                             pg_loss_max = torch.max(pg_losses, pg_losses2)
                             pg_loss = pg_loss_max.mean()
                             pg_clipfrac = (pg_losses2 > pg_losses).float().mean()
@@ -663,13 +657,13 @@ class RLOOTrainer(Trainer):
             del kl, mean_kl, mean_entropy, scores
             torch.cuda.empty_cache()
 
-            if config.num_sample_generations > 0 and (update - 1) % self.sample_generations_freq == 0:
+            if args.num_sample_generations > 0 and (update - 1) % self.sample_generations_freq == 0:
                 self.generate_completions(sampling=True)
 
     def generate_completions(self, sampling: bool = False):
-        config = self.config
+        args = self.args
         generation_config = GenerationConfig(
-            max_new_tokens=self.config.response_length,
+            max_new_tokens=self.args.response_length,
             temperature=(0.01 + 1e-7),
             top_k=0.0,
             top_p=1.0,
@@ -690,8 +684,8 @@ class RLOOTrainer(Trainer):
                     )
                 response = query_response[:, context_length:]
                 postprocessed_response = response
-                if config.truncate_token_id:
-                    postprocessed_response = truncate_response(config, self.tokenizer, response)
+                if args.truncate_token_id:
+                    postprocessed_response = truncate_response(args, self.tokenizer, response)
                 table["query"].extend(gather_object(self.tokenizer.batch_decode(query, skip_special_tokens=True)))
                 table["model response"].extend(gather_object(self.tokenizer.batch_decode(postprocessed_response)))
 
@@ -706,7 +700,7 @@ class RLOOTrainer(Trainer):
         df = pd.DataFrame(table)
         if self.accelerator.process_index == 0:
             print_rich_table(df.iloc[0 : 0 + 5])
-        if "wandb" in config.report_to:
+        if "wandb" in args.report_to:
             import wandb
 
             if wandb.run is not None:
