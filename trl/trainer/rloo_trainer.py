@@ -70,7 +70,10 @@ class RLOOTrainer(PolicyTrainerBase):
             # Response Processing 3. filter response. Ensure that the sample contains truncate_token_id
             # responses not passing that filter will receive a low (fixed) score
             if self.args.non_eos_penalty:
-                contain_eos_token = torch.any(postprocessed_responses == self.tokenizer.eos_token_id, dim=-1)
+                contain_eos_token = torch.any(
+                    postprocessed_responses == self.tokenizer.eos_token_id,
+                    dim=-1
+                )
                 non_eos_penalty_rewards = torch.full_like(scores, self.args.penalty_reward_value)
                 scores = torch.where(contain_eos_token, scores, non_eos_penalty_rewards)
 
@@ -96,7 +99,7 @@ class RLOOTrainer(PolicyTrainerBase):
 
         # calculate gradients and loss
         active_logits, active_logprobs = self.calc_logprobs(
-            model, query_responses, context_length
+            self.model, query_responses, context_length
         )
         active_logprobs = torch.masked_fill(
             active_logprobs, padding_mask, INVALID_LOGPROB

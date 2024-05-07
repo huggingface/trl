@@ -462,7 +462,7 @@ class PolicyTrainerBase(Trainer):
         context_length = queries.shape[1]
         with torch.no_grad(), self.cast_model_ctx():
             query_responses = self.generate(
-                model,
+                self.model,
                 queries,
                 self.train_generation_config,
             )
