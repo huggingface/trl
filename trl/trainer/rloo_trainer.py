@@ -679,7 +679,6 @@ class RLOOTrainer(Trainer):
         table = defaultdict(list)
         for batch in self.eval_dataloader:
             query = batch["input_ids"]
-            name = f"trained {config.base_model}"
             with torch.no_grad():
                 context_length = query.shape[1]
                 with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
@@ -694,7 +693,7 @@ class RLOOTrainer(Trainer):
                 if config.truncate_token_id:
                     postprocessed_response = truncate_response(config, self.tokenizer, response)
                 table["query"].extend(gather_object(self.tokenizer.batch_decode(query, skip_special_tokens=True)))
-                table[name].extend(gather_object(self.tokenizer.batch_decode(postprocessed_response)))
+                table["model response"].extend(gather_object(self.tokenizer.batch_decode(postprocessed_response)))
 
                 postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
                 _, score, _ = get_reward(
