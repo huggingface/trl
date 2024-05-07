@@ -459,6 +459,7 @@ class PolicyTrainerBase(Trainer):
     @cuda_gc
     def generate_batch_extras(self, model, input_ids):
         # PR TODO: generation_batch_size
+        print("(generate) self.model.active_adapters", self.model.active_adapters)
         queries = input_ids.to(self.accelerator.device)
         context_length = queries.shape[1]
         with torch.no_grad(), self.cast_model_ctx():
