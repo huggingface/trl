@@ -1,3 +1,4 @@
+from accelerate.utils import is_deepspeed_available
 from collections import defaultdict
 from contextlib import nullcontext
 from copy import deepcopy
@@ -26,7 +27,7 @@ from transformers import (
 from ..core import logprobs_from_logits
 from ..models import SUPPORTED_ARCHITECTURES, create_reference_model, PreTrainedModelWrapper
 from .utils import disable_dropout_in_model, peft_module_casting_to_bf16
-from ..import_utils import is_peft_available, is_deepspeed_available
+from ..import_utils import is_peft_available
 
 
 if is_peft_available():
