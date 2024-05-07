@@ -32,7 +32,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.7.ya
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \
     --learning_rate 3e-6 \
-    --output_dir models/minimal/ppo_zephyr_vllm_warmup \
+    --output_dir models/minimal/ppo_zephyr_vllm_test \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 32 \
     --local_rollout_forward_batch_size 8 \
@@ -49,7 +49,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.7.ya
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser(PPOConfig, ModelConfig)
+    parser = HfArgumentParser((PPOConfig, ModelConfig))
     config, model_config = parser.parse_args_into_dataclasses()
     # remove output_dir if exists
     shutil.rmtree(config.output_dir, ignore_errors=True)

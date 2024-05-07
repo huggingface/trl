@@ -14,8 +14,6 @@ from accelerate import Accelerator
 from accelerate.state import AcceleratorState
 from accelerate.utils import broadcast, gather_object
 from datasets import Dataset
-from rich.console import Console
-from rich.table import Table
 from torch.utils.data import DataLoader
 from transformers import (
     DataCollatorWithPadding,
@@ -31,6 +29,7 @@ from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer_callback import CallbackHandler, DefaultFlowCallback
 
 from trl.models.utils import unwrap_model_for_generation
+from trl.trainer.utils import print_rich_table
 
 
 INVALID_LOGPROB = 1.0
@@ -125,16 +124,6 @@ class PPOConfig(TrainingArguments):
     """whether to whiten the rewards"""
     kl_coef: float = 0.05
     """the KL coefficient"""
-
-
-def print_rich_table(df: pd.DataFrame) -> Table:
-    console = Console()
-    table = Table(show_lines=True)
-    for column in df.columns:
-        table.add_column(column)
-    for _, row in df.iterrows():
-        table.add_row(*row.astype(str).tolist())
-    console.print(table)
 
 
 # taken from https://github.com/vwxyzjn/direct-preference-optimization/blob/f8b8c0f49dc92a430bae41585f9d467d3618fe2f/utils.py#L99

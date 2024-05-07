@@ -52,7 +52,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.7.ya
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser(RLOOConfig, ModelConfig)
+    parser = HfArgumentParser((RLOOConfig, ModelConfig))
     config, model_config = parser.parse_config_into_dataclasses()
     # remove output_dir if exists
     shutil.rmtree(config.output_dir, ignore_errors=True)
