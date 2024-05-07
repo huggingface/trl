@@ -46,6 +46,7 @@ class RLOOTrainer(PolicyTrainerBase):
         with torch.no_grad():
 
             with self.ref_model_mgr as ref_model:
+                print("ref_model.active_adapters", ref_model.active_adapters)
                 _, ref_logprobs = self.calc_logprobs(
                     ref_model, query_responses, context_length
                 )
@@ -98,6 +99,7 @@ class RLOOTrainer(PolicyTrainerBase):
             advantages = rlhf_reward - mean_other
 
         # calculate gradients and loss
+        print("self.model.active_adapters", self.model.active_adapters)
         active_logits, active_logprobs = self.calc_logprobs(
             self.model, query_responses, context_length
         )
