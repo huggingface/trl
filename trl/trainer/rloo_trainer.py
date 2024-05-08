@@ -233,8 +233,6 @@ def prepare_deepspeed(model, per_device_train_batch_size):
             "prescale_gradients": False,
             "wall_clock_breakdown": False,
         }
-
-        return model
     else:
         if hasattr(model, "config"):
             hidden_size = (
@@ -252,9 +250,9 @@ def prepare_deepspeed(model, per_device_train_batch_size):
                         "zero_optimization.stage3_prefetch_bucket_size": 0,
                     }
                 )
-        model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
-        model.eval()
-        return model
+    model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
+    model.eval()
+    return model
 
 
 class RLOOTrainer(Trainer):
@@ -411,9 +409,9 @@ class RLOOTrainer(Trainer):
         iter_dataloader = iter(repeat_generator())
         if self.is_deepspeed_enabled:
             self.reward_model = prepare_deepspeed(self.reward_model, args.per_device_train_batch_size)
-            ref_policy = prepare_deepspeed(ref_policy, args.per_device_train_batch_size)
+            self.ref_policy = prepare_deepspeed(self.ref_policy, args.per_device_train_batch_size)
         else:
-            ref_policy = ref_policy.to(self.accelerator.device)
+            self.ref_policy = self.ref_policy.to(self.accelerator.device)
             self.reward_model = self.reward_model.to(self.accelerator.device)
 
         generation_config = GenerationConfig(
@@ -479,7 +477,9 @@ class RLOOTrainer(Trainer):
 
                     # Response Processing 1. truncate response after the first occurrence of `truncate_token_id`
                     postprocessed_response = response
-                    if args.truncate_token_id:
+                    if (
+                        args.truncate_token_id is not None
+                    ):  # handle the edge case when truncate_token_id exists but is 0
                         postprocessed_response = truncate_response(args, tokenizer, response)
 
                     # Response Processing 2. run reward model on the truncated responses
@@ -666,8 +666,8 @@ class RLOOTrainer(Trainer):
                     )
                 response = query_response[:, context_length:]
                 postprocessed_response = response
-                if args.truncate_token_id:
-                    postprocessed_response = truncate_response(args, self.tokenizer, response)
+                if args.truncate_token_id is not None:  # handle the edge case when truncate_token_id exists but is 0
+                    postprocessed_response = truncate_response(args, tokenizer, response)
                 table["query"].extend(gather_object(self.tokenizer.batch_decode(query, skip_special_tokens=True)))
                 table["model response"].extend(gather_object(self.tokenizer.batch_decode(postprocessed_response)))
 
