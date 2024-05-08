@@ -16,7 +16,6 @@ from datasets import load_dataset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, HfArgumentParser
 
 from trl import RewardConfig, RewardTrainer
-from trl.trainer.utils import RewardDataCollatorWithPadding
 
 
 """
@@ -82,23 +81,12 @@ if __name__ == "__main__":
     ################
     # Training
     ################
-    args.remove_unused_columns = False
-    # treats the EOS token and the padding token distinctively
-    default_collator = RewardDataCollatorWithPadding(tokenizer=tokenizer)
-
-    def data_collator(x):
-        batch = default_collator(x)
-        batch["input_ids_chosen"].masked_fill_(~batch["attention_mask_chosen"].bool(), 0)
-        batch["input_ids_rejected"].masked_fill_(~batch["attention_mask_rejected"].bool(), 0)
-        return batch
-
     trainer = RewardTrainer(
         model=model,
         tokenizer=tokenizer,
         args=args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        data_collator=data_collator,
     )
     trainer.train()
     trainer.save_model(args.output_dir)
