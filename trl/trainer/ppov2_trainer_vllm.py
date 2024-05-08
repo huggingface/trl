@@ -92,6 +92,8 @@ class PPOConfig(TrainingArguments):
     """the path to the reward model"""
     sft_model_path: str = "EleutherAI/pythia-160m"
     """the path to the sft model"""
+    sft_model_revision: str = "main"
+    """the revision of the sft model"""
 
     # ppo config
     num_ppo_epochs: int = 4
@@ -429,7 +431,13 @@ class PPOTrainer(Trainer):
             include_stop_str_in_output=True,
         )
         if accelerator.is_main_process:
-            self.llm = SingleGPULLM(model=args.sft_model_path, tensor_parallel_size=1, device="cuda:7")
+            self.llm = SingleGPULLM(
+                model=args.sft_model_path,
+                revision=args.sft_model_revision,
+                tokenizer_revision=args.sft_model_revision,
+                tensor_parallel_size=1,
+                device="cuda:7",
+            )
             self.llmp = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
             print("🔥🔥🔥 vllm loaded")
         else:

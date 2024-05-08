@@ -11,6 +11,7 @@ from transformers import (
 
 from trl import ModelConfig
 from trl.trainer.rloo_trainer_vllm import RLOOConfig, RLOOTrainer
+from trl.trainer.utils import ZEPHYR_CHAT_TEMPLATE
 
 
 """
@@ -53,7 +54,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.7.ya
 
 if __name__ == "__main__":
     parser = HfArgumentParser((RLOOConfig, ModelConfig))
-    config, model_config = parser.parse_config_into_dataclasses()
+    config, model_config = parser.parse_args_into_dataclasses()
     # remove output_dir if exists
     shutil.rmtree(config.output_dir, ignore_errors=True)
 
@@ -67,8 +68,7 @@ if __name__ == "__main__":
     )
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
     if tokenizer.chat_template is None:
-        # a default chat template to simply concatenate the messages
-        tokenizer.chat_template = "{% for message in messages %}\n{% if message['role'] == 'user' %}\n{{ '<|user|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'system' %}\n{{ '<|system|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'assistant' %}\n{{ '<|assistant|>\n'  + message['content'] + eos_token }}\n{% endif %}\n{% if loop.last and add_generation_prompt %}\n{{ '<|assistant|>' }}\n{% endif %}\n{% endfor %}"
+        tokenizer.chat_template = ZEPHYR_CHAT_TEMPLATE
     reward_model = AutoModelForSequenceClassification.from_pretrained(
         config.reward_model_path,
         attn_implementation="flash_attention_2",
@@ -130,4 +130,4 @@ if __name__ == "__main__":
     trainer.train()
     trainer.save_model(config.output_dir)
     trainer.push_to_hub()
-    trainer.generate_completions(True)
+    trainer.generate_completions()

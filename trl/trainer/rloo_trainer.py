@@ -34,16 +34,6 @@ from trl.trainer.utils import print_rich_table
 INVALID_LOGPROB = 1.0
 
 
-"""
-python -i trl/trainer/ppov2_trainer.py \
-    --learning_rate 3e-6 \
-    --output_dir models/minimal/ppo \
-    --per_device_train_batch_size 1 \
-    --gradient_accumulation_steps 64 \
-    --lr_scheduler_type linear \
-"""
-
-
 @dataclass
 class RLOOConfig(TrainingArguments):
     # common config
@@ -146,6 +136,7 @@ def get_reward(model, query_responses, tokenizer, context_length):
         # position_ids=position_ids,
         return_dict=True,
         output_hidden_states=True,
+        use_cache=False,  # otherwise mistral-based RM would error out
     )
     reward_logits = model.score(output.hidden_states[-1])
     sequence_lengths = (
@@ -319,18 +310,10 @@ class RLOOTrainer(Trainer):
             self.sample_generations_freq = max(1, args.num_updates // args.num_sample_generations)
 
         #########
-        # disable dropout
+        # setup model, optimizer, and others
         #########
         for module in [policy, ref_policy, reward_model]:
             disable_dropout(module)
-        policy.generation_config.eos_token_id = (
-            None  # disable `pad_token_id` and `eos_token_id` because we just want to
-        )
-        policy.generation_config.pad_token_id = None  # generate tokens without truncation / padding
-
-        #########
-        # setup model, optimizer, and others
-        #########
         if args.truncate_token and args.truncate_token == "eos":
             args.truncate_token_id = tokenizer.eos_token_id
         self.model = policy
@@ -385,6 +368,13 @@ class RLOOTrainer(Trainer):
         )  # no need to shuffle eval dataset
         self.eval_dataloader = accelerator.prepare(self.eval_dataloader)
 
+        if self.is_deepspeed_enabled:
+            self.reward_model = prepare_deepspeed(self.reward_model, args.per_device_train_batch_size)
+            self.ref_policy = prepare_deepspeed(self.ref_policy, args.per_device_train_batch_size)
+        else:
+            self.ref_policy = self.ref_policy.to(self.accelerator.device)
+            self.reward_model = self.reward_model.to(self.accelerator.device)
+
     def get_train_dataloader(self) -> DataLoader:
         return self.dataloader
 
@@ -407,13 +397,6 @@ class RLOOTrainer(Trainer):
                 yield from dataloader
 
         iter_dataloader = iter(repeat_generator())
-        if self.is_deepspeed_enabled:
-            self.reward_model = prepare_deepspeed(self.reward_model, args.per_device_train_batch_size)
-            self.ref_policy = prepare_deepspeed(self.ref_policy, args.per_device_train_batch_size)
-        else:
-            self.ref_policy = self.ref_policy.to(self.accelerator.device)
-            self.reward_model = self.reward_model.to(self.accelerator.device)
-
         generation_config = GenerationConfig(
             max_new_tokens=args.response_length,
             min_new_tokens=args.response_length,
@@ -499,7 +482,6 @@ class RLOOTrainer(Trainer):
                 postprocessed_responses = torch.cat(postprocessed_responses, 0)
                 logprobs = torch.cat(logprobs, 0)
                 ref_logprobs = torch.cat(ref_logprobs, 0)
-                # print(f"{(ref_logprobs - logprobs).exp()=}")
                 sequence_lengths = torch.cat(sequence_lengths, 0)
                 scores = torch.cat(scores, 0)
                 del (logprob, ref_logprob, score)
@@ -568,7 +550,6 @@ class RLOOTrainer(Trainer):
                             mb_logprobs = mb_logprobs.sum(1)
                             logprobs_diff = new_logprobs - mb_logprobs
                             ratio = torch.exp(logprobs_diff)
-                            # print(f"{ratio=}")
                             pg_losses = -mb_advantage * ratio
                             pg_losses2 = -mb_advantage * torch.clamp(ratio, 1.0 - args.cliprange, 1.0 + args.cliprange)
                             pg_loss_max = torch.max(pg_losses, pg_losses2)
@@ -602,25 +583,25 @@ class RLOOTrainer(Trainer):
                     )
                     # fmt: on
                     torch.cuda.empty_cache()
-                accelerator.print(
-                    f"ppo_epoch_idx: {ppo_epoch_idx}",
-                    f"approxkl: {approxkl_stats[:ppo_epoch_idx + 1].mean().item():.4f}",
-                    f"pg_loss: {pg_loss_stats[:ppo_epoch_idx + 1].mean().item():.4f}",
-                    f"pg_clipfrac: {pg_clipfrac_stats[:ppo_epoch_idx + 1].mean().item():.4f}",
-                    f"ratio: {ratio_stats[:ppo_epoch_idx + 1].mean().item():.4f}",
-                )
+                # accelerator.print(
+                #     f"ppo_epoch_idx: {ppo_epoch_idx}",
+                #     f"approxkl: {approxkl_stats[:ppo_epoch_idx + 1].mean().item():.4f}",
+                #     f"pg_loss: {pg_loss_stats[:ppo_epoch_idx + 1].mean().item():.4f}",
+                #     f"pg_clipfrac: {pg_clipfrac_stats[:ppo_epoch_idx + 1].mean().item():.4f}",
+                #     f"ratio: {ratio_stats[:ppo_epoch_idx + 1].mean().item():.4f}",
+                # )
             with torch.no_grad():
                 rlhf_reward_mean = self.accelerator.gather(rlhf_reward).mean().item()
                 accelerator.print(f"{rlhf_reward_mean=}")
                 mean_kl = kl.sum(1).mean()
                 mean_entropy = (-logprobs).sum(1).mean()
-                # mean_non_score_reward = non_score_reward.sum(1).mean()
+                mean_non_score_reward = non_score_reward.sum(1).mean()
                 eps = int(global_step / (time.time() - start_time))
                 metrics = {}
                 metrics["eps"] = eps
                 metrics["objective/kl"] = self.accelerator.gather(mean_kl).mean().item()
                 metrics["objective/entropy"] = self.accelerator.gather(mean_entropy).mean().item()
-                # metrics["objective/non_score_reward"] = self.accelerator.gather(mean_non_score_reward).mean().item()
+                metrics["objective/non_score_reward"] = self.accelerator.gather(mean_non_score_reward).mean().item()
                 metrics["objective/rlhf_reward"] = self.accelerator.gather(rlhf_reward).mean().item()
                 metrics["objective/scores"] = self.accelerator.gather(scores.mean()).mean().item()
                 metrics["policy/approxkl_avg"] = self.accelerator.gather(approxkl_stats).mean().item()

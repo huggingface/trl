@@ -91,10 +91,10 @@ class RLOOConfig(TrainingArguments):
     """the path to the reward model"""
     sft_model_path: str = "EleutherAI/pythia-160m"
     """the path to the sft model"""
+    sft_model_revision: str = "main"
+    """the revision of the sft model"""
 
     # ppo config
-    num_mini_batches: int = 1
-    """the number of minibatches to split a batch into"""
     num_ppo_epochs: int = 4
     """the number of epochs to train"""
     vf_coef: float = 0.1
@@ -379,13 +379,18 @@ class RLOOTrainer(Trainer):
             include_stop_str_in_output=True,
         )
         if accelerator.is_main_process:
-            self.llm = SingleGPULLM(model=args.base_model, tensor_parallel_size=1, device="cuda:7")
+            self.llm = SingleGPULLM(
+                model=args.sft_model_path,
+                revision=args.sft_model_revision,
+                tokenizer_revision=args.sft_model_revision,
+                tensor_parallel_size=1,
+                device="cuda:7",
+            )
             self.llmp = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
             print("🔥🔥🔥 vllm loaded")
         else:
             print("waiting for vllm to spin up...")
         accelerator.wait_for_everyone()
-
         if self.is_deepspeed_enabled:
             self.reward_model = prepare_deepspeed(self.reward_model, args.per_device_train_batch_size)
             self.ref_policy = prepare_deepspeed(self.ref_policy, args.per_device_train_batch_size)
@@ -637,7 +642,7 @@ class RLOOTrainer(Trainer):
                 accelerator.print(f"{rlhf_reward_mean=}")
                 mean_kl = kl.sum(1).mean()
                 mean_entropy = (-logprobs).sum(1).mean()
-                mean_non_score_reward = non_score_reward.sum(1).mean()
+                mean_non_score_reward = non_score_reward.mean()
                 eps = int(global_step / (time.time() - start_time))
                 metrics = {}
                 metrics["eps"] = eps
@@ -731,7 +736,7 @@ class RLOOTrainer(Trainer):
 
                 response = queries_responses[:, context_length:]
                 postprocessed_response = response
-                if args.truncate_token_id:
+                if args.truncate_token_id is not None:  # handle the edge case when truncate_token_id exists but is 0
                     postprocessed_response = truncate_response(args, self.tokenizer, response)
                 table["query"].extend(gather_object(self.tokenizer.batch_decode(queries, skip_special_tokens=True)))
                 table["model response"].extend(gather_object(self.tokenizer.batch_decode(postprocessed_response)))
