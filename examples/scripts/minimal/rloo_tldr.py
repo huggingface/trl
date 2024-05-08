@@ -7,47 +7,43 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
     HfArgumentParser,
-    PreTrainedModel,
 )
 
 from trl import ModelConfig
 from trl.trainer.rloo_trainer import RLOOConfig, RLOOTrainer
+from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
 
 
 """
-python -i examples/scripts/minimal/rloo_zephyr.py \
+python examples/scripts/minimal/rloo_tldr.py \
     --learning_rate 3e-6 \
-    --output_dir models/minimal/rloo_zephyr \
-    --per_device_train_batch_size 64 \
-    --gradient_accumulation_steps 1 \
-    --total_episodes 10000 \
-    --model_name_or_path HuggingFaceH4/mistral-7b-sft-beta \
-    --sft_model_path HuggingFaceH4/mistral-7b-sft-beta \
-    --reward_model_path weqweasdas/RM-Mistral-7B \
+    --output_dir models/minimal/ppo \
+    --per_device_train_batch_size 1 \
+    --gradient_accumulation_steps 64 \
+    --total_episodes 30000 \
+    --model_name_or_path EleutherAI/pythia-1b-deduped \
+    --sft_model_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr \
+    --reward_model_path cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr \
     --non_eos_penalty \
     --truncate_token eos \
     --response_length 53 \
     --sanity_check
-accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/scripts/minimal/rloo_zephyr.py \
-    --num_ppo_epochs 1 \
-    --num_mini_batches 1 \
-    --rloo_k 2 \
+
+accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
+    examples/scripts/minimal/rloo_tldr.py \
+    --output_dir models/minimal/rloo_tldr \
     --learning_rate 3e-6 \
-    --output_dir models/minimal/rloo_zephyr11 \
-    --per_device_train_batch_size 1 \
-    --gradient_accumulation_steps 32 \
-    --total_episodes 200000 \
-    --model_name_or_path HuggingFaceH4/mistral-7b-sft-beta \
-    --sft_model_path HuggingFaceH4/mistral-7b-sft-beta \
-    --reward_model_path weqweasdas/RM-Mistral-7B \
-    --local_rollout_forward_batch_size 32 \
-    --deepspeed3 \
-    --kl_coef 0.10 \
+    --per_device_train_batch_size 16 \
+    --gradient_accumulation_steps 4 \
+    --total_episodes 100000 \
+    --model_name_or_path EleutherAI/pythia-1b-deduped \
+    --sft_model_path EleutherAI/pythia-1b-deduped \
+    --reward_model_path EleutherAI/pythia-1b-deduped \
+    --local_rollout_forward_batch_size 16 \
     --non_eos_penalty \
     --truncate_token eos \
-    --response_length 512 \
 """
+
 
 if __name__ == "__main__":
     parser = HfArgumentParser((RLOOConfig, ModelConfig))
@@ -65,31 +61,20 @@ if __name__ == "__main__":
     )
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
     if tokenizer.chat_template is None:
-        # a default chat template to simply concatenate the messages
-        tokenizer.chat_template = "{% for message in messages %}\n{% if message['role'] == 'user' %}\n{{ '<|user|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'system' %}\n{{ '<|system|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'assistant' %}\n{{ '<|assistant|>\n'  + message['content'] + eos_token }}\n{% endif %}\n{% if loop.last and add_generation_prompt %}\n{{ '<|assistant|>' }}\n{% endif %}\n{% endfor %}"
-    value_model: PreTrainedModel = AutoModelForSequenceClassification.from_pretrained(
-        config.reward_model_path,
-        num_labels=1,
-    )
-    reward_model: PreTrainedModel = AutoModelForSequenceClassification.from_pretrained(
-        config.reward_model_path,
-        num_labels=1,
-    )
+        tokenizer.chat_template = SIMPLE_QUERY_CHAT_TEMPLATE
+    value_model = AutoModelForSequenceClassification.from_pretrained(config.reward_model_path, num_labels=1)
+    reward_model = AutoModelForSequenceClassification.from_pretrained(config.reward_model_path, num_labels=1)
     ref_policy = AutoModelForCausalLM.from_pretrained(config.sft_model_path)
     policy = AutoModelForCausalLM.from_pretrained(config.sft_model_path)
     ################
     # Dataset
     ################
-    raw_datasets = load_dataset("HuggingFaceH4/ultrachat_200k")
+    raw_datasets = load_dataset("trl-internal-testing/tldr-preference-sft-trl-style")
     if config.sanity_check:
         for key in raw_datasets:
             raw_datasets[key] = raw_datasets[key].select(range(1000))
-    train_dataset = raw_datasets["train_sft"]
-    eval_dataset = raw_datasets["test_sft"]
-    # train_dataset = train_dataset.select(range(1000))
-    # eval_dataset = eval_dataset.select(range(1000))
-
-    dataset_text_field = "prompt"
+    train_dataset = raw_datasets["train"]
+    eval_dataset = raw_datasets["validation"]
 
     def prepare_dataset(dataset, tokenizer):
         """pre-tokenize the dataset before training; only collate during training"""
@@ -112,8 +97,9 @@ if __name__ == "__main__":
     train_dataset = prepare_dataset(train_dataset, tokenizer)
     eval_dataset = prepare_dataset(eval_dataset, tokenizer)
     # filtering
-    train_dataset = train_dataset.filter(lambda x: x["lengths"] <= 1024)
-    eval_dataset = eval_dataset.filter(lambda x: x["lengths"] <= 1024)
+    train_dataset = train_dataset.filter(lambda x: x["lengths"] <= 512)
+    eval_dataset = eval_dataset.filter(lambda x: x["lengths"] <= 512)
+    assert train_dataset[0]["input_ids"][-1] != tokenizer.eos_token_id, "The last token should not be an EOS token"
     ################
     # Training
     ################

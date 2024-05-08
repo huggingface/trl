@@ -10,6 +10,7 @@ from transformers import (
 
 from trl import ModelConfig
 from trl.trainer.rloo_trainer import RLOOConfig, RLOOTrainer
+from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
 
 
 """
@@ -56,10 +57,7 @@ if __name__ == "__main__":
     )
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
     if tokenizer.chat_template is None:
-        # a default chat template to simply concatenate the messages
-        tokenizer.chat_template = (
-            "{% for message in messages %}{{' ' + message['content']}}{% endfor %}{{ eos_token }}"
-        )
+        tokenizer.chat_template = SIMPLE_QUERY_CHAT_TEMPLATE
     reward_model = AutoModelForSequenceClassification.from_pretrained(config.reward_model_path, num_labels=1)
     ref_policy = AutoModelForCausalLM.from_pretrained(config.sft_model_path)
     policy = AutoModelForCausalLM.from_pretrained(config.sft_model_path)
