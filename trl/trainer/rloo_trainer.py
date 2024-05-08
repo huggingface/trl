@@ -667,7 +667,7 @@ class RLOOTrainer(Trainer):
                 response = query_response[:, context_length:]
                 postprocessed_response = response
                 if args.truncate_token_id is not None:  # handle the edge case when truncate_token_id exists but is 0
-                    postprocessed_response = truncate_response(args, tokenizer, response)
+                    postprocessed_response = truncate_response(args, self.tokenizer, response)
                 table["query"].extend(gather_object(self.tokenizer.batch_decode(query, skip_special_tokens=True)))
                 table["model response"].extend(gather_object(self.tokenizer.batch_decode(postprocessed_response)))
 

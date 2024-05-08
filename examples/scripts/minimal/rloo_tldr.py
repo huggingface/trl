@@ -32,13 +32,15 @@ python examples/scripts/minimal/rloo_tldr.py \
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
     examples/scripts/minimal/rloo_tldr.py \
     --output_dir models/minimal/rloo_tldr \
+    --num_ppo_epochs 1 \
+    --num_mini_batches 1 \
     --learning_rate 3e-6 \
     --per_device_train_batch_size 16 \
     --gradient_accumulation_steps 4 \
-    --total_episodes 100000 \
+    --total_episodes 1000000 \
     --model_name_or_path EleutherAI/pythia-1b-deduped \
-    --sft_model_path EleutherAI/pythia-1b-deduped \
-    --reward_model_path EleutherAI/pythia-1b-deduped \
+    --sft_model_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr \
+    --reward_model_path cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr \
     --local_rollout_forward_batch_size 16 \
     --non_eos_penalty \
     --truncate_token eos \
