@@ -25,6 +25,7 @@ python examples/scripts/reward_modeling.py \
     --optim="adamw_torch" \
     --logging_steps=10 \
     --evaluation_strategy="steps" \
+    --eval_steps=100 \
     --max_length=512 \
 """
 import warnings
@@ -119,9 +120,9 @@ if __name__ == "__main__":
         eval_dataset=eval_dataset,
         peft_config=get_peft_config(model_config),
     )
-    # trainer.train()
-    # trainer.save_model(config.output_dir)
-    # trainer.push_to_hub()
+    trainer.train()
+    trainer.save_model(config.output_dir)
+    trainer.push_to_hub()
     metrics = trainer.evaluate()
     trainer.log_metrics("eval", metrics)
     print(metrics)
