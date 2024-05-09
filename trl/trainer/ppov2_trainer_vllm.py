@@ -90,6 +90,8 @@ class PPOConfig(TrainingArguments):
     """Whether to offload ref policy and reward model to CPU"""
     reward_model_path: str = "EleutherAI/pythia-160m"
     """the path to the reward model"""
+    reward_model_revision: str = "main"
+    """the revision of the reward model"""
     sft_model_path: str = "EleutherAI/pythia-160m"
     """the path to the sft model"""
     sft_model_revision: str = "main"
