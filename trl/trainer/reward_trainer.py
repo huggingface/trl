@@ -287,11 +287,18 @@ class RewardTrainer(Trainer):
         self.visualize_samples(sampling=True)
         return super().evaluate(*args, **kwargs)
 
-    def visualize_samples(self, sampling: bool = True, num_print_samples: int = 5):
+    def visualize_samples(self, num_print_samples: int = 4):
+        """
+        Visualize the reward model logits prediction
+
+        Args:
+            num_print_samples (`int`, defaults to `4`):
+                The number of samples to print. Set to `-1` to print all samples.
+        """
         eval_dataloader = self.get_eval_dataloader()
         table = defaultdict(list)
         for _, inputs in enumerate(eval_dataloader):
-            loss, logits, _ = self.prediction_step(self.model, inputs, prediction_loss_only=False)
+            _, logits, _ = self.prediction_step(self.model, inputs, prediction_loss_only=False)
             chosen_text = self.tokenizer.batch_decode(inputs["input_ids_chosen"], skip_special_tokens=True)
             rejected_text = self.tokenizer.batch_decode(inputs["input_ids_rejected"], skip_special_tokens=True)
             table["chosen_text"].extend(gather_object(chosen_text))
@@ -299,7 +306,7 @@ class RewardTrainer(Trainer):
             table["logits"].extend(
                 gather_object([[round(inner_item, 4) for inner_item in item] for item in logits.tolist()])
             )
-            if len(table["chosen_text"]) >= num_print_samples:
+            if num_print_samples >= 0 and len(table["chosen_text"]) >= num_print_samples:
                 break
         df = pd.DataFrame(table)
         print_rich_table(pd.DataFrame(table))
