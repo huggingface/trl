@@ -25,7 +25,7 @@ python examples/scripts/reward_modeling.py \
     --optim="adamw_torch" \
     --logging_steps=10 \
     --evaluation_strategy="steps" \
-    --eval_steps=50 \
+    --eval_steps=500 \
     --max_length=512 \
 """
 import warnings
