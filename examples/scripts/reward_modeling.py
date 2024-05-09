@@ -15,9 +15,9 @@
 python examples/scripts/reward_modeling.py \
     --model_name_or_path=facebook/opt-350m \
     --output_dir="reward_modeling_anthropic_hh" \
-    --per_device_train_batch_size=1 \
+    --per_device_train_batch_size=16 \
     --num_train_epochs=1 \
-    --gradient_accumulation_steps=32 \
+    --gradient_accumulation_steps=2 \
     --gradient_checkpointing=True \
     --learning_rate=1.41e-5 \
     --report_to="wandb" \
@@ -25,7 +25,7 @@ python examples/scripts/reward_modeling.py \
     --optim="adamw_torch" \
     --logging_steps=10 \
     --evaluation_strategy="steps" \
-    --eval_steps=100 \
+    --eval_steps=50 \
     --max_length=512 \
 """
 import warnings

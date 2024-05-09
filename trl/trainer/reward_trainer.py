@@ -284,10 +284,11 @@ class RewardTrainer(Trainer):
         return loss, logits, labels
 
     def evaluate(self, *args, **kwargs):
-        self.visualize_samples(sampling=True)
+        num_print_samples = kwargs.pop("num_print_samples", 4)
+        self.visualize_samples(num_print_samples)
         return super().evaluate(*args, **kwargs)
 
-    def visualize_samples(self, num_print_samples: int = 4):
+    def visualize_samples(self, num_print_samples: int):
         """
         Visualize the reward model logits prediction
 
