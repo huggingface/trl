@@ -114,7 +114,7 @@ class RLOOConfig(TrainingArguments):
     """the KL coefficient"""
 
     # rloo config
-    rloo_k: int = 4
+    rloo_k: int = 2
     """REINFORCE Leave-One-Out (RLOO) number of online samples per prompt"""
 
 
