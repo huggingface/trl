@@ -23,6 +23,7 @@ import torch
 from accelerate import PartialState
 from rich.console import Console, Group
 from rich.live import Live
+from rich.markup import escape
 from rich.panel import Panel
 from rich.progress import Progress
 from rich.table import Table
@@ -825,7 +826,9 @@ def print_rich_table(df: pd.DataFrame) -> Table:
     for column in df.columns:
         table.add_column(column)
     for _, row in df.iterrows():
-        table.add_row(*row.astype(str).tolist())
+        row_list = row.astype(str).tolist()
+        row_list = [escape(item) for item in row_list]
+        table.add_row(*row_list)
     console.print(table)
 
 
