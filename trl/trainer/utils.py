@@ -18,15 +18,21 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
+import pandas as pd
 import torch
 from accelerate import PartialState
 from rich.console import Console, Group
 from rich.live import Live
 from rich.panel import Panel
 from rich.progress import Progress
+from rich.table import Table
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import IterableDataset
-from transformers import BitsAndBytesConfig, DataCollatorForLanguageModeling, PreTrainedTokenizerBase
+from transformers import (
+    BitsAndBytesConfig,
+    DataCollatorForLanguageModeling,
+    PreTrainedTokenizerBase,
+)
 from transformers.trainer import TrainerCallback
 from transformers.trainer_utils import has_length
 
@@ -815,3 +821,13 @@ class RichProgressCallback(TrainerCallback):
             self.rich_console = None
             self.training_status = None
             self.current_step = None
+
+
+def print_rich_table(df: pd.DataFrame) -> Table:
+    console = Console()
+    table = Table(show_lines=True)
+    for column in df.columns:
+        table.add_column(column)
+    for _, row in df.iterrows():
+        table.add_row(*row.astype(str).tolist())
+    console.print(table)
