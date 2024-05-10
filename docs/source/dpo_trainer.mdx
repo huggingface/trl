@@ -78,11 +78,13 @@ The DPO trainer expects a model of `AutoModelForCausalLM`, compared to PPO that 
 For a detailed example have a look at the `examples/scripts/dpo.py` script. At a high level we need to initialize the `DPOTrainer` with a `model` we wish to train, a reference `ref_model` which we will use to calculate the implicit rewards of the preferred and rejected response, the `beta` refers to the hyperparameter of the implicit reward, and the dataset contains the 3 entries listed above. Note that the `model` and `ref_model` need to have the same architecture (ie decoder only or encoder-decoder).
 
 ```py
+training_args = DPOConfig(
+    beta=0.1,
+)
 dpo_trainer = DPOTrainer(
     model,
     model_ref,
     args=training_args,
-    beta=0.1,
     train_dataset=train_dataset,
     tokenizer=tokenizer,
 )
@@ -107,6 +109,10 @@ The [cDPO](https://ericmitchell.ai/cdpo.pdf) is a tweak on the DPO loss where we
 
 The [KTO](https://arxiv.org/abs/2402.01306) authors directly maximize the utility of LLM generations instead of the log-likelihood of preferences. To use preference data with KTO, we recommend breaking up the n preferences into 2n examples and using [`KTOTrainer`](kto_trainer) (i.e., treating the data like an unpaired feedback dataset). Although it is possible to pass in `loss_type="kto_pair"` into DPOTrainer, this is a highly simplified version of KTO that we *do not recommend* in most cases. Please use [`KTOTrainer`](kto_trainer) when possible.
 
+The [BCO](https://arxiv.org/abs/2404.04656) authors train a binary classifier whose logit serves as a reward so that the classifier maps {prompt, chosen completion} pairs to 1 and {prompt, rejected completion} pairs to 0. The `DPOTrainer` can be switched to this loss via the `loss_type="bco_pair"` argument.
+
+The [SPPO](https://arxiv.org/abs/2405.00675) authors claim that SPPO is capable of solving the Nash equilibrium iteratively by pushing the chosen rewards to be as large as 1/2 and the rejected rewards to be as small as -1/2 and can alleviate data sparsity issues. The implementation using loss_type="sppo_hard" approximates this algorithm by employing hard label probabilities, assigning 1 to the winner and 0 to the loser.
+
 ## Logging
 
 While training and evaluating we record the following reward metrics:
@@ -129,8 +135,7 @@ First install `unsloth` according to the [official documentation](https://github
 
 ```python
 import torch
-from transformers import TrainingArguments
-from trl import DPOTrainer
+from trl import DPOConfig, DPOTrainer
 from unsloth import FastLanguageModel
 
 max_seq_length = 2048 # Supports automatic RoPE Scaling, so choose any number.
@@ -157,13 +162,15 @@ model = FastLanguageModel.get_peft_model(
     random_state = 3407,
 )
 
-training_args = TrainingArguments(output_dir="./output")
+training_args = DPOConfig(
+    output_dir="./output",
+    beta=0.1,
+)
 
 dpo_trainer = DPOTrainer(
     model,
     ref_model=None,
     args=training_args,
-    beta=0.1,
     train_dataset=train_dataset,
     tokenizer=tokenizer,
 )
@@ -222,14 +229,21 @@ model = PeftModel.from_pretrained(
 model.load_adapter("/path/to/peft", adapter_name="reference")
 
 # Initialize the trainer, without a ref_model param.
-dpo_trainer = DPOTrainer(
-    model,
-    ...
+training_args = DPOConfig(
     model_adapter_name="train",
     ref_adapter_name="reference",
+)
+dpo_trainer = DPOTrainer(
+    model,
+    args=training_args,
+    ...
 )
 ```
 
 ## DPOTrainer
 
 [[autodoc]] DPOTrainer
+
+## DPOConfig
+
+[[autodoc]] DPOConfig
