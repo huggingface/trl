@@ -7,9 +7,9 @@ import torch
 from accelerate import Accelerator
 from datasets import Dataset, load_dataset
 from peft import LoraConfig
-from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, TrainingArguments, set_seed
+from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, set_seed
 
-from trl import DPOTrainer, DPOConfig
+from trl import DPOConfig, DPOTrainer
 
 
 # Define and parse arguments.

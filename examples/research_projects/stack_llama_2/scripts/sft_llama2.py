@@ -13,11 +13,10 @@ from transformers import (
     AutoTokenizer,
     BitsAndBytesConfig,
     HfArgumentParser,
-    TrainingArguments,
     set_seed,
 )
 
-from trl import SFTTrainer, SFTConfig
+from trl import SFTConfig, SFTTrainer
 from trl.import_utils import is_npu_available, is_xpu_available
 from trl.trainer import ConstantLengthDataset
 
