@@ -50,7 +50,7 @@ class PPOConfig(TrainingArguments):
     """The number of processes (GPUs) to use"""
     num_updates: Optional[int] = None
     """The number of updates to train"""
-    total_episodes: Optional[int] = 1000000
+    total_episodes: Optional[int] = None
     """The total number of episodes in the dataset"""
     micro_batch_size: Optional[int] = None
     """The micro batch size across devices (HF's `per_device_train_batch_size` * `world_size`)"""
@@ -335,6 +335,8 @@ class PPOTrainer(Trainer):
         #########
         # calculate various batch sizes
         #########
+        if args.total_episodes is None:  # allow the users to define episodes in terms of epochs.
+            args.total_episodes = args.num_train_epochs * self.train_dataset_len
         accelerator = Accelerator(gradient_accumulation_steps=args.gradient_accumulation_steps)
         self.accelerator = accelerator
         args.world_size = accelerator.num_processes
@@ -574,7 +576,7 @@ class PPOTrainer(Trainer):
                 contain_eos_token = torch.any(postprocessed_responses == tokenizer.eos_token_id, dim=-1)
                 if args.non_eos_penalty:
                     scores = torch.where(contain_eos_token, scores, torch.full_like(scores, args.penalty_reward_value))
-                accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
+                # accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
 
                 # be very careful with `padding_mask_p1`; see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
                 sequence_lengths_p1 = sequence_lengths + 1
@@ -660,15 +662,14 @@ class PPOTrainer(Trainer):
                             pg_losses2 = -mb_advantage * torch.clamp(ratio, 1.0 - args.cliprange, 1.0 + args.cliprange)
                             pg_loss_max = torch.max(pg_losses, pg_losses2)
                             pg_loss = masked_mean(pg_loss_max, ~padding_mask[micro_batch_inds])
-                            pg_clipfrac = masked_mean(
-                                (pg_losses2 > pg_losses).float(), ~padding_mask[micro_batch_inds]
-                            )
                             loss = pg_loss + args.vf_coef * vf_loss
                             accelerator.backward(loss)
                             optimizer.step()
                             optimizer.zero_grad()
                             with torch.no_grad():
-                                pg_clipfrac = (pg_losses2 > pg_losses).float().mean()
+                                pg_clipfrac = masked_mean(
+                                    (pg_losses2 > pg_losses).float(), ~padding_mask[micro_batch_inds]
+                                )
                                 prob_dist = torch.nn.functional.softmax(logits, dim=-1)
                                 entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1)
                                 approxkl = 0.5 * (logprobs_diff**2).mean()
@@ -706,15 +707,14 @@ class PPOTrainer(Trainer):
                 mean_kl = kl.sum(1).mean()
                 mean_entropy = (-logprobs).sum(1).mean()
                 mean_non_score_reward = non_score_reward.sum(1).mean()
+                rlhf_reward = mean_non_score_reward + scores.mean()
                 eps = int(global_step / (time.time() - start_time))
                 metrics = {}
                 metrics["eps"] = eps
                 metrics["objective/kl"] = self.accelerator.gather(mean_kl).mean().item()
                 metrics["objective/entropy"] = self.accelerator.gather(mean_entropy).mean().item()
                 metrics["objective/non_score_reward"] = self.accelerator.gather(mean_non_score_reward).mean().item()
-                metrics["objective/rlhf_reward"] = (
-                    self.accelerator.gather(mean_non_score_reward + scores.mean()).mean().item()
-                )
+                metrics["objective/rlhf_reward"] = self.accelerator.gather(rlhf_reward).mean().item()
                 metrics["objective/scores"] = self.accelerator.gather(scores.mean()).mean().item()
                 metrics["policy/approxkl_avg"] = self.accelerator.gather(approxkl_stats).mean().item()
                 metrics["policy/clipfrac_avg"] = self.accelerator.gather(pg_clipfrac_stats).mean().item()
