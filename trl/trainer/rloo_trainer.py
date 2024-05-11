@@ -29,7 +29,7 @@ from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer_callback import CallbackHandler, DefaultFlowCallback
 
 from trl.models.utils import unwrap_model_for_generation
-from trl.trainer.utils import print_rich_table
+from trl.trainer.utils import exact_div, print_rich_table
 
 
 INVALID_LOGPROB = 1.0
@@ -152,13 +152,6 @@ def get_reward(model, query_responses, tokenizer, context_length):
         ].squeeze(-1),
         sequence_lengths,
     )
-
-
-def exact_div(a, b):
-    q = a // b
-    if a != q * b:
-        raise ValueError(f"Inexact division: {a} / {b} = {a / b}")
-    return q
 
 
 def generate(lm_backbone, queries, tokenizer, generation_config):
@@ -296,8 +289,12 @@ class RLOOTrainer(Trainer):
         )
         args.micro_batch_size = int(args.per_device_train_batch_size * args.world_size)
         args.batch_size = int(args.local_batch_size * args.world_size)
-        args.mini_batch_size = exact_div(args.batch_size, args.num_mini_batches)
-        args.local_mini_batch_size = exact_div(args.local_batch_size, args.num_mini_batches)
+        args.mini_batch_size = exact_div(
+            args.batch_size, args.num_mini_batches, "`batch_size` must be a multiple of `num_mini_batches`"
+        )
+        args.local_mini_batch_size = exact_div(
+            args.local_batch_size, args.num_mini_batches, "`local_batch_size` must be a multiple of `num_mini_batches`"
+        )
         if args.whiten_rewards:
             assert (
                 args.local_mini_batch_size >= 8
@@ -312,7 +309,7 @@ class RLOOTrainer(Trainer):
         if args.num_sample_generations > 0:
             self.sample_generations_freq = max(1, args.num_updates // args.num_sample_generations)
         self.local_dataloader_batch_size = exact_div(
-            args.local_batch_size, args.rloo_k
+            args.local_batch_size, args.rloo_k, "`local_batch_size` must be a multiple of rloo_k"
         )  # RLOO logic: needed because RLOO repeats the same prompt args.rloo_k times
 
         #########
