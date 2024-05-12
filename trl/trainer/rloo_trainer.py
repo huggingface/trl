@@ -374,6 +374,7 @@ class RLOOTrainer(Trainer):
         if self.is_deepspeed_enabled:
             self.reward_model = prepare_deepspeed(self.reward_model, args.per_device_train_batch_size)
             self.ref_policy = prepare_deepspeed(self.ref_policy, args.per_device_train_batch_size)
+            self.deepspeed = self.model
         else:
             self.ref_policy = self.ref_policy.to(self.accelerator.device)
             self.reward_model = self.reward_model.to(self.accelerator.device)
