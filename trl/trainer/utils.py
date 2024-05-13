@@ -20,7 +20,8 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 import torch
-from accelerate import Accelerator, AcceleratorState, PartialState
+from accelerate import Accelerator
+from accelerate.state import AcceleratorState, PartialState
 from accelerate.utils import is_deepspeed_available
 from rich.console import Console, Group
 from rich.live import Live
