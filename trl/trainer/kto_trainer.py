@@ -1541,9 +1541,7 @@ class KTOTrainer(Trainer):
                     del self._stored_metrics[train_eval][key]
         # calculate reward margin
         if f"{prefix}rewards/chosen" in logs and f"{prefix}rewards/rejected" in logs:
-            logs[f"{prefix}rewards/margins"] = (
-                logs[f"{prefix}rewards/chosen"] - logs[f"{prefix}rewards/rejected"]
-            )
+            logs[f"{prefix}rewards/margins"] = logs[f"{prefix}rewards/chosen"] - logs[f"{prefix}rewards/rejected"]
         # Add averaged stored metrics to logs
         for key, metrics in self._stored_metrics[train_eval].items():
             logs[f"{prefix}{key}"] = torch.Tensor(metrics).mean().item()
