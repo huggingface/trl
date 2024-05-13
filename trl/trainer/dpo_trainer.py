@@ -547,8 +547,8 @@ class DPOTrainer(Trainer):
 
             self.add_callback(
                 SyncRefModelCallback(
-                    self.accelerator,
-                    self.ref_model,
+                    ref_model=self.ref_model,
+                    accelerator=self.accelerator,
                     ref_model_mixup_alpha=args.ref_model_mixup_alpha,
                     ref_model_sync_steps=args.ref_model_sync_steps,
                 )
