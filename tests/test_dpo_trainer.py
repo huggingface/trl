@@ -305,7 +305,7 @@ class DPOTrainerTester(unittest.TestCase):
 
     def test_tr_dpo_trainer(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
+            training_args = DPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -313,6 +313,8 @@ class DPOTrainerTester(unittest.TestCase):
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
                 evaluation_strategy="steps",
+                precompute_ref_log_probs=False,
+                sync_ref_model=True,
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -325,8 +327,6 @@ class DPOTrainerTester(unittest.TestCase):
                 tokenizer=self.tokenizer,
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
-                precompute_ref_log_probs=False,
-                sync_ref_model=True,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
