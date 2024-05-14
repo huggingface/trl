@@ -102,10 +102,8 @@ class SyncRefModelCallback(TrainerCallback):
 
         if self.ref_model is not None and state.global_step % self.ref_model_sync_steps == 0:
             if self.accelerator:
-                unwrapped_model = self.accelerator.unwrap_model(model)
-                self.sync_target_model(unwrapped_model, self.ref_model, self.ref_model_mixup_alpha)
-            else:
-                self.sync_target_model(model, self.ref_model, self.ref_model_mixup_alpha)
+                model = self.accelerator.unwrap_model(model)
+            self.sync_target_model(model, self.ref_model, self.ref_model_mixup_alpha)
 
 
 class FixedKLController:
