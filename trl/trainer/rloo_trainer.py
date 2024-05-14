@@ -2,8 +2,7 @@ import gc
 import os
 import time
 from collections import defaultdict
-from dataclasses import dataclass
-from typing import Dict, List, Literal, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -23,105 +22,16 @@ from transformers import (
     TrainerCallback,
     TrainerControl,
     TrainerState,
-    TrainingArguments,
 )
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer_callback import CallbackHandler, DefaultFlowCallback
 
-from trl.models.utils import unwrap_model_for_generation
-from trl.trainer.utils import exact_div, print_rich_table
+from ..models.utils import unwrap_model_for_generation
+from ..trainer.utils import disable_dropout_in_model, exact_div, print_rich_table
+from .rloo_config import RLOOConfig
 
 
 INVALID_LOGPROB = 1.0
-
-
-@dataclass
-class RLOOConfig(TrainingArguments):
-    # common config
-    exp_name: str = os.path.basename(__file__)[: -len(".py")]
-    """the name of this experiment"""
-    run_name: Optional[str] = None
-    """a unique name of this run"""
-    sanity_check: bool = False
-    """wether to run in debug mode"""
-
-    # various batch sizes
-    world_size: Optional[int] = None
-    """The number of processes (GPUs) to use"""
-    num_updates: Optional[int] = None
-    """The number of updates to train"""
-    total_episodes: Optional[int] = None
-    """The total number of episodes in the dataset"""
-    micro_batch_size: Optional[int] = None
-    """The micro batch size across devices (HF's `per_device_train_batch_size` * `world_size`)"""
-    local_batch_size: Optional[int] = None
-    """The batch size per GPU (HF's `per_device_train_batch_size` * `gradient_accumulation_steps`)"""
-    batch_size: Optional[int] = None
-    """The batch size across devices (HF's `per_device_train_batch_size` * `world_size` * `gradient_accumulation_steps`)"""
-    num_mini_batches: int = 1
-    """Number of minibatches to split a batch into"""
-    local_mini_batch_size: Optional[int] = None
-    """the mini batch size per GPU"""
-    mini_batch_size: Optional[int] = None
-    """the mini batch size across GPUs"""
-    local_eval_batch_size: int = 2
-    """per rank eval batch size"""
-    local_rollout_forward_batch_size: int = 64
-    """per rank no grad forward pass in the rollout phase"""
-    num_sample_generations: int = 10
-    """the number of debugging samples generations (i.e., `generate_completions` calls) throughout training"""
-
-    # other config
-    base_model: str = "EleutherAI/pythia-160m"
-    """the name of the pretrained model to use"""
-    response_length: int = 53
-    """the length of the response"""
-    truncate_token: Optional[Literal["eos"]] = None
-    """the truncate token"""
-    truncate_token_id: Optional[int] = None
-    """the truncation token id"""
-    temperature: float = 0.7
-    """the sampling temperature"""
-    penalty_reward_value: int = -1
-    """the reward value for responses that do not contain `truncate_token_id`"""
-    non_eos_penalty: bool = False
-    """whether to penalize responses that do not contain `truncate_token_id`"""
-    reward_model_path: str = "EleutherAI/pythia-160m"
-    """the path to the reward model"""
-    sft_model_path: str = "EleutherAI/pythia-160m"
-    """the path to the sft model"""
-
-    # ppo config
-    num_mini_batches: int = 1
-    """the number of minibatches to split a batch into"""
-    num_ppo_epochs: int = 4
-    """the number of epochs to train"""
-    vf_coef: float = 0.1
-    """the value function coefficient"""
-    cliprange: float = 0.2
-    """the clip range"""
-    cliprange_value: float = 0.2
-    """the clip range for the value function"""
-    gamma: float = 1
-    """the discount factor"""
-    lam: float = 0.95
-    """the lambda value for GAE"""
-    whiten_rewards: bool = False
-    """whether to whiten the rewards"""
-    kl_coef: float = 0.05
-    """the KL coefficient"""
-
-    # rloo config
-    rloo_k: int = 2
-    """REINFORCE Leave-One-Out (RLOO) number of online samples per prompt"""
-
-
-# taken from https://github.com/vwxyzjn/direct-preference-optimization/blob/f8b8c0f49dc92a430bae41585f9d467d3618fe2f/utils.py#L99
-def disable_dropout(model: torch.nn.Module) -> None:
-    """Disable dropout in a model."""
-    for module in model.modules():
-        if isinstance(module, torch.nn.Dropout):
-            module.p = 0
 
 
 def get_reward(model, query_responses, tokenizer, context_length):
@@ -314,7 +224,7 @@ class RLOOTrainer(Trainer):
         # setup model, optimizer, and others
         #########
         for module in [policy, ref_policy, reward_model]:
-            disable_dropout(module)
+            disable_dropout_in_model(module)
         if args.truncate_token and args.truncate_token == "eos":
             args.truncate_token_id = tokenizer.eos_token_id
         self.model = policy
