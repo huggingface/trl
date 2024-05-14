@@ -122,7 +122,7 @@ class DPOTrainerTester(unittest.TestCase):
                 ref_model = self.t5_ref_model
                 tokenizer = self.t5_tokenizer
 
-            if name == "t5" and loss_tye == "nca_pair":
+            if name == "t5" and loss_type == "nca_pair":
                 self.skipTest("For some reason t5 + nca_pair does not compute gradients properly on tiny models")
 
             trainer = DPOTrainer(
