@@ -578,13 +578,6 @@ class RLOOTrainer(Trainer):
                     )
                     # fmt: on
                     torch.cuda.empty_cache()
-                # accelerator.print(
-                #     f"ppo_epoch_idx: {ppo_epoch_idx}",
-                #     f"approxkl: {approxkl_stats[:ppo_epoch_idx + 1].mean().item():.4f}",
-                #     f"pg_loss: {pg_loss_stats[:ppo_epoch_idx + 1].mean().item():.4f}",
-                #     f"pg_clipfrac: {pg_clipfrac_stats[:ppo_epoch_idx + 1].mean().item():.4f}",
-                #     f"ratio: {ratio_stats[:ppo_epoch_idx + 1].mean().item():.4f}",
-                # )
             with torch.no_grad():
                 mean_kl = kl.sum(1).mean()
                 mean_entropy = (-logprobs).sum(1).mean()
