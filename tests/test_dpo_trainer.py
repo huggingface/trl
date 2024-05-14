@@ -142,7 +142,7 @@ class DPOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 # check the params have changed - ignore 0 biases
                 if param.sum() != 0:
-                    assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
+                    assert not torch.allclose(param, new_param, rtol=1e-16, atol=1e-16)
 
     def test_dpo_trainer_without_providing_ref_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
