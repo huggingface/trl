@@ -36,7 +36,7 @@ INVALID_LOGPROB = 1.0
 
 
 @dataclass
-class PPOConfig(TrainingArguments):
+class PPOv2Config(TrainingArguments):
     # common config
     exp_name: str = os.path.basename(__file__)[: -len(".py")]
     """the name of this experiment"""
@@ -86,8 +86,6 @@ class PPOConfig(TrainingArguments):
     """the reward value for responses that do not contain `truncate_token_id`"""
     non_eos_penalty: bool = False
     """whether to penalize responses that do not contain `truncate_token_id`"""
-    offload: bool = False
-    """Whether to offload ref policy and reward model to CPU"""
     reward_model_path: str = "EleutherAI/pythia-160m"
     """the path to the reward model"""
     sft_model_path: str = "EleutherAI/pythia-160m"
@@ -287,10 +285,10 @@ def prepare_deepspeed(model, per_device_train_batch_size):
     return model
 
 
-class PPOTrainer(Trainer):
+class PPOv2Trainer(Trainer):
     def __init__(
         self,
-        config: PPOConfig,
+        config: PPOv2Config,
         tokenizer: PreTrainedTokenizer,
         policy: nn.Module,
         ref_policy: nn.Module,

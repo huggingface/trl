@@ -14,7 +14,7 @@ from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
 
 
 """
-python -i examples/scripts/minimal/ppo_bandit_rloo.py \
+python -i examples/scripts/minimal/rloo.py \
     --learning_rate 3e-6 \
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \

@@ -9,7 +9,7 @@ from transformers import (
 )
 
 from trl import ModelConfig
-from trl.trainer.ppov2_trainer import PPOConfig, PPOTrainer
+from trl.trainer.ppov2_trainer import PPOv2Config, PPOv2Trainer
 from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
 
 
@@ -42,7 +42,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser((PPOConfig, ModelConfig))
+    parser = HfArgumentParser((PPOv2Config, ModelConfig))
     config, model_config = parser.parse_args_into_dataclasses()
     # remove output_dir if exists
     shutil.rmtree(config.output_dir, ignore_errors=True)
@@ -92,7 +92,7 @@ if __name__ == "__main__":
     ################
     # Training
     ################
-    trainer = PPOTrainer(
+    trainer = PPOv2Trainer(
         config=config,
         tokenizer=tokenizer,
         policy=policy,

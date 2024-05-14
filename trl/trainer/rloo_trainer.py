@@ -86,8 +86,6 @@ class RLOOConfig(TrainingArguments):
     """the reward value for responses that do not contain `truncate_token_id`"""
     non_eos_penalty: bool = False
     """whether to penalize responses that do not contain `truncate_token_id`"""
-    offload: bool = False
-    """Whether to offload ref policy and reward model to CPU"""
     reward_model_path: str = "EleutherAI/pythia-160m"
     """the path to the reward model"""
     sft_model_path: str = "EleutherAI/pythia-160m"
