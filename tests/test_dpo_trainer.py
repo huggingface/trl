@@ -329,6 +329,7 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_dataset=dummy_dataset,
             )
 
+            # params of the ref model as its the same as the model
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
             trainer.train()
@@ -337,8 +338,8 @@ class DPOTrainerTester(unittest.TestCase):
 
             # check the params have changed
             for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                # check the params have changed - ignore 0 biases
+                new_param = trainer.ref_model.get_parameter(n)
+                # check the ref model's params have changed - ignore 0 biases
                 if param.sum() != 0:
                     assert not torch.equal(param, new_param)
 
