@@ -136,7 +136,7 @@ class PPOv2Trainer(Trainer):
         for module in [policy, ref_policy, value_model, reward_model]:
             disable_dropout_in_model(module)
         if args.truncate_token and args.truncate_token == "eos":
-            args.truncate_token_id = tokenizer.eos_token_id
+            args.stop_token_id = tokenizer.eos_token_id
         self.model = PolicyAndValueWrapper(policy, value_model)
         self.create_optimizer_and_scheduler(num_training_steps=args.num_updates)
 
@@ -296,7 +296,7 @@ class PPOv2Trainer(Trainer):
                         del logits, all_logprob
                         torch.cuda.empty_cache()
 
-                        ref_output = forward(ref_policy, query_response, tokenizer)
+                        ref_output = forward(ref_policy, query_response, tokenizer.pad_token_id)
                         ref_logits = ref_output.logits[:, context_length - 1 : -1]
                         ref_logits /= args.temperature + 1e-7
                         ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
@@ -304,20 +304,24 @@ class PPOv2Trainer(Trainer):
                         del ref_output, ref_logits, ref_all_logprob
                         torch.cuda.empty_cache()
 
-                        # Response Processing 1. truncate response after the first occurrence of `truncate_token_id`
+                        # Response Processing 1. truncate response after the first occurrence of `stop_token_id`
                         postprocessed_response = response
-                        if (
-                            args.truncate_token_id is not None
-                        ):  # handle the edge case when truncate_token_id exists but is 0
-                            postprocessed_response = truncate_response(args, tokenizer, response)
+                        if args.stop_token_id is not None:  # handle the edge case when stop_token_id exists but is 0
+                            postprocessed_response = truncate_response(
+                                args.stop_token_id, tokenizer.pad_token_id, response
+                            )
 
                         # Response Processing 2. run reward model on the truncated responses
                         postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
                         sequence_length = first_true_indices(postprocessed_response == tokenizer.pad_token_id) - 1
                         unwrapped_value_model = accelerator.unwrap_model(model).value_model
-                        full_value, _, _ = get_reward(unwrapped_value_model, query_response, tokenizer, context_length)
+                        full_value, _, _ = get_reward(
+                            unwrapped_value_model, query_response, tokenizer.pad_token_id, context_length
+                        )
                         value = full_value[:, context_length - 1 : -1].squeeze(-1)
-                        _, score, _ = get_reward(reward_model, postprocessed_query_response, tokenizer, context_length)
+                        _, score, _ = get_reward(
+                            reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
+                        )
 
                         query_responses.append(query_response)
                         responses.append(response)
@@ -339,7 +343,7 @@ class PPOv2Trainer(Trainer):
                 torch.cuda.empty_cache()
                 gc.collect()
 
-                # Response Processing 3. filter response. Ensure that the sample contains truncate_token_id
+                # Response Processing 3. filter response. Ensure that the sample contains stop_token_id
                 # responses not passing that filter will receive a low (fixed) score
                 # only query humans on responses that pass that filter
                 contain_eos_token = torch.any(postprocessed_responses == tokenizer.eos_token_id, dim=-1)
@@ -521,6 +525,7 @@ class PPOv2Trainer(Trainer):
 
     def generate_completions(self, sampling: bool = False):
         args = self.args
+        tokenizer = self.tokenizer
         generation_config = GenerationConfig(
             max_new_tokens=self.args.response_length,
             temperature=(0.01 + 1e-7),
@@ -538,19 +543,19 @@ class PPOv2Trainer(Trainer):
                     query_response, _ = generate(
                         unwrapped_model.policy,
                         query,
-                        self.tokenizer,
+                        tokenizer,
                         generation_config,
                     )
                 response = query_response[:, context_length:]
                 postprocessed_response = response
-                if args.truncate_token_id is not None:  # handle the edge case when truncate_token_id exists but is 0
-                    postprocessed_response = truncate_response(args, self.tokenizer, response)
-                table["query"].extend(gather_object(self.tokenizer.batch_decode(query, skip_special_tokens=True)))
-                table["model response"].extend(gather_object(self.tokenizer.batch_decode(postprocessed_response)))
+                if args.stop_token_id is not None:  # handle the edge case when stop_token_id exists but is 0
+                    postprocessed_response = truncate_response(args.stop_token_id, tokenizer.pad_token_id, response)
+                table["query"].extend(gather_object(tokenizer.batch_decode(query, skip_special_tokens=True)))
+                table["model response"].extend(gather_object(tokenizer.batch_decode(postprocessed_response)))
 
                 postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
                 _, score, _ = get_reward(
-                    self.reward_model, postprocessed_query_response, self.tokenizer, context_length
+                    self.reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
                 )
                 table["score"].extend(self.accelerator.gather(score).float().cpu().numpy())
 

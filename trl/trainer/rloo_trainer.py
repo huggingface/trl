@@ -10,7 +10,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from accelerate import Accelerator
-from accelerate.state import AcceleratorState
 from accelerate.utils import broadcast, gather_object
 from datasets import Dataset
 from torch.utils.data import DataLoader
@@ -27,125 +26,21 @@ from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer_callback import CallbackHandler, DefaultFlowCallback
 
 from ..models.utils import unwrap_model_for_generation
-from ..trainer.utils import disable_dropout_in_model, exact_div, print_rich_table
+from ..trainer.utils import (
+    disable_dropout_in_model,
+    exact_div,
+    first_true_indices,
+    forward,
+    generate,
+    get_reward,
+    prepare_deepspeed,
+    print_rich_table,
+    truncate_response,
+)
 from .rloo_config import RLOOConfig
 
 
 INVALID_LOGPROB = 1.0
-
-
-def get_reward(model, query_responses, tokenizer, context_length):
-    attention_mask = query_responses != tokenizer.pad_token_id
-    # position_ids = attention_mask.cumsum(1) - attention_mask.long()  # exclusive cumsum
-    lm_backbone = getattr(model, model.base_model_prefix)
-    input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
-    output = lm_backbone(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        # position_ids=position_ids,
-        return_dict=True,
-        output_hidden_states=True,
-        use_cache=False,  # otherwise mistral-based RM would error out
-    )
-    reward_logits = model.score(output.hidden_states[-1])
-    sequence_lengths = (
-        first_true_indices(query_responses[:, context_length:] == tokenizer.pad_token_id) - 1 + context_length
-    )
-    # https://github.com/huggingface/transformers/blob/dc68a39c8111217683bf49a4912d0c9018bab33d/src/transformers/models/gpt2/modeling_gpt2.py#L1454
-    return (
-        reward_logits,
-        reward_logits[
-            torch.arange(reward_logits.size(0), device=reward_logits.device),
-            sequence_lengths,
-        ].squeeze(-1),
-        sequence_lengths,
-    )
-
-
-def generate(lm_backbone, queries, tokenizer, generation_config):
-    """generate in a way that does not affect padding tokens"""
-    context_length = queries.shape[1]
-    attention_mask = queries != tokenizer.pad_token_id
-    input_ids = torch.masked_fill(queries, ~attention_mask, 0)
-    output = lm_backbone.generate(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        # position_ids=attention_mask.cumsum(1) - attention_mask.long(), # not needed: already adjusted in generations
-        # https://github.com/huggingface/transformers/blob/ac33aeeeee2a7a89b89c93c2962e6feb90daef0a/src/transformers/models/gpt2/modeling_gpt2.py#L1227-L1250
-        generation_config=generation_config,
-        return_dict_in_generate=True,
-        output_scores=True,
-    )
-    logits = torch.stack(output.scores, 1)
-    return torch.cat((queries, output.sequences[:, context_length:]), dim=1), logits
-
-
-def first_true_indices(bools, dtype=torch.long):
-    """
-    Takes an N-dimensional bool tensor and returns an (N-1)-dimensional tensor of integers giving
-    the position of the first True in each "row".
-
-    Returns the length of the rows (bools.size(-1)) if no element is True in a given row.
-    """
-    row_len = bools.size(-1)
-    zero_or_index = row_len * (~bools).type(dtype) + torch.arange(row_len, dtype=dtype, device=bools.device)
-    return torch.min(zero_or_index, dim=-1).values
-
-
-def truncate_response(config, tokenizer, responses):
-    trunc_idxs = first_true_indices(responses == config.truncate_token_id).unsqueeze(-1)
-    new_size = [1] * (len(responses.size()) - 1) + [responses.shape[1]]
-    idxs = torch.arange(responses.shape[1], device=responses.device).view(*new_size)
-    postprocessed_responses = torch.masked_fill(responses, idxs > trunc_idxs, tokenizer.pad_token_id)
-    return postprocessed_responses
-
-
-def forward(model, query_responses, tokenizer):
-    attention_mask = query_responses != tokenizer.pad_token_id
-    # position_ids = attention_mask.cumsum(1) - attention_mask.long()
-    input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
-    return model(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        # position_ids=position_ids,
-        return_dict=True,
-        output_hidden_states=True,
-    )
-
-
-def prepare_deepspeed(model, per_device_train_batch_size):
-    import deepspeed
-
-    deepspeed_plugin = AcceleratorState().deepspeed_plugin
-    config_kwargs = deepspeed_plugin.deepspeed_config
-    if config_kwargs["zero_optimization"]["stage"] != 3:
-        config_kwargs["train_micro_batch_size_per_gpu"] = per_device_train_batch_size
-        config_kwargs = {
-            "train_micro_batch_size_per_gpu": config_kwargs["train_micro_batch_size_per_gpu"],
-            "bf16": {"enabled": True},
-            "prescale_gradients": False,
-            "wall_clock_breakdown": False,
-        }
-    else:
-        if hasattr(model, "config"):
-            hidden_size = (
-                max(model.config.hidden_sizes)
-                if getattr(model.config, "hidden_sizes", None)
-                else getattr(model.config, "hidden_size", None)
-            )
-            if hidden_size is not None and config_kwargs["zero_optimization"]["stage"] == 3:
-                # Note that `stage3_prefetch_bucket_size` can produce DeepSpeed messages like: `Invalidate trace cache @ step 0: expected module 1, but got module 0`
-                # This is expected and is not an error, see: https://github.com/microsoft/DeepSpeed/discussions/4081
-                config_kwargs.update(
-                    {
-                        "zero_optimization.reduce_bucket_size": hidden_size * hidden_size,
-                        "zero_optimization.stage3_param_persistence_threshold": 10 * hidden_size,
-                        "zero_optimization.stage3_prefetch_bucket_size": 0,
-                    }
-                )
-    model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
-    model.eval()
-    return model
 
 
 class RLOOTrainer(Trainer):
@@ -362,7 +257,7 @@ class RLOOTrainer(Trainer):
                         del logits, all_logprob
                         torch.cuda.empty_cache()
 
-                        ref_output = forward(ref_policy, query_response, tokenizer)
+                        ref_output = forward(ref_policy, query_response, tokenizer.pad_token_id)
                         ref_logits = ref_output.logits[:, context_length - 1 : -1]
                         ref_logits /= args.temperature + 1e-7
                         ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
@@ -375,12 +270,16 @@ class RLOOTrainer(Trainer):
                         if (
                             args.truncate_token_id is not None
                         ):  # handle the edge case when truncate_token_id exists but is 0
-                            postprocessed_response = truncate_response(args, tokenizer, response)
+                            postprocessed_response = truncate_response(
+                                args.stop_token_id, tokenizer.pad_token_id, response
+                            )
 
                         # Response Processing 2. run reward model on the truncated responses
                         postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
                         sequence_length = first_true_indices(postprocessed_response == tokenizer.pad_token_id) - 1
-                        _, score, _ = get_reward(reward_model, postprocessed_query_response, tokenizer, context_length)
+                        _, score, _ = get_reward(
+                            reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
+                        )
 
                         query_responses.append(query_response)
                         responses.append(response)
@@ -522,6 +421,7 @@ class RLOOTrainer(Trainer):
 
     def generate_completions(self, sampling: bool = False):
         args = self.args
+        tokenizer = self.tokenizer
         generation_config = GenerationConfig(
             max_new_tokens=self.args.response_length,
             temperature=(0.01 + 1e-7),
@@ -539,19 +439,19 @@ class RLOOTrainer(Trainer):
                     query_response, _ = generate(
                         unwrapped_model,
                         query,
-                        self.tokenizer,
+                        tokenizer,
                         generation_config,
                     )
                 response = query_response[:, context_length:]
                 postprocessed_response = response
                 if args.truncate_token_id is not None:  # handle the edge case when truncate_token_id exists but is 0
-                    postprocessed_response = truncate_response(args, self.tokenizer, response)
-                table["query"].extend(gather_object(self.tokenizer.batch_decode(query, skip_special_tokens=True)))
-                table["model response"].extend(gather_object(self.tokenizer.batch_decode(postprocessed_response)))
+                    postprocessed_response = truncate_response(args.stop_token_id, tokenizer.pad_token_id, response)
+                table["query"].extend(gather_object(tokenizer.batch_decode(query, skip_special_tokens=True)))
+                table["model response"].extend(gather_object(tokenizer.batch_decode(postprocessed_response)))
 
                 postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
                 _, score, _ = get_reward(
-                    self.reward_model, postprocessed_query_response, self.tokenizer, context_length
+                    self.reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
                 )
                 table["score"].extend(self.accelerator.gather(score).float().cpu().numpy())
 
