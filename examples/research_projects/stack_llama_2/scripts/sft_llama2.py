@@ -13,11 +13,10 @@ from transformers import (
     AutoTokenizer,
     BitsAndBytesConfig,
     HfArgumentParser,
-    TrainingArguments,
     set_seed,
 )
 
-from trl import SFTTrainer
+from trl import SFTConfig, SFTTrainer
 from trl.import_utils import is_npu_available, is_xpu_available
 from trl.trainer import ConstantLengthDataset
 
@@ -33,7 +32,6 @@ class ScriptArguments:
     shuffle_buffer: Optional[int] = field(default=5000, metadata={"help": "the shuffle buffer size"})
     seq_length: Optional[int] = field(default=1024, metadata={"help": "the sequence length"})
     num_workers: Optional[int] = field(default=4, metadata={"help": "the number of workers"})
-    packing: Optional[bool] = field(default=True, metadata={"help": "whether to use packing for SFTTrainer"})
     use_bnb: Optional[bool] = field(default=True, metadata={"help": "whether to use BitsAndBytes"})
 
     # LoraConfig
@@ -42,7 +40,7 @@ class ScriptArguments:
     lora_r: Optional[int] = field(default=8, metadata={"help": "the lora r parameter"})
 
 
-parser = HfArgumentParser((ScriptArguments, TrainingArguments))
+parser = HfArgumentParser((ScriptArguments, SFTConfig))
 script_args, training_args = parser.parse_args_into_dataclasses()
 peft_config = LoraConfig(
     r=script_args.lora_r,
@@ -53,7 +51,7 @@ peft_config = LoraConfig(
     task_type="CAUSAL_LM",
 )
 
-if training_args.group_by_length and script_args.packing:
+if training_args.group_by_length and training_args.packing:
     raise ValueError("Cannot use both packing and group by length")
 
 # `gradient_checkpointing` was True by default until `1f3314`, but it's actually not used.
@@ -172,8 +170,8 @@ trainer = SFTTrainer(
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
     peft_config=peft_config,
-    packing=script_args.packing,
     max_seq_length=None,
+    formatting_func=prepare_sample_text,
     tokenizer=tokenizer,
     args=training_args,
 )

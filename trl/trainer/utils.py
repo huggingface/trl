@@ -36,7 +36,7 @@ from transformers import (
     GenerationConfig,
     PreTrainedTokenizerBase,
 )
-from transformers.trainer import Trainer, TrainerCallback
+from transformers.trainer import TrainerCallback
 from transformers.trainer_utils import has_length
 
 from ..import_utils import is_peft_available, is_unsloth_available, is_xpu_available
