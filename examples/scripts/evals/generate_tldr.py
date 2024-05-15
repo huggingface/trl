@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 from datasets import load_dataset
+from gpt_tldr_judge import LLMJudgeConfig, llm_judge
 from transformers import AutoTokenizer, HfArgumentParser
 from vllm import SamplingParams, SingleGPULLM
 
@@ -76,9 +77,6 @@ df.to_csv(args.output_path)
 #####
 # GPT as a judge
 ####
-from gpt_tldr_judge import LLMJudgeConfig, llm_judge
-
-
 df["response0"] = df["model_response"]
 df["response1"] = df["reference_response"]
 judged_df = llm_judge(

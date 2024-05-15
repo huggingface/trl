@@ -84,8 +84,8 @@ def llm_judge(ljc: LLMJudgeConfig, df: pd.DataFrame):
                 comparison = r.split("Comparison:")[1].split("Preferred:")[0].strip()
                 preferred = r.split("Preferred:")[1].strip()
                 return comparison, preferred, i, text + r
-            except:
-                print(f"error in {i}")
+            except Exception as e:
+                print(f"error in {i} {e}")
                 return "", random.choice(["A", "B"]), i, text + r
 
     async def main(ljc: LLMJudgeConfig, df: pd.DataFrame):
