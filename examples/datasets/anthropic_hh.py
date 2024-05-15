@@ -24,7 +24,9 @@ api = HfApi()
 class ScriptArguments:
     debug: Optional[bool] = field(default=False, metadata={"help": "Enable debug mode"})
     hf_entity: Optional[str] = field(default=None, metadata={"help": "The Hugging Face entity to use"})
-    hf_repo_id: Optional[str] = field(default="hh-rlhf-trl-style", metadata={"help": "The Hugging Face repository ID"})
+    hf_repo_id: Optional[str] = field(
+        default="hh-rlhf-helpful-base-trl-style", metadata={"help": "The Hugging Face repository ID"}
+    )
     revision: Optional[str] = field(default="0.1.0", metadata={"help": "The revision of the repository"})
     update_main_revision: Optional[bool] = field(
         default=True, metadata={"help": "Update the main revision of the repository"}
@@ -64,7 +66,7 @@ if __name__ == "__main__":
     if args.hf_entity is None:
         args.hf_entity = api.whoami()["name"]
     full_repo_id = f"{args.hf_entity}/{args.hf_repo_id}"
-    ds = load_dataset("Anthropic/hh-rlhf")
+    ds = load_dataset("Anthropic/hh-rlhf", data_dir="helpful-base")
     if args.debug:
         for key in ds:
             ds[key] = ds[key].select(range(50))

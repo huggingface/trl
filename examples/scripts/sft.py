@@ -25,7 +25,7 @@ python examples/scripts/sft.py \
     --num_train_epochs=3 \
     --max_steps=-1 \
     --push_to_hub \
-    --gradient_checkpointing \
+    --gradient_checkpointing
 
 # peft:
 python examples/scripts/sft.py \
@@ -44,13 +44,14 @@ python examples/scripts/sft.py \
     --lora_r=64 \
     --lora_alpha=16
 """
+
 import logging
 import os
 from contextlib import nullcontext
 
 TRL_USE_RICH = os.environ.get("TRL_USE_RICH", False)
 
-from trl.commands.cli_utils import init_zero_verbose, SftScriptArguments, TrlParser
+from trl.commands.cli_utils import init_zero_verbose, SFTScriptArguments, TrlParser
 
 if TRL_USE_RICH:
     init_zero_verbose()
@@ -63,11 +64,12 @@ import torch
 from datasets import load_dataset
 
 from tqdm.rich import tqdm
-from transformers import AutoTokenizer, TrainingArguments
+from transformers import AutoTokenizer
 
 from trl import (
     ModelConfig,
     RichProgressCallback,
+    SFTConfig,
     SFTTrainer,
     get_peft_config,
     get_quantization_config,
@@ -81,7 +83,7 @@ if TRL_USE_RICH:
 
 
 if __name__ == "__main__":
-    parser = TrlParser((SftScriptArguments, TrainingArguments, ModelConfig))
+    parser = TrlParser((SFTScriptArguments, SFTConfig, ModelConfig))
     args, training_args, model_config = parser.parse_args_and_config()
 
     # Force use our print callback
@@ -114,8 +116,9 @@ if __name__ == "__main__":
     # Dataset
     ################
     raw_datasets = load_dataset(args.dataset_name)
-    train_dataset = raw_datasets["train"]
-    eval_dataset = raw_datasets["test"]
+
+    train_dataset = raw_datasets[args.dataset_train_split]
+    eval_dataset = raw_datasets[args.dataset_test_split]
 
     ################
     # Optional rich context managers
@@ -137,10 +140,7 @@ if __name__ == "__main__":
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            dataset_text_field=args.dataset_text_field,
-            max_seq_length=args.max_seq_length,
             tokenizer=tokenizer,
-            packing=args.packing,
             peft_config=get_peft_config(model_config),
             callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
         )
