@@ -43,6 +43,8 @@
     title: Iterative Supervised Fine-Tuning
   - local: text_environments
     title: Text Environments
+  - local: nash_md_trainer
+    title: Nash MD Trainer
   title: API
 - sections:
   - local: example_overview
