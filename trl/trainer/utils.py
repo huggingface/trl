@@ -665,8 +665,6 @@ def neftune_post_forward_hook(module, input, output):
 
 
 def peft_module_casting_to_bf16(model):
-    from peft.tuners.tuners_utils import BaseTunerLayer
-
     for name, module in model.named_modules():
         if isinstance(module, torch.nn.LayerNorm) or "norm" in name:
             module = module.to(torch.float32)
