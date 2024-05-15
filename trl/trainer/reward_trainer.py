@@ -13,11 +13,14 @@
 # limitations under the License.
 import inspect
 import warnings
+from collections import defaultdict
 from dataclasses import FrozenInstanceError, replace
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+import pandas as pd
 import torch
 import torch.nn as nn
+from accelerate.utils import gather_object
 from datasets import Dataset
 from transformers import DataCollator, PreTrainedModel, PreTrainedTokenizerBase, Trainer, TrainingArguments
 from transformers.trainer_callback import TrainerCallback
@@ -26,7 +29,7 @@ from transformers.trainer_utils import EvalPrediction
 
 from ..import_utils import is_peft_available
 from .reward_config import RewardConfig
-from .utils import RewardDataCollatorWithPadding, compute_accuracy
+from .utils import RewardDataCollatorWithPadding, compute_accuracy, print_rich_table
 
 
 if is_peft_available():
@@ -279,3 +282,39 @@ class RewardTrainer(Trainer):
         labels = self._prepare_inputs(labels)
 
         return loss, logits, labels
+
+    def evaluate(self, *args, **kwargs):
+        num_print_samples = kwargs.pop("num_print_samples", 4)
+        self.visualize_samples(num_print_samples)
+        return super().evaluate(*args, **kwargs)
+
+    def visualize_samples(self, num_print_samples: int):
+        """
+        Visualize the reward model logits prediction
+
+        Args:
+            num_print_samples (`int`, defaults to `4`):
+                The number of samples to print. Set to `-1` to print all samples.
+        """
+        eval_dataloader = self.get_eval_dataloader()
+        table = defaultdict(list)
+        for _, inputs in enumerate(eval_dataloader):
+            _, logits, _ = self.prediction_step(self.model, inputs, prediction_loss_only=False)
+            chosen_text = self.tokenizer.batch_decode(inputs["input_ids_chosen"], skip_special_tokens=True)
+            rejected_text = self.tokenizer.batch_decode(inputs["input_ids_rejected"], skip_special_tokens=True)
+            table["chosen_text"].extend(gather_object(chosen_text))
+            table["rejected_text"].extend(gather_object(rejected_text))
+            table["logits"].extend(
+                gather_object([[round(inner_item, 4) for inner_item in item] for item in logits.tolist()])
+            )
+            if num_print_samples >= 0 and len(table["chosen_text"]) >= num_print_samples:
+                break
+        df = pd.DataFrame(table)
+        print_rich_table(pd.DataFrame(table))
+        if self.accelerator.process_index == 0:
+            print_rich_table(df[:num_print_samples])
+            if "wandb" in self.args.report_to:
+                import wandb
+
+                if wandb.run is not None:
+                    wandb.log({"completions": wandb.Table(dataframe=df)})

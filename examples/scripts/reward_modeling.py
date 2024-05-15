@@ -15,9 +15,9 @@
 python examples/scripts/reward_modeling.py \
     --model_name_or_path=facebook/opt-350m \
     --output_dir="reward_modeling_anthropic_hh" \
-    --per_device_train_batch_size=64 \
+    --per_device_train_batch_size=16 \
     --num_train_epochs=1 \
-    --gradient_accumulation_steps=16 \
+    --gradient_accumulation_steps=2 \
     --gradient_checkpointing=True \
     --learning_rate=1.41e-5 \
     --report_to="wandb" \
@@ -25,6 +25,7 @@ python examples/scripts/reward_modeling.py \
     --optim="adamw_torch" \
     --logging_steps=10 \
     --evaluation_strategy="steps" \
+    --eval_steps=500 \
     --max_length=512 \
 """
 import warnings
@@ -42,8 +43,8 @@ tqdm.pandas()
 
 if __name__ == "__main__":
     parser = HfArgumentParser((RewardConfig, ModelConfig))
-    reward_config, model_config = parser.parse_args_into_dataclasses()
-    reward_config.gradient_checkpointing_kwargs = dict(use_reentrant=False)
+    config, model_config = parser.parse_args_into_dataclasses()
+    config.gradient_checkpointing_kwargs = dict(use_reentrant=False)
 
     ################
     # Model & Tokenizer
@@ -103,8 +104,7 @@ if __name__ == "__main__":
         num_proc=4,
     )
     raw_datasets = raw_datasets.filter(
-        lambda x: len(x["input_ids_chosen"]) <= reward_config.max_length
-        and len(x["input_ids_rejected"]) <= reward_config.max_length
+        lambda x: len(x["input_ids_chosen"]) <= config.max_length and len(x["input_ids_rejected"]) <= config.max_length
     )
     train_dataset = raw_datasets["train"]
     eval_dataset = raw_datasets["test"]
@@ -115,10 +115,14 @@ if __name__ == "__main__":
     trainer = RewardTrainer(
         model=model,
         tokenizer=tokenizer,
-        args=reward_config,
+        args=config,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         peft_config=get_peft_config(model_config),
     )
     trainer.train()
-    trainer.save_model(reward_config.output_dir)
+    trainer.save_model(config.output_dir)
+    trainer.push_to_hub()
+    metrics = trainer.evaluate()
+    trainer.log_metrics("eval", metrics)
+    print(metrics)

@@ -84,6 +84,13 @@ After this one can then call:
 kto_trainer.train()
 ```
 
+## Loss Functions
+
+Given the binary signal data indicating whether a completion is desirable or undesirable for a prompt, we can optimize an implicit reward function that aligns with the key principles of Kahneman-Tversky's prospect theory, such as reference dependence, loss aversion, and diminishing sensitivity.
+
+The [BCO](https://arxiv.org/abs/2404.04656) authors train a binary classifier whose logit serves as a reward so that the classifier maps {prompt, chosen completion} pairs to 1 and {prompt, rejected completion} pairs to 0.
+The `KTOTrainer` can be switched to this loss via the `loss_type="bco"` argument.
+
 ## KTOTrainer
 
 [[autodoc]] KTOTrainer
