@@ -10,12 +10,12 @@ from transformers import (
 )
 
 from trl import ModelConfig
-from trl.trainer.ppov2_trainer import PPOv2Config, PPOv2Trainer
+from trl.trainer.rloo_trainer import RLOOConfig, RLOOTrainer
 from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
 
 
 """
-python examples/scripts/minimal/ppo_tldr.py \
+python examples/scripts/rloo/rloo_tldr.py \
     --learning_rate 3e-6 \
     --output_dir models/minimal/ppo \
     --per_device_train_batch_size 1 \
@@ -30,8 +30,10 @@ python examples/scripts/minimal/ppo_tldr.py \
     --sanity_check
 
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
-    examples/scripts/minimal/ppo_tldr.py \
-    --output_dir models/minimal/ppo_tldr \
+    examples/scripts/rloo/rloo_tldr.py \
+    --output_dir models/minimal/rloo_tldr \
+    --num_ppo_epochs 1 \
+    --num_mini_batches 1 \
     --learning_rate 3e-6 \
     --per_device_train_batch_size 16 \
     --gradient_accumulation_steps 4 \
@@ -46,7 +48,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser((PPOv2Config, ModelConfig))
+    parser = HfArgumentParser((RLOOConfig, ModelConfig))
     config, model_config = parser.parse_args_into_dataclasses()
     # remove output_dir if exists
     shutil.rmtree(config.output_dir, ignore_errors=True)
@@ -62,7 +64,6 @@ if __name__ == "__main__":
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_QUERY_CHAT_TEMPLATE
-    value_model = AutoModelForSequenceClassification.from_pretrained(config.reward_model_path, num_labels=1)
     reward_model = AutoModelForSequenceClassification.from_pretrained(config.reward_model_path, num_labels=1)
     ref_policy = AutoModelForCausalLM.from_pretrained(config.sft_model_path)
     policy = AutoModelForCausalLM.from_pretrained(config.sft_model_path)
@@ -103,13 +104,12 @@ if __name__ == "__main__":
     ################
     # Training
     ################
-    trainer = PPOv2Trainer(
+    trainer = RLOOTrainer(
         config=config,
         tokenizer=tokenizer,
         policy=policy,
         ref_policy=ref_policy,
         reward_model=reward_model,
-        value_model=value_model,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
     )
