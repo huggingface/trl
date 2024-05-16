@@ -12,19 +12,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from collections import defaultdict
 from datasets import load_dataset
-import pandas as pd
 from transformers import (
-    AutoTokenizer,
     AutoModelForCausalLM,
+    AutoTokenizer,
     DataCollatorForLanguageModeling,
     HfArgumentParser,
 )
 
-
-from trl import SFTTrainer, SFTConfig
-from trl.trainer.utils import print_rich_table, GenerateCompletionCallback
+from trl import SFTConfig, SFTTrainer
 
 
 """
@@ -51,9 +47,8 @@ if __name__ == "__main__":
     # Model & Tokenizer
     ################
     tokenizer = AutoTokenizer.from_pretrained(base_model)
-    tokenizer.pad_token = tokenizer.eos_token
-    # left padding is required for generation
-    left_tokenizer = AutoTokenizer.from_pretrained(base_model, padding_side="left")
+    tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+    left_tokenizer = AutoTokenizer.from_pretrained(base_model, padding_side="left")  # for generation
     left_tokenizer.pad_token = left_tokenizer.eos_token
     if tokenizer.chat_template is None:
         # a default chat template to simply concatenate the messages
@@ -81,6 +76,14 @@ if __name__ == "__main__":
     ################
     # Training
     ################
+    # treats the EOS token and the padding token distinctively
+    default_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+
+    def data_collator(x):
+        batch = default_collator(x)
+        batch["input_ids"].masked_fill_(~batch["attention_mask"].bool(), 0)
+        return batch
+
     trainer = SFTTrainer(
         model=model,
         args=args,
@@ -89,11 +92,12 @@ if __name__ == "__main__":
         dataset_text_field="chosen",
         max_seq_length=1000,
         tokenizer=tokenizer,
+        data_collator=data_collator,
     )
-    trainer.add_callback(GenerateCompletionCallback(left_tokenizer=left_tokenizer, trainer=trainer))
-    # trainer.train()
-    # trainer.save_model(args.output_dir)
-    # trainer.push_to_hub()
+    trainer.train()
+    trainer.save_model(args.output_dir)
+    trainer.push_to_hub()
+    # trainer.generate_completions(True)
     metrics = trainer.evaluate()
-    # trainer.log_metrics("eval", metrics)
-    # print(metrics)
+    trainer.log_metrics("eval", metrics)
+    print(metrics)

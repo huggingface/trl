@@ -24,12 +24,12 @@ python examples/scripts/minimal/rm.py \
     --per_device_train_batch_size 1 \
     --per_device_eval_batch_size 1 \
     --gradient_accumulation_steps 32 \
-    --learning_rate 5e-05 \
-    --logging_steps 10 \
+    --logging_steps 1 \
     --evaluation_strategy epoch \
-    --max_length 512 \
+    --max_length 1024 \
     --remove_unused_columns False \
     --num_train_epochs 1 \
+    --eval_steps=10 \
     --output_dir models/minimal/rm \
 """
 
@@ -91,7 +91,6 @@ if __name__ == "__main__":
     trainer.train()
     trainer.save_model(args.output_dir)
     trainer.push_to_hub()
-    # trainer.generate_completions(True)
-    metrics = trainer.evaluate()
-    trainer.log_metrics("eval", metrics)
-    print(metrics)
+    # metrics = trainer.evaluate()
+    # trainer.log_metrics("eval", metrics)
+    # print(metrics)
