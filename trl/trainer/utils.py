@@ -35,6 +35,7 @@ from transformers import (
     DataCollatorWithPadding,
     GenerationConfig,
     PreTrainedTokenizerBase,
+    Trainer,
 )
 from transformers.trainer import TrainerCallback
 from transformers.trainer_utils import has_length
