@@ -32,7 +32,7 @@ python examples/scripts/vsft_llava.py \
     
 # peft:
 python examples/scripts/vsft_llava.py \
-    --dataset_name="HuggingFaceH4/llava-instruct-mix-vsft" \    
+    --dataset_name="HuggingFaceH4/llava-instruct-mix-vsft" \
     --model_name_or_path="llava-hf/llava-1.5-7b-hf" \
     --report_to="wandb" \
     --learning_rate=1.4e-5 \
@@ -45,11 +45,11 @@ python examples/scripts/vsft_llava.py \
     --gradient_checkpointing \
     --remove_unused_columns=False \
     --torch_dtype=float16 \
-    --fp16=True \ 
+    --fp16=True \
     --use_peft=True \
     --lora_r=64 \
     --lora_alpha=16 \
-    --lora_target_modules=all-linear"
+    --lora_target_modules=all-linear
 
 # evaluation:
  
