@@ -13,8 +13,6 @@ if tok.chat_template is None:
     tok.chat_template = CHATML_CHAT_TEMPLATE
 sanity_check = True  # deal with a small chunk of dataset to test run the code
 
-# https://huggingface.co/datasets/trl-internal-testing/hh-rlhf-trl-style
-
 preference_datasets = load_dataset("trl-internal-testing/hh-rlhf-trl-style")
 if sanity_check:
     for key in preference_datasets:
@@ -26,9 +24,8 @@ dataset_processor = PreferenceDatasetProcessor(tokenizer=tok, config=dataset_con
 train_dataset = dataset_processor.tokenize(preference_datasets["train"])
 stats = dataset_processor.get_token_length_stats(train_dataset)
 pprint.pp(stats)
-# train_dataset = dataset_processor.filter(train_dataset)
-# stats = dataset_processor.get_token_length_stats(train_dataset)
-# pprint.pp(stats)
+train_dataset = dataset_processor.filter(train_dataset)
+stats = dataset_processor.get_token_length_stats(train_dataset)
+pprint.pp(stats)
 dataset_processor.get_token_length_visualization(train_dataset)
-print(tok.decode(train_dataset[0]["chosen"]))
 visualize_token(train_dataset[0]["chosen"], tok)
