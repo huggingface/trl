@@ -886,7 +886,7 @@ def first_true_indices(bools: torch.Tensor, dtype=torch.long):
 
 def get_reward(
     model: torch.nn.Module, query_responses: torch.Tensor, pad_token_id: int, context_length: int
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Computes the reward logits and the rewards for a given model and query responses.
 
@@ -1040,7 +1040,7 @@ def truncate_response(stop_token_id: int, pad_token_id: int, responses: torch.Te
 
 def generate(
     lm_backbone: torch.nn.Module, queries: torch.Tensor, pad_token_id: int, generation_config: dict
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Generates sequences from the language model backbone in a way that does not affect padding tokens.
 
