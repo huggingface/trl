@@ -1,19 +1,5 @@
-# Copyright 2023 The HuggingFace Team. All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 import inspect
 import random
-from turtle import shape
 import warnings
 from collections import defaultdict
 from copy import deepcopy
@@ -40,10 +26,8 @@ from ..import_utils import is_peft_available, is_wandb_available
 from ..models import PreTrainedModelWrapper, create_reference_model
 from .utils import DPODataCollatorWithPadding, disable_dropout_in_model, pad_to_length
 
-
 if is_peft_available():
     from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
-
 
 if is_wandb_available():
     import wandb
@@ -52,67 +36,38 @@ if is_deepspeed_available():
     import deepspeed
 
 
-class POVIDTrainer(Trainer):
-    r"""
-    Initialize DPOTrainer.
+class POVIDTrainer(DPOTrainer):
+    """
+    A custom trainer class for training models with POVID.
 
     Args:
-        model (`transformers.PreTrainedModel`):
-            The model to train, preferably an `AutoModelForSequenceClassification`.
-        ref_model (`PreTrainedModelWrapper`):
-            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation and loss. If no
-            reference model is provided, the trainer will create a reference model with the same architecture as the model to be optimized.
-        beta (`float`, defaults to 0.1):
-            The beta factor in DPO loss. Higher beta means less divergence from the initial policy.
-        loss_type (`str`, defaults to `"sigmoid"`):
-            The type of DPO loss to use. Either `"sigmoid"` the default DPO loss or `"hinge"` loss from SLiC paper.
-        args (`transformers.TrainingArguments`):
-            The arguments to use for training.
-        data_collator (`transformers.DataCollator`):
-            The data collator to use for training. If None is specified, the default data collator (`DPODataCollatorWithPadding`) will be used
-            which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
-        label_pad_token_id (`int`, defaults to `-100`):
-            The label pad token id. This argument is required if you want to use the default data collator.
-        padding_value (`int`, defaults to `0`):
-            The padding value. This argument is required if you want to use the default data collator.
-        truncation_mode (`str`, defaults to `keep_end`):
-            The truncation mode to use, either `keep_end` or `keep_start`. This argument is required if you want to use the default data collator.
-        train_dataset (`datasets.Dataset`):
-            The dataset to use for training.
-        eval_dataset (`datasets.Dataset`):
-            The dataset to use for evaluation.
-        tokenizer (`transformers.PreTrainedTokenizerBase`):
-            The tokenizer to use for training. This argument is required if you want to use the default data collator.
-        model_init (`Callable[[], transformers.PreTrainedModel]`):
-            The model initializer to use for training. If None is specified, the default model initializer will be used.
-        callbacks (`List[transformers.TrainerCallback]`):
-            The callbacks to use for training.
-        optimizers (`Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
-            The optimizer and scheduler to use for training.
-        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
-            The function to use to preprocess the logits before computing the metrics.
-        max_length (`int`, defaults to `None`):
-            The maximum length of the sequences in the batch. This argument is required if you want to use the default data collator.
-        max_prompt_length (`int`, defaults to `None`):
-            The maximum length of the prompt. This argument is required if you want to use the default data collator.
-        max_target_length (`int`, defaults to `None`):
-            The maximum length of the target. This argument is required if you want to use the default data collator and your model is an encoder-decoder.
-        peft_config (`Dict`, defaults to `None`):
-            The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
-        is_encoder_decoder (`Optional[bool]`, `optional`, defaults to `None`):
-            If no model is provided, we need to know if the model_init returns an encoder-decoder.
-        disable_dropout (`bool`, defaults to `True`):
-            Whether or not to disable dropouts in `model` and `ref_model`.
-        generate_during_eval (`bool`, defaults to `False`):
-            Whether to sample and log generations during evaluation step.
-        compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
-            The function to use to compute the metrics. Must take a `EvalPrediction` and return
-            a dictionary string to metric values.
-        model_init_kwargs: (`Optional[Dict]`, *optional*):
-            Dict of Optional kwargs to pass when instantiating the model from a string
-        ref_model_init_kwargs: (`Optional[Dict]`, *optional*):
-            Dict of Optional kwargs to pass when instantiating the ref model from a string
-
+        model (Union[PreTrainedModel, nn.Module, str]): The model to train.
+        ref_model (Optional[Union[PreTrainedModel, nn.Module, str]]): The reference model.
+        beta (float, optional): The beta factor in DPO loss. Defaults to 0.1.
+        loss_type (Literal["sigmoid", "hinge"], optional): The type of DPO loss to use. Defaults to "sigmoid".
+        args (TrainingArguments): The arguments to use for training.
+        data_collator (Optional[DataCollator], optional): The data collator to use for training. Defaults to None.
+        label_pad_token_id (int, optional): The label pad token id. Defaults to -100.
+        padding_value (int, optional): The padding value. Defaults to 0.
+        truncation_mode (str, optional): The truncation mode to use. Defaults to "keep_end".
+        train_dataset (Optional[Dataset], optional): The dataset to use for training. Defaults to None.
+        eval_dataset (Optional[Union[Dataset, Dict[str, Dataset]]], optional): The dataset to use for evaluation. Defaults to None.
+        tokenizer (Optional[PreTrainedTokenizerBase], optional): The tokenizer to use for training. Defaults to None.
+        model_init (Optional[Callable[[], PreTrainedModel]], optional): The model initializer to use for training. Defaults to None.
+        callbacks (Optional[List[TrainerCallback]], optional): The callbacks to use for training. Defaults to None.
+        optimizers (Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR], optional): The optimizer and scheduler to use for training. Defaults to (None, None).
+        preprocess_logits_for_metrics (Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]], optional): The function to use to preprocess the logits before computing the metrics. Defaults to None.
+        max_length (Optional[int], optional): The maximum length of the sequences in the batch. Defaults to None.
+        max_prompt_length (Optional[int], optional): The maximum length of the prompt. Defaults to None.
+        max_target_length (Optional[int], optional): The maximum length of the target. Defaults to None.
+        stage (int, optional): The stage of the training. Defaults to 1.
+        peft_config (Optional[Dict], optional): The PEFT configuration to use for training. Defaults to None.
+        is_encoder_decoder (Optional[bool], optional): Whether the model is an encoder-decoder. Defaults to None.
+        disable_dropout (bool, optional): Whether to disable dropouts in model and ref_model. Defaults to True.
+        generate_during_eval (bool, optional): Whether to sample and log generations during evaluation step. Defaults to False.
+        compute_metrics (Optional[Callable[[EvalLoopOutput], Dict]], optional): The function to use to compute the metrics. Defaults to None.
+        model_init_kwargs (Optional[Dict], optional): Optional kwargs to pass when instantiating the model from a string. Defaults to None.
+        ref_model_init_kwargs (Optional[Dict], optional): Optional kwargs to pass when instantiating the ref model from a string. Defaults to None.
     """
 
     def __init__(
@@ -139,7 +94,7 @@ class POVIDTrainer(Trainer):
         max_length: Optional[int] = None,
         max_prompt_length: Optional[int] = None,
         max_target_length: Optional[int] = None,
-        stage : int = 1,
+        stage: int = 1,
         peft_config: Optional[Dict] = None,
         is_encoder_decoder: Optional[bool] = None,
         disable_dropout: bool = True,
@@ -181,10 +136,7 @@ class POVIDTrainer(Trainer):
         elif is_peft_available() and peft_config is not None:
             # if model is a peft model and we have a peft_config, we merge and unload it first
             if isinstance(model, PeftModel):
-                # model = model.merge_and_unload()
                 pass
-                # from peft import  get_peft_model
-                # model = get_peft_model(model, peft_config)
 
             if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
                 _support_gc_kwargs = hasattr(
@@ -213,9 +165,6 @@ class POVIDTrainer(Trainer):
             # get peft model with the given config
             model = get_peft_model(model, peft_config)
 
-        # For models that use gradient_checkpoiting, we need to attach a hook that enables input
-        # to explicitly have `requires_grad=True`, otherwise training will either silently
-        # fail or completely fail.
         elif getattr(args, "gradient_checkpointing", False):
             # For backward compatibility with older versions of transformers
             if hasattr(model, "enable_input_require_grads"):
@@ -348,45 +297,16 @@ class POVIDTrainer(Trainer):
             else:
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
-    def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
-        # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
-        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-        config_kwargs = deepcopy(deepspeed_plugin.deepspeed_config)
-
-        if model is not None:
-            if hasattr(model, "config"):
-                hidden_size = (
-                    max(model.config.hidden_sizes)
-                    if getattr(model.config, "hidden_sizes", None)
-                    else getattr(model.config, "hidden_size", None)
-                )
-                if hidden_size is not None and config_kwargs["zero_optimization"]["stage"] == 3:
-                    # Note that `stage3_prefetch_bucket_size` can produce DeepSpeed messages like: `Invalidate trace cache @ step 0: expected module 1, but got module 0`
-                    # This is expected and is not an error, see: https://github.com/microsoft/DeepSpeed/discussions/4081
-                    config_kwargs.update(
-                        {
-                            "zero_optimization.reduce_bucket_size": hidden_size * hidden_size,
-                            "zero_optimization.stage3_param_persistence_threshold": 10 * hidden_size,
-                            "zero_optimization.stage3_prefetch_bucket_size": 0.9 * hidden_size * hidden_size,
-                        }
-                    )
-
-        # If ZeRO-3 is used, we shard both the active and reference model.
-        # Otherwise, we assume the reference model fits in memory and is initialized on each device with ZeRO disabled (stage 0)
-        if config_kwargs["zero_optimization"]["stage"] != 3:
-            config_kwargs["zero_optimization"]["stage"] = 0
-        model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
-        model.eval()
-        return model
 
     def concatenated_inputs(self, batch: Dict[str, Union[List, torch.LongTensor]]) -> Dict[str, torch.LongTensor]:
-        """Concatenate the chosen and rejected inputs into a single tensor.
+        """
+        Concatenate the chosen and rejected inputs into a single tensor.
 
         Args:
-            batch: A batch of data. Must contain the keys 'chosen_input_ids' and 'rejected_input_ids', which are tensors of shape (batch_size, sequence_length).
+            batch (Dict[str, Union[List, torch.LongTensor]]): A batch of data.
 
         Returns:
-            A dictionary containing the concatenated inputs under the key 'concatenated_input_ids'.
+            Dict[str, torch.LongTensor]: A dictionary containing the concatenated inputs.
         """
         concatenated_batch = {}
 
@@ -426,20 +346,18 @@ class POVIDTrainer(Trainer):
         reference_rejected_logps: torch.FloatTensor,
         reference_free: bool = False,
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
-        """Compute the DPO loss for a batch of policy and reference model log probabilities.
+        """
+        Compute the DPO loss for a batch of policy and reference model log probabilities.
 
         Args:
-            policy_chosen_logps: Log probabilities of the policy model for the chosen responses. Shape: (batch_size,)
-            policy_rejected_logps: Log probabilities of the policy model for the rejected responses. Shape: (batch_size,)
-            reference_chosen_logps: Log probabilities of the reference model for the chosen responses. Shape: (batch_size,)
-            reference_rejected_logps: Log probabilities of the reference model for the rejected responses. Shape: (batch_size,)
-            beta: Temperature parameter for the DPO loss, typically something in the range of 0.1 to 0.5. We ignore the reference model as beta -> 0.
-            reference_free: If True, we ignore the _provided_ reference model and implicitly use a reference model that assigns equal probability to all responses.
+            policy_chosen_logps (torch.FloatTensor): Log probabilities of the policy model for the chosen responses.
+            policy_rejected_logps (torch.FloatTensor): Log probabilities of the policy model for the rejected responses.
+            reference_chosen_logps (torch.FloatTensor): Log probabilities of the reference model for the chosen responses.
+            reference_rejected_logps (torch.FloatTensor): Log probabilities of the reference model for the rejected responses.
+            reference_free (bool, optional): If True, ignore the provided reference model. Defaults to False.
 
         Returns:
-            A tuple of three tensors: (losses, chosen_rewards, rejected_rewards).
-            The losses tensor contains the DPO loss for each example in the batch.
-            The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
+            Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]: A tuple containing the losses, chosen rewards, and rejected rewards.
         """
         pi_logratios = policy_chosen_logps - policy_rejected_logps
         ref_logratios = reference_chosen_logps - reference_rejected_logps
@@ -467,15 +385,16 @@ class POVIDTrainer(Trainer):
         labels: torch.LongTensor,
         average_log_prob: bool = False,
     ) -> torch.FloatTensor:
-        """Compute the log probabilities of the given labels under the given logits.
+        """
+        Compute the log probabilities of the given labels under the given logits.
 
         Args:
-            logits: Logits of the model (unnormalized). Shape: (batch_size, sequence_length, vocab_size)
-            labels: Labels for which to compute the log probabilities. Label tokens with a value of label_pad_token_id are ignored. Shape: (batch_size, sequence_length)
-            average_log_prob: If True, return the average log probability per (non-masked) token. Otherwise, return the sum of the log probabilities of the (non-masked) tokens.
+            logits (torch.FloatTensor): Logits of the model.
+            labels (torch.LongTensor): Labels for which to compute the log probabilities.
+            average_log_prob (bool, optional): If True, return the average log probability per token. Defaults to False.
 
         Returns:
-            A tensor of shape (batch_size,) containing the average/sum log probabilities of the given labels under the given logits.
+            torch.FloatTensor: A tensor containing the average/sum log probabilities of the given labels under the given logits.
         """
         if logits.shape[:-1] != labels.shape:
             raise ValueError("Logits (batch and sequence length dim) and labels must have the same shape.")
@@ -494,6 +413,7 @@ class POVIDTrainer(Trainer):
             return (per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)
         else:
             return (per_token_logps * loss_mask).sum(-1)
+
     def _get_noisy_batch_logps(
         self,
         logits: torch.FloatTensor,
@@ -501,42 +421,26 @@ class POVIDTrainer(Trainer):
         labels: torch.LongTensor,
         average_log_prob: bool = False,
     ) -> torch.FloatTensor:
-        """Compute the log probabilities of the given labels under the given logits.
+        """
+        Compute the log probabilities of the given labels under the given logits.
 
         Args:
-            logits: Logits of the model (unnormalized). Shape: (batch_size, sequence_length, vocab_size)
-            labels: Labels for which to compute the log probabilities. Label tokens with a value of label_pad_token_id are ignored. Shape: (batch_size, sequence_length)
-            average_log_prob: If True, return the average log probability per (non-masked) token. Otherwise, return the sum of the log probabilities of the (non-masked) tokens.
+            logits (torch.FloatTensor): Logits of the model.
+            chosen_logits (torch.FloatTensor): Logits of the chosen model.
+            labels (torch.LongTensor): Labels for which to compute the log probabilities.
+            average_log_prob (bool, optional): If True, return the average log probability per token. Defaults to False.
 
         Returns:
-            A tensor of shape (batch_size,) containing the average/sum log probabilities of the given labels under the given logits.
+            torch.FloatTensor: A tensor containing the average/sum log probabilities of the given labels under the given logits.
         """
-        # if logits.shape[:-1] != labels.shape:
-        #     raise ValueError("Logits (batch and sequence length dim) and labels must have the same shape.")
-
         if not self.is_encoder_decoder:
             new_chosen_logits = chosen_logits[:, :-1, :]
             logits = logits[:, :-1, :]
             labels = labels[:, 1:].clone()
         loss_mask = labels != self.label_pad_token_id
 
-
         _, max_indices = torch.max(logits, dim=2)
         per_token_logps = torch.gather(new_chosen_logits.log_softmax(-1), dim=2, index=max_indices.unsqueeze(2)).squeeze(2)
-
-        # # Get top two indices (highest and second-highest logits)
-        # _, top_two_indices = torch.topk(logits, 2, dim=2)
-        #
-        # # Check if the chosen label is the same as the highest logit
-        # overlap_mask = top_two_indices[:,:,0] == labels
-        #
-        # # If there is an overlap, use the second highest logit, otherwise use the highest
-        # chosen_indices = torch.where(overlap_mask, top_two_indices[:,:,1], top_two_indices[:,:,0])
-        #
-        # # Gather the log probabilities for the chosen indices
-        # per_token_logps = torch.gather(new_chosen_logits.log_softmax(-1), dim=2, index=chosen_indices.unsqueeze(2)).squeeze(2)
-
-        # per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
 
         if average_log_prob:
             return (per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)
@@ -546,9 +450,15 @@ class POVIDTrainer(Trainer):
     def concatenated_forward(
         self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
-        """Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
+        """
+        Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
 
-        We do this to avoid doing two forward passes, because it's faster for FSDP.
+        Args:
+            model (nn.Module): The model to run.
+            batch (Dict[str, Union[List, torch.LongTensor]]): The batch of inputs.
+
+        Returns:
+            Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]: The log probabilities and logits for the chosen and rejected inputs.
         """
         concatenated_batch = self.concatenated_inputs(batch)
         len_chosen = batch["chosen_labels"].shape[0]
@@ -575,21 +485,21 @@ class POVIDTrainer(Trainer):
             else {}
         )
         chosen_logits = model(
-            input_ids = chosen_batch,
-            labels = chosen_label,
+            input_ids=chosen_batch,
+            labels=chosen_label,
             images=batch['images'],
             attention_mask=chosen_mask,
             **chosen_model_kwargs,
         ).logits.to(torch.float32)
 
         _, _, _, _, _, new_chosen_labels = self.model.prepare_inputs_labels_for_multimodal(
-                input_ids = chosen_batch,
-                position_ids = None,
-                attention_mask = chosen_mask,
-                past_key_values = None,
-                labels = chosen_label,
-                images = batch['images']
-            )
+            input_ids=chosen_batch,
+            position_ids=None,
+            attention_mask=chosen_mask,
+            past_key_values=None,
+            labels=chosen_label,
+            images=batch['images']
+        )
 
         chosen_logps = self._get_batch_logps(
             chosen_logits,
@@ -598,21 +508,21 @@ class POVIDTrainer(Trainer):
         )
 
         rejected_logits = model(
-            input_ids = rejected_batch,
-            labels = rejected_label,
+            input_ids=rejected_batch,
+            labels=rejected_label,
             images=batch['images'],
             attention_mask=rejected_mask,
             **rejected_model_kwargs,
         ).logits.to(torch.float32)
 
         _, _, _, _, _, new_rejected_labels = self.model.prepare_inputs_labels_for_multimodal(
-                input_ids = rejected_batch,
-                position_ids = None,
-                attention_mask = rejected_mask,
-                past_key_values = None,
-                labels = rejected_label,
-                images = batch['images']
-            )
+            input_ids=rejected_batch,
+            position_ids=None,
+            attention_mask=rejected_mask,
+            past_key_values=None,
+            labels=rejected_label,
+            images=batch['images']
+        )
 
         rejected_logps = self._get_batch_logps(
             rejected_logits,
@@ -620,14 +530,20 @@ class POVIDTrainer(Trainer):
             average_log_prob=False,
         )
 
-        return (chosen_logps, rejected_logps, chosen_logits, rejected_logits)
+        return chosen_logps, rejected_logps, chosen_logits, rejected_logits
 
     def concatenated_stage2_forward(
         self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
-        """Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
+        """
+        Run the given model on the given batch of inputs for stage 2 training, concatenating the chosen and rejected inputs together.
 
-        We do this to avoid doing two forward passes, because it's faster for FSDP.
+        Args:
+            model (nn.Module): The model to run.
+            batch (Dict[str, Union[List, torch.LongTensor]]): The batch of inputs.
+
+        Returns:
+            Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]: The log probabilities and logits for the chosen and rejected inputs.
         """
         concatenated_batch = self.concatenated_inputs(batch)
         len_chosen = batch["chosen_labels"].shape[0]
@@ -654,21 +570,21 @@ class POVIDTrainer(Trainer):
             else {}
         )
         chosen_logits = model(
-            input_ids = chosen_batch,
-            labels = chosen_label,
+            input_ids=chosen_batch,
+            labels=chosen_label,
             images=batch['images'],
             attention_mask=chosen_mask,
             **chosen_model_kwargs,
         ).logits.to(torch.float32)
 
         _, _, _, _, _, new_chosen_labels = self.model.prepare_inputs_labels_for_multimodal(
-                input_ids = chosen_batch,
-                position_ids = None,
-                attention_mask = chosen_mask,
-                past_key_values = None,
-                labels = chosen_label,
-                images = batch['images']
-            )
+            input_ids=chosen_batch,
+            position_ids=None,
+            attention_mask=chosen_mask,
+            past_key_values=None,
+            labels=chosen_label,
+            images=batch['images']
+        )
 
         chosen_logps = self._get_batch_logps(
             chosen_logits,
@@ -677,30 +593,28 @@ class POVIDTrainer(Trainer):
         )
 
         rejected_logits_own = model(
-            input_ids = chosen_batch,
-            labels = chosen_label,
+            input_ids=chosen_batch,
+            labels=chosen_label,
             images=batch['images_noisy'],
             attention_mask=chosen_mask,
             **chosen_model_kwargs,
         ).logits.to(torch.float32)
 
-
         _, _, _, _, _, new_rejected_labels = self.model.prepare_inputs_labels_for_multimodal(
-                input_ids = rejected_batch,
-                position_ids = None,
-                attention_mask = rejected_mask,
-                past_key_values = None,
-                labels = rejected_label,
-                images = batch['images_noisy']
-            )
+            input_ids=rejected_batch,
+            position_ids=None,
+            attention_mask=rejected_mask,
+            past_key_values=None,
+            labels=rejected_label,
+            images=batch['images_noisy']
+        )
         rejected_logits = model(
-            input_ids = rejected_batch,
-            labels = rejected_label,
+            input_ids=rejected_batch,
+            labels=rejected_label,
             images=batch['images'],
             attention_mask=rejected_mask,
             **rejected_model_kwargs,
         ).logits.to(torch.float32)
-
 
         rejected_logps = self._get_batch_logps(
             rejected_logits,
@@ -714,39 +628,34 @@ class POVIDTrainer(Trainer):
             average_log_prob=False,
         )
 
+        return chosen_logps, rejected_logps, chosen_logits, rejected_logits, rejected_own_logps
 
-        return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, rejected_own_logps)
     def get_batch_metrics(
         self,
-        model,
+        model: nn.Module,
         batch: Dict[str, Union[List, torch.LongTensor]],
         train_eval: Literal["train", "eval"] = "train",
-    ):
-        """Compute the DPO loss and other metrics for the given batch of inputs for train or test."""
+    ) -> Tuple[torch.FloatTensor, Dict[str, float]]:
+        """
+        Compute the DPO loss and other metrics for the given batch of inputs for train or test.
+
+        Args:
+            model (nn.Module): The model to run.
+            batch (Dict[str, Union[List, torch.LongTensor]]): The batch of inputs.
+            train_eval (Literal["train", "eval"], optional): Whether the mode is train or eval. Defaults to "train".
+
+        Returns:
+            Tuple[torch.FloatTensor, Dict[str, float]]: The loss and metrics.
+        """
         metrics = {}
         if self.stage == 1:
-            (
-                policy_chosen_logps,
-                policy_rejected_logps,
-                policy_chosen_logits,
-                policy_rejected_logits,
-            ) = self.concatenated_forward(model, batch)
+            policy_chosen_logps, policy_rejected_logps, policy_chosen_logits, policy_rejected_logits = self.concatenated_forward(model, batch)
             with torch.no_grad():
                 if self.ref_model is None:
                     with self.accelerator.unwrap_model(self.model).disable_adapter():
-                        (
-                            reference_chosen_logps,
-                            reference_rejected_logps,
-                            _,
-                            _,
-                        ) = self.concatenated_forward(self.model, batch)
+                        reference_chosen_logps, reference_rejected_logps, _, _ = self.concatenated_forward(self.model, batch)
                 else:
-                    (
-                        reference_chosen_logps,
-                        reference_rejected_logps,
-                        _,
-                        _,
-                    ) = self.concatenated_forward(self.ref_model, batch)
+                    reference_chosen_logps, reference_rejected_logps, _, _ = self.concatenated_forward(self.ref_model, batch)
 
             losses, chosen_rewards, rejected_rewards = self.dpo_loss(
                 policy_chosen_logps,
@@ -755,32 +664,14 @@ class POVIDTrainer(Trainer):
                 reference_rejected_logps,
             )
             reward_accuracies = (chosen_rewards > rejected_rewards).float()
-        elif self.stage==2:
-            (
-                policy_chosen_logps,
-                policy_rejected_logps,
-                policy_chosen_logits,
-                policy_rejected_logits,
-                rejected_own_logps,
-            ) = self.concatenated_stage2_forward(model, batch)
+        elif self.stage == 2:
+            policy_chosen_logps, policy_rejected_logps, policy_chosen_logits, policy_rejected_logits, rejected_own_logps = self.concatenated_stage2_forward(model, batch)
             with torch.no_grad():
                 if self.ref_model is None:
                     with self.accelerator.unwrap_model(self.model).disable_adapter():
-                        (
-                            reference_chosen_logps,
-                            reference_rejected_logps,
-                            _,
-                            _,
-                            reference_rejected_own_logps,
-                        ) = self.concatenated_stage2_forward(self.model, batch)
+                        reference_chosen_logps, reference_rejected_logps, _, _, reference_rejected_own_logps = self.concatenated_stage2_forward(self.model, batch)
                 else:
-                    (
-                        reference_chosen_logps,
-                        reference_rejected_logps,
-                        _,
-                        _,
-                        reference_rejected_own_logps,
-                    ) = self.concatenated_stage2_forward(self.ref_model, batch)
+                    reference_chosen_logps, reference_rejected_logps, _, _, reference_rejected_own_logps = self.concatenated_stage2_forward(self.ref_model, batch)
 
             self_losses, chosen_rewards, rejected_rewards = self.dpo_loss(
                 policy_chosen_logps,
@@ -811,169 +702,3 @@ class POVIDTrainer(Trainer):
 
         return losses.mean(), metrics
 
-    def compute_loss(
-        self,
-        model: Union[PreTrainedModel, nn.Module],
-        inputs: Dict[str, Union[torch.Tensor, Any]],
-        return_outputs=False,
-    ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
-        if not self.use_dpo_data_collator:
-            warnings.warn(
-                "compute_loss is only implemented for DPODataCollatorWithPadding, and you passed a datacollator that is different than "
-                "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
-            )
-        loss, metrics = self.get_batch_metrics(model, inputs, train_eval="train")
-
-        # force log the metrics
-        if self.accelerator.is_main_process:
-            self.store_metrics(metrics, train_eval="train")
-
-        if return_outputs:
-            return (loss, metrics)
-        return loss
-
-    def get_batch_samples(self, model, batch: Dict[str, torch.LongTensor]) -> Tuple[str, str]:
-        """Generate samples from the model and reference model for the given batch of inputs."""
-
-        policy_output = model.generate(
-            input_ids=batch["prompt_input_ids"],
-            attention_mask=batch["prompt_attention_mask"],
-            max_length=self.max_length,
-            do_sample=True,
-            pad_token_id=self.tokenizer.pad_token_id,
-        )
-
-        if self.ref_model is None:
-            with self.accelerator.unwrap_model(self.model).disable_adapter():
-                reference_output = self.model.generate(
-                    batch["prompt_input_ids"],
-                    attention_mask=batch["prompt_attention_mask"],
-                    max_length=self.max_length,
-                    do_sample=True,
-                    pad_token_id=self.tokenizer.pad_token_id,
-                )
-        else:
-            reference_output = self.ref_model.generate(
-                batch["prompt_input_ids"],
-                attention_mask=batch["prompt_attention_mask"],
-                max_length=self.max_length,
-                do_sample=True,
-                pad_token_id=self.tokenizer.pad_token_id,
-            )
-
-        policy_output = pad_to_length(policy_output, self.max_length, self.tokenizer.pad_token_id)
-        policy_output_decoded = self.tokenizer.batch_decode(policy_output, skip_special_tokens=True)
-
-        reference_output = pad_to_length(reference_output, self.max_length, self.tokenizer.pad_token_id)
-        reference_output_decoded = self.tokenizer.batch_decode(reference_output, skip_special_tokens=True)
-
-        return policy_output_decoded, reference_output_decoded
-
-    def prediction_step(
-        self,
-        model: Union[PreTrainedModel, nn.Module],
-        inputs: Dict[str, Union[torch.Tensor, Any]],
-        prediction_loss_only: bool,
-        ignore_keys: Optional[List[str]] = None,
-    ):
-        if not self.use_dpo_data_collator:
-            warnings.warn(
-                "prediction_step is only implemented for DPODataCollatorWithPadding, and you passed a datacollator that is different than "
-                "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
-            )
-        if ignore_keys is None:
-            if hasattr(model, "config"):
-                ignore_keys = getattr(model.config, "keys_to_ignore_at_inference", [])
-            else:
-                ignore_keys = []
-
-        with torch.no_grad():
-            loss, metrics = self.get_batch_metrics(model, inputs, train_eval="eval")
-
-        # force log the metrics
-        if self.accelerator.is_main_process:
-            self.store_metrics(metrics, train_eval="eval")
-
-        if prediction_loss_only:
-            return (loss.detach(), None, None)
-
-        # logits for the chosen and rejected samples from model
-        logits_dict = {
-            "eval_logits/chosen": metrics["eval_logits/chosen"],
-            "eval_logits/rejected": metrics["eval_logits/rejected"],
-        }
-        logits = tuple(v.unsqueeze(dim=0) for k, v in logits_dict.items() if k not in ignore_keys)
-        logits = torch.stack(logits).mean(axis=1).to(self.accelerator.device)
-        labels = torch.zeros(logits.shape[0], device=self.accelerator.device)
-
-        return (loss.detach(), logits, labels)
-
-    def store_metrics(self, metrics: Dict[str, float], train_eval: Literal["train", "eval"] = "train") -> None:
-        for key, value in metrics.items():
-            self._stored_metrics[train_eval][key].append(value)
-
-    def evaluation_loop(
-        self,
-        dataloader: DataLoader,
-        description: str,
-        prediction_loss_only: Optional[bool] = None,
-        ignore_keys: Optional[List[str]] = None,
-        metric_key_prefix: str = "eval",
-    ) -> EvalLoopOutput:
-        """
-        Overriding built-in evaluation loop to store metrics for each batch.
-        Prediction/evaluation loop, shared by `Trainer.evaluate()` and `Trainer.predict()`.
-
-        Works both with or without labels.
-        """
-
-        # Sample and save to game log if requested (for one batch to save time)
-        if self.generate_during_eval:
-            # Generate random indices within the range of the total number of samples
-            num_samples = len(dataloader.dataset)
-            random_indices = random.sample(range(num_samples), k=self.args.eval_batch_size)
-
-            # Use dataloader.dataset.select to get the random batch without iterating over the DataLoader
-            random_batch_dataset = dataloader.dataset.select(random_indices)
-            random_batch = self.data_collator(random_batch_dataset)
-            random_batch = self._prepare_inputs(random_batch)
-
-            policy_output_decoded, ref_output_decoded = self.get_batch_samples(self.model, random_batch)
-
-            self.log(
-                {
-                    "game_log": wandb.Table(
-                        columns=["Prompt", "Policy", "Ref Model"],
-                        rows=[
-                            [prompt, pol[len(prompt) :], ref[len(prompt) :]]
-                            for prompt, pol, ref in zip(
-                                random_batch["prompt"], policy_output_decoded, ref_output_decoded
-                            )
-                        ],
-                    )
-                }
-            )
-            self.state.log_history.pop()
-
-        # Base evaluation
-        initial_output = super().evaluation_loop(
-            dataloader, description, prediction_loss_only, ignore_keys, metric_key_prefix
-        )
-
-        return initial_output
-
-    def log(self, logs: Dict[str, float]) -> None:
-        """
-        Log `logs` on the various objects watching training, including stored metrics.
-
-        Args:
-            logs (`Dict[str, float]`):
-                The values to log.
-        """
-        # logs either has 'loss' or 'eval_loss'
-        train_eval = "train" if "loss" in logs else "eval"
-        # Add averaged stored metrics to logs
-        for key, metrics in self._stored_metrics[train_eval].items():
-            logs[key] = torch.tensor(metrics).mean().item()
-        del self._stored_metrics[train_eval]
-        return super().log(logs)
