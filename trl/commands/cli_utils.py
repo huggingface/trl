@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import inspect
+import logging
 import os
 import sys
 from copy import deepcopy
@@ -22,6 +23,9 @@ from typing import Any, List
 
 import yaml
 from transformers import HfArgumentParser
+
+
+logger = logging.getLogger(__name__)
 
 
 class YamlConfigParser:
@@ -136,13 +140,10 @@ def init_zero_verbose():
 
 
 @dataclass
-class SftScriptArguments:
+class SFTScriptArguments:
     dataset_name: str = field(default="timdettmers/openassistant-guanaco", metadata={"help": "the dataset name"})
-    dataset_text_field: str = field(default=None, metadata={"help": "the text field of the dataset"})
-    dataset_train_name: str = field(default="train", metadata={"help": "the name of the training set of the dataset"})
-    dataset_test_name: str = field(default="test", metadata={"help": "the name of the training set of the dataset"})
-    max_seq_length: int = field(default=512, metadata={"help": "The maximum sequence length for SFT Trainer"})
-    packing: bool = field(default=False, metadata={"help": "Whether to apply data packing or not during training"})
+    dataset_train_split: str = field(default="train", metadata={"help": "The dataset split to train on"})
+    dataset_test_split: str = field(default="test", metadata={"help": "The dataset split to evaluate on"})
     config: str = field(default=None, metadata={"help": "Path to the optional config file"})
     gradient_checkpointing_use_reentrant: bool = field(
         default=False, metadata={"help": "Whether to apply `use_reentrant` for gradient_checkpointing"}
@@ -150,14 +151,10 @@ class SftScriptArguments:
 
 
 @dataclass
-class DpoScriptArguments:
+class DPOScriptArguments:
     dataset_name: str = field(default=None, metadata={"help": "the dataset name"})
-    beta: float = field(default=0.1, metadata={"help": "the beta parameter for DPO loss"})
-    max_length: int = field(default=512, metadata={"help": "max length of each sample"})
-    max_prompt_length: int = field(default=128, metadata={"help": "max length of each sample's prompt"})
-    max_target_length: int = field(
-        default=128, metadata={"help": "Only used for encoder decoder model. Max target of each sample's prompt"}
-    )
+    dataset_train_split: str = field(default="train", metadata={"help": "The dataset split to use for training"})
+    dataset_test_split: str = field(default="test", metadata={"help": "The dataset split to use for evaluation"})
     sanity_check: bool = field(default=False, metadata={"help": "only train on 1000 samples"})
     ignore_bias_buffers: bool = field(
         default=False,
@@ -167,7 +164,6 @@ class DpoScriptArguments:
             "https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992"
         },
     )
-    generate_during_eval: bool = field(default=False, metadata={"help": "Generate during evaluation"})
     config: str = field(default=None, metadata={"help": "Path to the optional config file"})
     gradient_checkpointing_use_reentrant: bool = field(
         default=False, metadata={"help": "Whether to apply `use_reentrant` for gradient_checkpointing"}
@@ -256,6 +252,8 @@ class TrlParser(HfArgumentParser):
         """
         super().__init__(parsers)
 
+        self.config_parser = None
+
     def post_process_dataclasses(self, dataclasses):
         # Apply additional post-processing in case some arguments needs a special
         # care
@@ -266,7 +264,7 @@ class TrlParser(HfArgumentParser):
             if dataclass_obj.__class__.__name__ == "TrainingArguments":
                 training_args = dataclass_obj
                 training_args_index = i
-            elif dataclass_obj.__class__.__name__ in ("SftScriptArguments", "DpoScriptArguments"):
+            elif dataclass_obj.__class__.__name__ in ("SFTScriptArguments", "DPOScriptArguments"):
                 trl_args = dataclass_obj
             else:
                 ...
@@ -286,29 +284,42 @@ class TrlParser(HfArgumentParser):
             config_index = sys.argv.index("--config") + 1
             config_path = sys.argv[config_index]
 
-            with open(config_path) as yaml_file:
-                yaml_config = yaml.safe_load(yaml_file)
-
-            output_dir = yaml_config.get("output_dir")
+            self.config_parser = YamlConfigParser(config_path)
+            output_dir = self.config_parser.config.get("output_dir")
 
             if output_dir is not None:
                 if "--output_dir" in sys.argv:
                     output_dir_index = sys.argv.index("--output_dir")
-                    sys.argv.index[output_dir_index + 1] = output_dir
+                    passed_output_dir = sys.argv[output_dir_index + 1]
+                    self.config_parser.config["output_dir"] = passed_output_dir
                 else:
                     sys.argv.extend(["--output_dir", output_dir])
 
         dataclasses = self.parse_args_into_dataclasses(return_remaining_strings=True)
+
+        if len(dataclasses[-1]) > 0:
+            # It is expected that `config` is in that list but not ignored
+            # let's simply remove them
+            list_ignored = dataclasses[-1]
+            if "--config" in list_ignored:
+                config_index = list_ignored.index("--config") + 1
+                config_path = list_ignored[config_index]
+
+                list_ignored.remove(config_path)
+                list_ignored.remove("--config")
+
+            if len(list_ignored) > 0:
+                logger.warning(
+                    f"Detected extra arguments that are going to be ignored: {list_ignored} - make sure to double check what you are doing"
+                )
+
         # Pop the last element which should be the remaining strings
         dataclasses = self.update_dataclasses_with_config(dataclasses[:-1])
         return dataclasses
 
     def update_dataclasses_with_config(self, dataclasses):
-        self.config_parser = None
         for parser_dataclass in dataclasses:
-            if hasattr(parser_dataclass, "config"):
-                if self.config_parser is not None:
-                    raise ValueError("You passed the `config` field twice! Make sure to pass `config` only once.")
+            if hasattr(parser_dataclass, "config") and self.config_parser is None:
                 self.config_parser = YamlConfigParser(parser_dataclass.config)
 
         if self.config_parser is not None:

@@ -58,7 +58,7 @@ import os
 from setuptools import find_packages, setup
 
 
-__version__ = "0.8.6.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
+__version__ = "0.8.7.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
 
 REQUIRED_PKGS = [
     "torch>=1.4.0",
@@ -69,7 +69,7 @@ REQUIRED_PKGS = [
     "tyro>=0.5.11",
 ]
 EXTRAS = {
-    "test": ["parameterized", "pytest", "pytest-xdist", "accelerate", "pytest-cov", "pytest-xdist"],
+    "test": ["parameterized", "pytest", "pytest-xdist", "accelerate", "pytest-cov", "pytest-xdist", "scikit-learn"],
     "peft": ["peft>=0.4.0"],
     "diffusers": ["diffusers>=0.18.0"],
     "deepspeed": ["deepspeed>=0.9.5"],
@@ -106,7 +106,7 @@ try:
         },
         include_package_data=True,
         package_data={"trl": ["commands/scripts/config/*", "commands/scripts/*"]},
-        packages=find_packages(),
+        packages=find_packages(exclude={"tests"}),
         install_requires=REQUIRED_PKGS,
         extras_require=EXTRAS,
         python_requires=">=3.7",

@@ -97,6 +97,10 @@ def is_wandb_available() -> bool:
     return find_spec("wandb") is not None
 
 
+def is_sklearn_available() -> bool:
+    return find_spec("sklearn") is not None
+
+
 def is_xpu_available() -> bool:
     if is_accelerate_greater_20_0():
         import accelerate

@@ -33,7 +33,7 @@ from rich.markdown import Markdown
 from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
 
 from trl.commands.cli_utils import ChatArguments, TrlParser, init_zero_verbose
-from trl.trainer.utils import get_kbit_device_map, get_quantization_config
+from trl.trainer.utils import get_quantization_config
 
 
 HELP_STRING = """\
@@ -220,7 +220,7 @@ def load_model_and_tokenizer(args):
         trust_remote_code=args.trust_remote_code,
         attn_implementation=args.attn_implementation,
         torch_dtype=torch_dtype,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
+        device_map="auto",
         quantization_config=quantization_config,
     )
     model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path, **model_kwargs)

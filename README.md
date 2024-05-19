@@ -69,7 +69,7 @@ trl sft --model_name_or_path facebook/opt-125m --dataset_name imdb --output_dir 
 **DPO:**
 
 ```bash
-trl dpo --model_name_or_path facebook/opt-125m --dataset_name trl-internal-testing/hh-rlhf-trl-style --output_dir opt-sft-hh-rlhf 
+trl dpo --model_name_or_path facebook/opt-125m --dataset_name trl-internal-testing/hh-rlhf-helpful-base-trl-style --output_dir opt-sft-hh-rlhf 
 ```
 
 **Chat:**
