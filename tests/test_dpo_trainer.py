@@ -624,7 +624,7 @@ class DPOTrainerTester(unittest.TestCase):
             training_args = DPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
-                max_steps"=3,
+                max_steps=3,
                 remove_unused_columns=False,
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
