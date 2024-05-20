@@ -7,12 +7,13 @@
 # 5. ✅ Filter?
 #   * Smart truncation?
 # 6. ✅ dataset_num_proc
-# 7. check EOS token
+# 7. ✅ check EOS token
 # 8. dataset mixer?
 # 9. ✅ pretty print that show tokenization?
-# 10. hashable tokneization?
+# 10. ✅ hashable tokneization?
 # 11. inputs / labels / attention_mask
-# 12. always set a `tokenizer.pad_token_id`?
+# 12. ✅ always set a `tokenizer.pad_token_id`?
+# 13. a new DataCollatorForLanguageModeling?
 
 ## too many names related to "maximum length":
 # * `max_seq_length` in SFT
@@ -40,7 +41,7 @@ class DatasetConfig:
 
     # dataset.map config
     batched: bool = False
-    load_from_cache_file: bool = False
+    load_from_cache_file: bool = True
     num_proc: Optional[int] = 1
 
     # visualization configs
