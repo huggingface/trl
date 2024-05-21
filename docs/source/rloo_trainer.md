@@ -29,7 +29,7 @@ python examples/scripts/minimal/rloo.py \
 
 ## Explanation of the logged metrics
 
-The logged metrics are as follows. Here is an example [tracked run at Weights and Biases](https://wandb.ai/costa-huang/huggingface/runs/u2sqci34)
+The logged metrics are as follows. Here is an example [tracked run at Weights and Biases](https://wandb.ai/huggingface/trl/runs/u2sqci34)
 
 <!-- * `rlhf_reward_var_per_prompt`: calculated by `rlhf_reward.var(0).mean()`. This is the variance of the rewards estimated across the `args.rloo_k` samples. Usually we expect it to go down (cause policy entropy goes down). -->
 
@@ -62,7 +62,7 @@ The logged metrics are as follows. Here is an example [tracked run at Weights an
 
 ## What is my model doing exactly?
 
-To help you understand what your model is doing, we periodically log some sample completions from the model. Here is an example of a completion. In an example [tracked run at Weights and Biases](https://wandb.ai/costa-huang/huggingface/runs/u2sqci34), it looks like the following, allowing you to see the model's response at different stages of training. By default we generate `--num_sample_generations 10` during training, but you can customize the number of generations.
+To help you understand what your model is doing, we periodically log some sample completions from the model. Here is an example of a completion. In an example [tracked run at Weights and Biases](https://wandb.ai/huggingface/trl/runs/u2sqci34), it looks like the following, allowing you to see the model's response at different stages of training. By default we generate `--num_sample_generations 10` during training, but you can customize the number of generations.
 
 ![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/ppov2_completions.gif?download=true)
 
@@ -251,7 +251,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
 1B experiment can be found here:
 
 - [🤗 Model checkpoint](https://huggingface.co/vwxyzjn/rloo_tldr)
-- [🐝 Tracked experiment](https://wandb.ai/costa-huang/huggingface/runs/u2sqci34)
+- [🐝 Tracked experiment](https://wandb.ai/huggingface/trl/runs/u2sqci34)
 
 
 To evaluate, we use vLLM to load the checkpoints and GPT3.5 as a judge model to evaluate the generated TL;DR against the reference TL;DR.
