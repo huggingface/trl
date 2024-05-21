@@ -14,6 +14,8 @@
 # 11. inputs / labels / attention_mask
 # 12. ✅ always set a `tokenizer.pad_token_id`?
 # 13. a new DataCollatorForLanguageModeling?
+# 14. `add_bos_token` and `add_eos_token`? E.g., LLAMA models
+# 15. generate properties: has eos_token, bos_token?
 
 ## too many names related to "maximum length":
 # * `max_seq_length` in SFT
@@ -32,6 +34,19 @@ from transformers import PreTrainedTokenizer
 
 
 COLORS = ["on red", "on green", "on blue", "on yellow", "on magenta"]
+# preference dataset
+CHOSEN_KEY = "chosen"
+REJECTED_KEY = "rejected"
+INPUT_IDS_CHOSEN_KEY = "input_ids_chosen"
+ATTENTION_MASK_CHOSEN_KEY = "attention_mask_chosen"
+INPUT_IDS_REJECTED_KEY = "input_ids_rejected"
+ATTENTION_MASK_REJECTED_KEY = "attention_mask_rejected"
+INPUT_IDS_PROMPT_KEY = "input_ids_prompt"
+ATTENTION_MASK_PROMPT_KEY = "attention_mask_prompt"
+
+# SFT dataset
+MESSAGES_KEY = "messages"
+INPUT_IDS_KEY = "input_ids"
 
 
 @dataclass
@@ -100,9 +115,12 @@ class DatasetProcessor:
 class PreferenceDatasetProcessor(DatasetProcessor):
     def tokenize(self, dataset: Dataset):
         def tokenize_fn(row):
-            row["prompt"] = self.tokenizer.apply_chat_template(row["chosen"][:-1])
-            row["chosen"] = self.tokenizer.apply_chat_template(row["chosen"])
-            row["rejected"] = self.tokenizer.apply_chat_template(row["rejected"])
+            row[INPUT_IDS_PROMPT_KEY] = self.tokenizer.apply_chat_template(row[CHOSEN_KEY][:-1])
+            row[ATTENTION_MASK_PROMPT_KEY] = [1] * len(row[INPUT_IDS_PROMPT_KEY])
+            row[INPUT_IDS_CHOSEN_KEY] = self.tokenizer.apply_chat_template(row[CHOSEN_KEY])
+            row[ATTENTION_MASK_CHOSEN_KEY] = [1] * len(row[INPUT_IDS_CHOSEN_KEY])
+            row[INPUT_IDS_REJECTED_KEY] = self.tokenizer.apply_chat_template(row[REJECTED_KEY])
+            row[ATTENTION_MASK_REJECTED_KEY] = [1] * len(row[INPUT_IDS_REJECTED_KEY])
             return row
 
         return dataset.map(
@@ -112,11 +130,11 @@ class PreferenceDatasetProcessor(DatasetProcessor):
     def filter(self, dataset: Dataset):
         def filter_fn(row):
             return (
-                len(row["prompt"]) <= self.config.max_prompt_token_lenth
+                len(row[INPUT_IDS_PROMPT_KEY]) <= self.config.max_prompt_token_lenth
                 if self.config.max_prompt_token_lenth is not None
-                else True and len(row["chosen"]) <= self.config.max_token_length
+                else True and len(row[INPUT_IDS_CHOSEN_KEY]) <= self.config.max_token_length
                 if self.config.max_token_length is not None
-                else True and len(row["rejected"]) <= self.config.max_token_length
+                else True and len(row[INPUT_IDS_REJECTED_KEY]) <= self.config.max_token_length
                 if self.config.max_token_length is not None
                 else True
             )
@@ -126,17 +144,21 @@ class PreferenceDatasetProcessor(DatasetProcessor):
         )
 
     def get_token_length_stats(self, dataset: Dataset):
-        return super().get_token_length_stats(features=["prompt", "chosen", "rejected"], dataset=dataset)
+        return super().get_token_length_stats(
+            features=[INPUT_IDS_PROMPT_KEY, INPUT_IDS_CHOSEN_KEY, INPUT_IDS_REJECTED_KEY], dataset=dataset
+        )
 
     def get_token_length_visualization(self, dataset: Dataset):
-        return super().get_token_length_visualization(features=["prompt", "chosen", "rejected"], dataset=dataset)
+        return super().get_token_length_visualization(
+            features=[INPUT_IDS_PROMPT_KEY, INPUT_IDS_CHOSEN_KEY, INPUT_IDS_REJECTED_KEY], dataset=dataset
+        )
 
 
 class SFTDatasetProcessor(DatasetProcessor):
     def tokenize(self, dataset: Dataset):
         def tokenize_fn(row):
-            row["prompt"] = self.tokenizer.apply_chat_template(row["messages"][:-1])
-            row["messages"] = self.tokenizer.apply_chat_template(row["messages"])
+            row[INPUT_IDS_PROMPT_KEY] = self.tokenizer.apply_chat_template(row[MESSAGES_KEY][:-1])
+            row[INPUT_IDS_KEY] = self.tokenizer.apply_chat_template(row[MESSAGES_KEY])
             return row
 
         return dataset.map(
@@ -146,9 +168,9 @@ class SFTDatasetProcessor(DatasetProcessor):
     def filter(self, dataset: Dataset):
         def filter_fn(row):
             return (
-                len(row["prompt"]) <= self.config.max_prompt_token_lenth
+                len(row[INPUT_IDS_PROMPT_KEY]) <= self.config.max_prompt_token_lenth
                 if self.config.max_prompt_token_lenth is not None
-                else True and len(row["messages"]) <= self.config.max_token_length
+                else True and len(row[INPUT_IDS_KEY]) <= self.config.max_token_length
                 if self.config.max_token_length is not None
                 else True
             )
@@ -158,10 +180,10 @@ class SFTDatasetProcessor(DatasetProcessor):
         )
 
     def get_token_length_stats(self, dataset: Dataset):
-        return super().get_token_length_stats(features=["prompt", "messages"], dataset=dataset)
+        return super().get_token_length_stats(features=[INPUT_IDS_PROMPT_KEY, INPUT_IDS_KEY], dataset=dataset)
 
     def get_token_length_visualization(self, dataset: Dataset):
-        return super().get_token_length_visualization(features=["prompt", "messages"], dataset=dataset)
+        return super().get_token_length_visualization(features=[INPUT_IDS_PROMPT_KEY, INPUT_IDS_KEY], dataset=dataset)
 
 
 def visualize_token(tokens: list[int], tokenizer: PreTrainedTokenizer):

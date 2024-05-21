@@ -158,30 +158,7 @@ class RewardTrainer(Trainer):
             compute_metrics = compute_accuracy
 
         if data_collator is None:
-            if tokenizer is None:
-                raise ValueError(
-                    "max_length or a tokenizer must be specified when using the default RewardDataCollatorWithPadding"
-                )
-            if type(args) == TrainingArguments:
-                if max_length is None:
-                    warnings.warn(
-                        "When using RewardDataCollatorWithPadding, you should set `max_length` in RewardConfig."
-                        " It will be set to `512` by default, but you should do it yourself in the future.",
-                        UserWarning,
-                    )
-                    max_length = 512
-            else:
-                if max_length is None and args.max_length is None:
-                    warnings.warn(
-                        "When using RewardDataCollatorWithPadding, you should set `max_length` in RewardConfig."
-                        " It will be set to `512` by default, but you should do it yourself in the future.",
-                        UserWarning,
-                    )
-                    max_length = 512
-                if max_length is None and args.max_length is not None:
-                    max_length = args.max_length
-
-            data_collator = RewardDataCollatorWithPadding(tokenizer, max_length=max_length)
+            data_collator = RewardDataCollatorWithPadding(tokenizer)
 
             if args.remove_unused_columns:
                 try:  # for bc before https://github.com/huggingface/transformers/pull/25435
@@ -300,12 +277,12 @@ class RewardTrainer(Trainer):
         table = defaultdict(list)
         for _, inputs in enumerate(eval_dataloader):
             _, logits, _ = self.prediction_step(self.model, inputs, prediction_loss_only=False)
-            chosen_text = self.tokenizer.batch_decode(inputs["input_ids_chosen"], skip_special_tokens=True)
-            rejected_text = self.tokenizer.batch_decode(inputs["input_ids_rejected"], skip_special_tokens=True)
+            chosen_text = self.tokenizer.batch_decode(inputs["input_ids_chosen"])
+            rejected_text = self.tokenizer.batch_decode(inputs["input_ids_rejected"])
             table["chosen_text"].extend(gather_object(chosen_text))
             table["rejected_text"].extend(gather_object(rejected_text))
             table["logits"].extend(
-                gather_object([[round(inner_item, 4) for inner_item in item] for item in logits.tolist()])
+                gather_object([[round(inner_item, 6) for inner_item in item] for item in logits.tolist()])
             )
             if num_print_samples >= 0 and len(table["chosen_text"]) >= num_print_samples:
                 break
