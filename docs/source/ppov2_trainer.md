@@ -233,4 +233,25 @@ python -i examples/scripts/evals/generate_tldr.py \
 The PPO checkpoint gets a 52.8% preferred rate vs the 34.4% preference rate of the SFT checkpoint. This is a good sign that the PPO training is working as intended.
 
 
+Metrics:
+
+![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/benchmark/pr-1540/ppov2.png?download=true)
+
+
+```bash
+# pip install openrlbenchmark==0.2.1a5
+# see https://github.com/openrlbenchmark/openrlbenchmark#get-started for documentation
+# to use it, change `?we=huggingface&wpn=trl` to your own project and `?tag=pr-1540` to your own tag
+python -m openrlbenchmark.rlops_multi_metrics \
+    --filters '?we=huggingface&wpn=trl&xaxis=train/episode&ceik=output_dir&cen=sft_model_path&metrics=train/objective/rlhf_reward&metrics=train/objective/scores&metrics=train/objective/kl&metrics=train/objective/non_score_reward&metrics=train/objective/entropy&metrics=train/policy/approxkl_avg&metrics=train/policy/clipfrac_avg&metrics=train/loss/policy_avg&metrics=train/loss/value_avg&metrics=train/val/clipfrac_avg&metrics=train/policy/entropy_avg&metrics=train/val/ratio&metrics=train/val/ratio_var&metrics=train/val/num_eos_tokens&metrics=train/lr&metrics=train/eps' \
+        "cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr?tag=pr-1540" \
+    --env-ids models/minimal/ppo_tldr \
+    --pc.ncols 4 \
+    --pc.ncols-legend 1 \
+    --pc.xlabel "Episode" \
+    --output-filename benchmark/trl/pr-1540/ppov2 \
+    --scan-history
+```
+
+
 6.9B experiment is still TBD (experiments got preempted due to resource constraints).
