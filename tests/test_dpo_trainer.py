@@ -320,6 +320,8 @@ class DPOTrainerTester(unittest.TestCase):
                 evaluation_strategy="steps",
                 precompute_ref_log_probs=False,
                 sync_ref_model=True,
+                ref_model_mixup_alpha=0.5,
+                ref_model_sync_steps=1,
             )
 
             dummy_dataset = self._init_dummy_dataset()

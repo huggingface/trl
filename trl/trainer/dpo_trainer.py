@@ -545,14 +545,7 @@ class DPOTrainer(Trainer):
                     "You cannot use `precompute_ref_log_probs=True` with TR-DPO method. Please set `precompute_ref_log_probs=False`."
                 )
 
-            self.add_callback(
-                SyncRefModelCallback(
-                    ref_model=self.ref_model,
-                    accelerator=self.accelerator,
-                    ref_model_mixup_alpha=args.ref_model_mixup_alpha,
-                    ref_model_sync_steps=args.ref_model_sync_steps,
-                )
-            )
+            self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
         if self.loss_type == "bco_pair":
             self.running = RunningMoments(self.accelerator)
 

@@ -74,11 +74,7 @@ class SyncRefModelCallback(TrainerCallback):
         self,
         ref_model: Union[PreTrainedModel, torch.nn.Module],
         accelerator: Optional[Accelerator],
-        ref_model_mixup_alpha: float,
-        ref_model_sync_steps: int,
     ):
-        self.ref_model_mixup_alpha = ref_model_mixup_alpha
-        self.ref_model_sync_steps = ref_model_sync_steps
         self.accelerator = accelerator
         self.ref_model = ref_model
 
@@ -87,23 +83,23 @@ class SyncRefModelCallback(TrainerCallback):
         for target_param, copy_param in zip(target_model.parameters(), model.parameters()):
             target_param.data.mul_(1.0 - alpha).add_(copy_param.data, alpha=alpha)
 
-    @classmethod
-    def sync_target_model(cls, model, target_model, alpha):
+    @staticmethod
+    def sync_target_model(model, target_model, alpha):
         deepspeed_plugin = AcceleratorState().deepspeed_plugin
         if deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3:
             with deepspeed.zero.GatheredParameters(list(model.parameters()), modifier_rank=0):
                 if deepspeed.comm.get_rank() == 0:
-                    cls._sync_target_model(model, target_model, alpha)
+                    SyncRefModelCallback._sync_target_model(model, target_model, alpha)
         else:
-            cls._sync_target_model(model, target_model, alpha)
+            SyncRefModelCallback._sync_target_model(model, target_model, alpha)
 
     def on_step_end(self, args, state, control, **kwargs):
         model: PreTrainedModel = kwargs["model"]
 
-        if self.ref_model is not None and state.global_step % self.ref_model_sync_steps == 0:
+        if self.ref_model is not None and state.global_step % args.ref_model_sync_steps == 0:
             if self.accelerator:
                 model = self.accelerator.unwrap_model(model)
-            self.sync_target_model(model, self.ref_model, self.ref_model_mixup_alpha)
+            self.sync_target_model(model, self.ref_model, args.ref_model_mixup_alpha)
 
 
 class FixedKLController:

@@ -94,5 +94,5 @@ class DPOConfig(TrainingArguments):
     reference_free: bool = False
     force_use_ref_model: bool = False
     sync_ref_model: bool = False
-    ref_model_mixup_alpha: float = 1.0
-    ref_model_sync_steps: int = 2
+    ref_model_mixup_alpha: float = 0.9
+    ref_model_sync_steps: int = 64
