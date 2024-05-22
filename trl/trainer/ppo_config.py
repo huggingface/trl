@@ -156,8 +156,6 @@ class PPOConfig:
         exact_div(
             self.batch_size,
             self.backward_batch_size,
-            "`batch_size`",
-            "`mini_batch_size * gradient_accumulation_steps`",
             "`batch_size` must be a multiple of `mini_batch_size * gradient_accumulation_steps`",
         )
 
