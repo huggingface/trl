@@ -114,6 +114,8 @@ class PPOConfig(TrainingArguments):
     """whether to whiten the rewards"""
     kl_coef: float = 0.05
     """the KL coefficient"""
+    vllm_device: str = "cuda:7"
+    vllm_gpu_memory_utilization: float = 0.9
     remove_duplicate_response_pad_tokens: bool = False
 
 
@@ -438,7 +440,8 @@ class PPOTrainer(Trainer):
                 revision=args.sft_model_revision,
                 tokenizer_revision=args.sft_model_revision,
                 tensor_parallel_size=1,
-                device="cuda:7",
+                device=args.vllm_device,
+                gpu_memory_utilization=args.vllm_gpu_memory_utilization,
             )
             self.llmp = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
             print("🔥🔥🔥 vllm loaded")
@@ -625,7 +628,7 @@ class PPOTrainer(Trainer):
                 contain_eos_token = torch.any(postprocessed_responses == tokenizer.eos_token_id, dim=-1)
                 if args.non_eos_penalty:
                     scores = torch.where(contain_eos_token, scores, torch.full_like(scores, args.penalty_reward_value))
-                accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
+                # accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
 
                 # be very careful with `padding_mask_p1`; see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
                 sequence_lengths_p1 = sequence_lengths + 1
