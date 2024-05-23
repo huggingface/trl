@@ -14,7 +14,7 @@ from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
 
 
 """
-python -i examples/scripts/minimal/ppo.py \
+python -i examples/scripts/ppo/ppo.py \
     --learning_rate 3e-6 \
     --output_dir models/minimal/ppo \
     --per_device_train_batch_size 64 \
@@ -24,7 +24,7 @@ python -i examples/scripts/minimal/ppo.py \
     --non_eos_penalty \
 
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/scripts/minimal/ppo.py \
+    examples/scripts/ppo/ppo.py \
     --output_dir models/minimal/ppo \
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \

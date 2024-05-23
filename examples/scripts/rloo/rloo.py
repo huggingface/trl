@@ -14,7 +14,7 @@ from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
 
 
 """
-python -i examples/scripts/minimal/rloo.py \
+python -i examples/scripts/rloo/rloo.py \
     --learning_rate 3e-6 \
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \
@@ -25,7 +25,7 @@ python -i examples/scripts/minimal/rloo.py \
     --model_name_or_path EleutherAI/pythia-1b-deduped \
     --non_eos_penalty \
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/scripts/minimal/rloo.py \
+    examples/scripts/rloo/rloo.py \
     --output_dir models/minimal/rloo \
     --rloo_k 2 \
     --num_ppo_epochs 1 \

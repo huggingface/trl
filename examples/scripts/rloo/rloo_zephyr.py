@@ -15,7 +15,7 @@ from trl.trainer.rloo_trainer import RLOOConfig, RLOOTrainer
 
 
 """
-python -i examples/scripts/minimal/rloo_zephyr.py \
+python -i examples/scripts/rloo/rloo_zephyr.py \
     --learning_rate 3e-6 \
     --output_dir models/minimal/rloo_zephyr \
     --per_device_train_batch_size 64 \
@@ -25,11 +25,11 @@ python -i examples/scripts/minimal/rloo_zephyr.py \
     --sft_model_path HuggingFaceH4/mistral-7b-sft-beta \
     --reward_model_path weqweasdas/RM-Mistral-7B \
     --non_eos_penalty \
-    --truncate_token eos \
+    --stop_token eos \
     --response_length 53 \
     --sanity_check
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/scripts/minimal/rloo_zephyr.py \
+    examples/scripts/rloo/rloo_zephyr.py \
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \
     --rloo_k 2 \
@@ -45,7 +45,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
     --deepspeed3 \
     --kl_coef 0.10 \
     --non_eos_penalty \
-    --truncate_token eos \
+    --stop_token eos \
     --response_length 512 \
 """
 
