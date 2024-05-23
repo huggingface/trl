@@ -12,7 +12,7 @@ from ..trainer.utils import (
 
 
 @dataclass
-class PPOv2Config(TrainingArguments, OnpolicyRuntimeConfig):
+class PPOv2Config(OnpolicyRuntimeConfig, TrainingArguments):
     # common config
     exp_name: str = os.path.basename(__file__)[: -len(".py")]
     """the name of this experiment"""
