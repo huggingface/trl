@@ -285,7 +285,7 @@ class PPOv2Trainer(Trainer):
                         query_response, logits = generate(
                             unwrapped_model.policy,
                             query,
-                            tokenizer,
+                            tokenizer.pad_token_id,
                             generation_config,
                         )
                         response = query_response[:, context_length:]
@@ -407,7 +407,7 @@ class PPOv2Trainer(Trainer):
                             mb_query_responses = query_responses[micro_batch_inds]
                             mb_logprobs = logprobs[micro_batch_inds]
 
-                            output, vpred_temp = forward(model, mb_query_responses, tokenizer)
+                            output, vpred_temp = forward(model, mb_query_responses, tokenizer.pad_token_id)
                             logits = output.logits[:, context_length - 1 : -1]
                             logits /= args.temperature + 1e-7
                             new_all_logprobs = F.log_softmax(logits, dim=-1)
