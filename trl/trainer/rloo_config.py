@@ -13,7 +13,7 @@ INVALID_LOGPROB = 1.0
 
 
 @dataclass
-class RLOOConfig(TrainingArguments, OnpolicyRuntimeConfig):
+class RLOOConfig(OnpolicyRuntimeConfig, TrainingArguments):
     # common config
     exp_name: str = os.path.basename(__file__)[: -len(".py")]
     """the name of this experiment"""
