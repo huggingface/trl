@@ -20,8 +20,9 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 import torch
-from accelerate import PartialState
-from accelerate.state import AcceleratorState
+from accelerate import Accelerator
+from accelerate.state import AcceleratorState, PartialState
+from accelerate.utils import is_deepspeed_available
 from rich.console import Console, Group
 from rich.live import Live
 from rich.panel import Panel
@@ -32,6 +33,7 @@ from torch.utils.data import IterableDataset
 from transformers import (
     BitsAndBytesConfig,
     DataCollatorForLanguageModeling,
+    PreTrainedModel,
     PreTrainedTokenizerBase,
 )
 from transformers.trainer import TrainerCallback
@@ -43,6 +45,10 @@ from ..trainer.model_config import ModelConfig
 
 if is_peft_available():
     from peft import LoraConfig, PeftConfig
+
+
+if is_deepspeed_available():
+    import deepspeed
 
 
 class AdaptiveKLController:
@@ -61,6 +67,39 @@ class AdaptiveKLController:
         proportional_error = np.clip(current / target - 1, -0.2, 0.2)
         mult = 1 + proportional_error * n_steps / self.horizon
         self.value *= mult
+
+
+class SyncRefModelCallback(TrainerCallback):
+    def __init__(
+        self,
+        ref_model: Union[PreTrainedModel, torch.nn.Module],
+        accelerator: Optional[Accelerator],
+    ):
+        self.accelerator = accelerator
+        self.ref_model = ref_model
+
+    @staticmethod
+    def _sync_target_model(model, target_model, alpha):
+        for target_param, copy_param in zip(target_model.parameters(), model.parameters()):
+            target_param.data.mul_(1.0 - alpha).add_(copy_param.data, alpha=alpha)
+
+    @staticmethod
+    def sync_target_model(model, target_model, alpha):
+        deepspeed_plugin = AcceleratorState().deepspeed_plugin
+        if deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3:
+            with deepspeed.zero.GatheredParameters(list(model.parameters()), modifier_rank=0):
+                if deepspeed.comm.get_rank() == 0:
+                    SyncRefModelCallback._sync_target_model(model, target_model, alpha)
+        else:
+            SyncRefModelCallback._sync_target_model(model, target_model, alpha)
+
+    def on_step_end(self, args, state, control, **kwargs):
+        model: PreTrainedModel = kwargs["model"]
+
+        if self.ref_model is not None and state.global_step % args.ref_model_sync_steps == 0:
+            if self.accelerator:
+                model = self.accelerator.unwrap_model(model)
+            self.sync_target_model(model, self.ref_model, args.ref_model_mixup_alpha)
 
 
 class FixedKLController:

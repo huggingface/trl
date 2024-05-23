@@ -65,6 +65,12 @@ class DPOConfig(TrainingArguments):
             If True, we ignore the _provided_ reference model and implicitly use a reference model that assigns equal probability to all responses.
         force_use_ref_model (`bool`, defaults to `False`):
             In case one passes a PEFT model for the active model and you want to use a different model for the ref_model, set this flag to `True`.
+        sync_ref_model ('bool', defaults to `False`):
+            The flag for syncing reference model during training from the [TR-DPO](https://arxiv.org/pdf/2404.09656) paper.
+        ref_model_mixup_alpha ('float', defaults to 1.0):
+            The alpha parameter from the [TR-DPO](https://arxiv.org/pdf/2404.09656) paper.
+        ref_model_sync_steps ('int', defaults to 2):
+            The tau parameter from the [TR-DPO](https://arxiv.org/pdf/2404.09656) paper.
     """
 
     beta: float = 0.1
@@ -89,3 +95,6 @@ class DPOConfig(TrainingArguments):
     ref_adapter_name: Optional[str] = None
     reference_free: bool = False
     force_use_ref_model: bool = False
+    sync_ref_model: bool = False
+    ref_model_mixup_alpha: float = 0.9
+    ref_model_sync_steps: int = 64

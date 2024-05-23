@@ -117,6 +117,8 @@ The [SPPO](https://arxiv.org/abs/2405.00675) authors claim that SPPO is capable 
 
 The [NCA](https://arxiv.org/abs/2402.05369) authors shows that NCA optimizes the absolute likelihood for each response rather than the relative likelihood.
 
+The [TR-DPO](https://arxiv.org/pdf/2404.09656) paper suggests syncing the reference model weights after every `ref_model_sync_steps` steps of SGD with weight `ref_model_mixup_alpha` during DPO training. To toggle this callback use the `sync_ref_model` flag in the `DPOConfig`.
+
 ## Logging
 
 While training and evaluating we record the following reward metrics:
