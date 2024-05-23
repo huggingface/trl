@@ -120,8 +120,8 @@ class RLOOTrainer(Trainer):
         #########
         for module in [policy, ref_policy, reward_model]:
             disable_dropout_in_model(module)
-        if args.truncate_token and args.truncate_token == "eos":
-            args.truncate_token_id = tokenizer.eos_token_id
+        if args.stop_token and args.stop_token == "eos":
+            args.stop_token_id = tokenizer.eos_token_id
         self.model = policy
         self.create_optimizer_and_scheduler(num_training_steps=args.num_updates)
 
@@ -246,7 +246,7 @@ class RLOOTrainer(Trainer):
                         query_response, logits = generate(
                             unwrapped_model,
                             query,
-                            tokenizer,
+                            tokenizer.pad_token_id,
                             generation_config,
                         )
                         response = query_response[:, context_length:]
@@ -268,7 +268,7 @@ class RLOOTrainer(Trainer):
                         # Response Processing 1. truncate response after the first occurrence of `truncate_token_id`
                         postprocessed_response = response
                         if (
-                            args.truncate_token_id is not None
+                            args.stop_token_id is not None
                         ):  # handle the edge case when truncate_token_id exists but is 0
                             postprocessed_response = truncate_response(
                                 args.stop_token_id, tokenizer.pad_token_id, response
@@ -342,7 +342,7 @@ class RLOOTrainer(Trainer):
                             mb_query_responses = query_responses[micro_batch_inds]
                             mb_logprobs = logprobs[micro_batch_inds]
 
-                            output = forward(model, mb_query_responses, tokenizer)
+                            output = forward(model, mb_query_responses, tokenizer.pad_token_id)
                             logits = output.logits[:, context_length - 1 : -1]
                             logits /= args.temperature + 1e-7
                             new_all_logprobs = F.log_softmax(logits, dim=-1)
@@ -439,12 +439,12 @@ class RLOOTrainer(Trainer):
                     query_response, _ = generate(
                         unwrapped_model,
                         query,
-                        tokenizer,
+                        tokenizer.pad_token_id,
                         generation_config,
                     )
                 response = query_response[:, context_length:]
                 postprocessed_response = response
-                if args.truncate_token_id is not None:  # handle the edge case when truncate_token_id exists but is 0
+                if args.stop_token_id is not None:  # handle the edge case when truncate_token_id exists but is 0
                     postprocessed_response = truncate_response(args.stop_token_id, tokenizer.pad_token_id, response)
                 table["query"].extend(gather_object(tokenizer.batch_decode(query, skip_special_tokens=True)))
                 table["model response"].extend(gather_object(tokenizer.batch_decode(postprocessed_response)))

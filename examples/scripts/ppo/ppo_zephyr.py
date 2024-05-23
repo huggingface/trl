@@ -15,7 +15,7 @@ from trl.trainer.ppov2_trainer import PPOv2Config, PPOv2Trainer
 
 
 """
-python -i examples/scripts/minimal/ppo_zephyr.py \
+python -i examples/scripts/ppo/ppo_zephyr.py \
     --learning_rate 3e-6 \
     --output_dir models/minimal/ppo \
     --per_device_train_batch_size 1 \
@@ -28,7 +28,7 @@ python -i examples/scripts/minimal/ppo_zephyr.py \
     --truncate_token eos \
 
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/scripts/minimal/ppo_zephyr.py \
+    examples/scripts/ppo/ppo_zephyr.py \
     --output_dir models/minimal/ppo_zephyr10 \
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \

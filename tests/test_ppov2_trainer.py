@@ -16,7 +16,7 @@ import subprocess
 
 def test():
     command = """\
-python -i examples/scripts/minimal/ppo.py \
+python -i examples/scripts/ppo/ppo.py \
     --learning_rate 3e-6 \
     --output_dir models/minimal/ppo \
     --per_device_train_batch_size 5 \

@@ -13,7 +13,7 @@ References:
 To just run a PPO script to make sure the trainer can run, you can run the following command to train a PPO model with a dummy reward model.
 
 ```bash
-python -i examples/scripts/minimal/rloo.py \
+python -i examples/scripts/ppo/ppo.py \
     --learning_rate 3e-6 \
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \

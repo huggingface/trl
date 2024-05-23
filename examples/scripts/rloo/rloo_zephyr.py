@@ -15,7 +15,7 @@ from trl.trainer.rloo_trainer import RLOOConfig, RLOOTrainer
 
 
 """
-python -i examples/scripts/minimal/rloo_zephyr.py \
+python -i examples/scripts/rloo/rloo_zephyr.py \
     --learning_rate 3e-6 \
     --output_dir models/minimal/rloo_zephyr \
     --per_device_train_batch_size 64 \
@@ -29,7 +29,7 @@ python -i examples/scripts/minimal/rloo_zephyr.py \
     --response_length 53 \
     --sanity_check
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/scripts/minimal/rloo_zephyr.py \
+    examples/scripts/rloo/rloo_zephyr.py \
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \
     --rloo_k 2 \
