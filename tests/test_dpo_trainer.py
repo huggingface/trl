@@ -94,6 +94,7 @@ class DPOTrainerTester(unittest.TestCase):
             ["t5", "sppo_hard", True],
             ["gpt2", "nca_pair", False],
             ["t5", "nca_pair", True],
+            ["gpt2", "robust", True],
         ]
     )
     def test_dpo_trainer(self, name, loss_type, pre_compute):
@@ -317,7 +318,7 @@ class DPOTrainerTester(unittest.TestCase):
                 remove_unused_columns=False,
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 precompute_ref_log_probs=False,
                 sync_ref_model=True,
                 ref_model_mixup_alpha=0.5,
@@ -508,6 +509,10 @@ class DPOTrainerTester(unittest.TestCase):
             ["gpt2", "bco_pair", False, True],
             ["gpt2", "bco_pair", True, False],
             ["gpt2", "bco_pair", True, True],
+            ["gpt2", "robust", False, False],
+            ["gpt2", "robust", False, True],
+            ["gpt2", "robust", True, False],
+            ["gpt2", "robust", True, True],
         ]
     )
     @require_bitsandbytes
