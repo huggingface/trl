@@ -25,7 +25,7 @@ python examples/scripts/rloo/rloo_tldr.py \
     --sft_model_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr \
     --reward_model_path cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr \
     --non_eos_penalty \
-    --truncate_token eos \
+    --stop_token eos \
     --response_length 53 \
     --sanity_check
 
@@ -43,7 +43,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --reward_model_path cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr \
     --local_rollout_forward_batch_size 16 \
     --non_eos_penalty \
-    --truncate_token eos \
+    --stop_token eos \
 """
 
 

@@ -25,7 +25,7 @@ python -i examples/scripts/ppo/ppo_zephyr.py \
     --sft_model_path EleutherAI/pythia-1b-deduped  \
     --reward_model_path EleutherAI/pythia-1b-deduped  \
     --non_eos_penalty \
-    --truncate_token eos \
+    --stop_token eos \
 
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/ppo/ppo_zephyr.py \
@@ -43,7 +43,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
     --deepspeed3 \
     --kl_coef 0.10 \
     --non_eos_penalty \
-    --truncate_token eos \
+    --stop_token eos \
     --response_length 512 \
 """
 

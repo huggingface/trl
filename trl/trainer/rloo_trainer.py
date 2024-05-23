@@ -265,11 +265,9 @@ class RLOOTrainer(Trainer):
                         del ref_output, ref_logits, ref_all_logprob
                         torch.cuda.empty_cache()
 
-                        # Response Processing 1. truncate response after the first occurrence of `truncate_token_id`
+                        # Response Processing 1. truncate response after the first occurrence of `stop_token_id`
                         postprocessed_response = response
-                        if (
-                            args.stop_token_id is not None
-                        ):  # handle the edge case when truncate_token_id exists but is 0
+                        if args.stop_token_id is not None:  # handle the edge case when stop_token_id exists but is 0
                             postprocessed_response = truncate_response(
                                 args.stop_token_id, tokenizer.pad_token_id, response
                             )
@@ -299,7 +297,7 @@ class RLOOTrainer(Trainer):
                 torch.cuda.empty_cache()
                 gc.collect()
 
-                # Response Processing 3. filter response. Ensure that the sample contains truncate_token_id
+                # Response Processing 3. filter response. Ensure that the sample contains stop_token_id
                 # responses not passing that filter will receive a low (fixed) score
                 # only query humans on responses that pass that filter
                 contain_eos_token = torch.any(postprocessed_responses == tokenizer.eos_token_id, dim=-1)
@@ -444,7 +442,7 @@ class RLOOTrainer(Trainer):
                     )
                 response = query_response[:, context_length:]
                 postprocessed_response = response
-                if args.stop_token_id is not None:  # handle the edge case when truncate_token_id exists but is 0
+                if args.stop_token_id is not None:  # handle the edge case when stop_token_id exists but is 0
                     postprocessed_response = truncate_response(args.stop_token_id, tokenizer.pad_token_id, response)
                 table["query"].extend(gather_object(tokenizer.batch_decode(query, skip_special_tokens=True)))
                 table["model response"].extend(gather_object(tokenizer.batch_decode(postprocessed_response)))
