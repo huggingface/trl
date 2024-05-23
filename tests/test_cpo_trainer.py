@@ -95,7 +95,7 @@ class CPOTrainerTester(unittest.TestCase):
                 remove_unused_columns=False,
                 gradient_accumulation_steps=1,
                 learning_rate=9e-1,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 beta=0.1,
                 loss_type=loss_type,
             )
@@ -152,7 +152,7 @@ class CPOTrainerTester(unittest.TestCase):
                 remove_unused_columns=False,
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 beta=0.1,
             )
 
