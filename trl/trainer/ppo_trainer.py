@@ -156,6 +156,7 @@ class PPOTrainer(BaseTrainer):
         data_collator: Optional[typing.Callable] = None,
         num_shared_layers: Optional[int] = None,
         lr_scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
+        training_data_collator: Optional[typing.Callable] = None,
     ):
         """
         Initialize PPOTrainer.
@@ -176,12 +177,15 @@ class PPOTrainer(BaseTrainer):
             optimizer (Optional[`torch.optim.Optimizer`]):
                 Optimizer used for training. If `None`, the `Adam` is used as default.
             data_collator (Optional[function]):
-                Data collator function.
+                Data collator function that is going to be used for `prepare_dataloader` method. Note this collator
+                is different from the one we use for training. Pass a valid `training_data_collator` instead.
             num_shared_layers (Optional[int]):
                 Number of shared layers between the model and the reference model. If `None`, all layers are shared.
                 used only if `ref_model` is `None`.
             lr_scheduler (Optional[`torch.optim.lr_scheduler`]):
                 Learning rate scheduler used for training.
+            training_data_collator (Optional[function]):
+                Custom data collator used for training.
         """
         super().__init__(config)
 
@@ -280,7 +284,10 @@ class PPOTrainer(BaseTrainer):
             self.dataloader = None
 
         # Step 3: Initialize optimizer and data collator
-        self.data_collator = DataCollatorForLanguageModeling(self.tokenizer, mlm=False)
+        if training_data_collator is None:
+            self.data_collator = DataCollatorForLanguageModeling(self.tokenizer, mlm=False)
+        else:
+            self.data_collator = training_data_collator
         if optimizer is None:
             self.optimizer = Adam(
                 filter(lambda p: p.requires_grad, self.model.parameters()),
