@@ -319,6 +319,18 @@ class PPOTrainer(BaseTrainer):
             self.accelerator.state, "deepspeed_plugin"
         )
 
+        if config.gradient_checkpointing:
+            self.model.gradient_checkpointing_enable()
+
+            if hasattr(self.model, "enable_input_require_grads"):
+                self.model.enable_input_require_grads()
+            else:
+                # For backward compatibility with older versions of transformers
+                def make_inputs_require_grad(module, input, output):
+                    output.requires_grad_(True)
+
+                self.model.pretrained_model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
+
         (
             self.model,
             self.optimizer,
