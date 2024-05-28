@@ -319,7 +319,15 @@ class SFTTrainer(Trainer):
                     dataset_kwargs["add_special_tokens"] = False
 
         if not args.packing:
-            if args.dataset_text_field is None and formatting_func is None:
+            # If we aren't skipping data preparation, then a dataset_text_field
+            # or formatting_func must be provided.
+            if (
+                args.dataset_text_field is None
+                and formatting_func is None
+                and dataset_kwargs is not None
+                and "skip_prepare_dataset" in dataset_kwargs
+                and dataset_kwargs["skip_prepare_dataset"]
+            ):
                 raise ValueError(
                     "You passed `packing=False` to the SFTTrainer/SFTConfig, but you didn't pass a `dataset_text_field` or `formatting_func` argument."
                 )
