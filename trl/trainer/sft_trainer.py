@@ -141,6 +141,11 @@ class SFTTrainer(Trainer):
         dataset_kwargs: Optional[Dict] = None,
         eval_packing: Optional[bool] = None,
     ):
+        if args is None:
+            output_dir = "tmp_trainer"
+            warnings.warn(f"No `SFTConfig` passed, using `output_dir={output_dir}`.")
+            args = SFTConfig(output_dir=output_dir)
+
         if model_init_kwargs is not None:
             warnings.warn(
                 "You passed `model_init_kwargs` to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
