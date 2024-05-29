@@ -490,9 +490,11 @@ class DPOTrainer(Trainer):
         # see: https://github.com/huggingface/trl/pull/1255
         with PartialState().local_main_process_first():
             # tokenize the dataset
-            train_dataset = train_dataset.map(self.tokenize_row, num_proc=self.dataset_num_proc)
+            train_dataset = train_dataset.map(partial(DPOTrainer.tokenize_row, args=args, tokenizer=self.tokenizer),
+                                              num_proc=self.dataset_num_proc)
             if eval_dataset is not None:
-                eval_dataset = eval_dataset.map(self.tokenize_row, num_proc=self.dataset_num_proc)
+                eval_dataset = eval_dataset.map(partial(DPOTrainer.tokenize_row, args=args, tokenizer=self.tokenizer),
+                                                num_proc=self.dataset_num_proc)
 
         super().__init__(
             model=model,
@@ -675,7 +677,8 @@ class DPOTrainer(Trainer):
 
         return super().get_eval_dataloader(eval_dataset=eval_dataset)
 
-    def build_tokenized_answer(self, prompt, answer):
+    @staticmethod
+    def build_tokenized_answer(tokenizer, prompt, answer):
         """
         Llama tokenizer does satisfy `enc(a + b) = enc(a) + enc(b)`.
         It does ensure `enc(a + b) = enc(a) + enc(a + b)[len(enc(a)):]`.
@@ -683,11 +686,10 @@ class DPOTrainer(Trainer):
             https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
         """
 
-        full_tokenized = self.tokenizer(prompt + answer, add_special_tokens=False)
-        prompt_input_ids = self.tokenizer(prompt, add_special_tokens=False)["input_ids"]
+        full_tokenized = tokenizer(prompt + answer, add_special_tokens=False)
+        prompt_input_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
 
-        answer_input_ids = full_tokenized["input_ids"][len(prompt_input_ids) :]
-        answer_attention_mask = full_tokenized["attention_mask"][len(prompt_input_ids) :]
+        answer_input_ids = full_tokenized["input_ids"][len(prompt_input_ids):]
 
         # Concat tokens to form `enc(a) + enc(a + b)[len(enc(a)):]`
         full_concat_input_ids = np.concatenate([prompt_input_ids, answer_input_ids])
@@ -704,7 +706,7 @@ class DPOTrainer(Trainer):
         # vs when done as prompt+answer.
         response_token_ids_start_idx = len(prompt_input_ids)
 
-        # If tokenized prompt is different than both prompt+answer, then it means the
+        # If tokenized prompt is different from both prompt+answer, then it means the
         # last token has changed due to merging.
         if prompt_input_ids != full_tokenized["input_ids"][:response_token_ids_start_idx]:
             response_token_ids_start_idx -= 1
@@ -725,7 +727,8 @@ class DPOTrainer(Trainer):
             attention_mask=answer_attention_mask,
         )
 
-    def tokenize_row(self, feature, model: Optional[Union[PreTrainedModel, nn.Module]] = None) -> Dict:
+    @staticmethod
+    def tokenize_row(feature, args, tokenizer, model: Optional[Union[PreTrainedModel, nn.Module]] = None) -> Dict:
         """Tokenize a single row from a DPO specific dataset.
 
         At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
@@ -741,7 +744,7 @@ class DPOTrainer(Trainer):
         chosen = feature["chosen"]
         rejected = feature["rejected"]
 
-        if not self.is_encoder_decoder:
+        if not args.is_encoder_decoder:
             # Check issues below for more details
             #  1. https://github.com/huggingface/trl/issues/907
             #  2. https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
@@ -749,27 +752,26 @@ class DPOTrainer(Trainer):
 
             if not isinstance(prompt, str):
                 raise ValueError(f"prompt should be an str but got {type(prompt)}")
-            prompt_tokens = self.tokenizer(prompt, add_special_tokens=False)
+            prompt_tokens = tokenizer(prompt, add_special_tokens=False)
             prompt_tokens = {f"prompt_{k}": v for k, v in prompt_tokens.items()}
 
             if not isinstance(chosen, str):
                 raise ValueError(f"chosen should be an str but got {type(chosen)}")
-            chosen_tokens = self.build_tokenized_answer(prompt, chosen)
+            chosen_tokens = DPOTrainer.build_tokenized_answer(tokenizer, prompt, chosen)
 
             if not isinstance(rejected, str):
                 raise ValueError(f"rejected should be an str but got {type(rejected)}")
-            rejected_tokens = self.build_tokenized_answer(prompt, rejected)
+            rejected_tokens = DPOTrainer.build_tokenized_answer(tokenizer, prompt, rejected)
 
             # Last prompt token might get merged by tokenizer and
             # it should not be included for generation if that happens
-            prompt_len_input_ids = len(prompt_tokens["prompt_input_ids"])
-
             chosen_prompt_len_input_ids = len(chosen_tokens["prompt_input_ids"])
             rejected_prompt_len_input_ids = len(rejected_tokens["prompt_input_ids"])
             prompt_len_input_ids = min(chosen_prompt_len_input_ids, rejected_prompt_len_input_ids)
 
-            for k, v in prompt_tokens.items():
-                prompt_tokens[k] = v[:prompt_len_input_ids]
+            if prompt_len_input_ids != len(prompt_tokens["prompt_input_ids"]):
+                for k, v in prompt_tokens.items():
+                    prompt_tokens[k] = v[:prompt_len_input_ids]
 
             # Make sure prompts only have one different token at most an
             # and length only differs by 1 at most
@@ -784,7 +786,7 @@ class DPOTrainer(Trainer):
                 )
 
             # add BOS token to head of prompt. Avoid adding if it's already there
-            bos_token_id = self.tokenizer.bos_token_id
+            bos_token_id = tokenizer.bos_token_id
             if prompt_len_input_ids == 0 or bos_token_id != prompt_tokens["prompt_input_ids"][0]:
                 prompt_tokens["prompt_input_ids"] = [bos_token_id] + prompt_tokens["prompt_input_ids"]
                 prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens["prompt_attention_mask"]
@@ -796,7 +798,7 @@ class DPOTrainer(Trainer):
                 rejected_tokens["prompt_attention_mask"] = [1] + rejected_tokens["prompt_attention_mask"]
 
             # add EOS token to end of answer. Avoid adding if it's already there
-            eos_token_id = self.tokenizer.eos_token_id
+            eos_token_id = tokenizer.eos_token_id
             if len(chosen_tokens["input_ids"]) == 0 or eos_token_id != chosen_tokens["input_ids"][-1]:
                 chosen_tokens["input_ids"].append(eos_token_id)
                 chosen_tokens["attention_mask"].append(1)
@@ -808,21 +810,21 @@ class DPOTrainer(Trainer):
 
             # if combined sequence is too long, truncate the prompt
             for answer_tokens in [chosen_tokens, rejected_tokens, prompt_tokens]:
-                if len(answer_tokens["prompt_input_ids"]) + longer_response_length > self.max_length:
-                    if self.truncation_mode == "keep_start":
+                if len(answer_tokens["prompt_input_ids"]) + longer_response_length > args.max_length:
+                    if args.truncation_mode == "keep_start":
                         for k in ["prompt_input_ids", "prompt_attention_mask"]:
-                            answer_tokens[k] = answer_tokens[k][: self.max_prompt_length]
-                    elif self.truncation_mode == "keep_end":
+                            answer_tokens[k] = answer_tokens[k][: args.max_prompt_length]
+                    elif args.truncation_mode == "keep_end":
                         for k in ["prompt_input_ids", "prompt_attention_mask"]:
-                            answer_tokens[k] = answer_tokens[k][-self.max_prompt_length :]
+                            answer_tokens[k] = answer_tokens[k][-args.max_prompt_length:]
                     else:
-                        raise ValueError(f"Unknown truncation mode: {self.truncation_mode}")
+                        raise ValueError(f"Unknown truncation mode: {args.truncation_mode}")
 
             # if that's still too long, truncate the response
             for answer_tokens in [chosen_tokens, rejected_tokens]:
-                if len(answer_tokens["prompt_input_ids"]) + longer_response_length > self.max_length:
+                if len(answer_tokens["prompt_input_ids"]) + longer_response_length > args.max_length:
                     for k in ["input_ids", "attention_mask"]:
-                        answer_tokens[k] = answer_tokens[k][: self.max_length - self.max_prompt_length]
+                        answer_tokens[k] = answer_tokens[k][: args.max_length - args.max_prompt_length]
 
             # Create labels
             chosen_sequence_tokens = {
@@ -833,12 +835,12 @@ class DPOTrainer(Trainer):
             }
             chosen_sequence_tokens["labels"] = chosen_sequence_tokens["input_ids"][:]
             chosen_sequence_tokens["labels"][: len(chosen_tokens["prompt_input_ids"])] = [
-                self.label_pad_token_id
-            ] * len(chosen_tokens["prompt_input_ids"])
+                                                                                             args.label_pad_token_id
+                                                                                         ] * len(chosen_tokens["prompt_input_ids"])
             rejected_sequence_tokens["labels"] = rejected_sequence_tokens["input_ids"][:]
             rejected_sequence_tokens["labels"][: len(rejected_tokens["prompt_input_ids"])] = [
-                self.label_pad_token_id
-            ] * len(rejected_tokens["prompt_input_ids"])
+                                                                                                 args.label_pad_token_id
+                                                                                             ] * len(rejected_tokens["prompt_input_ids"])
 
             for k, toks in {
                 "chosen_": chosen_sequence_tokens,
@@ -851,14 +853,14 @@ class DPOTrainer(Trainer):
                     batch[f"{k}{type_key}"] = tokens
 
         else:
-            chosen_tokens = self.tokenizer(
-                chosen, truncation=True, max_length=self.max_target_length, add_special_tokens=True
+            chosen_tokens = tokenizer(
+                chosen, truncation=True, max_length=args.max_target_length, add_special_tokens=True
             )
-            rejected_tokens = self.tokenizer(
-                rejected, truncation=True, max_length=self.max_target_length, add_special_tokens=True
+            rejected_tokens = tokenizer(
+                rejected, truncation=True, max_length=args.max_target_length, add_special_tokens=True
             )
-            prompt_tokens = self.tokenizer(
-                prompt, truncation=True, max_length=self.max_prompt_length, add_special_tokens=True
+            prompt_tokens = tokenizer(
+                prompt, truncation=True, max_length=args.max_prompt_length, add_special_tokens=True
             )
 
             batch["chosen_labels"] = chosen_tokens["input_ids"]
