@@ -26,7 +26,7 @@ class ORPOConfig(TrainingArguments):
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.
 
-    Parameters:
+    make precommit:
         max_length (`int`, defaults to `None`):
             The maximum length of the sequences in the batch. This argument is required if you want to use the default data collator.
         max_prompt_length (`int`, defaults to `None`):

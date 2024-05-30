@@ -28,6 +28,7 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.progress import Progress
 from rich.table import Table
+from torch import nn
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import IterableDataset
 from transformers import (
@@ -1124,8 +1125,8 @@ def build_tokenized_answer(tokenizer, prompt, answer):
     full_tokenized = tokenizer(prompt + answer, add_special_tokens=False)
     prompt_input_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
 
-    answer_input_ids = full_tokenized["input_ids"][len(prompt_input_ids):]
-    answer_attention_mask = full_tokenized["attention_mask"][len(prompt_input_ids):]
+    answer_input_ids = full_tokenized["input_ids"][len(prompt_input_ids) :]
+    answer_attention_mask = full_tokenized["attention_mask"][len(prompt_input_ids) :]
 
     # Concat tokens to form `enc(a) + enc(a + b)[len(enc(a)):]`
     full_concat_input_ids = np.concatenate([prompt_input_ids, answer_input_ids])
@@ -1252,7 +1253,7 @@ def tokenize_row(feature, args, tokenizer, model: Optional[Union[PreTrainedModel
                         answer_tokens[k] = answer_tokens[k][: args.max_prompt_length]
                 elif args.truncation_mode == "keep_end":
                     for k in ["prompt_input_ids", "prompt_attention_mask"]:
-                        answer_tokens[k] = answer_tokens[k][-args.max_prompt_length:]
+                        answer_tokens[k] = answer_tokens[k][-args.max_prompt_length :]
                 else:
                     raise ValueError(f"Unknown truncation mode: {args.truncation_mode}")
 
@@ -1270,13 +1271,13 @@ def tokenize_row(feature, args, tokenizer, model: Optional[Union[PreTrainedModel
             k: rejected_tokens[f"prompt_{k}"] + rejected_tokens[k] for k in ["input_ids", "attention_mask"]
         }
         chosen_sequence_tokens["labels"] = chosen_sequence_tokens["input_ids"][:]
-        chosen_sequence_tokens["labels"][: len(chosen_tokens["prompt_input_ids"])] = [
-                                                                                         args.label_pad_token_id
-                                                                                     ] * len(chosen_tokens["prompt_input_ids"])
+        chosen_sequence_tokens["labels"][: len(chosen_tokens["prompt_input_ids"])] = [args.label_pad_token_id] * len(
+            chosen_tokens["prompt_input_ids"]
+        )
         rejected_sequence_tokens["labels"] = rejected_sequence_tokens["input_ids"][:]
         rejected_sequence_tokens["labels"][: len(rejected_tokens["prompt_input_ids"])] = [
-                                                                                             args.label_pad_token_id
-                                                                                         ] * len(rejected_tokens["prompt_input_ids"])
+            args.label_pad_token_id
+        ] * len(rejected_tokens["prompt_input_ids"])
 
         for k, toks in {
             "chosen_": chosen_sequence_tokens,
@@ -1289,15 +1290,11 @@ def tokenize_row(feature, args, tokenizer, model: Optional[Union[PreTrainedModel
                 batch[f"{k}{type_key}"] = tokens
 
     else:
-        chosen_tokens = tokenizer(
-            chosen, truncation=True, max_length=args.max_target_length, add_special_tokens=True
-        )
+        chosen_tokens = tokenizer(chosen, truncation=True, max_length=args.max_target_length, add_special_tokens=True)
         rejected_tokens = tokenizer(
             rejected, truncation=True, max_length=args.max_target_length, add_special_tokens=True
         )
-        prompt_tokens = tokenizer(
-            prompt, truncation=True, max_length=args.max_prompt_length, add_special_tokens=True
-        )
+        prompt_tokens = tokenizer(prompt, truncation=True, max_length=args.max_prompt_length, add_special_tokens=True)
 
         batch["chosen_labels"] = chosen_tokens["input_ids"]
         batch["rejected_labels"] = rejected_tokens["input_ids"]

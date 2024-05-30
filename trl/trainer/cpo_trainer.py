@@ -18,10 +18,9 @@ import random
 import warnings
 from collections import defaultdict
 from contextlib import nullcontext
-from functools import wraps, partial
+from functools import partial, wraps
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -40,8 +39,8 @@ from .utils import (
     disable_dropout_in_model,
     pad_to_length,
     peft_module_casting_to_bf16,
+    tokenize_row,
     trl_sanitze_kwargs_for_tagging,
-    tokenize_row
 )
 
 
@@ -275,11 +274,13 @@ class CPOTrainer(Trainer):
         # see: https://github.com/huggingface/trl/pull/1255
         with PartialState().local_main_process_first():
             # tokenize the dataset
-            train_dataset = train_dataset.map(partial(tokenize_row, args=args, tokenizer=self.tokenizer),
-                                              num_proc=args.dataset_num_proc)
+            train_dataset = train_dataset.map(
+                partial(tokenize_row, args=args, tokenizer=self.tokenizer), num_proc=args.dataset_num_proc
+            )
             if eval_dataset is not None:
-                eval_dataset = eval_dataset.map(partial(tokenize_row, args=args, tokenizer=self.tokenizer),
-                                                num_proc=args.dataset_num_proc)
+                eval_dataset = eval_dataset.map(
+                    partial(tokenize_row, args=args, tokenizer=self.tokenizer), num_proc=args.dataset_num_proc
+                )
 
         super().__init__(
             model=model,
@@ -303,6 +304,7 @@ class CPOTrainer(Trainer):
             raise AttributeError(
                 "Your `Trainer` does not have an `accelerator` object. Consider upgrading `transformers`."
             )
+
     @staticmethod
     def concatenated_inputs(
         batch: Dict[str, Union[List, torch.LongTensor]],
