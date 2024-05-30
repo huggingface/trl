@@ -130,6 +130,9 @@ if __name__ == "__main__":
         model._ddp_params_and_buffers_to_ignore = [
             name for name, buffer in model.named_buffers() if buffer.dtype == torch.bool
         ]
+    processor.pad_token_id = tokenizer.pad_token_id
+    processor.bos_token_id = tokenizer.bos_token_id # needed for DPOTrainer
+    processor.eos_token_id = tokenizer.eos_token_id # needed for DPOTrainer
 
     ################
     # Optional rich context managers
@@ -150,6 +153,7 @@ if __name__ == "__main__":
             ds[key] = ds[key].select(range(50))
 
     def process(row):
+        row["prompt"] = processor.apply_chat_template(row["prompt"], tokenize=False)
         row["chosen"] = processor.apply_chat_template(row["chosen"], tokenize=False)
         row["rejected"] = processor.apply_chat_template(row["rejected"], tokenize=False)
         return row
@@ -172,7 +176,7 @@ if __name__ == "__main__":
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            tokenizer=tokenizer,
+            tokenizer=processor,
             peft_config=get_peft_config(model_config),
             callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
         )
