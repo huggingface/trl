@@ -56,5 +56,3 @@ class TestPad(unittest.TestCase):
         )
         self.assertTrue(torch.equal(output, expected))
 
-if __name__ == "__main__":
-    unittest.main()
