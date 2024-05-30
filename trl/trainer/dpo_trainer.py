@@ -314,6 +314,12 @@ class DPOTrainer(Trainer):
         else:
             self.is_encoder_decoder = args.is_encoder_decoder
 
+        if model is not None:
+            self.is_vision_model = model.config.model_type in ["idefics2"]  # TODO: find a better way to check if its a vision model
+        else:
+            warnings.warn("No model provided, cannot determine if it is a vision model. Setting is_vision_model to False.")
+            self.is_vision_model = False
+
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
         if model_adapter_name is not None:
             warnings.warn(
@@ -489,9 +495,9 @@ class DPOTrainer(Trainer):
         # see: https://github.com/huggingface/trl/pull/1255
         with PartialState().local_main_process_first():
             # tokenize the dataset
-            train_dataset = train_dataset.map(self.tokenize_row, num_proc=self.dataset_num_proc)
+            train_dataset = train_dataset.map(self.tokenize_row, num_proc=self.dataset_num_proc, load_from_cache_file=False)
             if eval_dataset is not None:
-                eval_dataset = eval_dataset.map(self.tokenize_row, num_proc=self.dataset_num_proc)
+                eval_dataset = eval_dataset.map(self.tokenize_row, num_proc=self.dataset_num_proc, load_from_cache_file=False)
 
         super().__init__(
             model=model,
@@ -663,16 +669,22 @@ class DPOTrainer(Trainer):
 
         return super().get_eval_dataloader(eval_dataset=eval_dataset)
 
-    def build_tokenized_answer(self, prompt, answer):
+    def build_tokenized_answer(self, prompt, answer, images=None):
         """
         Llama tokenizer does satisfy `enc(a + b) = enc(a) + enc(b)`.
         It does ensure `enc(a + b) = enc(a) + enc(a + b)[len(enc(a)):]`.
         Reference:
             https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
         """
-
-        full_tokenized = self.tokenizer(prompt + answer, add_special_tokens=False)
-        prompt_input_ids = self.tokenizer(prompt, add_special_tokens=False)["input_ids"]
+        if self.is_vision_model:
+            if answer.count("<image>") > 0:
+                raise NotImplementedError("Answer contains <image> token, which is not supported yet.")
+            full_tokenized = self.tokenizer(prompt + answer, images=images, add_special_tokens=False)
+            full_tokenized = {k: v[0] for k, v in full_tokenized.items()}  # Unbatch, not done when using idefics
+            prompt_input_ids = self.tokenizer(prompt, images=images, add_special_tokens=False)["input_ids"][0]
+        else:
+            full_tokenized = self.tokenizer(prompt + answer, add_special_tokens=False)
+            prompt_input_ids = self.tokenizer(prompt, add_special_tokens=False)["input_ids"]
 
         answer_input_ids = full_tokenized["input_ids"][len(prompt_input_ids) :]
         answer_attention_mask = full_tokenized["attention_mask"][len(prompt_input_ids) :]
@@ -706,12 +718,23 @@ class DPOTrainer(Trainer):
         answer_input_ids = full_tokenized["input_ids"][response_token_ids_start_idx:]
         answer_attention_mask = full_tokenized["attention_mask"][response_token_ids_start_idx:]
 
-        return dict(
-            prompt_input_ids=prompt_input_ids,
-            prompt_attention_mask=prompt_attention_mask,
-            input_ids=answer_input_ids,
-            attention_mask=answer_attention_mask,
-        )
+        if self.is_vision_model:
+            return dict(
+                prompt_input_ids=prompt_input_ids,
+                prompt_attention_mask=prompt_attention_mask,
+                prompt_pixel_values=full_tokenized["pixel_values"],
+                prompt_pixel_attention_mask=full_tokenized["pixel_attention_mask"],
+                input_ids=answer_input_ids,
+                attention_mask=answer_attention_mask,
+            )
+        else:
+            return dict(
+                prompt_input_ids=prompt_input_ids,
+                prompt_attention_mask=prompt_attention_mask,
+                input_ids=answer_input_ids,
+                attention_mask=answer_attention_mask,
+                pixel_value=full_tokenized
+            )
 
     def tokenize_row(self, feature, model: Optional[Union[PreTrainedModel, nn.Module]] = None) -> Dict:
         """Tokenize a single row from a DPO specific dataset.
@@ -728,6 +751,8 @@ class DPOTrainer(Trainer):
         prompt = feature["prompt"]
         chosen = feature["chosen"]
         rejected = feature["rejected"]
+        if self.is_vision_model:
+            images = feature["images"]
 
         if not self.is_encoder_decoder:
             # Check issues below for more details
@@ -737,16 +762,22 @@ class DPOTrainer(Trainer):
 
             if not isinstance(prompt, str):
                 raise ValueError(f"prompt should be an str but got {type(prompt)}")
-            prompt_tokens = self.tokenizer(prompt, add_special_tokens=False)
+            if self.is_vision_model:
+                prompt_tokens = self.tokenizer(prompt, images=images, add_special_tokens=False)
+                prompt_tokens = {k: v[0] for k, v in prompt_tokens.items()}  # Unbatch, not done when using idefics
+            else:
+                prompt_tokens = self.tokenizer(prompt, add_special_tokens=False)
+
             prompt_tokens = {f"prompt_{k}": v for k, v in prompt_tokens.items()}
 
             if not isinstance(chosen, str):
                 raise ValueError(f"chosen should be an str but got {type(chosen)}")
-            chosen_tokens = self.build_tokenized_answer(prompt, chosen)
+
+            chosen_tokens = self.build_tokenized_answer(prompt, chosen, images)
 
             if not isinstance(rejected, str):
                 raise ValueError(f"rejected should be an str but got {type(rejected)}")
-            rejected_tokens = self.build_tokenized_answer(prompt, rejected)
+            rejected_tokens = self.build_tokenized_answer(prompt, rejected, images)
 
             # Last prompt token might get merged by tokenizer and
             # it should not be included for generation if that happens
