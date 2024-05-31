@@ -31,24 +31,22 @@ python examples/scripts/vdpo.py \
 
 # peft:
 python examples/scripts/vdpo.py \
-    --dataset_name=HuggingFaceH4/vqa_preferences \
-    --model_name_or_path=HuggingFaceM4/idefics2-8b \
-    --per_device_train_batch_size 4 \
-    --learning_rate 1e-3 \
-    --gradient_accumulation_steps 1 \
-    --logging_steps 10 \
-    --eval_steps 500 \
-    --output_dir="dpo_anthropic_hh" \
-    --optim rmsprop \
-    --warmup_steps 150 \
+    --dataset_name HuggingFaceH4/vqa_preferences \
+    --model_name_or_path HuggingFaceM4/idefics2-8b \
+    --per_device_train_batch_size 8 \
+    --learning_rate 1e-5 \
+    --gradient_accumulation_steps 8 \
+    --logging_steps 5 \
+    --output_dir dpo_idefics \
+    --warmup_steps 10 \
     --report_to wandb \
     --bf16 \
+    --torch_dtype bfloat16 \
     --logging_first_step \
     --no_remove_unused_columns \
     --use_peft \
-    --load_in_4bit \
+    --dataloader_num_workers 8
     --lora_target_module .*(text_model|modality_projection|perceiver_resampler).*(down_proj|gate_proj|up_proj|k_proj|q_proj|v_proj|o_proj).*$
-
 """
 
 import logging
@@ -59,7 +57,7 @@ from contextlib import nullcontext
 TRL_USE_RICH = os.environ.get("TRL_USE_RICH", False)
 
 from trl.commands.cli_utils import DPOScriptArguments, init_zero_verbose, TrlParser
-
+from accelerate import PartialState
 if TRL_USE_RICH:
     init_zero_verbose()
     FORMAT = "%(message)s"
@@ -69,7 +67,7 @@ if TRL_USE_RICH:
 
 import torch
 from datasets import load_dataset
-from transformers import Idefics2ForConditionalGeneration, AutoTokenizer, AutoProcessor
+from transformers import AutoModelForVision2Seq, AutoProcessor
 
 from trl import (
     DPOConfig,
@@ -98,11 +96,7 @@ if __name__ == "__main__":
     ################
     # Model & Tokenizer
     ################
-    torch_dtype = (
-        model_config.torch_dtype
-        if model_config.torch_dtype in ["auto", None]
-        else getattr(torch, model_config.torch_dtype)
-    )
+    torch_dtype = model_config.torch_dtype if model_config.torch_dtype in ["auto", None] else getattr(torch, model_config.torch_dtype)
     quantization_config = get_quantization_config(model_config)
     model_kwargs = dict(
         revision=model_config.model_revision,
@@ -113,26 +107,26 @@ if __name__ == "__main__":
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
-    model = Idefics2ForConditionalGeneration.from_pretrained(model_config.model_name_or_path, **model_kwargs)
+    model = AutoModelForVision2Seq.from_pretrained(model_config.model_name_or_path, **model_kwargs)
     peft_config = get_peft_config(model_config)
     if peft_config is None:
-        model_ref = Idefics2ForConditionalGeneration.from_pretrained(model_config.model_name_or_path, **model_kwargs)
+        model_ref = AutoModelForVision2Seq.from_pretrained(model_config.model_name_or_path, **model_kwargs)
     else:
         model_ref = None
-    tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path)
     processor = AutoProcessor.from_pretrained(model_config.model_name_or_path, do_image_splitting=False)
+    tokenizer = processor.tokenizer
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     if tokenizer.chat_template is None:
         tokenizer.chat_template = "{% for message in messages %}{{message['role'] + ': ' + message['content'] + '\n\n'}}{% endfor %}{{ eos_token }}"
     if args.ignore_bias_buffers:
         # torch distributed hack
-        model._ddp_params_and_buffers_to_ignore = [
-            name for name, buffer in model.named_buffers() if buffer.dtype == torch.bool
-        ]
+        model._ddp_params_and_buffers_to_ignore = [name for name, buffer in model.named_buffers() if buffer.dtype == torch.bool]
+    
+    # DPOTrainer needs the processor to have these attributes
     processor.pad_token_id = tokenizer.pad_token_id
-    processor.bos_token_id = tokenizer.bos_token_id # needed for DPOTrainer
-    processor.eos_token_id = tokenizer.eos_token_id # needed for DPOTrainer
+    processor.bos_token_id = tokenizer.bos_token_id
+    processor.eos_token_id = tokenizer.eos_token_id
 
     ################
     # Optional rich context managers
@@ -157,12 +151,9 @@ if __name__ == "__main__":
         row["chosen"] = processor.apply_chat_template(row["chosen"], tokenize=False)
         row["rejected"] = processor.apply_chat_template(row["rejected"], tokenize=False)
         return row
-
-    ds = ds.map(
-        process,
-        # num_proc=multiprocessing.cpu_count(),
-        load_from_cache_file=False,
-    )
+    
+    with PartialState().local_main_process_first():
+        ds = ds.map(process, num_proc=multiprocessing.cpu_count())
     train_dataset = ds[args.dataset_train_split]
     eval_dataset = ds[args.dataset_test_split]
 
