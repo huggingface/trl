@@ -56,9 +56,25 @@ import logging
 import os
 from contextlib import nullcontext
 
+import torch
+from datasets import load_dataset
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+from trl import (
+    ModelConfig,
+    NashMDConfig,
+    NashMDTrainer,
+    RichProgressCallback,
+    get_kbit_device_map,
+    get_peft_config,
+    get_quantization_config,
+)
+from trl.commands.cli_utils import DPOScriptArguments, TrlParser, init_zero_verbose
+from trl.trainer import PairRMJudge
+
+
 TRL_USE_RICH = os.environ.get("TRL_USE_RICH", False)
 
-from trl.commands.cli_utils import DPOScriptArguments, init_zero_verbose, TrlParser
 
 if TRL_USE_RICH:
     init_zero_verbose()
@@ -67,22 +83,6 @@ if TRL_USE_RICH:
     from rich.console import Console
     from rich.logging import RichHandler
 
-import torch
-from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
-from trl import (
-    NashMDConfig,
-    NashMDTrainer,
-    ModelConfig,
-    RichProgressCallback,
-    get_kbit_device_map,
-    get_peft_config,
-    get_quantization_config,
-)
-
-from trl.trainer import WinRateCallback, MockJudge, PairRMJudge
-
-if TRL_USE_RICH:
     logging.basicConfig(format=FORMAT, datefmt="[%X]", handlers=[RichHandler()], level=logging.INFO)
 
 
@@ -135,7 +135,9 @@ if __name__ == "__main__":
     ################
     # Optional rich context managers
     ###############
-    init_context = nullcontext() if not TRL_USE_RICH else console.status("[bold green]Initializing the NashMDTrainer...")
+    init_context = (
+        nullcontext() if not TRL_USE_RICH else console.status("[bold green]Initializing the NashMDTrainer...")
+    )
     save_context = (
         nullcontext()
         if not TRL_USE_RICH
@@ -149,7 +151,6 @@ if __name__ == "__main__":
     if args.sanity_check:
         for key in ds:
             ds[key] = ds[key].select(range(1_000))
-
 
     for key in ds:
         ds[key] = ds[key].remove_columns(["chosen", "rejected", "score_chosen", "score_rejected"])
