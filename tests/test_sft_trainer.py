@@ -1175,9 +1175,9 @@ class SFTTrainerTester(unittest.TestCase):
             trainer = SFTTrainer(
                 model=self.model_id,
                 args=training_args,
-                train_dataset=self.dummy_vsft_instruction_dataset,
+                train_dataset=self.dummy_dataset,
             )
-            assert trainer.train_dataset.features == self.dummy_vsft_instruction_dataset.features
+            assert trainer.train_dataset.features == self.dummy_dataset.features
 
     @requires_pil
     def test_sft_trainer_llava(self):
