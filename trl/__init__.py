@@ -56,7 +56,8 @@ _import_structure = {
     ],
     "commands": [],
     "commands.cli_utils": ["init_zero_verbose", "SFTScriptArguments", "DPOScriptArguments", "TrlParser"],
-    "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config", "RichProgressCallback"],
+    "trainer.callbacks": ["RichProgressCallback", "SyncRefModelCallback", "WinRateCallback"],
+    "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config"],
     "multitask_prompt_tuning": [
         "MultitaskPromptEmbedding",
         "MultitaskPromptTuningConfig",
@@ -122,7 +123,8 @@ if TYPE_CHECKING:
         SFTConfig,
         SFTTrainer,
     )
-    from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config, RichProgressCallback
+    from .trainer.callbacks import RichProgressCallback, SyncRefModelCallback, WinRateCallback
+    from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config
     from .commands.cli_utils import init_zero_verbose, SFTScriptArguments, DPOScriptArguments, TrlParser
 
     try:

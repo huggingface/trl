@@ -42,11 +42,11 @@ from transformers.trainer_utils import EvalLoopOutput
 
 from ..import_utils import is_peft_available, is_wandb_available
 from ..models import PreTrainedModelWrapper, create_reference_model
+from .callbacks import SyncRefModelCallback
 from .dpo_config import DPOConfig
 from .utils import (
     DPODataCollatorWithPadding,
     RunningMoments,
-    SyncRefModelCallback,
     disable_dropout_in_model,
     pad_to_length,
     peft_module_casting_to_bf16,

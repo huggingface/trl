@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 from ..import_utils import _LazyModule, is_diffusers_available, OptionalDependencyNotAvailable
 
 _import_structure = {
+    "callbacks": ["RichProgressCallback", "SyncRefModelCallback", "WinRateCallback"],
     "utils": [
         "AdaptiveKLController",
         "FixedKLController",
@@ -27,7 +28,6 @@ _import_structure = {
         "RunningMoments",
         "disable_dropout_in_model",
         "peft_module_casting_to_bf16",
-        "RichProgressCallback",
     ],
     "dpo_config": ["DPOConfig"],
     "dpo_trainer": ["DPOTrainer"],
@@ -62,6 +62,11 @@ else:
 
 if TYPE_CHECKING:
     # isort: off
+    from .callbacks import (
+        RichProgressCallback,
+        SyncRefModelCallback,
+        WinRateCallback,
+    )
     from .utils import (
         AdaptiveKLController,
         FixedKLController,
@@ -70,9 +75,7 @@ if TYPE_CHECKING:
         RunningMoments,
         disable_dropout_in_model,
         peft_module_casting_to_bf16,
-        RichProgressCallback,
     )
-
     # isort: on
 
     from .base import BaseTrainer

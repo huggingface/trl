@@ -40,11 +40,11 @@ from transformers.trainer_utils import EvalPrediction
 
 from ..extras.dataset_formatting import get_formatting_func_from_dataset
 from ..import_utils import is_peft_available
+from .callbacks import RichProgressCallback
 from .sft_config import SFTConfig
 from .utils import (
     ConstantLengthDataset,
     DataCollatorForCompletionOnlyLM,
-    RichProgressCallback,
     neftune_post_forward_hook,
     peft_module_casting_to_bf16,
     trl_sanitze_kwargs_for_tagging,
