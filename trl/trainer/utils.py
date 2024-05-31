@@ -312,7 +312,7 @@ def pad(tensors: List[torch.Tensor], padding_value: int = 0, padding_side: str =
     Returns:
         `torch.Tensor`:
             A single tensor containing the padded tensors.
-    
+
     Examples:
         >>> import torch
         >>> pad([torch.tensor([1, 2, 3]), torch.tensor([4, 5])])
