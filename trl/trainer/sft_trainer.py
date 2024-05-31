@@ -141,6 +141,11 @@ class SFTTrainer(Trainer):
         dataset_kwargs: Optional[Dict] = None,
         eval_packing: Optional[bool] = None,
     ):
+        if args is None:
+            output_dir = "tmp_trainer"
+            warnings.warn(f"No `SFTConfig` passed, using `output_dir={output_dir}`.")
+            args = SFTConfig(output_dir=output_dir)
+
         if model_init_kwargs is not None:
             warnings.warn(
                 "You passed `model_init_kwargs` to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
@@ -237,7 +242,14 @@ class SFTTrainer(Trainer):
 
                         model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
 
-                model = get_peft_model(model, peft_config)
+                if (
+                    "autocast_adapter_dtype" in list(inspect.signature(get_peft_model).parameters)
+                    and getattr(model, "is_loaded_in_4bit", False)
+                    and is_sharded_qlora
+                ):
+                    model = get_peft_model(model, peft_config, autocast_adapter_dtype=False)
+                else:
+                    model = get_peft_model(model, peft_config)
                 if (
                     args is not None
                     and args.bf16

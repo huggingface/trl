@@ -27,6 +27,10 @@
     title: Supervised Fine-Tuning
   - local: ppo_trainer
     title: PPO Trainer
+  - local: ppov2_trainer
+    title: PPOv2 Trainer
+  - local: rloo_trainer
+    title: RLOO Trainer
   - local: best_of_n
     title: Best of N Sampling
   - local: dpo_trainer

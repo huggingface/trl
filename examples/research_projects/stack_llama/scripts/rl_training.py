@@ -90,7 +90,9 @@ config = PPOConfig(
     adap_kl_ctrl=script_args.adap_kl_ctrl,
 )
 
-train_dataset = load_dataset("lvwerra/stack-exchange-paired", data_dir="data/rl", split="train")
+train_dataset = load_dataset(
+    "lvwerra/stack-exchange-paired", data_dir="data/rl", split="train", verification_mode="no_checks"
+)
 train_dataset = train_dataset.select(range(100000))
 original_columns = train_dataset.column_names
 

@@ -110,6 +110,7 @@ def get_stack_exchange_paired(
         split="train",
         cache_dir=cache_dir,
         data_dir=data_dir,
+        verification_mode="no_checks",
     )
     original_columns = dataset.column_names
 
@@ -186,7 +187,7 @@ if __name__ == "__main__":
         gradient_accumulation_steps=script_args.gradient_accumulation_steps,
         gradient_checkpointing=script_args.gradient_checkpointing,
         learning_rate=script_args.learning_rate,
-        evaluation_strategy="steps",
+        eval_strategy="steps",
         eval_steps=script_args.eval_steps,
         output_dir=script_args.output_dir,
         report_to=script_args.report_to,

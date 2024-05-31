@@ -99,10 +99,14 @@ parser = HfArgumentParser(ScriptArguments)
 script_args = parser.parse_args_into_dataclasses()[0]
 set_seed(script_args.seed)
 # Load the human stack-exchange-paired dataset for tuning the reward model.
-train_dataset = load_dataset("lvwerra/stack-exchange-paired", data_dir="data/reward", split="train")
+train_dataset = load_dataset(
+    "lvwerra/stack-exchange-paired", data_dir="data/reward", split="train", verification_mode="no_checks"
+)
 if script_args.train_subset > 0:
     train_dataset = train_dataset.select(range(script_args.train_subset))
-eval_dataset = load_dataset("lvwerra/stack-exchange-paired", data_dir="data/evaluation", split="train")
+eval_dataset = load_dataset(
+    "lvwerra/stack-exchange-paired", data_dir="data/evaluation", split="train", verification_mode="no_checks"
+)
 if script_args.eval_subset > 0:
     eval_dataset = eval_dataset.select(range(script_args.eval_subset))
 # Define the training args. Needs to be done before the model is loaded if you are using deepspeed.
@@ -118,7 +122,7 @@ training_args = TrainingArguments(
     per_device_eval_batch_size=script_args.per_device_eval_batch_size,
     num_train_epochs=script_args.num_train_epochs,
     weight_decay=script_args.weight_decay,
-    evaluation_strategy="steps",
+    eval_strategy="steps",
     eval_steps=500,
     save_strategy="steps",
     save_steps=500,
