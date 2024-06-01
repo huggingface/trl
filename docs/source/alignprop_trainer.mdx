@@ -2,12 +2,16 @@
 
 ## The why
 
-| Before | After finetuning |
-| --- | --- |
-| <div style="text-align: center"><img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/pre_squirrel.png"/></div> |  <div style="text-align: center"><img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/post_squirrel.png"/></div> |
-| <div style="text-align: center"><img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/pre_crab.png"/></div> |  <div style="text-align: center"><img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/post_crab.png"/></div> |
-|  <div style="text-align: center"><img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/pre_starfish.png"/></div> |  <div style="text-align: center"><img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/post_starfish.png"/></div> |
 
+If your reward function is differentiable, directly backpropagating gradients from the reward models is significantly more sample efficient than doing policy gradient algorithm like DDPO.
+AlignProp does full backpropagation through time, which allows updating the earlier steps of denoising via reward backpropagation.
+
+<div style="text-align: center"><img src="https://align-prop.github.io/reward_tuning.png"/></div>
+
+<video width="1200" autoplay="" muted="">
+          <source src="https://align-prop.github.io/promo2.m4v" type="video/mp4">
+          Your browser does not support the video tag.
+      </video>
 
 ## Getting started with Stable Diffusion finetuning with reinforcement learning
 
