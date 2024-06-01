@@ -1230,7 +1230,7 @@ class DPOTrainer(Trainer):
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
         if self.args.rpo_alpha is not None:
-            losses = losses * self.args.rpo_alpha + policy_chosen_logps_avg
+            losses = losses * self.args.rpo_alpha - policy_chosen_logps_avg
 
         prefix = "eval_" if train_eval == "eval" else ""
         metrics[f"{prefix}rewards/chosen"] = chosen_rewards.mean().cpu()
