@@ -25,18 +25,13 @@ python examples/scripts/ddpo.py \
     --log_with="wandb"
 """
 import os
-import torchvision
 from dataclasses import dataclass, field
-
 import numpy as np
 import torch
 import torch.nn as nn
-from huggingface_hub import hf_hub_download
-from huggingface_hub.utils import EntryNotFoundError
-from transformers import CLIPModel, CLIPProcessor, HfArgumentParser
-
+from transformers import  HfArgumentParser
 from trl import AlignPropConfig, AlignPropTrainer, DefaultDDPOStableDiffusionPipeline
-from trl.import_utils import is_npu_available, is_xpu_available
+from trl.models.auxiliary_modules import aesthetic_scorer
 
 
 @dataclass
@@ -46,7 +41,7 @@ class ScriptArguments:
     )
     pretrained_revision: str = field(default="main", metadata={"help": "the pretrained model revision to use"})
     hf_hub_model_id: str = field(
-        default="ddpo-finetuned-stable-diffusion", metadata={"help": "HuggingFace repo to save model weights to"}
+        default="alignprop-finetuned-stable-diffusion", metadata={"help": "HuggingFace repo to save model weights to"}
     )
     hf_hub_aesthetic_model_id: str = field(
         default="trl-lib/ddpo-aesthetic-predictor",
@@ -58,78 +53,6 @@ class ScriptArguments:
     )
     use_lora: bool = field(default=True, metadata={"help": "Whether to use LoRA."})
 
-
-class MLP(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.layers = nn.Sequential(
-            nn.Linear(768, 1024),
-            nn.Dropout(0.2),
-            nn.Linear(1024, 128),
-            nn.Dropout(0.2),
-            nn.Linear(128, 64),
-            nn.Dropout(0.1),
-            nn.Linear(64, 16),
-            nn.Linear(16, 1),
-        )
-
-    def forward(self, embed):
-        return self.layers(embed)
-
-
-class AestheticScorer(torch.nn.Module):
-    """
-    This model attempts to predict the aesthetic score of an image. The aesthetic score
-    is a numerical approximation of how much a specific image is liked by humans on average.
-    This is from https://github.com/christophschuhmann/improved-aesthetic-predictor
-    """
-
-    def __init__(self, *, dtype, model_id, model_filename):
-        super().__init__()
-        self.clip = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
-        self.normalize = torchvision.transforms.Normalize(mean=[0.48145466, 0.4578275, 0.40821073],
-                                                    std=[0.26862954, 0.26130258, 0.27577711])   
-        self.target_size = 224        
-        self.mlp = MLP()
-        try:
-            cached_path = hf_hub_download(model_id, model_filename)
-        except EntryNotFoundError:
-            cached_path = os.path.join(model_id, model_filename)
-        state_dict = torch.load(cached_path, map_location=torch.device("cpu"))
-        self.mlp.load_state_dict(state_dict)
-        self.dtype = dtype
-        self.eval()
-
-    def __call__(self, images):
-        device = next(self.parameters()).device
-        images = torchvision.transforms.Resize(self.target_size)(images)
-        images = self.normalize(images).to(self.dtype).to(device)
-        embed = self.clip.get_image_features(pixel_values=images)
-        # normalize embedding
-        embed = embed / torch.linalg.vector_norm(embed, dim=-1, keepdim=True)
-        reward = self.mlp(embed).squeeze(1)        
-        return reward
-
-
-def aesthetic_scorer(hub_model_id, model_filename):
-    scorer = AestheticScorer(
-        model_id=hub_model_id,
-        model_filename=model_filename,
-        dtype=torch.float32,
-    )
-    if is_npu_available():
-        scorer = scorer.npu()
-    elif is_xpu_available():
-        scorer = scorer.xpu()
-    else:
-        scorer = scorer.cuda()
-
-    def _fn(images, prompts, metadata):
-        images = (images).clamp(0, 1)
-        scores = scorer(images)
-        return scores, {}
-
-    return _fn
 
 
 # list of example prompts to feed stable diffusion
@@ -177,8 +100,7 @@ def image_outputs_logger(image_pair_data, global_step, accelerate_logger):
     for i, image in enumerate(images[:4]):
         prompt = prompts[i]
         reward = rewards[i].item()
-        result[f"{prompt:.25} | {reward:.2f}"] = image.unsqueeze(0).float()
-
+        result[f"{prompt}"] = image.unsqueeze(0).float()
     accelerate_logger.log_images(
         result,
         step=global_step,
@@ -198,7 +120,6 @@ if __name__ == "__main__":
     pipeline = DefaultDDPOStableDiffusionPipeline(
         args.pretrained_model, pretrained_model_revision=args.pretrained_revision, use_lora=args.use_lora
     )
-
     trainer = AlignPropTrainer(
         alignprop_config,
         aesthetic_scorer(args.hf_hub_aesthetic_model_id, args.hf_hub_aesthetic_model_filename),
