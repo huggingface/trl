@@ -2,33 +2,11 @@
 
 ## The why
 
-
-If your reward function is differentiable, directly backpropagating gradients from the reward models is significantly more sample efficient than doing policy gradient algorithm like DDPO.
+If your reward function is differentiable, directly backpropagating gradients from the reward models to the diffusion model is significantly more sample and compute efficient (25x) than doing policy gradient algorithm like DDPO.
 AlignProp does full backpropagation through time, which allows updating the earlier steps of denoising via reward backpropagation.
 
 <div style="text-align: center"><img src="https://align-prop.github.io/reward_tuning.png"/></div>
 
-<video width="1200" autoplay="" muted="">
-          <source src="https://align-prop.github.io/promo2.m4v" type="video/mp4">
-          Your browser does not support the video tag.
-      </video>
-
-## Getting started with Stable Diffusion finetuning with reinforcement learning
-
-The machinery for finetuning of Stable Diffusion models with reinforcement learning makes heavy use of HuggingFace's `diffusers`
-library. A reason for  stating this is that getting started requires a bit of familiarity with the `diffusers` library concepts, mainly two of them - pipelines and schedulers.
-Right out of the box (`diffusers` library), there isn't a `Pipeline` nor a `Scheduler` instance that is suitable for finetuning with reinforcement learning. Some adjustments need to made. 
-
-There is a pipeline interface that is provided by this library that is required to be implemented to be used with the `AlignPropTrainer`, which is one of the methods for fine-tuning Stable Diffusion with reward backpropagation. **Note: Only the StableDiffusion architecture is supported at this point.**
-There is a default implementation of this interface that you can use out of the box. Assuming the default implementation is sufficient and/or to get things moving, refer to the training example alongside this guide. 
-
-The point of the interface is to fuse the pipeline and the scheduler into one object which allows for minimalness in terms of having the constraints all in one place. The interface was designed in hopes of catering to pipelines and schedulers beyond the examples in this repository and elsewhere at this time of writing. Also the scheduler step is a method of this pipeline interface and this may seem redundant given that the raw scheduler is accessible via the interface but this is one of the way to pass gradients from the scheduler step befitting of the algorithm at hand (AlignProp).
-
-For a more detailed look into the interface and the associated default implementation, go [here](https://github.com/lvwerra/trl/tree/main/trl/models/modeling_sd_base.py)
-
-Note that the default implementation has a LoRA implementation path and a non-LoRA based implementation path. The LoRA flag enabled by default and this can be turned off by passing in the flag to do so. LORA based training is faster and the LORA associated model hyperparameters responsible for model convergence aren't as finicky as non-LORA based training.
-
-Also in addition, there is the expectation of providing a reward function and a prompt function. The reward function is used to evaluate the generated images  and the prompt function is used to generate the prompts that are used to generate the images.
 
 ## Getting started with `examples/scripts/alignprop.py`
 
@@ -94,25 +72,17 @@ def image_outputs_hook(image_data, global_step, accelerate_logger):
 Assuming you've done with all the epochs and have pushed up your model to the hub, you can use the finetuned model as follows
 
 ```python
+from diffusers import StableDiffusionPipeline
+pipeline = StableDiffusionPipeline.from_pretrained("runwayml/stable-diffusion-v1-5")
+pipeline.to("cuda")
 
-import torch
-from trl import DefaultDDPOStableDiffusionPipeline
-
-pipeline = DefaultDDPOStableDiffusionPipeline("metric-space/alignprop-finetuned-sd-model")
-
-device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-
-# memory optimization
-pipeline.vae.to(device, torch.float16)
-pipeline.text_encoder.to(device, torch.float16)
-pipeline.unet.to(device, torch.float16)
+pipeline.load_lora_weights('mihirpd/alignprop-trl-aesthetics')
 
 prompts = ["squirrel", "crab", "starfish", "whale","sponge", "plankton"]
 results = pipeline(prompts)
 
 for prompt, image in zip(prompts,results.images):
-    image.save(f"{prompt}.png")
-
+    image.save(f"dump/{prompt}.png")
 ```
 
 ## Credits
