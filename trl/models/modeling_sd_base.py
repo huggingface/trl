@@ -528,7 +528,7 @@ def pipeline_step(
     return DDPOPipelineOutput(image, all_latents, all_log_probs)
 
 def pipeline_step_with_grad(
-    self,
+    pipeline,
     prompt: Optional[Union[str, List[str]]] = None,
     height: Optional[int] = None,
     width: Optional[int] = None,
@@ -554,8 +554,8 @@ def pipeline_step_with_grad(
     guidance_rescale: float = 0.0,
 ):
     r"""
-    Function to get RGB image with gradients attached to the model weights.  Args: prompt (`str` or `List[str]`, *optional*): The prompt or prompts to guide the image generation. If not defined, one has to pass `prompt_embeds`.  instead.  height (`int`, *optional*, defaults to self.unet.config.sample_size * self.vae_scale_factor): The height in pixels of the generated image.
-        width (`int`, *optional*, defaults to self.unet.config.sample_size * self.vae_scale_factor):
+    Function to get RGB image with gradients attached to the model weights.  Args: prompt (`str` or `List[str]`, *optional*): The prompt or prompts to guide the image generation. If not defined, one has to pass `prompt_embeds`.  instead.  height (`int`, *optional*, defaults to pipeline.unet.config.sample_size * pipeline.vae_scale_factor): The height in pixels of the generated image.
+        width (`int`, *optional*, defaults to pipeline.unet.config.sample_size * pipeline.vae_scale_factor):
             The width in pixels of the generated image.
         num_inference_steps (`int`, *optional*, defaults to 50):
             The number of denoising steps. More denoising steps usually lead to a higher quality image at the
@@ -617,7 +617,7 @@ def pipeline_step_with_grad(
             called at every step.
         cross_attention_kwargs (`dict`, *optional*):
             A kwargs dictionary that if specified is passed along to the `AttentionProcessor` as defined under
-            `self.processor` in
+            `pipeline.processor` in
             [diffusers.cross_attention](https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/cross_attention.py).
         guidance_rescale (`float`, *optional*, defaults to 0.7):
             Guidance rescale factor proposed by [Common Diffusion Noise Schedules and Sample Steps are
@@ -631,12 +631,12 @@ def pipeline_step_with_grad(
         `DDPOPipelineOutput`: The generated image, the predicted latents used to generate the image and the associated log probabilities
     """
     # 0. Default height and width to unet
-    height = height or self.unet.config.sample_size * self.vae_scale_factor
-    width = width or self.unet.config.sample_size * self.vae_scale_factor
+    height = height or pipeline.unet.config.sample_size * pipeline.vae_scale_factor
+    width = width or pipeline.unet.config.sample_size * pipeline.vae_scale_factor
 
     with torch.no_grad():
         # 1. Check inputs. Raise error if not correct
-        self.check_inputs(
+        pipeline.check_inputs(
             prompt,
             height,
             width,
@@ -654,7 +654,7 @@ def pipeline_step_with_grad(
         else:
             batch_size = prompt_embeds.shape[0]
 
-        device = self._execution_device
+        device = pipeline._execution_device
         # here `guidance_scale` is defined analog to the guidance weight `w` of equation (2)
         # of the Imagen paper: https://arxiv.org/pdf/2205.11487.pdf . `guidance_scale = 1`
         # corresponds to doing no classifier free guidance.
@@ -662,7 +662,7 @@ def pipeline_step_with_grad(
         
         # 3. Encode input prompt
         text_encoder_lora_scale = cross_attention_kwargs.get("scale", None) if cross_attention_kwargs is not None else None
-        prompt_embeds = self._encode_prompt(
+        prompt_embeds = pipeline._encode_prompt(
             prompt,
             device,
             num_images_per_prompt,
@@ -674,12 +674,12 @@ def pipeline_step_with_grad(
         )
 
         # 4. Prepare timesteps
-        self.scheduler.set_timesteps(num_inference_steps, device=device)
-        timesteps = self.scheduler.timesteps
+        pipeline.scheduler.set_timesteps(num_inference_steps, device=device)
+        timesteps = pipeline.scheduler.timesteps
 
         # 5. Prepare latent variables
-        num_channels_latents = self.unet.config.in_channels
-        latents = self.prepare_latents(
+        num_channels_latents = pipeline.unet.config.in_channels
+        latents = pipeline.prepare_latents(
             batch_size * num_images_per_prompt,
             num_channels_latents,
             height,
@@ -690,20 +690,20 @@ def pipeline_step_with_grad(
             latents,
         )
     # 6. Denoising loop
-    num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
+    num_warmup_steps = len(timesteps) - num_inference_steps * pipeline.scheduler.order
     all_latents = [latents]
     all_log_probs = []
-    with self.progress_bar(total=num_inference_steps) as progress_bar:
+    with pipeline.progress_bar(total=num_inference_steps) as progress_bar:
         for i, t in enumerate(timesteps):
             # expand the latents if we are doing classifier free guidance
             latent_model_input = torch.cat([latents] * 2) if do_classifier_free_guidance else latents
-            latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
+            latent_model_input = pipeline.scheduler.scale_model_input(latent_model_input, t)
             
             # predict the noise residual
             if gradient_checkpoint:
-                noise_pred = checkpoint.checkpoint(self.unet, latent_model_input, t, prompt_embeds, cross_attention_kwargs=cross_attention_kwargs, use_reentrant=False)[0]
+                noise_pred = checkpoint.checkpoint(pipeline.unet, latent_model_input, t, prompt_embeds, cross_attention_kwargs=cross_attention_kwargs, use_reentrant=False)[0]
             else:                
-                noise_pred = self.unet(
+                noise_pred = pipeline.unet(
                     latent_model_input,
                     t,
                     encoder_hidden_states=prompt_embeds,
@@ -711,13 +711,17 @@ def pipeline_step_with_grad(
                     return_dict=False,
                 )[0]
 
-
+            #  truncating backpropagation is critical for preventing overoptimization (https://arxiv.org/abs/2304.05977). 
             if truncated_backprop:
+                # Randomized truncation randomizes the truncation process (https://arxiv.org/abs/2310.03739)
+                # the range of truncation is defined by truncated_rand_backprop_minmax
+                # Setting truncated_rand_backprop_minmax[0] to be low will allow the model to update earlier timesteps in the diffusion chain, while setitng it high will reduce the memory usage.
                 if truncated_backprop_rand:
                     rand_timestep = random.randint(truncated_rand_backprop_minmax[0],truncated_rand_backprop_minmax[1])
                     if i < rand_timestep:
                         noise_pred = noise_pred.detach()
                 else:
+                    # fixed truncation process
                     if i < truncated_backprop_timestep:
                         noise_pred = noise_pred.detach()
 
@@ -731,7 +735,7 @@ def pipeline_step_with_grad(
                 noise_pred = rescale_noise_cfg(noise_pred, noise_pred_text, guidance_rescale=guidance_rescale)
 
             # compute the previous noisy sample x_t -> x_t-1
-            scheduler_output = scheduler_step(self.scheduler, noise_pred, t, latents, eta)
+            scheduler_output = scheduler_step(pipeline.scheduler, noise_pred, t, latents, eta)
             latents = scheduler_output.latents
             log_prob = scheduler_output.log_probs
 
@@ -739,14 +743,14 @@ def pipeline_step_with_grad(
             all_log_probs.append(log_prob)
 
             # call the callback, if provided
-            if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
+            if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % pipeline.scheduler.order == 0):
                 progress_bar.update()
                 if callback is not None and i % callback_steps == 0:
                     callback(i, t, latents)
 
     if not output_type == "latent":
-        image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0]
-        image, has_nsfw_concept = self.run_safety_checker(image, device, prompt_embeds.dtype)
+        image = pipeline.vae.decode(latents / pipeline.vae.config.scaling_factor, return_dict=False)[0]
+        image, has_nsfw_concept = pipeline.run_safety_checker(image, device, prompt_embeds.dtype)
     else:
         image = latents
         has_nsfw_concept = None
@@ -756,11 +760,11 @@ def pipeline_step_with_grad(
     else:
         do_denormalize = [not has_nsfw for has_nsfw in has_nsfw_concept]
 
-    image = self.image_processor.postprocess(image, output_type=output_type, do_denormalize=do_denormalize)
+    image = pipeline.image_processor.postprocess(image, output_type=output_type, do_denormalize=do_denormalize)
 
     # Offload last model to CPU
-    if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
-        self.final_offload_hook.offload()
+    if hasattr(pipeline, "final_offload_hook") and pipeline.final_offload_hook is not None:
+        pipeline.final_offload_hook.offload()
 
     return DDPOPipelineOutput(image, all_latents, all_log_probs)
 
