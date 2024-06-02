@@ -273,26 +273,7 @@ class AlignPropTrainer(BaseTrainer):
             )
         # Logs generated images
         if self.image_samples_callback is not None and global_step % self.config.log_image_freq == 0:
-            with torch.no_grad():
-                train_prompts = ['lion', 'duck', 'llama', 'cat']
-                train_prompt_image_pairs = self._generate_samples(
-                    batch_size=len(train_prompts), prompts=train_prompts
-                )
-                train_rewards = self.compute_rewards(
-                    train_prompt_image_pairs
-                )
-                train_prompt_image_pairs['rewards'] = train_rewards
-                test_prompts = ['elephant', 'dolphin', 'panda', 'penguin', 'octopus', 'koala', 'crocodile', 'chimpanzee']
-                test_prompt_image_pairs = self._generate_samples(
-                    batch_size=len(test_prompts), prompts=test_prompts
-                )
-                test_rewards = self.compute_rewards(test_prompt_image_pairs)
-                test_prompt_image_pairs['rewards'] = test_rewards
-            
-            logs = {"test_reward": test_rewards.mean(), "train_reward": train_rewards.mean()}
-            self.accelerator.log(logs, step=global_step)    
-
-            self.image_samples_callback(train_prompt_image_pairs, global_step, self.accelerator.trackers[0])
+            self.image_samples_callback(prompt_image_pairs, global_step, self.accelerator.trackers[0])
 
         if epoch != 0 and epoch % self.config.save_freq == 0 and self.accelerator.is_main_process:
             self.accelerator.save_state()

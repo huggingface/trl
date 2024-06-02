@@ -23,6 +23,8 @@ class AlignPropConfig:
     """Seed value for random generations"""
     log_with: Optional[Literal["wandb", "tensorboard"]] = None
     """Log with either 'wandb' or 'tensorboard', check  https://huggingface.co/docs/accelerate/usage_guides/tracking for more details"""
+    log_image_freq =1
+    """Logging Frequency for images"""    
     tracker_kwargs: dict = field(default_factory=dict)
     """Keyword arguments for the tracker (e.g. wandb_project)"""
     accelerator_kwargs: dict = field(default_factory=dict)
