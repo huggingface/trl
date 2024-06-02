@@ -1120,11 +1120,6 @@ class DPOTrainer(Trainer):
 
         return (per_token_logps * loss_mask).sum(-1), loss_mask.sum(-1)
 
-        # if average_log_prob:
-        #     return (per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)
-        # else:
-        #     return (per_token_logps * loss_mask).sum(-1)
-
     def concatenated_forward(
         self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
