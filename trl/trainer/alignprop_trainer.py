@@ -47,7 +47,7 @@ tags:
 
 # {model_name}
 
-This is a pipeline that finetunes a diffusion model with reward gradients. The model can be used for image generation conditioned with text.
+This is a pipeline that finetunes a diffusion model with reward backpropagation while using randomized truncation (https://arxiv.org/abs/2310.03739). The model can be used for image generation conditioned with text.
 
 """
 
@@ -271,10 +271,28 @@ class AlignPropTrainer(BaseTrainer):
             raise ValueError(
                 "Optimization step should have been performed by this point. Please check calculated gradient accumulation settings."
             )
-            
         # Logs generated images
-        if self.image_samples_callback is not None:
-            self.image_samples_callback(prompt_image_pairs, global_step, self.accelerator.trackers[0])
+        if self.image_samples_callback is not None and global_step % self.config.log_image_freq == 0:
+            with torch.no_grad():
+                train_prompts = ['lion', 'duck', 'llama', 'cat']
+                train_prompt_image_pairs = self._generate_samples(
+                    batch_size=len(train_prompts), prompts=train_prompts
+                )
+                train_rewards = self.compute_rewards(
+                    train_prompt_image_pairs
+                )
+                train_prompt_image_pairs['rewards'] = train_rewards
+                test_prompts = ['elephant', 'dolphin', 'panda', 'penguin', 'octopus', 'koala', 'crocodile', 'chimpanzee']
+                test_prompt_image_pairs = self._generate_samples(
+                    batch_size=len(test_prompts), prompts=test_prompts
+                )
+                test_rewards = self.compute_rewards(test_prompt_image_pairs)
+                test_prompt_image_pairs['rewards'] = test_rewards
+            
+            logs = {"test_reward": test_rewards.mean(), "train_reward": train_rewards.mean()}
+            self.accelerator.log(logs, step=global_step)    
+
+            self.image_samples_callback(train_prompt_image_pairs, global_step, self.accelerator.trackers[0])
 
         if epoch != 0 and epoch % self.config.save_freq == 0 and self.accelerator.is_main_process:
             self.accelerator.save_state()
@@ -334,7 +352,7 @@ class AlignPropTrainer(BaseTrainer):
         self.sd_pipeline.load_checkpoint(models, input_dir)
         models.pop()  # ensures that accelerate doesn't try to handle loading of the model
 
-    def _generate_samples(self, batch_size, with_grad= True):
+    def _generate_samples(self, batch_size, with_grad= True, prompts=None):
         """
         Generate samples from the model
 
@@ -350,7 +368,11 @@ class AlignPropTrainer(BaseTrainer):
 
         sample_neg_prompt_embeds = self.neg_prompt_embed.repeat(batch_size, 1, 1)
 
-        prompts, prompt_metadata = zip(*[self.prompt_fn() for _ in range(batch_size)])
+        if prompts is None:
+            prompts, prompt_metadata = zip(*[self.prompt_fn() for _ in range(batch_size)])
+        else:
+            prompt_metadata = [{} for _ in range(batch_size)]
+
 
         prompt_ids = self.sd_pipeline.tokenizer(
             prompts,
