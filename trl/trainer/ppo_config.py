@@ -145,7 +145,7 @@ class PPOConfig:
         )
 
         if optimize_device_cache is True:
-            raise ValueError(f"Both `optimize_device_cache` and `optimize_cuda_cache` were provided")
+            raise ValueError("Both `optimize_device_cache` and `optimize_cuda_cache` were provided")
 
         optimize_device_cache = optimize_cuda_cache
 
