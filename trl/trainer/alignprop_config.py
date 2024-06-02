@@ -59,7 +59,7 @@ class AlignPropConfig:
     """Batch size (per GPU!) to use for training."""
     train_use_8bit_adam: bool = False
     """Whether to use the 8bit Adam optimizer from bitsandbytes."""
-    train_learning_rate: float = 3e-4
+    train_learning_rate: float = 1e-3
     """Learning rate."""
     train_adam_beta1: float = 0.9
     """Adam beta1."""

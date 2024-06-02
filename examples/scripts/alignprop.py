@@ -12,15 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-python examples/scripts/ddpo.py \
-    --num_epochs=200 \
-    --train_gradient_accumulation_steps=1 \
+python examples/scripts/alignprop.py \
+    --num_epochs=20 \
+    --train_gradient_accumulation_steps=4 \
     --sample_num_steps=50 \
-    --sample_batch_size=6 \
-    --train_batch_size=3 \
-    --sample_num_batches_per_epoch=4 \
-    --per_prompt_stat_tracking=True \
-    --per_prompt_stat_tracking_buffer_size=32 \
+    --train_batch_size=8 \
     --tracker_project_name="stable_diffusion_training" \
     --log_with="wandb"
 """
