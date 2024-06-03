@@ -143,9 +143,11 @@ class PPOConfig:
         warnings.warn(
             "The `optimize_cuda_cache` argument will be deprecated soon, please use `optimize_device_cache` instead."
         )
+
+        if optimize_device_cache is True:
+            raise ValueError("Both `optimize_device_cache` and `optimize_cuda_cache` were provided")
+
         optimize_device_cache = optimize_cuda_cache
-    else:
-        optimize_device_cache = False
 
     def __post_init__(self):
         if self.forward_batch_size is not None:
