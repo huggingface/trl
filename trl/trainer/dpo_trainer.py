@@ -495,9 +495,9 @@ class DPOTrainer(Trainer):
         # see: https://github.com/huggingface/trl/pull/1255
         with PartialState().local_main_process_first():
             # tokenize the dataset
-            train_dataset = train_dataset.map(self.tokenize_row, num_proc=self.dataset_num_proc, load_from_cache_file=False)
+            train_dataset = train_dataset.map(self.tokenize_row, num_proc=self.dataset_num_proc, writer_batch_size=10)
             if eval_dataset is not None:
-                eval_dataset = eval_dataset.map(self.tokenize_row, num_proc=self.dataset_num_proc, load_from_cache_file=False)
+                eval_dataset = eval_dataset.map(self.tokenize_row, num_proc=self.dataset_num_proc, writer_batch_size=10)
 
         super().__init__(
             model=model,
@@ -935,6 +935,7 @@ class DPOTrainer(Trainer):
     def concatenated_inputs(
         batch: Dict[str, Union[List, torch.LongTensor]],
         is_encoder_decoder: bool = False,
+        is_vision_model: bool = False,
         label_pad_token_id: int = -100,
         padding_value: int = 0,
         device: Optional[torch.device] = None,
@@ -991,6 +992,9 @@ class DPOTrainer(Trainer):
                 batch["prompt_attention_mask"].repeat(2, 1).to(device=device)
             )
 
+        if is_vision_model:
+            concatenated_batch["pixel_values"] = batch["prompt_pixel_values"].repeat(2, 1, 1, 1, 1).to(device=device)
+            concatenated_batch["pixel_attention_mask"] = batch["prompt_pixel_attention_mask"].repeat(2, 1, 1, 1).to(device=device)
         return concatenated_batch
 
     def dpo_loss(
@@ -1147,20 +1151,23 @@ class DPOTrainer(Trainer):
         concatenated_batch = self.concatenated_inputs(
             batch,
             is_encoder_decoder=self.is_encoder_decoder,
+            is_vision_model=self.is_vision_model,
             label_pad_token_id=self.label_pad_token_id,
             padding_value=self.padding_value,
             device=self.accelerator.device,
         )
         len_chosen = batch["chosen_labels"].shape[0]
 
-        model_kwargs = (
-            {
-                "labels": concatenated_batch["concatenated_labels"],
-                "decoder_input_ids": concatenated_batch.pop("concatenated_decoder_input_ids", None),
-            }
-            if self.is_encoder_decoder
-            else {}
-        )
+        model_kwargs = {}
+
+        if self.is_encoder_decoder:
+            model_kwargs["labels"] = concatenated_batch["concatenated_labels"]
+            model_kwargs["decoder_input_ids"] = concatenated_batch.pop("concatenated_decoder_input_ids", None)
+
+        if self.is_vision_model:
+            model_kwargs["pixel_values"] = concatenated_batch["pixel_values"]
+            model_kwargs["pixel_attention_mask"] = concatenated_batch["pixel_attention_mask"]
+
         all_logits = model(
             concatenated_batch["concatenated_input_ids"],
             attention_mask=concatenated_batch["concatenated_attention_mask"],
