@@ -167,7 +167,7 @@ class DPOTrainer(Trainer):
     ):
         if model_init_kwargs is not None:
             warnings.warn(
-                "You passed `model_init_kwargs` to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
+                "You passed `model_init_kwargs` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
             args.model_init_kwargs = model_init_kwargs
 
@@ -187,7 +187,7 @@ class DPOTrainer(Trainer):
 
         if ref_model_init_kwargs is not None:
             warnings.warn(
-                "You passed `ref_model_kwargs` to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
+                "You passed `ref_model_init_kwargs` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
             args.ref_model_init_kwargs = ref_model_init_kwargs
 
