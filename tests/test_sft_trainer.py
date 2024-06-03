@@ -1156,6 +1156,29 @@ class SFTTrainerTester(unittest.TestCase):
             assert trainer.train_dataset.features == self.dummy_vsft_instruction_dataset.features
             assert trainer.eval_dataset.features == self.dummy_vsft_instruction_dataset.features
 
+    def test_sft_trainer_skip_prepare_dataset_with_no_packing(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = SFTConfig(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                eval_strategy="steps",
+                max_steps=4,
+                eval_steps=2,
+                save_steps=2,
+                per_device_train_batch_size=2,
+                gradient_checkpointing=True,
+                remove_unused_columns=False,
+                packing=False,
+                dataset_kwargs={"skip_prepare_dataset": True},
+            )
+
+            trainer = SFTTrainer(
+                model=self.model_id,
+                args=training_args,
+                train_dataset=self.dummy_dataset,
+            )
+            assert trainer.train_dataset.features == self.dummy_dataset.features
+
     @requires_pil
     def test_sft_trainer_llava(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
