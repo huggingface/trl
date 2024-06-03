@@ -160,6 +160,7 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 beta=0.1,
                 precompute_ref_log_probs=True,
+                rpo_alpha=0.5,
             )
 
             dummy_dataset = self._init_dummy_dataset()
