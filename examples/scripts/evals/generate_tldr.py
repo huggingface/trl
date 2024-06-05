@@ -8,7 +8,7 @@ import pandas as pd
 from datasets import load_dataset
 from gpt_tldr_judge import LLMJudgeConfig, llm_judge
 from transformers import AutoTokenizer, HfArgumentParser
-from vllm import SamplingParams, SingleGPULLM
+from vllm import LLM, SamplingParams
 
 
 """
@@ -28,6 +28,7 @@ class Args:
     output_path: str
     model_name_or_path: str
     model_revision: str = "main"
+    judge_model: str = "gpt-3.5-turbo-0125"
     n: int = 1000
 
 
@@ -50,11 +51,11 @@ if args.n is not None:
     prompts = prompts[: args.n]
 reference_summaries = [message[-1]["content"] for message in raw_datasets["test"]["messages"]]
 sampling_params = SamplingParams(temperature=0.0, top_p=0.95, max_tokens=MAX_TOKENS)
-llm = SingleGPULLM(
+llm = LLM(
     model=args.model_name_or_path,
     revision=args.model_revision,
+    tokenizer_revision=args.model_revision,
     tensor_parallel_size=1,
-    device="cuda:0",
 )
 outputs = llm.generate(prompts, sampling_params)
 table = defaultdict(list)
@@ -82,8 +83,13 @@ df["response1"] = df["reference_response"]
 judged_df = llm_judge(
     LLMJudgeConfig(
         n=args.n,
-        model="gpt-3.5-turbo-0125",
+        model=args.judge_model,
     ),
     df,
 )
+judged_df.rename(columns={"response0": "model_response", "response1": "reference_response"}, inplace=True)
+print(judged_df["preferred"].value_counts())
+# print percentage
+print(judged_df["preferred"].value_counts(normalize=True))
+
 judged_df.to_csv(args.output_path.replace(".csv", "_judged.csv"))
