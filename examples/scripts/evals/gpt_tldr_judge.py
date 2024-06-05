@@ -124,7 +124,6 @@ def llm_judge(ljc: LLMJudgeConfig, df: pd.DataFrame):
                 else "response1"
             )
             df.at[i, "preferred"] = preferred_label
-        print(df["preferred"].value_counts())
         return df
 
     return asyncio.run(main(ljc, df))
@@ -138,4 +137,5 @@ if __name__ == "__main__":
     df["response0"] = df["model_response"].map(lambda x: x.strip())
     df["response1"] = df["reference_response"].map(lambda x: x.strip())
     judge_df = llm_judge(ljc, df)
+    print(judge_df["preferred"].value_counts())
     judge_df.to_csv(args.output_path)
