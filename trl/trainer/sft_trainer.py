@@ -151,7 +151,7 @@ class SFTTrainer(Trainer):
                 "You passed `model_init_kwargs` to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
             )
             args.model_init_kwargs = model_init_kwargs
-        if args.model_init_kwargs is None:
+        if getattr(args, "model_init_kwargs", None) is None:
             model_init_kwargs = {}
         elif not isinstance(model, str):
             raise ValueError("You passed model_init_kwargs to the SFTConfig, but your model is already instantiated.")
