@@ -8,7 +8,7 @@ import pandas as pd
 from datasets import load_dataset
 from gpt_tldr_judge import LLMJudgeConfig, llm_judge
 from transformers import AutoTokenizer, HfArgumentParser
-from vllm import SamplingParams, LLM
+from vllm import LLM, SamplingParams
 
 
 """
