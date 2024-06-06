@@ -25,6 +25,7 @@ from transformers import (
     AutoProcessor,
     AutoTokenizer,
     LlavaForConditionalGeneration,
+    TrainingArguments,
 )
 
 from trl import SFTConfig, SFTTrainer
@@ -212,6 +213,31 @@ class SFTTrainerTester(unittest.TestCase):
 
             decoded_text = self.tokenizer.decode(example["input_ids"])
             assert ("Question" in decoded_text) and ("Answer" in decoded_text)
+
+    def test_sft_trainer_backward_compatibility(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(
+                output_dir=tmp_dir,
+                eval_strategy="steps",
+                max_steps=4,
+                eval_steps=2,
+                save_steps=2,
+                per_device_train_batch_size=2,
+            )
+
+            trainer = SFTTrainer(
+                model=self.model_id,
+                args=training_args,
+                train_dataset=self.train_dataset,
+                eval_dataset=self.eval_dataset,
+            )
+
+            trainer.train()
+
+            assert trainer.state.log_history[(-1)]["train_loss"] is not None
+            assert trainer.state.log_history[0]["eval_loss"] is not None
+
+            assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2")
 
     def test_sft_trainer(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
