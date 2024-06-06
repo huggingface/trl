@@ -213,7 +213,7 @@ class SFTTrainerTester(unittest.TestCase):
 
             decoded_text = self.tokenizer.decode(example["input_ids"])
             assert ("Question" in decoded_text) and ("Answer" in decoded_text)
-     
+
     def test_sft_trainer_backward_compatibility(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
