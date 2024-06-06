@@ -1075,8 +1075,10 @@ class DPOTrainer(Trainer):
 
             delta = chosen_logratios_sorted - rejected_logratios_sorted
 
-            losses = (-F.logsigmoid(self.beta * delta) * (1 - self.label_smoothing)
-                      - F.logsigmoid(-self.beta * delta) * self.label_smoothing)
+            losses = (
+                -F.logsigmoid(self.beta * delta) * (1 - self.label_smoothing)
+                - F.logsigmoid(-self.beta * delta) * self.label_smoothing
+            )
 
         elif self.loss_type == "aot":
             pi_logratios = policy_chosen_logps - policy_rejected_logps
@@ -1087,8 +1089,10 @@ class DPOTrainer(Trainer):
 
             delta = pi_logratios_sorted - ref_logratios_sorted
 
-            losses = (-F.logsigmoid(self.beta * delta) * (1 - self.label_smoothing)
-                      - F.logsigmoid(-self.beta * delta) * self.label_smoothing)
+            losses = (
+                -F.logsigmoid(self.beta * delta) * (1 - self.label_smoothing)
+                - F.logsigmoid(-self.beta * delta) * self.label_smoothing
+            )
 
         else:
             raise ValueError(
