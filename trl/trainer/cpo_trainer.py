@@ -707,7 +707,7 @@ class CPOTrainer(Trainer):
         if self.loss_type != "simpo":
             nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
         else:
-            nll_loss = 0
+            nll_loss = torch.tensor(0.0).to(self.accelerator.device)
 
         all_logps = self.get_batch_logps(
             all_logits,
