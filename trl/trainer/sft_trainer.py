@@ -145,6 +145,8 @@ class SFTTrainer(Trainer):
             output_dir = "tmp_trainer"
             warnings.warn(f"No `SFTConfig` passed, using `output_dir={output_dir}`.")
             args = SFTConfig(output_dir=output_dir)
+        elif args is not None and args.__class__.__name__ == "TrainingArguments":
+            args = SFTConfig(**args.to_dict())
 
         if model_init_kwargs is not None:
             warnings.warn(
