@@ -67,6 +67,9 @@ class CPOConfig(TrainingArguments):
     loss_type: Literal["sigmoid", "hinge", "ipo", "kto_pair", "simpo"] = "sigmoid"
     disable_dropout: bool = True
     simpo_gamma: float = 0.5
+    """
+    simpo_gamma: A target reward margin for the SimPO loss, used only when the "simpo" option is enabled.
+    """
 
     label_pad_token_id: int = -100
     padding_value: int = None
