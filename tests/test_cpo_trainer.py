@@ -84,6 +84,8 @@ class CPOTrainerTester(unittest.TestCase):
             ["t5", "hinge"],
             ["gpt2", "ipo"],
             ["t5", "ipo"],
+            ["gpt2", "simpo"],
+            ["t5", "simpo"],
         ]
     )
     def test_cpo_trainer(self, name, loss_type):

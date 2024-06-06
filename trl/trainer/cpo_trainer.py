@@ -268,6 +268,9 @@ class CPOTrainer(Trainer):
         self.label_smoothing = args.label_smoothing
         self.loss_type = args.loss_type
 
+        if args.loss_type == "simpo":
+            self.simpo_gamma = args.simpo_gamma
+
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
         # Compute that only on the main process for faster data processing.
@@ -585,7 +588,16 @@ class CPOTrainer(Trainer):
         # The beta is a temperature parameter for the CPO loss, typically something in the range of 0.1 to 0.5.
         # We ignore the reference model as beta -> 0. The label_smoothing parameter encodes our uncertainty about the labels and
         # calculates a conservative CPO loss.
-        if self.loss_type == "sigmoid":
+
+        if self.loss_type == "simpo":
+            gamma_logratios = self.simpo_gamma / self.beta
+            logits = logits - gamma_logratios
+            # This reduces to Equation 3 from the CPO paper when label_smoothing -> 0.
+            losses = (
+                -F.logsigmoid(self.beta * logits) * (1 - self.label_smoothing)
+                - F.logsigmoid(-self.beta * logits) * self.label_smoothing
+            )
+        elif self.loss_type == "sigmoid":
             # This reduces to Equation 3 from the CPO paper when label_smoothing -> 0.
             losses = (
                 -F.logsigmoid(self.beta * logits) * (1 - self.label_smoothing)
@@ -598,7 +610,7 @@ class CPOTrainer(Trainer):
             losses = (logits - 1 / (2 * self.beta)) ** 2
         else:
             raise ValueError(
-                f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'kto_pair']"
+                f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'kto_pair', 'simpo']"
             )
 
         chosen_rewards = self.beta * (policy_chosen_logps.to(self.accelerator.device)).detach()
@@ -691,12 +703,16 @@ class CPOTrainer(Trainer):
             return loss
 
         labels = concatenated_batch["concatenated_labels"].clone()
-        nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
+
+        if self.loss_type != "simpo":
+            nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
+        else:
+            nll_loss = torch.tensor(0.0).to(self.accelerator.device)
 
         all_logps = self.get_batch_logps(
             all_logits,
             concatenated_batch["concatenated_labels"],
-            average_log_prob=self.loss_type == "ipo",
+            average_log_prob=self.loss_type in ["ipo", "simpo"],
             is_encoder_decoder=self.is_encoder_decoder,
             label_pad_token_id=self.label_pad_token_id,
         )

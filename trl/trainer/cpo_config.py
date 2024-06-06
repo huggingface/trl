@@ -41,6 +41,8 @@ class CPOConfig(TrainingArguments):
             The type of loss to use. This argument is required if you want to use the default data collator.
         label_pad_token_id (`int`, defaults to `-100`):
             The label pad token id. This argument is required if you want to use the default data collator.
+        simpo_gamma (`float`, defaults to `0.5`):
+            A target reward margin for the SimPO loss, used only when the "simpo" option is enabled.
         padding_value (`int`, defaults to `None`):
             The padding value if it is different to the tokenizer's pad_token_id.
         truncation_mode (`str`, defaults to `keep_end`):
@@ -64,8 +66,9 @@ class CPOConfig(TrainingArguments):
 
     beta: float = 0.1
     label_smoothing: float = 0
-    loss_type: Literal["sigmoid", "hinge", "ipo", "kto_pair"] = "sigmoid"
+    loss_type: Literal["sigmoid", "hinge", "ipo", "kto_pair", "simpo"] = "sigmoid"
     disable_dropout: bool = True
+    simpo_gamma: float = 0.5
 
     label_pad_token_id: int = -100
     padding_value: int = None
