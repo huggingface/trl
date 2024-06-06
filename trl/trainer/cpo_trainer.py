@@ -584,14 +584,20 @@ class CPOTrainer(Trainer):
             The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
         """
         logits = (policy_chosen_logps - policy_rejected_logps).to(self.accelerator.device)
-        if self.loss_type == "simpo":
-            gamma_logratios = self.simpo_gamma / self.beta
-            logits = logits - gamma_logratios
         
         # The beta is a temperature parameter for the CPO loss, typically something in the range of 0.1 to 0.5.
         # We ignore the reference model as beta -> 0. The label_smoothing parameter encodes our uncertainty about the labels and
         # calculates a conservative CPO loss.
-        if self.loss_type == "sigmoid":
+
+        if self.loss_type == "simpo":
+            gamma_logratios = self.simpo_gamma / self.beta
+            logits = logits - gamma_logratios
+            # This reduces to Equation 3 from the CPO paper when label_smoothing -> 0.
+            losses = (
+                -F.logsigmoid(self.beta * logits) * (1 - self.label_smoothing)
+                - F.logsigmoid(-self.beta * logits) * self.label_smoothing
+            )
+        elif self.loss_type == "sigmoid":
             # This reduces to Equation 3 from the CPO paper when label_smoothing -> 0.
             losses = (
                 -F.logsigmoid(self.beta * logits) * (1 - self.label_smoothing)
@@ -604,7 +610,7 @@ class CPOTrainer(Trainer):
             losses = (logits - 1 / (2 * self.beta)) ** 2
         else:
             raise ValueError(
-                f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'kto_pair']"
+                f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'kto_pair', 'simpo']"
             )
 
         chosen_rewards = self.beta * (policy_chosen_logps.to(self.accelerator.device)).detach()
