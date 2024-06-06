@@ -66,9 +66,9 @@ class SFTTrainer(Trainer):
             The model to train, can be a `PreTrainedModel`, a `torch.nn.Module` or a string with the model name to
             load from cache or download. The model can be also converted to a `PeftModel` if a `PeftConfig` object is
             passed to the `peft_config` argument.
-        args (Optional[`transformers.TrainingArguments`]):
-            The arguments to tweak for training. Please refer to the official documentation of `transformers.TrainingArguments`
-            for more information.
+        args (Optional[`SFTConfig`]):
+            The arguments to tweak for training. Will default to a basic instance of [`SFTConfig`] with the `output_dir`
+            set to a directory named *tmp_trainer* in the current directory if not provided.
         data_collator (Optional[`transformers.DataCollator`]):
             The data collator to use for training.
         train_dataset (Optional[`datasets.Dataset`]):

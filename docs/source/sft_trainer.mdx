@@ -24,7 +24,7 @@ sft_config = SFTConfig(
 trainer = SFTTrainer(
     "facebook/opt-350m",
     train_dataset=dataset,
-    args=training_args,
+    args=sft_config,
 )
 trainer.train()
 ```
@@ -263,23 +263,23 @@ To properly format your input make sure to process all the examples by looping o
 
 ### Packing dataset ([`ConstantLengthDataset`])
 
-[`SFTTrainer`] supports _example packing_, where multiple short examples are packed in the same input sequence to increase training efficiency. This is done with the [`ConstantLengthDataset`] utility class that returns constant length chunks of tokens from a stream of examples. To enable the usage of this dataset class, simply pass `packing=True` to the [`SFTTrainer`] constructor.
+[`SFTTrainer`] supports _example packing_, where multiple short examples are packed in the same input sequence to increase training efficiency. This is done with the [`ConstantLengthDataset`] utility class that returns constant length chunks of tokens from a stream of examples. To enable the usage of this dataset class, simply pass `packing=True` to the [`SFTConfig`] constructor.
 
 ```python
 ...
+sft_config = SFTConfig(packing=True, dataset_text_field="text",)
 
 trainer = SFTTrainer(
     "facebook/opt-350m",
     train_dataset=dataset,
-    dataset_text_field="text",
-    packing=True
+    args=sft_config
 )
 
 trainer.train()
 ```
 
 Note that if you use a packed dataset and if you pass `max_steps` in the training arguments you will probably train your models for more than few epochs, depending on the way you have configured the packed dataset and the training protocol. Double check that you know and understand what you are doing.
-If you don't want to pack your `eval_dataset`, you can pass `eval_packing=False` to the `SFTTrainer` init method.
+If you don't want to pack your `eval_dataset`, you can pass `eval_packing=False` to the `SFTConfig` init method.
 
 #### Customize your prompts using packed dataset
 
@@ -300,11 +300,11 @@ trainer = SFTTrainer(
 
 trainer.train()
 ```
-You can also customize the [`ConstantLengthDataset`] much more by directly passing the arguments to the [`SFTTrainer`] constructor. Please refer to that class' signature for more information.
+You can also customize the [`ConstantLengthDataset`] much more by directly passing the arguments to the [`SFTConfig`] constructor. Please refer to that class' signature for more information.
 
 ### Control over the pretrained model
 
-You can directly pass the kwargs of the `from_pretrained()` method to the [`SFTTrainer`]. For example, if you want to load a model in a different precision, analogous to
+You can directly pass the kwargs of the `from_pretrained()` method to the [`SFTConfig`]. For example, if you want to load a model in a different precision, analogous to
 
 ```python
 model = AutoModelForCausalLM.from_pretrained("facebook/opt-350m", torch_dtype=torch.bfloat16)
