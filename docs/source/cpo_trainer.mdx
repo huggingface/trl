@@ -6,7 +6,7 @@ avoid generating adequate, but not perfect translations in Machine Translation (
 CPO aims to mitigate two fundamental shortcomings of SFT. First, SFT’s methodology of minimizing the discrepancy between predicted outputs and gold-standard references inherently caps model performance at the quality level of the training data. Secondly, SFT lacks a mechanism to prevent the model from rejecting mistakes in translations. The CPO objective is derived from the DPO objective.
 
 ## A Variant of CPO: SimPO
-There is also a variant of CPO, [SimPO: Simple Preference Optimization with a Reference-Free Reward](https://arxiv.org/abs/2405.14734), which adds a reward margin and does not use BC regularization.
+There is also a variant of CPO, [SimPO: Simple Preference Optimization with a Reference-Free Reward](https://arxiv.org/abs/2405.14734), which adds a reward margin and does not use BC regularization. Use the `loss_type="simpo"` in the `CPOConfig` to use this loss.
 
 ## Expected dataset format
 
