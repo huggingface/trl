@@ -268,6 +268,9 @@ class CPOTrainer(Trainer):
         self.label_smoothing = args.label_smoothing
         self.loss_type = args.loss_type
 
+        if args.loss_type == "simpo":
+            self.simpo_gamma = args.simpo_gamma
+
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
         # Compute that only on the main process for faster data processing.
@@ -581,7 +584,10 @@ class CPOTrainer(Trainer):
             The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
         """
         logits = (policy_chosen_logps - policy_rejected_logps).to(self.accelerator.device)
-
+        if self.loss_type == "simpo":
+            gamma_logratios = self.simpo_gamma / self.beta
+            logits = logits - gamma_logratios
+        
         # The beta is a temperature parameter for the CPO loss, typically something in the range of 0.1 to 0.5.
         # We ignore the reference model as beta -> 0. The label_smoothing parameter encodes our uncertainty about the labels and
         # calculates a conservative CPO loss.
@@ -691,12 +697,16 @@ class CPOTrainer(Trainer):
             return loss
 
         labels = concatenated_batch["concatenated_labels"].clone()
-        nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
+
+        if self.loss_type != "simpo":
+            nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
+        else:
+            nll_loss = 0
 
         all_logps = self.get_batch_logps(
             all_logits,
             concatenated_batch["concatenated_labels"],
-            average_log_prob=self.loss_type == "ipo",
+            average_log_prob=self.loss_type == "ipo" or self.loss_type == "simpo",
             is_encoder_decoder=self.is_encoder_decoder,
             label_pad_token_id=self.label_pad_token_id,
         )

@@ -64,8 +64,9 @@ class CPOConfig(TrainingArguments):
 
     beta: float = 0.1
     label_smoothing: float = 0
-    loss_type: Literal["sigmoid", "hinge", "ipo", "kto_pair"] = "sigmoid"
+    loss_type: Literal["sigmoid", "hinge", "ipo", "kto_pair", "simpo"] = "sigmoid"
     disable_dropout: bool = True
+    simpo_gamma: float = 0.5
 
     label_pad_token_id: int = -100
     padding_value: int = None
