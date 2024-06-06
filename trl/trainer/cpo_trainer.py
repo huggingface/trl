@@ -584,7 +584,7 @@ class CPOTrainer(Trainer):
             The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
         """
         logits = (policy_chosen_logps - policy_rejected_logps).to(self.accelerator.device)
-        
+
         # The beta is a temperature parameter for the CPO loss, typically something in the range of 0.1 to 0.5.
         # We ignore the reference model as beta -> 0. The label_smoothing parameter encodes our uncertainty about the labels and
         # calculates a conservative CPO loss.
