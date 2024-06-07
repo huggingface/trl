@@ -33,13 +33,13 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.7.ya
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \
     --learning_rate 1e-6 \
-    --output_dir models/minimal/ppo_zephyr_vllm_warmup_1e-6_promising \
+    --output_dir models/minimal/ppo_zephyr_vllm_1e-6_warmup_0.2 \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 64 \
     --local_rollout_forward_batch_size 8 \
     --total_episodes 300000 \
-    --model_name_or_path HuggingFaceH4/mistral-7b-sft-beta \
-    --sft_model_path HuggingFaceH4/mistral-7b-sft-beta \
+    --model_name_or_path mistralai/Mistral-7B-Instruct-v0.2 \
+    --sft_model_path mistralai/Mistral-7B-Instruct-v0.2 \
     --reward_model_path weqweasdas/RM-Mistral-7B \
     --kl_coef 0.10 \
     --non_eos_penalty \
