@@ -47,6 +47,7 @@ from .utils import (
     DPODataCollatorWithPadding,
     RunningMoments,
     cap_exp,
+    SyncRefModelCallback,
     disable_dropout_in_model,
     pad_to_length,
     peft_module_casting_to_bf16,
@@ -135,7 +136,7 @@ class DPOTrainer(Trainer):
         ref_model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
         beta: float = 0.1,
         label_smoothing: float = 0,
-        loss_type: Literal["sigmoid", "hinge", "ipo", "kto_pair", "bco_pair"] = "sigmoid",
+        loss_type: Literal["sigmoid", "hinge", "ipo", "kto_pair", "bco_pair", "robust"] = "sigmoid",
         args: Optional[DPOConfig] = None,
         data_collator: Optional[DataCollator] = None,
         label_pad_token_id: int = -100,
@@ -167,7 +168,7 @@ class DPOTrainer(Trainer):
     ):
         if model_init_kwargs is not None:
             warnings.warn(
-                "You passed `model_init_kwargs` to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
+                "You passed `model_init_kwargs` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
             args.model_init_kwargs = model_init_kwargs
 
@@ -187,7 +188,7 @@ class DPOTrainer(Trainer):
 
         if ref_model_init_kwargs is not None:
             warnings.warn(
-                "You passed `ref_model_kwargs` to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
+                "You passed `ref_model_init_kwargs` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
             args.ref_model_init_kwargs = ref_model_init_kwargs
 
@@ -532,12 +533,23 @@ class DPOTrainer(Trainer):
                 raise ValueError(
                     "No reference model and model is not a Peft model. Try setting `precompute_ref_log_probs=True`"
                 )
+            if args.sync_ref_model:
+                raise ValueError(
+                    "You currently cannot use `ref_model=None` with TR-DPO method. Please provide `ref_model`."
+                )
         else:
             if self.is_deepspeed_enabled:
                 self.ref_model = self._prepare_deepspeed(self.ref_model)
             else:
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
+        if args.sync_ref_model:
+            if precompute_ref_log_probs:
+                raise ValueError(
+                    "You cannot use `precompute_ref_log_probs=True` with TR-DPO method. Please set `precompute_ref_log_probs=False`."
+                )
+
+            self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
         if self.loss_type == "bco_pair":
             self.running = RunningMoments(self.accelerator)
 
@@ -775,21 +787,26 @@ class DPOTrainer(Trainer):
                     "last token due to tokenizer merge ops."
                 )
 
-            # add BOS token to head of prompt
-            prompt_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + prompt_tokens["prompt_input_ids"]
-            chosen_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + chosen_tokens["prompt_input_ids"]
-            rejected_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + rejected_tokens["prompt_input_ids"]
+            # add BOS token to head of prompt. Avoid adding if it's already there
+            bos_token_id = self.tokenizer.bos_token_id
+            if prompt_len_input_ids == 0 or bos_token_id != prompt_tokens["prompt_input_ids"][0]:
+                prompt_tokens["prompt_input_ids"] = [bos_token_id] + prompt_tokens["prompt_input_ids"]
+                prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens["prompt_attention_mask"]
+            if chosen_prompt_len_input_ids == 0 or bos_token_id != chosen_tokens["prompt_input_ids"][0]:
+                chosen_tokens["prompt_input_ids"] = [bos_token_id] + chosen_tokens["prompt_input_ids"]
+                chosen_tokens["prompt_attention_mask"] = [1] + chosen_tokens["prompt_attention_mask"]
+            if rejected_prompt_len_input_ids == 0 or bos_token_id != rejected_tokens["prompt_input_ids"][0]:
+                rejected_tokens["prompt_input_ids"] = [bos_token_id] + rejected_tokens["prompt_input_ids"]
+                rejected_tokens["prompt_attention_mask"] = [1] + rejected_tokens["prompt_attention_mask"]
 
-            prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens["prompt_attention_mask"]
-            chosen_tokens["prompt_attention_mask"] = [1] + chosen_tokens["prompt_attention_mask"]
-            rejected_tokens["prompt_attention_mask"] = [1] + rejected_tokens["prompt_attention_mask"]
-
-            # add EOS token to end of answer
-            chosen_tokens["input_ids"].append(self.tokenizer.eos_token_id)
-            chosen_tokens["attention_mask"].append(1)
-
-            rejected_tokens["input_ids"].append(self.tokenizer.eos_token_id)
-            rejected_tokens["attention_mask"].append(1)
+            # add EOS token to end of answer. Avoid adding if it's already there
+            eos_token_id = self.tokenizer.eos_token_id
+            if len(chosen_tokens["input_ids"]) == 0 or eos_token_id != chosen_tokens["input_ids"][-1]:
+                chosen_tokens["input_ids"].append(eos_token_id)
+                chosen_tokens["attention_mask"].append(1)
+            if len(rejected_tokens["input_ids"]) == 0 or eos_token_id != rejected_tokens["input_ids"][-1]:
+                rejected_tokens["input_ids"].append(eos_token_id)
+                rejected_tokens["attention_mask"].append(1)
 
             longer_response_length = max(len(chosen_tokens["input_ids"]), len(rejected_tokens["input_ids"]))
 
@@ -888,11 +905,13 @@ class DPOTrainer(Trainer):
                         reference_rejected_logps,
                         _,
                         _,
+                        _,
                     ) = self.concatenated_forward(self.model, padded_batch)
             else:
                 (
                     reference_chosen_logps,
                     reference_rejected_logps,
+                    _,
                     _,
                     _,
                 ) = self.concatenated_forward(self.ref_model, padded_batch)
@@ -1027,6 +1046,11 @@ class DPOTrainer(Trainer):
                 -F.logsigmoid(self.beta * logits) * (1 - self.label_smoothing)
                 - F.logsigmoid(-self.beta * logits) * self.label_smoothing
             )
+        elif self.loss_type == "robust":
+            losses = (
+                -F.logsigmoid(self.beta * logits) * (1 - self.label_smoothing)
+                + F.logsigmoid(-self.beta * logits) * self.label_smoothing
+            ) / (1 - 2 * self.label_smoothing)
         elif self.loss_type == "hinge":
             losses = torch.relu(1 - self.beta * logits)
         elif self.loss_type == "ipo":
@@ -1060,9 +1084,23 @@ class DPOTrainer(Trainer):
             losses = -F.logsigmoid((self.beta * chosen_logratios) - delta) - F.logsigmoid(
                 -(self.beta * rejected_logratios - delta)
             )
+        elif self.loss_type == "sppo_hard":
+            # In the paper (https://arxiv.org/pdf/2405.00675), SPPO employs a soft probability approach, estimated using the PairRM score. The probability calculation is conducted outside of the trainer class. The version described here is the hard probability version, where P in Equation (4.7) of Algorithm 1 is set to 1 for the winner and 0 for the loser.
+            a = policy_chosen_logps - reference_chosen_logps
+            b = policy_rejected_logps - reference_rejected_logps
+
+            losses = (a - 0.5 / self.beta) ** 2 + (b + 0.5 / self.beta) ** 2
+        elif self.loss_type == "nca_pair":
+            chosen_rewards = (policy_chosen_logps - reference_chosen_logps) * self.beta
+            rejected_rewards = (policy_rejected_logps - reference_rejected_logps) * self.beta
+            losses = (
+                -F.logsigmoid(chosen_rewards)
+                - 0.5 * F.logsigmoid(-chosen_rewards)
+                - 0.5 * F.logsigmoid(-rejected_rewards)
+            )
         else:
             raise ValueError(
-                f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'kto_pair', 'bco_pair']"
+                f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'kto_pair', 'bco_pair', 'sppo_hard', 'nca_pair', 'robust']"
             )
 
         chosen_rewards = (
@@ -1085,21 +1123,19 @@ class DPOTrainer(Trainer):
     def get_batch_logps(
         logits: torch.FloatTensor,
         labels: torch.LongTensor,
-        average_log_prob: bool = False,
         label_pad_token_id: int = -100,
         is_encoder_decoder: bool = False,
-    ) -> torch.FloatTensor:
+    ) -> Tuple[torch.FloatTensor, torch.LongTensor]:
         """Compute the log probabilities of the given labels under the given logits.
 
         Args:
             logits: Logits of the model (unnormalized). Shape: (batch_size, sequence_length, vocab_size)
             labels: Labels for which to compute the log probabilities. Label tokens with a value of label_pad_token_id are ignored. Shape: (batch_size, sequence_length)
-            average_log_prob: If True, return the average log probability per (non-masked) token. Otherwise, return the sum of the log probabilities of the (non-masked) tokens.
             label_pad_token_id: The label pad token id.
             is_encoder_decoder: Whether the model is an encoder-decoder model.
 
         Returns:
-            A tensor of shape (batch_size,) containing the average/sum log probabilities of the given labels under the given logits.
+            A Tuple of two tensor of shape ((batch_size,), (batch_size,)) containing the sum of log probabilities of the given labels under the given logits in the first tensor and the number of non-masked tokens in the second tensor.
         """
         if logits.shape[:-1] != labels.shape:
             raise ValueError("Logits (batch and sequence length dim) and labels must have the same shape.")
@@ -1114,14 +1150,11 @@ class DPOTrainer(Trainer):
 
         per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
 
-        if average_log_prob:
-            return (per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)
-        else:
-            return (per_token_logps * loss_mask).sum(-1)
+        return (per_token_logps * loss_mask).sum(-1), loss_mask.sum(-1)
 
     def concatenated_forward(
         self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]
-    ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+    ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         """Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
 
         We do this to avoid doing two forward passes, because it's faster for FSDP.
@@ -1150,13 +1183,33 @@ class DPOTrainer(Trainer):
             **model_kwargs,
         ).logits
 
-        all_logps = self.get_batch_logps(
+        all_logps, size_completion = self.get_batch_logps(
             all_logits,
             concatenated_batch["concatenated_labels"],
-            average_log_prob=self.loss_type == "ipo",
+            # average_log_prob=self.loss_type == "ipo",
             is_encoder_decoder=self.is_encoder_decoder,
             label_pad_token_id=self.label_pad_token_id,
         )
+
+        def cross_entropy_loss(logits, labels):
+            if not self.is_encoder_decoder:
+                # Shift so that tokens < n predict n
+                logits = logits[..., :-1, :].contiguous()
+                labels = labels[..., 1:].contiguous()
+            # Flatten the tokens
+            loss_fct = nn.CrossEntropyLoss()
+            logits = logits.view(-1, logits.shape[-1])
+            labels = labels.view(-1)
+            # Enable model parallelism
+            labels = labels.to(logits.device)
+            loss = loss_fct(logits, labels)
+            return loss
+
+        labels = concatenated_batch["concatenated_labels"].clone()
+        nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
+
+        if self.loss_type == "ipo":
+            all_logps = all_logps / size_completion
 
         chosen_logps = all_logps[:len_chosen]
         rejected_logps = all_logps[len_chosen:]
@@ -1164,7 +1217,7 @@ class DPOTrainer(Trainer):
         chosen_logits = all_logits[:len_chosen]
         rejected_logits = all_logits[len_chosen:]
 
-        return (chosen_logps, rejected_logps, chosen_logits, rejected_logits)
+        return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, nll_loss)
 
     def get_batch_loss_metrics(
         self,
@@ -1180,10 +1233,15 @@ class DPOTrainer(Trainer):
             policy_rejected_logps,
             policy_chosen_logits,
             policy_rejected_logits,
+            policy_nll_loss,
         ) = self.concatenated_forward(model, batch)
 
         # if reference_chosen_logps and reference_rejected_logps in batch use them, otherwise use the reference model
-        if "reference_chosen_logps" in batch and "reference_rejected_logps" in batch:
+        if (
+            "reference_chosen_logps" in batch
+            and "reference_rejected_logps" in batch
+            and self.args.rpo_alpha is not None
+        ):
             reference_chosen_logps = batch["reference_chosen_logps"]
             reference_rejected_logps = batch["reference_rejected_logps"]
         else:
@@ -1195,11 +1253,13 @@ class DPOTrainer(Trainer):
                             reference_rejected_logps,
                             _,
                             _,
+                            _,
                         ) = self.concatenated_forward(self.model, batch)
                 else:
                     (
                         reference_chosen_logps,
                         reference_rejected_logps,
+                        _,
                         _,
                         _,
                     ) = self.concatenated_forward(self.ref_model, batch)
@@ -1212,6 +1272,9 @@ class DPOTrainer(Trainer):
         )
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
+        if self.args.rpo_alpha is not None:
+            losses = losses * self.args.rpo_alpha + policy_nll_loss
+
         prefix = "eval_" if train_eval == "eval" else ""
         metrics[f"{prefix}rewards/chosen"] = chosen_rewards.mean().cpu()
         metrics[f"{prefix}rewards/rejected"] = rejected_rewards.mean().cpu()
@@ -1221,6 +1284,8 @@ class DPOTrainer(Trainer):
         metrics[f"{prefix}logps/chosen"] = policy_chosen_logps.detach().mean().cpu()
         metrics[f"{prefix}logits/rejected"] = policy_rejected_logits.detach().mean().cpu()
         metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.detach().mean().cpu()
+        if self.args.rpo_alpha is not None:
+            metrics[f"{prefix}nll_loss"] = policy_nll_loss.detach().mean().cpu()
 
         return losses.mean(), metrics
 

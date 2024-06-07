@@ -3,7 +3,7 @@
 # but defaults to QLoRA + PEFT
 OUTPUT_DIR="test_dpo/"
 MODEL_NAME="trl-internal-testing/tiny-random-LlamaForCausalLM"
-DATASET_NAME="trl-internal-testing/hh-rlhf-trl-style"
+DATASET_NAME="trl-internal-testing/hh-rlhf-helpful-base-trl-style"
 MAX_STEPS=5
 BATCH_SIZE=2
 SEQ_LEN=128

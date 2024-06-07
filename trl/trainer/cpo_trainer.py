@@ -268,6 +268,9 @@ class CPOTrainer(Trainer):
         self.label_smoothing = args.label_smoothing
         self.loss_type = args.loss_type
 
+        if args.loss_type == "simpo":
+            self.simpo_gamma = args.simpo_gamma
+
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
         # Compute that only on the main process for faster data processing.
@@ -409,21 +412,26 @@ class CPOTrainer(Trainer):
                     "last token due to tokenizer merge ops."
                 )
 
-            # add BOS token to head of prompt
-            prompt_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + prompt_tokens["prompt_input_ids"]
-            chosen_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + chosen_tokens["prompt_input_ids"]
-            rejected_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + rejected_tokens["prompt_input_ids"]
+            # add BOS token to head of prompt. Avoid adding if it's already there
+            bos_token_id = self.tokenizer.bos_token_id
+            if prompt_len_input_ids == 0 or bos_token_id != prompt_tokens["prompt_input_ids"][0]:
+                prompt_tokens["prompt_input_ids"] = [bos_token_id] + prompt_tokens["prompt_input_ids"]
+                prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens["prompt_attention_mask"]
+            if chosen_prompt_len_input_ids == 0 or bos_token_id != chosen_tokens["prompt_input_ids"][0]:
+                chosen_tokens["prompt_input_ids"] = [bos_token_id] + chosen_tokens["prompt_input_ids"]
+                chosen_tokens["prompt_attention_mask"] = [1] + chosen_tokens["prompt_attention_mask"]
+            if rejected_prompt_len_input_ids == 0 or bos_token_id != rejected_tokens["prompt_input_ids"][0]:
+                rejected_tokens["prompt_input_ids"] = [bos_token_id] + rejected_tokens["prompt_input_ids"]
+                rejected_tokens["prompt_attention_mask"] = [1] + rejected_tokens["prompt_attention_mask"]
 
-            prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens["prompt_attention_mask"]
-            chosen_tokens["prompt_attention_mask"] = [1] + chosen_tokens["prompt_attention_mask"]
-            rejected_tokens["prompt_attention_mask"] = [1] + rejected_tokens["prompt_attention_mask"]
-
-            # add EOS token to end of answer
-            chosen_tokens["input_ids"].append(self.tokenizer.eos_token_id)
-            chosen_tokens["attention_mask"].append(1)
-
-            rejected_tokens["input_ids"].append(self.tokenizer.eos_token_id)
-            rejected_tokens["attention_mask"].append(1)
+            # add EOS token to end of answer. Avoid adding if it's already there
+            eos_token_id = self.tokenizer.eos_token_id
+            if len(chosen_tokens["input_ids"]) == 0 or eos_token_id != chosen_tokens["input_ids"][-1]:
+                chosen_tokens["input_ids"].append(eos_token_id)
+                chosen_tokens["attention_mask"].append(1)
+            if len(rejected_tokens["input_ids"]) == 0 or eos_token_id != rejected_tokens["input_ids"][-1]:
+                rejected_tokens["input_ids"].append(eos_token_id)
+                rejected_tokens["attention_mask"].append(1)
 
             longer_response_length = max(len(chosen_tokens["input_ids"]), len(rejected_tokens["input_ids"]))
 
@@ -580,7 +588,16 @@ class CPOTrainer(Trainer):
         # The beta is a temperature parameter for the CPO loss, typically something in the range of 0.1 to 0.5.
         # We ignore the reference model as beta -> 0. The label_smoothing parameter encodes our uncertainty about the labels and
         # calculates a conservative CPO loss.
-        if self.loss_type == "sigmoid":
+
+        if self.loss_type == "simpo":
+            gamma_logratios = self.simpo_gamma / self.beta
+            logits = logits - gamma_logratios
+            # This reduces to Equation 3 from the CPO paper when label_smoothing -> 0.
+            losses = (
+                -F.logsigmoid(self.beta * logits) * (1 - self.label_smoothing)
+                - F.logsigmoid(-self.beta * logits) * self.label_smoothing
+            )
+        elif self.loss_type == "sigmoid":
             # This reduces to Equation 3 from the CPO paper when label_smoothing -> 0.
             losses = (
                 -F.logsigmoid(self.beta * logits) * (1 - self.label_smoothing)
@@ -593,7 +610,7 @@ class CPOTrainer(Trainer):
             losses = (logits - 1 / (2 * self.beta)) ** 2
         else:
             raise ValueError(
-                f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'kto_pair']"
+                f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'kto_pair', 'simpo']"
             )
 
         chosen_rewards = self.beta * (policy_chosen_logps.to(self.accelerator.device)).detach()
@@ -686,12 +703,16 @@ class CPOTrainer(Trainer):
             return loss
 
         labels = concatenated_batch["concatenated_labels"].clone()
-        nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
+
+        if self.loss_type != "simpo":
+            nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
+        else:
+            nll_loss = torch.tensor(0.0).to(self.accelerator.device)
 
         all_logps = self.get_batch_logps(
             all_logits,
             concatenated_batch["concatenated_labels"],
-            average_log_prob=self.loss_type == "ipo",
+            average_log_prob=self.loss_type in ["ipo", "simpo"],
             is_encoder_decoder=self.is_encoder_decoder,
             label_pad_token_id=self.label_pad_token_id,
         )

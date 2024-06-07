@@ -65,7 +65,7 @@ The SFT CLI is based on the `examples/scripts/sft.py` script.
 
 To use the DPO CLI, you need to have a dataset in the TRL format such as 
 
-* TRL's Anthropic HH dataset: https://huggingface.co/datasets/trl-internal-testing/hh-rlhf-trl-style
+* TRL's Anthropic HH dataset: https://huggingface.co/datasets/trl-internal-testing/hh-rlhf-helpful-base-trl-style
 * TRL's OpenAI TL;DR summarization dataset: https://huggingface.co/datasets/trl-internal-testing/tldr-preference-trl-style
 
 These datasets always have at least three columns `prompt, chosen, rejected`:
@@ -78,7 +78,7 @@ These datasets always have at least three columns `prompt, chosen, rejected`:
 To do a quick start, you can run the following command:
 
 ```bash
-trl dpo --model_name_or_path facebook/opt-125m --output_dir trl-hh-rlhf --dataset_name trl-internal-testing/hh-rlhf-trl-style
+trl dpo --model_name_or_path facebook/opt-125m --output_dir trl-hh-rlhf --dataset_name trl-internal-testing/hh-rlhf-helpful-base-trl-style
 ```
 
 
