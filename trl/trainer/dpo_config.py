@@ -32,7 +32,7 @@ class DPOConfig(TrainingArguments):
             `"kto_pair"` from the HALOs [report](https://github.com/ContextualAI/HALOs/blob/main/assets/report.pdf), `"bco_pair"` from [BCO](https://arxiv.org/abs/2404.04656) paper or `"robust"` from [Robust DPO](https://arxiv.org/abs/2403.00409) paper.
         label_pad_token_id (`int`, defaults to `-100`):
             The label pad token id. This argument is required if you want to use the default data collator.
-        padding_value (`int`, defaults to `0`):
+        padding_value (`Optional[int]`, *optional*):
             The padding value if it is different to the tokenizer's pad_token_id.
         truncation_mode (`str`, defaults to `keep_end`):
             The truncation mode to use, either `keep_end` or `keep_start`. This argument is required if you want to use the default data collator.
@@ -81,7 +81,7 @@ class DPOConfig(TrainingArguments):
         "sigmoid", "hinge", "ipo", "kto_pair", "bco_pair", "sppo_hard", "nca_pair", "robust"
     ] = "sigmoid"
     label_pad_token_id: int = -100
-    padding_value: int = 0
+    padding_value: Optional[int] = None
     truncation_mode: str = "keep_end"
     max_length: Optional[int] = None
     max_prompt_length: Optional[int] = None
