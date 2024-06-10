@@ -46,8 +46,8 @@ from .dpo_config import DPOConfig, FDivergenceConstants, FDivergenceType
 from .utils import (
     DPODataCollatorWithPadding,
     RunningMoments,
-    cap_exp,
     SyncRefModelCallback,
+    cap_exp,
     disable_dropout_in_model,
     pad_to_length,
     peft_module_casting_to_bf16,
