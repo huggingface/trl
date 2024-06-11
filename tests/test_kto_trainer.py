@@ -82,6 +82,74 @@ class KTOTrainerTester(unittest.TestCase):
         # fmt: on
         return Dataset.from_dict(dummy_dataset_dict)
 
+    def _init_dummy_dataset_only_desirable(self):
+        # fmt: off
+        dummy_dataset_unbalanced_dict = {
+            "prompt": [
+                "Hey, hello",
+                "How are you",
+                "What is your name?",
+                "What is your name?",
+                "Which is the best programming language?",
+                "Which is the best programming language?",
+                "Which is the best programming language?",
+            ],
+            "completion": [
+                "hi nice to meet you",
+                "leave me alone",
+                "I don't have a name",
+                "My name is Mary",
+                "Python",
+                "C++",
+                "Java",
+            ],
+            "label": [
+                True,
+                True,
+                True,
+                True,
+                True,
+                True,
+                True,
+            ],
+        }
+        # fmt: on
+        return Dataset.from_dict(dummy_dataset_unbalanced_dict)
+
+    def _init_dummy_dataset_no_desirable(self):
+        # fmt: off
+        dummy_dataset_unbalanced_dict = {
+            "prompt": [
+                "Hey, hello",
+                "How are you",
+                "What is your name?",
+                "What is your name?",
+                "Which is the best programming language?",
+                "Which is the best programming language?",
+                "Which is the best programming language?",
+            ],
+            "completion": [
+                "hi nice to meet you",
+                "leave me alone",
+                "I don't have a name",
+                "My name is Mary",
+                "Python",
+                "C++",
+                "Java",
+            ],
+            "label": [
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
+            ],
+        }
+        # fmt: on
+        return Dataset.from_dict(dummy_dataset_unbalanced_dict)
+
     @parameterized.expand(
         [
             ["gpt2", "kto", True, True],
@@ -143,6 +211,60 @@ class KTOTrainerTester(unittest.TestCase):
                 # check the params have changed - ignore 0 biases
                 if param.sum() != 0:
                     self.assertFalse(torch.equal(param, new_param))
+
+    @require_no_wandb
+    def test_kto_trainer_no_desirable_input(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = KTOConfig(
+                output_dir=tmp_dir,
+                remove_unused_columns=False,
+            )
+
+            dummy_dataset = self._init_dummy_dataset_no_desirable()
+
+            model = self.model
+            ref_model = self.ref_model
+            tokenizer = self.tokenizer
+
+            with self.assertRaises(
+                ValueError,
+                msg="The set of desirable completions cannot be empty.",
+            ):
+                _ = KTOTrainer(
+                    model=model,
+                    ref_model=ref_model,
+                    args=training_args,
+                    tokenizer=tokenizer,
+                    train_dataset=dummy_dataset,
+                    eval_dataset=None,
+                )
+
+    @require_no_wandb
+    def test_kto_trainer_only_desirable_input(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = KTOConfig(
+                output_dir=tmp_dir,
+                remove_unused_columns=False,
+            )
+
+            dummy_dataset = self._init_dummy_dataset_only_desirable()
+
+            model = self.model
+            ref_model = self.ref_model
+            tokenizer = self.tokenizer
+
+            with self.assertRaises(
+                ValueError,
+                msg="The set of undesirable completions cannot be empty.",
+            ):
+                _ = KTOTrainer(
+                    model=model,
+                    ref_model=ref_model,
+                    args=training_args,
+                    tokenizer=tokenizer,
+                    train_dataset=dummy_dataset,
+                    eval_dataset=None,
+                )
 
     def test_tokenize_and_process_tokens(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
