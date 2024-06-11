@@ -35,8 +35,8 @@ class SimPOConfig(TrainingArguments):
             The maximum length of the target. This argument is required if you want to use the default data collator and your model is an encoder-decoder.
         beta (`float`, defaults to 2.0):
             The beta factor in SimPO loss.
-        gamma (`float`, defaults to 0.5):
-            The target reward margin in SimPO loss.
+        gamma_beta_ratio (`float`, defaults to 0.25):
+            The ratio between the target reward margin (gamma) and beta in SimPO loss.
         label_smoothing (`float`, defaults to 0):
             The label smoothing factor. This argument is required if you want to use the default data collator.
         loss_type (`str`, defaults to `sigmoid`):
@@ -65,7 +65,7 @@ class SimPOConfig(TrainingArguments):
     max_target_length: Optional[int] = None
 
     beta: float = 2.0
-    gamma: float = 0.5
+    gamma_beta_ratio: float = 0.25
     label_smoothing: float = 0
     loss_type: Literal["sigmoid", "hinge"] = "sigmoid"
     disable_dropout: bool = True

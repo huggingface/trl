@@ -56,7 +56,7 @@ For a detailed example have a look at the `examples/scripts/simpo.py` script. At
 ```py
 simpo_config = SimPOConfig(
     beta=2.5, # beta
-    gamma=0.5, # target reward margin gamma
+    gamma_beta_ratio=0.25, # ratio between target reward margin (gamma) and beta
 )
 
 simpo_trainer = SimPOTrainer(

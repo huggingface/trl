@@ -266,7 +266,7 @@ class SimPOTrainer(Trainer):
             )
 
         self.beta = args.beta
-        self.gamma = args.gamma
+        self.gamma_beta_ratio = args.gamma_beta_ratio
         self.label_smoothing = args.label_smoothing
         self.loss_type = args.loss_type
 
@@ -583,9 +583,8 @@ class SimPOTrainer(Trainer):
             The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
         """
         pi_logratios = policy_chosen_logps - policy_rejected_logps
-        gamma_logratios = self.gamma / self.beta 
         pi_logratios = pi_logratios.to(self.accelerator.device)
-        logits = pi_logratios - gamma_logratios
+        logits = pi_logratios - self.gamma_beta_ratio
 
         if self.loss_type == "sigmoid":
             losses = (
