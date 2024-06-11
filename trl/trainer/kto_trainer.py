@@ -646,6 +646,11 @@ class KTOTrainer(Trainer):
                 lambda x: not x["label"], num_proc=args.dataset_num_proc, desc="Filtering undesirable examples"
             )
 
+            if len(desirable) == 0:
+                raise ValueError("The set of desirable completions cannot be empty.")
+            elif len(undesirable) == 0:
+                raise ValueError("The set of undesirable completions cannot be empty.")
+
             if len(desirable) != len(undesirable):
                 # The lower and upper bounds come from Eq. (8) of https://arxiv.org/abs/2402.01306
                 des_weight_lower_bound = round((len(undesirable) * self.undesirable_weight / len(desirable)) * 1, 2)
