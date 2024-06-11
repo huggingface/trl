@@ -41,6 +41,8 @@ _import_structure = {
     "orpo_trainer": ["ORPOTrainer"],
     "ppo_config": ["PPOConfig"],
     "ppo_trainer": ["PPOTrainer"],
+    "simpo_config": ["SimPOConfig"],
+    "simpo_trainer": ["SimPOTrainer"],
     "reward_config": ["RewardConfig"],
     "reward_trainer": ["RewardTrainer", "compute_accuracy"],
     "sft_config": ["SFTConfig"],
