@@ -135,7 +135,7 @@ class DPOTrainer(Trainer):
         ref_model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
         beta: float = 0.1,
         label_smoothing: float = 0,
-        loss_type: Literal["sigmoid", "hinge", "ipo", "kto_pair", "bco_pair", "robust"] = "sigmoid",
+        loss_type: Literal["sigmoid", "hinge", "ipo", "kto_pair", "bco_pair", "robust", "aot", "aot_pair"] = "sigmoid",
         args: Optional[DPOConfig] = None,
         data_collator: Optional[DataCollator] = None,
         label_pad_token_id: int = -100,
@@ -1066,6 +1066,34 @@ class DPOTrainer(Trainer):
                 - 0.5 * F.logsigmoid(-chosen_rewards)
                 - 0.5 * F.logsigmoid(-rejected_rewards)
             )
+        elif self.loss_type == "aot_pair":
+            chosen_logratios = policy_chosen_logps - reference_chosen_logps
+            rejected_logratios = policy_rejected_logps - reference_rejected_logps
+
+            chosen_logratios_sorted, _ = torch.sort(chosen_logratios, dim=0)
+            rejected_logratios_sorted, _ = torch.sort(rejected_logratios, dim=0)
+
+            delta = chosen_logratios_sorted - rejected_logratios_sorted
+
+            losses = (
+                -F.logsigmoid(self.beta * delta) * (1 - self.label_smoothing)
+                - F.logsigmoid(-self.beta * delta) * self.label_smoothing
+            )
+
+        elif self.loss_type == "aot":
+            pi_logratios = policy_chosen_logps - policy_rejected_logps
+            ref_logratios = reference_chosen_logps - reference_rejected_logps
+
+            pi_logratios_sorted, _ = torch.sort(pi_logratios, dim=0)
+            ref_logratios_sorted, _ = torch.sort(ref_logratios, dim=0)
+
+            delta = pi_logratios_sorted - ref_logratios_sorted
+
+            losses = (
+                -F.logsigmoid(self.beta * delta) * (1 - self.label_smoothing)
+                - F.logsigmoid(-self.beta * delta) * self.label_smoothing
+            )
+
         else:
             raise ValueError(
                 f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'kto_pair', 'bco_pair', 'sppo_hard', 'nca_pair', 'robust']"
