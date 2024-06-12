@@ -100,6 +100,9 @@ class PreTrainedModelWrapper(nn.Module):
         if hasattr(pretrained_model, "gradient_checkpointing_enable"):
             self.gradient_checkpointing_enable = pretrained_model.gradient_checkpointing_enable
 
+        if hasattr(pretrained_model, "enable_input_require_grads"):
+            self.enable_input_require_grads = pretrained_model.enable_input_require_grads
+
         self.supports_rm_adapter = supports_rm_adapter
         self.rm_adapter_name = rm_adapter_name
         self.policy_adapter_name = "default"

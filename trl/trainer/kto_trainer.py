@@ -578,6 +578,7 @@ class KTOTrainer(Trainer):
                 "truncation_mode": self.truncation_mode,
                 "label_pad_token_id": self.label_pad_token_id,
                 "max_prompt_length": self.max_prompt_length,
+                "max_completion_length": self.max_completion_length,
             }
             train_dataset = train_dataset.map(
                 _process_tokens,
@@ -618,6 +619,7 @@ class KTOTrainer(Trainer):
                     "truncation_mode": self.truncation_mode,
                     "label_pad_token_id": self.label_pad_token_id,
                     "max_prompt_length": self.max_prompt_length,
+                    "max_completion_length": self.max_completion_length,
                 }
                 eval_dataset = eval_dataset.map(
                     _process_tokens,
@@ -643,6 +645,11 @@ class KTOTrainer(Trainer):
             undesirable = train_dataset.filter(
                 lambda x: not x["label"], num_proc=args.dataset_num_proc, desc="Filtering undesirable examples"
             )
+
+            if len(desirable) == 0:
+                raise ValueError("The set of desirable completions cannot be empty.")
+            elif len(undesirable) == 0:
+                raise ValueError("The set of undesirable completions cannot be empty.")
 
             if len(desirable) != len(undesirable):
                 # The lower and upper bounds come from Eq. (8) of https://arxiv.org/abs/2402.01306
