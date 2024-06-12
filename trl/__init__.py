@@ -4,7 +4,6 @@ __version__ = "0.8.7.dev0"
 
 from typing import TYPE_CHECKING
 from .import_utils import _LazyModule, is_diffusers_available, OptionalDependencyNotAvailable
-import torch.utils.checkpoint as checkpoint
 
 _import_structure = {
     "core": [
