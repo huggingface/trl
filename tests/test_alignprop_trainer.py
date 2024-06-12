@@ -13,6 +13,7 @@
 # limitations under the License.
 import gc
 import unittest
+
 import torch
 
 from trl import is_diffusers_available, is_peft_available
@@ -64,21 +65,19 @@ class AlignPropTrainerTester(unittest.TestCase):
     def test_generate_samples(self):
         output_pairs = self.trainer._generate_samples(2, with_grad=True)
         assert len(output_pairs.keys()) == 3
-        assert len(output_pairs['images']) == 2
+        assert len(output_pairs["images"]) == 2
 
     def test_calculate_loss(self):
         sample = self.trainer._generate_samples(2)
-        
+
         images = sample["images"]
         prompts = sample["prompts"]
 
         assert images.shape == (2, 3, 128, 128)
         assert len(prompts) == 2
 
-        rewards = self.trainer.compute_rewards(
-            sample
-        )
-        loss = self.trainer.calculate_loss(rewards)        
+        rewards = self.trainer.compute_rewards(sample)
+        loss = self.trainer.calculate_loss(rewards)
 
         assert torch.isfinite(loss.cpu())
 
@@ -97,7 +96,7 @@ class AlignPropTrainerWithLoRATester(AlignPropTrainerTester):
             truncated_backprop_rand=False,
             save_freq=1000000,
         )
-        
+
         pretrained_model = "hf-internal-testing/tiny-stable-diffusion-torch"
         pretrained_revision = "main"
 

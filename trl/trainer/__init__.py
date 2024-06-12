@@ -34,7 +34,7 @@ _import_structure = {
     "cpo_config": ["CPOConfig"],
     "cpo_trainer": ["CPOTrainer"],
     "alignprop_config": ["AlignPropConfig"],
-    "alignprop_trainer": ["AlignPropTrainer"],    
+    "alignprop_trainer": ["AlignPropTrainer"],
     "iterative_sft_trainer": ["IterativeSFTTrainer"],
     "kto_config": ["KTOConfig"],
     "kto_trainer": ["KTOTrainer"],
@@ -83,7 +83,7 @@ if TYPE_CHECKING:
     from .iterative_sft_trainer import IterativeSFTTrainer
     from .cpo_config import CPOConfig
     from .cpo_trainer import CPOTrainer
-    from .alignprop_config import AlignPropConfig    
+    from .alignprop_config import AlignPropConfig
     from .kto_config import KTOConfig
     from .kto_trainer import KTOTrainer
     from .model_config import ModelConfig

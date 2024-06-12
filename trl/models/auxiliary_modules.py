@@ -11,13 +11,16 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import torch.nn as nn
+import os
 import torch
-from transformers import CLIPModel, CLIPProcessor
-from huggingface_hub.utils import EntryNotFoundError
-from huggingface_hub import hf_hub_download
-from trl.import_utils import is_npu_available, is_xpu_available
+import torch.nn as nn
 import torchvision
+from huggingface_hub import hf_hub_download
+from huggingface_hub.utils import EntryNotFoundError
+from transformers import CLIPModel
+
+from trl.import_utils import is_npu_available, is_xpu_available
+
 
 class MLP(nn.Module):
     def __init__(self):
@@ -47,9 +50,10 @@ class AestheticScorer(torch.nn.Module):
     def __init__(self, *, dtype, model_id, model_filename):
         super().__init__()
         self.clip = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
-        self.normalize = torchvision.transforms.Normalize(mean=[0.48145466, 0.4578275, 0.40821073],
-                                                    std=[0.26862954, 0.26130258, 0.27577711])   
-        self.target_size = 224        
+        self.normalize = torchvision.transforms.Normalize(
+            mean=[0.48145466, 0.4578275, 0.40821073], std=[0.26862954, 0.26130258, 0.27577711]
+        )
+        self.target_size = 224
         self.mlp = MLP()
         try:
             cached_path = hf_hub_download(model_id, model_filename)
@@ -67,7 +71,7 @@ class AestheticScorer(torch.nn.Module):
         embed = self.clip.get_image_features(pixel_values=images)
         # normalize embedding
         embed = embed / torch.linalg.vector_norm(embed, dim=-1, keepdim=True)
-        reward = self.mlp(embed).squeeze(1)        
+        reward = self.mlp(embed).squeeze(1)
         return reward
 
 

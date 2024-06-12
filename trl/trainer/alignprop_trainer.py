@@ -14,7 +14,6 @@
 import os
 import warnings
 from collections import defaultdict
-from concurrent import futures
 from typing import Any, Callable, Optional, Tuple
 from warnings import warn
 
@@ -25,10 +24,7 @@ from accelerate.utils import ProjectConfiguration, set_seed
 from huggingface_hub import whoami
 
 from ..models import DDPOStableDiffusionPipeline
-from .utils import PerPromptStatTracker
-from . import BaseTrainer, AlignPropConfig
-
-
+from . import AlignPropConfig, BaseTrainer
 
 
 logger = get_logger(__name__)
@@ -107,7 +103,6 @@ class AlignPropTrainer(BaseTrainer):
 
                 accelerator_project_config.iteration = checkpoint_numbers[-1] + 1
 
-
         self.accelerator = Accelerator(
             log_with=self.config.log_with,
             mixed_precision=self.config.mixed_precision,
@@ -119,16 +114,14 @@ class AlignPropTrainer(BaseTrainer):
             **self.config.accelerator_kwargs,
         )
 
-        is_okay, message = self._config_check()
-        if not is_okay:
-            raise ValueError(message)
-
         is_using_tensorboard = config.log_with is not None and config.log_with == "tensorboard"
 
         if self.accelerator.is_main_process:
             self.accelerator.init_trackers(
                 self.config.tracker_project_name,
-                config=dict(alignprop_trainer_config=config.to_dict()) if not is_using_tensorboard else config.to_dict(),
+                config=dict(alignprop_trainer_config=config.to_dict())
+                if not is_using_tensorboard
+                else config.to_dict(),
                 init_kwargs=self.config.tracker_kwargs,
             )
 
@@ -201,7 +194,9 @@ class AlignPropTrainer(BaseTrainer):
             self.first_epoch = 0
 
     def compute_rewards(self, prompt_image_pairs):
-        reward, reward_metadata = self.reward_fn(prompt_image_pairs['images'], prompt_image_pairs['prompts'], prompt_image_pairs['prompt_metadata'])
+        reward, reward_metadata = self.reward_fn(
+            prompt_image_pairs["images"], prompt_image_pairs["prompts"], prompt_image_pairs["prompt_metadata"]
+        )
         return reward
 
     def step(self, epoch: int, global_step: int):
@@ -222,27 +217,25 @@ class AlignPropTrainer(BaseTrainer):
 
         """
         info = defaultdict(list)
-        
+
         self.sd_pipeline.unet.train()
-        
-        for inner_iters in range(self.config.train_gradient_accumulation_steps):
+
+        for _ in range(self.config.train_gradient_accumulation_steps):
             with self.accelerator.accumulate(self.sd_pipeline.unet), self.autocast(), torch.enable_grad():
                 prompt_image_pairs = self._generate_samples(
                     batch_size=self.config.train_batch_size,
                 )
 
-                rewards = self.compute_rewards(
-                    prompt_image_pairs
-                )
-                
+                rewards = self.compute_rewards(prompt_image_pairs)
+
                 prompt_image_pairs["rewards"] = rewards
-                
+
                 rewards_vis = self.accelerator.gather(rewards).detach().cpu().numpy()
-                                
+
                 loss = self.calculate_loss(rewards)
-                
+
                 self.accelerator.backward(loss)
-                
+
                 if self.accelerator.sync_gradients:
                     self.accelerator.clip_grad_norm_(
                         self.trainable_layers.parameters()
@@ -253,17 +246,17 @@ class AlignPropTrainer(BaseTrainer):
 
                 self.optimizer.step()
                 self.optimizer.zero_grad()
-            
+
             info["reward_mean"].append(rewards_vis.mean())
             info["reward_std"].append(rewards_vis.std())
-            info["loss"].append(loss.item())                
+            info["loss"].append(loss.item())
 
         # Checks if the accelerator has performed an optimization step behind the scenes
         if self.accelerator.sync_gradients:
             # log training-related stuff
             info = {k: torch.mean(torch.tensor(v)) for k, v in info.items()}
             info = self.accelerator.reduce(info, reduction="mean")
-            info.update({"epoch": epoch, "inner_iters": inner_iters})
+            info.update({"epoch": epoch})
             self.accelerator.log(info, step=global_step)
             global_step += 1
             info = defaultdict(list)
@@ -277,7 +270,7 @@ class AlignPropTrainer(BaseTrainer):
 
         if epoch != 0 and epoch % self.config.save_freq == 0 and self.accelerator.is_main_process:
             self.accelerator.save_state()
-        
+
         return global_step
 
     def calculate_loss(self, rewards):
@@ -333,7 +326,7 @@ class AlignPropTrainer(BaseTrainer):
         self.sd_pipeline.load_checkpoint(models, input_dir)
         models.pop()  # ensures that accelerate doesn't try to handle loading of the model
 
-    def _generate_samples(self, batch_size, with_grad= True, prompts=None):
+    def _generate_samples(self, batch_size, with_grad=True, prompts=None):
         """
         Generate samples from the model
 
@@ -344,7 +337,6 @@ class AlignPropTrainer(BaseTrainer):
         Returns:
             prompt_image_pairs (Dict[Any])
         """
-        samples = []
         prompt_image_pairs = {}
 
         sample_neg_prompt_embeds = self.neg_prompt_embed.repeat(batch_size, 1, 1)
@@ -353,7 +345,6 @@ class AlignPropTrainer(BaseTrainer):
             prompts, prompt_metadata = zip(*[self.prompt_fn() for _ in range(batch_size)])
         else:
             prompt_metadata = [{} for _ in range(batch_size)]
-
 
         prompt_ids = self.sd_pipeline.tokenizer(
             prompts,
@@ -372,9 +363,9 @@ class AlignPropTrainer(BaseTrainer):
                 num_inference_steps=self.config.sample_num_steps,
                 guidance_scale=self.config.sample_guidance_scale,
                 eta=self.config.sample_eta,
-                truncated_backprop_rand= self.config.truncated_backprop_rand,
-                truncated_backprop_timestep= self.config.truncated_backprop_timestep,
-                truncated_rand_backprop_minmax= self.config.truncated_rand_backprop_minmax,
+                truncated_backprop_rand=self.config.truncated_backprop_rand,
+                truncated_backprop_timestep=self.config.truncated_backprop_timestep,
+                truncated_rand_backprop_minmax=self.config.truncated_rand_backprop_minmax,
                 output_type="pt",
             )
         else:
@@ -386,25 +377,14 @@ class AlignPropTrainer(BaseTrainer):
                 eta=self.config.sample_eta,
                 output_type="pt",
             )
-        
+
         images = sd_output.images
-        latents = sd_output.latents
-        log_probs = sd_output.log_probs
 
         prompt_image_pairs["images"] = images
         prompt_image_pairs["prompts"] = prompts
         prompt_image_pairs["prompt_metadata"] = prompt_metadata
-        
+
         return prompt_image_pairs
-
-
-    def _config_check(self) -> Tuple[bool, str]:
-        total_train_batch_size = (
-            self.config.train_batch_size
-            * self.accelerator.num_processes
-            * self.config.train_gradient_accumulation_steps
-        )
-        return True, ""
 
     def train(self, epochs: Optional[int] = None):
         """

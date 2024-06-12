@@ -23,8 +23,8 @@ class AlignPropConfig:
     """Seed value for random generations"""
     log_with: Optional[Literal["wandb", "tensorboard"]] = None
     """Log with either 'wandb' or 'tensorboard', check  https://huggingface.co/docs/accelerate/usage_guides/tracking for more details"""
-    log_image_freq =1
-    """Logging Frequency for images"""    
+    log_image_freq = 1
+    """Logging Frequency for images"""
     tracker_kwargs: dict = field(default_factory=dict)
     """Keyword arguments for the tracker (e.g. wandb_project)"""
     accelerator_kwargs: dict = field(default_factory=dict)
@@ -79,9 +79,8 @@ class AlignPropConfig:
     """Truncated Randomized Backpropation randomizes truncation to different diffusion timesteps"""
     truncated_backprop_timestep: int = 49
     """Absolute timestep to which the gradients are being backpropagated. If truncated_backprop_rand is False"""
-    truncated_rand_backprop_minmax: tuple = (0,50)
+    truncated_rand_backprop_minmax: tuple = (0, 50)
     """Range of diffusion timesteps for randomized truncated backprop."""
-    
 
     def to_dict(self):
         output_dict = {}

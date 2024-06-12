@@ -12,20 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-python examples/scripts/alignprop.py \
+Total Batch size = 128 = 4 (num_gpus) * 8 (per_device_batch) * 4 (accumulation steps)
+Feel free to reduce batch size or increasing truncated_rand_backprop_min to a higher value to reduce memory usage.
+
+CUDA_VISIBLE_DEVICES=0,1,2,3 python examples/scripts/alignprop.py \
     --num_epochs=20 \
     --train_gradient_accumulation_steps=4 \
     --sample_num_steps=50 \
     --train_batch_size=8 \
     --tracker_project_name="stable_diffusion_training" \
     --log_with="wandb"
+
 """
-import os
 from dataclasses import dataclass, field
+
 import numpy as np
-import torch
-import torch.nn as nn
-from transformers import  HfArgumentParser
+from transformers import HfArgumentParser
+
 from trl import AlignPropConfig, AlignPropTrainer, DefaultDDPOStableDiffusionPipeline
 from trl.models.auxiliary_modules import aesthetic_scorer
 
@@ -48,7 +51,6 @@ class ScriptArguments:
         metadata={"help": "HuggingFace model filename for aesthetic scorer model weights"},
     )
     use_lora: bool = field(default=True, metadata={"help": "Whether to use LoRA."})
-
 
 
 # list of example prompts to feed stable diffusion
@@ -87,15 +89,13 @@ def prompt_fn():
     return np.random.choice(animals), {}
 
 
-
 def image_outputs_logger(image_pair_data, global_step, accelerate_logger):
     # For the sake of this example, we will only log the last batch of images
     # and associated data
     result = {}
-    images, prompts, rewards = [image_pair_data['images'],image_pair_data['prompts'],image_pair_data['rewards']]
+    images, prompts, _ = [image_pair_data["images"], image_pair_data["prompts"], image_pair_data["rewards"]]
     for i, image in enumerate(images[:4]):
         prompt = prompts[i]
-        reward = rewards[i].item()
         result[f"{prompt}"] = image.unsqueeze(0).float()
     accelerate_logger.log_images(
         result,

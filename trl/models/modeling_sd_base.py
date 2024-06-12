@@ -14,13 +14,14 @@
 
 import contextlib
 import os
+import random
 import warnings
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Union
-import torch.utils.checkpoint as checkpoint
-import random
+
 import numpy as np
 import torch
+import torch.utils.checkpoint as checkpoint
 from diffusers import DDIMScheduler, StableDiffusionPipeline, UNet2DConditionModel
 from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import rescale_noise_cfg
 
@@ -527,6 +528,7 @@ def pipeline_step(
 
     return DDPOPipelineOutput(image, all_latents, all_log_probs)
 
+
 def pipeline_step_with_grad(
     pipeline,
     prompt: Optional[Union[str, List[str]]] = None,
@@ -538,7 +540,7 @@ def pipeline_step_with_grad(
     truncated_backprop_rand: bool = True,
     gradient_checkpoint: bool = True,
     truncated_backprop_timestep: int = 49,
-    truncated_rand_backprop_minmax: tuple = (0,50),
+    truncated_rand_backprop_minmax: tuple = (0, 50),
     negative_prompt: Optional[Union[str, List[str]]] = None,
     num_images_per_prompt: Optional[int] = 1,
     eta: float = 0.0,
@@ -574,8 +576,8 @@ def pipeline_step_with_grad(
         gradient_checkpoint (`bool`, *optional*, defaults to True):
             Adds gradient checkpointing to Unet forward pass. Reduces GPU memory consumption while slightly increasing the training time.
         truncated_backprop_timestep (`int`, *optional*, defaults to 49):
-            Absolute timestep to which the gradients are being backpropagated. Higher number reduces the memory usage and reduces the chances of collapse. 
-            While a lower value, allows more semantic changes in the diffusion generations, as the earlier diffusion timesteps are getting updated. 
+            Absolute timestep to which the gradients are being backpropagated. Higher number reduces the memory usage and reduces the chances of collapse.
+            While a lower value, allows more semantic changes in the diffusion generations, as the earlier diffusion timesteps are getting updated.
             However it also increases the chances of collapse.
         truncated_rand_backprop_minmax (`Tuple`, *optional*, defaults to (0,50)):
             Range for randomized backprop. Here the value at 0 index indicates the earlier diffusion timestep to update (closer to noise), while the value
@@ -659,9 +661,11 @@ def pipeline_step_with_grad(
         # of the Imagen paper: https://arxiv.org/pdf/2205.11487.pdf . `guidance_scale = 1`
         # corresponds to doing no classifier free guidance.
         do_classifier_free_guidance = guidance_scale > 1.0
-        
+
         # 3. Encode input prompt
-        text_encoder_lora_scale = cross_attention_kwargs.get("scale", None) if cross_attention_kwargs is not None else None
+        text_encoder_lora_scale = (
+            cross_attention_kwargs.get("scale", None) if cross_attention_kwargs is not None else None
+        )
         prompt_embeds = pipeline._encode_prompt(
             prompt,
             device,
@@ -698,11 +702,18 @@ def pipeline_step_with_grad(
             # expand the latents if we are doing classifier free guidance
             latent_model_input = torch.cat([latents] * 2) if do_classifier_free_guidance else latents
             latent_model_input = pipeline.scheduler.scale_model_input(latent_model_input, t)
-            
+
             # predict the noise residual
             if gradient_checkpoint:
-                noise_pred = checkpoint.checkpoint(pipeline.unet, latent_model_input, t, prompt_embeds, cross_attention_kwargs=cross_attention_kwargs, use_reentrant=False)[0]
-            else:                
+                noise_pred = checkpoint.checkpoint(
+                    pipeline.unet,
+                    latent_model_input,
+                    t,
+                    prompt_embeds,
+                    cross_attention_kwargs=cross_attention_kwargs,
+                    use_reentrant=False,
+                )[0]
+            else:
                 noise_pred = pipeline.unet(
                     latent_model_input,
                     t,
@@ -711,13 +722,15 @@ def pipeline_step_with_grad(
                     return_dict=False,
                 )[0]
 
-            #  truncating backpropagation is critical for preventing overoptimization (https://arxiv.org/abs/2304.05977). 
+            #  truncating backpropagation is critical for preventing overoptimization (https://arxiv.org/abs/2304.05977).
             if truncated_backprop:
                 # Randomized truncation randomizes the truncation process (https://arxiv.org/abs/2310.03739)
                 # the range of truncation is defined by truncated_rand_backprop_minmax
                 # Setting truncated_rand_backprop_minmax[0] to be low will allow the model to update earlier timesteps in the diffusion chain, while setitng it high will reduce the memory usage.
                 if truncated_backprop_rand:
-                    rand_timestep = random.randint(truncated_rand_backprop_minmax[0],truncated_rand_backprop_minmax[1])
+                    rand_timestep = random.randint(
+                        truncated_rand_backprop_minmax[0], truncated_rand_backprop_minmax[1]
+                    )
                     if i < rand_timestep:
                         noise_pred = noise_pred.detach()
                 else:
@@ -805,7 +818,7 @@ class DefaultDDPOStableDiffusionPipeline(DDPOStableDiffusionPipeline):
         return pipeline_step(self.sd_pipeline, *args, **kwargs)
 
     def rgb_with_grad(self, *args, **kwargs) -> DDPOPipelineOutput:
-        return pipeline_step_with_grad(self.sd_pipeline, *args, **kwargs)  
+        return pipeline_step_with_grad(self.sd_pipeline, *args, **kwargs)
 
     def scheduler_step(self, *args, **kwargs) -> DDPOSchedulerOutput:
         return scheduler_step(self.sd_pipeline.scheduler, *args, **kwargs)
