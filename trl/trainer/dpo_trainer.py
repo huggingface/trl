@@ -164,6 +164,7 @@ class DPOTrainer(Trainer):
         ref_adapter_name: Optional[str] = None,
         reference_free: bool = False,
         force_use_ref_model: bool = False,
+        ref_model_use_stage_3: bool = False,
     ):
         if model_init_kwargs is not None:
             warnings.warn(
@@ -229,6 +230,12 @@ class DPOTrainer(Trainer):
             )
             args.force_use_ref_model = force_use_ref_model
 
+        if ref_model_use_stage_3:
+            warnings.warn(
+                "You passed `ref_model_use_stage_3` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+            )
+            self.ref_model_use_stage_3 = args.ref_model_use_stage_3
+        
         if not is_peft_available() and peft_config is not None:
             raise ValueError(
                 "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
@@ -519,7 +526,7 @@ class DPOTrainer(Trainer):
 
         # Deepspeed Zero-3 does not support precompute_ref_log_probs
         if self.is_deepspeed_enabled:
-            if self.accelerator.state.deepspeed_plugin.zero_stage == 3 and self.precompute_ref_log_probs:
+            if (self.accelerator.state.deepspeed_plugin.zero_stage == 3 or self.ref_model_use_stage_3) and self.precompute_ref_log_probs:
                 raise ValueError(
                     "You cannot use `precompute_ref_log_probs=True` with Deepspeed ZeRO-3. Please set `precompute_ref_log_probs=False`."
                 )
@@ -575,7 +582,10 @@ class DPOTrainer(Trainer):
         # If ZeRO-3 is used, we shard both the active and reference model.
         # Otherwise, we assume the reference model fits in memory and is initialized on each device with ZeRO disabled (stage 0)
         if config_kwargs["zero_optimization"]["stage"] != 3:
-            config_kwargs["zero_optimization"]["stage"] = 0
+            if self.ref_model_use_stage_3:
+                config_kwargs["zero_optimization"]["stage"] = 3
+            else:
+                config_kwargs["zero_optimization"]["stage"] = 0
         model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
         model.eval()
         return model
