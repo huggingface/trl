@@ -84,7 +84,7 @@ def _tokenize(
     tokenizer: "PreTrainedTokenizer",
     embedding_tokenizer: Optional["PreTrainedTokenizer"] = None,
 ) -> Dict[str, List[Any]]:
-    """Tokenize a batch from a KTO/BCO specific dataset."""
+    """Tokenize a batch from a KTO/BCO/SBCO specific dataset."""
     prompt_tokenized = tokenizer(batch["prompt"], add_special_tokens=False)
     prompt_input_ids = prompt_tokenized["input_ids"]
     prompt_attention_mask = prompt_tokenized["attention_mask"]
@@ -672,7 +672,7 @@ class KTOTrainer(Trainer):
                         UserWarning,
                     )
 
-            if self.loss_type == "bco":
+            if self.loss_type in ("bco", "sbco"):
                 desirable = desirable.shuffle(seed=args.data_seed)
                 undesirable = undesirable.shuffle(seed=args.data_seed)
 
@@ -724,7 +724,7 @@ class KTOTrainer(Trainer):
             else:
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
-        if self.loss_type == "bco":
+        if self.loss_type in ("bco", "sbco"):
             self.running = RunningMoments(self.accelerator)
 
         if self.embedding_func is None:
@@ -900,7 +900,7 @@ class KTOTrainer(Trainer):
             reference_KL_logps = []
 
             for padded_batch in tqdm(iterable=data_loader, desc="Train dataset reference log probs"):
-                reference_completion_logp, reference_KL_logp = self.compute_reference_log_probs(padded_batch)
+                reference_completion_logp, reference_KL_logp, _ = self.compute_reference_log_probs(padded_batch)
 
                 reference_completion_logp = self.accelerator.gather_for_metrics(reference_completion_logp)
                 reference_completion_logps.append(reference_completion_logp.cpu())
@@ -950,7 +950,7 @@ class KTOTrainer(Trainer):
             reference_KL_logps = []
 
             for padded_batch in tqdm(iterable=data_loader, desc="Eval dataset reference log probs"):
-                reference_completion_logp, reference_KL_logp = self.compute_reference_log_probs(padded_batch)
+                reference_completion_logp, reference_KL_logp, _ = self.compute_reference_log_probs(padded_batch)
 
                 reference_completion_logp = self.accelerator.gather_for_metrics(reference_completion_logp)
                 reference_completion_logps.append(reference_completion_logp.cpu())
@@ -972,7 +972,7 @@ class KTOTrainer(Trainer):
 
         return super().get_eval_dataloader(eval_dataset=eval_dataset)
 
-    def compute_reference_log_probs(self, padded_batch: Dict) -> Dict:
+    def compute_reference_log_probs(self, padded_batch: Dict) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.LongTensor]:
         """Computes log probabilities of the reference model for a single padded batch of a KTO specific dataset."""
         with torch.no_grad():
             if self.ref_model is None:
@@ -1026,41 +1026,39 @@ class KTOTrainer(Trainer):
                         attention_mask=padded_batch["KL_completion_attention_mask"],
                     ).logits
 
-        completion_logps = self.get_batch_logps(
+        completion_logps, size_completion = self.get_batch_logps(
             completion_logits,
             padded_batch["completion_labels"],
-            average_log_prob=False,
             is_encoder_decoder=self.is_encoder_decoder,
             label_pad_token_id=self.label_pad_token_id,
         )
 
-        KL_logps = self.get_batch_logps(
+        KL_logps, _ = self.get_batch_logps(
             KL_logits,
             padded_batch["KL_completion_labels"],
-            average_log_prob=False,
             is_encoder_decoder=self.is_encoder_decoder,
             label_pad_token_id=self.label_pad_token_id,
         )
 
-        return completion_logps, KL_logps
+        return completion_logps, KL_logps, size_completion
 
     @staticmethod
     def get_batch_logps(
         logits: torch.FloatTensor,
         labels: torch.LongTensor,
-        average_log_prob: bool = False,
         label_pad_token_id: int = -100,
         is_encoder_decoder: bool = False,
-    ) -> torch.FloatTensor:
+    ) -> Tuple[torch.FloatTensor, torch.LongTensor]:
         """Compute the log probabilities of the given labels under the given logits.
 
         Args:
             logits: Logits of the model (unnormalized). Shape: (batch_size, sequence_length, vocab_size)
             labels: Labels for which to compute the log probabilities. Label tokens with a value of label_pad_token_id are ignored. Shape: (batch_size, sequence_length)
-            average_log_prob: If True, return the average log probability per (non-masked) token. Otherwise, return the sum of the log probabilities of the (non-masked) tokens.
+            label_pad_token_id: The label pad token id.
+            is_encoder_decoder: Whether the model is an encoder-decoder model.
 
         Returns:
-            A tensor of shape (batch_size,) containing the average/sum log probabilities of the given labels under the given logits.
+            A Tuple of two tensor of shape ((batch_size,), (batch_size,)) containing the sum of log probabilities of the given labels under the given logits in the first tensor and the number of non-masked tokens in the second tensor.
         """
         if logits.shape[:-1] != labels.shape:
             raise ValueError("Logits (batch and sequence length dim) and labels must have the same shape.")
@@ -1068,10 +1066,6 @@ class KTOTrainer(Trainer):
         if not is_encoder_decoder:
             labels = labels[:, 1:].clone()
             logits = logits[:, :-1, :]
-        else:
-            # Fixes end-dec RuntimeError
-            labels = labels.clone()
-
         loss_mask = labels != label_pad_token_id
 
         # dummy token; we'll ignore the losses on these tokens later
@@ -1079,14 +1073,11 @@ class KTOTrainer(Trainer):
 
         per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
 
-        if average_log_prob:
-            return (per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)
-        else:
-            return (per_token_logps * loss_mask).sum(-1)
+        return (per_token_logps * loss_mask).sum(-1), loss_mask.sum(-1)
 
     def forward(
         self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]
-    ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+    ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.LongTensor]:
         if self.is_encoder_decoder:
             with torch.no_grad():
                 KL_logits = model(
@@ -1114,7 +1105,7 @@ class KTOTrainer(Trainer):
                 attention_mask=batch["completion_attention_mask"],
             ).logits
 
-        completion_logps = self.get_batch_logps(
+        completion_logps, size_completion = self.get_batch_logps(
             completion_logits,
             batch["completion_labels"],
             average_log_prob=False,
@@ -1122,7 +1113,7 @@ class KTOTrainer(Trainer):
             label_pad_token_id=self.label_pad_token_id,
         )
 
-        KL_logps = self.get_batch_logps(
+        KL_logps, _ = self.get_batch_logps(
             KL_logits,
             batch["KL_completion_labels"],
             average_log_prob=False,
@@ -1145,7 +1136,7 @@ class KTOTrainer(Trainer):
         chosen_logits = completion_logits[chosen_idx, ...]
         rejected_logits = completion_logits[rejected_idx, ...]
 
-        return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, KL_logps)
+        return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, KL_logps, size_completion)
 
     def kto_loss(
         self,
@@ -1259,6 +1250,62 @@ class KTOTrainer(Trainer):
 
         return losses, chosen_rewards, rejected_rewards, torch.as_tensor(rewards_mean)
 
+    def sbco_loss(
+        self,
+        policy_chosen_logps: torch.FloatTensor,
+        policy_rejected_logps: torch.FloatTensor,
+        reference_chosen_logps: torch.FloatTensor,
+        reference_rejected_logps: torch.FloatTensor,
+        size_completion: torch.LongTensor = None,
+    ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+        """Compute the SBCO loss for a batch of policy and reference model log probabilities.
+
+        Args:
+            policy_chosen_logps: Log probabilities of the policy model for the chosen responses. Shape: (num(chosen) in batch_size,)
+            policy_rejected_logps: Log probabilities of the policy model for the rejected responses. Shape: (num(rejected) in batch_size,)
+            reference_chosen_logps: Log probabilities of the reference model for the chosen responses. Shape: (num(chosen) in batch_size,)
+            reference_rejected_logps: Log probabilities of the reference model for the rejected responses. Shape: (num(rejected) in batch_size,)
+            size_completion: size of completion for each example in the batch. Shape: (batch_size,)
+
+        Returns:
+            A tuple of four tensors: (losses, chosen_rewards, rejected_rewards, KL).
+            The losses tensor contains the KTO loss for each example in the batch.
+            The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
+            The delta value contains the moving average of all implicit rewards.
+        """
+        assert policy_chosen_logps.shape[0] > 0, f"no chosen data at {self.accelerator.local_process_index}"
+        assert policy_rejected_logps.shape[0] > 0, f"no rejected data at {self.accelerator.local_process_index}"
+        chosen_logratios = policy_chosen_logps - reference_chosen_logps
+        rejected_logratios = policy_rejected_logps - reference_rejected_logps
+
+        chosen_rewards = self.beta * chosen_logratios
+        rejected_rewards = self.beta * rejected_logratios
+        chosen_rewards = chosen_rewards.to(self.accelerator.device)
+        rejected_rewards = rejected_rewards.to(self.accelerator.device)
+
+        rewards = torch.cat((chosen_rewards, rejected_rewards), 0).mean().detach()
+        self.running.update(rewards)
+        rewards_mean = self.running.mean  # Expect to be stable
+
+        chosen_losses = -F.logsigmoid(chosen_rewards - rewards_mean)
+        rejected_losses = -F.logsigmoid(rewards_mean - rejected_rewards)
+
+        # size_completion.item() / size_completion.any() or size_completion.all()
+        if self.match_underlying_distribution and size_completion is not None:
+            labels = torch.cat([torch.ones_like(chosen_logratios), torch.zeros_like(rejected_logratios)], dim=0).float()
+            probs = torch.sigmoid(torch.cat([chosen_logratios, rejected_logratios], dim=0) / size_completion.float()).to(self.accelerator.device)
+            aux_loss = F.binary_cross_entropy(probs, labels, reduction="none")
+
+            chosen_weight = torch.ones_like(chosen_losses)
+            rejected_probs = probs[policy_chosen_logps.shape[0] :]
+            rejected_weight = (rejected_probs / (1 - rejected_probs + 1e-8)).clamp(min=self.args.min_density_ratio, max=self.args.max_density_ratio)
+
+            losses = torch.cat((chosen_weight * chosen_losses, rejected_weight * rejected_losses), dim=0) + aux_loss
+        else:
+            losses = torch.cat((chosen_losses, rejected_losses), dim=0)
+
+        return losses, chosen_rewards.detach(), rejected_rewards.detach(), torch.as_tensor(rewards_mean)
+    
     def get_batch_loss_metrics(
         self,
         model,
@@ -1274,6 +1321,7 @@ class KTOTrainer(Trainer):
             policy_chosen_logits,
             policy_rejected_logits,
             policy_KL_logps,
+            size_completion,
         ) = self.forward(model, batch)
 
         # if reference_logps in batch use them, otherwise use the reference model
@@ -1294,6 +1342,7 @@ class KTOTrainer(Trainer):
                             _,
                             _,
                             reference_KL_logps,
+                            size_completion,
                         ) = self.forward(self.model, batch)
                 else:
                     (
@@ -1302,6 +1351,7 @@ class KTOTrainer(Trainer):
                         _,
                         _,
                         reference_KL_logps,
+                        size_completion,
                     ) = self.forward(self.ref_model, batch)
 
         if self.loss_type == "kto":
@@ -1323,6 +1373,14 @@ class KTOTrainer(Trainer):
                 reference_rejected_logps,
                 chosen_embeddings,
                 rejected_embeddings,
+            )
+        elif self.loss_type == "sbco":
+            losses, chosen_rewards, rejected_rewards, kl = self.sbco_loss(
+                policy_chosen_logps,
+                policy_rejected_logps,
+                reference_chosen_logps, 
+                reference_rejected_logps,
+                size_completion=size_completion,
             )
 
         num_chosen = torch.Tensor([len(chosen_rewards)]).to(self.accelerator.device)
