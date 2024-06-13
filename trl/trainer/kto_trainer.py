@@ -1105,7 +1105,7 @@ class KTOTrainer(Trainer):
                 attention_mask=batch["completion_attention_mask"],
             ).logits
 
-        completion_logps, size_completion = self.get_batch_logps(
+        completion_logps, _size_completion = self.get_batch_logps(
             completion_logits,
             batch["completion_labels"],
             average_log_prob=False,
@@ -1135,6 +1135,8 @@ class KTOTrainer(Trainer):
 
         chosen_logits = completion_logits[chosen_idx, ...]
         rejected_logits = completion_logits[rejected_idx, ...]
+
+        size_completion = torch.cat([_size_completion[chosen_idx, ...], _size_completion[rejected_idx, ...]], dim=0)
 
         return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, KL_logps, size_completion)
 
@@ -1290,7 +1292,6 @@ class KTOTrainer(Trainer):
         chosen_losses = -F.logsigmoid(chosen_rewards - rewards_mean)
         rejected_losses = -F.logsigmoid(rewards_mean - rejected_rewards)
 
-        # size_completion.item() / size_completion.any() or size_completion.all()
         if self.match_underlying_distribution and size_completion is not None:
             labels = torch.cat([torch.ones_like(chosen_logratios), torch.zeros_like(rejected_logratios)], dim=0).float()
             probs = torch.sigmoid(torch.cat([chosen_logratios, rejected_logratios], dim=0) / size_completion.float()).to(self.accelerator.device)
