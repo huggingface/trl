@@ -190,8 +190,12 @@ class PPOv2Trainer(Trainer):
         self.eval_dataloader = accelerator.prepare(self.eval_dataloader)
 
         if self.is_deepspeed_enabled:
-            self.reward_model = prepare_deepspeed(self.reward_model, args.per_device_train_batch_size)
-            self.ref_policy = prepare_deepspeed(self.ref_policy, args.per_device_train_batch_size)
+            self.reward_model = prepare_deepspeed(
+                self.reward_model, args.per_device_train_batch_size, args.bf16, args.fp16
+            )
+            self.ref_policy = prepare_deepspeed(
+                self.ref_policy, args.per_device_train_batch_size, args.bf16, args.fp16
+            )
         else:
             self.ref_policy = self.ref_policy.to(self.accelerator.device)
             self.reward_model = self.reward_model.to(self.accelerator.device)
@@ -447,14 +451,14 @@ class PPOv2Trainer(Trainer):
                                 entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1)
                                 approxkl = 0.5 * (logprobs_diff**2).mean()
                                 approxkl_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = approxkl
-                                pg_clipfrac_stats[
-                                    ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
-                                ] = pg_clipfrac
+                                pg_clipfrac_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
+                                    pg_clipfrac
+                                )
                                 pg_loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = pg_loss
                                 vf_loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = vf_loss
-                                vf_clipfrac_stats[
-                                    ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
-                                ] = vf_clipfrac
+                                vf_clipfrac_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
+                                    vf_clipfrac
+                                )
                                 entropy_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = entropy.mean()
                                 ratio_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = ratio.mean()
                         gradient_accumulation_idx += 1

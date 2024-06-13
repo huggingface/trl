@@ -175,8 +175,12 @@ class RLOOTrainer(Trainer):
         self.eval_dataloader = accelerator.prepare(self.eval_dataloader)
 
         if self.is_deepspeed_enabled:
-            self.reward_model = prepare_deepspeed(self.reward_model, args.per_device_train_batch_size)
-            self.ref_policy = prepare_deepspeed(self.ref_policy, args.per_device_train_batch_size)
+            self.reward_model = prepare_deepspeed(
+                self.reward_model, args.per_device_train_batch_size, args.bf16, args.fp16
+            )
+            self.ref_policy = prepare_deepspeed(
+                self.ref_policy, args.per_device_train_batch_size, args.bf16, args.fp16
+            )
             self.deepspeed = self.model
         else:
             self.ref_policy = self.ref_policy.to(self.accelerator.device)
@@ -367,9 +371,9 @@ class RLOOTrainer(Trainer):
                                 entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1)
                                 approxkl = 0.5 * (logprobs_diff**2).mean()
                                 approxkl_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = approxkl
-                                pg_clipfrac_stats[
-                                    ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
-                                ] = pg_clipfrac
+                                pg_clipfrac_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
+                                    pg_clipfrac
+                                )
                                 pg_loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = pg_loss
                                 entropy_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = entropy.mean()
                                 ratio_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = new_ratio.mean()
