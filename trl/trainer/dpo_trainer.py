@@ -164,7 +164,6 @@ class DPOTrainer(Trainer):
         ref_adapter_name: Optional[str] = None,
         reference_free: bool = False,
         force_use_ref_model: bool = False,
-        ref_model_use_stage_3: bool = False,
     ):
         if model_init_kwargs is not None:
             warnings.warn(
