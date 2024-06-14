@@ -230,12 +230,7 @@ class DPOTrainer(Trainer):
             )
             args.force_use_ref_model = force_use_ref_model
 
-        if ref_model_use_stage_3:
-            warnings.warn(
-                "You passed `ref_model_use_stage_3` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
-            )
-            self.ref_model_use_stage_3 = args.ref_model_use_stage_3
-        
+        self.ref_model_use_stage_3 = args.ref_model_use_stage_3
         if not is_peft_available() and peft_config is not None:
             raise ValueError(
                 "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
