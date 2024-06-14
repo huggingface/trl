@@ -183,7 +183,7 @@ class ChatArguments:
     use_bnb_nested_quant: bool = field(default=False, metadata={"help": "use nested quantization"})
 
 
-class TRLParser(HfArgumentParser):
+class TrlParser(HfArgumentParser):
     def __init__(self, parsers):
         """
         The TRL parser parses a list of parsers (TrainingArguments, trl.ModelConfig, etc.), creates a config
@@ -247,7 +247,7 @@ class TRLParser(HfArgumentParser):
             # outputs[-1] is either remaining yaml config as Namespace or parsed config as Dataclass
             if isinstance(outputs[-1], Namespace):
                 remaining_args = vars(outputs[-1])
-                raise ValueError(f"Some specified config arguments are not used by the TRLParser: {remaining_args}")
+                raise ValueError(f"Some specified config arguments are not used by the TrlParser: {remaining_args}")
 
             return outputs
 
