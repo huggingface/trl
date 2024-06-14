@@ -725,18 +725,18 @@ class KTOTrainer(Trainer):
         if self.loss_type == "bco":
             self.running = RunningMoments(self.accelerator)
 
-        if self.embedding_func is None:
-            return
+            if self.embedding_func is None:
+                return
 
-        chosen_embeddings = self._get_sample_prompt_embeddings(desirable, sample_size=self.args.prompt_sample_size)
-        rejected_embeddings = self._get_sample_prompt_embeddings(undesirable, sample_size=self.args.prompt_sample_size)
+            chosen_embeddings = self._get_sample_prompt_embeddings(desirable, sample_size=self.args.prompt_sample_size)
+            rejected_embeddings = self._get_sample_prompt_embeddings(undesirable, sample_size=self.args.prompt_sample_size)
 
-        embeddings = torch.cat((chosen_embeddings, rejected_embeddings), dim=0)
-        labels = torch.cat(
-            (torch.ones_like(chosen_embeddings[:, 0]), torch.zeros_like(rejected_embeddings[:, 0])), dim=0
-        )
+            embeddings = torch.cat((chosen_embeddings, rejected_embeddings), dim=0)
+            labels = torch.cat(
+                (torch.ones_like(chosen_embeddings[:, 0]), torch.zeros_like(rejected_embeddings[:, 0])), dim=0
+            )
 
-        self.clf = LogisticRegression(class_weight="balanced").fit(embeddings.cpu().numpy(), labels.cpu().numpy())
+            self.clf = LogisticRegression(class_weight="balanced").fit(embeddings.cpu().numpy(), labels.cpu().numpy())
 
     @property
     def match_underlying_distribution(self):
