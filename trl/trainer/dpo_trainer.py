@@ -1019,6 +1019,15 @@ class DPOTrainer(Trainer):
                 -F.logsigmoid(self.beta * logits) * (1 - self.label_smoothing)
                 + F.logsigmoid(-self.beta * logits) * self.label_smoothing
             ) / (1 - 2 * self.label_smoothing)
+        elif self.loss_type == "exo_pair":
+            # eqn (16) of the EXO paper: https://arxiv.org/pdf/2402.00856
+            import math
+            if self.label_smoothing == 0:
+                self.label_smoothing = 1e-3
+            losses = (
+                (self.beta * logits).sigmoid() * ((self.beta * logits).logsigmoid() - math.log(1 - self.label_smoothing)) 
+              + (-self.beta * logits).sigmoid() * ((-self.beta * logits).logsigmoid() - math.log(self.label_smoothing))
+            )
         elif self.loss_type == "hinge":
             losses = torch.relu(1 - self.beta * logits)
         elif self.loss_type == "ipo":
@@ -1096,7 +1105,7 @@ class DPOTrainer(Trainer):
 
         else:
             raise ValueError(
-                f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'kto_pair', 'bco_pair', 'sppo_hard', 'nca_pair', 'robust']"
+                f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'kto_pair', 'bco_pair', 'sppo_hard', 'nca_pair', 'robust', 'exo_pair']"
             )
 
         chosen_rewards = (
