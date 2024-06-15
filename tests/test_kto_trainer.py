@@ -13,12 +13,14 @@
 # limitations under the License.
 import tempfile
 import unittest
+from functools import partial
 
 import torch
+from accelerate import Accelerator
 from datasets import Dataset
 from parameterized import parameterized
 from pytest import mark
-from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
+from transformers import AutoModel, AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
 from trl import KTOConfig, KTOTrainer
 from trl.trainer.kto_trainer import _get_kl_dataset, _process_tokens, _tokenize
@@ -40,6 +42,11 @@ class KTOTrainerTester(unittest.TestCase):
         cls.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         cls.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         cls.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        # get embedding model
+        model_id = "facebook/bart-base"
+        cls.embedding_model = AutoModel.from_pretrained(model_id)
+        cls.embedding_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
     def _init_dummy_dataset(self):
         # fmt: off
@@ -75,17 +82,89 @@ class KTOTrainerTester(unittest.TestCase):
         # fmt: on
         return Dataset.from_dict(dummy_dataset_dict)
 
+    def _init_dummy_dataset_only_desirable(self):
+        # fmt: off
+        dummy_dataset_unbalanced_dict = {
+            "prompt": [
+                "Hey, hello",
+                "How are you",
+                "What is your name?",
+                "What is your name?",
+                "Which is the best programming language?",
+                "Which is the best programming language?",
+                "Which is the best programming language?",
+            ],
+            "completion": [
+                "hi nice to meet you",
+                "leave me alone",
+                "I don't have a name",
+                "My name is Mary",
+                "Python",
+                "C++",
+                "Java",
+            ],
+            "label": [
+                True,
+                True,
+                True,
+                True,
+                True,
+                True,
+                True,
+            ],
+        }
+        # fmt: on
+        return Dataset.from_dict(dummy_dataset_unbalanced_dict)
+
+    def _init_dummy_dataset_no_desirable(self):
+        # fmt: off
+        dummy_dataset_unbalanced_dict = {
+            "prompt": [
+                "Hey, hello",
+                "How are you",
+                "What is your name?",
+                "What is your name?",
+                "Which is the best programming language?",
+                "Which is the best programming language?",
+                "Which is the best programming language?",
+            ],
+            "completion": [
+                "hi nice to meet you",
+                "leave me alone",
+                "I don't have a name",
+                "My name is Mary",
+                "Python",
+                "C++",
+                "Java",
+            ],
+            "label": [
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
+            ],
+        }
+        # fmt: on
+        return Dataset.from_dict(dummy_dataset_unbalanced_dict)
+
     @parameterized.expand(
         [
-            ["gpt2", True, True],
-            ["gpt2", True, False],
+            ["gpt2", "kto", True, True],
+            ["gpt2", "kto", True, False],
             # ["t5", True],
-            ["gpt2", False, True],
-            ["gpt2", False, False],
+            ["gpt2", "kto", False, True],
+            ["gpt2", "kto", False, False],
             # ["t5", False],
+            ["gpt2", "bco", True, True],
+            ["gpt2", "bco", True, False],
+            ["gpt2", "bco", False, True],
+            ["gpt2", "bco", False, False],
         ]
     )
-    def test_kto_trainer(self, name, pre_compute, eval_dataset):
+    def test_kto_trainer(self, name, loss_type, pre_compute, eval_dataset):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = KTOConfig(
                 output_dir=tmp_dir,
@@ -94,9 +173,10 @@ class KTOTrainerTester(unittest.TestCase):
                 remove_unused_columns=False,
                 gradient_accumulation_steps=1,
                 learning_rate=9e-1,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 beta=0.1,
                 precompute_ref_log_probs=pre_compute,
+                loss_type=loss_type,
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -132,6 +212,60 @@ class KTOTrainerTester(unittest.TestCase):
                 if param.sum() != 0:
                     self.assertFalse(torch.equal(param, new_param))
 
+    @require_no_wandb
+    def test_kto_trainer_no_desirable_input(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = KTOConfig(
+                output_dir=tmp_dir,
+                remove_unused_columns=False,
+            )
+
+            dummy_dataset = self._init_dummy_dataset_no_desirable()
+
+            model = self.model
+            ref_model = self.ref_model
+            tokenizer = self.tokenizer
+
+            with self.assertRaises(
+                ValueError,
+                msg="The set of desirable completions cannot be empty.",
+            ):
+                _ = KTOTrainer(
+                    model=model,
+                    ref_model=ref_model,
+                    args=training_args,
+                    tokenizer=tokenizer,
+                    train_dataset=dummy_dataset,
+                    eval_dataset=None,
+                )
+
+    @require_no_wandb
+    def test_kto_trainer_only_desirable_input(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = KTOConfig(
+                output_dir=tmp_dir,
+                remove_unused_columns=False,
+            )
+
+            dummy_dataset = self._init_dummy_dataset_only_desirable()
+
+            model = self.model
+            ref_model = self.ref_model
+            tokenizer = self.tokenizer
+
+            with self.assertRaises(
+                ValueError,
+                msg="The set of undesirable completions cannot be empty.",
+            ):
+                _ = KTOTrainer(
+                    model=model,
+                    ref_model=ref_model,
+                    args=training_args,
+                    tokenizer=tokenizer,
+                    train_dataset=dummy_dataset,
+                    eval_dataset=None,
+                )
+
     def test_tokenize_and_process_tokens(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = KTOConfig(
@@ -141,7 +275,7 @@ class KTOTrainerTester(unittest.TestCase):
                 remove_unused_columns=False,
                 gradient_accumulation_steps=1,
                 learning_rate=9e-1,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 beta=0.1,
             )
 
@@ -222,7 +356,7 @@ class KTOTrainerTester(unittest.TestCase):
                 remove_unused_columns=False,
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 beta=0.1,
             )
 
@@ -235,6 +369,54 @@ class KTOTrainerTester(unittest.TestCase):
                 tokenizer=self.tokenizer,
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                # check the params have changed - ignore 0 biases
+                if param.sum() != 0:
+                    self.assertFalse(torch.equal(param, new_param))
+
+    def test_kto_trainer_bco_udm(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = KTOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=4,
+                learning_rate=9e-1,
+                eval_strategy="steps",
+                beta=0.1,
+                loss_type="bco",
+            )
+
+            dummy_dataset = self._init_dummy_dataset()
+
+            def embed_prompt(input_ids, attention_mask, model):
+                outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+
+                return outputs.last_hidden_state.mean(dim=1)
+
+            embedding_model = Accelerator().prepare_model(self.embedding_model)
+            embedding_func = partial(embed_prompt, model=embedding_model)
+
+            trainer = KTOTrainer(
+                model=self.model,
+                ref_model=None,
+                args=training_args,
+                tokenizer=self.tokenizer,
+                train_dataset=dummy_dataset,
+                eval_dataset=dummy_dataset,
+                embedding_func=embedding_func,
+                embedding_tokenizer=self.embedding_tokenizer,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -271,7 +453,7 @@ class KTOTrainerTester(unittest.TestCase):
                 remove_unused_columns=False,
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 beta=0.1,
             )
 
@@ -311,7 +493,7 @@ class KTOTrainerTester(unittest.TestCase):
                 remove_unused_columns=False,
                 gradient_accumulation_steps=1,
                 learning_rate=9e-1,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 beta=0.1,
                 generate_during_eval=True,
             )
@@ -357,7 +539,7 @@ class KTOTrainerTester(unittest.TestCase):
                 remove_unused_columns=False,
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 beta=0.1,
             )
 

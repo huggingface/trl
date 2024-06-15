@@ -33,7 +33,7 @@ from rich.markdown import Markdown
 from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
 
 from trl.commands.cli_utils import ChatArguments, TrlParser, init_zero_verbose
-from trl.trainer.utils import get_kbit_device_map, get_quantization_config
+from trl.trainer.utils import get_quantization_config
 
 
 HELP_STRING = """\
@@ -220,7 +220,7 @@ def load_model_and_tokenizer(args):
         trust_remote_code=args.trust_remote_code,
         attn_implementation=args.attn_implementation,
         torch_dtype=torch_dtype,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
+        device_map="auto",
         quantization_config=quantization_config,
     )
     model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path, **model_kwargs)
@@ -229,6 +229,26 @@ def load_model_and_tokenizer(args):
         model = model.to(args.device)
 
     return model, tokenizer
+
+
+def parse_eos_tokens(tokenizer, eos_tokens, eos_token_ids):
+    if tokenizer.pad_token_id is None:
+        pad_token_id = tokenizer.eos_token_id
+    else:
+        pad_token_id = tokenizer.pad_token_id
+
+    all_eos_token_ids = []
+
+    if eos_tokens is not None:
+        all_eos_token_ids.extend(tokenizer.convert_tokens_to_ids(eos_tokens.split(",")))
+
+    if eos_token_ids is not None:
+        all_eos_token_ids.extend([int(token_id) for token_id in eos_token_ids.split(",")])
+
+    if len(all_eos_token_ids) == 0:
+        all_eos_token_ids.append(tokenizer.eos_token_id)
+
+    return pad_token_id, all_eos_token_ids
 
 
 def chat_cli():
@@ -251,6 +271,8 @@ def chat_cli():
 
     model, tokenizer = load_model_and_tokenizer(args)
     generation_streamer = TextIteratorStreamer(tokenizer, skip_special_tokens=True)
+
+    pad_token_id, eos_token_ids = parse_eos_tokens(tokenizer, args.eos_tokens, args.eos_token_ids)
 
     interface = RichInterface(model_name=args.model_name_or_path, user_name=user)
     interface.clear()
@@ -322,8 +344,8 @@ def chat_cli():
                 top_k=current_args.top_k,
                 top_p=current_args.top_p,
                 repetition_penalty=current_args.repetition_penalty,
-                pad_token_id=tokenizer.pad_token_id,
-                eos_token_id=tokenizer.eos_token_id,
+                pad_token_id=pad_token_id,
+                eos_token_id=eos_token_ids,
             )
 
             thread = Thread(target=model.generate, kwargs=generation_kwargs)
