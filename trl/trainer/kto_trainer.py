@@ -640,7 +640,7 @@ class KTOTrainer(Trainer):
                 eval_dataset = concatenate_datasets([eval_dataset, eval_kl_dataset], axis=1)
 
             num_desirable = max(sum(train_dataset["label"]), 1)
-            num_undesirable = max(len(train_dataset["label"]) - num_desirable, 1) # "label" is binary
+            num_undesirable = max(len(train_dataset["label"]) - num_desirable, 1)  # "label" is binary
 
             if num_desirable != num_undesirable:
                 # The lower and upper bounds come from Eq. (8) of https://arxiv.org/abs/2402.01306
@@ -729,7 +729,9 @@ class KTOTrainer(Trainer):
                 return
 
             chosen_embeddings = self._get_sample_prompt_embeddings(desirable, sample_size=self.args.prompt_sample_size)
-            rejected_embeddings = self._get_sample_prompt_embeddings(undesirable, sample_size=self.args.prompt_sample_size)
+            rejected_embeddings = self._get_sample_prompt_embeddings(
+                undesirable, sample_size=self.args.prompt_sample_size
+            )
 
             embeddings = torch.cat((chosen_embeddings, rejected_embeddings), dim=0)
             labels = torch.cat(
