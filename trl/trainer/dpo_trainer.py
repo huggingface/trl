@@ -467,6 +467,8 @@ class DPOTrainer(Trainer):
             warnings.warn(
                 "You are using a loss type that does not support label smoothing. Ignoring label_smoothing parameter."
             )
+        if args.loss_type == "kto_pair":
+            raise ValueError("Support for kto_pair has been removed in DPOTrainer. Please use KTOTrainer.")
 
         if beta != 0.1:
             warnings.warn(

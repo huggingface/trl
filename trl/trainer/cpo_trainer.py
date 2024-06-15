@@ -263,6 +263,8 @@ class CPOTrainer(Trainer):
             warnings.warn(
                 "You are using a loss type that does not support label smoothing. Ignoring label_smoothing parameter."
             )
+        if args.loss_type == "kto_pair":
+            raise ValueError("Support for kto_pair has been removed in CPOTrainer. Please use KTOTrainer.")
 
         self.beta = args.beta
         self.label_smoothing = args.label_smoothing

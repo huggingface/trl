@@ -29,12 +29,8 @@ class DPOConfig(TrainingArguments):
             The robust DPO label smoothing parameter from the [cDPO](https://ericmitchell.ai/cdpo.pdf) report and [Robust DPO](https://arxiv.org/abs/2403.00409) paper that should be between 0 and 0.5.
         loss_type (`str`, defaults to `"sigmoid"`):
             The type of DPO loss to use. Either `"sigmoid"` the default DPO loss,`"hinge"` loss from [SLiC](https://arxiv.org/abs/2305.10425) paper, `"ipo"` from [IPO](https://arxiv.org/abs/2310.12036) paper,
-<<<<<<< HEAD
-            `"bco_pair"` from [BCO](https://arxiv.org/abs/2404.04656) paper or `"robust"` from [Robust DPO](https://arxiv.org/abs/2403.00409) paper.
-=======
-            `"kto_pair"` from the HALOs [report](https://github.com/ContextualAI/HALOs/blob/main/assets/report.pdf), `"bco_pair"` from [BCO](https://arxiv.org/abs/2404.04656) paper or `"robust"` from [Robust DPO](https://arxiv.org/abs/2403.00409) paper,
+            `"bco_pair"` from [BCO](https://arxiv.org/abs/2404.04656) paper or `"robust"` from [Robust DPO](https://arxiv.org/abs/2403.00409) paper,
             "aot" and "aot_pair" from alignment via optimal transport
->>>>>>> f5168fdbaf9cbf6a3f1bdc64dc44b9db3a9ae333
         label_pad_token_id (`int`, defaults to `-100`):
             The label pad token id. This argument is required if you want to use the default data collator.
         padding_value (`Optional[int]`, *optional*):
@@ -106,3 +102,7 @@ class DPOConfig(TrainingArguments):
     ref_model_mixup_alpha: float = 0.9
     ref_model_sync_steps: int = 64
     rpo_alpha: Optional[float] = None
+
+    def __post_init__(self):
+        if self.loss_type == "kto_pair":
+            raise ValueError("Support for kto_pair has been removed in DPOTrainer. Please use KTOTrainer.")
