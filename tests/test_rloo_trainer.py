@@ -18,7 +18,7 @@ import torch
 
 def test():
     command = """\
-python -i examples/scripts/rloo/rloo.py \
+python examples/scripts/rloo/rloo.py \
     --learning_rate 3e-6 \
     --output_dir models/minimal/rloo \
     --per_device_train_batch_size 5 \
