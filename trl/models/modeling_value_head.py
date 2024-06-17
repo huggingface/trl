@@ -143,8 +143,8 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
         self,
         input_ids=None,
         past_key_values=None,
-        return_past_key_values=False,
         attention_mask=None,
+        return_past_key_values=False,
         **kwargs,
     ):
         r"""
@@ -156,11 +156,11 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
             past_key_values (`tuple(tuple(torch.FloatTensor))`, `optional`):
                 Contains pre-computed hidden-states (key and values in the attention blocks) as computed by the model
                 (see `past_key_values` input) to speed up sequential decoding.
-            return_past_key_values (bool): A flag indicating if the computed hidden-states should be returned.
             attention_mask (`torch.FloatTensor` of shape `(batch_size, sequence_length)`, `optional`):
                 Mask to avoid performing attention on padding token indices. Mask values selected in ``[0, 1]``:
                 - 1 for tokens that are **not masked**,
                 - 0 for tokens that are **masked**.
+            return_past_key_values (bool): A flag indicating if the computed hidden-states should be returned.
             kwargs (`dict`, `optional`):
                 Additional keyword arguments, that are passed to the wrapped model.
         """
@@ -410,8 +410,8 @@ class AutoModelForSeq2SeqLMWithValueHead(PreTrainedModelWrapper):
         self,
         input_ids=None,
         past_key_values=None,
-        return_past_key_values=False,
         attention_mask=None,
+        return_past_key_values=False,
         **kwargs,
     ):
         kwargs["past_key_values"] = past_key_values
