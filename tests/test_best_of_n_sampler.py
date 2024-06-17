@@ -23,6 +23,7 @@ class BestOfNSamplerTester(unittest.TestCase):
     tokenizer = AutoTokenizer.from_pretrained(ref_model_name)
     tokenizer.pad_token = tokenizer.eos_token
     output_length_sampler = LengthSampler(2, 6)
+    dummy = None
 
     def test_different_input_types(self):
         r"""
