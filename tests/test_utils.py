@@ -55,4 +55,3 @@ class TestPad(unittest.TestCase):
             ]
         )
         self.assertTrue(torch.equal(output, expected))
-

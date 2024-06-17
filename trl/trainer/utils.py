@@ -296,7 +296,6 @@ class RewardDataCollatorWithPadding:
         return batch
 
 
-
 def pad(tensors: List[torch.Tensor], padding_value: int = 0, padding_side: str = "right") -> torch.Tensor:
     """
     Pads a list of tensors to the same shape along the first dimension.
@@ -344,6 +343,7 @@ def pad(tensors: List[torch.Tensor], padding_value: int = 0, padding_side: str =
         output[i][slices] = t
 
     return output
+
 
 @dataclass
 class DPODataCollatorWithPadding:

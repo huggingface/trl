@@ -315,9 +315,11 @@ class DPOTrainer(Trainer):
             self.is_encoder_decoder = args.is_encoder_decoder
 
         if model is not None:
-            self.is_vision_model = model.config.model_type in ["idefics2"]  # TODO: find a better way to check if its a vision model
+            self.is_vision_model = model.config.model_type in ["idefics2"]  # TODO: find a better way
         else:
-            warnings.warn("No model provided, cannot determine if it is a vision model. Setting is_vision_model to False.")
+            warnings.warn(
+                "No model provided, cannot determine if it is a vision model. Setting is_vision_model to False."
+            )
             self.is_vision_model = False
 
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
@@ -497,7 +499,9 @@ class DPOTrainer(Trainer):
             # tokenize the dataset
             train_dataset = train_dataset.map(self.tokenize_row, num_proc=self.dataset_num_proc, writer_batch_size=10)
             if eval_dataset is not None:
-                eval_dataset = eval_dataset.map(self.tokenize_row, num_proc=self.dataset_num_proc, writer_batch_size=10)
+                eval_dataset = eval_dataset.map(
+                    self.tokenize_row, num_proc=self.dataset_num_proc, writer_batch_size=10
+                )
 
         super().__init__(
             model=model,
@@ -733,7 +737,7 @@ class DPOTrainer(Trainer):
                 prompt_attention_mask=prompt_attention_mask,
                 input_ids=answer_input_ids,
                 attention_mask=answer_attention_mask,
-                pixel_value=full_tokenized
+                pixel_value=full_tokenized,
             )
 
     def tokenize_row(self, feature, model: Optional[Union[PreTrainedModel, nn.Module]] = None) -> Dict:
@@ -994,7 +998,9 @@ class DPOTrainer(Trainer):
 
         if is_vision_model:
             concatenated_batch["pixel_values"] = batch["prompt_pixel_values"].repeat(2, 1, 1, 1, 1).to(device=device)
-            concatenated_batch["pixel_attention_mask"] = batch["prompt_pixel_attention_mask"].repeat(2, 1, 1, 1).to(device=device)
+            concatenated_batch["pixel_attention_mask"] = (
+                batch["prompt_pixel_attention_mask"].repeat(2, 1, 1, 1).to(device=device)
+            )
         return concatenated_batch
 
     def dpo_loss(

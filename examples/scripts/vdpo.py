@@ -13,40 +13,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-# regular: # OOM error
-python examples/scripts/vdpo.py \
-    --dataset_name=HuggingFaceH4/vqa_preferences \
-    --model_name_or_path=HuggingFaceM4/idefics2-8b \
-    --per_device_train_batch_size 4 \
-    --learning_rate 1e-3 \
-    --gradient_accumulation_steps 1 \
-    --logging_steps 10 \
-    --eval_steps 500 \
-    --output_dir="dpo_anthropic_hh" \
-    --warmup_steps 150 \
-    --report_to wandb \
-    --bf16 \
-    --logging_first_step \
-    --no_remove_unused_columns
-
-# peft:
-python examples/scripts/vdpo.py \
-    --dataset_name HuggingFaceH4/vqa_preferences \
+accelerate launch examples/scripts/vdpo.py \
+    --dataset_name HuggingFaceH4/rlaif-v_formatted \
     --model_name_or_path HuggingFaceM4/idefics2-8b \
-    --per_device_train_batch_size 8 \
+    --per_device_train_batch_size 1 \
     --learning_rate 1e-5 \
-    --gradient_accumulation_steps 8 \
     --logging_steps 5 \
-    --output_dir dpo_idefics \
-    --warmup_steps 10 \
-    --report_to wandb \
+    --output_dir dpo_idefics_rlaif-v \
     --bf16 \
     --torch_dtype bfloat16 \
     --logging_first_step \
     --no_remove_unused_columns \
+    --sanity_check \
     --use_peft \
-    --dataloader_num_workers 8
-    --lora_target_module .*(text_model|modality_projection|perceiver_resampler).*(down_proj|gate_proj|up_proj|k_proj|q_proj|v_proj|o_proj).*$
+    --lora_target_modules=all-linear
 """
 
 import logging
@@ -58,6 +38,7 @@ TRL_USE_RICH = os.environ.get("TRL_USE_RICH", False)
 
 from trl.commands.cli_utils import DPOScriptArguments, init_zero_verbose, TrlParser
 from accelerate import PartialState
+
 if TRL_USE_RICH:
     init_zero_verbose()
     FORMAT = "%(message)s"
@@ -96,8 +77,13 @@ if __name__ == "__main__":
     ################
     # Model & Tokenizer
     ################
-    torch_dtype = model_config.torch_dtype if model_config.torch_dtype in ["auto", None] else getattr(torch, model_config.torch_dtype)
+    torch_dtype = (
+        model_config.torch_dtype
+        if model_config.torch_dtype in ["auto", None]
+        else getattr(torch, model_config.torch_dtype)
+    )
     quantization_config = get_quantization_config(model_config)
+
     model_kwargs = dict(
         revision=model_config.model_revision,
         trust_remote_code=model_config.trust_remote_code,
@@ -121,8 +107,10 @@ if __name__ == "__main__":
         tokenizer.chat_template = "{% for message in messages %}{{message['role'] + ': ' + message['content'] + '\n\n'}}{% endfor %}{{ eos_token }}"
     if args.ignore_bias_buffers:
         # torch distributed hack
-        model._ddp_params_and_buffers_to_ignore = [name for name, buffer in model.named_buffers() if buffer.dtype == torch.bool]
-    
+        model._ddp_params_and_buffers_to_ignore = [
+            name for name, buffer in model.named_buffers() if buffer.dtype == torch.bool
+        ]
+
     # DPOTrainer needs the processor to have these attributes
     processor.pad_token_id = tokenizer.pad_token_id
     processor.bos_token_id = tokenizer.bos_token_id
@@ -151,7 +139,7 @@ if __name__ == "__main__":
         row["chosen"] = processor.apply_chat_template(row["chosen"], tokenize=False)
         row["rejected"] = processor.apply_chat_template(row["rejected"], tokenize=False)
         return row
-    
+
     with PartialState().local_main_process_first():
         ds = ds.map(process, num_proc=multiprocessing.cpu_count())
     train_dataset = ds[args.dataset_train_split]
