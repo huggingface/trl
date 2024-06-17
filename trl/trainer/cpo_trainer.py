@@ -259,10 +259,12 @@ class CPOTrainer(Trainer):
         self.max_target_length = max_target_length
         self.tokenizer = tokenizer
 
-        if args.loss_type in ["hinge", "ipo", "kto_pair"] and args.label_smoothing > 0:
+        if args.loss_type in ["hinge", "ipo"] and args.label_smoothing > 0:
             warnings.warn(
                 "You are using a loss type that does not support label smoothing. Ignoring label_smoothing parameter."
             )
+        if args.loss_type == "kto_pair":
+            raise ValueError("Support for kto_pair has been removed in CPOTrainer. Please use KTOTrainer.")
 
         self.beta = args.beta
         self.label_smoothing = args.label_smoothing
@@ -610,7 +612,7 @@ class CPOTrainer(Trainer):
             losses = (logits - 1 / (2 * self.beta)) ** 2
         else:
             raise ValueError(
-                f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'kto_pair', 'simpo']"
+                f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'simpo']"
             )
 
         chosen_rewards = self.beta * (policy_chosen_logps.to(self.accelerator.device)).detach()
