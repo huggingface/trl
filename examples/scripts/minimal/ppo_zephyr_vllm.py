@@ -38,9 +38,9 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.7.ya
     --gradient_accumulation_steps 64 \
     --local_rollout_forward_batch_size 8 \
     --total_episodes 300000 \
-    --model_name_or_path mistralai/Mistral-7B-Instruct-v0.2 \
-    --sft_model_path mistralai/Mistral-7B-Instruct-v0.2 \
-    --reward_model_path weqweasdas/RM-Mistral-7B \
+    --model_name_or_path alignment-handbook/zephyr-7b-sft-full \
+    --sft_model_path alignment-handbook/zephyr-7b-sft-full \
+    --reward_model_path vwxyzjn/rm_zephyr \
     --kl_coef 0.10 \
     --non_eos_penalty \
     --truncate_token eos \
