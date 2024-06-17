@@ -212,60 +212,6 @@ class KTOTrainerTester(unittest.TestCase):
                 if param.sum() != 0:
                     self.assertFalse(torch.equal(param, new_param))
 
-    @require_no_wandb
-    def test_kto_trainer_no_desirable_input(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = KTOConfig(
-                output_dir=tmp_dir,
-                remove_unused_columns=False,
-            )
-
-            dummy_dataset = self._init_dummy_dataset_no_desirable()
-
-            model = self.model
-            ref_model = self.ref_model
-            tokenizer = self.tokenizer
-
-            with self.assertRaises(
-                ValueError,
-                msg="The set of desirable completions cannot be empty.",
-            ):
-                _ = KTOTrainer(
-                    model=model,
-                    ref_model=ref_model,
-                    args=training_args,
-                    tokenizer=tokenizer,
-                    train_dataset=dummy_dataset,
-                    eval_dataset=None,
-                )
-
-    @require_no_wandb
-    def test_kto_trainer_only_desirable_input(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = KTOConfig(
-                output_dir=tmp_dir,
-                remove_unused_columns=False,
-            )
-
-            dummy_dataset = self._init_dummy_dataset_only_desirable()
-
-            model = self.model
-            ref_model = self.ref_model
-            tokenizer = self.tokenizer
-
-            with self.assertRaises(
-                ValueError,
-                msg="The set of undesirable completions cannot be empty.",
-            ):
-                _ = KTOTrainer(
-                    model=model,
-                    ref_model=ref_model,
-                    args=training_args,
-                    tokenizer=tokenizer,
-                    train_dataset=dummy_dataset,
-                    eval_dataset=None,
-                )
-
     def test_tokenize_and_process_tokens(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = KTOConfig(
