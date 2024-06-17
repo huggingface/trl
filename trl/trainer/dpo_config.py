@@ -106,3 +106,4 @@ class DPOConfig(TrainingArguments):
     def __post_init__(self):
         if self.loss_type == "kto_pair":
             raise ValueError("Support for kto_pair has been removed in DPOTrainer. Please use KTOTrainer.")
+        return super().__post_init__()
