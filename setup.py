@@ -72,8 +72,8 @@ EXTRAS = {
     "test": ["parameterized", "pytest", "pytest-xdist", "accelerate", "pytest-cov", "pytest-xdist", "scikit-learn"],
     "peft": ["peft>=0.4.0"],
     "diffusers": ["diffusers>=0.18.0"],
-    "deepspeed": ["deepspeed>=0.9.5"],
-    "benchmark": ["wandb", "ghapi", "openrlbenchmark==0.2.1a5", "requests", "deepspeed"],
+    "deepspeed": ["deepspeed>=0.9.5", "numpy>=1.18.2,!=2.0.0"],
+    "benchmark": ["wandb", "ghapi", "openrlbenchmark==0.2.1a5", "requests", "deepspeed", "numpy>=1.18.2,!=2.0.0"],
     "quantization": ["bitsandbytes<=0.41.1"],
 }
 EXTRAS["dev"] = []
