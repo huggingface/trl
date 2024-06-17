@@ -199,6 +199,7 @@ class TrlParser(HfArgumentParser):
         """
         super().__init__(parsers)
         self.yaml_parser = YamlConfigParser()
+        self.ignore_extra_args = ignore_extra_args
 
     def post_process_dataclasses(self, dataclasses):
         # Apply additional post-processing in case some arguments needs a special
