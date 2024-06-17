@@ -639,24 +639,15 @@ class KTOTrainer(Trainer):
                 # merge the datasets
                 eval_dataset = concatenate_datasets([eval_dataset, eval_kl_dataset], axis=1)
 
-            desirable = train_dataset.filter(
-                lambda x: x["label"], num_proc=args.dataset_num_proc, desc="Filtering desirable examples"
-            )
-            undesirable = train_dataset.filter(
-                lambda x: not x["label"], num_proc=args.dataset_num_proc, desc="Filtering undesirable examples"
-            )
+            num_desirable = max(sum(train_dataset["label"]), 1)
+            num_undesirable = max(len(train_dataset["label"]) - num_desirable, 1)  # "label" is binary
 
-            if len(desirable) == 0:
-                raise ValueError("The set of desirable completions cannot be empty.")
-            elif len(undesirable) == 0:
-                raise ValueError("The set of undesirable completions cannot be empty.")
-
-            if len(desirable) != len(undesirable):
+            if num_desirable != num_undesirable:
                 # The lower and upper bounds come from Eq. (8) of https://arxiv.org/abs/2402.01306
-                des_weight_lower_bound = round((len(undesirable) * self.undesirable_weight / len(desirable)) * 1, 2)
-                des_weight_upper_bound = round((len(undesirable) * self.undesirable_weight / len(desirable)) * 1.33, 2)
-                und_weight_lower_bound = round((len(desirable) * self.desirable_weight / len(undesirable)) / 1.33, 2)
-                und_weight_upper_bound = round((len(desirable) * self.desirable_weight / len(undesirable)) / 1, 2)
+                des_weight_lower_bound = round((num_undesirable * self.undesirable_weight / num_desirable) * 1, 2)
+                des_weight_upper_bound = round((num_undesirable * self.undesirable_weight / num_desirable) * 1.33, 2)
+                und_weight_lower_bound = round((num_desirable * self.desirable_weight / num_undesirable) / 1.33, 2)
+                und_weight_upper_bound = round((num_desirable * self.desirable_weight / num_undesirable) / 1, 2)
 
                 des_weight_in_range = des_weight_lower_bound <= self.desirable_weight <= des_weight_upper_bound
                 und_weight_in_range = und_weight_lower_bound <= self.undesirable_weight <= und_weight_upper_bound
@@ -673,6 +664,13 @@ class KTOTrainer(Trainer):
                     )
 
             if self.loss_type == "bco":
+                desirable = train_dataset.filter(
+                    lambda x: x["label"], num_proc=args.dataset_num_proc, desc="Filtering desirable examples"
+                )
+                undesirable = train_dataset.filter(
+                    lambda x: not x["label"], num_proc=args.dataset_num_proc, desc="Filtering undesirable examples"
+                )
+
                 desirable = desirable.shuffle(seed=args.data_seed)
                 undesirable = undesirable.shuffle(seed=args.data_seed)
 
@@ -727,18 +725,20 @@ class KTOTrainer(Trainer):
         if self.loss_type == "bco":
             self.running = RunningMoments(self.accelerator)
 
-        if self.embedding_func is None:
-            return
+            if self.embedding_func is None:
+                return
 
-        chosen_embeddings = self._get_sample_prompt_embeddings(desirable, sample_size=self.args.prompt_sample_size)
-        rejected_embeddings = self._get_sample_prompt_embeddings(undesirable, sample_size=self.args.prompt_sample_size)
+            chosen_embeddings = self._get_sample_prompt_embeddings(desirable, sample_size=self.args.prompt_sample_size)
+            rejected_embeddings = self._get_sample_prompt_embeddings(
+                undesirable, sample_size=self.args.prompt_sample_size
+            )
 
-        embeddings = torch.cat((chosen_embeddings, rejected_embeddings), dim=0)
-        labels = torch.cat(
-            (torch.ones_like(chosen_embeddings[:, 0]), torch.zeros_like(rejected_embeddings[:, 0])), dim=0
-        )
+            embeddings = torch.cat((chosen_embeddings, rejected_embeddings), dim=0)
+            labels = torch.cat(
+                (torch.ones_like(chosen_embeddings[:, 0]), torch.zeros_like(rejected_embeddings[:, 0])), dim=0
+            )
 
-        self.clf = LogisticRegression(class_weight="balanced").fit(embeddings.cpu().numpy(), labels.cpu().numpy())
+            self.clf = LogisticRegression(class_weight="balanced").fit(embeddings.cpu().numpy(), labels.cpu().numpy())
 
     @property
     def match_underlying_distribution(self):

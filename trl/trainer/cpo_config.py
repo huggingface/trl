@@ -66,7 +66,7 @@ class CPOConfig(TrainingArguments):
 
     beta: float = 0.1
     label_smoothing: float = 0
-    loss_type: Literal["sigmoid", "hinge", "ipo", "kto_pair", "simpo"] = "sigmoid"
+    loss_type: Literal["sigmoid", "hinge", "ipo", "simpo"] = "sigmoid"
     disable_dropout: bool = True
     simpo_gamma: float = 0.5
 
@@ -79,3 +79,7 @@ class CPOConfig(TrainingArguments):
     model_init_kwargs: Optional[Dict] = None
 
     dataset_num_proc: Optional[int] = None
+
+    def __post_init__(self):
+        if self.loss_type == "kto_pair":
+            raise ValueError("Support for kto_pair has been removed in CPOTrainer. Please use KTOTrainer.")
