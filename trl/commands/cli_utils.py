@@ -184,7 +184,7 @@ class ChatArguments:
 
 
 class TrlParser(HfArgumentParser):
-    def __init__(self, parsers):
+    def __init__(self, parsers, ignore_extra_args=False):
         """
         The TRL parser parses a list of parsers (TrainingArguments, trl.ModelConfig, etc.), creates a config
         parsers for users that pass a valid `config` field and merge the values that are set in the config
@@ -193,9 +193,13 @@ class TrlParser(HfArgumentParser):
         Args:
             parsers (`List[argparse.ArgumentParser`]):
                 List of parsers.
+            ignore_extra_args (`bool`):
+                Whether to ignore extra arguments passed by the config
+                and not raise errors.
         """
         super().__init__(parsers)
         self.yaml_parser = YamlConfigParser()
+        self.ignore_extra_args = ignore_extra_args
 
     def post_process_dataclasses(self, dataclasses):
         # Apply additional post-processing in case some arguments needs a special
@@ -245,7 +249,7 @@ class TrlParser(HfArgumentParser):
             return outputs[:-2], remaining_strings
         else:
             # outputs[-1] is either remaining yaml config as Namespace or parsed config as Dataclass
-            if isinstance(outputs[-1], Namespace):
+            if isinstance(outputs[-1], Namespace) and not self.ignore_extra_args:
                 remaining_args = vars(outputs[-1])
                 raise ValueError(f"Some specified config arguments are not used by the TrlParser: {remaining_args}")
 
