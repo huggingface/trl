@@ -161,11 +161,11 @@ class SFTTrainer(Trainer):
             model_init_kwargs = args.model_init_kwargs
             print("Dtype :", model_init_kwargs["torch_dtype"], type(model_init_kwargs["torch_dtype"]))
             print("The fix : ", type(f'{model_init_kwargs["torch_dtype"]}'))
-            
+
             model_init_kwargs["torch_dtype"] = (
                 model_init_kwargs["torch_dtype"]
                 if model_init_kwargs["torch_dtype"] in ["auto", None]
-                else getattr(torch, f'{model_init_kwargs["torch_dtype"]}')
+                else getattr(torch, f'{model_init_kwargs["torch_dtype"]}'.split('.')[-1])
             )
 
         if infinite is not None:
