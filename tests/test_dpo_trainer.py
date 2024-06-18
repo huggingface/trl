@@ -18,8 +18,8 @@ import torch
 from datasets import Dataset
 from parameterized import parameterized
 from pytest import mark
-from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
-
+from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer, AutoModelForVision2Seq, AutoProcessor
+from PIL import Image
 from trl import DPOConfig, DPOTrainer
 
 from .testing_utils import require_bitsandbytes, require_no_wandb, require_peft
@@ -40,9 +40,66 @@ class DPOTrainerTester(unittest.TestCase):
         cls.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         cls.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
+        # get idefics2 model
+        model_id = "trl-internal-testing/tiny-random-idefics2"
+        cls.idefics2_model = AutoModelForVision2Seq.from_pretrained(model_id)
+        cls.idefics2_ref_model = AutoModelForVision2Seq.from_pretrained(model_id)
+        cls.idefics2_processor = AutoProcessor.from_pretrained(model_id)
+
     def _init_dummy_dataset(self):
         # fmt: off
         dummy_dataset_dict = {
+            "prompt": [
+                "hello",
+                "how are you",
+                "What is your name?",
+                "What is your name?",
+                "Which is the best programming language?",
+                "Which is the best programming language?",
+                "Which is the best programming language?",
+                "[INST] How is the stock price? [/INST]",
+                "[INST] How is the stock price? [/INST] ",
+            ],
+            "chosen": [
+                "hi nice to meet you",
+                "I am fine",
+                "My name is Mary",
+                "My name is Mary",
+                "Python",
+                "Python",
+                "Python",
+                "$46 as of 10am EST",
+                "46 as of 10am EST",
+            ],
+            "rejected": [
+                "leave me alone",
+                "I am not fine",
+                "Whats it to you?",
+                "I dont have a name",
+                "Javascript",
+                "C++",
+                "Java",
+                " $46 as of 10am EST",
+                " 46 as of 10am EST",
+            ],
+        }
+        # fmt: on
+        return Dataset.from_dict(dummy_dataset_dict)
+
+    def _init_dummy_image_dataset(self):
+        # fmt: off
+        dummy_dataset_dict = {
+            "images": [
+                [Image.new("RGB", (100, 100), color="black")],
+                [Image.new("RGB", (133, 100), color="red")],
+                [Image.new("RGB", (100, 133), color="green")],
+                [Image.new("RGB", (133, 133), color="blue")],
+                [Image.new("RGB", (200, 50), color="yellow")],
+                [Image.new("RGB", (50, 200), color="magenta")],
+                [Image.new("RGB", (200, 200), color="cyan")],
+                [Image.new("RGB", (50, 50), color="white")],
+                [Image.new("RGB", (100, 100), color="orange")],
+            ],
             "prompt": [
                 "hello",
                 "how are you",
@@ -146,6 +203,58 @@ class DPOTrainerTester(unittest.TestCase):
                 # check the params have changed - ignore 0 biases
                 if param.sum() != 0:
                     assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
+
+
+    @parameterized.expand(
+        [
+            ["sigmoid", True],
+        ]
+    )
+    def test_vdpo_trainer(self, loss_type, pre_compute):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=1,
+                learning_rate=9e-1,
+                evaluation_strategy="steps",
+                beta=0.1,
+                loss_type=loss_type,
+                precompute_ref_log_probs=pre_compute,
+            )
+
+            dummy_dataset = self._init_dummy_image_dataset()
+
+            model = self.idefics2_model
+            ref_model = self.idefics2_ref_model
+            processor = self.idefics2_processor
+
+            processor.pad_token_id = processor.tokenizer.pad_token_id
+
+            trainer = DPOTrainer(
+                model=model,
+                ref_model=ref_model,
+                args=training_args,
+                tokenizer=processor,
+                train_dataset=dummy_dataset,
+                eval_dataset=dummy_dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            assert trainer.state.log_history[-1]["train_loss"] is not None
+
+            # check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                # check the params have changed - ignore 0 biases
+                if param.sum() != 0:
+                    assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
+
 
     def test_dpo_trainer_without_providing_ref_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
