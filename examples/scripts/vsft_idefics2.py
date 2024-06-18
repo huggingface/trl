@@ -15,19 +15,19 @@
 """
 # regular:
 python examples/scripts/vsft_idefics2.py \
-    --dataset_name=HuggingFaceH4/cord-v2 \
     --model_name_or_path=HuggingFaceM4/idefics2-8b \
+    --dataset_name=HuggingFaceH4/cord-v2 \
     --report_to=wandb \
-    --learning_rate=1e-4 \
-    --per_device_train_batch_size=2 \
-    --gradient_accumulation_steps=8 \
+    --learning_rate=2.0e-5 \
+    --per_device_train_batch_size=8 \
+    --gradient_accumulation_steps=1 \
     --output_dir=data/vsft-idefics2 \
     --logging_steps=5 \
     --num_train_epochs=1 \
     --push_to_hub \
     --gradient_checkpointing \
     --remove_unused_columns=False \
-    --torch_dtype=float16
+    --torch_dtype=bfloat16
 
 
 # peft:
@@ -115,7 +115,11 @@ if __name__ == "__main__":
     ################
     # IDEFICS2_CHAT_TEMPLATE = """{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. {% for message in messages %}{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}{% if add_generation_prompt %}ASSISTANT: {% endif %}"""
 
-    torch_dtype = model_config.torch_dtype if model_config.torch_dtype in ["auto", None] else getattr(torch, model_config.torch_dtype)
+    torch_dtype = (
+        model_config.torch_dtype
+        if model_config.torch_dtype in ["auto", None]
+        else getattr(torch, model_config.torch_dtype)
+    )
     quantization_config = get_quantization_config(model_config)
     model_kwargs = dict(
         revision=model_config.model_revision,

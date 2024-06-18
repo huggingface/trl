@@ -17,14 +17,17 @@ accelerate launch examples/scripts/vdpo.py \
     --dataset_name HuggingFaceH4/rlaif-v_formatted \
     --model_name_or_path HuggingFaceM4/idefics2-8b \
     --per_device_train_batch_size 1 \
+    --gradient_accumulation_steps 16 \
     --learning_rate 1e-5 \
     --logging_steps 5 \
     --output_dir dpo_idefics_rlaif-v \
+    --push_to_hub --hub_model_id HuggingFaceH4/idefics2-8b-dpo-rlaif-v \
     --bf16 \
     --torch_dtype bfloat16 \
     --logging_first_step \
     --no_remove_unused_columns \
-    --sanity_check \
+    --dataset_num_proc 50 \
+    --dataload_num_workers 16 \
     --use_peft \
     --lora_target_modules=all-linear
 """
@@ -138,6 +141,11 @@ if __name__ == "__main__":
         row["prompt"] = processor.apply_chat_template(row["prompt"], tokenize=False)
         row["chosen"] = processor.apply_chat_template(row["chosen"], tokenize=False)
         row["rejected"] = processor.apply_chat_template(row["rejected"], tokenize=False)
+        for idx, img in enumerate(row["images"]):  # Resize image so that the largest side is 640
+            ratio = min(1.0, 640 / max(img.size))
+            new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
+            row["images"][idx] = img.resize(new_size)
+        row["images"] = row["images"]
         return row
 
     with PartialState().local_main_process_first():

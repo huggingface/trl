@@ -9,8 +9,16 @@ Seems to be training without bnb that fails!
 import torch
 from datasets import load_dataset
 from peft import LoraConfig
-from transformers import AutoProcessor, Idefics2ForConditionalGeneration, Trainer, TrainingArguments, BitsAndBytesConfig
+from transformers import (
+    AutoProcessor,
+    BitsAndBytesConfig,
+    Idefics2ForConditionalGeneration,
+    Trainer,
+    TrainingArguments,
+)
+
 from trl import get_kbit_device_map
+
 
 USE_QLORA = True  # QLora
 
@@ -18,7 +26,9 @@ if __name__ == "__main__":
     # Load the model and processor
     model_name = "HuggingFaceM4/idefics2-8b"
     if USE_QLORA:
-        quantization_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=torch.float16)
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=torch.float16
+        )
     else:
         quantization_config = None
     model = Idefics2ForConditionalGeneration.from_pretrained(
