@@ -19,7 +19,7 @@ def test():
 python examples/scripts/ppo/ppo.py \
     --learning_rate 3e-6 \
     --output_dir models/minimal/ppo \
-    --per_device_train_batch_size 5 \
+    --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 1 \
     --total_episodes 10 \
     --model_name_or_path EleutherAI/pythia-14m \
@@ -38,7 +38,7 @@ def test_num_train_epochs():
 python examples/scripts/ppo/ppo.py \
     --learning_rate 3e-6 \
     --output_dir models/minimal/ppo \
-    --per_device_train_batch_size 5 \
+    --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 1 \
     --num_train_epochs 0.003 \
     --model_name_or_path EleutherAI/pythia-14m \

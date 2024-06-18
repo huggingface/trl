@@ -21,7 +21,7 @@ def test():
 python examples/scripts/rloo/rloo.py \
     --learning_rate 3e-6 \
     --output_dir models/minimal/rloo \
-    --per_device_train_batch_size 5 \
+    --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 1 \
     --total_episodes 10 \
     --model_name_or_path EleutherAI/pythia-14m \
