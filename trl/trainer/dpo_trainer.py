@@ -321,6 +321,12 @@ class DPOTrainer(Trainer):
                 "No model provided, cannot determine if it is a vision model. Setting is_vision_model to False."
             )
             self.is_vision_model = False
+        
+        if self.is_vision_model:
+            self.processor = tokenizer
+            self.tokenizer = tokenizer.tokenizer # tokenizer is actually a processor at this point
+        else:
+            self.tokenizer = tokenizer
 
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
         if model_adapter_name is not None:
@@ -407,7 +413,7 @@ class DPOTrainer(Trainer):
             args.label_pad_token_id = label_pad_token_id
         if data_collator is None:
             data_collator = DPODataCollatorWithPadding(
-                pad_token_id=tokenizer.pad_token_id,
+                pad_token_id=self.tokenizer.pad_token_id,
                 label_pad_token_id=args.label_pad_token_id,
                 is_encoder_decoder=self.is_encoder_decoder,
             )
@@ -443,7 +449,7 @@ class DPOTrainer(Trainer):
                 "You passed `padding_value` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
             args.padding_value = padding_value
-        self.padding_value = args.padding_value if padding_value is not None else tokenizer.pad_token_id
+        self.padding_value = args.padding_value if padding_value is not None else self.tokenizer.pad_token_id
         self.max_prompt_length = args.max_prompt_length
         if truncation_mode != "keep_end":
             warnings.warn(
@@ -452,7 +458,6 @@ class DPOTrainer(Trainer):
             args.truncation_mode = truncation_mode
         self.truncation_mode = args.truncation_mode
         self.max_target_length = args.max_target_length
-        self.tokenizer = tokenizer
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
 
         # Since ref_logs are precomputed on the first call to get_train/eval_dataloader
@@ -683,9 +688,9 @@ class DPOTrainer(Trainer):
         if self.is_vision_model:
             if answer.count("<image>") > 0:
                 raise NotImplementedError("Answer contains <image> token, which is not supported yet.")
-            full_tokenized = self.tokenizer(prompt + answer, images=images, add_special_tokens=False)
+            full_tokenized = self.processor(prompt + answer, images=images, add_special_tokens=False)
             full_tokenized = {k: v[0] for k, v in full_tokenized.items()}  # Unbatch, not done when using idefics
-            prompt_input_ids = self.tokenizer(prompt, images=images, add_special_tokens=False)["input_ids"][0]
+            prompt_input_ids = self.processor(prompt, images=images, add_special_tokens=False)["input_ids"][0]
         else:
             full_tokenized = self.tokenizer(prompt + answer, add_special_tokens=False)
             prompt_input_ids = self.tokenizer(prompt, add_special_tokens=False)["input_ids"]
@@ -766,7 +771,7 @@ class DPOTrainer(Trainer):
             if not isinstance(prompt, str):
                 raise ValueError(f"prompt should be an str but got {type(prompt)}")
             if self.is_vision_model:
-                prompt_tokens = self.tokenizer(prompt, images=images, add_special_tokens=False)
+                prompt_tokens = self.processor(prompt, images=images, add_special_tokens=False)
                 prompt_tokens = {k: v[0] for k, v in prompt_tokens.items()}  # Unbatch, not done when using idefics
             else:
                 prompt_tokens = self.tokenizer(prompt, add_special_tokens=False)
