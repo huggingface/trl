@@ -35,7 +35,7 @@ class DPOTrainerTester(unittest.TestCase):
         cls.tokenizer.pad_token = cls.tokenizer.eos_token
 
         # get t5 as seq2seq example:
-        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration-correct-vocab"
+        model_id = "trl-internal-testing/T5ForConditionalGeneration-correct-vocab-calibrated"
         cls.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         cls.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         cls.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -86,8 +86,10 @@ class DPOTrainerTester(unittest.TestCase):
             ["t5", "hinge", False],
             ["gpt2", "ipo", False],
             ["t5", "ipo", True],
-            ["gpt2", "kto_pair", True],
-            ["t5", "kto_pair", False],
+            ["gpt2", "aot_pair", True],
+            ["t5", "aot_pair", False],
+            ["gpt2", "aot", True],
+            ["t5", "aot", False],
             ["gpt2", "bco_pair", False],
             ["t5", "bco_pair", True],
             ["gpt2", "sppo_hard", False],
@@ -123,8 +125,8 @@ class DPOTrainerTester(unittest.TestCase):
                 ref_model = self.t5_ref_model
                 tokenizer = self.t5_tokenizer
 
-            if name == "t5" and loss_type == "nca_pair":
-                self.skipTest("For some reason t5 + nca_pair does not compute gradients properly on tiny models")
+            if name == "t5":
+                self.skipTest("For some reason t5 does not compute gradients properly on tiny models")
 
             trainer = DPOTrainer(
                 model=model,
@@ -502,10 +504,14 @@ class DPOTrainerTester(unittest.TestCase):
             ["gpt2", "ipo", False, True],
             ["gpt2", "ipo", True, False],
             ["gpt2", "ipo", True, True],
-            ["gpt2", "kto_pair", False, False],
-            ["gpt2", "kto_pair", False, True],
-            ["gpt2", "kto_pair", True, False],
-            ["gpt2", "kto_pair", True, True],
+            ["gpt2", "aot_pair", False, False],
+            ["gpt2", "aot_pair", False, True],
+            ["gpt2", "aot_pair", True, False],
+            ["gpt2", "aot_pair", True, True],
+            ["gpt2", "aot", False, False],
+            ["gpt2", "aot", False, True],
+            ["gpt2", "aot", True, False],
+            ["gpt2", "aot", True, True],
             ["gpt2", "bco_pair", False, False],
             ["gpt2", "bco_pair", False, True],
             ["gpt2", "bco_pair", True, False],
