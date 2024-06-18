@@ -165,6 +165,8 @@ class SFTTrainer(Trainer):
                 else getattr(torch, model_init_kwargs["torch_dtype"])
             )
 
+        print("model_init_kwargs", model_init_kwargs)
+
         if infinite is not None:
             warnings.warn(
                 "The `infinite` argument is deprecated and will be removed in a future version of TRL. Use `TrainingArguments.max_steps` or `TrainingArguments.num_train_epochs` instead to control training length."
