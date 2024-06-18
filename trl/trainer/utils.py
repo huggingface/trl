@@ -412,7 +412,7 @@ class DPODataCollatorWithPadding:
 
                     # Set the dtype
                     if k.endswith("_pixel_values"):
-                        dtype = torch.bfloat16  # TODO: tmp fix
+                        dtype = torch.float32  # will be downcasted if necessary by the Trainer
                     else:
                         dtype = torch.int64
 
