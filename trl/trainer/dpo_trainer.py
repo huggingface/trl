@@ -755,8 +755,7 @@ class DPOTrainer(Trainer):
         prompt = feature["prompt"]
         chosen = feature["chosen"]
         rejected = feature["rejected"]
-        if self.is_vision_model:
-            images = feature["images"]
+        images = feature.get("images")
 
         if not self.is_encoder_decoder:
             # Check issues below for more details
