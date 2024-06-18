@@ -35,7 +35,7 @@ class DPOTrainerTester(unittest.TestCase):
         cls.tokenizer.pad_token = cls.tokenizer.eos_token
 
         # get t5 as seq2seq example:
-        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration-correct-vocab"
+        model_id = "trl-internal-testing/T5ForConditionalGeneration-correct-vocab-calibrated"
         cls.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         cls.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         cls.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
