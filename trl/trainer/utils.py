@@ -1001,7 +1001,9 @@ def forward(
     )
 
 
-def prepare_deepspeed(model: torch.nn.Module, per_device_train_batch_size: int):
+def prepare_deepspeed(
+    model: torch.nn.Module, per_device_train_batch_size: int, fp16: bool = False, bf16: bool = False
+):
     """
     Prepares the model for training with DeepSpeed (both for stage 2 and 3), configuring the appropriate settings based on the model and
     batch size.
@@ -1024,10 +1026,13 @@ def prepare_deepspeed(model: torch.nn.Module, per_device_train_batch_size: int):
         config_kwargs["train_micro_batch_size_per_gpu"] = per_device_train_batch_size
         config_kwargs = {
             "train_micro_batch_size_per_gpu": config_kwargs["train_micro_batch_size_per_gpu"],
-            "bf16": {"enabled": True},
             "prescale_gradients": False,
             "wall_clock_breakdown": False,
         }
+        if bf16:
+            config_kwargs["bf16"] = {"enabled": True}
+        elif fp16:
+            config_kwargs["fp16"] = {"enabled": True}
     else:
         if hasattr(model, "config"):
             hidden_size = (
