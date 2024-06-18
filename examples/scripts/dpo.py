@@ -148,8 +148,9 @@ if __name__ == "__main__":
             ds[key] = ds[key].select(range(50))
 
     def process(row):
-        row["chosen"] = tokenizer.apply_chat_template(row["chosen"], tokenize=False)
-        row["rejected"] = tokenizer.apply_chat_template(row["rejected"], tokenize=False)
+        row["prompt"] = tokenizer.apply_chat_template(row["chosen"][:-1], tokenize=False)
+        row["chosen"] = tokenizer.apply_chat_template([row["chosen"][-1]], tokenize=False)
+        row["rejected"] = tokenizer.apply_chat_template([row["rejected"][-1]], tokenize=False)
         return row
 
     ds = ds.map(
