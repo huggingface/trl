@@ -12,9 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from dataclasses import dataclass
+from enum import Enum
 from typing import Dict, Literal, Optional
 
 from transformers import TrainingArguments
+
+
+class FDivergenceType(Enum):
+    REVERSE_KL = "reverse_kl"
+    JS_DIVERGENCE = "js_divergence"
+    ALPHA_DIVERGENCE = "alpha_divergence"
+
+
+class FDivergenceConstants:
+    ALPHA_DIVERGENCE_COEF_KEY = "alpha_divergence_coef"
+    ALPHA_DIVERGENCE_COEF_DEFAULT = 1.0
 
 
 @dataclass
@@ -66,6 +78,10 @@ class DPOConfig(TrainingArguments):
             If True, we ignore the _provided_ reference model and implicitly use a reference model that assigns equal probability to all responses.
         force_use_ref_model (`bool`, defaults to `False`):
             In case one passes a PEFT model for the active model and you want to use a different model for the ref_model, set this flag to `True`.
+        f_divergence_type (`FDivergenceType`, *optional*, defaults to `FDivergenceType.REVERSE_KL`):
+            The type of f-divergence regularization function to compute divergence between policy and reference model. This argument is optional, defaults to `FDivergenceType.REVERSE_KL`.
+        f_alpha_divergence_coef (`float`, *optional*, defaults to `1.0`):
+            The alpha coef in alpha-divergence(u^-alpha) regularization function for DPO loss.
         sync_ref_model ('bool', defaults to `False`):
             The flag for syncing reference model during training from the [TR-DPO](https://arxiv.org/pdf/2404.09656) paper.
         ref_model_mixup_alpha ('float', defaults to 1.0):
@@ -98,6 +114,8 @@ class DPOConfig(TrainingArguments):
     ref_adapter_name: Optional[str] = None
     reference_free: bool = False
     force_use_ref_model: bool = False
+    f_divergence_type: Optional[FDivergenceType] = FDivergenceType.REVERSE_KL
+    f_alpha_divergence_coef: Optional[float] = 1.0
     sync_ref_model: bool = False
     ref_model_mixup_alpha: float = 0.9
     ref_model_sync_steps: int = 64
