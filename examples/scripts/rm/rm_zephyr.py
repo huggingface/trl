@@ -82,6 +82,7 @@ if __name__ == "__main__":
     train_dataset = dataset_processor.filter(train_dataset)
     eval_dataset = dataset_processor.filter(eval_dataset)
     visualize_token(train_dataset[0][INPUT_IDS_CHOSEN_KEY], tokenizer)
+    dataset_processor.get_token_length_visualization(train_dataset, save_path="tmp.png")
 
     ################
     # Training
@@ -95,4 +96,6 @@ if __name__ == "__main__":
     )
     trainer.train()
     trainer.save_model(args.output_dir)
-    trainer.push_to_hub()
+    if args.push_to_hub:
+        trainer.push_to_hub()
+    trainer.evaluate()

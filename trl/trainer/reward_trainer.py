@@ -36,6 +36,15 @@ if is_peft_available():
     from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
 
 
+def find_shared_text(chosen_text: str, rejected_text: str):
+    """return shared (prompt) text between chosen and rejected text"""
+    for i in range(min(len(chosen_text), len(rejected_text))):
+        if chosen_text[i] != rejected_text[i]:
+            break
+
+    return chosen_text[:i]
+
+
 class RewardTrainer(Trainer):
     r"""
     The RewardTrainer can be used to train your custom Reward Model. It is a subclass of the
@@ -175,6 +184,11 @@ class RewardTrainer(Trainer):
             self.use_reward_data_collator = True
         else:
             self.use_reward_data_collator = False
+
+        # for caching decoded texts, which is used for visualizations
+        self.chosen_response_texts = []
+        self.rejected_response_texts = []
+        self.shared_texts = []
         super().__init__(
             model=model,
             args=args,
@@ -275,12 +289,33 @@ class RewardTrainer(Trainer):
         """
         eval_dataloader = self.get_eval_dataloader()
         table = defaultdict(list)
-        for _, inputs in enumerate(eval_dataloader):
+        for idx, inputs in enumerate(eval_dataloader):
             _, logits, _ = self.prediction_step(self.model, inputs, prediction_loss_only=False)
-            chosen_text = self.tokenizer.batch_decode(inputs["input_ids_chosen"])
-            rejected_text = self.tokenizer.batch_decode(inputs["input_ids_rejected"])
-            table["chosen_text"].extend(gather_object(chosen_text))
-            table["rejected_text"].extend(gather_object(rejected_text))
+            # create decoded text and store cache
+            if len(self.chosen_response_texts) < idx + 1:
+                chosen_texts = self.tokenizer.batch_decode(inputs["input_ids_chosen"])
+                rejected_texts = self.tokenizer.batch_decode(inputs["input_ids_rejected"])
+                shared_texts = [
+                    find_shared_text(chosen_text, rejected_text)
+                    for chosen_text, rejected_text in zip(chosen_texts, rejected_texts)
+                ]
+                chosen_response_texts = [
+                    chosen_text[len(shared_text) :] for chosen_text, shared_text in zip(chosen_texts, shared_texts)
+                ]
+                rejected_response_texts = [
+                    rejected_text[len(shared_text) :]
+                    for rejected_text, shared_text in zip(rejected_texts, shared_texts)
+                ]
+                self.chosen_response_texts.append(chosen_response_texts)
+                self.rejected_response_texts.append(rejected_response_texts)
+                self.shared_texts.append(shared_texts)
+            else:
+                chosen_response_texts = self.chosen_response_texts[idx]
+                rejected_response_texts = self.rejected_response_texts[idx]
+                shared_texts = self.shared_texts[idx]
+            table["shared_text"].extend(gather_object(shared_texts))
+            table["chosen_text"].extend(gather_object(chosen_response_texts))
+            table["rejected_text"].extend(gather_object(rejected_response_texts))
             table["logits"].extend(
                 gather_object([[round(inner_item, 6) for inner_item in item] for item in logits.tolist()])
             )

@@ -15,24 +15,24 @@
 from datasets import load_dataset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, HfArgumentParser
 
-from trl import RewardConfig, RewardTrainer
+from trl import ModelConfig, RewardConfig, RewardTrainer
 from trl.dataset_processor import INPUT_IDS_CHOSEN_KEY, DatasetConfig, PreferenceDatasetProcessor, visualize_token
 
 
 """
-python examples/scripts/rm/rm.py \
+python -i examples/scripts/rm/rm.py \
     --learning_rate 3e-6 \
     --per_device_train_batch_size 1 \
     --per_device_eval_batch_size 1 \
     --gradient_accumulation_steps 32 \
     --logging_steps 1 \
-    --evaluation_strategy steps \
+    --eval_strategy steps \
     --max_token_length 1024 \
     --max_prompt_token_lenth 128 \
     --remove_unused_columns False \
     --num_train_epochs 1 \
-    --eval_steps=5 \
-    --output_dir models/minimal/rm \
+    --eval_steps=100 \
+    --output_dir models/minimal/rm
 """
 CONCAT_CHAT_TEMPLATE = (
     """{% for message in messages %}{{' ' if not loop.first else ''}}{{message['content']}}{% endfor %}{{eos_token}}"""
@@ -40,8 +40,8 @@ CONCAT_CHAT_TEMPLATE = (
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser((RewardConfig, DatasetConfig))
-    args, dataset_config = parser.parse_args_into_dataclasses()
+    parser = HfArgumentParser((RewardConfig, DatasetConfig, ModelConfig))
+    args, dataset_config, model_config = parser.parse_args_into_dataclasses()
     # backward compatibility `max_length`
     args.max_length = dataset_config.max_token_length
     base_model = "EleutherAI/pythia-160m"
@@ -49,10 +49,10 @@ if __name__ == "__main__":
     ################
     # Model & Tokenizer
     ################
-    tokenizer = AutoTokenizer.from_pretrained(base_model)
+    tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path)
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
     tokenizer.chat_template = CONCAT_CHAT_TEMPLATE
-    model = AutoModelForSequenceClassification.from_pretrained(base_model, num_labels=1)
+    model = AutoModelForSequenceClassification.from_pretrained(model_config.model_name_or_path, num_labels=1)
     model.config.pad_token_id = tokenizer.pad_token_id
 
     ################
@@ -66,6 +66,7 @@ if __name__ == "__main__":
     train_dataset = dataset_processor.filter(train_dataset)
     eval_dataset = dataset_processor.filter(eval_dataset)
     visualize_token(train_dataset[0][INPUT_IDS_CHOSEN_KEY], tokenizer)
+    dataset_processor.get_token_length_visualization(train_dataset, save_path="tmp.png")
 
     ################
     # Training
@@ -81,3 +82,4 @@ if __name__ == "__main__":
     trainer.save_model(args.output_dir)
     if args.push_to_hub:
         trainer.push_to_hub()
+    trainer.evaluate()

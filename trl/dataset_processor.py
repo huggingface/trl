@@ -164,9 +164,12 @@ class PreferenceDatasetProcessor(DatasetProcessor):
             features=[INPUT_IDS_PROMPT_KEY, INPUT_IDS_CHOSEN_KEY, INPUT_IDS_REJECTED_KEY], dataset=dataset
         )
 
-    def get_token_length_visualization(self, dataset: Dataset):
+    def get_token_length_visualization(self, dataset: Dataset, save_path: str = "tmp.png", bins: int = 30):
         return super().get_token_length_visualization(
-            features=[INPUT_IDS_PROMPT_KEY, INPUT_IDS_CHOSEN_KEY, INPUT_IDS_REJECTED_KEY], dataset=dataset
+            features=[INPUT_IDS_PROMPT_KEY, INPUT_IDS_CHOSEN_KEY, INPUT_IDS_REJECTED_KEY],
+            dataset=dataset,
+            save_path=save_path,
+            bins=bins,
         )
 
 
@@ -198,8 +201,13 @@ class SFTDatasetProcessor(DatasetProcessor):
     def get_token_length_stats(self, dataset: Dataset):
         return super().get_token_length_stats(features=[INPUT_IDS_PROMPT_KEY, INPUT_IDS_KEY], dataset=dataset)
 
-    def get_token_length_visualization(self, dataset: Dataset):
-        return super().get_token_length_visualization(features=[INPUT_IDS_PROMPT_KEY, INPUT_IDS_KEY], dataset=dataset)
+    def get_token_length_visualization(self, dataset: Dataset, save_path: str = "tmp.png", bins: int = 30):
+        return super().get_token_length_visualization(
+            features=[INPUT_IDS_PROMPT_KEY, INPUT_IDS_KEY],
+            dataset=dataset,
+            save_path=save_path,
+            bins=bins,
+        )
 
 
 def visualize_token(tokens: list[int], tokenizer: PreTrainedTokenizer):
