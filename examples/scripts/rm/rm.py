@@ -20,7 +20,7 @@ from trl.dataset_processor import INPUT_IDS_CHOSEN_KEY, DatasetConfig, Preferenc
 
 
 """
-python -i examples/scripts/minimal/rm1.py \
+python examples/scripts/rm/rm.py \
     --learning_rate 3e-6 \
     --per_device_train_batch_size 1 \
     --per_device_eval_batch_size 1 \
@@ -32,10 +32,8 @@ python -i examples/scripts/minimal/rm1.py \
     --remove_unused_columns False \
     --num_train_epochs 1 \
     --eval_steps=5 \
-    --output_dir models/minimal/rm1 \
+    --output_dir models/minimal/rm \
 """
-CHATML_CHAT_TEMPLATE = """{% for message in messages %}{{'\n' if not loop.first else ''}}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>'}}{% endfor %}"""
-SIMPLE_CHAT_TEMPLATE = """{% for message in messages %}{{'\n' if not loop.first else ''}}{{message['role'] + ':' + message['content']}}{% endfor %}{{eos_token}}"""
 CONCAT_CHAT_TEMPLATE = (
     """{% for message in messages %}{{' ' if not loop.first else ''}}{{message['content']}}{% endfor %}{{eos_token}}"""
 )
@@ -53,19 +51,20 @@ if __name__ == "__main__":
     ################
     tokenizer = AutoTokenizer.from_pretrained(base_model)
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
-    if tokenizer.chat_template is None:
-        tokenizer.chat_template = CONCAT_CHAT_TEMPLATE
+    tokenizer.chat_template = CONCAT_CHAT_TEMPLATE
     model = AutoModelForSequenceClassification.from_pretrained(base_model, num_labels=1)
     model.config.pad_token_id = tokenizer.pad_token_id
 
     ################
     # Dataset
     ################
-    raw_datasets = load_dataset("trl-internal-testing/descriptiveness-sentiment-trl-style", split="descriptiveness")
-    raw_datasets = raw_datasets.train_test_split(test_size=0.05)
+    raw_datasets = load_dataset("trl-internal-testing/sentiment-trl-style")
     dataset_processor = PreferenceDatasetProcessor(tokenizer=tokenizer, config=dataset_config)
+    dataset_processor.sanity_check_(raw_datasets)
     train_dataset = dataset_processor.tokenize(raw_datasets["train"])
     eval_dataset = dataset_processor.tokenize(raw_datasets["test"])
+    train_dataset = dataset_processor.filter(train_dataset)
+    eval_dataset = dataset_processor.filter(eval_dataset)
     visualize_token(train_dataset[0][INPUT_IDS_CHOSEN_KEY], tokenizer)
 
     ################
@@ -78,7 +77,7 @@ if __name__ == "__main__":
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
     )
-    trainer.evaluate()
     trainer.train()
     trainer.save_model(args.output_dir)
-    trainer.push_to_hub()
+    if args.push_to_hub:
+        trainer.push_to_hub()
