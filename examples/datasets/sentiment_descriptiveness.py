@@ -1,9 +1,7 @@
-import multiprocessing
 import sys
 from dataclasses import dataclass, field
 from typing import Optional
 
-import numpy as np
 from datasets import Dataset, DatasetDict
 from huggingface_hub import HfApi, hf_hub_download
 from huggingface_hub.repocard import RepoCard
@@ -12,7 +10,7 @@ from transformers import AutoTokenizer, HfArgumentParser
 
 """
 # debug
-python -i examples/datasets/sentiment_descriptiveness.py --debug --push_to_hub
+python -i examples/datasets/sentiment_descriptiveness.py  --push_to_hub
 # actual push
 python examples/datasets/sentiment_descriptiveness.py \
     --hf_repo_id sentiment-trl-style \
@@ -98,6 +96,19 @@ if __name__ == "__main__":
     # columns are `['sample2', 'sample3', 'sample0', 'query', 'sample1', 'best']`
     NUM_SAMPLES = 4
 
+    # edge cases handling: remove the cases where all samples are the same
+    def filter(row):
+        best_idx = row["best"]
+        chosen_sample = row[f"sample{best_idx}"]
+        if all(chosen_sample == row[f"sample{j}"] for j in range(NUM_SAMPLES)):
+            return False
+        else:
+            return True
+
+    print("=== Before filtering ===", ds)
+    ds = ds.filter(filter, load_from_cache_file=False)
+    print("=== After filtering ===", ds)
+
     # here we simply take the preferred sample as the chosen one and the first non-preferred sample as the rejected one
     def process(row):
         for j in range(NUM_SAMPLES):
@@ -108,26 +119,33 @@ if __name__ == "__main__":
         row["rejected"] = []
         for i in range(len(row["best"])):
             best_idx = row["best"][i]
+            chosen_sample = row[f"sample{best_idx}"][i].strip()
             row["chosen"].append(
                 [
                     {"role": "user", "content": row["prompt"][i].strip()},
-                    {"role": "assistant", "content": row[f"sample{best_idx}"][i].strip()},
+                    {"role": "assistant", "content": chosen_sample},
                 ]
             )
-            rejected_ids = [k for k in [0, 1, 2, 3] if k != best_idx]
-            rejected_idx = np.argmin(rejected_ids)  # select the first rejected sample for reproducibility
+            # find the first rejected sample which is different from the chosen one
+            rejected_idx = -1
+            for k in range(4):
+                if k != best_idx and row[f"sample{k}"][i].strip() != chosen_sample:
+                    rejected_idx = k
+                    break
+            rejected_sample = row[f"sample{rejected_idx}"][i].strip()
+            assert rejected_idx != -1, "No rejected sample found! This should not happen!"
             row["rejected"].append(
                 [
                     {"role": "user", "content": row["prompt"][i].strip()},
-                    {"role": "assistant", "content": row[f"sample{rejected_idx}"][i].strip()},
+                    {"role": "assistant", "content": rejected_sample},
                 ]
             )
+            assert chosen_sample != rejected_sample
         return row
 
     ds = ds.map(
         process,
         batched=True,
-        num_proc=1 if args.debug else multiprocessing.cpu_count(),
         load_from_cache_file=False,
     )
     for key in ds:  # reorder columns
