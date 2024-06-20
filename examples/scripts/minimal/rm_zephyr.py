@@ -27,12 +27,30 @@ python -i examples/scripts/minimal/rm_zephyr.py \
     --per_device_eval_batch_size 1 \
     --gradient_accumulation_steps 32 \
     --logging_steps 1 \
-    --evaluation_strategy steps \
+    --eval_strategy steps \
     --max_token_length 1024 \
     --max_prompt_token_lenth 128 \
     --remove_unused_columns False \
     --num_train_epochs 1 \
     --eval_steps=100 \
+    --sanity_check \
+    --output_dir models/minimal/rm_zephyr \
+
+accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
+    examples/scripts/minimal/rm_zephyr.py \
+    --model_name_or_path alignment-handbook/zephyr-7b-sft-full \
+    --learning_rate 3e-6 \
+    --per_device_train_batch_size 1 \
+    --per_device_eval_batch_size 1 \
+    --gradient_accumulation_steps 32 \
+    --logging_steps 1 \
+    --eval_strategy steps \
+    --max_token_length 1024 \
+    --max_prompt_token_lenth 1024 \
+    --remove_unused_columns False \
+    --num_train_epochs 1 \
+    --eval_steps=100 \
+    --bf16 \
     --output_dir models/minimal/rm_zephyr \
 """
 ZEPHYR_CHAT_TEMPLATE = """{% for message in messages %}\n{% if message['role'] == 'user' %}\n{{ '<|user|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'system' %}\n{{ '<|system|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'assistant' %}\n{{ '<|assistant|>\n'  + message['content'] + eos_token }}\n{% endif %}\n{% if loop.last and add_generation_prompt %}\n{{ '<|assistant|>' }}\n{% endif %}\n{% endfor %}"""
@@ -58,11 +76,12 @@ if __name__ == "__main__":
     ################
     raw_datasets = load_dataset("HuggingFaceH4/ultrafeedback_binarized")
     dataset_processor = PreferenceDatasetProcessor(tokenizer=tokenizer, config=dataset_config)
+    dataset_processor.sanity_check_(raw_datasets)
     train_dataset = dataset_processor.tokenize(raw_datasets["train_prefs"])
     eval_dataset = dataset_processor.tokenize(raw_datasets["test_prefs"])
+    train_dataset = dataset_processor.filter(train_dataset)
+    eval_dataset = dataset_processor.filter(eval_dataset)
     visualize_token(train_dataset[0][INPUT_IDS_CHOSEN_KEY], tokenizer)
-    train_dataset = train_dataset.filter(train_dataset)
-    eval_dataset = eval_dataset.filter(eval_dataset)
 
     ################
     # Training
@@ -74,7 +93,6 @@ if __name__ == "__main__":
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
     )
-    trainer.evaluate()
     trainer.train()
     trainer.save_model(args.output_dir)
     trainer.push_to_hub()

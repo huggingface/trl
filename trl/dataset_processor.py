@@ -23,11 +23,12 @@
 # * `max_prompt_length` in DPO
 
 import logging
+import multiprocessing
 from dataclasses import dataclass
 from typing import Optional
 
 import matplotlib.pyplot as plt
-from datasets import Dataset
+from datasets import Dataset, DatasetDict
 from rich.console import Console
 from rich.text import Text
 from transformers import PreTrainedTokenizer
@@ -55,12 +56,22 @@ class DatasetConfig:
     max_prompt_token_lenth: Optional[int] = None
 
     # dataset.map config
+    sanity_check: bool = False
+    sanity_check_max_samples: int = 100
     batched: bool = False
-    load_from_cache_file: bool = True
-    num_proc: Optional[int] = 1
+    load_from_cache_file: Optional[bool] = None
+    num_proc: Optional[int] = None
 
     # visualization configs
     ncols: int = 2
+
+    def __post_init__(self):
+        if self.sanity_check:
+            self.num_proc = 1
+            self.load_from_cache_file = False
+        else:
+            self.num_proc = multiprocessing.cpu_count()
+            self.load_from_cache_file = True
 
 
 class DatasetProcessor:
@@ -80,6 +91,11 @@ class DatasetProcessor:
             logging.warn("No config provided, skipping filtering")
             return dataset
         raise NotImplementedError
+
+    def sanity_check_(self, dataset: DatasetDict):
+        if self.config.sanity_check:
+            for key in dataset:
+                dataset[key] = dataset[key].select(range(min(self.sanity_check_max_samples, len(dataset[key]))))
 
     def get_token_length_stats(self, features: list[str], dataset: Dataset):
         stats = {}
