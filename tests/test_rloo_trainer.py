@@ -44,16 +44,16 @@ def test():
     #     shell=True,
     #     check=True,
     # )
-    config, model_config = RLOOConfig(), ModelConfig()
-    config.learning_rate = 3e-6
-    config.output_dir = "models/minimal/rloo"
-    config.per_device_train_batch_size = 4
-    config.gradient_accumulation_steps = 1
-    config.total_episodes = 10
-    config.non_eos_penalty = True
-    config.stop_token = "eos"
-
-    model_config.model_name_or_path = "EleutherAI/pythia-14m"
+    config = RLOOConfig(
+        learning_rate=3e-6,
+        output_dir="models/minimal/rloo",
+        per_device_train_batch_size=4,
+        gradient_accumulation_steps=1,
+        total_episodes=10,
+        non_eos_penalty=True,
+        stop_token="eos",
+    )
+    model_config = ModelConfig(model_name_or_path="EleutherAI/pythia-14m")
 
     # remove output_dir if exists
     shutil.rmtree(config.output_dir, ignore_errors=True)
