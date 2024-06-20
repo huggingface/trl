@@ -104,5 +104,6 @@ if __name__ == "__main__":
     )
     trainer.train()
     trainer.save_model(config.output_dir)
-    trainer.push_to_hub()
+    if config.push_to_hub:
+        trainer.push_to_hub()
     trainer.generate_completions()
