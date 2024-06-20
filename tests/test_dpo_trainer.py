@@ -20,7 +20,7 @@ from parameterized import parameterized
 from pytest import mark
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
-from trl import DPOConfig, DPOTrainer
+from trl import DPOConfig, DPOTrainer, FDivergenceType
 
 from .testing_utils import require_bitsandbytes, require_no_wandb, require_peft
 
@@ -725,3 +725,87 @@ class DPOTrainerTester(unittest.TestCase):
 
             # train the model
             trainer.train()
+
+    def test_dpo_loss_alpha_div_f(self):
+        model_id = "trl-internal-testing/tiny-random-LlamaForCausalLM"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        # lora model
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=4,
+                learning_rate=9e-1,
+                evaluation_strategy="steps",
+                f_divergence_type=FDivergenceType.ALPHA_DIVERGENCE.value,
+                f_alpha_divergence_coef=0.5,
+            )
+
+            dummy_dataset = self._init_dummy_dataset()
+
+            # dpo train lora model with a lora config
+            trainer = DPOTrainer(
+                model=model,
+                ref_model=None,
+                args=training_args,
+                tokenizer=tokenizer,
+                train_dataset=dummy_dataset,
+                eval_dataset=dummy_dataset,
+            )
+
+            # Fake chosen and rejected log probs
+            policy_chosen_logps = torch.FloatTensor([410.0, 0.1])
+            policy_rejected_logps = torch.FloatTensor([810.5, 0.2])
+            reference_chosen_logps = torch.FloatTensor([-610.0, -0.1])
+            reference_rejected_logps = torch.FloatTensor([110.6, 0.5])
+            losses, _, _ = trainer.dpo_loss(
+                policy_chosen_logps, policy_rejected_logps, reference_chosen_logps, reference_rejected_logps
+            )
+            assert torch.isfinite(losses).cpu().numpy().all()
+
+    def test_dpo_loss_js_div_f(self):
+        model_id = "trl-internal-testing/tiny-random-LlamaForCausalLM"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        # lora model
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=4,
+                learning_rate=9e-1,
+                evaluation_strategy="steps",
+                f_divergence_type=FDivergenceType.JS_DIVERGENCE.value,
+                f_alpha_divergence_coef=0.5,
+            )
+
+            dummy_dataset = self._init_dummy_dataset()
+
+            # dpo train lora model with a lora config
+            trainer = DPOTrainer(
+                model=model,
+                ref_model=None,
+                args=training_args,
+                tokenizer=tokenizer,
+                train_dataset=dummy_dataset,
+                eval_dataset=dummy_dataset,
+            )
+
+            # Fake chosen and rejected log probs
+            policy_chosen_logps = torch.FloatTensor([410.0, 0.1])
+            policy_rejected_logps = torch.FloatTensor([95.5, 0.2])
+            reference_chosen_logps = torch.FloatTensor([-610.0, -0.1])
+            reference_rejected_logps = torch.FloatTensor([5.5, 0.5])
+            losses, _, _ = trainer.dpo_loss(
+                policy_chosen_logps, policy_rejected_logps, reference_chosen_logps, reference_rejected_logps
+            )
+            assert torch.isfinite(losses).cpu().numpy().all()
