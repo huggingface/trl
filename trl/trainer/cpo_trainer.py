@@ -718,7 +718,6 @@ class CPOTrainer(Trainer):
             nll_loss = torch.tensor(0.0).to(self.accelerator.device)
         else:
             nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
-            
 
         all_logps = self.get_batch_logps(
             all_logits,
