@@ -21,7 +21,7 @@ import datasets
 import torch
 import torch.nn as nn
 from accelerate.state import PartialState
-from datasets import Dataset
+from datasets import Dataset, IterableDataset
 from datasets.arrow_writer import SchemaInferenceError
 from datasets.builder import DatasetGenerationError
 from huggingface_hub.utils._deprecation import _deprecate_arguments
@@ -71,9 +71,9 @@ class SFTTrainer(Trainer):
             set to a directory named *tmp_trainer* in the current directory if not provided.
         data_collator (Optional[`transformers.DataCollator`]):
             The data collator to use for training.
-        train_dataset (Optional[`datasets.Dataset`]):
+        train_dataset (Optional[`datasets.Dataset`, `datasets.IterableDataset`]):
             The dataset to use for training. We recommend users to use `trl.trainer.ConstantLengthDataset` to create their dataset.
-        eval_dataset (Optional[Union[`datasets.Dataset`, Dict[`str`, `datasets.Dataset`]]]):
+        eval_dataset (Optional[Union[`datasets.Dataset`, `datasets.IterableDataset`, Dict[`str`, `datasets.Dataset`], Dict[`str`, `datasets.IterableDataset`]]]):
             The dataset to use for evaluation. We recommend users to use `trl.trainer.ConstantLengthDataset` to create their dataset.
         tokenizer (Optional[`transformers.PreTrainedTokenizer`]):
             The tokenizer to use for training. If not specified, the tokenizer associated to the model will be used.
@@ -118,8 +118,8 @@ class SFTTrainer(Trainer):
         model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
         args: Optional[SFTConfig] = None,
         data_collator: Optional[DataCollator] = None,  # type: ignore
-        train_dataset: Optional[Dataset] = None,
-        eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
+        train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
+        eval_dataset: Optional[Union[Dataset, IterableDataset, Dict[str, Dataset], Dict[str, IterableDataset]]] = None,
         tokenizer: Optional[PreTrainedTokenizerBase] = None,
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
@@ -573,13 +573,26 @@ class SFTTrainer(Trainer):
                 f"inspect dataset other columns (in this case {extra_columns}), you can subclass `DataCollatorForLanguageModeling` in case you used the default collator and create your own data collator in order to inspect the unused dataset columns."
             )
 
-        tokenized_dataset = dataset.map(
-            tokenize,
-            batched=True,
-            remove_columns=dataset.column_names if remove_unused_columns else None,
-            num_proc=self.dataset_num_proc,
-            batch_size=self.dataset_batch_size,
-        )
+        if isinstance(dataset, datasets.IterableDataset):
+            if self.dataset_num_proc is not None:
+                warnings.warn(
+                    f"You passed `dataset_num_proc={self.dataset_num_proc}` but you are using `datasets.IterableDataset` which does not support num_proc. The argument is ignored"
+                )
+
+            tokenized_dataset = dataset.map(
+                tokenize,
+                batched=True,
+                remove_columns=dataset.column_names if remove_unused_columns else None,
+                batch_size=self.dataset_batch_size,
+            )
+        else:
+            tokenized_dataset = dataset.map(
+                tokenize,
+                batched=True,
+                remove_columns=dataset.column_names if remove_unused_columns else None,
+                num_proc=self.dataset_num_proc,
+                batch_size=self.dataset_batch_size,
+            )
 
         return tokenized_dataset
 
