@@ -36,10 +36,12 @@ class PPOv2Config(OnpolicyRuntimeConfig, TrainingArguments):
     """the name of the pretrained model to use"""
     response_length: int = 53
     """the length of the response"""
-    stop_token: Optional[Literal["eos"]] = None
+    stop_token: Optional[Literal["eos", "period"]] = None
     """the stop token"""
     stop_token_id: Optional[int] = None
     """the truncation token id"""
+    min_response_length: int = 0
+    """stop only after this many tokens"""
     temperature: float = 0.7
     """the sampling temperature"""
     penalty_reward_value: int = -1
