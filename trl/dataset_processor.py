@@ -35,7 +35,7 @@ from transformers import PreTrainedTokenizer
 
 
 COLORS = ["on red", "on green", "on blue", "on yellow", "on magenta"]
-# preference dataset
+# Preference dataset
 CHOSEN_KEY = "chosen"
 REJECTED_KEY = "rejected"
 INPUT_IDS_CHOSEN_KEY = "input_ids_chosen"
@@ -50,8 +50,21 @@ MESSAGES_KEY = "messages"
 INPUT_IDS_KEY = "input_ids"
 
 
+# Chat templates
+CHAT_TEMPLATES = {
+    "simple_concat": """{% for message in messages %}{{' ' if not loop.first else ''}}{{message['content']}}{% endfor %}{{eos_token}}""",
+    "zephyr": """{% for message in messages %}\n{% if message['role'] == 'user' %}\n{{ '<|user|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'system' %}\n{{ '<|system|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'assistant' %}\n{{ '<|assistant|>\n'  + message['content'] + eos_token }}\n{% endif %}\n{% if loop.last and add_generation_prompt %}\n{{ '<|assistant|>' }}\n{% endif %}\n{% endfor %}""",
+}
+
+
 @dataclass
 class DatasetConfig:
+    # dataset specs
+    dataset_name: Optional[str] = None
+    dataset_train_split: str = "train"
+    dataset_test_split: str = "test"
+    chat_template: str = "simple_concat"
+
     max_token_length: Optional[int] = None
     max_prompt_token_lenth: Optional[int] = None
 
@@ -72,6 +85,9 @@ class DatasetConfig:
         else:
             self.num_proc = multiprocessing.cpu_count()
             self.load_from_cache_file = True
+
+        if self.chat_template not in CHAT_TEMPLATES:
+            raise ValueError(f"chat_template must be one of {list(CHAT_TEMPLATES.keys())}")
 
 
 class DatasetProcessor:
@@ -95,7 +111,7 @@ class DatasetProcessor:
     def sanity_check_(self, dataset: DatasetDict):
         if self.config.sanity_check:
             for key in dataset:
-                dataset[key] = dataset[key].select(range(min(self.sanity_check_max_samples, len(dataset[key]))))
+                dataset[key] = dataset[key].select(range(min(self.config.sanity_check_max_samples, len(dataset[key]))))
 
     def get_token_length_stats(self, features: list[str], dataset: Dataset):
         stats = {}

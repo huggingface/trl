@@ -872,7 +872,9 @@ def print_rich_table(df: pd.DataFrame) -> Table:
 SIMPLE_SFT_CHAT_TEMPLATE = "{% for message in messages %}{{' ' + message['content']}}{% endfor %}{{ eos_token }}"
 # SIMPLE_SFT_CHAT_TEMPLATE simply ends things with an EOS token, this helps the SFT model learn to end the completions with EOS tokens
 
-SIMPLE_QUERY_CHAT_TEMPLATE = "{% for message in messages %}{{' ' + message['content']}}{% endfor %}"
+SIMPLE_QUERY_CHAT_TEMPLATE = (
+    "{% for message in messages %}{{' ' if not loop.first else ''}}{{message['content']}}{% endfor %}{{eos_token}}"
+)
 # SIMPLE_QUERY_CHAT_TEMPLATE is a variant of SIMPLE_SFT_CHAT_TEMPLATE, which does not end the content with EOS token. The idea
 # is to have the generated response to end with an EOS token, but the query itself should not end with EOS tokens.
 
@@ -1115,3 +1117,12 @@ def generate(
     )
     logits = torch.stack(output.scores, 1)
     return torch.cat((queries, output.sequences[:, context_length:]), dim=1), logits
+
+
+DEFAULT_STD_FOR_LAYER_INIT = np.sqrt(2)
+
+
+def layer_init(layer, std=DEFAULT_STD_FOR_LAYER_INIT, bias_const=0.0):
+    torch.nn.init.normal_(layer.weight, std=std)
+    torch.nn.init.constant_(layer.bias, val=bias_const)
+    return layer

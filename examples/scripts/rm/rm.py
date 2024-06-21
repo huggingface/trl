@@ -12,15 +12,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import numpy as np
+import torch.nn as nn
 from datasets import load_dataset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, HfArgumentParser
 
 from trl import ModelConfig, RewardConfig, RewardTrainer
-from trl.dataset_processor import INPUT_IDS_CHOSEN_KEY, DatasetConfig, PreferenceDatasetProcessor, visualize_token
+from trl.dataset_processor import (
+    CHAT_TEMPLATES,
+    INPUT_IDS_CHOSEN_KEY,
+    DatasetConfig,
+    PreferenceDatasetProcessor,
+    visualize_token,
+)
+from trl.trainer.utils import layer_init
 
 
 """
+# interactive debugging
 python -i examples/scripts/rm/rm.py \
+    --dataset_name trl-internal-testing/sentiment-trl-style \
+    --dataset_train_split train \
+    --dataset_test_split test \
+    --model_name_or_path EleutherAI/pythia-160m \
+    --chat_template simple_concat \
     --learning_rate 3e-6 \
     --per_device_train_batch_size 1 \
     --per_device_eval_batch_size 1 \
@@ -28,49 +43,92 @@ python -i examples/scripts/rm/rm.py \
     --logging_steps 1 \
     --eval_strategy steps \
     --max_token_length 1024 \
-    --max_prompt_token_lenth 128 \
+    --max_prompt_token_lenth 1024 \
     --remove_unused_columns False \
     --num_train_epochs 1 \
     --eval_steps=100 \
-    --output_dir models/minimal/rm
+    --sanity_check \
+    --output_dir models/minimal/rm \
+
+# single GPU model training; adjust your `per_device_train_batch_size` and
+# `gradient_accumulation_steps` accordingly
+python examples/scripts/rm/rm.py \
+    --dataset_name trl-internal-testing/sentiment-trl-style \
+    --dataset_train_split train \
+    --dataset_test_split test \
+    --model_name_or_path EleutherAI/pythia-1b-deduped \
+    --chat_template simple_concat \
+    --learning_rate 3e-6 \
+    --per_device_train_batch_size 32 \
+    --per_device_eval_batch_size 32 \
+    --gradient_accumulation_steps 1 \
+    --logging_steps 1 \
+    --eval_strategy steps \
+    --max_token_length 1024 \
+    --max_prompt_token_lenth 1024 \
+    --remove_unused_columns False \
+    --num_train_epochs 1 \
+    --eval_steps=100 \
+    --output_dir models/minimal/rm_sentiment_1b \
+    --push_to_hub \
+
+accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
+    examples/scripts/minimal/rm_zephyr.py \
+    --dataset_name HuggingFaceH4/ultrafeedback_binarized \
+    --dataset_train_split train_prefs \
+    --dataset_test_split test_prefs \
+    --chat_template zephyr \
+    --learning_rate 3e-6 \
+    --per_device_train_batch_size 1 \
+    --per_device_eval_batch_size 1 \
+    --gradient_accumulation_steps 32 \
+    --logging_steps 1 \
+    --eval_strategy steps \
+    --max_token_length 1024 \
+    --max_prompt_token_lenth 1024 \
+    --remove_unused_columns False \
+    --num_train_epochs 1 \
+    --eval_steps=100 \
+    --bf16 \
+    --output_dir models/minimal/rm_zephyr_7b \
 """
-CONCAT_CHAT_TEMPLATE = (
-    """{% for message in messages %}{{' ' if not loop.first else ''}}{{message['content']}}{% endfor %}{{eos_token}}"""
-)
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser((RewardConfig, DatasetConfig, ModelConfig))
-    args, dataset_config, model_config = parser.parse_args_into_dataclasses()
+    parser = HfArgumentParser((DatasetConfig, ModelConfig, RewardConfig))
+    dataset_config, model_config, args = parser.parse_args_into_dataclasses()
     # backward compatibility `max_length`
     args.max_length = dataset_config.max_token_length
-    base_model = "EleutherAI/pythia-160m"
 
     ################
-    # Model & Tokenizer
+    # Tokenizer & Dataset
     ################
     tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path)
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
-    tokenizer.chat_template = CONCAT_CHAT_TEMPLATE
-    model = AutoModelForSequenceClassification.from_pretrained(model_config.model_name_or_path, num_labels=1)
-    model.config.pad_token_id = tokenizer.pad_token_id
+    tokenizer.chat_template = CHAT_TEMPLATES[dataset_config.chat_template]
 
     ################
     # Dataset
     ################
-    raw_datasets = load_dataset("trl-internal-testing/sentiment-trl-style")
+    raw_datasets = load_dataset(dataset_config.dataset_name)
     dataset_processor = PreferenceDatasetProcessor(tokenizer=tokenizer, config=dataset_config)
     dataset_processor.sanity_check_(raw_datasets)
-    train_dataset = dataset_processor.tokenize(raw_datasets["train"])
-    eval_dataset = dataset_processor.tokenize(raw_datasets["test"])
+    train_dataset = dataset_processor.tokenize(raw_datasets[dataset_config.dataset_train_split])
+    eval_dataset = dataset_processor.tokenize(raw_datasets[dataset_config.dataset_test_split])
     train_dataset = dataset_processor.filter(train_dataset)
     eval_dataset = dataset_processor.filter(eval_dataset)
     visualize_token(train_dataset[0][INPUT_IDS_CHOSEN_KEY], tokenizer)
     dataset_processor.get_token_length_visualization(train_dataset, save_path="tmp.png")
 
     ################
-    # Training
+    # Model & Training
     ################
+    model = AutoModelForSequenceClassification.from_pretrained(model_config.model_name_or_path, num_labels=1)
+    model.config.pad_token_id = tokenizer.pad_token_id
+    model.score = layer_init(
+        nn.Linear(model.config.hidden_size, 1),
+        std=1 / np.sqrt(model.config.hidden_size + 1),
+    )
     trainer = RewardTrainer(
         model=model,
         tokenizer=tokenizer,
@@ -79,7 +137,16 @@ if __name__ == "__main__":
         eval_dataset=eval_dataset,
     )
     trainer.train()
+    trainer.tokenizer = AutoTokenizer.from_pretrained(
+        model_config.model_name_or_path
+    )  # reset tokenizer (without pad token)
     trainer.save_model(args.output_dir)
     if args.push_to_hub:
         trainer.push_to_hub()
     trainer.evaluate()
+    if "wandb" in args.report_to:
+        import wandb
+
+        if wandb.run is not None:
+            for item in [dataset_config, model_config]:
+                wandb.config.update(item, allow_val_change=True)
