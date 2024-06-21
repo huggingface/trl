@@ -538,8 +538,9 @@ class KTOTrainer(Trainer):
         self.beta = args.beta
         self.desirable_weight = args.desirable_weight
         self.undesirable_weight = args.undesirable_weight
-
         self.loss_type = args.loss_type
+        self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
+
         # Underlying Distribution Matching argument
         self.embedding_func = embedding_func
         self.embedding_tokenizer = embedding_tokenizer
@@ -1096,7 +1097,7 @@ class KTOTrainer(Trainer):
                     labels=batch["KL_completion_labels"],
                 ).logits
 
-            if hasattr(model, "num_experts"):
+            if self.aux_loss_enabled:
                 output = model(
                     batch["completion_input_ids"],
                     attention_mask=batch["completion_attention_mask"],
@@ -1120,7 +1121,7 @@ class KTOTrainer(Trainer):
                     attention_mask=batch["KL_completion_attention_mask"],
                 ).logits
 
-            if hasattr(model, "num_experts"):
+            if self.aux_loss_enabled:
                 output = model(
                     batch["completion_input_ids"],
                     attention_mask=batch["completion_attention_mask"],
@@ -1166,7 +1167,7 @@ class KTOTrainer(Trainer):
         chosen_logits = completion_logits[chosen_idx, ...]
         rejected_logits = completion_logits[rejected_idx, ...]
 
-        if hasattr(model, "num_experts"):
+        if self.aux_loss_enabled:
             return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, KL_logps, aux_loss)
         else:
             return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, KL_logps)
@@ -1300,7 +1301,7 @@ class KTOTrainer(Trainer):
             policy_rejected_logits,
             policy_KL_logps,
         ) = policy_forward[:5]
-        if hasattr(model, "num_experts"):
+        if self.aux_loss_enabled:
             aux_loss = policy_forward[5]
 
         # if reference_logps in batch use them, otherwise use the reference model
@@ -1371,8 +1372,8 @@ class KTOTrainer(Trainer):
         metrics["kl"] = kl.item()
 
         loss = losses.nanmean()
-        if hasattr(model, "num_experts"):
-            loss += aux_loss
+        if self.aux_loss_enabled:
+            loss += getattr(model.config, "router_aux_loss_coef", 0.) * aux_loss
 
         return loss, metrics
 
