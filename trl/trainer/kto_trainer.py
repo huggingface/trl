@@ -1088,7 +1088,6 @@ class KTOTrainer(Trainer):
     def forward(
         self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
-        
         KL_model_kwargs = (
             {
                 "labels": batch["KL_completion_labels"],
@@ -1106,7 +1105,7 @@ class KTOTrainer(Trainer):
             else {}
         )
         if self.aux_loss_enabled:
-            model_kwargs["output_router_logits"] = True 
+            model_kwargs["output_router_logits"] = True
 
         with torch.no_grad():
             KL_logits = model(
@@ -1359,7 +1358,7 @@ class KTOTrainer(Trainer):
 
         loss = losses.nanmean()
         if self.aux_loss_enabled:
-            loss += getattr(model.config, "router_aux_loss_coef", 0.) * aux_loss
+            loss += getattr(model.config, "router_aux_loss_coef", 0.0) * aux_loss
 
         return loss, metrics
 

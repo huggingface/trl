@@ -784,7 +784,7 @@ class ORPOTrainer(Trainer):
         metrics[f"{prefix}log_odds_chosen"] = log_odds_chosen
 
         if self.aux_loss_enabled:
-            loss += getattr(model.config, "router_aux_loss_coef", 0.) * aux_loss
+            loss += getattr(model.config, "router_aux_loss_coef", 0.0) * aux_loss
 
         return loss, metrics
 

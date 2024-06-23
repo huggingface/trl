@@ -1314,7 +1314,7 @@ class DPOTrainer(Trainer):
             metrics[f"{prefix}nll_loss"] = policy_nll_loss.detach().mean().cpu()
 
         if self.aux_loss_enabled:
-            return losses.mean() + getattr(model.config, "router_aux_loss_coef", 0.) * aux_loss, metrics
+            return losses.mean() + getattr(model.config, "router_aux_loss_coef", 0.0) * aux_loss, metrics
 
         return losses.mean(), metrics
 
