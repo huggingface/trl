@@ -269,9 +269,17 @@ class CPOTrainer(Trainer):
         self.beta = args.beta
         self.label_smoothing = args.label_smoothing
         self.loss_type = args.loss_type
+        self.cpo_alpha = args.cpo_alpha
 
         if args.loss_type == "simpo":
             self.simpo_gamma = args.simpo_gamma
+            if self.cpo_alpha > 0:
+                warnings.warn(
+                    "You are using CPO-SimPO method because you set a non-zero cpo_alpha. "
+                    "This will result in the CPO-SimPO method "
+                    "(https://github.com/fe1ixxu/CPO_SIMPO/tree/main). "
+                    "If you want to use a pure SimPO method, please set cpo_alpha to 0."
+                )
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
@@ -706,10 +714,10 @@ class CPOTrainer(Trainer):
 
         labels = concatenated_batch["concatenated_labels"].clone()
 
-        if self.loss_type != "simpo":
-            nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
-        else:
+        if self.cpo_alpha == 0:
             nll_loss = torch.tensor(0.0).to(self.accelerator.device)
+        else:
+            nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
 
         all_logps = self.get_batch_logps(
             all_logits,
@@ -749,7 +757,7 @@ class CPOTrainer(Trainer):
             policy_rejected_logps,
         )
 
-        loss = losses.mean() + policy_nll_loss
+        loss = losses.mean() + self.cpo_alpha * policy_nll_loss
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
         prefix = "eval_" if train_eval == "eval" else ""
