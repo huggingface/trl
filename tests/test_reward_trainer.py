@@ -14,6 +14,7 @@
 import tempfile
 import unittest
 
+import numpy as np
 import pytest
 import torch
 from datasets import Dataset
@@ -361,3 +362,76 @@ class RewardTrainerTester(unittest.TestCase):
             )
 
             assert trainer.model.model_tags == trainer._tag_names
+
+    def test_reward_trainer_concatenate_forward(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = RewardConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=4,
+                learning_rate=9e-1,
+                eval_strategy="steps",
+                concatenate_forward_flag=True,
+            )
+
+            # fmt: off
+            dummy_dataset_dict = {
+                "input_ids_chosen": [
+                    torch.LongTensor([0, 1, 2]),
+                    torch.LongTensor([1, 2]),
+                    torch.LongTensor([0, 1, 2]),
+                    torch.LongTensor([1, 2]),
+                ],
+                "attention_mask_chosen": [
+                    torch.LongTensor([1, 1, 1]),
+                    torch.LongTensor([1, 0]),
+                    torch.LongTensor([1, 1, 1]),
+                    torch.LongTensor([1, 0]),
+                ],
+                "input_ids_rejected": [
+                    torch.LongTensor([0, 2]),
+                    torch.LongTensor([1, 2, 0]),
+                    torch.LongTensor([0, 2]),
+                    torch.LongTensor([1, 2, 0]),
+                ],
+                "attention_mask_rejected": [
+                    torch.LongTensor([1, 1]),
+                    torch.LongTensor([1, 1, 0]),
+                    torch.LongTensor([1, 1]),
+                    torch.LongTensor([1, 1, 1]),
+                ],
+            }
+            # fmt: on
+            dummy_dataset = Dataset.from_dict(dummy_dataset_dict)
+
+            trainer = RewardTrainer(
+                model=self.model,
+                args=training_args,
+                tokenizer=self.tokenizer,
+                train_dataset=dummy_dataset,
+                eval_dataset=dummy_dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            assert trainer.state.log_history[(-1)]["train_loss"] is not None
+
+            # check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                # check the params have changed - ignore 0 biases
+                if param.sum() != 0:
+                    assert not torch.equal(param, new_param)
+
+            preds = trainer.predict(dummy_dataset)
+            assert preds.predictions.shape == (4, 2)
+
+            trainer.args.concatenate_forward_flag = False
+            orig_preds = trainer.predict(dummy_dataset)
+            assert orig_preds.predictions.shape == (4, 2)
+
+            assert np.allclose(orig_preds.predictions, preds.predictions)

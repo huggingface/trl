@@ -29,7 +29,7 @@ from transformers.trainer_utils import EvalPrediction
 
 from ..import_utils import is_peft_available
 from .reward_config import RewardConfig
-from .utils import RewardDataCollatorWithPadding, compute_accuracy, print_rich_table
+from .utils import RewardDataCollatorWithPadding, compute_accuracy, pad_to_length, print_rich_table
 
 
 if is_peft_available():
@@ -216,6 +216,51 @@ class RewardTrainer(Trainer):
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
 
+    @staticmethod
+    def concatenated_inputs(
+        batch: Dict[str, Union[List, torch.LongTensor]],
+        padding_value: int = 0,
+        device: Optional[torch.device] = None,
+    ) -> Dict[str, torch.LongTensor]:
+        """Concatenate the chosen and rejected inputs into a single tensor.
+
+        Args:
+            batch: A batch of data. Must contain the keys 'chosen_input_ids' and 'rejected_input_ids', which are tensors of shape (batch_size, sequence_length).
+            padding_value: The padding value to use for the concatenated inputs_ids.
+            device: The device for the concatenated inputs.
+
+        Returns:
+            A dictionary containing the concatenated inputs under the key 'concatenated_input_ids'.
+        """
+        concatenated_batch = {}
+
+        max_length = max(batch["input_ids_chosen"].shape[1], batch["input_ids_rejected"].shape[1])
+
+        for k in batch:
+            if k.endswith("chosen") and isinstance(batch[k], torch.Tensor):
+                if k.startswith("input_ids"):
+                    pad_value = padding_value
+                elif k.startswith("attention_mask"):
+                    pad_value = 0
+                concatenated_key = k.replace("chosen", "concatenated")
+                concatenated_batch[concatenated_key] = pad_to_length(batch[k], max_length, pad_value=pad_value)
+        for k in batch:
+            if k.endswith("rejected") and isinstance(batch[k], torch.Tensor):
+                if k.startswith("input_ids"):
+                    pad_value = padding_value
+                elif k.startswith("attention_mask"):
+                    pad_value = 0
+                concatenated_key = k.replace("rejected", "concatenated")
+                concatenated_batch[concatenated_key] = torch.cat(
+                    (
+                        concatenated_batch[concatenated_key],
+                        pad_to_length(batch[k], max_length, pad_value=pad_value),
+                    ),
+                    dim=0,
+                ).to(device=device)
+
+        return concatenated_batch
+
     def compute_loss(
         self,
         model: Union[PreTrainedModel, nn.Module],
@@ -228,16 +273,30 @@ class RewardTrainer(Trainer):
                 " if you are using a custom data collator make sure you know what you are doing or"
                 " implement your own compute_loss method."
             )
-        rewards_chosen = model(
-            input_ids=inputs["input_ids_chosen"],
-            attention_mask=inputs["attention_mask_chosen"],
-            return_dict=True,
-        )["logits"]
-        rewards_rejected = model(
-            input_ids=inputs["input_ids_rejected"],
-            attention_mask=inputs["attention_mask_rejected"],
-            return_dict=True,
-        )["logits"]
+
+        if self.args.concatenate_forward_flag:
+            concatenated_inputs = self.concatenated_inputs(inputs)
+
+            rewards_concatenated = model(
+                input_ids=concatenated_inputs["input_ids_concatenated"],
+                attention_mask=concatenated_inputs["attention_mask_concatenated"],
+                return_dict=True,
+            )["logits"]
+
+            chosen_len = inputs["input_ids_chosen"].shape[0]
+            rewards_chosen = rewards_concatenated[:chosen_len]
+            rewards_rejected = rewards_concatenated[chosen_len:]
+        else:
+            rewards_chosen = model(
+                input_ids=inputs["input_ids_chosen"],
+                attention_mask=inputs["attention_mask_chosen"],
+                return_dict=True,
+            )["logits"]
+            rewards_rejected = model(
+                input_ids=inputs["input_ids_rejected"],
+                attention_mask=inputs["attention_mask_rejected"],
+                return_dict=True,
+            )["logits"]
         # calculate loss, optionally modulate with margin
         if "margin" in inputs:
             loss = -nn.functional.logsigmoid(rewards_chosen - rewards_rejected - inputs["margin"]).mean()
