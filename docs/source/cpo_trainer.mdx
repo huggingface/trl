@@ -88,11 +88,11 @@ The [IPO](https://arxiv.org/abs/2310.12036) authors provide a deeper theoretical
 
 ### For Mixture of Experts Models: Enabling the auxiliary loss
 
-MoEs are the most efficient if the load is about equally distributed between experts.  
-To ensure that it stays this way during fine-tuning, it is beneficial to add the auxiliary loss from load balancing to the final loss.  
+MOEs are the most efficient if the load is about equally distributed between experts.  
+To ensure that we train MOEs similarly during preference-tuning, it is beneficial to add the auxiliary loss from the load balancer to the final loss.  
 
 This option is enabled by setting `output_router_logits=True` in the model config (e.g. MixtralConfig).  
-To scale how much the auxiliary loss contributes to the total loss, use the hyperparameter `router_aux_loss_coef=...`(default: 0.001).
+To scale how much the auxiliary loss contributes to the total loss, use the hyperparameter `router_aux_loss_coef=...` (default: 0.001).
 
 ## Logging
 
