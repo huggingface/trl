@@ -1090,11 +1090,16 @@ class KTOTrainer(Trainer):
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         KL_model_kwargs = (
             {
+                "input_ids": batch["KL_prompt_input_ids"],
+                "attention_mask": batch["KL_prompt_attention_mask"],
                 "labels": batch["KL_completion_labels"],
                 "decoder_input_ids": batch.get("KL_completion_decoder_input_ids"),
             }
             if self.is_encoder_decoder
-            else {}
+            else {
+                "input_ids": batch["KL_completion_input_ids"],
+                "attention_mask": batch["KL_completion_attention_mask"],
+            }
         )
         model_kwargs = (
             {
@@ -1109,8 +1114,6 @@ class KTOTrainer(Trainer):
 
         with torch.no_grad():
             KL_logits = model(
-                batch["KL_prompt_input_ids"],
-                attention_mask=batch["KL_prompt_attention_mask"],
                 **KL_model_kwargs,
             ).logits
 
