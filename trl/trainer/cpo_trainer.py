@@ -270,6 +270,7 @@ class CPOTrainer(Trainer):
         self.label_smoothing = args.label_smoothing
         self.loss_type = args.loss_type
         self.cpo_alpha = args.cpo_alpha
+        self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
 
         if args.loss_type == "simpo":
             self.simpo_gamma = args.simpo_gamma
@@ -690,6 +691,9 @@ class CPOTrainer(Trainer):
             else {}
         )
 
+        if self.aux_loss_enabled:
+            model_kwargs["output_router_logits"] = True
+
         outputs = model(
             concatenated_batch["concatenated_input_ids"],
             attention_mask=concatenated_batch["concatenated_attention_mask"],
@@ -733,6 +737,9 @@ class CPOTrainer(Trainer):
         chosen_logits = all_logits[:len_chosen]
         rejected_logits = all_logits[len_chosen:]
 
+        if self.aux_loss_enabled:
+            return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, nll_loss, outputs.aux_loss)
+
         return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, nll_loss)
 
     def get_batch_loss_metrics(
@@ -744,13 +751,16 @@ class CPOTrainer(Trainer):
         """Compute the CPO loss and other metrics for the given batch of inputs for train or test."""
         metrics = {}
 
+        forward_output = self.concatenated_forward(model, batch)
         (
             policy_chosen_logps,
             policy_rejected_logps,
             policy_chosen_logits,
             policy_rejected_logits,
             policy_nll_loss,
-        ) = self.concatenated_forward(model, batch)
+        ) = forward_output[:5]
+        if self.aux_loss_enabled:
+            aux_loss = forward_output[5]
 
         losses, chosen_rewards, rejected_rewards = self.cpo_loss(
             policy_chosen_logps,
@@ -770,6 +780,9 @@ class CPOTrainer(Trainer):
         metrics[f"{prefix}logits/rejected"] = policy_rejected_logits.detach().mean().cpu()
         metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.detach().mean().cpu()
         metrics[f"{prefix}nll_loss"] = policy_nll_loss.detach().mean().cpu()
+
+        if self.aux_loss_enabled:
+            loss += getattr(model.config, "router_aux_loss_coef", 0.0) * aux_loss
 
         return loss, metrics
 
