@@ -52,7 +52,8 @@ INPUT_IDS_KEY = "input_ids"
 
 # Chat templates
 CHAT_TEMPLATES = {
-    "simple_concat": """{% for message in messages %}{{' ' if not loop.first else ''}}{{message['content']}}{% endfor %}{{eos_token}}""",
+    "simple_concat": "{% for message in messages %}{{' ' if not loop.first else ''}}{{message['content']}}{% endfor %}{{eos_token}}",
+    "simple_chat": "{% for message in messages %}{{'\n\n' if not loop.first else ''}}{{message['role']|capitalize + ': ' +message['content']}}{% endfor %}{{eos_token}}",
     "zephyr": """{% for message in messages %}\n{% if message['role'] == 'user' %}\n{{ '<|user|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'system' %}\n{{ '<|system|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'assistant' %}\n{{ '<|assistant|>\n'  + message['content'] + eos_token }}\n{% endif %}\n{% if loop.last and add_generation_prompt %}\n{{ '<|assistant|>' }}\n{% endif %}\n{% endfor %}""",
 }
 
