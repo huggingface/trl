@@ -121,6 +121,14 @@ The [RPO](https://arxiv.org/abs/2404.19733) paper implements an iterative prefer
 
 The [AOT](https://arxiv.org/abs/2406.05882) authors propose to use Distributional Preference Alignment Via Optimal Transport. Traditionally, the alignment algorithms use paired preferences at a sample level, which does not ensure alignment on the distributional level. AOT, on the other hand, can align LLMs on paired or unpaired preference data by making the reward distribution of the positive samples stochastically dominant in the first order on the distribution of negative samples. Specifically, `loss_type="aot"` is appropriate for  paired datasets, where each prompt has both chosen and rejected responses; `loss_type="aot_pair"` is for unpaired datasets. In a nutshell, `loss_type="aot"` ensures that the log-likelihood ratio of chosen to rejected of the aligned model has higher quantiles than that ratio for the reference model. `loss_type="aot_pair"` ensures that the chosen reward is higher on all quantiles than the rejected reward. Note that in both cases quantiles are obtained via sorting. To fully leverage the advantages of the AOT algorithm, it is important to maximize the per-GPU batch size.
 
+### For Mixture of Experts Models: Enabling the auxiliary loss
+
+MOEs are the most efficient if the load is about equally distributed between experts.  
+To ensure that we train MOEs similarly during preference-tuning, it is beneficial to add the auxiliary loss from the load balancer to the final loss.  
+
+This option is enabled by setting `output_router_logits=True` in the model config (e.g. MixtralConfig).  
+To scale how much the auxiliary loss contributes to the total loss, use the hyperparameter `router_aux_loss_coef=...` (default: 0.001).
+
 ## Logging
 
 While training and evaluating we record the following reward metrics:
