@@ -114,11 +114,6 @@ if __name__ == "__main__":
             name for name, buffer in model.named_buffers() if buffer.dtype == torch.bool
         ]
 
-    # DPOTrainer needs the processor to have these attributes
-    processor.pad_token_id = tokenizer.pad_token_id
-    processor.bos_token_id = tokenizer.bos_token_id
-    processor.eos_token_id = tokenizer.eos_token_id
-
     ################
     # Optional rich context managers
     ###############
@@ -169,6 +164,6 @@ if __name__ == "__main__":
         )
 
     trainer.train()
-
+    trainer.push_to_hub
     with save_context:
         trainer.save_model(training_args.output_dir)
