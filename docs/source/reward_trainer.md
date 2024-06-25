@@ -35,7 +35,7 @@ Here is a command to train a simple reward model on the sentiment dataset taken 
 python examples/scripts/rm/rm.py \
     --dataset_name trl-internal-testing/sentiment-trl-style \
     --dataset_train_split train \
-    --dataset_test_split test \
+    --dataset_eval_split test \
     --model_name_or_path EleutherAI/pythia-1b-deduped \
     --chat_template simple_concat \
     --learning_rate 3e-6 \
@@ -52,6 +52,87 @@ python examples/scripts/rm/rm.py \
     --output_dir models/minimal/rm_sentiment_1b \
     --push_to_hub
 ```
+
+
+## How does it work?
+
+You can use the [`RewardTrainer`] in the same way as the `Trainer` class from 🤗 Transformers.
+You should pass an `AutoModelForSequenceClassification` model to the [`RewardTrainer`], along with a [`RewardConfig`] which configures the hyperparameters of the training.
+
+
+### Tokenization
+
+Ultimately, the `RewardTrainer` takes tokenized data as inputs: the post-processed dataset object should contain the following entries
+
+-   `input_ids_chosen`
+-   `attention_mask_chosen`
+-   `input_ids_rejected`
+-   `attention_mask_rejected`
+
+
+To make data processing easier, we typically deal with chat-style dataset. For example, a chosen or rejected chat message would look like the following `chat` variable. We can set the `tokenizer.chat_template` to a template string that will be used to tokenize the chat, then call `tokenizer.apply_chat_template` to tokenize the chat, like demonstrated below:
+
+```python
+from transformers import AutoTokenizer
+chat = [
+    {"content": "How can I store food if I don't have a pantry?", "role": "user"},
+    {
+        "content": "You could store the food in a refrigerator, the top cupboards in your kitchen, the freezer, or even in a hole in the ground.",
+        "role": "assistant",
+    },
+]
+tokenizer = AutoTokenizer.from_pretrained("gpt2")
+tokenizer.chat_template = "{% for message in messages %}{{'\n\n' if not loop.first else ''}}{{message['role']|capitalize + ': ' +message['content']}}{% endfor %}{{eos_token}}"
+print(tokenizer.apply_chat_template(chat, tokenize=False))
+# User: How can I store food if I don't have a pantry?
+#
+# Assistant: You could store the food in a refrigerator, the top cupboards in your kitchen, the freezer, or even in a hole in the ground.<|endoftext|>
+```
+
+To make sure the tokenization process is as transparent as possible. We provide a `DatasetProcessor` class that can be used to tokenize the dataset and visualize the tokenization process. Here is an example of how to use it:
+
+
+```python
+from transformers import AutoTokenizer
+from datasets import load_dataset
+from trl.dataset_processor import (
+    CHAT_TEMPLATES,
+    INPUT_IDS_CHOSEN_KEY,
+    DatasetConfig,
+    PreferenceDatasetProcessor,
+    visualize_token,
+)
+dataset_config = DatasetConfig(
+    dataset_name="trl-internal-testing/sentiment-trl-style",
+    chat_template="simple_chat",
+    max_token_length=1024,
+    max_prompt_token_lenth=1024,
+)
+tokenizer = AutoTokenizer.from_pretrained("gpt2")
+tokenizer.chat_template = CHAT_TEMPLATES["simple_chat"]
+dataset = load_dataset(dataset_config.dataset_name)
+dataset_processor = PreferenceDatasetProcessor(tokenizer=tokenizer, config=dataset_config)
+dataset_processor.sanity_check_(dataset)
+dataset = dataset_processor.tokenize(dataset)
+dataset = dataset_processor.filter(dataset)
+dataset_processor.get_token_length_visualization(dataset, save_path="tmp.png")
+train_dataset = dataset[dataset_config.dataset_train_split]
+eval_dataset = dataset[dataset_config.dataset_eval_split]
+visualize_token(train_dataset[0][INPUT_IDS_CHOSEN_KEY], tokenizer)
+```
+
+
+The `visualize_token` will output the following colored tokens:
+
+<div style="text-align: center">
+<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/Visualize token.png?download=true", width="80%">
+</div>
+
+The `dataset_processor.get_token_length_visualization` will output the visualization on the token length for the `chosen`, `rejected` and `prompt` in `tmp.png`.
+<div style="text-align: center">
+<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/token_length_visualization.png?download=true", width="80%">
+</div>
+
 
 
 ## Explanation of logged metrics
@@ -73,91 +154,6 @@ The logged metrics are as follows. Here is an example [tracked run at Weights an
 * `train/loss`: The loss of the model on a batch of the training dataset.
 
 
-## How does it work?
-
-You can use the [`RewardTrainer`] in the same way as the `Trainer` class from 🤗 Transformers.
-You should pass an `AutoModelForSequenceClassification` model to the [`RewardTrainer`], along with a [`RewardConfig`] which configures the hyperparameters of the training.
-
-
-### Tokenization
-
-Ultimately, the `RewardTrainer` takes tokenized data as inputs. For example, a chosen or rejected message would look like the following `chat` variable. We can set the `tokenizer.chat_template` to a template string that will be used to tokenize the chat, then call `tokenizer.apply_chat_template` to tokenize the chat, like demonstrated below:
-
-```python
-from transformers import AutoTokenizer
-chat = [
-    {"content": "How can I store food if I don't have a pantry?", "role": "user"},
-    {
-        "content": "You could store the food in a refrigerator, the top cupboards in your kitchen, the freezer, or even in a hole in the ground.",
-        "role": "assistant",
-    },
-]
-tokenizer = AutoTokenizer.from_pretrained("gpt2")
-tokenizer.chat_template = "{% for message in messages %}{{'\n\n' if not loop.first else ''}}{{message['role']|capitalize + ': ' +message['content']}}{% endfor %}{{eos_token}}"
-print(tokenizer.apply_chat_template(chat, tokenize=False))
-# User: How can I store food if I don't have a pantry?
-#
-# Assistant: You could store the food in a refrigerator, the top cupboards in your kitchen, the freezer, or even in a hole in the ground.<|endoftext|>
-```
-
-
-
-
-To make sure the tokenization process is as transparent as possible. We provide a `DatasetProcessor` class that can be used to tokenize the dataset and visualize the tokenization process. Here is an example of how to use it:
-
-
-
-```python
-from transformers import AutoTokenizer
-from datasets import load_dataset
-from trl.dataset_processor import (
-    CHAT_TEMPLATES,
-    INPUT_IDS_CHOSEN_KEY,
-    DatasetConfig,
-    PreferenceDatasetProcessor,
-    visualize_token,
-)
-dataset_config = DatasetConfig(
-    dataset_name="trl-internal-testing/sentiment-trl-style",
-    chat_template="simple_chat",
-    max_token_length=1024,
-    max_prompt_token_lenth=1024,
-)
-tokenizer = AutoTokenizer.from_pretrained("gpt2")
-tokenizer.chat_template = CHAT_TEMPLATES["simple_chat"]
-raw_datasets = load_dataset(dataset_config.dataset_name)
-dataset_processor = PreferenceDatasetProcessor(tokenizer=tokenizer, config=dataset_config)
-dataset_processor.sanity_check_(raw_datasets)
-train_dataset = dataset_processor.tokenize(raw_datasets[dataset_config.dataset_train_split])
-eval_dataset = dataset_processor.tokenize(raw_datasets[dataset_config.dataset_test_split])
-train_dataset = dataset_processor.filter(train_dataset)
-eval_dataset = dataset_processor.filter(eval_dataset)
-visualize_token(train_dataset[0][INPUT_IDS_CHOSEN_KEY], tokenizer)
-dataset_processor.get_token_length_visualization(train_dataset, save_path="tmp.png")
-```
-
-
-The `visualize_token` will output the following colored tokens:
-
-<div style="text-align: center">
-<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/Visualize token.png?download=true", width="80%">
-</div>
-
-The `dataset_processor.get_token_length_visualization` will output the visualization on the token length for the `chosen`, `rejected` and `prompt` in `tmp.png`.
-<div style="text-align: center">
-<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/token_length_visualization.png?download=true", width="80%">
-</div>
-
-
-## Cookbook
-
-* Debugging TIP: `eval/accuracy`: this is the ultimate evaluation of the reward model training. Ideally it should keep going up.
-* Memory TIP: If you are running out of memory, you can try to reduce the `--per_device_train_batch_size` or increase the `--gradient_accumulation_steps` to reduce the memory footprint.
-* Memory TIP: If you have multiple GPUs, you can also run training with DeepSpeed stage 3 to reduce the memory footprint `accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml`.
-* Usage TIP: Make sure you understand the dataset by looking the tokenized inputs: do something like `print(train_dataset[0][INPUT_IDS_CHOSEN_KEY])` and `print(tokenizer.decode(train_dataset[0][INPUT_IDS_CHOSEN_KEY]))`. You should also see the token length distribution by running `dataset_processor.get_token_length_visualization`. Make sure nothing weird happens like the token length being too long or too short. You can customize by tweaking the `max_token_length=1024` and `max_prompt_token_lenth=1024` options.
-
-
-
 ## What is my model doing exactly?
 
 
@@ -170,7 +166,14 @@ To help you understand what your model is doing, we periodically log some the pr
 
 
 
+## Cookbook
 
+* Debugging TIP: `eval/accuracy`: this is the ultimate evaluation of the reward model training. Ideally it should keep going up.
+* Debugging TIP: `train/loss`: this is the loss of the reward model's objective, and it should keep going down.
+* Debugging TIP: Always look into the dataset and the output reward logits which are logged in weights and biases to understand what the model is doing.
+* Memory TIP: If you are running out of memory, you can try to reduce the `--per_device_train_batch_size` or increase the `--gradient_accumulation_steps` to reduce the memory footprint.
+* Memory TIP: If you have multiple GPUs, you can also run training with DeepSpeed stage 3 to reduce the memory footprint `accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml`.
+* Usage TIP: Make sure you understand the dataset by looking the tokenized inputs: do something like `print(train_dataset[0][INPUT_IDS_CHOSEN_KEY])` and `print(tokenizer.decode(train_dataset[0][INPUT_IDS_CHOSEN_KEY]))`. You should also see the token length distribution by running `dataset_processor.get_token_length_visualization`. Make sure nothing weird happens like the token length being too long or too short. You can customize by tweaking the `max_token_length=1024` and `max_prompt_token_lenth=1024` options.
 
 
 ## Leveraging 🤗 PEFT to train a reward model

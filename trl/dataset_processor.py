@@ -67,7 +67,7 @@ class DatasetConfig:
     # dataset specs
     dataset_name: Optional[str] = None
     dataset_train_split: str = "train"
-    dataset_test_split: str = "test"
+    dataset_eval_split: str = "test"
     chat_template: str = "simple_concat"
 
     max_token_length: Optional[int] = None
@@ -114,11 +114,13 @@ class DatasetProcessor:
         raise NotImplementedError
 
     def sanity_check_(self, dataset: DatasetDict):
+        """Sanity check the dataset by selecting a subset of samples to speed up tokenization: only useful for debugging"""
         if self.config.sanity_check:
             for key in dataset:
                 dataset[key] = dataset[key].select(range(min(self.config.sanity_check_max_samples, len(dataset[key]))))
 
     def get_token_length_stats(self, features: list[str], dataset: Union[Dataset, DatasetDict]):
+        """Get token length statistics for the dataset"""
         if isinstance(dataset, Dataset):
             return self._get_token_length_stats(features, dataset)
         elif isinstance(dataset, DatasetDict):
@@ -140,6 +142,7 @@ class DatasetProcessor:
     def get_token_length_visualization(
         self, features: list[str], dataset: DatasetDict, save_path: str = "tmp.png", bins: int = 30
     ):
+        """Visualize the token length distribution of the dataset"""
         num_splits = len(dataset)
         cols = min(3, num_splits)  # Maximum 3 columns
         rows = math.ceil(num_splits / cols)
@@ -199,9 +202,10 @@ class PreferenceDatasetProcessor(DatasetProcessor):
         )
         if isinstance(dataset, DatasetDict):
             for key in dataset:
-                logging.info(
-                    f"Filtered out {len(dataset[key]) - len(filtered_dataset[key])} samples or {(len(dataset[key]) - len(filtered_dataset[key])) / len(dataset[key])}% samples from {key}"
-                )
+                filtered_count = len(dataset[key]) - len(filtered_dataset[key])
+                total_count = len(dataset[key])
+                percentage = (filtered_count / total_count) * 100 if total_count > 0 else 0
+                logging.info(f"Filtered out {filtered_count} samples or {percentage:.2f}% samples from {key}")
         return filtered_dataset
 
     def get_token_length_stats(self, dataset: Union[Dataset, DatasetDict]):

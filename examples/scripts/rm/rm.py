@@ -29,11 +29,11 @@ from trl.trainer.utils import layer_init
 
 
 """
-# interactive debugging
+# LEVEL 0: interactive debugging
 python -i examples/scripts/rm/rm.py \
     --dataset_name trl-internal-testing/sentiment-trl-style \
     --dataset_train_split train \
-    --dataset_test_split test \
+    --dataset_eval_split test \
     --model_name_or_path EleutherAI/pythia-160m \
     --chat_template simple_concat \
     --learning_rate 3e-6 \
@@ -47,15 +47,16 @@ python -i examples/scripts/rm/rm.py \
     --remove_unused_columns False \
     --num_train_epochs 1 \
     --eval_steps=100 \
-    --output_dir models/minimal/rm \
+    --output_dir models/rm/rm \
     --sanity_check \
 
-# single GPU model training; adjust your `per_device_train_batch_size` and
+# LEVEL 1: single GPU model training; adjust your `per_device_train_batch_size` and
 # `gradient_accumulation_steps` accordingly
+# you can also use the `trl-internal-testing/descriptiveness-trl-style` dataset
 python examples/scripts/rm/rm.py \
     --dataset_name trl-internal-testing/sentiment-trl-style \
     --dataset_train_split train \
-    --dataset_test_split test \
+    --dataset_eval_split test \
     --model_name_or_path EleutherAI/pythia-1b-deduped \
     --chat_template simple_concat \
     --learning_rate 3e-6 \
@@ -69,14 +70,59 @@ python examples/scripts/rm/rm.py \
     --remove_unused_columns False \
     --num_train_epochs 1 \
     --eval_steps=100 \
-    --output_dir models/minimal/rm_sentiment_1b \
+    --output_dir models/rm/rm_sentiment_1b \
     --push_to_hub \
 
+# LEVEL 2: multi-gpu training using DS2 with the TL;DR summarization dataset 
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
-    examples/scripts/minimal/rm_zephyr.py \
+    examples/scripts/rm/rm.py \
+    --dataset_name trl-internal-testing/tldr-preference-trl-style \
+    --dataset_train_split train \
+    --dataset_eval_split validation \
+    --model_name_or_path EleutherAI/pythia-2.8b-deduped \
+    --chat_template simple_concat \
+    --learning_rate 3e-6 \
+    --per_device_train_batch_size 1 \
+    --per_device_eval_batch_size 1 \
+    --gradient_accumulation_steps 32 \
+    --logging_steps 1 \
+    --eval_strategy steps \
+    --max_token_length 1024 \
+    --max_prompt_token_lenth 512 \
+    --remove_unused_columns False \
+    --num_train_epochs 1 \
+    --eval_steps=100 \
+    --output_dir models/rm/rm_tldr_2.8b \
+    --bf16 \
+
+# LEVEL 2: multi-gpu training using DS2 with the TL;DR summarization dataset 
+accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
+    examples/scripts/rm/rm.py \
+    --dataset_name trl-internal-testing/tldr-preference-trl-style \
+    --dataset_train_split train \
+    --dataset_eval_split validation \
+    --model_name_or_path EleutherAI/pythia-2.8b-deduped \
+    --chat_template simple_concat \
+    --learning_rate 3e-6 \
+    --per_device_train_batch_size 1 \
+    --per_device_eval_batch_size 1 \
+    --gradient_accumulation_steps 32 \
+    --logging_steps 1 \
+    --eval_strategy steps \
+    --max_token_length 1024 \
+    --max_prompt_token_lenth 512 \
+    --remove_unused_columns False \
+    --num_train_epochs 1 \
+    --eval_steps=100 \
+    --bf16 \
+    --output_dir models/rm/rm_tldr_2.8b \
+
+
+accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
+    examples/scripts/rm/rm_zephyr.py \
     --dataset_name HuggingFaceH4/ultrafeedback_binarized \
     --dataset_train_split train_prefs \
-    --dataset_test_split test_prefs \
+    --dataset_eval_split test_prefs \
     --chat_template zephyr \
     --learning_rate 3e-6 \
     --per_device_train_batch_size 1 \
@@ -90,7 +136,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --num_train_epochs 1 \
     --eval_steps=100 \
     --bf16 \
-    --output_dir models/minimal/rm_zephyr_7b \
+    --output_dir models/rm/rm_zephyr_7b \
 """
 
 
@@ -117,7 +163,7 @@ if __name__ == "__main__":
     dataset = dataset_processor.filter(dataset)
     dataset_processor.get_token_length_visualization(dataset, save_path="tmp.png")
     train_dataset = dataset[dataset_config.dataset_train_split]
-    eval_dataset = dataset[dataset_config.dataset_test_split]
+    eval_dataset = dataset[dataset_config.dataset_eval_split]
     visualize_token(train_dataset[0][INPUT_IDS_CHOSEN_KEY], tokenizer)
 
     ################
