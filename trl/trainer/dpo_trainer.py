@@ -1057,6 +1057,7 @@ class DPOTrainer(Trainer):
         elif self.loss_type == "exo_pair":
             # eqn (16) of the EXO paper: https://arxiv.org/pdf/2402.00856
             import math
+
             if self.label_smoothing == 0:
                 self.label_smoothing = 1e-3
             losses = (self.beta * logits).sigmoid() * (
