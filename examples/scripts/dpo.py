@@ -48,6 +48,19 @@ python examples/scripts/dpo.py \
     --use_peft \
     --lora_r=16 \
     --lora_alpha=16
+
+# vision with peft:
+accelerate launch examples/scripts/dpo.py \
+    --dataset_name HuggingFaceH4/rlaif-v_formatted \
+    --model_name_or_path HuggingFaceM4/idefics2-8b \
+    --output_dir dpo_idefics_rlaif-v \
+    --per_device_train_batch_size 1 \
+    --gradient_accumulation_steps 16 \
+    --learning_rate 1e-5 \
+    --bf16 \
+    --torch_dtype bfloat16 \
+    --use_peft \
+    --lora_target_modules=all-linear
 """
 
 import logging
@@ -58,6 +71,7 @@ from contextlib import nullcontext
 TRL_USE_RICH = os.environ.get("TRL_USE_RICH", False)
 
 from trl.commands.cli_utils import DPOScriptArguments, init_zero_verbose, TrlParser
+from accelerate import PartialState
 
 if TRL_USE_RICH:
     init_zero_verbose()
@@ -68,7 +82,7 @@ if TRL_USE_RICH:
 
 import torch
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, AutoModelForVision2Seq, AutoProcessor
 
 from trl import (
     DPOConfig,
@@ -112,13 +126,25 @@ if __name__ == "__main__":
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
-    model = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, **model_kwargs)
+    is_vision_model = model_config.model_name_or_path in ['HuggingFaceM4/idefics2-8b']
+    if is_vision_model:
+        model = AutoModelForVision2Seq.from_pretrained(model_config.model_name_or_path, **model_kwargs)
+    else:
+        model = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, **model_kwargs)
     peft_config = get_peft_config(model_config)
     if peft_config is None:
-        model_ref = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, **model_kwargs)
+        if is_vision_model:
+            model_ref = AutoModelForVision2Seq.from_pretrained(model_config.model_name_or_path, **model_kwargs)
+        else:
+            model_ref = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, **model_kwargs)
     else:
         model_ref = None
-    tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path)
+    if is_vision_model:
+        processor = AutoProcessor.from_pretrained(model_config.model_name_or_path, do_image_splitting=True)
+        tokenizer = processor.tokenizer
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path)
+    processor = AutoProcessor.from_pretrained(model_config.model_name_or_path, do_image_splitting=False)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     if tokenizer.chat_template is None:
@@ -148,16 +174,19 @@ if __name__ == "__main__":
             ds[key] = ds[key].select(range(50))
 
     def process(row):
-        row["prompt"] = tokenizer.apply_chat_template(row["chosen"][:-1], tokenize=False)
-        row["chosen"] = tokenizer.apply_chat_template([row["chosen"][-1]], tokenize=False)
-        row["rejected"] = tokenizer.apply_chat_template([row["rejected"][-1]], tokenize=False)
+        row["prompt"] = tokenizer.apply_chat_template(row["prompt"], tokenize=False)
+        row["chosen"] = tokenizer.apply_chat_template(row["chosen"], tokenize=False)
+        row["rejected"] = tokenizer.apply_chat_template(row["rejected"], tokenize=False)
+        if "images" in row:
+            for idx, img in enumerate(row["images"]):  # Resize image so that the largest side is 640
+                ratio = min(1.0, 640 / max(img.size))
+                new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
+                row["images"][idx] = img.resize(new_size)
+            row["images"] = row["images"]
         return row
 
-    ds = ds.map(
-        process,
-        num_proc=multiprocessing.cpu_count(),
-        load_from_cache_file=False,
-    )
+    with PartialState().local_main_process_first():
+        ds = ds.map(process, num_proc=multiprocessing.cpu_count())
     train_dataset = ds[args.dataset_train_split]
     eval_dataset = ds[args.dataset_test_split]
 
@@ -171,7 +200,7 @@ if __name__ == "__main__":
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            tokenizer=tokenizer,
+            tokenizer=processor if is_vision_model else tokenizer,
             peft_config=get_peft_config(model_config),
             callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
         )
