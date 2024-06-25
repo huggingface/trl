@@ -15,7 +15,7 @@ import tempfile
 import unittest
 
 import torch
-from datasets import Dataset
+from datasets import Dataset, features
 from parameterized import parameterized
 from PIL import Image
 from pytest import mark
@@ -142,7 +142,15 @@ class DPOTrainerTester(unittest.TestCase):
             ],
         }
         # fmt: on
-        return Dataset.from_dict(dummy_dataset_dict)
+        f = features.Features(
+            {
+                "images": features.Sequence(features.Image(decode=True)),  # datasets handles badly sequence of images
+                "prompt": features.Value("string"),
+                "chosen": features.Value("string"),
+                "rejected": features.Value("string"),
+            }
+        )
+        return Dataset.from_dict(dummy_dataset_dict, features=f)
 
     @parameterized.expand(
         [
