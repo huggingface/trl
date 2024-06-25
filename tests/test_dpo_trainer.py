@@ -741,7 +741,7 @@ class DPOTrainerTester(unittest.TestCase):
                 remove_unused_columns=False,
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 f_divergence_type=FDivergenceType.ALPHA_DIVERGENCE.value,
                 f_alpha_divergence_coef=0.5,
             )
@@ -783,7 +783,7 @@ class DPOTrainerTester(unittest.TestCase):
                 remove_unused_columns=False,
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 f_divergence_type=FDivergenceType.JS_DIVERGENCE.value,
                 f_alpha_divergence_coef=0.5,
             )
