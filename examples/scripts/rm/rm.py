@@ -47,8 +47,8 @@ python -i examples/scripts/rm/rm.py \
     --remove_unused_columns False \
     --num_train_epochs 1 \
     --eval_steps=100 \
-    --sanity_check \
     --output_dir models/minimal/rm \
+    --sanity_check \
 
 # single GPU model training; adjust your `per_device_train_batch_size` and
 # `gradient_accumulation_steps` accordingly
@@ -110,15 +110,15 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    raw_datasets = load_dataset(dataset_config.dataset_name)
+    dataset = load_dataset(dataset_config.dataset_name)
     dataset_processor = PreferenceDatasetProcessor(tokenizer=tokenizer, config=dataset_config)
-    dataset_processor.sanity_check_(raw_datasets)
-    train_dataset = dataset_processor.tokenize(raw_datasets[dataset_config.dataset_train_split])
-    eval_dataset = dataset_processor.tokenize(raw_datasets[dataset_config.dataset_test_split])
-    train_dataset = dataset_processor.filter(train_dataset)
-    eval_dataset = dataset_processor.filter(eval_dataset)
+    dataset_processor.sanity_check_(dataset)
+    dataset = dataset_processor.tokenize(dataset)
+    dataset = dataset_processor.filter(dataset)
+    dataset_processor.get_token_length_visualization(dataset, save_path="tmp.png")
+    train_dataset = dataset[dataset_config.dataset_train_split]
+    eval_dataset = dataset[dataset_config.dataset_test_split]
     visualize_token(train_dataset[0][INPUT_IDS_CHOSEN_KEY], tokenizer)
-    dataset_processor.get_token_length_visualization(train_dataset, save_path="tmp.png")
 
     ################
     # Model & Training

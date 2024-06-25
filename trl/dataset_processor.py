@@ -23,15 +23,19 @@
 # * `max_prompt_length` in DPO
 
 import logging
+import math
 import multiprocessing
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Union
 
 import matplotlib.pyplot as plt
 from datasets import Dataset, DatasetDict
 from rich.console import Console
 from rich.text import Text
 from transformers import PreTrainedTokenizer
+
+
+logging.basicConfig(level=logging.INFO)
 
 
 COLORS = ["on red", "on green", "on blue", "on yellow", "on magenta"]
@@ -100,10 +104,10 @@ class DatasetProcessor:
                 "Tokenizer's pad token is the same as EOS token, this might cause the model to not learn to generate EOS tokens."
             )
 
-    def tokenize(self, dataset: Dataset):
+    def tokenize(self, dataset: Union[Dataset, DatasetDict]):
         raise NotImplementedError
 
-    def filter(self, dataset: Dataset):
+    def filter(self, dataset: DatasetDict):
         if self.config is None:
             logging.warn("No config provided, skipping filtering")
             return dataset
@@ -114,7 +118,16 @@ class DatasetProcessor:
             for key in dataset:
                 dataset[key] = dataset[key].select(range(min(self.config.sanity_check_max_samples, len(dataset[key]))))
 
-    def get_token_length_stats(self, features: list[str], dataset: Dataset):
+    def get_token_length_stats(self, features: list[str], dataset: Union[Dataset, DatasetDict]):
+        if isinstance(dataset, Dataset):
+            return self._get_token_length_stats(features, dataset)
+        elif isinstance(dataset, DatasetDict):
+            stats = {}
+            for key in dataset:
+                stats[key] = self._get_token_length_stats(features, dataset[key])
+            return stats
+
+    def _get_token_length_stats(self, features: list[str], dataset: Dataset):
         stats = {}
         for key in features:
             stats[key] = {
@@ -125,28 +138,37 @@ class DatasetProcessor:
         return stats
 
     def get_token_length_visualization(
-        self, features: list[str], dataset: Dataset, save_path: str = "tmp.png", bins: int = 30
+        self, features: list[str], dataset: DatasetDict, save_path: str = "tmp.png", bins: int = 30
     ):
-        plt.figure(figsize=(10, 5))
+        num_splits = len(dataset)
+        cols = min(3, num_splits)  # Maximum 3 columns
+        rows = math.ceil(num_splits / cols)
 
-        for feature in features:
-            token_lengths = [len(x) for x in dataset[feature]]
+        fig, axs = plt.subplots(rows, cols, figsize=(6 * cols, 5 * rows), squeeze=False)
+        fig.suptitle("Token Length Distribution", fontsize=16)
 
-            # Plot the histogram of token lengths
-            plt.hist(token_lengths, bins=bins, alpha=0.5, label=feature, edgecolor="black")
+        for idx, (split_name, item) in enumerate(dataset.items()):
+            row = idx // cols
+            col = idx % cols
+            ax = axs[row, col]
 
-        # Add title and labels
-        plt.title("Token Length Distribution")
-        plt.xlabel("Token Length")
-        plt.ylabel("Frequency")
-        plt.legend(loc="upper right")
-        # Show the plot
+            for feature in features:
+                token_lengths = [len(x) for x in item[feature]]
+                ax.hist(token_lengths, bins=bins, alpha=0.5, label=feature, edgecolor="black")
+
+            ax.set_title(f"{split_name} split")
+            ax.set_xlabel("Token Length")
+            ax.set_ylabel("Frequency")
+            ax.legend(loc="upper right")
+
+        plt.tight_layout()
         plt.savefig(save_path)
         logging.info(f"Saved token length distribution plot to {save_path}")
+        plt.close(fig)  # Close the figure to free up memory
 
 
 class PreferenceDatasetProcessor(DatasetProcessor):
-    def tokenize(self, dataset: Dataset):
+    def tokenize(self, dataset: Union[Dataset, DatasetDict]):
         def tokenize_fn(row):
             row[INPUT_IDS_PROMPT_KEY] = self.tokenizer.apply_chat_template(row[CHOSEN_KEY][:-1])
             row[ATTENTION_MASK_PROMPT_KEY] = [1] * len(row[INPUT_IDS_PROMPT_KEY])
@@ -160,7 +182,7 @@ class PreferenceDatasetProcessor(DatasetProcessor):
             tokenize_fn, num_proc=self.config.num_proc, load_from_cache_file=self.config.load_from_cache_file
         )
 
-    def filter(self, dataset: Dataset):
+    def filter(self, dataset: Union[Dataset, DatasetDict]):
         def filter_fn(row):
             return (
                 len(row[INPUT_IDS_PROMPT_KEY]) <= self.config.max_prompt_token_lenth
@@ -172,16 +194,22 @@ class PreferenceDatasetProcessor(DatasetProcessor):
                 else True
             )
 
-        return dataset.filter(
+        filtered_dataset = dataset.filter(
             filter_fn, num_proc=self.config.num_proc, load_from_cache_file=self.config.load_from_cache_file
         )
+        if isinstance(dataset, DatasetDict):
+            for key in dataset:
+                logging.info(
+                    f"Filtered out {len(dataset[key]) - len(filtered_dataset[key])} samples or {(len(dataset[key]) - len(filtered_dataset[key])) / len(dataset[key])}% samples from {key}"
+                )
+        return filtered_dataset
 
-    def get_token_length_stats(self, dataset: Dataset):
+    def get_token_length_stats(self, dataset: Union[Dataset, DatasetDict]):
         return super().get_token_length_stats(
             features=[INPUT_IDS_PROMPT_KEY, INPUT_IDS_CHOSEN_KEY, INPUT_IDS_REJECTED_KEY], dataset=dataset
         )
 
-    def get_token_length_visualization(self, dataset: Dataset, save_path: str = "tmp.png", bins: int = 30):
+    def get_token_length_visualization(self, dataset: DatasetDict, save_path: str = "tmp.png", bins: int = 30):
         return super().get_token_length_visualization(
             features=[INPUT_IDS_PROMPT_KEY, INPUT_IDS_CHOSEN_KEY, INPUT_IDS_REJECTED_KEY],
             dataset=dataset,
@@ -191,7 +219,7 @@ class PreferenceDatasetProcessor(DatasetProcessor):
 
 
 class SFTDatasetProcessor(DatasetProcessor):
-    def tokenize(self, dataset: Dataset):
+    def tokenize(self, dataset: Union[Dataset, DatasetDict]):
         def tokenize_fn(row):
             row[INPUT_IDS_PROMPT_KEY] = self.tokenizer.apply_chat_template(row[MESSAGES_KEY][:-1])
             row[INPUT_IDS_KEY] = self.tokenizer.apply_chat_template(row[MESSAGES_KEY])
@@ -215,10 +243,10 @@ class SFTDatasetProcessor(DatasetProcessor):
             filter_fn, num_proc=self.config.num_proc, load_from_cache_file=self.config.load_from_cache_file
         )
 
-    def get_token_length_stats(self, dataset: Dataset):
+    def get_token_length_stats(self, dataset: Union[Dataset, DatasetDict]):
         return super().get_token_length_stats(features=[INPUT_IDS_PROMPT_KEY, INPUT_IDS_KEY], dataset=dataset)
 
-    def get_token_length_visualization(self, dataset: Dataset, save_path: str = "tmp.png", bins: int = 30):
+    def get_token_length_visualization(self, dataset: DatasetDict, save_path: str = "tmp.png", bins: int = 30):
         return super().get_token_length_visualization(
             features=[INPUT_IDS_PROMPT_KEY, INPUT_IDS_KEY],
             dataset=dataset,
