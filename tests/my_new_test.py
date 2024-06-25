@@ -1,9 +1,10 @@
+import datasets
 import torch
 from datasets import Dataset
-from transformers import AutoModelForVision2Seq, AutoProcessor
 from PIL import Image
+from transformers import AutoModelForVision2Seq, AutoProcessor
+
 from trl import DPOConfig, DPOTrainer
-import datasets
 
 
 # Get the model
