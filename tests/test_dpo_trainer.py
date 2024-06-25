@@ -97,6 +97,8 @@ class DPOTrainerTester(unittest.TestCase):
             ["gpt2", "nca_pair", False],
             ["t5", "nca_pair", True],
             ["gpt2", "robust", True],
+            ["gpt2", "exo_pair", False],
+            ["t5", "exo_pair", True],
         ]
     )
     def test_dpo_trainer(self, name, loss_type, pre_compute):
