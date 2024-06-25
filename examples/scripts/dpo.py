@@ -174,7 +174,8 @@ if __name__ == "__main__":
             ds[key] = ds[key].select(range(50))
 
     def process(row):
-        row["prompt"] = tokenizer.apply_chat_template(row["prompt"], tokenize=False)
+        if "prompt" in row:
+            row["prompt"] = tokenizer.apply_chat_template(row["prompt"], tokenize=False)
         row["chosen"] = tokenizer.apply_chat_template(row["chosen"], tokenize=False)
         row["rejected"] = tokenizer.apply_chat_template(row["rejected"], tokenize=False)
         if "images" in row:
