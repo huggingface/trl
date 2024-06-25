@@ -49,7 +49,8 @@ kto_dataset_dict = {
 ```
 
 where the `prompt` contains the context inputs, `completion` contains the corresponding responses and `label` contains the corresponding flag that indicates if the generated completion is desired (`True`) or undesired (`False`).
-A prompt can have multiple responses and this is reflected in the entries being repeated in the dictionary's value arrays.
+A prompt can have multiple responses and this is reflected in the entries being repeated in the dictionary's value arrays. It is required that the dataset contains at least one desirable and one undesirable completion.
+
 
 ## Expected model format
 The KTO trainer expects a model of `AutoModelForCausalLM`, compared to PPO that expects `AutoModelForCausalLMWithValueHead` for the value function.
@@ -90,6 +91,14 @@ Given the binary signal data indicating whether a completion is desirable or und
 
 The [BCO](https://arxiv.org/abs/2404.04656) authors train a binary classifier whose logit serves as a reward so that the classifier maps {prompt, chosen completion} pairs to 1 and {prompt, rejected completion} pairs to 0.
 The `KTOTrainer` can be switched to this loss via the `loss_type="bco"` argument.
+
+### For Mixture of Experts Models: Enabling the auxiliary loss
+
+MOEs are the most efficient if the load is about equally distributed between experts.  
+To ensure that we train MOEs similarly during preference-tuning, it is beneficial to add the auxiliary loss from the load balancer to the final loss.  
+
+This option is enabled by setting `output_router_logits=True` in the model config (e.g. MixtralConfig).  
+To scale how much the auxiliary loss contributes to the total loss, use the hyperparameter `router_aux_loss_coef=...` (default: 0.001).
 
 ## KTOTrainer
 

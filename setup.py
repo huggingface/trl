@@ -58,12 +58,12 @@ import os
 from setuptools import find_packages, setup
 
 
-__version__ = "0.8.7.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
+__version__ = "0.9.5.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
 
 REQUIRED_PKGS = [
     "torch>=1.4.0",
     "transformers>=4.31.0",
-    "numpy>=1.18.2",
+    "numpy>=1.18.2,<2.0.0",
     "accelerate",
     "datasets",
     "tyro>=0.5.11",
