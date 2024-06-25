@@ -97,48 +97,40 @@ class DPOTrainerTester(unittest.TestCase):
         # fmt: off
         dummy_dataset_dict = {
             "images": [
-                [Image.new("RGB", (100, 100), color="black")],
-                [Image.new("RGB", (133, 100), color="red")],
-                [Image.new("RGB", (100, 133), color="green")],
-                [Image.new("RGB", (133, 133), color="blue")],
-                [Image.new("RGB", (200, 50), color="yellow")],
-                [Image.new("RGB", (50, 200), color="magenta")],
-                [Image.new("RGB", (200, 200), color="cyan")],
-                [Image.new("RGB", (50, 50), color="white")],
-                [Image.new("RGB", (100, 100), color="orange")],
+                [Image.new("RGB", (100, 50), color="black")],
+                # None,
+                # [Image.new("RGB", (100, 100), color="blue"), Image.new("RGB", (150, 50), color="red")],
+                [Image.new("RGB", (200, 100), color="green")],
+                # [Image.new("RGB", (150, 150), color="yellow"), Image.new("RGB", (50, 150), color="purple")],
+                [Image.new("RGB", (80, 120), color="gray")],
+                [Image.new("RGB", (120, 80), color="pink")],
             ],
             "prompt": [
-                "hello",
-                "how are you",
-                "What is your name?",
-                "What is your name?",
-                "Which is the best programming language?",
-                "Which is the best programming language?",
-                "Which is the best programming language?",
-                "[INST] How is the stock price? [/INST]",
-                "[INST] How is the stock price? [/INST] ",
+                "<image> Hello",
+                # "How are you?",
+                # "<image><image> Let's chat",
+                "<image> Good morning",
+                # "<image><image> What's up?",
+                "Can you see this? <image>",
+                "Here is something interesting: <image>",
             ],
             "chosen": [
-                "hi nice to meet you",
-                "I am fine",
-                "My name is Mary",
-                "My name is Mary",
-                "Python",
-                "Python",
-                "Python",
-                "$46 as of 10am EST",
-                "46 as of 10am EST",
+                "Hi nice to meet you!",
+                # "I'm doing well, thank you!",
+                # "Sure, let's talk!",
+                "Good morning to you too!",
+                # "Not much, just working.",
+                "Yes, I can see it clearly.",
+                "That's quite interesting indeed.",
             ],
             "rejected": [
-                "leave me alone",
-                "I am not fine",
-                "Whats it to you?",
-                "I dont have a name",
-                "Javascript",
-                "C++",
-                "Java",
-                " $46 as of 10am EST",
-                " 46 as of 10am EST",
+                "Leave me alone!",
+                # "I'm not interested.",
+                # "I don't want to chat.",
+                "I'm still sleepy.",
+                # "Busy right now, talk later.",
+                "No, I can't see it.",
+                "I'm not sure what that is.",
             ],
         }
         # fmt: on
@@ -247,8 +239,6 @@ class DPOTrainerTester(unittest.TestCase):
             model = self.idefics2_model
             ref_model = self.idefics2_ref_model
             processor = self.idefics2_processor
-
-            processor.pad_token_id = processor.tokenizer.pad_token_id
 
             trainer = DPOTrainer(
                 model=model,
@@ -931,3 +921,7 @@ class DPOTrainerTester(unittest.TestCase):
                 policy_chosen_logps, policy_rejected_logps, reference_chosen_logps, reference_rejected_logps
             )
             assert torch.isfinite(losses).cpu().numpy().all()
+
+
+if __name__ == "__main__":
+    unittest.main()

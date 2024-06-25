@@ -746,7 +746,7 @@ class DPOTrainer(Trainer):
         answer_input_ids = full_tokenized["input_ids"][response_token_ids_start_idx:]
         answer_attention_mask = full_tokenized["attention_mask"][response_token_ids_start_idx:]
 
-        if self.is_vision_model:
+        if "pixel_values" in full_tokenized:
             return dict(
                 prompt_input_ids=prompt_input_ids,
                 prompt_attention_mask=prompt_attention_mask,
@@ -761,7 +761,6 @@ class DPOTrainer(Trainer):
                 prompt_attention_mask=prompt_attention_mask,
                 input_ids=answer_input_ids,
                 attention_mask=answer_attention_mask,
-                pixel_value=full_tokenized,
             )
 
     def tokenize_row(self, feature, model: Optional[Union[PreTrainedModel, nn.Module]] = None) -> Dict:
