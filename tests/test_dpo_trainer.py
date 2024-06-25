@@ -17,10 +17,17 @@ import unittest
 import torch
 from datasets import Dataset
 from parameterized import parameterized
-from pytest import mark
-from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer, AutoModelForVision2Seq, AutoProcessor
 from PIL import Image
-from trl import DPOConfig, DPOTrainer, FDivergenceType
+from pytest import mark
+from transformers import (
+    AutoModelForCausalLM,
+    AutoModelForSeq2SeqLM,
+    AutoModelForVision2Seq,
+    AutoProcessor,
+    AutoTokenizer,
+)
+
+from trl import DPOConfig, DPOTrainer
 
 from .testing_utils import require_bitsandbytes, require_no_wandb, require_peft
 
@@ -207,7 +214,6 @@ class DPOTrainerTester(unittest.TestCase):
                 if param.sum() != 0:
                     assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
 
-
     @parameterized.expand(
         [
             ["sigmoid", True],
@@ -257,7 +263,6 @@ class DPOTrainerTester(unittest.TestCase):
                 # check the params have changed - ignore 0 biases
                 if param.sum() != 0:
                     assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
-
 
     def test_dpo_trainer_without_providing_ref_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

@@ -126,7 +126,7 @@ if __name__ == "__main__":
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
-    is_vision_model = model_config.model_name_or_path in ['HuggingFaceM4/idefics2-8b']
+    is_vision_model = model_config.model_name_or_path in ["HuggingFaceM4/idefics2-8b"]
     if is_vision_model:
         model = AutoModelForVision2Seq.from_pretrained(model_config.model_name_or_path, **model_kwargs)
     else:

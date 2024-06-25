@@ -323,10 +323,10 @@ class DPOTrainer(Trainer):
                 "No model provided, cannot determine if it is a vision model. Setting is_vision_model to False."
             )
             self.is_vision_model = False
-        
+
         if self.is_vision_model:
             self.processor = tokenizer
-            self.tokenizer = tokenizer.tokenizer # tokenizer is actually a processor at this point
+            self.tokenizer = tokenizer.tokenizer  # tokenizer is actually a processor at this point
         else:
             self.tokenizer = tokenizer
 
