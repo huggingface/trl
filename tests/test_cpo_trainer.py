@@ -100,6 +100,7 @@ class CPOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 beta=0.1,
                 loss_type=loss_type,
+                cpo_alpha=1.0,
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -156,6 +157,7 @@ class CPOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
+                cpo_alpha=1.0,
             )
 
             dummy_dataset = self._init_dummy_dataset()

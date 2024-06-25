@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import platform
 import subprocess
 
 import torch
@@ -18,16 +19,20 @@ import torch
 
 def test():
     command = """\
-python -i examples/scripts/rloo/rloo.py \
+python examples/scripts/rloo/rloo.py \
     --learning_rate 3e-6 \
     --output_dir models/minimal/rloo \
-    --per_device_train_batch_size 5 \
+    --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 1 \
     --total_episodes 10 \
     --model_name_or_path EleutherAI/pythia-14m \
     --non_eos_penalty \
     --stop_token eos \
 """
+    if platform.system() == "Windows":
+        # windows CI does not work with subprocesses for some reason
+        # e.g., https://github.com/huggingface/trl/actions/runs/9600036224/job/26475286210?pr=1743
+        return
     subprocess.run(
         command,
         shell=True,

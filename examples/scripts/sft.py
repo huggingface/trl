@@ -16,6 +16,7 @@
 # regular:
 python examples/scripts/sft.py \
     --model_name_or_path="facebook/opt-350m" \
+    --dataset_text_field="text" \
     --report_to="wandb" \
     --learning_rate=1.41e-5 \
     --per_device_train_batch_size=64 \
@@ -30,6 +31,7 @@ python examples/scripts/sft.py \
 # peft:
 python examples/scripts/sft.py \
     --model_name_or_path="facebook/opt-350m" \
+    --dataset_text_field="text" \
     --report_to="wandb" \
     --learning_rate=1.41e-5 \
     --per_device_train_batch_size=64 \

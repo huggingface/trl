@@ -859,6 +859,32 @@ class RichProgressCallback(TrainerCallback):
             self.current_step = None
 
 
+def get_exp_cap(value, decimal=4):
+    """
+    Get the exponent cap of a value. This is used to cap the exponent of a value to avoid overflow.
+    The formula is : log(value.dtype.max)
+    E.g.
+      For float32 data type, the maximum exponent value is 88.7228 to 4 decimal points.
+    ```
+    Args:
+        value (`torch.Tensor`):
+            The input tensor to obtain the data type
+        decimal (`int`):
+            The number of decimal points of the output exponent cap.
+            eg: direct calling exp(log(torch.float32.max)) will result in inf
+            so we cap the exponent to 88.7228 to avoid overflow.
+    """
+    vdtype_max = torch.zeros([1]).to(value.dtype) + torch.finfo(value.dtype).max
+    vdtype_log_max = torch.log(vdtype_max).to(value.device)
+    return torch.floor(vdtype_log_max * 10**decimal) / 10**decimal if decimal > 0 else vdtype_log_max
+
+
+def cap_exp(value, cap=-1):
+    # Cap the exponent value below the upper-bound to avoid overflow, before calling torch.exp
+    cap = get_exp_cap(value) if cap < 0 else cap
+    return torch.exp(torch.clamp(value, max=cap))
+
+
 def print_rich_table(df: pd.DataFrame) -> Table:
     console = Console()
     table = Table(show_lines=True)
@@ -1001,7 +1027,9 @@ def forward(
     )
 
 
-def prepare_deepspeed(model: torch.nn.Module, per_device_train_batch_size: int):
+def prepare_deepspeed(
+    model: torch.nn.Module, per_device_train_batch_size: int, fp16: bool = False, bf16: bool = False
+):
     """
     Prepares the model for training with DeepSpeed (both for stage 2 and 3), configuring the appropriate settings based on the model and
     batch size.
@@ -1024,10 +1052,13 @@ def prepare_deepspeed(model: torch.nn.Module, per_device_train_batch_size: int):
         config_kwargs["train_micro_batch_size_per_gpu"] = per_device_train_batch_size
         config_kwargs = {
             "train_micro_batch_size_per_gpu": config_kwargs["train_micro_batch_size_per_gpu"],
-            "bf16": {"enabled": True},
             "prescale_gradients": False,
             "wall_clock_breakdown": False,
         }
+        if bf16:
+            config_kwargs["bf16"] = {"enabled": True}
+        elif fp16:
+            config_kwargs["fp16"] = {"enabled": True}
     else:
         if hasattr(model, "config"):
             hidden_size = (

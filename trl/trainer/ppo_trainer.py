@@ -614,7 +614,7 @@ class PPOTrainer(BaseTrainer):
             scores (List[`torch.FloatTensor`]):
                 List of tensors containing the scores.
             masks (List[`torch.LongTensor`], *optional*):
-                list of optional tensors containing the masks of shape (`query_length` + `response_length`)
+                list of optional tensors containing the masks of shape (`response_length`)
         Returns:
             `tuple`: The input processed data.
         """
@@ -1033,15 +1033,11 @@ class PPOTrainer(BaseTrainer):
                     if attention_mask[j, 0] == 0:  # offset left padding
                         start += attention_mask[j, :].nonzero()[0]
                     end = start + len(response_batch[j])
-                    if response_masks is not None:
-                        response_masks_batch[j] = torch.cat(
-                            (torch.zeros_like(query_batch[j]), response_masks_batch[j])
-                        )[1:]
 
                 masks[j, :start] = 0
                 masks[j, end:] = 0
                 if response_masks is not None:
-                    masks[j, start:end] = masks[j, start:end] * response_masks_batch[j][start:end]
+                    masks[j, start:end] = masks[j, start:end] * response_masks_batch[j]
 
             if return_logits:
                 all_logits.append(logits)
