@@ -1059,10 +1059,9 @@ class DPOTrainer(Trainer):
             import math
             if self.label_smoothing == 0:
                 self.label_smoothing = 1e-3
-            losses = (
-                (self.beta * logits).sigmoid() * ((self.beta * logits).logsigmoid() - math.log(1 - self.label_smoothing)) 
-              + (-self.beta * logits).sigmoid() * ((-self.beta * logits).logsigmoid() - math.log(self.label_smoothing))
-            )
+            losses = (self.beta * logits).sigmoid() * (
+                (self.beta * logits).logsigmoid() - math.log(1 - self.label_smoothing)
+            ) + (-self.beta * logits).sigmoid() * ((-self.beta * logits).logsigmoid() - math.log(self.label_smoothing))
         elif self.loss_type == "hinge":
             losses = torch.relu(1 - self.beta * logits)
         elif self.loss_type == "ipo":
