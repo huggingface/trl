@@ -72,6 +72,8 @@ where the `prompt` contains the context inputs, `chosen` contains the correspond
 
 `DPOTrainer` can be used to fine-tune visual language models (VLMs). In this case, the dataset must also contain the key `images`. For example, for Idefics2, the processor expects the dataset to have the following format:
 
+Note: Currently, VLM support is exclusive to Idefics2 and does not extend to other VLMs.
+
 ```py
 dpo_dataset_dict = {
     'images': [
