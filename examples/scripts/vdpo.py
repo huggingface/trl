@@ -146,10 +146,10 @@ if __name__ == "__main__":
         #        "chosen": [{"content": "It means to get rid of the toxins.", "role": "assistant"}],
         #        "rejected": [{"content": "I don't know.", "role": "user"}]}
         if "prompt" in row and isinstance(row["prompt"], list):
-            row["prompt"] = tokenizer.apply_chat_template(row["prompt"], tokenize=False)
+            row["prompt"] = processor.apply_chat_template(row["prompt"], tokenize=False)
 
-        row["chosen"] = tokenizer.apply_chat_template(row["chosen"], tokenize=False)
-        row["rejected"] = tokenizer.apply_chat_template(row["rejected"], tokenize=False)
+        row["chosen"] = processor.apply_chat_template(row["chosen"], tokenize=False)
+        row["rejected"] = processor.apply_chat_template(row["rejected"], tokenize=False)
 
         if "images" in row:
             for idx, img in enumerate(row["images"]):  # Resize each image so the largest side is 640 pixels

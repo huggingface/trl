@@ -181,16 +181,21 @@ if __name__ == "__main__":
         # Example 1:
         # row = {"prompt": "What does detox mean?",
         #        "chosen": [{"content": "What does detox mean?", "role": "user"}, {"content": "It means to get rid of the toxins.", "role": "assistant"}],
-        #        "rejected": [{"content": "What does detox mean?", "role": "assistant"}, {"content": "I don't know.", "role": "user"}]}
+        #        "rejected": [{"content": "What does detox mean?", "role": "assistant"}, {"content": "I don't know.", "role": "assistant"}]}
         # Example 2:
         # row = {"prompt": [{"content": "What does detox mean?", "role": "user"}],
         #        "chosen": [{"content": "It means to get rid of the toxins.", "role": "assistant"}],
-        #        "rejected": [{"content": "I don't know.", "role": "user"}]}
-        if "prompt" in row and isinstance(row["prompt"], list):
-            row["prompt"] = tokenizer.apply_chat_template(row["prompt"], tokenize=False)
+        #        "rejected": [{"content": "I don't know.", "role": "assistant"}]}
+        if is_vision_model:
+            apply_chat_template = processor.apply_chat_template
+        else:
+            apply_chat_template = tokenizer.apply_chat_template
 
-        row["chosen"] = tokenizer.apply_chat_template(row["chosen"], tokenize=False)
-        row["rejected"] = tokenizer.apply_chat_template(row["rejected"], tokenize=False)
+        if "prompt" in row and isinstance(row["prompt"], list):
+            row["prompt"] = apply_chat_template(row["prompt"], tokenize=False)
+
+        row["chosen"] = apply_chat_template(row["chosen"], tokenize=False)
+        row["rejected"] = apply_chat_template(row["rejected"], tokenize=False)
 
         if "images" in row:
             for idx, img in enumerate(row["images"]):  # Resize each image so the largest side is 640 pixels
