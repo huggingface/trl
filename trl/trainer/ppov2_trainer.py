@@ -220,7 +220,7 @@ class PPOv2Trainer(Trainer):
             self.model = self.accelerator.unwrap_model(self.model).policy  # save only the policy
         if output_dir is None:
             output_dir = self.args.output_dir
-        state_dict = self.accelerator.get_state_dict(self.backup_model)
+        state_dict = self.accelerator.get_state_dict(self.model)
         policy_state_dict = state_dict
         if self.accelerator.is_main_process:
             policy_state_dict = OrderedDict(
