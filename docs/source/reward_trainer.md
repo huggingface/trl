@@ -37,7 +37,7 @@ python examples/scripts/rm/rm.py \
     --dataset_train_split train \
     --dataset_eval_split test \
     --model_name_or_path EleutherAI/pythia-1b-deduped \
-    --chat_template simple_concat \
+    --chat_template simple_concat_with_space \
     --learning_rate 3e-6 \
     --per_device_train_batch_size 32 \
     --per_device_eval_batch_size 32 \
@@ -174,6 +174,195 @@ To help you understand what your model is doing, we periodically log some the pr
 * Memory TIP: If you are running out of memory, you can try to reduce the `--per_device_train_batch_size` or increase the `--gradient_accumulation_steps` to reduce the memory footprint.
 * Memory TIP: If you have multiple GPUs, you can also run training with DeepSpeed stage 3 to reduce the memory footprint `accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml`.
 * Usage TIP: Make sure you understand the dataset by looking the tokenized inputs: do something like `print(train_dataset[0][INPUT_IDS_CHOSEN_KEY])` and `print(tokenizer.decode(train_dataset[0][INPUT_IDS_CHOSEN_KEY]))`. You should also see the token length distribution by running `dataset_processor.get_token_length_visualization`. Make sure nothing weird happens like the token length being too long or too short. You can customize by tweaking the `max_token_length=1024` and `max_prompt_token_lenth=1024` options.
+
+
+## Benchmark experiments
+
+To validate the RM implementation works, we ran some experimetns on TRL-style preference datasets.
+
+
+```
+python examples/scripts/rm/rm.py \
+    --dataset_name trl-internal-testing/sentiment-trl-style \
+    --dataset_train_split train \
+    --dataset_eval_split test \
+    --model_name_or_path EleutherAI/pythia-1b-deduped \
+    --chat_template simple_concat_with_space \
+    --learning_rate 3e-6 \
+    --per_device_train_batch_size 32 \
+    --per_device_eval_batch_size 32 \
+    --gradient_accumulation_steps 1 \
+    --logging_steps 1 \
+    --eval_strategy steps \
+    --max_token_length 1024 \
+    --max_prompt_token_lenth 1024 \
+    --remove_unused_columns False \
+    --num_train_epochs 1 \
+    --eval_steps=100 \
+    --output_dir models/rm/rm_sentiment_1b \
+    --push_to_hub \
+    --hub_model_id trl-internal-testing/rm_sentiment_1b
+
+# plot
+# pip install openrlbenchmark==0.2.1a5
+python -m openrlbenchmark.rlops_multi_metrics \
+    --filters '?we=huggingface&wpn=trl&xaxis=train/epoch&ceik=output_dir&cen=output_dir&metrics=train/loss&metrics=eval/accuracy&metrics=eval/loss&metrics=train/grad_norm&metrics=train/learning_rate&metrics=eval/runtime&metrics=eval/samples_per_second&metrics=eval/steps_per_second' \
+        "models/rm/rm_sentiment_1b?tag=pr-1646" \
+    --env-ids models/rm/rm_sentiment_1b \
+    --pc.ncols 4 \
+    --pc.ncols-legend 1 \
+    --pc.xlabel "Epoch" \
+    --output-filename benchmark/trl/pr-1646/rm_sentiment_1b \
+    --scan-history
+```
+
+
+* [🤗 Trained model](https://huggingface.co/trl-internal-testing/rm_sentiment_1b)
+* [🐝 Tracked experiment](https://wandb.ai/huggingface/trl/runs/kkboirll)
+
+<div style="text-align: center">
+<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/benchmark/trl/pr-1646/rm_sentiment_1b.png?download=true">
+</div>
+
+
+
+```
+python examples/scripts/rm/rm.py \
+    --dataset_name trl-internal-testing/descriptiveness-trl-style \
+    --dataset_train_split train \
+    --dataset_eval_split test \
+    --model_name_or_path EleutherAI/pythia-1b-deduped \
+    --chat_template simple_concat_with_space \
+    --learning_rate 3e-6 \
+    --per_device_train_batch_size 32 \
+    --per_device_eval_batch_size 32 \
+    --gradient_accumulation_steps 1 \
+    --logging_steps 1 \
+    --eval_strategy steps \
+    --max_token_length 1024 \
+    --max_prompt_token_lenth 1024 \
+    --remove_unused_columns False \
+    --num_train_epochs 1 \
+    --eval_steps=100 \
+    --output_dir models/rm/rm_descriptiveness_1b \
+    --push_to_hub \
+    --hub_model_id trl-internal-testing/rm_descriptiveness_1b
+
+# plot
+# pip install openrlbenchmark==0.2.1a5
+python -m openrlbenchmark.rlops_multi_metrics \
+    --filters '?we=huggingface&wpn=trl&xaxis=train/epoch&ceik=output_dir&cen=output_dir&metrics=train/loss&metrics=eval/accuracy&metrics=eval/loss&metrics=train/grad_norm&metrics=train/learning_rate&metrics=eval/runtime&metrics=eval/samples_per_second&metrics=eval/steps_per_second' \
+        "models/rm/rm_descriptiveness_1b?tag=pr-1646" \
+    --env-ids models/rm/rm_descriptiveness_1b \
+    --pc.ncols 4 \
+    --pc.ncols-legend 1 \
+    --pc.xlabel "Epoch" \
+    --output-filename benchmark/trl/pr-1646/rm_descriptiveness_1b \
+    --scan-history
+```
+
+* [🤗 Trained model](https://huggingface.co/trl-internal-testing/rm_descriptiveness_1b)
+* [🐝 Tracked experiment](https://wandb.ai/huggingface/trl/runs/g312ymwj)
+
+<div style="text-align: center">
+<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/benchmark/trl/pr-1646/rm_descriptiveness_1b.png?download=true">
+</div>
+
+
+
+```
+accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
+    examples/scripts/rm/rm.py \
+    --dataset_name trl-internal-testing/hh-rlhf-trl-style \
+    --dataset_train_split train \
+    --dataset_eval_split test \
+    --model_name_or_path EleutherAI/pythia-1b-deduped \
+    --chat_template simple_chat \
+    --learning_rate 3e-6 \
+    --per_device_train_batch_size 8 \
+    --per_device_eval_batch_size 8 \
+    --gradient_accumulation_steps 4 \
+    --logging_steps 1 \
+    --eval_strategy steps \
+    --max_token_length 1280 \
+    --max_prompt_token_lenth 1024 \
+    --remove_unused_columns False \
+    --num_train_epochs 1 \
+    --eval_steps=300 \
+    --bf16 \
+    --output_dir models/rm/rm_hh_1b \
+    --push_to_hub \
+    --hub_model_id trl-internal-testing/rm_hh_1b
+
+# plot
+# pip install openrlbenchmark==0.2.1a5
+python -m openrlbenchmark.rlops_multi_metrics \
+    --filters '?we=huggingface&wpn=trl&xaxis=train/epoch&ceik=output_dir&cen=output_dir&metrics=train/loss&metrics=eval/accuracy&metrics=eval/loss&metrics=train/grad_norm&metrics=train/learning_rate&metrics=eval/runtime&metrics=eval/samples_per_second&metrics=eval/steps_per_second' \
+        "models/rm/rm_hh_1b?tag=pr-1646" \
+    --env-ids models/rm/rm_hh_1b \
+    --pc.ncols 4 \
+    --pc.ncols-legend 1 \
+    --pc.xlabel "Epoch" \
+    --output-filename benchmark/trl/pr-1646/rm_hh_1b \
+    --scan-history
+```
+
+
+* [🤗 Trained model](https://huggingface.co/trl-internal-testing/rm_hh_1b)
+* [🐝 Tracked experiment](https://wandb.ai/huggingface/trl/runs/g7pb8ooc)
+
+<div style="text-align: center">
+<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/benchmark/trl/pr-1646/rm_hh_1b.png?download=true">
+</div>
+
+
+
+
+```
+accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
+    examples/scripts/rm/rm.py \
+    --dataset_name trl-internal-testing/tldr-preference-trl-style \
+    --dataset_train_split train \
+    --dataset_eval_split validation \
+    --model_name_or_path EleutherAI/pythia-1b-deduped \
+    --chat_template simple_concat_with_space \
+    --learning_rate 3e-6 \
+    --per_device_train_batch_size 8 \
+    --per_device_eval_batch_size 8 \
+    --gradient_accumulation_steps 4 \
+    --logging_steps 1 \
+    --eval_strategy steps \
+    --max_token_length 1280 \
+    --max_prompt_token_lenth 1024 \
+    --remove_unused_columns False \
+    --num_train_epochs 1 \
+    --eval_steps=300 \
+    --bf16 \
+    --output_dir models/rm/rm_tldr_1b \
+    --push_to_hub \
+    --hub_model_id trl-internal-testing/rm_tldr_1b
+
+# plot
+# pip install openrlbenchmark==0.2.1a5
+python -m openrlbenchmark.rlops_multi_metrics \
+    --filters '?we=huggingface&wpn=trl&xaxis=train/epoch&ceik=output_dir&cen=output_dir&metrics=train/loss&metrics=eval/accuracy&metrics=eval/loss&metrics=train/grad_norm&metrics=train/learning_rate&metrics=eval/runtime&metrics=eval/samples_per_second&metrics=eval/steps_per_second' \
+        "models/rm/rm_tldr_1b?tag=pr-1646" \
+    --env-ids models/rm/rm_tldr_1b \
+    --pc.ncols 4 \
+    --pc.ncols-legend 1 \
+    --pc.xlabel "Epoch" \
+    --output-filename benchmark/trl/pr-1646/rm_tldr_1b \
+    --scan-history
+```
+
+
+* [🤗 Trained model](https://huggingface.co/trl-internal-testing/rm_tldr_1b)
+* [🐝 Tracked experiment](https://wandb.ai/huggingface/trl/runs/o75i0ori)
+
+<div style="text-align: center">
+<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/benchmark/trl/pr-1646/rm_tldr_1b.png?download=true">
+</div>
+
 
 
 ## Leveraging 🤗 PEFT to train a reward model
