@@ -48,19 +48,6 @@ python examples/scripts/dpo.py \
     --use_peft \
     --lora_r=16 \
     --lora_alpha=16
-
-# vision with peft:
-accelerate launch examples/scripts/dpo.py \
-    --dataset_name HuggingFaceH4/rlaif-v_formatted \
-    --model_name_or_path HuggingFaceM4/idefics2-8b \
-    --output_dir dpo_idefics_rlaif-v \
-    --per_device_train_batch_size 1 \
-    --gradient_accumulation_steps 16 \
-    --learning_rate 1e-5 \
-    --bf16 \
-    --torch_dtype bfloat16 \
-    --use_peft \
-    --lora_target_modules=all-linear
 """
 
 import logging
@@ -71,7 +58,6 @@ from contextlib import nullcontext
 TRL_USE_RICH = os.environ.get("TRL_USE_RICH", False)
 
 from trl.commands.cli_utils import DPOScriptArguments, init_zero_verbose, TrlParser
-from accelerate import PartialState
 
 if TRL_USE_RICH:
     init_zero_verbose()
@@ -82,7 +68,7 @@ if TRL_USE_RICH:
 
 import torch
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, AutoModelForVision2Seq, AutoProcessor
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl import (
     DPOConfig,
@@ -126,25 +112,13 @@ if __name__ == "__main__":
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
-    is_vision_model = model_config.model_name_or_path in ["HuggingFaceM4/idefics2-8b"]
-    if is_vision_model:
-        model = AutoModelForVision2Seq.from_pretrained(model_config.model_name_or_path, **model_kwargs)
-    else:
-        model = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, **model_kwargs)
+    model = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, **model_kwargs)
     peft_config = get_peft_config(model_config)
     if peft_config is None:
-        if is_vision_model:
-            model_ref = AutoModelForVision2Seq.from_pretrained(model_config.model_name_or_path, **model_kwargs)
-        else:
-            model_ref = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, **model_kwargs)
+        model_ref = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, **model_kwargs)
     else:
         model_ref = None
-    if is_vision_model:
-        processor = AutoProcessor.from_pretrained(model_config.model_name_or_path, do_image_splitting=True)
-        tokenizer = processor.tokenizer
-    else:
-        tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path)
-    processor = AutoProcessor.from_pretrained(model_config.model_name_or_path, do_image_splitting=False)
+    tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     if tokenizer.chat_template is None:
@@ -174,40 +148,16 @@ if __name__ == "__main__":
             ds[key] = ds[key].select(range(50))
 
     def process(row):
-        # The prompt can be either a string or a list. In some datasets, the prompt is just a common string
-        # for both rejected and chosen (already included in chosen and rejected) and is not meant to be used
-        # separately. In other datasets, the prompt is intended to be used as a prefix for rejected and chosen,
-        # and in such cases, it is properly formatted as a list with keys "role" and "content".
-        # Example 1:
-        # row = {"prompt": "What does detox mean?",
-        #        "chosen": [{"content": "What does detox mean?", "role": "user"}, {"content": "It means to get rid of the toxins.", "role": "assistant"}],
-        #        "rejected": [{"content": "What does detox mean?", "role": "assistant"}, {"content": "I don't know.", "role": "assistant"}]}
-        # Example 2:
-        # row = {"prompt": [{"content": "What does detox mean?", "role": "user"}],
-        #        "chosen": [{"content": "It means to get rid of the toxins.", "role": "assistant"}],
-        #        "rejected": [{"content": "I don't know.", "role": "assistant"}]}
-        if is_vision_model:
-            apply_chat_template = processor.apply_chat_template
-        else:
-            apply_chat_template = tokenizer.apply_chat_template
-
-        if "prompt" in row and isinstance(row["prompt"], list):
-            row["prompt"] = apply_chat_template(row["prompt"], tokenize=False)
-
-        row["chosen"] = apply_chat_template(row["chosen"], tokenize=False)
-        row["rejected"] = apply_chat_template(row["rejected"], tokenize=False)
-
-        if "images" in row:
-            for idx, img in enumerate(row["images"]):  # Resize each image so the largest side is 640 pixels
-                ratio = min(1.0, 640 / max(img.size))
-                new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
-                row["images"][idx] = img.resize(new_size)
-            row["images"] = row["images"]
-
+        row["prompt"] = tokenizer.apply_chat_template(row["chosen"][:-1], tokenize=False)
+        row["chosen"] = tokenizer.apply_chat_template([row["chosen"][-1]], tokenize=False)
+        row["rejected"] = tokenizer.apply_chat_template([row["rejected"][-1]], tokenize=False)
         return row
 
-    with PartialState().local_main_process_first():
-        ds = ds.map(process, num_proc=multiprocessing.cpu_count())
+    ds = ds.map(
+        process,
+        num_proc=multiprocessing.cpu_count(),
+        load_from_cache_file=False,
+    )
     train_dataset = ds[args.dataset_train_split]
     eval_dataset = ds[args.dataset_test_split]
 
@@ -221,7 +171,7 @@ if __name__ == "__main__":
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            tokenizer=processor if is_vision_model else tokenizer,
+            tokenizer=tokenizer,
             peft_config=get_peft_config(model_config),
             callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
         )
