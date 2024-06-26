@@ -15,10 +15,17 @@ import tempfile
 import unittest
 
 import torch
-from datasets import Dataset
+from datasets import Dataset, features
 from parameterized import parameterized
+from PIL import Image
 from pytest import mark
-from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
+from transformers import (
+    AutoModelForCausalLM,
+    AutoModelForSeq2SeqLM,
+    AutoModelForVision2Seq,
+    AutoProcessor,
+    AutoTokenizer,
+)
 
 from trl import DPOConfig, DPOTrainer, FDivergenceType
 
@@ -39,6 +46,12 @@ class DPOTrainerTester(unittest.TestCase):
         cls.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         cls.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         cls.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        # get idefics2 model
+        model_id = "trl-internal-testing/tiny-random-idefics2"
+        cls.idefics2_model = AutoModelForVision2Seq.from_pretrained(model_id)
+        cls.idefics2_ref_model = AutoModelForVision2Seq.from_pretrained(model_id)
+        cls.idefics2_processor = AutoProcessor.from_pretrained(model_id)
 
     def _init_dummy_dataset(self):
         # fmt: off
@@ -79,6 +92,57 @@ class DPOTrainerTester(unittest.TestCase):
         }
         # fmt: on
         return Dataset.from_dict(dummy_dataset_dict)
+
+    def _init_dummy_image_dataset(self):
+        # fmt: off
+        dummy_dataset_dict = {
+            "images": [
+                [Image.new("RGB", (100, 50), color="black")],
+                # None,
+                # [Image.new("RGB", (100, 100), color="blue"), Image.new("RGB", (150, 50), color="red")],
+                [Image.new("RGB", (200, 100), color="green")],
+                # [Image.new("RGB", (150, 150), color="yellow"), Image.new("RGB", (50, 150), color="purple")],
+                [Image.new("RGB", (80, 120), color="gray")],
+                [Image.new("RGB", (120, 80), color="pink")],
+            ],
+            "prompt": [
+                "<image> Hello",
+                # "How are you?",
+                # "<image><image> Let's chat",
+                "<image> Good morning",
+                # "<image><image> What's up?",
+                "Can you see this? <image>",
+                "Here is something interesting: <image>",
+            ],
+            "chosen": [
+                "Hi nice to meet you!",
+                # "I'm doing well, thank you!",
+                # "Sure, let's talk!",
+                "Good morning to you too!",
+                # "Not much, just working.",
+                "Yes, I can see it clearly.",
+                "That's quite interesting indeed.",
+            ],
+            "rejected": [
+                "Leave me alone!",
+                # "I'm not interested.",
+                # "I don't want to chat.",
+                "I'm still sleepy.",
+                # "Busy right now, talk later.",
+                "No, I can't see it.",
+                "I'm not sure what that is.",
+            ],
+        }
+        # fmt: on
+        f = features.Features(
+            {
+                "images": features.Sequence(features.Image(decode=True)),  # datasets handles badly sequence of images
+                "prompt": features.Value("string"),
+                "chosen": features.Value("string"),
+                "rejected": features.Value("string"),
+            }
+        )
+        return Dataset.from_dict(dummy_dataset_dict, features=f)
 
     @parameterized.expand(
         [
@@ -135,6 +199,54 @@ class DPOTrainerTester(unittest.TestCase):
                 ref_model=ref_model,
                 args=training_args,
                 tokenizer=tokenizer,
+                train_dataset=dummy_dataset,
+                eval_dataset=dummy_dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            assert trainer.state.log_history[-1]["train_loss"] is not None
+
+            # check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                # check the params have changed - ignore 0 biases
+                if param.sum() != 0:
+                    assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
+
+    @parameterized.expand(
+        [
+            ["sigmoid", True],
+        ]
+    )
+    def test_vdpo_trainer(self, loss_type, pre_compute):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=1,
+                learning_rate=9e-1,
+                eval_strategy="steps",
+                beta=0.1,
+                loss_type=loss_type,
+                precompute_ref_log_probs=pre_compute,
+            )
+
+            dummy_dataset = self._init_dummy_image_dataset()
+
+            model = self.idefics2_model
+            ref_model = self.idefics2_ref_model
+            processor = self.idefics2_processor
+
+            trainer = DPOTrainer(
+                model=model,
+                ref_model=ref_model,
+                args=training_args,
+                tokenizer=processor,
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
             )
@@ -811,3 +923,7 @@ class DPOTrainerTester(unittest.TestCase):
                 policy_chosen_logps, policy_rejected_logps, reference_chosen_logps, reference_rejected_logps
             )
             assert torch.isfinite(losses).cpu().numpy().all()
+
+
+if __name__ == "__main__":
+    unittest.main()

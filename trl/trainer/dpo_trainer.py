@@ -37,6 +37,7 @@ from transformers import (
     PreTrainedTokenizerBase,
     Trainer,
 )
+from transformers.models.auto.modeling_auto import MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
 
@@ -316,6 +317,20 @@ class DPOTrainer(Trainer):
         else:
             self.is_encoder_decoder = args.is_encoder_decoder
 
+        if model is not None:
+            self.is_vision_model = model.config.model_type in MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES.keys()
+        else:
+            warnings.warn(
+                "No model provided, cannot determine if it is a vision model. Setting is_vision_model to False."
+            )
+            self.is_vision_model = False
+
+        if self.is_vision_model:
+            self.processor = tokenizer
+            self.tokenizer = tokenizer.tokenizer  # tokenizer is actually a processor at this point
+        else:
+            self.tokenizer = tokenizer
+
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
         if model_adapter_name is not None:
             warnings.warn(
@@ -401,7 +416,7 @@ class DPOTrainer(Trainer):
             args.label_pad_token_id = label_pad_token_id
         if data_collator is None:
             data_collator = DPODataCollatorWithPadding(
-                pad_token_id=tokenizer.pad_token_id,
+                pad_token_id=self.tokenizer.pad_token_id,
                 label_pad_token_id=args.label_pad_token_id,
                 is_encoder_decoder=self.is_encoder_decoder,
             )
@@ -437,7 +452,7 @@ class DPOTrainer(Trainer):
                 "You passed `padding_value` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
             args.padding_value = padding_value
-        self.padding_value = args.padding_value if padding_value is not None else tokenizer.pad_token_id
+        self.padding_value = args.padding_value if padding_value is not None else self.tokenizer.pad_token_id
         self.max_prompt_length = args.max_prompt_length
         if truncation_mode != "keep_end":
             warnings.warn(
@@ -446,7 +461,6 @@ class DPOTrainer(Trainer):
             args.truncation_mode = truncation_mode
         self.truncation_mode = args.truncation_mode
         self.max_target_length = args.max_target_length
-        self.tokenizer = tokenizer
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
 
         # Since ref_logs are precomputed on the first call to get_train/eval_dataloader
@@ -496,10 +510,12 @@ class DPOTrainer(Trainer):
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
         with PartialState().local_main_process_first():
-            # tokenize the dataset
-            train_dataset = train_dataset.map(self.tokenize_row, num_proc=self.dataset_num_proc)
+            # tokenize the dataset, lower writer batch size to avoid OOM (frequent in vision models)
+            train_dataset = train_dataset.map(self.tokenize_row, num_proc=self.dataset_num_proc, writer_batch_size=10)
             if eval_dataset is not None:
-                eval_dataset = eval_dataset.map(self.tokenize_row, num_proc=self.dataset_num_proc)
+                eval_dataset = eval_dataset.map(
+                    self.tokenize_row, num_proc=self.dataset_num_proc, writer_batch_size=10
+                )
 
         super().__init__(
             model=model,
@@ -682,16 +698,22 @@ class DPOTrainer(Trainer):
 
         return super().get_eval_dataloader(eval_dataset=eval_dataset)
 
-    def build_tokenized_answer(self, prompt, answer):
+    def build_tokenized_answer(self, prompt, answer, images=None):
         """
         Llama tokenizer does satisfy `enc(a + b) = enc(a) + enc(b)`.
         It does ensure `enc(a + b) = enc(a) + enc(a + b)[len(enc(a)):]`.
         Reference:
             https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
         """
-
-        full_tokenized = self.tokenizer(prompt + answer, add_special_tokens=False)
-        prompt_input_ids = self.tokenizer(prompt, add_special_tokens=False)["input_ids"]
+        if self.is_vision_model:
+            if answer.count("<image>") > 0:
+                raise NotImplementedError("Answer contains <image> token, which is not supported yet.")
+            full_tokenized = self.processor(prompt + answer, images=images, add_special_tokens=False)
+            full_tokenized = {k: v[0] for k, v in full_tokenized.items()}  # Unbatch, not done when using idefics
+            prompt_input_ids = self.processor(prompt, images=images, add_special_tokens=False)["input_ids"][0]
+        else:
+            full_tokenized = self.tokenizer(prompt + answer, add_special_tokens=False)
+            prompt_input_ids = self.tokenizer(prompt, add_special_tokens=False)["input_ids"]
 
         answer_input_ids = full_tokenized["input_ids"][len(prompt_input_ids) :]
         answer_attention_mask = full_tokenized["attention_mask"][len(prompt_input_ids) :]
@@ -725,12 +747,22 @@ class DPOTrainer(Trainer):
         answer_input_ids = full_tokenized["input_ids"][response_token_ids_start_idx:]
         answer_attention_mask = full_tokenized["attention_mask"][response_token_ids_start_idx:]
 
-        return dict(
-            prompt_input_ids=prompt_input_ids,
-            prompt_attention_mask=prompt_attention_mask,
-            input_ids=answer_input_ids,
-            attention_mask=answer_attention_mask,
-        )
+        if "pixel_values" in full_tokenized:
+            return dict(
+                prompt_input_ids=prompt_input_ids,
+                prompt_attention_mask=prompt_attention_mask,
+                prompt_pixel_values=full_tokenized["pixel_values"],
+                prompt_pixel_attention_mask=full_tokenized["pixel_attention_mask"],
+                input_ids=answer_input_ids,
+                attention_mask=answer_attention_mask,
+            )
+        else:
+            return dict(
+                prompt_input_ids=prompt_input_ids,
+                prompt_attention_mask=prompt_attention_mask,
+                input_ids=answer_input_ids,
+                attention_mask=answer_attention_mask,
+            )
 
     def tokenize_row(self, feature, model: Optional[Union[PreTrainedModel, nn.Module]] = None) -> Dict:
         """Tokenize a single row from a DPO specific dataset.
@@ -747,6 +779,7 @@ class DPOTrainer(Trainer):
         prompt = feature["prompt"]
         chosen = feature["chosen"]
         rejected = feature["rejected"]
+        images = feature.get("images")
 
         if not self.is_encoder_decoder:
             # Check issues below for more details
@@ -756,16 +789,22 @@ class DPOTrainer(Trainer):
 
             if not isinstance(prompt, str):
                 raise ValueError(f"prompt should be an str but got {type(prompt)}")
-            prompt_tokens = self.tokenizer(prompt, add_special_tokens=False)
+            if self.is_vision_model:
+                prompt_tokens = self.processor(prompt, images=images, add_special_tokens=False)
+                prompt_tokens = {k: v[0] for k, v in prompt_tokens.items()}  # Unbatch, not done when using idefics
+            else:
+                prompt_tokens = self.tokenizer(prompt, add_special_tokens=False)
+
             prompt_tokens = {f"prompt_{k}": v for k, v in prompt_tokens.items()}
 
             if not isinstance(chosen, str):
                 raise ValueError(f"chosen should be an str but got {type(chosen)}")
-            chosen_tokens = self.build_tokenized_answer(prompt, chosen)
+
+            chosen_tokens = self.build_tokenized_answer(prompt, chosen, images)
 
             if not isinstance(rejected, str):
                 raise ValueError(f"rejected should be an str but got {type(rejected)}")
-            rejected_tokens = self.build_tokenized_answer(prompt, rejected)
+            rejected_tokens = self.build_tokenized_answer(prompt, rejected, images)
 
             # Last prompt token might get merged by tokenizer and
             # it should not be included for generation if that happens
@@ -925,6 +964,7 @@ class DPOTrainer(Trainer):
     def concatenated_inputs(
         batch: Dict[str, Union[List, torch.LongTensor]],
         is_encoder_decoder: bool = False,
+        is_vision_model: bool = False,
         label_pad_token_id: int = -100,
         padding_value: int = 0,
         device: Optional[torch.device] = None,
@@ -981,6 +1021,11 @@ class DPOTrainer(Trainer):
                 batch["prompt_attention_mask"].repeat(2, 1).to(device=device)
             )
 
+        if is_vision_model:
+            concatenated_batch["pixel_values"] = batch["prompt_pixel_values"].repeat(2, 1, 1, 1, 1).to(device=device)
+            concatenated_batch["pixel_attention_mask"] = (
+                batch["prompt_pixel_attention_mask"].repeat(2, 1, 1, 1).to(device=device)
+            )
         return concatenated_batch
 
     def dpo_loss(
@@ -1187,20 +1232,23 @@ class DPOTrainer(Trainer):
         concatenated_batch = self.concatenated_inputs(
             batch,
             is_encoder_decoder=self.is_encoder_decoder,
+            is_vision_model=self.is_vision_model,
             label_pad_token_id=self.label_pad_token_id,
             padding_value=self.padding_value,
             device=self.accelerator.device,
         )
         len_chosen = batch["chosen_labels"].shape[0]
 
-        model_kwargs = (
-            {
-                "labels": concatenated_batch["concatenated_labels"],
-                "decoder_input_ids": concatenated_batch.pop("concatenated_decoder_input_ids", None),
-            }
-            if self.is_encoder_decoder
-            else {}
-        )
+        model_kwargs = {}
+
+        if self.is_encoder_decoder:
+            model_kwargs["labels"] = concatenated_batch["concatenated_labels"]
+            model_kwargs["decoder_input_ids"] = concatenated_batch.pop("concatenated_decoder_input_ids", None)
+
+        if self.is_vision_model:
+            model_kwargs["pixel_values"] = concatenated_batch["pixel_values"]
+            model_kwargs["pixel_attention_mask"] = concatenated_batch["pixel_attention_mask"]
+
         if self.aux_loss_enabled:
             model_kwargs["output_router_logits"] = True
 
