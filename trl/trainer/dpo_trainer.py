@@ -510,7 +510,7 @@ class DPOTrainer(Trainer):
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
         with PartialState().local_main_process_first():
-            # tokenize the dataset
+            # tokenize the dataset, lower writer batch size to avoid OOM (frequent in vision models)
             train_dataset = train_dataset.map(self.tokenize_row, num_proc=self.dataset_num_proc, writer_batch_size=10)
             if eval_dataset is not None:
                 eval_dataset = eval_dataset.map(
