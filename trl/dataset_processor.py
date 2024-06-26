@@ -56,7 +56,9 @@ INPUT_IDS_KEY = "input_ids"
 
 # Chat templates
 CHAT_TEMPLATES = {
-    "simple_concat": "{% for message in messages %}{{' ' if not loop.first else ''}}{{message['content']}}{% endfor %}{{eos_token}}",
+    "simple_concat": "{% for message in messages %}{{message['content']}}{% endfor %}{{eos_token}}",
+    "simple_concat_with_space": "{% for message in messages %}{{' ' if not loop.first else ''}}{{message['content']}}{% endfor %}{{eos_token}}",
+    "simple_concat_with_new_line": "{% for message in messages %}{{'\n' if not loop.first else ''}}{{message['content']}}{% endfor %}{{eos_token}}",
     "simple_chat": "{% for message in messages %}{{'\n\n' if not loop.first else ''}}{{message['role']|capitalize + ': ' +message['content']}}{% endfor %}{{eos_token}}",
     "zephyr": """{% for message in messages %}\n{% if message['role'] == 'user' %}\n{{ '<|user|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'system' %}\n{{ '<|system|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'assistant' %}\n{{ '<|assistant|>\n'  + message['content'] + eos_token }}\n{% endif %}\n{% if loop.last and add_generation_prompt %}\n{{ '<|assistant|>' }}\n{% endif %}\n{% endfor %}""",
 }
@@ -68,7 +70,7 @@ class DatasetConfig:
     dataset_name: Optional[str] = None
     dataset_train_split: str = "train"
     dataset_eval_split: str = "test"
-    chat_template: str = "simple_concat"
+    chat_template: str = "simple_chat"
 
     max_token_length: Optional[int] = None
     max_prompt_token_lenth: Optional[int] = None

@@ -35,7 +35,7 @@ python -i examples/scripts/rm/rm.py \
     --dataset_train_split train \
     --dataset_eval_split test \
     --model_name_or_path EleutherAI/pythia-160m \
-    --chat_template simple_concat \
+    --chat_template simple_concat_with_space \
     --learning_rate 3e-6 \
     --per_device_train_batch_size 1 \
     --per_device_eval_batch_size 1 \
@@ -58,7 +58,7 @@ python examples/scripts/rm/rm.py \
     --dataset_train_split train \
     --dataset_eval_split test \
     --model_name_or_path EleutherAI/pythia-1b-deduped \
-    --chat_template simple_concat \
+    --chat_template simple_concat_with_space \
     --learning_rate 3e-6 \
     --per_device_train_batch_size 32 \
     --per_device_eval_batch_size 32 \
@@ -80,7 +80,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --dataset_train_split train \
     --dataset_eval_split validation \
     --model_name_or_path EleutherAI/pythia-2.8b-deduped \
-    --chat_template simple_concat \
+    --chat_template simple_concat_with_space \
     --learning_rate 3e-6 \
     --per_device_train_batch_size 1 \
     --per_device_eval_batch_size 1 \
@@ -95,29 +95,29 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --output_dir models/rm/rm_tldr_2.8b \
     --bf16 \
 
-# LEVEL 2: multi-gpu training using DS2 with the TL;DR summarization dataset 
+# LEVEL 2: multi-gpu training using DS2 with the anthropic HH dataset
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
     examples/scripts/rm/rm.py \
-    --dataset_name trl-internal-testing/tldr-preference-trl-style \
+    --dataset_name trl-internal-testing/hh-rlhf-trl-style \
     --dataset_train_split train \
     --dataset_eval_split validation \
     --model_name_or_path EleutherAI/pythia-2.8b-deduped \
-    --chat_template simple_concat \
+    --chat_template simple_chat \
     --learning_rate 3e-6 \
-    --per_device_train_batch_size 1 \
-    --per_device_eval_batch_size 1 \
-    --gradient_accumulation_steps 32 \
+    --per_device_train_batch_size 4 \
+    --per_device_eval_batch_size 4 \
+    --gradient_accumulation_steps 8 \
     --logging_steps 1 \
     --eval_strategy steps \
-    --max_token_length 1024 \
-    --max_prompt_token_lenth 512 \
+    --max_token_length 2048 \
+    --max_prompt_token_lenth 1024 \
     --remove_unused_columns False \
     --num_train_epochs 1 \
     --eval_steps=100 \
     --bf16 \
-    --output_dir models/rm/rm_tldr_2.8b \
+    --output_dir models/rm/rm_hh_2.8b \
 
-
+# LEVEL 3: multi-gpu training using DS2 with the ultrafeedback dataset
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
     examples/scripts/rm/rm_zephyr.py \
     --dataset_name HuggingFaceH4/ultrafeedback_binarized \
