@@ -70,8 +70,33 @@ dpo_dataset_dict = {
 
 where the `prompt` contains the context inputs, `chosen` contains the corresponding chosen responses and `rejected` contains the corresponding negative (rejected) responses. As can be seen a prompt can have multiple responses and this is reflected in the entries being repeated in the dictionary's value arrays.
 
+`DPOTrainer` can be used to fine-tune visual language models (VLMs). In this case, the dataset must also contain the key `images`, and the trainer's `tokenizer` is the VLM's `processor`. For example, for Idefics2, the processor expects the dataset to have the following format:
+
+Note: Currently, VLM support is exclusive to Idefics2 and does not extend to other VLMs.
+
+```py
+dpo_dataset_dict = {
+    'images': [
+        [Image.open('beach.jpg')],
+        [Image.open('street.jpg')],
+    ],
+    'prompt': [
+        'The image <image> shows',
+        '<image> The image depicts',
+    ],
+    'chosen': [
+        'a sunny beach with palm trees.',
+        'a busy street with several cars and buildings.',
+    ],
+    'rejected': [
+        'a snowy mountain with skiers.',
+        'a calm countryside with green fields.',
+    ],
+}
+```
+
 ## Expected model format
-The DPO trainer expects a model of `AutoModelForCausalLM`, compared to PPO that expects `AutoModelForCausalLMWithValueHead` for the value function.
+The DPO trainer expects a model of `AutoModelForCausalLM` or `AutoModelForVision2Seq`, compared to PPO that expects `AutoModelForCausalLMWithValueHead` for the value function.
 
 ## Using the `DPOTrainer`
 
@@ -86,7 +111,7 @@ dpo_trainer = DPOTrainer(
     model_ref,
     args=training_args,
     train_dataset=train_dataset,
-    tokenizer=tokenizer,
+    tokenizer=tokenizer,  # for visual language models, use tokenizer=processor instead
 )
 ```
 After this one can then call:

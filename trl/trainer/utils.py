@@ -336,6 +336,55 @@ class RewardDataCollatorWithPadding:
         return batch
 
 
+def pad(tensors: List[torch.Tensor], padding_value: int = 0, padding_side: str = "right") -> torch.Tensor:
+    """
+    Pads a list of tensors to the same shape along the first dimension.
+
+    Args:
+        tensors (`List[torch.Tensor]`):
+            List of input tensors to pad.
+        padding_value (`int`):
+            Value to use for padding. Default is 0.
+        padding_side (`str`):
+            Side on which to add padding. Must be 'left' or 'right'. Default is 'right'.
+
+    Returns:
+        `torch.Tensor`:
+            A single tensor containing the padded tensors.
+
+    Examples:
+        >>> import torch
+        >>> pad([torch.tensor([1, 2, 3]), torch.tensor([4, 5])])
+        tensor([[1, 2, 3],
+                [4, 5, 0]])
+        >>> pad([torch.tensor([[1, 2], [3, 4]]), torch.tensor([[5, 6]])])
+        tensor([[[1, 2],
+                [3, 4]],
+
+                [[5, 6],
+                [0, 0]]])
+    """
+    # Determine the maximum shape for each dimension
+    output_shape = np.max([t.shape for t in tensors], 0).tolist()
+
+    # Create an output tensor filled with the padding value
+    output = torch.full((len(tensors), *output_shape), padding_value, dtype=tensors[0].dtype, device=tensors[0].device)
+
+    for i, t in enumerate(tensors):
+        # Determine the slice for the sequence dimension
+        if padding_side == "left":
+            seq_slice = slice(output_shape[0] - t.shape[0], output_shape[0])
+        elif padding_side == "right":
+            seq_slice = slice(0, t.shape[0])
+        else:
+            raise ValueError("padding_side must be 'left' or 'right'")
+
+        slices = (seq_slice,) + tuple(slice(0, s) for s in t.shape[1:])
+        output[i][slices] = t
+
+    return output
+
+
 @dataclass
 class DPODataCollatorWithPadding:
     r"""
@@ -357,7 +406,7 @@ class DPODataCollatorWithPadding:
         # first, pad everything to the same length
         padded_batch = {}
         for k in features[0].keys():
-            if k.endswith("_input_ids") or k.endswith("_attention_mask") or k.endswith("_labels"):
+            if k.endswith(("_input_ids", "_attention_mask", "_labels", "_pixel_values")):
                 if self.is_encoder_decoder:
                     to_pad = [torch.LongTensor(ex[k]) for ex in features]
 
@@ -377,11 +426,7 @@ class DPODataCollatorWithPadding:
                         raise ValueError(f"Unexpected key in batch '{k}'")
                     padded_batch[k] = pad_sequence(to_pad, batch_first=True, padding_value=padding_value)
                 else:
-                    # adapted from https://stackoverflow.com/questions/73256206
-                    if "prompt" in k:
-                        to_pad = [torch.LongTensor(ex[k][::-1]) for ex in features]
-                    else:
-                        to_pad = [torch.LongTensor(ex[k]) for ex in features]
+                    # Set padding value based on the key
                     if k.endswith("_input_ids"):
                         if self.pad_token_id is None:
                             raise ValueError(
@@ -394,13 +439,26 @@ class DPODataCollatorWithPadding:
                         padding_value = self.label_pad_token_id
                     elif k.endswith("_attention_mask"):
                         padding_value = 0
+                    elif k.endswith("_pixel_values"):
+                        padding_value = 0  # TODO: check if this is correct
                     else:
                         raise ValueError(f"Unexpected key in batch '{k}'")
 
-                    padded_batch[k] = pad_sequence(to_pad, batch_first=True, padding_value=padding_value)
-                    # for the prompt, flip back so padding is on left side
-                    if "prompt" in k:
-                        padded_batch[k] = padded_batch[k].flip(dims=[1])
+                    # Set padding side based on the key
+                    if k in ["prompt_input_ids", "prompt_attention_mask"]:
+                        padding_side = "left"
+                    else:
+                        padding_side = "right"
+
+                    # Set the dtype
+                    if k.endswith("_pixel_values"):
+                        dtype = torch.float32  # will be downcasted if necessary by the Trainer
+                    else:
+                        dtype = torch.int64
+
+                    # Convert to tensor and pad
+                    to_pad = [torch.tensor(ex[k], dtype=dtype) for ex in features]
+                    padded_batch[k] = pad(to_pad, padding_value=padding_value, padding_side=padding_side)
             elif k.endswith("_logps"):
                 # the cached reference model logprobs
                 padded_batch[k] = torch.tensor([ex[k] for ex in features])
