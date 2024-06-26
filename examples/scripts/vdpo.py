@@ -18,22 +18,15 @@ accelerate launch examples/scripts/vdpo.py \
     --model_name_or_path HuggingFaceM4/idefics2-8b \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 16 \
-    --learning_rate 1e-5 \
-    --logging_steps 5 \
+    --dataset_num_proc 32 \
     --output_dir dpo_idefics_rlaif-v \
-    --push_to_hub --hub_model_id HuggingFaceH4/idefics2-8b-dpo-rlaif-v \
     --bf16 \
     --torch_dtype bfloat16 \
-    --logging_first_step \
-    --no_remove_unused_columns \
-    --dataset_num_proc 50 \
-    --dataload_num_workers 16 \
     --use_peft \
     --lora_target_modules=all-linear
 """
 
 import logging
-import multiprocessing
 import os
 from contextlib import nullcontext
 
@@ -106,8 +99,6 @@ if __name__ == "__main__":
     tokenizer = processor.tokenizer
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-    if tokenizer.chat_template is None:
-        tokenizer.chat_template = "{% for message in messages %}{{message['role'] + ': ' + message['content'] + '\n\n'}}{% endfor %}{{ eos_token }}"
     if args.ignore_bias_buffers:
         # torch distributed hack
         model._ddp_params_and_buffers_to_ignore = [
@@ -161,7 +152,7 @@ if __name__ == "__main__":
         return row
 
     with PartialState().local_main_process_first():
-        ds = ds.map(process, num_proc=multiprocessing.cpu_count())
+        ds = ds.map(process, num_proc=training_args.dataset_num_proc)
     train_dataset = ds[args.dataset_train_split]
     eval_dataset = ds[args.dataset_test_split]
 
