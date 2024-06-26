@@ -258,7 +258,8 @@ class PPOv2Trainer(Trainer):
         )
 
         accelerator.print("===training policy===")
-        global_step = 0
+        self.state.global_step = 0
+        episode = 0
         start_time = time.time()
         stats_shape = (args.num_ppo_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
         approxkl_stats = torch.zeros(stats_shape, device=device)
@@ -293,7 +294,7 @@ class PPOv2Trainer(Trainer):
 
         self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
         for update in range(1, args.num_updates + 1):
-            global_step += 1 * args.batch_size
+            episode += 1 * args.batch_size
             self.lr_scheduler.step()
             data = next(iter_dataloader)
             with torch.no_grad():
@@ -417,6 +418,7 @@ class PPOv2Trainer(Trainer):
                 torch.cuda.empty_cache()
 
             # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
+            num_steps = 0
             for ppo_epoch_idx in range(args.num_ppo_epochs):
                 b_inds = np.random.permutation(args.local_batch_size)
                 minibatch_idx = 0
@@ -497,12 +499,13 @@ class PPOv2Trainer(Trainer):
                     )
                     # fmt: on
                     torch.cuda.empty_cache()
+                num_steps += minibatch_idx
             with torch.no_grad():
                 mean_kl = kl.sum(1).mean()
                 mean_entropy = (-logprobs).sum(1).mean()
                 mean_non_score_reward = non_score_reward.sum(1).mean()
                 rlhf_reward = mean_non_score_reward + scores.mean()
-                eps = int(global_step / (time.time() - start_time))
+                eps = int(episode / (time.time() - start_time))
                 metrics = {}
                 metrics["eps"] = eps
                 metrics["objective/kl"] = self.accelerator.gather(mean_kl).mean().item()
@@ -520,8 +523,8 @@ class PPOv2Trainer(Trainer):
                 metrics["val/ratio_var"] = self.accelerator.gather(ratio_stats).var().item()
                 metrics["val/num_eos_tokens"] = (responses == tokenizer.eos_token_id).sum().item()
                 metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
-                metrics["episode"] = global_step
-                self.state.epoch = global_step / self.train_dataset_len  # used by self.log
+                metrics["episode"] = episode
+                self.state.epoch = episode / self.train_dataset_len  # used by self.log
                 self.log(metrics)
             del kl, mean_kl, mean_entropy, mean_non_score_reward, scores, non_score_reward
             torch.cuda.empty_cache()
@@ -531,7 +534,7 @@ class PPOv2Trainer(Trainer):
                 self.generate_completions(sampling=True)
                 torch.cuda.empty_cache()
 
-            self.state.global_step = update
+            self.state.global_step += num_steps
             self.control = self.callback_handler.on_step_end(args, self.state, self.control)
             if self.control.should_save:
                 self._save_checkpoint(model, trial=None, metrics=metrics)
