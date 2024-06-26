@@ -174,16 +174,31 @@ if __name__ == "__main__":
             ds[key] = ds[key].select(range(50))
 
     def process(row):
-        if "prompt" in row:
+        # The prompt can be either a string or a list. In some datasets, the prompt is just a common string
+        # for both rejected and chosen (already included in chosen and rejected) and is not meant to be used
+        # separately. In other datasets, the prompt is intended to be used as a prefix for rejected and chosen,
+        # and in such cases, it is properly formatted as a list with keys "role" and "content".
+        # Example 1:
+        # row = {"prompt": "What does detox mean?",
+        #        "chosen": [{"content": "What does detox mean?", "role": "user"}, {"content": "It means to get rid of the toxins.", "role": "assistant"}],
+        #        "rejected": [{"content": "What does detox mean?", "role": "assistant"}, {"content": "I don't know.", "role": "user"}]}
+        # Example 2:
+        # row = {"prompt": [{"content": "What does detox mean?", "role": "user"}],
+        #        "chosen": [{"content": "It means to get rid of the toxins.", "role": "assistant"}],
+        #        "rejected": [{"content": "I don't know.", "role": "user"}]}
+        if "prompt" in row and isinstance(row["prompt"], list):
             row["prompt"] = tokenizer.apply_chat_template(row["prompt"], tokenize=False)
+
         row["chosen"] = tokenizer.apply_chat_template(row["chosen"], tokenize=False)
         row["rejected"] = tokenizer.apply_chat_template(row["rejected"], tokenize=False)
+
         if "images" in row:
-            for idx, img in enumerate(row["images"]):  # Resize image so that the largest side is 640
+            for idx, img in enumerate(row["images"]):  # Resize each image so the largest side is 640 pixels
                 ratio = min(1.0, 640 / max(img.size))
                 new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
                 row["images"][idx] = img.resize(new_size)
             row["images"] = row["images"]
+
         return row
 
     with PartialState().local_main_process_first():
