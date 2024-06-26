@@ -73,7 +73,7 @@ python examples/scripts/rm/rm.py \
     --output_dir models/rm/rm_sentiment_1b \
     --push_to_hub \
 
-# LEVEL 2: multi-gpu training using DS2 with the TL;DR summarization dataset 
+# LEVEL 2: multi-gpu training using DS2 with the TL;DR summarization dataset
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
     examples/scripts/rm/rm.py \
     --dataset_name trl-internal-testing/tldr-preference-trl-style \
