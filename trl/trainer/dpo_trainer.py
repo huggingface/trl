@@ -37,6 +37,7 @@ from transformers import (
     PreTrainedTokenizerBase,
     Trainer,
 )
+from transformers.models.auto.modeling_auto import MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
 
@@ -317,7 +318,7 @@ class DPOTrainer(Trainer):
             self.is_encoder_decoder = args.is_encoder_decoder
 
         if model is not None:
-            self.is_vision_model = model.config.model_type in ["idefics2"]  # TODO: find a better way
+            self.is_vision_model = model.config.model_type in MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES.keys()
         else:
             warnings.warn(
                 "No model provided, cannot determine if it is a vision model. Setting is_vision_model to False."
