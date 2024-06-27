@@ -41,6 +41,8 @@
     title: CPO Trainer
   - local: ddpo_trainer
     title: Denoising Diffusion Policy Optimization
+  - local: alignprop_trainer
+    title: AlignProp Trainer
   - local: orpo_trainer
     title: ORPO Trainer
   - local: iterative_sft_trainer

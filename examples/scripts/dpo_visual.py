@@ -13,51 +13,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-# regular:
-python examples/scripts/dpo.py \
-    --dataset_name=trl-internal-testing/hh-rlhf-helpful-base-trl-style \
-    --model_name_or_path=gpt2 \
-    --per_device_train_batch_size 4 \
-    --learning_rate 1e-3 \
-    --gradient_accumulation_steps 1 \
-    --logging_steps 10 \
-    --eval_steps 500 \
-    --output_dir="dpo_anthropic_hh" \
-    --warmup_steps 150 \
-    --report_to wandb \
+accelerate launch examples/scripts/vdpo.py \
+    --dataset_name HuggingFaceH4/rlaif-v_formatted \
+    --model_name_or_path HuggingFaceM4/idefics2-8b \
+    --per_device_train_batch_size 1 \
+    --gradient_accumulation_steps 16 \
+    --dataset_num_proc 32 \
+    --output_dir dpo_idefics_rlaif-v \
     --bf16 \
-    --logging_first_step \
-    --no_remove_unused_columns
-
-# peft:
-python examples/scripts/dpo.py \
-    --dataset_name=trl-internal-testing/hh-rlhf-helpful-base-trl-style \
-    --model_name_or_path=gpt2 \
-    --per_device_train_batch_size 4 \
-    --learning_rate 1e-3 \
-    --gradient_accumulation_steps 1 \
-    --logging_steps 10 \
-    --eval_steps 500 \
-    --output_dir="dpo_anthropic_hh" \
-    --optim rmsprop \
-    --warmup_steps 150 \
-    --report_to wandb \
-    --bf16 \
-    --logging_first_step \
-    --no_remove_unused_columns \
+    --torch_dtype bfloat16 \
     --use_peft \
-    --lora_r=16 \
-    --lora_alpha=16
+    --lora_target_modules=all-linear
 """
 
 import logging
-import multiprocessing
 import os
 from contextlib import nullcontext
 
 TRL_USE_RICH = os.environ.get("TRL_USE_RICH", False)
 
 from trl.commands.cli_utils import DPOScriptArguments, init_zero_verbose, TrlParser
+from accelerate import PartialState
 
 if TRL_USE_RICH:
     init_zero_verbose()
@@ -68,7 +44,7 @@ if TRL_USE_RICH:
 
 import torch
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForVision2Seq, AutoProcessor
 
 from trl import (
     DPOConfig,
@@ -103,6 +79,7 @@ if __name__ == "__main__":
         else getattr(torch, model_config.torch_dtype)
     )
     quantization_config = get_quantization_config(model_config)
+
     model_kwargs = dict(
         revision=model_config.model_revision,
         trust_remote_code=model_config.trust_remote_code,
@@ -112,17 +89,16 @@ if __name__ == "__main__":
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
-    model = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, **model_kwargs)
+    model = AutoModelForVision2Seq.from_pretrained(model_config.model_name_or_path, **model_kwargs)
     peft_config = get_peft_config(model_config)
     if peft_config is None:
-        model_ref = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, **model_kwargs)
+        model_ref = AutoModelForVision2Seq.from_pretrained(model_config.model_name_or_path, **model_kwargs)
     else:
         model_ref = None
-    tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path)
+    processor = AutoProcessor.from_pretrained(model_config.model_name_or_path, do_image_splitting=False)
+    tokenizer = processor.tokenizer
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-    if tokenizer.chat_template is None:
-        tokenizer.chat_template = "{% for message in messages %}{{message['role'] + ': ' + message['content'] + '\n\n'}}{% endfor %}{{ eos_token }}"
     if args.ignore_bias_buffers:
         # torch distributed hack
         model._ddp_params_and_buffers_to_ignore = [
@@ -148,16 +124,35 @@ if __name__ == "__main__":
             ds[key] = ds[key].select(range(50))
 
     def process(row):
-        row["prompt"] = tokenizer.apply_chat_template(row["chosen"][:-1], tokenize=False)
-        row["chosen"] = tokenizer.apply_chat_template([row["chosen"][-1]], tokenize=False)
-        row["rejected"] = tokenizer.apply_chat_template([row["rejected"][-1]], tokenize=False)
+        # The prompt can be either a string or a list. In some datasets, the prompt is just a common string
+        # for both rejected and chosen (already included in chosen and rejected) and is not meant to be used
+        # separately. In other datasets, the prompt is intended to be used as a prefix for rejected and chosen,
+        # and in such cases, it is properly formatted as a list with keys "role" and "content".
+        # Example 1:
+        # row = {"prompt": "What does detox mean?",
+        #        "chosen": [{"content": "What does detox mean?", "role": "user"}, {"content": "It means to get rid of the toxins.", "role": "assistant"}],
+        #        "rejected": [{"content": "What does detox mean?", "role": "assistant"}, {"content": "I don't know.", "role": "user"}]}
+        # Example 2:
+        # row = {"prompt": [{"content": "What does detox mean?", "role": "user"}],
+        #        "chosen": [{"content": "It means to get rid of the toxins.", "role": "assistant"}],
+        #        "rejected": [{"content": "I don't know.", "role": "user"}]}
+        if "prompt" in row and isinstance(row["prompt"], list):
+            row["prompt"] = processor.apply_chat_template(row["prompt"], tokenize=False)
+
+        row["chosen"] = processor.apply_chat_template(row["chosen"], tokenize=False)
+        row["rejected"] = processor.apply_chat_template(row["rejected"], tokenize=False)
+
+        if "images" in row:
+            for idx, img in enumerate(row["images"]):  # Resize each image so the largest side is 640 pixels
+                ratio = min(1.0, 640 / max(img.size))
+                new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
+                row["images"][idx] = img.resize(new_size)
+            row["images"] = row["images"]
+
         return row
 
-    ds = ds.map(
-        process,
-        num_proc=multiprocessing.cpu_count(),
-        load_from_cache_file=False,
-    )
+    with PartialState().local_main_process_first():
+        ds = ds.map(process, num_proc=training_args.dataset_num_proc)
     train_dataset = ds[args.dataset_train_split]
     eval_dataset = ds[args.dataset_test_split]
 
@@ -171,12 +166,12 @@ if __name__ == "__main__":
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            tokenizer=tokenizer,
+            tokenizer=processor,
             peft_config=get_peft_config(model_config),
             callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
         )
 
     trainer.train()
-
+    trainer.push_to_hub
     with save_context:
         trainer.save_model(training_args.output_dir)

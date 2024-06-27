@@ -36,28 +36,11 @@ jobs:
     - name: Test with pytest
       run: |
         make test
-    - name: Post to a Slack channel
+    - name: Post to Slack
       if: always()
-      id: slack
-      #uses: slackapi/slack-github-action@v1.25.0
-      uses: slackapi/slack-github-action@6c661ce58804a1a20f6dc5fbee7f0381b469e001
+      uses: huggingface/hf-workflows/.github/actions/post-slack@main
       with:
-        # Slack channel id, channel name, or user id to post message.
-        # See also: https://api.slack.com/methods/chat.postMessage#channels
-        channel-id: ${{ env.CI_SLACK_CHANNEL }}
-        # For posting a rich message using Block Kit
-        payload: |
-          {
-            "text": "TRL CI on transformers/PEFT main: ${{ job.status }}\n${{ github.event.pull_request.html_url || github.event.head_commit.url }}",
-            "blocks": [
-              {
-                "type": "section",
-                "text": {
-                  "type": "mrkdwn",
-                  "text": "TRL CI on transformers/PEFT main: ${{ job.status }}\n${{ github.event.pull_request.html_url || github.event.head_commit.url }}"
-                }
-              }
-            ]
-          }
-      env:
-        SLACK_BOT_TOKEN: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
+        slack_channel: ${{ env.CI_SLACK_CHANNEL }}
+        title: 🤗 Results of the TRL CI on transformers/PEFT main
+        status: ${{ job.status }}
+        slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}

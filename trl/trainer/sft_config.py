@@ -49,7 +49,8 @@ class SFTConfig(TrainingArguments):
             The number of sequences to use for the `ConstantLengthDataset`. Defaults to `1024`.
         chars_per_token (`Optional[float]`):
             The number of characters per token to use for the `ConstantLengthDataset`. Defaults to `3.6`. You can check how this is computed in the
-            stack-llama example: https://github.com/huggingface/trl/blob/08f550674c553c36c51d1027613c29f14f3676a5/examples/stack_llama/scripts/supervised_finetuning.py#L53.
+            stack-llama example:
+            [chars_token_ratio](https://github.com/huggingface/trl/blob/08f550674c553c36c51d1027613c29f14f3676a5/examples/stack_llama/scripts/supervised_finetuning.py#L53).
     """
 
     dataset_text_field: Optional[str] = None

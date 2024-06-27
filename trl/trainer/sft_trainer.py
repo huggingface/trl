@@ -66,9 +66,9 @@ class SFTTrainer(Trainer):
             The model to train, can be a `PreTrainedModel`, a `torch.nn.Module` or a string with the model name to
             load from cache or download. The model can be also converted to a `PeftModel` if a `PeftConfig` object is
             passed to the `peft_config` argument.
-        args (Optional[`transformers.TrainingArguments`]):
-            The arguments to tweak for training. Please refer to the official documentation of `transformers.TrainingArguments`
-            for more information.
+        args (Optional[`SFTConfig`]):
+            The arguments to tweak for training. Will default to a basic instance of [`SFTConfig`] with the `output_dir`
+            set to a directory named *tmp_trainer* in the current directory if not provided.
         data_collator (Optional[`transformers.DataCollator`]):
             The data collator to use for training.
         train_dataset (Optional[`datasets.Dataset`]):
@@ -145,13 +145,15 @@ class SFTTrainer(Trainer):
             output_dir = "tmp_trainer"
             warnings.warn(f"No `SFTConfig` passed, using `output_dir={output_dir}`.")
             args = SFTConfig(output_dir=output_dir)
+        elif args is not None and args.__class__.__name__ == "TrainingArguments":
+            args = SFTConfig(**args.to_dict())
 
         if model_init_kwargs is not None:
             warnings.warn(
                 "You passed `model_init_kwargs` to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
             )
             args.model_init_kwargs = model_init_kwargs
-        if args.model_init_kwargs is None:
+        if getattr(args, "model_init_kwargs", None) is None:
             model_init_kwargs = {}
         elif not isinstance(model, str):
             raise ValueError("You passed model_init_kwargs to the SFTConfig, but your model is already instantiated.")
@@ -319,7 +321,15 @@ class SFTTrainer(Trainer):
                     dataset_kwargs["add_special_tokens"] = False
 
         if not args.packing:
-            if args.dataset_text_field is None and formatting_func is None:
+            # If we aren't skipping data preparation, then a dataset_text_field
+            # or formatting_func must be provided.
+            if (
+                args.dataset_text_field is None
+                and formatting_func is None
+                and dataset_kwargs is not None
+                and "skip_prepare_dataset" in dataset_kwargs
+                and dataset_kwargs["skip_prepare_dataset"]
+            ):
                 raise ValueError(
                     "You passed `packing=False` to the SFTTrainer/SFTConfig, but you didn't pass a `dataset_text_field` or `formatting_func` argument."
                 )

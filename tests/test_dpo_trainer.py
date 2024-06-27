@@ -15,12 +15,19 @@ import tempfile
 import unittest
 
 import torch
-from datasets import Dataset
+from datasets import Dataset, features
 from parameterized import parameterized
+from PIL import Image
 from pytest import mark
-from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
+from transformers import (
+    AutoModelForCausalLM,
+    AutoModelForSeq2SeqLM,
+    AutoModelForVision2Seq,
+    AutoProcessor,
+    AutoTokenizer,
+)
 
-from trl import DPOConfig, DPOTrainer
+from trl import DPOConfig, DPOTrainer, FDivergenceType
 
 from .testing_utils import require_bitsandbytes, require_no_wandb, require_peft
 
@@ -35,10 +42,16 @@ class DPOTrainerTester(unittest.TestCase):
         cls.tokenizer.pad_token = cls.tokenizer.eos_token
 
         # get t5 as seq2seq example:
-        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration-correct-vocab"
+        model_id = "trl-internal-testing/T5ForConditionalGeneration-correct-vocab-calibrated"
         cls.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         cls.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         cls.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        # get idefics2 model
+        model_id = "trl-internal-testing/tiny-random-idefics2"
+        cls.idefics2_model = AutoModelForVision2Seq.from_pretrained(model_id)
+        cls.idefics2_ref_model = AutoModelForVision2Seq.from_pretrained(model_id)
+        cls.idefics2_processor = AutoProcessor.from_pretrained(model_id)
 
     def _init_dummy_dataset(self):
         # fmt: off
@@ -80,14 +93,67 @@ class DPOTrainerTester(unittest.TestCase):
         # fmt: on
         return Dataset.from_dict(dummy_dataset_dict)
 
+    def _init_dummy_image_dataset(self):
+        # fmt: off
+        dummy_dataset_dict = {
+            "images": [
+                [Image.new("RGB", (100, 50), color="black")],
+                # None,
+                # [Image.new("RGB", (100, 100), color="blue"), Image.new("RGB", (150, 50), color="red")],
+                [Image.new("RGB", (200, 100), color="green")],
+                # [Image.new("RGB", (150, 150), color="yellow"), Image.new("RGB", (50, 150), color="purple")],
+                [Image.new("RGB", (80, 120), color="gray")],
+                [Image.new("RGB", (120, 80), color="pink")],
+            ],
+            "prompt": [
+                "<image> Hello",
+                # "How are you?",
+                # "<image><image> Let's chat",
+                "<image> Good morning",
+                # "<image><image> What's up?",
+                "Can you see this? <image>",
+                "Here is something interesting: <image>",
+            ],
+            "chosen": [
+                "Hi nice to meet you!",
+                # "I'm doing well, thank you!",
+                # "Sure, let's talk!",
+                "Good morning to you too!",
+                # "Not much, just working.",
+                "Yes, I can see it clearly.",
+                "That's quite interesting indeed.",
+            ],
+            "rejected": [
+                "Leave me alone!",
+                # "I'm not interested.",
+                # "I don't want to chat.",
+                "I'm still sleepy.",
+                # "Busy right now, talk later.",
+                "No, I can't see it.",
+                "I'm not sure what that is.",
+            ],
+        }
+        # fmt: on
+        f = features.Features(
+            {
+                "images": features.Sequence(features.Image(decode=True)),  # datasets handles badly sequence of images
+                "prompt": features.Value("string"),
+                "chosen": features.Value("string"),
+                "rejected": features.Value("string"),
+            }
+        )
+        return Dataset.from_dict(dummy_dataset_dict, features=f)
+
     @parameterized.expand(
         [
             ["gpt2", "sigmoid", True],
             ["t5", "hinge", False],
             ["gpt2", "ipo", False],
             ["t5", "ipo", True],
-            ["gpt2", "kto_pair", True],
-            ["t5", "kto_pair", False],
+            ["gpt2", "aot_pair", True],
+            ["t5", "aot_pair", False],
+            ["gpt2", "aot", True],
+            ["t5", "aot", False],
             ["gpt2", "bco_pair", False],
             ["t5", "bco_pair", True],
             ["gpt2", "sppo_hard", False],
@@ -95,6 +161,8 @@ class DPOTrainerTester(unittest.TestCase):
             ["gpt2", "nca_pair", False],
             ["t5", "nca_pair", True],
             ["gpt2", "robust", True],
+            ["gpt2", "exo_pair", False],
+            ["t5", "exo_pair", True],
         ]
     )
     def test_dpo_trainer(self, name, loss_type, pre_compute):
@@ -123,14 +191,62 @@ class DPOTrainerTester(unittest.TestCase):
                 ref_model = self.t5_ref_model
                 tokenizer = self.t5_tokenizer
 
-            if name == "t5" and loss_type == "nca_pair":
-                self.skipTest("For some reason t5 + nca_pair does not compute gradients properly on tiny models")
+            if name == "t5":
+                self.skipTest("For some reason t5 does not compute gradients properly on tiny models")
 
             trainer = DPOTrainer(
                 model=model,
                 ref_model=ref_model,
                 args=training_args,
                 tokenizer=tokenizer,
+                train_dataset=dummy_dataset,
+                eval_dataset=dummy_dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            assert trainer.state.log_history[-1]["train_loss"] is not None
+
+            # check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                # check the params have changed - ignore 0 biases
+                if param.sum() != 0:
+                    assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
+
+    @parameterized.expand(
+        [
+            ["sigmoid", True],
+        ]
+    )
+    def test_vdpo_trainer(self, loss_type, pre_compute):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=1,
+                learning_rate=9e-1,
+                eval_strategy="steps",
+                beta=0.1,
+                loss_type=loss_type,
+                precompute_ref_log_probs=pre_compute,
+            )
+
+            dummy_dataset = self._init_dummy_image_dataset()
+
+            model = self.idefics2_model
+            ref_model = self.idefics2_ref_model
+            processor = self.idefics2_processor
+
+            trainer = DPOTrainer(
+                model=model,
+                ref_model=ref_model,
+                args=training_args,
+                tokenizer=processor,
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
             )
@@ -160,6 +276,7 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 beta=0.1,
                 precompute_ref_log_probs=True,
+                rpo_alpha=0.5,
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -501,10 +618,14 @@ class DPOTrainerTester(unittest.TestCase):
             ["gpt2", "ipo", False, True],
             ["gpt2", "ipo", True, False],
             ["gpt2", "ipo", True, True],
-            ["gpt2", "kto_pair", False, False],
-            ["gpt2", "kto_pair", False, True],
-            ["gpt2", "kto_pair", True, False],
-            ["gpt2", "kto_pair", True, True],
+            ["gpt2", "aot_pair", False, False],
+            ["gpt2", "aot_pair", False, True],
+            ["gpt2", "aot_pair", True, False],
+            ["gpt2", "aot_pair", True, True],
+            ["gpt2", "aot", False, False],
+            ["gpt2", "aot", False, True],
+            ["gpt2", "aot", True, False],
+            ["gpt2", "aot", True, True],
             ["gpt2", "bco_pair", False, False],
             ["gpt2", "bco_pair", False, True],
             ["gpt2", "bco_pair", True, False],
@@ -718,3 +839,91 @@ class DPOTrainerTester(unittest.TestCase):
 
             # train the model
             trainer.train()
+
+    def test_dpo_loss_alpha_div_f(self):
+        model_id = "trl-internal-testing/tiny-random-LlamaForCausalLM"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        # lora model
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=4,
+                learning_rate=9e-1,
+                eval_strategy="steps",
+                f_divergence_type=FDivergenceType.ALPHA_DIVERGENCE.value,
+                f_alpha_divergence_coef=0.5,
+            )
+
+            dummy_dataset = self._init_dummy_dataset()
+
+            # dpo train lora model with a lora config
+            trainer = DPOTrainer(
+                model=model,
+                ref_model=None,
+                args=training_args,
+                tokenizer=tokenizer,
+                train_dataset=dummy_dataset,
+                eval_dataset=dummy_dataset,
+            )
+
+            # Fake chosen and rejected log probs
+            policy_chosen_logps = torch.FloatTensor([410.0, 0.1])
+            policy_rejected_logps = torch.FloatTensor([810.5, 0.2])
+            reference_chosen_logps = torch.FloatTensor([-610.0, -0.1])
+            reference_rejected_logps = torch.FloatTensor([110.6, 0.5])
+            losses, _, _ = trainer.dpo_loss(
+                policy_chosen_logps, policy_rejected_logps, reference_chosen_logps, reference_rejected_logps
+            )
+            assert torch.isfinite(losses).cpu().numpy().all()
+
+    def test_dpo_loss_js_div_f(self):
+        model_id = "trl-internal-testing/tiny-random-LlamaForCausalLM"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        # lora model
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=4,
+                learning_rate=9e-1,
+                eval_strategy="steps",
+                f_divergence_type=FDivergenceType.JS_DIVERGENCE.value,
+                f_alpha_divergence_coef=0.5,
+            )
+
+            dummy_dataset = self._init_dummy_dataset()
+
+            # dpo train lora model with a lora config
+            trainer = DPOTrainer(
+                model=model,
+                ref_model=None,
+                args=training_args,
+                tokenizer=tokenizer,
+                train_dataset=dummy_dataset,
+                eval_dataset=dummy_dataset,
+            )
+
+            # Fake chosen and rejected log probs
+            policy_chosen_logps = torch.FloatTensor([410.0, 0.1])
+            policy_rejected_logps = torch.FloatTensor([95.5, 0.2])
+            reference_chosen_logps = torch.FloatTensor([-610.0, -0.1])
+            reference_rejected_logps = torch.FloatTensor([5.5, 0.5])
+            losses, _, _ = trainer.dpo_loss(
+                policy_chosen_logps, policy_rejected_logps, reference_chosen_logps, reference_rejected_logps
+            )
+            assert torch.isfinite(losses).cpu().numpy().all()
+
+
+if __name__ == "__main__":
+    unittest.main()
