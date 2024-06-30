@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 from ..import_utils import _LazyModule, is_diffusers_available, OptionalDependencyNotAvailable
 
 _import_structure = {
+    "callbacks": ["RichProgressCallback", "SyncRefModelCallback", "WinRateCallback"],
     "utils": [
         "AdaptiveKLController",
         "FixedKLController",
@@ -27,7 +28,6 @@ _import_structure = {
         "RunningMoments",
         "disable_dropout_in_model",
         "peft_module_casting_to_bf16",
-        "RichProgressCallback",
     ],
     "dpo_config": ["DPOConfig", "FDivergenceConstants", "FDivergenceType"],
     "dpo_trainer": ["DPOTrainer"],
@@ -39,6 +39,8 @@ _import_structure = {
     "kto_config": ["KTOConfig"],
     "kto_trainer": ["KTOTrainer"],
     "model_config": ["ModelConfig"],
+    "nash_md_config": ["NashMDConfig"],
+    "nasn_md_trainer": ["NashMDTrainer"],
     "orpo_config": ["ORPOConfig"],
     "orpo_trainer": ["ORPOTrainer"],
     "ppo_config": ["PPOConfig"],
@@ -62,6 +64,11 @@ else:
 
 if TYPE_CHECKING:
     # isort: off
+    from .callbacks import (
+        RichProgressCallback,
+        SyncRefModelCallback,
+        WinRateCallback,
+    )
     from .utils import (
         AdaptiveKLController,
         FixedKLController,
@@ -70,9 +77,7 @@ if TYPE_CHECKING:
         RunningMoments,
         disable_dropout_in_model,
         peft_module_casting_to_bf16,
-        RichProgressCallback,
     )
-
     # isort: on
 
     from .base import BaseTrainer
@@ -87,6 +92,8 @@ if TYPE_CHECKING:
     from .kto_config import KTOConfig
     from .kto_trainer import KTOTrainer
     from .model_config import ModelConfig
+    from .nash_md_config import NashMDConfig
+    from .nash_md_trainer import NashMDTrainer
     from .orpo_config import ORPOConfig
     from .orpo_trainer import ORPOTrainer
     from .ppo_config import PPOConfig
