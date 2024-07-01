@@ -29,7 +29,7 @@ python -i examples/scripts/ppo/ppo.py \
 # single GPU model training; adjust your `per_device_train_batch_size` and
 # `gradient_accumulation_steps` accordingly
 python examples/scripts/ppo/ppo.py \
-    --output_dir models/minimal/ppo1 \
+    --output_dir models/minimal/ppo \
     --num_ppo_epochs 4 \
     --num_mini_batches 1 \
     --learning_rate 3e-6 \
@@ -110,5 +110,6 @@ if __name__ == "__main__":
     )
     trainer.train()
     trainer.save_model(config.output_dir)
-    trainer.push_to_hub()
+    if config.push_to_hub:
+        trainer.push_to_hub()
     trainer.generate_completions()

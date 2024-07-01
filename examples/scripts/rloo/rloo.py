@@ -14,6 +14,8 @@ from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
 
 
 """
+# interactive debugging; doesn't train anything meaningful; it's just
+# to make sure the pipeline runs.
 python -i examples/scripts/rloo/rloo.py \
     --learning_rate 3e-6 \
     --num_ppo_epochs 1 \
@@ -22,24 +24,30 @@ python -i examples/scripts/rloo/rloo.py \
     --per_device_train_batch_size 64 \
     --gradient_accumulation_steps 1 \
     --total_episodes 10000 \
-    --model_name_or_path EleutherAI/pythia-1b-deduped \
+    --model_name_or_path EleutherAI/pythia-160m \
+    --stop_token period \
     --non_eos_penalty \
-accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/scripts/rloo/rloo.py \
+
+# single GPU model training; adjust your `per_device_train_batch_size` and
+# `gradient_accumulation_steps` accordingly
+python examples/scripts/rloo/rloo.py \
     --output_dir models/minimal/rloo \
     --rloo_k 2 \
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \
     --learning_rate 3e-6 \
-    --per_device_train_batch_size 1 \
+    --per_device_train_batch_size 32 \
     --gradient_accumulation_steps 16 \
-    --total_episodes 10000 \
+    --local_rollout_forward_batch_size 32 \
+    --total_episodes 100000 \
     --model_name_or_path EleutherAI/pythia-1b-deduped \
     --sft_model_path EleutherAI/pythia-1b-deduped \
-    --reward_model_path EleutherAI/pythia-1b-deduped \
-    --local_rollout_forward_batch_size 1 \
-    --deepspeed3 \
+    --reward_model_path trl-internal-testing/rm_sentiment_1b \
+    --kl_coef 0.1 \
+    --stop_token period \
     --non_eos_penalty \
+    --min_response_length 13 \
+    --penalty_reward_value -3
 """
 
 
@@ -66,10 +74,9 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    raw_datasets = load_dataset("trl-internal-testing/descriptiveness-sentiment-trl-style", split="descriptiveness")
-    eval_samples = 20
-    train_dataset = raw_datasets.select(range(len(raw_datasets) - eval_samples))
-    eval_dataset = raw_datasets.select(range(len(raw_datasets) - eval_samples, len(raw_datasets)))
+    raw_datasets = load_dataset("trl-internal-testing/sentiment-trl-style")
+    train_dataset = raw_datasets["train"]
+    eval_dataset = raw_datasets["test"]
     dataset_text_field = "prompt"
 
     def prepare_dataset(dataset, tokenizer):
