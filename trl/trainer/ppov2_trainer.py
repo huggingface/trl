@@ -135,8 +135,11 @@ class PPOv2Trainer(Trainer):
         #########
         for module in [policy, ref_policy, value_model, reward_model]:
             disable_dropout_in_model(module)
-        if args.stop_token and args.stop_token == "eos":
-            args.stop_token_id = tokenizer.eos_token_id
+        if args.stop_token:
+            if args.stop_token == "eos":
+                args.stop_token_id = tokenizer.eos_token_id
+            if args.stop_token == "period":
+                args.stop_token_id = tokenizer.encode(".")[0]
         self.model = PolicyAndValueWrapper(policy, value_model)
         self.create_optimizer_and_scheduler(num_training_steps=args.num_updates)
 
@@ -350,10 +353,15 @@ class PPOv2Trainer(Trainer):
                 # Response Processing 3. filter response. Ensure that the sample contains stop_token_id
                 # responses not passing that filter will receive a low (fixed) score
                 # only query humans on responses that pass that filter
-                contain_eos_token = torch.any(postprocessed_responses == tokenizer.eos_token_id, dim=-1)
+                contain_stop_token = torch.any(postprocessed_responses == args.stop_token_id, dim=-1)
+                # NOTE: only apply the stop token filter if the response is long enough
+                # otherwise the model could learn to generate the first token as the stop token
+                contain_stop_token = contain_stop_token & (sequence_lengths >= args.min_response_length)
                 if args.non_eos_penalty:
-                    scores = torch.where(contain_eos_token, scores, torch.full_like(scores, args.penalty_reward_value))
-                # accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
+                    scores = torch.where(
+                        contain_stop_token, scores, torch.full_like(scores, args.penalty_reward_value)
+                    )
+                # accelerator.print(f"{scores=}, {(contain_stop_token.sum() / len(contain_stop_token))=}")
 
                 # be very careful with `padding_mask_p1`; see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
                 sequence_lengths_p1 = sequence_lengths + 1
@@ -514,7 +522,7 @@ class PPOv2Trainer(Trainer):
                 ref_logprobs,
                 values,
                 sequence_lengths,
-                contain_eos_token,
+                contain_stop_token,
                 sequence_lengths_p1,
                 response_idxs,
                 padding_mask,
