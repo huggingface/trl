@@ -269,9 +269,18 @@ class CPOTrainer(Trainer):
         self.beta = args.beta
         self.label_smoothing = args.label_smoothing
         self.loss_type = args.loss_type
+        self.cpo_alpha = args.cpo_alpha
+        self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
 
         if args.loss_type == "simpo":
             self.simpo_gamma = args.simpo_gamma
+            if self.cpo_alpha > 0:
+                warnings.warn(
+                    "You are using CPO-SimPO method because you set a non-zero cpo_alpha. "
+                    "This will result in the CPO-SimPO method "
+                    "(https://github.com/fe1ixxu/CPO_SIMPO/tree/main). "
+                    "If you want to use a pure SimPO method, please set cpo_alpha to 0."
+                )
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
@@ -682,6 +691,9 @@ class CPOTrainer(Trainer):
             else {}
         )
 
+        if self.aux_loss_enabled:
+            model_kwargs["output_router_logits"] = True
+
         outputs = model(
             concatenated_batch["concatenated_input_ids"],
             attention_mask=concatenated_batch["concatenated_attention_mask"],
@@ -706,10 +718,10 @@ class CPOTrainer(Trainer):
 
         labels = concatenated_batch["concatenated_labels"].clone()
 
-        if self.loss_type != "simpo":
-            nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
-        else:
+        if self.cpo_alpha == 0:
             nll_loss = torch.tensor(0.0).to(self.accelerator.device)
+        else:
+            nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
 
         all_logps = self.get_batch_logps(
             all_logits,
@@ -725,6 +737,9 @@ class CPOTrainer(Trainer):
         chosen_logits = all_logits[:len_chosen]
         rejected_logits = all_logits[len_chosen:]
 
+        if self.aux_loss_enabled:
+            return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, nll_loss, outputs.aux_loss)
+
         return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, nll_loss)
 
     def get_batch_loss_metrics(
@@ -736,20 +751,23 @@ class CPOTrainer(Trainer):
         """Compute the CPO loss and other metrics for the given batch of inputs for train or test."""
         metrics = {}
 
+        forward_output = self.concatenated_forward(model, batch)
         (
             policy_chosen_logps,
             policy_rejected_logps,
             policy_chosen_logits,
             policy_rejected_logits,
             policy_nll_loss,
-        ) = self.concatenated_forward(model, batch)
+        ) = forward_output[:5]
+        if self.aux_loss_enabled:
+            aux_loss = forward_output[5]
 
         losses, chosen_rewards, rejected_rewards = self.cpo_loss(
             policy_chosen_logps,
             policy_rejected_logps,
         )
 
-        loss = losses.mean() + policy_nll_loss
+        loss = losses.mean() + self.cpo_alpha * policy_nll_loss
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
         prefix = "eval_" if train_eval == "eval" else ""
@@ -762,6 +780,9 @@ class CPOTrainer(Trainer):
         metrics[f"{prefix}logits/rejected"] = policy_rejected_logits.detach().mean().cpu()
         metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.detach().mean().cpu()
         metrics[f"{prefix}nll_loss"] = policy_nll_loss.detach().mean().cpu()
+
+        if self.aux_loss_enabled:
+            loss += getattr(model.config, "router_aux_loss_coef", 0.0) * aux_loss
 
         return loss, metrics
 

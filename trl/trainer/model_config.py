@@ -86,5 +86,5 @@ class ModelConfig:
         if self.load_in_8bit and self.load_in_4bit:
             raise ValueError("You can't use 8 bit and 4 bit precision at the same time")
 
-        if self.lora_target_modules == ["all-linear"]:
-            self.lora_target_modules = "all-linear"
+        if isinstance(self.lora_target_modules, list) and len(self.lora_target_modules) == 1:
+            self.lora_target_modules = self.lora_target_modules[0]
