@@ -163,7 +163,6 @@ class PPOv2Trainer(Trainer):
             self.init_hf_repo()
         if self.args.should_save:
             os.makedirs(self.args.output_dir, exist_ok=True)
-        self.backup_model = None
 
         #########
         ### setup dataloader
@@ -206,30 +205,21 @@ class PPOv2Trainer(Trainer):
     def get_eval_dataloader(self) -> DataLoader:
         return self.eval_dataloader
 
-    def push_to_hub(self, **kwargs):
-        """Modified from `Trainer.save_model` to only save the policy and not the value network."""
-        self.backup_model = self.model
-        self.model = self.accelerator.unwrap_model(self.model).policy  # save only the policy
-        super().push_to_hub(**kwargs)
-        self.model = self.backup_model
-
     def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
         """Modified from `Trainer.save_model` to only save the policy and not the value network."""
-        if not _internal_call:  # `push_to_hub` already swaps out the self.model with policy
-            self.backup_model = self.model
-            self.model = self.accelerator.unwrap_model(self.model).policy  # save only the policy
-        if output_dir is None:
-            output_dir = self.args.output_dir
-        state_dict = self.accelerator.get_state_dict(self.model)
-        policy_state_dict = state_dict
-        if self.accelerator.is_main_process:
-            policy_state_dict = OrderedDict(
-                {k[len("policy.") :]: v for k, v in state_dict.items() if k.startswith("policy.")}
-            )
-        if self.args.should_save:
-            self._save(output_dir, state_dict=policy_state_dict)
-        if not _internal_call:
-            self.model = self.backup_model
+        backup_model = self.model
+        self.model = self.model.policy  # save only the policy
+
+        if self.is_deepspeed_enabled:
+            backup_deepspeed = self.deepspeed
+            self.deepspeed = self.model
+
+        super().save_model(self, output_dir, _internal_call)
+
+        self.model = backup_model
+
+        if self.is_deepspeed_enabled:
+            self.deepspeed = backup_deepspeed
 
     def train(self):
         args = self.args
@@ -451,14 +441,14 @@ class PPOv2Trainer(Trainer):
                                 entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1)
                                 approxkl = 0.5 * (logprobs_diff**2).mean()
                                 approxkl_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = approxkl
-                                pg_clipfrac_stats[
-                                    ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
-                                ] = pg_clipfrac
+                                pg_clipfrac_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
+                                    pg_clipfrac
+                                )
                                 pg_loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = pg_loss
                                 vf_loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = vf_loss
-                                vf_clipfrac_stats[
-                                    ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
-                                ] = vf_clipfrac
+                                vf_clipfrac_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
+                                    vf_clipfrac
+                                )
                                 entropy_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = entropy.mean()
                                 ratio_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = ratio.mean()
                         gradient_accumulation_idx += 1
