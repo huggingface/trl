@@ -143,12 +143,8 @@ if __name__ == "__main__":
         row["rejected"] = processor.apply_chat_template(row["rejected"], tokenize=False)
 
         if "images" in row:
-            for idx, img in enumerate(row["images"]):  # Resize each image so the largest side is 640 pixels
-                ratio = min(1.0, 640 / max(img.size))
-                new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
-                row["images"][idx] = img.resize(new_size)
-            row["images"] = row["images"]
-
+            for img in row["images"]:  # Resize each image so the largest side is 640 pixels
+                img.thumbnail((640, 640))  # Resize the image to at most 640x640 pixels
         return row
 
     with PartialState().local_main_process_first():
@@ -167,7 +163,7 @@ if __name__ == "__main__":
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             tokenizer=processor,
-            peft_config=get_peft_config(model_config),
+            peft_config=peft_config,
             callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
         )
 

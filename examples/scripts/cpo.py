@@ -77,7 +77,6 @@ if __name__ == "__main__":
     # Model & Tokenizer
     ################
     model = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path)
-    peft_config = get_peft_config(model_config)
     tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
