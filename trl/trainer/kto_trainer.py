@@ -557,19 +557,23 @@ class KTOTrainer(Trainer):
                 batched=True,
                 desc="Tokenizing train dataset",
             )
-            # Get KL datasets
-            total_batch_size = (
-                max(torch.cuda.device_count(), 1) * args.per_device_train_batch_size * args.gradient_accumulation_steps
-            )
-            if total_batch_size <= 1:
-                raise ValueError(
-                    "Batch size is 1 (too small). KTO will not work properly because the KL term will be equivalent to the implied reward."
+
+            if self.loss_type == "kto":
+                # Get KL datasets
+                total_batch_size = (
+                    max(torch.cuda.device_count(), 1)
+                    * args.per_device_train_batch_size
+                    * args.gradient_accumulation_steps
                 )
-            # create pairs for estimating the KL term by flipping the matched pairs in each batch of size total_batch_size
-            # i.e., (x_1, y_1), ..., (x_n, y_n) --> (x_1, y_n), ..., (x_n, y_1) = (x'_1, y'_1), ..., (x'_n, y'_n)
-            train_kl_dataset = train_dataset.map(
-                _get_kl_dataset, batched=True, batch_size=total_batch_size, desc="Extracting KL train dataset"
-            )
+                if total_batch_size <= 1:
+                    raise ValueError(
+                        "Batch size is 1 (too small). KTO will not work properly because the KL term will be equivalent to the implied reward."
+                    )
+                # create pairs for estimating the KL term by flipping the matched pairs in each batch of size total_batch_size
+                # i.e., (x_1, y_1), ..., (x_n, y_n) --> (x_1, y_n), ..., (x_n, y_1) = (x'_1, y'_1), ..., (x'_n, y'_n)
+                train_kl_dataset = train_dataset.map(
+                    _get_kl_dataset, batched=True, batch_size=total_batch_size, desc="Extracting KL train dataset"
+                )
             # Prepare the datasets
             fn_kwargs = {
                 "prefix": "",
@@ -587,17 +591,18 @@ class KTOTrainer(Trainer):
                 num_proc=args.dataset_num_proc,
                 desc="Processing tokenized train dataset",
             )
-            fn_kwargs["prefix"] = "KL_"
-            train_kl_dataset = train_kl_dataset.map(
-                _process_tokens,
-                fn_kwargs=fn_kwargs,
-                num_proc=args.dataset_num_proc,
-                remove_columns=[c for c in train_kl_dataset.column_names if c in train_dataset.column_names],
-                desc="Processing tokenized train KL dataset",
-            )
+            if self.loss_type == "kto":
+                fn_kwargs["prefix"] = "KL_"
+                train_kl_dataset = train_kl_dataset.map(
+                    _process_tokens,
+                    fn_kwargs=fn_kwargs,
+                    num_proc=args.dataset_num_proc,
+                    remove_columns=[c for c in train_kl_dataset.column_names if c in train_dataset.column_names],
+                    desc="Processing tokenized train KL dataset",
+                )
 
-            # merge the datasets
-            train_dataset = concatenate_datasets([train_dataset, train_kl_dataset], axis=1)
+                # merge the datasets
+                train_dataset = concatenate_datasets([train_dataset, train_kl_dataset], axis=1)
 
             if eval_dataset is not None:
                 # Tokenize
@@ -607,10 +612,12 @@ class KTOTrainer(Trainer):
                     batched=True,
                     desc="Tokenizing eval dataset",
                 )
-                # Get KL dataset
-                eval_kl_dataset = eval_dataset.map(
-                    _get_kl_dataset, batched=True, batch_size=total_batch_size, desc="Extracting eval KL dataset"
-                )
+
+                if self.loss_type == "kto":
+                    # Get KL dataset
+                    eval_kl_dataset = eval_dataset.map(
+                        _get_kl_dataset, batched=True, batch_size=total_batch_size, desc="Extracting eval KL dataset"
+                    )
                 # Process
                 fn_kwargs = {
                     "prefix": "",
@@ -628,17 +635,19 @@ class KTOTrainer(Trainer):
                     num_proc=args.dataset_num_proc,
                     desc="Processing tokenized eval dataset",
                 )
-                fn_kwargs["prefix"] = "KL_"
-                eval_kl_dataset = eval_kl_dataset.map(
-                    _process_tokens,
-                    fn_kwargs=fn_kwargs,
-                    num_proc=args.dataset_num_proc,
-                    remove_columns=[c for c in eval_kl_dataset.column_names if c in eval_dataset.column_names],
-                    desc="Processing tokenized eval KL dataset",
-                )
 
-                # merge the datasets
-                eval_dataset = concatenate_datasets([eval_dataset, eval_kl_dataset], axis=1)
+                if self.loss_type == "kto":
+                    fn_kwargs["prefix"] = "KL_"
+                    eval_kl_dataset = eval_kl_dataset.map(
+                        _process_tokens,
+                        fn_kwargs=fn_kwargs,
+                        num_proc=args.dataset_num_proc,
+                        remove_columns=[c for c in eval_kl_dataset.column_names if c in eval_dataset.column_names],
+                        desc="Processing tokenized eval KL dataset",
+                    )
+
+                    # merge the datasets
+                    eval_dataset = concatenate_datasets([eval_dataset, eval_kl_dataset], axis=1)
 
             num_desirable = max(sum(train_dataset["label"]), 1)
             num_undesirable = max(len(train_dataset["label"]) - num_desirable, 1)  # "label" is binary
@@ -906,15 +915,17 @@ class KTOTrainer(Trainer):
                 reference_completion_logp = self.accelerator.gather_for_metrics(reference_completion_logp)
                 reference_completion_logps.append(reference_completion_logp.cpu())
 
-                reference_KL_logp = self.accelerator.gather_for_metrics(reference_KL_logp)
-                reference_KL_logps.append(reference_KL_logp.cpu())
+                if self.loss_type == "kto":
+                    reference_KL_logp = self.accelerator.gather_for_metrics(reference_KL_logp)
+                    reference_KL_logps.append(reference_KL_logp.cpu())
 
             self.train_dataset = self.train_dataset.add_column(
                 name="reference_logps", column=torch.cat(reference_completion_logps).float().numpy()
             )
-            self.train_dataset = self.train_dataset.add_column(
-                name="reference_KL_logps", column=torch.cat(reference_KL_logps).float().numpy()
-            )
+            if self.loss_type == "kto":
+                self.train_dataset = self.train_dataset.add_column(
+                    name="reference_KL_logps", column=torch.cat(reference_KL_logps).float().numpy()
+                )
 
             self._precomputed_train_ref_log_probs = True
 
@@ -956,15 +967,17 @@ class KTOTrainer(Trainer):
                 reference_completion_logp = self.accelerator.gather_for_metrics(reference_completion_logp)
                 reference_completion_logps.append(reference_completion_logp.cpu())
 
-                reference_KL_logp = self.accelerator.gather_for_metrics(reference_KL_logp)
-                reference_KL_logps.append(reference_KL_logp.cpu())
+                if self.loss_type == "kto":
+                    reference_KL_logp = self.accelerator.gather_for_metrics(reference_KL_logp)
+                    reference_KL_logps.append(reference_KL_logp.cpu())
 
             eval_dataset = eval_dataset.add_column(
                 name="reference_logps", column=torch.cat(reference_completion_logps).float().numpy()
             )
-            eval_dataset = eval_dataset.add_column(
-                name="reference_KL_logps", column=torch.cat(reference_KL_logps).float().numpy()
-            )
+            if self.loss_type == "kto":
+                eval_dataset = eval_dataset.add_column(
+                    name="reference_KL_logps", column=torch.cat(reference_KL_logps).float().numpy()
+                )
 
             # Save calculated reference_chosen_logps and reference_rejected_logps to the eval_dataset for subsequent runs
             if self.eval_dataset is not None:
@@ -986,22 +999,24 @@ class KTOTrainer(Trainer):
                             labels=padded_batch["completion_labels"],
                         ).logits
 
-                        KL_logits = self.model(
-                            padded_batch["KL_prompt_input_ids"],
-                            attention_mask=padded_batch["KL_prompt_attention_mask"],
-                            decoder_input_ids=padded_batch.get("KL_completion_decoder_input_ids"),
-                            labels=padded_batch["KL_completion_labels"],
-                        ).logits
+                        if self.loss_type == "kto":
+                            KL_logits = self.model(
+                                padded_batch["KL_prompt_input_ids"],
+                                attention_mask=padded_batch["KL_prompt_attention_mask"],
+                                decoder_input_ids=padded_batch.get("KL_completion_decoder_input_ids"),
+                                labels=padded_batch["KL_completion_labels"],
+                            ).logits
                     else:
                         completion_logits = self.model(
                             padded_batch["completion_input_ids"],
                             attention_mask=padded_batch["completion_attention_mask"],
                         ).logits
 
-                        KL_logits = self.model(
-                            padded_batch["KL_completion_input_ids"],
-                            attention_mask=padded_batch["KL_completion_attention_mask"],
-                        ).logits
+                        if self.loss_type == "kto":
+                            KL_logits = self.model(
+                                padded_batch["KL_completion_input_ids"],
+                                attention_mask=padded_batch["KL_completion_attention_mask"],
+                            ).logits
             else:
                 if self.is_encoder_decoder:
                     completion_logits = self.ref_model(
@@ -1011,21 +1026,23 @@ class KTOTrainer(Trainer):
                         labels=padded_batch["completion_labels"],
                     ).logits
 
-                    KL_logits = self.ref_model(
-                        padded_batch["KL_prompt_input_ids"],
-                        attention_mask=padded_batch["KL_prompt_attention_mask"],
-                        decoder_input_ids=padded_batch.get("KL_completion_decoder_input_ids"),
-                        labels=padded_batch["KL_completion_labels"],
-                    ).logits
+                    if self.loss_type == "kto":
+                        KL_logits = self.ref_model(
+                            padded_batch["KL_prompt_input_ids"],
+                            attention_mask=padded_batch["KL_prompt_attention_mask"],
+                            decoder_input_ids=padded_batch.get("KL_completion_decoder_input_ids"),
+                            labels=padded_batch["KL_completion_labels"],
+                        ).logits
                 else:
                     completion_logits = self.ref_model(
                         padded_batch["completion_input_ids"], attention_mask=padded_batch["completion_attention_mask"]
                     ).logits
 
-                    KL_logits = self.ref_model(
-                        padded_batch["KL_completion_input_ids"],
-                        attention_mask=padded_batch["KL_completion_attention_mask"],
-                    ).logits
+                    if self.loss_type == "kto":
+                        KL_logits = self.ref_model(
+                            padded_batch["KL_completion_input_ids"],
+                            attention_mask=padded_batch["KL_completion_attention_mask"],
+                        ).logits
 
         completion_logps = self.get_batch_logps(
             completion_logits,
@@ -1035,15 +1052,17 @@ class KTOTrainer(Trainer):
             label_pad_token_id=self.label_pad_token_id,
         )
 
-        KL_logps = self.get_batch_logps(
-            KL_logits,
-            padded_batch["KL_completion_labels"],
-            average_log_prob=False,
-            is_encoder_decoder=self.is_encoder_decoder,
-            label_pad_token_id=self.label_pad_token_id,
-        )
+        if self.loss_type == "kto":
+            KL_logps = self.get_batch_logps(
+                KL_logits,
+                padded_batch["KL_completion_labels"],
+                average_log_prob=False,
+                is_encoder_decoder=self.is_encoder_decoder,
+                label_pad_token_id=self.label_pad_token_id,
+            )
 
-        return completion_logps, KL_logps
+            return completion_logps, KL_logps
+        return completion_logps, None
 
     @staticmethod
     def get_batch_logps(
@@ -1088,19 +1107,35 @@ class KTOTrainer(Trainer):
     def forward(
         self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
-        KL_model_kwargs = (
-            {
-                "input_ids": batch["KL_prompt_input_ids"],
-                "attention_mask": batch["KL_prompt_attention_mask"],
-                "labels": batch["KL_completion_labels"],
-                "decoder_input_ids": batch.get("KL_completion_decoder_input_ids"),
-            }
-            if self.is_encoder_decoder
-            else {
-                "input_ids": batch["KL_completion_input_ids"],
-                "attention_mask": batch["KL_completion_attention_mask"],
-            }
-        )
+
+        KL_logps = None
+        if self.loss_type == "kto":
+            KL_model_kwargs = (
+                {
+                    "input_ids": batch["KL_prompt_input_ids"],
+                    "attention_mask": batch["KL_prompt_attention_mask"],
+                    "labels": batch["KL_completion_labels"],
+                    "decoder_input_ids": batch.get("KL_completion_decoder_input_ids"),
+                }
+                if self.is_encoder_decoder
+                else {
+                    "input_ids": batch["KL_completion_input_ids"],
+                    "attention_mask": batch["KL_completion_attention_mask"],
+                }
+            )
+            with torch.no_grad():
+                KL_logits = model(
+                    **KL_model_kwargs,
+                ).logits
+
+            KL_logps = self.get_batch_logps(
+                KL_logits,
+                batch["KL_completion_labels"],
+                average_log_prob=False,
+                is_encoder_decoder=self.is_encoder_decoder,
+                label_pad_token_id=self.label_pad_token_id,
+            )
+
         model_kwargs = (
             {
                 "labels": batch["completion_labels"],
@@ -1112,11 +1147,6 @@ class KTOTrainer(Trainer):
         if self.aux_loss_enabled:
             model_kwargs["output_router_logits"] = True
 
-        with torch.no_grad():
-            KL_logits = model(
-                **KL_model_kwargs,
-            ).logits
-
         outputs = model(
             batch["completion_input_ids"],
             attention_mask=batch["completion_attention_mask"],
@@ -1127,14 +1157,6 @@ class KTOTrainer(Trainer):
         completion_logps = self.get_batch_logps(
             completion_logits,
             batch["completion_labels"],
-            average_log_prob=False,
-            is_encoder_decoder=self.is_encoder_decoder,
-            label_pad_token_id=self.label_pad_token_id,
-        )
-
-        KL_logps = self.get_batch_logps(
-            KL_logits,
-            batch["KL_completion_labels"],
             average_log_prob=False,
             is_encoder_decoder=self.is_encoder_decoder,
             label_pad_token_id=self.label_pad_token_id,
@@ -1299,7 +1321,8 @@ class KTOTrainer(Trainer):
 
             reference_chosen_logps = batch["reference_logps"][chosen_idx, ...]
             reference_rejected_logps = batch["reference_logps"][rejected_idx, ...]
-            reference_KL_logps = batch["reference_KL_logps"]
+            if self.loss_type == "kto":
+                reference_KL_logps = batch["reference_KL_logps"]
         else:
             with torch.no_grad():
                 if self.ref_model is None:
@@ -1329,10 +1352,11 @@ class KTOTrainer(Trainer):
                 reference_rejected_logps,
                 reference_KL_logps,
             )
+            metrics["kl"] = kl.item()
         elif self.loss_type == "bco":
             chosen_embeddings, rejected_embeddings = self._get_prompt_embeddings(batch)
 
-            losses, chosen_rewards, rejected_rewards, kl = self.bco_loss(
+            losses, chosen_rewards, rejected_rewards, mean_reward = self.bco_loss(
                 policy_chosen_logps,
                 policy_rejected_logps,
                 reference_chosen_logps,
@@ -1340,6 +1364,7 @@ class KTOTrainer(Trainer):
                 chosen_embeddings,
                 rejected_embeddings,
             )
+            metrics["mean_reward"] = mean_reward.item()
 
         num_chosen = torch.Tensor([len(chosen_rewards)]).to(self.accelerator.device)
         num_rejected = torch.Tensor([len(rejected_rewards)]).to(self.accelerator.device)
@@ -1356,8 +1381,6 @@ class KTOTrainer(Trainer):
             metrics["rewards/rejected_sum"] = self.accelerator.gather(rejected_rewards.nansum()).nansum().item()
             metrics["logps/rejected_sum"] = self.accelerator.gather(policy_rejected_logps.nansum()).nansum().item()
             metrics["count/rejected"] = all_num_rejected
-
-        metrics["kl"] = kl.item()
 
         loss = losses.nanmean()
         if self.aux_loss_enabled:
