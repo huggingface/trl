@@ -1269,24 +1269,37 @@ class KTOTrainer(Trainer):
             The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
             The delta value contains the moving average of all implicit rewards.
         """
-        assert policy_chosen_logps.shape[0] > 0, f"no chosen data at {self.accelerator.local_process_index}"
-        assert policy_rejected_logps.shape[0] > 0, f"no rejected data at {self.accelerator.local_process_index}"
-        chosen_logratios = policy_chosen_logps - reference_chosen_logps
-        rejected_logratios = policy_rejected_logps - reference_rejected_logps
 
-        chosen_rewards = self.beta * chosen_logratios
-        rejected_rewards = self.beta * rejected_logratios
+        if policy_chosen_logps.shape[0] != 0 or reference_chosen_logps.shape[0] != 0:
+            chosen_logratios = policy_chosen_logps - reference_chosen_logps
+            chosen_rewards = self.beta * chosen_logratios
+        else:
+            # lists can't be empty -- if they are, then accelerate.gather will hang
+            chosen_losses = torch.Tensor([]).to(self.accelerator.device)
+            chosen_rewards = torch.Tensor([]).to(self.accelerator.device)
+
+        if policy_rejected_logps.shape[0] != 0 or reference_rejected_logps.shape[0] != 0:
+            rejected_logratios = policy_rejected_logps - reference_rejected_logps
+            rejected_rewards = self.beta * rejected_logratios
+        else:
+            # lists can't be empty -- if they are, then accelerate.gather will hang
+            rejected_losses = torch.Tensor([]).to(self.accelerator.device)
+            rejected_rewards = torch.Tensor([]).to(self.accelerator.device)
+
 
         rewards = torch.cat((chosen_rewards, rejected_rewards), 0).mean().detach()
         self.running.update(rewards)
         rewards_mean = self.running.mean
 
-        chosen_losses = -F.logsigmoid(chosen_rewards - rewards_mean)
-        rejected_losses = -F.logsigmoid(-(rejected_rewards - rewards_mean))
+        if policy_chosen_logps.shape[0] != 0 or reference_chosen_logps.shape[0] != 0:
+            chosen_losses = -F.logsigmoid(chosen_rewards - rewards_mean)
+
+        if policy_rejected_logps.shape[0] != 0 or reference_rejected_logps.shape[0] != 0:
+            rejected_losses = -F.logsigmoid(-(rejected_rewards - rewards_mean))
 
         if self.match_underlying_distribution:
             chosen_weight = torch.ones_like(chosen_losses)
-            rejected_weight = self._get_udm_weight(rejected_embeddings)
+            rejected_weight = self._get_udm_weight(rejected_embeddings) if rejected_embeddings.shape[0] > 0 else 0.
 
             losses = torch.cat((chosen_weight * chosen_losses, rejected_weight * rejected_losses), dim=0)
         else:
