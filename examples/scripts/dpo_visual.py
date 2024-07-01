@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-accelerate launch examples/scripts/vdpo.py \
+accelerate launch examples/scripts/dpo_visual.py \
     --dataset_name HuggingFaceH4/rlaif-v_formatted \
     --model_name_or_path HuggingFaceM4/idefics2-8b \
     --per_device_train_batch_size 1 \
