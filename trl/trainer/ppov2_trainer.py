@@ -353,13 +353,15 @@ class PPOv2Trainer(Trainer):
                 # Response Processing 3. filter response. Ensure that the sample contains stop_token_id
                 # responses not passing that filter will receive a low (fixed) score
                 # only query humans on responses that pass that filter
-                contain_eos_token = torch.any(postprocessed_responses == args.stop_token_id, dim=-1)
+                contain_stop_token = torch.any(postprocessed_responses == args.stop_token_id, dim=-1)
                 # NOTE: only apply the stop token filter if the response is long enough
                 # otherwise the model could learn to generate the first token as the stop token
-                contain_eos_token = contain_eos_token & (sequence_lengths >= args.min_response_length)
+                contain_stop_token = contain_stop_token & (sequence_lengths >= args.min_response_length)
                 if args.non_eos_penalty:
-                    scores = torch.where(contain_eos_token, scores, torch.full_like(scores, args.penalty_reward_value))
-                # accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
+                    scores = torch.where(
+                        contain_stop_token, scores, torch.full_like(scores, args.penalty_reward_value)
+                    )
+                # accelerator.print(f"{scores=}, {(contain_stop_token.sum() / len(contain_stop_token))=}")
 
                 # be very careful with `padding_mask_p1`; see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
                 sequence_lengths_p1 = sequence_lengths + 1
@@ -520,7 +522,7 @@ class PPOv2Trainer(Trainer):
                 ref_logprobs,
                 values,
                 sequence_lengths,
-                contain_eos_token,
+                contain_stop_token,
                 sequence_lengths_p1,
                 response_idxs,
                 padding_mask,
