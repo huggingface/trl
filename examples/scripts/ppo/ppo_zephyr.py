@@ -15,9 +15,9 @@ from trl.trainer.utils import ZEPHYR_CHAT_TEMPLATE
 
 
 """
-python -i examples/scripts/minimal/ppo_zephyr_vllm.py \
+python -i examples/scripts/ppo/ppo_zephyr.py \
     --learning_rate 3e-6 \
-    --output_dir models/minimal/ppo \
+    --output_dir models/ppo/ppo \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 32 \
     --total_episodes 10000 \
@@ -25,27 +25,27 @@ python -i examples/scripts/minimal/ppo_zephyr_vllm.py \
     --sft_model_path EleutherAI/pythia-1b-deduped  \
     --reward_model_path EleutherAI/pythia-1b-deduped  \
     --non_eos_penalty \
-    --truncate_token eos \
+    --stop_token eos \
     --response_length 512 \
 
 accelerate launch --num_processes 7 --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/scripts/minimal/ppo_zephyr_vllm.py \
+    examples/scripts/ppo/ppo_zephyr.py \
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \
     --learning_rate 1e-6 \
-    --output_dir models/minimal/ppo_zephyr_vllm_1e-6_warmup_0.2 \
+    --output_dir models/ppo/ppo_zephyr_1e-6_warmup_0.2 \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 64 \
-    --local_rollout_forward_batch_size 8 \
+    --local_rollout_forward_batch_size 4 \
     --total_episodes 300000 \
     --model_name_or_path alignment-handbook/zephyr-7b-sft-full \
     --sft_model_path alignment-handbook/zephyr-7b-sft-full \
     --reward_model_path vwxyzjn/rm_zephyr \
     --kl_coef 0.10 \
     --non_eos_penalty \
-    --truncate_token eos \
+    --stop_token eos \
     --response_length 1024 \
-    --warmup_ratio 0.2
+    --warmup_ratio 0.2 \
     --generation_backend vllm \
     --vllm_device cuda:7
 """
