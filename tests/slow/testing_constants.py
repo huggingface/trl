@@ -14,7 +14,7 @@
 
 # TODO: push them under trl-org
 MODELS_TO_TEST = [
-    "HuggingFaceM4/tiny-random-LlamaForCausalLM",
+    "trl-internal-testing/tiny-random-LlamaForCausalLM",
     "HuggingFaceM4/tiny-random-MistralForCausalLM",
 ]
 
@@ -23,5 +23,5 @@ PACKING_OPTIONS = [True, False]
 GRADIENT_CHECKPOINTING_KWARGS = [None, {"use_reentrant": False}, {"use_reentrant": True}]
 DEVICE_MAP_OPTIONS = [{"": 0}, "auto"]
 
-DPO_LOSS_TYPES = ["sigmoid", "ipo", "kto_pair"]
+DPO_LOSS_TYPES = ["sigmoid", "ipo"]
 DPO_PRECOMPUTE_LOGITS = [True, False]

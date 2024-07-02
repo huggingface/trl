@@ -14,7 +14,8 @@
 # limitations under the License.
 """
 # regular:
-python examples/scripts/vsft.py \
+python examples/scripts/vsft_llava.py \
+    --dataset_name="HuggingFaceH4/llava-instruct-mix-vsft" \
     --model_name_or_path="llava-hf/llava-1.5-7b-hf" \
     --report_to="wandb" \
     --learning_rate=1.4e-5 \
@@ -27,11 +28,11 @@ python examples/scripts/vsft.py \
     --gradient_checkpointing \
     --remove_unused_columns=False \
     --torch_dtype=float16 \
-    --fp16=True \ 
-    --dataset_name=HuggingFaceH4/llava-instruct-mix-vsft \
+    --fp16=True
     
 # peft:
-python examples/scripts/vsft.py \
+python examples/scripts/vsft_llava.py \
+    --dataset_name="HuggingFaceH4/llava-instruct-mix-vsft" \    
     --model_name_or_path="llava-hf/llava-1.5-7b-hf" \
     --report_to="wandb" \
     --learning_rate=1.4e-5 \
@@ -45,7 +46,6 @@ python examples/scripts/vsft.py \
     --remove_unused_columns=False \
     --torch_dtype=float16 \
     --fp16=True \ 
-    --dataset_name=HuggingFaceH4/llava-instruct-mix-vsft \    
     --use_peft=True \
     --lora_r=64 \
     --lora_alpha=16 \
@@ -63,13 +63,14 @@ accelerate launch --num_processes=8 -m lmms_eval \
         --output_path ./logs/ \
         --log_sample    
 """
+
 import logging
 import os
 from contextlib import nullcontext
 
 TRL_USE_RICH = os.environ.get("TRL_USE_RICH", False)
 
-from trl.commands.cli_utils import init_zero_verbose, SftScriptArguments, TrlParser
+from trl.commands.cli_utils import init_zero_verbose, SFTScriptArguments, TrlParser
 
 if TRL_USE_RICH:
     init_zero_verbose()
@@ -79,14 +80,16 @@ if TRL_USE_RICH:
     from rich.logging import RichHandler
 
 import torch
+from accelerate import Accelerator
 from datasets import load_dataset
 
 from tqdm.rich import tqdm
-from transformers import AutoTokenizer, AutoProcessor, TrainingArguments, LlavaForConditionalGeneration
+from transformers import AutoTokenizer, AutoProcessor, LlavaForConditionalGeneration
 
 from trl import (
     ModelConfig,
     RichProgressCallback,
+    SFTConfig,
     SFTTrainer,
     get_peft_config,
     get_quantization_config,
@@ -100,8 +103,8 @@ if TRL_USE_RICH:
 
 
 if __name__ == "__main__":
-    parser = TrlParser((SftScriptArguments, TrainingArguments, ModelConfig))
-    args, training_args, model_config = parser.parse_args_and_config()
+    parser = TrlParser((SFTScriptArguments, SFTConfig, ModelConfig))
+    sft_script_args, training_args, model_config = parser.parse_args_and_config()
     training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
     # Force use our print callback
     if TRL_USE_RICH:
@@ -111,7 +114,7 @@ if __name__ == "__main__":
     ################
     # Model, Tokenizer & Processor
     ################
-    LLAVA_CHAT_TEMPLATE = """A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. {% for message in messages %}{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}"""
+    LLAVA_CHAT_TEMPLATE = """{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. {% for message in messages %}{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}{% if add_generation_prompt %}ASSISTANT: {% endif %}"""
 
     torch_dtype = (
         model_config.torch_dtype
@@ -169,9 +172,9 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    raw_datasets = load_dataset(args.dataset_name)
-    train_dataset = raw_datasets["train"]
-    eval_dataset = raw_datasets["test"]
+    raw_datasets = load_dataset(sft_script_args.dataset_name)
+    train_dataset = raw_datasets[sft_script_args.dataset_train_split]
+    eval_dataset = raw_datasets[sft_script_args.dataset_test_split]
 
     ################
     # Optional rich context managers
@@ -205,3 +208,5 @@ if __name__ == "__main__":
     with save_context:
         trainer.save_model(training_args.output_dir)
         trainer.push_to_hub()
+        if Accelerator().is_main_process:
+            processor.push_to_hub(training_args.hub_model_id)

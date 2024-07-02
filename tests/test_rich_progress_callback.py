@@ -32,7 +32,7 @@ class TestRichProgressCallback(unittest.TestCase):
                 per_device_eval_batch_size=2,
                 per_device_train_batch_size=2,
                 num_train_epochs=4,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 eval_steps=1,
                 logging_strategy="steps",
                 logging_steps=1,

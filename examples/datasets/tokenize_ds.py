@@ -15,7 +15,9 @@ python -i examples/datasets/tokenize_ds.py --debug --model gpt2
 @dataclass
 class ScriptArguments:
     debug: Optional[bool] = field(default=False, metadata={"help": "Enable debug mode"})
-    dataset: str = field(default="trl-internal-testing/hh-rlhf-trl-style", metadata={"help": "The dataset to load"})
+    dataset: str = field(
+        default="trl-internal-testing/hh-rlhf-helpful-base-trl-style", metadata={"help": "The dataset to load"}
+    )
     model: str = field(default="gpt2", metadata={"help": "The model to use for tokenization"})
 
 
