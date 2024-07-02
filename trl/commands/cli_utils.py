@@ -90,6 +90,27 @@ class SFTScriptArguments:
         metadata={"help": "Whether to apply `use_reentrant` for gradient_checkpointing"},
     )
 
+@dataclass
+class SRPOScriptArguments:
+    dataset_name: str = field(default=None, metadata={"help": "the dataset name"})
+    dataset_train_split: str = field(default="train", metadata={"help": "The dataset split to use for training"})
+    dataset_test_split: str = field(default="test", metadata={"help": "The dataset split to use for evaluation"})
+    sanity_check: bool = field(default=False, metadata={"help": "only train on 1000 samples"})
+    ignore_bias_buffers: bool = field(
+        default=False,
+        metadata={
+            "help": "debug argument for distributed training;"
+            "fix for DDP issues with LM bias/mask buffers - invalid scalar type,`inplace operation. See"
+            "https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992"
+        },
+    )
+    config: str = field(default=None, metadata={"help": "Path to the optional config file"})
+    gradient_checkpointing_use_reentrant: bool = field(
+        default=False,
+        metadata={"help": "Whether to apply `use_reentrant` for gradient_checkpointing"},
+    )
+    # revisions: int = field(default=5, metadata={"help": "Number of revisions for SRPO"},)
+
 
 @dataclass
 class DPOScriptArguments:
