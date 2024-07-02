@@ -22,7 +22,7 @@ os.environ["TRANSFORMERS_CACHE"] = f"{os.environ['HUGGINGFACE_CACHE']}/transform
 os.environ["WANDB_LOG_MODEL"] = "end"
 """
 # pretrained:
-python examples/scripts/srpo/srpo_tldr.py \
+python examples/scripts/srpo/srpo_eval.py \
     --model_name_or_path=./final_trained \
     --per_device_train_batch_size 4 \
     --per_device_eval_batch_size 4 \
@@ -34,14 +34,13 @@ python examples/scripts/srpo/srpo_tldr.py \
     --warmup_steps 150 \
     --bf16 \
     --logging_first_step \
-    --no_remove_unused_columns \
-    --report_to=wandb \
-    --generate_during_eval=True
+    --no_remove_unused_columns
 
-# regular:
-python examples/scripts/srpo/srpo_tldr.py \
-    --model_name_or_path EleutherAI/pythia-1b-deduped \
+untrained:
+python examples/scripts/srpo/srpo_eval.py \
+    --model_name_or_path=EleutherAI/pythia-1b-deduped \
     --per_device_train_batch_size 4 \
+    --per_device_eval_batch_size 4 \
     --learning_rate 3e-6 \
     --gradient_accumulation_steps 64 \
     --logging_steps 10 \
@@ -50,27 +49,7 @@ python examples/scripts/srpo/srpo_tldr.py \
     --warmup_steps 150 \
     --bf16 \
     --logging_first_step \
-    --no_remove_unused_columns \
-    --report_to=wandb
-    --generate_during_eval=True
-
-# peft:
-python examples/scripts/srpo/srpo_tldr.py \
-    --model_name_or_path EleutherAI/pythia-1b-deduped \
-    --per_device_train_batch_size 6 \
-    --learning_rate 2e-6 \
-    --gradient_accumulation_steps 64 \
-    --logging_steps 10 \
-    --eval_steps 500 \
-    --output_dir="srpo_tldr" \
-    --warmup_steps 150 \
-    --bf16 \
-    --logging_first_step \
-    --use_peft \
-    --lora_r=16 \
-    --lora_alpha=8 \
-    --no_remove_unused_columns \
-    --report_to=wandb
+    --no_remove_unused_columns
 """
 
 import logging
@@ -166,9 +145,8 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    raw_datasets = load_dataset("trl-internal-testing/tldr-preference-trl-style")
-    train_dataset = raw_datasets["train"]
-    eval_dataset = raw_datasets["validation"]
+    raw_datasets = load_dataset("trl-internal-testing/tldr-preference-sft-trl-style")
+    test_dataset = raw_datasets["test"]
 
     if args.sanity_check:
         for key in ds:
@@ -177,8 +155,6 @@ if __name__ == "__main__":
     def process(row):
         if row["prompt"].endswith("TL;DR:"):
             row["prompt"] = row["prompt"][:-6]
-        row["chosen"] = row["chosen"][1]["content"]
-        row["rejected"] = row["rejected"][1]["content"]
         # row["chosen"] = tokenizer.apply_chat_template(
         #     row["chosen"],
         #     padding=False,
@@ -193,47 +169,50 @@ if __name__ == "__main__":
         # )
         return row
 
-    def process_dpo(row):
-        row["chosen"] = tokenizer.apply_chat_template(row["chosen"], tokenize=False)
-        row["rejected"] = tokenizer.apply_chat_template(row["rejected"], tokenize=False)
-        return row
-
     # train_dataset = train_dataset.map(
-    train_dataset = train_dataset.select(range(10)).map(
+    test_dataset = test_dataset.select(range(1000)).map(
          process,
          num_proc=multiprocessing.cpu_count(),
-         # load_from_cache_file=False,
     )
-    # eval_dataset = eval_dataset.select(range(100)).map(
-    #     process,
-    #     num_proc=multiprocessing.cpu_count(),
-    #     # load_from_cache_file=False,
-    # )
 
     ################
     # Training
     ################
-    training_args.prefix_zero_prompt = """Below is a reddit POST and the corresponding SUBREDDIT and TITLE.
+    prefix_zero_prompt = """Below is a reddit POST and the corresponding SUBREDDIT and TITLE.
 Write a both precise and concise summary of the contents of the POST."""
-    training_args.prefix_n_prompt = """Below is a reddit POST and the corresponding SUBREDDIT, TITLE, and an EXAMPLE
+    prefix_n_prompt = """Below is a reddit POST and the corresponding SUBREDDIT, TITLE, and an EXAMPLE
 SUMMARY. Write a both precise and concise summary of the contents of the POST."""
 
-    training_args.post_revision_prompt = "TL;DR:"
+    post_revision_prompt = "TL;DR:"
     training_args.dataset_num_proc = multiprocessing.cpu_count()
-    with init_context:
-        trainer = SRPOTrainer(
-            model,
-            model_ref,
-            args=training_args,
-            # train_dataset=train_dataset,
-            eval_dataset=train_dataset,
-            tokenizer=tokenizer,
-            peft_config=get_peft_config(model_config),
-            callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
-        )
+    # with init_context:
+    #     trainer = SRPOTrainer(
+    #         model,
+    #         model_ref,
+    #         args=training_args,
+    #         # train_dataset=train_dataset,
+    #         eval_dataset=train_dataset,
+    #         tokenizer=tokenizer,
+    #         peft_config=get_peft_config(model_config),
+    #         callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
+    #     )
 
-    # trainer.train()
-    trainer.evaluate()
+    print("BEFORE ITEMS")
+    for item in test_dataset:
+        zero_prompt = prefix_zero_prompt + "\n" + item["prompt"] + post_revision_prompt
+        print("ITEM", zero_prompt)
+        inputs = tokenizer(zero_prompt, return_tensors="pt")
+        print("USING MODEL", model)
+        output = model.generate(
+            input_ids=inputs["input_ids"],
+            attention_mask=inputs["attention_mask"],
+            max_length=1024,
+            do_sample=True,
+            pad_token_id=tokenizer.pad_token_id,
+        )
+        import pdb; pdb.set_trace()
+        print("HAS OUTPUT")
+        decoded_output = tokenizer.batch_decode(output)
 
     # with save_context:
     #     trainer.save_model(training_args.output_dir)

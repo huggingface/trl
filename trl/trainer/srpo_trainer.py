@@ -501,7 +501,8 @@ class SRPOTrainer(Trainer):
         # see: https://github.com/huggingface/trl/pull/1255
         with PartialState().local_main_process_first():
             # tokenize the dataset
-            train_dataset = train_dataset.map(self.tokenize_row, num_proc=self.dataset_num_proc)
+            if train_dataset is not None:
+                train_dataset = train_dataset.map(self.tokenize_row, num_proc=self.dataset_num_proc)
             if eval_dataset is not None:
                 eval_dataset = eval_dataset.map(self.tokenize_row, num_proc=self.dataset_num_proc)
 
@@ -784,9 +785,9 @@ class SRPOTrainer(Trainer):
                 raise ValueError(f"rejected should be an str but got {type(rejected)}")
             # rejected_tokens = self.build_tokenized_answer(n_prompt, rejected)
             improve_to_chosen_given_rejected_tokens = self.build_tokenized_answer(rejected_prompt, chosen)
-            improve_to_chosen_given_chosen_tokens =  self.build_tokenized_answer(chosen_prompt, chosen)
+            improve_to_chosen_given_chosen_tokens = self.build_tokenized_answer(chosen_prompt, chosen)
             improve_to_rejected_given_rejected_tokens = self.build_tokenized_answer(rejected_prompt, rejected)
-            improve_to_rejected_given_chosen_tokens =  self.build_tokenized_answer(chosen_prompt, rejected)
+            improve_to_rejected_given_chosen_tokens = self.build_tokenized_answer(chosen_prompt, rejected)
             rejected = self.build_tokenized_answer(zero_prompt, rejected)
             chosen = self.build_tokenized_answer(zero_prompt, chosen)
             token_set = {
@@ -799,10 +800,6 @@ class SRPOTrainer(Trainer):
                 "chosen": chosen
             }
 
-
-            def perform_for_all_token_sets(action, token_set_key, final_action):
-                results = [action(value[token_set_key]) for _, value in token_set.items()]
-                return final_action(results), results
 
 
             # Last prompt token might get merged by tokenizer and
@@ -1083,7 +1080,6 @@ class SRPOTrainer(Trainer):
         rejected_to_chosen_improvement_ratio = improve_to_chosen_given_rejected - ref_improve_to_chosen_given_rejected
         rejected_to_rejected_improvement_ratio = improve_to_rejected_given_rejected - ref_improve_to_rejected_given_rejected
         given_rejected = (0.5 - self.beta * (rejected_to_chosen_improvement_ratio - rejected_to_rejected_improvement_ratio)) ** 2
-        # import pdb; pdb.set_trace()
 
         chosen_to_chosen_improvement_ratio = improve_to_chosen_given_chosen - ref_improve_to_chosen_given_chosen
 
@@ -1256,9 +1252,10 @@ class SRPOTrainer(Trainer):
         )
         chosen_rewards = reward_ratios["chosen_zero_ratio"]
         rejected_rewards = reward_ratios["rejected_zero_ratio"]
-        reward_accuracies = (chosen_rewards > rejected_rewards).float()
-        improvement_accuracies = (reward_ratios["rejected_to_chosen_improvement_ratio"] > reward_ratios["chosen_to_rejected_improvement_ratio"]).float()
 
+        import pdb; pdb.set_trace()
+        reward_accuracies = (policy_logits["chosen"] > policy_logits["rejected"]).float()
+        improvement_accuracies = (policy_logits["improve_to_chosen_given_rejected"] > policy_logits["improve_to_rejected_given_chosen"]).float()
         # if self.args.rpo_alpha is not None:
         #     losses = losses * self.args.rpo_alpha + policy_nll_loss
 
@@ -1312,8 +1309,8 @@ class SRPOTrainer(Trainer):
 
         with generate_context_manager():
             policy_output = model.generate(
-                input_ids=batch["prompt_input_ids"],
-                attention_mask=batch["prompt_attention_mask"],
+                input_ids=batch["zero_prompt_prompt_input_ids"],
+                attention_mask=batch["zero_prompt_prompt_attention_mask"],
                 max_length=self.max_length,
                 do_sample=True,
                 pad_token_id=self.tokenizer.pad_token_id,
@@ -1326,16 +1323,16 @@ class SRPOTrainer(Trainer):
                 if self.ref_model is None:
                     with self.null_ref_context():
                         reference_output = self.model.generate(
-                            input_ids=batch["prompt_input_ids"],
-                            attention_mask=batch["prompt_attention_mask"],
+                            input_ids=batch["zero_prompt_prompt_input_ids"],
+                            attention_mask=batch["zero_prompt_prompt_attention_mask"],
                             max_length=self.max_length,
                             do_sample=True,
                             pad_token_id=self.tokenizer.pad_token_id,
                         )
                 else:
                     reference_output = self.ref_model.generate(
-                        input_ids=batch["prompt_input_ids"],
-                        attention_mask=batch["prompt_attention_mask"],
+                        input_ids=batch["zero_prompt_prompt_input_ids"],
+                        attention_mask=batch["zero_prompt_prompt_attention_mask"],
                         max_length=self.max_length,
                         do_sample=True,
                         pad_token_id=self.tokenizer.pad_token_id,
@@ -1371,6 +1368,7 @@ class SRPOTrainer(Trainer):
 
         with torch.no_grad(), prediction_context_manager():
             loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="eval")
+        import pdb; pdb.set_trace()
 
         # force log the metrics
         self.store_metrics(metrics, train_eval="eval")
