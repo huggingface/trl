@@ -29,7 +29,7 @@ python examples/scripts/ppo/ppo_tldr.py \
     --response_length 53 \
     --sanity_check
 
-accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
+accelerate launch --num_processes 3 --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/ppo/ppo_tldr.py \
     --output_dir models/minimal/ppo_tldr \
     --learning_rate 3e-6 \
@@ -42,6 +42,8 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --local_rollout_forward_batch_size 16 \
     --non_eos_penalty \
     --stop_token eos \
+    --generation_backend vllm \
+    --vllm_device cuda:3
 """
 
 

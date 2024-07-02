@@ -48,8 +48,12 @@ class PPOv2Config(OnpolicyRuntimeConfig, TrainingArguments):
     """whether to penalize responses that do not contain `stop_token_id`"""
     reward_model_path: str = "EleutherAI/pythia-160m"
     """the path to the reward model"""
+    reward_model_revision: str = "main"
+    """the revision of the reward model"""
     sft_model_path: str = "EleutherAI/pythia-160m"
     """the path to the sft model"""
+    sft_model_revision: str = "main"
+    """the revision of the sft model"""
 
     # ppo config
     num_ppo_epochs: int = 4
@@ -68,3 +72,14 @@ class PPOv2Config(OnpolicyRuntimeConfig, TrainingArguments):
     """whether to whiten the rewards"""
     kl_coef: float = 0.05
     """the KL coefficient"""
+
+    # vllm deivce: only applies if we use the vllm mode
+    # We actually needed to do precise model placement for the vllm model.
+    # For this reason we created our own fork https://github.com/vwxyzjn/vllm/pull/1
+    # you have to install via `pip install vllm-online`
+    generation_backend: Literal["hf", "vllm"] = "hf"
+    """the backend to use for the online generation"""
+    vllm_device: str = "cuda:1"
+    """the device placement of the vllm model; typically we place the vllm model on a decicated GPU"""
+    vllm_gpu_memory_utilization: float = 0.8
+    """the GPU memory utilization of the vllm model; passed to `gpu_memory_utilization` to the `vLLM` instance"""

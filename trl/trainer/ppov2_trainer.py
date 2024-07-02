@@ -1,4 +1,5 @@
 import gc
+import logging
 import os
 import time
 from collections import OrderedDict, defaultdict
@@ -40,6 +41,11 @@ from ..trainer.utils import (
 )
 from .ppov2_config import PPOv2Config
 
+
+try:
+    from vllm import SamplingParams, SingleGPULLM
+except ImportError:
+    raise ImportError("Please install our custom build `pip install vllm-online`") from None
 
 INVALID_LOGPROB = 1.0
 
@@ -189,6 +195,30 @@ class PPOv2Trainer(Trainer):
         )  # no need to shuffle eval dataset
         self.eval_dataloader = accelerator.prepare(self.eval_dataloader)
 
+        #########
+        ### vllm
+        #########
+        if args.generation_backend == "vllm":
+            self.sampling_params = SamplingParams(
+                temperature=args.temperature,
+                top_p=1.0,
+                max_tokens=args.response_length,
+                include_stop_str_in_output=True,
+            )
+            if accelerator.is_main_process:
+                self.llm = SingleGPULLM(
+                    model=args.sft_model_path,
+                    revision=args.sft_model_revision,
+                    tokenizer_revision=args.sft_model_revision,
+                    tensor_parallel_size=1,
+                    device=args.vllm_device,
+                    gpu_memory_utilization=args.vllm_gpu_memory_utilization,
+                )
+                self.llmp = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+                logging.info("🔥🔥🔥 vllm loaded")
+            else:
+                logging.info("waiting for vllm to spin up...")
+
         if self.is_deepspeed_enabled:
             self.reward_model = prepare_deepspeed(
                 self.reward_model, args.per_device_train_batch_size, args.bf16, args.fp16
@@ -267,6 +297,9 @@ class PPOv2Trainer(Trainer):
         vf_clipfrac_stats = torch.zeros(stats_shape, device=device)
         entropy_stats = torch.zeros(stats_shape, device=device)
         ratio_stats = torch.zeros(stats_shape, device=device)
+        vllm_responses = torch.zeros(
+            (args.batch_size, args.response_length), device=self.accelerator.device, dtype=torch.long
+        )
         model.train()
         for update in range(1, args.num_updates + 1):
             global_step += 1 * args.batch_size
@@ -284,17 +317,30 @@ class PPOv2Trainer(Trainer):
                 scores = []
                 sequence_lengths = []
                 with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+                    if args.generation_backend == "vllm":
+                        # under the vllm backend, we send all queries to the vllm model and do a batch generation there;
+                        # meanwhile, the training GPUs are idle
+                        local_vllm_responses = self.vllm_generate(
+                            args, accelerator, tokenizer, device, vllm_responses, queries, unwrapped_model
+                        )
+                        local_vllm_query_responses = torch.cat((queries, local_vllm_responses), 1)
                     for i in range(0, queries.shape[0], args.local_rollout_forward_batch_size):
                         query = queries[i : i + args.local_rollout_forward_batch_size]
-                        query_response, logits = generate(
-                            unwrapped_model.policy,
-                            query,
-                            tokenizer.pad_token_id,
-                            generation_config,
-                        )
+                        if args.generation_backend == "vllm":
+                            query_response = local_vllm_query_responses[i : i + args.local_rollout_forward_batch_size]
+                            output = forward(unwrapped_model.policy, query_response, tokenizer.pad_token_id)
+                            logits = output.logits[:, context_length - 1 : -1]
+                            logits /= args.temperature + 1e-7
+                            del output
+                        elif args.generation_backend == "hf":
+                            query_response, logits = generate(
+                                unwrapped_model.policy,
+                                query,
+                                tokenizer.pad_token_id,
+                                generation_config,
+                            )
                         response = query_response[:, context_length:]
 
-                        # use the logits during generation directly, instead of using the following
                         all_logprob = F.log_softmax(logits, dim=-1)
                         logprob = torch.gather(all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
                         del logits, all_logprob
@@ -527,29 +573,80 @@ class PPOv2Trainer(Trainer):
             )
             torch.cuda.empty_cache()
 
+    def vllm_generate(self, args, accelerator, tokenizer, device, vllm_responses, queries, unwrapped_model):
+        """"""
+        g_queries_list = gather_object(queries.tolist())
+
+        if accelerator.is_main_process:
+            logging.info(
+                "🔥🔥🔥 Loading weights using shared memory;" "we expect the generations to be completely different"
+            )
+            start_time = time.time()
+            self.llmp.load_weights(unwrapped_model.policy.named_parameters())
+            logging.info(f"Time to load weights: {time.time() - start_time:.2f} seconds")
+            g_queries_list = [
+                [inneritem for inneritem in item if inneritem != tokenizer.pad_token_id] for item in g_queries_list
+            ]
+            outputs = self.llm.generate(prompt_token_ids=g_queries_list, sampling_params=self.sampling_params)
+            padded_response_token_ids = []
+            for output in outputs:
+                token_ids = output.outputs[0].token_ids
+                DUMMY_PAD_TOKEN = 0  # we can't use tokenizer.pad_token_id because it's outside vocab and `torch.gather(all_logprob, 2, response.unsqueeze(-1))` will error out
+                padded_token_ids = token_ids + [DUMMY_PAD_TOKEN] * (args.response_length - len(token_ids))
+                padded_response_token_ids.append(padded_token_ids)
+            padded_response_token_ids = torch.tensor(padded_response_token_ids, device=device)
+            vllm_responses[:] = padded_response_token_ids
+
+        broadcast(vllm_responses, 0)
+
+        return vllm_responses[
+            accelerator.local_process_index * queries.shape[0] : (accelerator.local_process_index + 1)
+            * queries.shape[0]
+        ]
+
     def generate_completions(self, sampling: bool = False):
         args = self.args
+        accelerator = self.accelerator
         tokenizer = self.tokenizer
-        generation_config = GenerationConfig(
-            max_new_tokens=self.args.response_length,
-            temperature=(0.01 + 1e-7),
-            top_k=0.0,
-            top_p=1.0,
-            do_sample=True,
-        )
-
+        device = accelerator.device
+        if args.generation_backend == "vllm":
+            generation_config = SamplingParams(
+                temperature=(0.01 + 1e-7),
+                top_p=1.0,
+                max_tokens=args.response_length,
+                include_stop_str_in_output=True,
+            )
+        else:
+            generation_config = GenerationConfig(
+                max_new_tokens=self.args.response_length,
+                temperature=(0.01 + 1e-7),
+                top_k=0.0,
+                top_p=1.0,
+                do_sample=True,
+            )
         table = defaultdict(list)
+        vllm_responses = torch.zeros(
+            (args.per_device_eval_batch_size * args.world_size, args.response_length),
+            device=device,
+            dtype=torch.long,
+        )
         for batch in self.eval_dataloader:
             query = batch["input_ids"]
             with torch.no_grad():
                 context_length = query.shape[1]
                 with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
-                    query_response, _ = generate(
-                        unwrapped_model.policy,
-                        query,
-                        tokenizer.pad_token_id,
-                        generation_config,
-                    )
+                    if args.generation_backend == "vllm":
+                        local_vllm_responses = self.vllm_generate(
+                            args, accelerator, tokenizer, device, vllm_responses, query, unwrapped_model
+                        )
+                        query_response = torch.cat((query, local_vllm_responses), 1)
+                    else:
+                        query_response, _ = generate(
+                            unwrapped_model.policy,
+                            query,
+                            tokenizer.pad_token_id,
+                            generation_config,
+                        )
                 response = query_response[:, context_length:]
                 postprocessed_response = response
                 if args.stop_token_id is not None:  # handle the edge case when stop_token_id exists but is 0
