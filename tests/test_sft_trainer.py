@@ -223,6 +223,7 @@ class SFTTrainerTester(unittest.TestCase):
                 eval_steps=2,
                 save_steps=2,
                 per_device_train_batch_size=2,
+                hub_token="not_a_real_token",
             )
 
             trainer = SFTTrainer(
@@ -231,6 +232,8 @@ class SFTTrainerTester(unittest.TestCase):
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
             )
+
+            assert trainer.args.hub_token == training_args.hub_token
 
             trainer.train()
 
