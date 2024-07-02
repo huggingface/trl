@@ -146,8 +146,9 @@ class SFTTrainer(Trainer):
             warnings.warn(f"No `SFTConfig` passed, using `output_dir={output_dir}`.")
             args = SFTConfig(output_dir=output_dir)
         elif args is not None and args.__class__.__name__ == "TrainingArguments":
+            args_as_dict = args.to_dict()
             # Manually copy token values as TrainingArguments.to_dict() redacts them
-            args_as_dict = args.to_dict() | {"hub_token": args.hub_token, "push_to_hub_token": args.push_to_hub_token}
+            args_as_dict |= {k: getattr(args, k) for k in args_as_dict.keys() if k.endswith("_token")}
             args = SFTConfig(**args_as_dict)
 
         if model_init_kwargs is not None:
