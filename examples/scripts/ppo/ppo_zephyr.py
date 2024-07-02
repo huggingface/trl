@@ -10,7 +10,7 @@ from transformers import (
 )
 
 from trl import ModelConfig
-from trl.trainer.ppov2_trainer_vllm import PPOConfig, PPOTrainer
+from trl.trainer.ppov2_trainer import PPOv2Config, PPOv2Trainer
 from trl.trainer.utils import ZEPHYR_CHAT_TEMPLATE
 
 
@@ -28,7 +28,7 @@ python -i examples/scripts/minimal/ppo_zephyr_vllm.py \
     --truncate_token eos \
     --response_length 512 \
 
-accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.7.yaml \
+accelerate launch --num_processes 7 --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/minimal/ppo_zephyr_vllm.py \
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \
@@ -46,11 +46,13 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.7.ya
     --truncate_token eos \
     --response_length 1024 \
     --warmup_ratio 0.2
+    --generation_backend vllm \
+    --vllm_device cuda:7
 """
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser((PPOConfig, ModelConfig))
+    parser = HfArgumentParser((PPOv2Config, ModelConfig))
     config, model_config = parser.parse_args_into_dataclasses()
     # remove output_dir if exists
     shutil.rmtree(config.output_dir, ignore_errors=True)
@@ -120,7 +122,7 @@ if __name__ == "__main__":
     ################
     # Training
     ################
-    trainer = PPOTrainer(
+    trainer = PPOv2Trainer(
         config=config,
         tokenizer=tokenizer,
         policy=policy,
