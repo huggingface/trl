@@ -708,14 +708,17 @@ class DPOTrainer(Trainer):
         if self.is_vision_model:
             if answer.count("<image>") > 0:
                 raise NotImplementedError("Answer contains <image> token, which is not supported yet.")
-            processor_kwargs = {"add_special_tokens": False} if "add_special_tokens" in inspect.signature(self.processor).parameters else {}
+            if "add_special_tokens" in inspect.signature(self.processor).parameters:
+                processor_kwargs = {"add_special_tokens": False}
+            else:
+                processor_kwargs = {}
             full_tokenized = self.processor(prompt + answer, images=images, **processor_kwargs)
             full_tokenized = {k: v[0] for k, v in full_tokenized.items()}  # Unbatch, not done when using idefics
-            if not isinstance(full_tokenized["input_ids"], list): # llava processor returns tensors
+            if not isinstance(full_tokenized["input_ids"], list):  # llava processor returns tensors
                 full_tokenized["input_ids"] = full_tokenized["input_ids"].tolist()
                 full_tokenized["attention_mask"] = full_tokenized["attention_mask"].tolist()
             prompt_input_ids = self.processor(prompt, images=images, **processor_kwargs)["input_ids"][0]
-            if not isinstance(prompt_input_ids, list): # llava processor returns tensors
+            if not isinstance(prompt_input_ids, list):  # llava processor returns tensors
                 prompt_input_ids = prompt_input_ids.tolist()
         else:
             full_tokenized = self.tokenizer(prompt + answer, add_special_tokens=False)
@@ -792,10 +795,13 @@ class DPOTrainer(Trainer):
             if not isinstance(prompt, str):
                 raise ValueError(f"prompt should be an str but got {type(prompt)}")
             if self.is_vision_model:
-                processor_kwargs = {"add_special_tokens": False} if "add_special_tokens" in inspect.signature(self.processor).parameters else {}
+                if "add_special_tokens" in inspect.signature(self.processor).parameters:
+                    processor_kwargs = {"add_special_tokens": False}
+                else:
+                    processor_kwargs = {}
                 prompt_tokens = self.processor(prompt, images=images, **processor_kwargs)
                 prompt_tokens = {k: v[0] for k, v in prompt_tokens.items()}  # Unbatch, not done when using idefics
-                if not isinstance(prompt_tokens["input_ids"], list): # llava processor returns tensors
+                if not isinstance(prompt_tokens["input_ids"], list):  # llava processor returns tensors
                     prompt_tokens["input_ids"] = prompt_tokens["input_ids"].tolist()
                     prompt_tokens["attention_mask"] = prompt_tokens["attention_mask"].tolist()
             else:
@@ -1028,7 +1034,9 @@ class DPOTrainer(Trainer):
             )
 
         if is_vision_model:
-            concatenated_batch["pixel_values"] = torch.cat([batch["prompt_pixel_values"], batch["prompt_pixel_values"]], dim=0)
+            concatenated_batch["pixel_values"] = torch.cat(
+                [batch["prompt_pixel_values"], batch["prompt_pixel_values"]], dim=0
+            )
             if "prompt_pixel_attention_mask" in batch:
                 concatenated_batch["pixel_attention_mask"] = torch.cat(
                     [batch["prompt_pixel_attention_mask"], batch["prompt_pixel_attention_mask"]], dim=0
@@ -1270,8 +1278,8 @@ class DPOTrainer(Trainer):
 
         if all_logits.shape[:2] != concatenated_batch["concatenated_labels"].shape[:2]:
             # for llava, the model returns logits for the entire sequence, including the image tokens (placed before the text tokens)
-            l = concatenated_batch["concatenated_labels"].shape[1]
-            all_logits = all_logits[:, -l:]
+            seq_len = concatenated_batch["concatenated_labels"].shape[1]
+            all_logits = all_logits[:, -seq_len:]
 
         all_logps, size_completion = self.get_batch_logps(
             all_logits,
