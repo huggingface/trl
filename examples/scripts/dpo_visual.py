@@ -85,7 +85,6 @@ if __name__ == "__main__":
         trust_remote_code=model_config.trust_remote_code,
         attn_implementation=model_config.attn_implementation,
         torch_dtype=torch_dtype,
-        use_cache=False if training_args.gradient_checkpointing else True,
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
@@ -97,6 +96,8 @@ if __name__ == "__main__":
         model_ref = None
     processor = AutoProcessor.from_pretrained(model_config.model_name_or_path, do_image_splitting=False)
     tokenizer = processor.tokenizer
+    if not hasattr(processor, "chat_template") or processor.chat_template is None:
+        processor.chat_template = """{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. {% for message in messages %}{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}{% if add_generation_prompt %}ASSISTANT: {% endif %}"""
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     if args.ignore_bias_buffers:
@@ -172,6 +173,6 @@ if __name__ == "__main__":
         )
 
     trainer.train()
-    trainer.push_to_hub
+
     with save_context:
         trainer.save_model(training_args.output_dir)
