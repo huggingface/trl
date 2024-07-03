@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import inspect
+import os
 import random
 import warnings
 from collections import defaultdict
@@ -70,6 +71,8 @@ if is_deepspeed_available():
 
 if TYPE_CHECKING:
     from transformers import PreTrainedModel, PreTrainedTokenizer
+
+RUNNING_NAME = "running.pt"
 
 
 def _get_kl_dataset(batch: Dict[str, List[Any]]) -> Dict[str, List[Any]]:
@@ -733,7 +736,7 @@ class KTOTrainer(Trainer):
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
         if self.loss_type == "bco":
-            self.running = RunningMoments(self.accelerator)
+            self.running = RunningMoments(accelerator=self.accelerator)
 
             if self.embedding_func is None:
                 return
@@ -875,6 +878,27 @@ class KTOTrainer(Trainer):
         model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
         model.eval()
         return model
+
+    def _save_optimizer_and_scheduler(self, output_dir):
+        super()._save_optimizer_and_scheduler(output_dir)
+
+        # When saving optimizer and scheduler to checkpoint, save also the running delta object.
+        if self.loss_type == "bco":
+            output_dir = output_dir if output_dir is not None else self.args.output_dir
+
+            self.running.save_to_json(os.path.join(output_dir, RUNNING_NAME))
+
+    def _load_optimizer_and_scheduler(self, checkpoint):
+        super()._load_optimizer_and_scheduler(checkpoint)
+
+        # when loading optimizer and scheduler from checkpoint, also load the running delta object.
+        if self.loss_type == "bco" and checkpoint is not None:
+            running_file = os.path.join(checkpoint, RUNNING_NAME)
+            if not os.path.isfile(running_file):
+                warnings.warn(
+                    f"Missing file {running_file}. Will use a new running delta value for BCO loss calculation"
+                )
+            self.running = RunningMoments.load_from_json(self.accelerator, running_file)
 
     @contextmanager
     def null_ref_context(self):
@@ -1107,7 +1131,6 @@ class KTOTrainer(Trainer):
     def forward(
         self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
-
         KL_logps = None
         if self.loss_type == "kto":
             KL_model_kwargs = (
@@ -1286,26 +1309,25 @@ class KTOTrainer(Trainer):
             rejected_losses = torch.Tensor([]).to(self.accelerator.device)
             rejected_rewards = torch.Tensor([]).to(self.accelerator.device)
 
-
         rewards = torch.cat((chosen_rewards, rejected_rewards), 0).mean().detach()
         self.running.update(rewards)
-        rewards_mean = self.running.mean
+        delta = self.running.mean
 
         if policy_chosen_logps.shape[0] != 0 or reference_chosen_logps.shape[0] != 0:
-            chosen_losses = -F.logsigmoid(chosen_rewards - rewards_mean)
+            chosen_losses = -F.logsigmoid(chosen_rewards - delta)
 
         if policy_rejected_logps.shape[0] != 0 or reference_rejected_logps.shape[0] != 0:
-            rejected_losses = -F.logsigmoid(-(rejected_rewards - rewards_mean))
+            rejected_losses = -F.logsigmoid(-(rejected_rewards - delta))
 
         if self.match_underlying_distribution:
             chosen_weight = torch.ones_like(chosen_losses)
-            rejected_weight = self._get_udm_weight(rejected_embeddings) if rejected_embeddings.shape[0] > 0 else 0.
+            rejected_weight = self._get_udm_weight(rejected_embeddings) if rejected_embeddings.shape[0] > 0 else 0.0
 
             losses = torch.cat((chosen_weight * chosen_losses, rejected_weight * rejected_losses), dim=0)
         else:
             losses = torch.cat((chosen_losses, rejected_losses), dim=0)
 
-        return losses, chosen_rewards, rejected_rewards, torch.as_tensor(rewards_mean)
+        return losses, chosen_rewards, rejected_rewards, torch.as_tensor(delta)
 
     def get_batch_loss_metrics(
         self,
@@ -1366,10 +1388,11 @@ class KTOTrainer(Trainer):
                 reference_KL_logps,
             )
             metrics["kl"] = kl.item()
+
         elif self.loss_type == "bco":
             chosen_embeddings, rejected_embeddings = self._get_prompt_embeddings(batch)
 
-            losses, chosen_rewards, rejected_rewards, mean_reward = self.bco_loss(
+            losses, chosen_rewards, rejected_rewards, delta = self.bco_loss(
                 policy_chosen_logps,
                 policy_rejected_logps,
                 reference_chosen_logps,
@@ -1377,7 +1400,7 @@ class KTOTrainer(Trainer):
                 chosen_embeddings,
                 rejected_embeddings,
             )
-            metrics["mean_reward"] = mean_reward.item()
+            metrics["delta"] = delta.item()
 
         num_chosen = torch.Tensor([len(chosen_rewards)]).to(self.accelerator.device)
         num_rejected = torch.Tensor([len(rejected_rewards)]).to(self.accelerator.device)
