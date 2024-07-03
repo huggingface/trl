@@ -708,12 +708,13 @@ class DPOTrainer(Trainer):
         if self.is_vision_model:
             if answer.count("<image>") > 0:
                 raise NotImplementedError("Answer contains <image> token, which is not supported yet.")
-            full_tokenized = self.processor(prompt + answer, images=images, add_special_tokens=False)
+            processor_kwargs = {"add_special_tokens": False} if "add_special_tokens" in inspect.signature(self.processor).parameters else {}
+            full_tokenized = self.processor(prompt + answer, images=images, **processor_kwargs)
             full_tokenized = {k: v[0] for k, v in full_tokenized.items()}  # Unbatch, not done when using idefics
             if not isinstance(full_tokenized["input_ids"], list): # llava processor returns tensors
                 full_tokenized["input_ids"] = full_tokenized["input_ids"].tolist()
                 full_tokenized["attention_mask"] = full_tokenized["attention_mask"].tolist()
-            prompt_input_ids = self.processor(prompt, images=images, add_special_tokens=False)["input_ids"][0]
+            prompt_input_ids = self.processor(prompt, images=images, **processor_kwargs)["input_ids"][0]
             if not isinstance(prompt_input_ids, list): # llava processor returns tensors
                 prompt_input_ids = prompt_input_ids.tolist()
         else:
@@ -791,7 +792,8 @@ class DPOTrainer(Trainer):
             if not isinstance(prompt, str):
                 raise ValueError(f"prompt should be an str but got {type(prompt)}")
             if self.is_vision_model:
-                prompt_tokens = self.processor(prompt, images=images, add_special_tokens=False)
+                processor_kwargs = {"add_special_tokens": False} if "add_special_tokens" in inspect.signature(self.processor).parameters else {}
+                prompt_tokens = self.processor(prompt, images=images, **processor_kwargs)
                 prompt_tokens = {k: v[0] for k, v in prompt_tokens.items()}  # Unbatch, not done when using idefics
                 if not isinstance(prompt_tokens["input_ids"], list): # llava processor returns tensors
                     prompt_tokens["input_ids"] = prompt_tokens["input_ids"].tolist()
