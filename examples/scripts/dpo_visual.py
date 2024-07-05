@@ -82,22 +82,40 @@ if __name__ == "__main__":
 
     model_kwargs = dict(
         revision=model_config.model_revision,
-        trust_remote_code=model_config.trust_remote_code,
         attn_implementation=model_config.attn_implementation,
         torch_dtype=torch_dtype,
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
-    model = AutoModelForVision2Seq.from_pretrained(model_config.model_name_or_path, **model_kwargs)
+    model = AutoModelForVision2Seq.from_pretrained(
+        model_config.model_name_or_path,
+        trust_remote_code=model_config.trust_remote_code,
+        **model_kwargs,
+    )
     peft_config = get_peft_config(model_config)
     if peft_config is None:
-        model_ref = AutoModelForVision2Seq.from_pretrained(model_config.model_name_or_path, **model_kwargs)
+        model_ref = AutoModelForVision2Seq.from_pretrained(
+            model_config.model_name_or_path,
+            trust_remote_code=model_config.trust_remote_code,
+            **model_kwargs,
+        )
     else:
         model_ref = None
-    processor = AutoProcessor.from_pretrained(model_config.model_name_or_path, do_image_splitting=False)
+    processor = AutoProcessor.from_pretrained(
+        model_config.model_name_or_path,
+        trust_remote_code=model_config.trust_remote_code,
+        do_image_splitting=False,
+    )
     tokenizer = processor.tokenizer
-    if not hasattr(processor, "chat_template") or processor.chat_template is None:
-        processor.chat_template = """{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. {% for message in messages %}{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}{% if add_generation_prompt %}ASSISTANT: {% endif %}"""
+    
+    # Set up the chat template
+    if model.config.model_type == "idefics2":
+        pass # the processor is already set up a chat template
+    elif model.config.model_type == "paligemma":
+        processor.chat_template = """{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% for message in messages %}<|im_start|>{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] if item['type'] == 'text' %}{{ item['text'] }}<|im_end|>{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}{% if add_generation_prompt %}ASSISTANT: {% endif %}"""
+    elif model.config.model_type == "llava":
+        processor.chat_template = """{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% for message in messages %}{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}{% if add_generation_prompt %}ASSISTANT: {% endif %}"""
+    
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     if args.ignore_bias_buffers:
@@ -125,21 +143,7 @@ if __name__ == "__main__":
             ds[key] = ds[key].select(range(50))
 
     def process(row):
-        # The prompt can be either a string or a list. In some datasets, the prompt is just a common string
-        # for both rejected and chosen (already included in chosen and rejected) and is not meant to be used
-        # separately. In other datasets, the prompt is intended to be used as a prefix for rejected and chosen,
-        # and in such cases, it is properly formatted as a list with keys "role" and "content".
-        # Example 1:
-        # row = {"prompt": "What does detox mean?",
-        #        "chosen": [{"content": "What does detox mean?", "role": "user"}, {"content": "It means to get rid of the toxins.", "role": "assistant"}],
-        #        "rejected": [{"content": "What does detox mean?", "role": "assistant"}, {"content": "I don't know.", "role": "user"}]}
-        # Example 2:
-        # row = {"prompt": [{"content": "What does detox mean?", "role": "user"}],
-        #        "chosen": [{"content": "It means to get rid of the toxins.", "role": "assistant"}],
-        #        "rejected": [{"content": "I don't know.", "role": "user"}]}
-        if "prompt" in row and isinstance(row["prompt"], list):
-            row["prompt"] = processor.apply_chat_template(row["prompt"], tokenize=False)
-
+        row["prompt"] = processor.apply_chat_template(row["prompt"], tokenize=False)
         row["chosen"] = processor.apply_chat_template(row["chosen"], tokenize=False)
         row["rejected"] = processor.apply_chat_template(row["rejected"], tokenize=False)
 
