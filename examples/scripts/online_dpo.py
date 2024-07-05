@@ -10,8 +10,40 @@ from transformers import (
 
 from trl import ModelConfig
 from trl.commands.cli_utils import TrlParser
-from trl.trainer.online_dpo_config import OnlineDPOConfig
-from trl.trainer.online_dpo_trainer import OnlineDPOTrainer
+from trl.trainer.online_dpo_trainer import OnlineDPOConfig, OnlineDPOTrainer
+from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
+
+
+"""
+python examples/scripts/online_dpo.py \
+    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
+    --learning_rate 3e-6 \
+    --output_dir models/minimal/online_dpo \
+    --per_device_train_batch_size 1 \
+    --gradient_accumulation_steps 64 \
+    --total_episodes 30000 \
+    --model_name_or_path EleutherAI/pythia-14m \
+    --sft_model_path EleutherAI/pythia-14m \
+    --reward_model_path EleutherAI/pythia-14m \
+    --non_eos_penalty \
+    --stop_token eos \
+    --response_length 53 \
+    --sanity_check
+python examples/scripts/online_dpo.py \
+    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
+    --learning_rate 3e-6 \
+    --output_dir models/minimal/online_dpo \
+    --per_device_train_batch_size 1 \
+    --gradient_accumulation_steps 64 \
+    --total_episodes 30000 \
+    --model_name_or_path EleutherAI/pythia-1b-deduped \
+    --sft_model_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr \
+    --reward_model_path cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr \
+    --non_eos_penalty \
+    --stop_token eos \
+    --response_length 53 \
+    --sanity_check
+"""
 
 
 @dataclass
@@ -54,7 +86,9 @@ if __name__ == "__main__":
         padding_side="left",
         trust_remote_code=True,
     )
-
+    tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+    if tokenizer.chat_template is None:
+        tokenizer.chat_template = SIMPLE_QUERY_CHAT_TEMPLATE
     reward_model = AutoModelForSequenceClassification.from_pretrained(config.reward_model_path, num_labels=1)
     ref_policy = AutoModelForCausalLM.from_pretrained(config.sft_model_path)
     policy = AutoModelForCausalLM.from_pretrained(config.sft_model_path)
@@ -65,14 +99,6 @@ if __name__ == "__main__":
     if config.sanity_check:
         for key in raw_datasets:
             raw_datasets[key] = raw_datasets[key].select(range(1024))
-        config.push_to_hub = False
-        config.report_to = ""
-        config.save_strategy = "no"
-        config.num_sample_generations = 0
-        config.total_episodes = 32
-        config.per_device_train_batch_size = 8
-        config.gradient_accumulation_steps = 1
-
     train_dataset = raw_datasets[args.dataset_train_split]
     train_dataset = prepare_dataset(train_dataset, tokenizer, args.dataset_text_field)
 
@@ -95,7 +121,6 @@ if __name__ == "__main__":
         eval_dataset=eval_dataset,
     )
     trainer.train()
-
     if not config.sanity_check:
         trainer.save_model(config.output_dir)
         if config.push_to_hub:
