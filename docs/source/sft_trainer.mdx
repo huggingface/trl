@@ -216,7 +216,7 @@ dataset = load_dataset("philschmid/dolly-15k-oai-style", split="train")
 
 ...
 
-sft_config = STFConfig(packing=True)
+sft_config = SFTConfig(packing=True)
 trainer = SFTTrainer(
     "facebook/opt-350m",
     args=sft_config,
@@ -290,7 +290,7 @@ def formatting_func(example):
     text = f"### Question: {example['question']}\n ### Answer: {example['answer']}"
     return text
 
-sft_config = STFConfig(packing=True)
+sft_config = SFTConfig(packing=True)
 trainer = SFTTrainer(
     "facebook/opt-350m",
     train_dataset=dataset,
@@ -382,7 +382,7 @@ model = AutoModelForCausalLM.from_pretrained(
 trainer = SFTTrainer(
     model,
     train_dataset=dataset,
-    args=STFConfig(),
+    args=SFTConfig(),
     peft_config=peft_config,
 )
 
@@ -502,11 +502,11 @@ To use it in `SFTTrainer` simply pass `neftune_noise_alpha` when creating your `
 
 ```python
 from datasets import load_dataset
-from trl import STFConfig, SFTTrainer
+from trl import SFTConfig, SFTTrainer
 
 dataset = load_dataset("imdb", split="train")
 
-sft_config = STFConfig(
+sft_config = SFTConfig(
     neftune_noise_alpha=5,
 )
 trainer = SFTTrainer(

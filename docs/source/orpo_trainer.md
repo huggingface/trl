@@ -73,6 +73,14 @@ After this one can then call:
 orpo_trainer.train()
 ```
 
+### For Mixture of Experts Models: Enabling the auxiliary loss
+
+MOEs are the most efficient if the load is about equally distributed between experts.  
+To ensure that we train MOEs similarly during preference-tuning, it is beneficial to add the auxiliary loss from the load balancer to the final loss.  
+
+This option is enabled by setting `output_router_logits=True` in the model config (e.g. MixtralConfig).  
+To scale how much the auxiliary loss contributes to the total loss, use the hyperparameter `router_aux_loss_coef=...` (default: 0.001).
+
 ## Logging
 
 While training and evaluating we record the following reward metrics:

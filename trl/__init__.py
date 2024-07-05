@@ -39,6 +39,8 @@ _import_structure = {
         "DPOTrainer",
         "CPOConfig",
         "CPOTrainer",
+        "AlignPropConfig",
+        "AlignPropTrainer",
         "IterativeSFTTrainer",
         "KTOConfig",
         "KTOTrainer",
@@ -51,6 +53,8 @@ _import_structure = {
         "RewardTrainer",
         "SFTConfig",
         "SFTTrainer",
+        "FDivergenceConstants",
+        "FDivergenceType",
     ],
     "commands": [],
     "commands.cli_utils": ["init_zero_verbose", "SFTScriptArguments", "DPOScriptArguments", "TrlParser"],
@@ -105,6 +109,8 @@ if TYPE_CHECKING:
         DPOTrainer,
         CPOConfig,
         CPOTrainer,
+        AlignPropConfig,
+        AlignPropTrainer,
         IterativeSFTTrainer,
         KTOConfig,
         KTOTrainer,
@@ -117,6 +123,8 @@ if TYPE_CHECKING:
         RewardTrainer,
         SFTConfig,
         SFTTrainer,
+        FDivergenceConstants,
+        FDivergenceType,
     )
     from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config, RichProgressCallback
     from .commands.cli_utils import init_zero_verbose, SFTScriptArguments, DPOScriptArguments, TrlParser

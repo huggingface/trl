@@ -538,8 +538,9 @@ class KTOTrainer(Trainer):
         self.beta = args.beta
         self.desirable_weight = args.desirable_weight
         self.undesirable_weight = args.undesirable_weight
-
         self.loss_type = args.loss_type
+        self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
+
         # Underlying Distribution Matching argument
         self.embedding_func = embedding_func
         self.embedding_tokenizer = embedding_tokenizer
@@ -1087,32 +1088,41 @@ class KTOTrainer(Trainer):
     def forward(
         self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
-        if self.is_encoder_decoder:
-            with torch.no_grad():
-                KL_logits = model(
-                    batch["KL_prompt_input_ids"],
-                    attention_mask=batch["KL_prompt_attention_mask"],
-                    decoder_input_ids=batch.get("KL_completion_decoder_input_ids"),
-                    labels=batch["KL_completion_labels"],
-                ).logits
+        KL_model_kwargs = (
+            {
+                "input_ids": batch["KL_prompt_input_ids"],
+                "attention_mask": batch["KL_prompt_attention_mask"],
+                "labels": batch["KL_completion_labels"],
+                "decoder_input_ids": batch.get("KL_completion_decoder_input_ids"),
+            }
+            if self.is_encoder_decoder
+            else {
+                "input_ids": batch["KL_completion_input_ids"],
+                "attention_mask": batch["KL_completion_attention_mask"],
+            }
+        )
+        model_kwargs = (
+            {
+                "labels": batch["completion_labels"],
+                "decoder_input_ids": batch.get("completion_decoder_input_ids"),
+            }
+            if self.is_encoder_decoder
+            else {}
+        )
+        if self.aux_loss_enabled:
+            model_kwargs["output_router_logits"] = True
 
-            completion_logits = model(
-                batch["prompt_input_ids"],
-                attention_mask=batch["prompt_attention_mask"],
-                decoder_input_ids=batch.get("completion_decoder_input_ids"),
-                labels=batch["completion_labels"],
+        with torch.no_grad():
+            KL_logits = model(
+                **KL_model_kwargs,
             ).logits
-        else:
-            with torch.no_grad():
-                KL_logits = model(
-                    batch["KL_completion_input_ids"],
-                    attention_mask=batch["KL_completion_attention_mask"],
-                ).logits
 
-            completion_logits = model(
-                batch["completion_input_ids"],
-                attention_mask=batch["completion_attention_mask"],
-            ).logits
+        outputs = model(
+            batch["completion_input_ids"],
+            attention_mask=batch["completion_attention_mask"],
+            **model_kwargs,
+        )
+        completion_logits = outputs.logits
 
         completion_logps = self.get_batch_logps(
             completion_logits,
@@ -1145,7 +1155,10 @@ class KTOTrainer(Trainer):
         chosen_logits = completion_logits[chosen_idx, ...]
         rejected_logits = completion_logits[rejected_idx, ...]
 
-        return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, KL_logps)
+        if self.aux_loss_enabled:
+            return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, KL_logps, outputs.aux_loss)
+        else:
+            return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, KL_logps)
 
     def kto_loss(
         self,
@@ -1268,13 +1281,16 @@ class KTOTrainer(Trainer):
         metrics = {}
         batch = {k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in batch.items()}
 
+        forward_output = self.forward(model, batch)
         (
             policy_chosen_logps,
             policy_rejected_logps,
             policy_chosen_logits,
             policy_rejected_logits,
             policy_KL_logps,
-        ) = self.forward(model, batch)
+        ) = forward_output[:5]
+        if self.aux_loss_enabled:
+            aux_loss = forward_output[5]
 
         # if reference_logps in batch use them, otherwise use the reference model
         if "reference_logps" in batch:
@@ -1294,7 +1310,7 @@ class KTOTrainer(Trainer):
                             _,
                             _,
                             reference_KL_logps,
-                        ) = self.forward(self.model, batch)
+                        ) = self.forward(self.model, batch)[:5]
                 else:
                     (
                         reference_chosen_logps,
@@ -1302,7 +1318,7 @@ class KTOTrainer(Trainer):
                         _,
                         _,
                         reference_KL_logps,
-                    ) = self.forward(self.ref_model, batch)
+                    ) = self.forward(self.ref_model, batch)[:5]
 
         if self.loss_type == "kto":
             losses, chosen_rewards, rejected_rewards, kl = self.kto_loss(
@@ -1343,7 +1359,11 @@ class KTOTrainer(Trainer):
 
         metrics["kl"] = kl.item()
 
-        return losses.nanmean(), metrics
+        loss = losses.nanmean()
+        if self.aux_loss_enabled:
+            loss += getattr(model.config, "router_aux_loss_coef", 0.0) * aux_loss
+
+        return loss, metrics
 
     def compute_loss(
         self,

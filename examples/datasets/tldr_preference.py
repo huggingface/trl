@@ -63,8 +63,9 @@ if __name__ == "__main__":
         format_str = cnndm_format_str if row["batch"] in cnndm_batches else tldr_format_str
         row["prompt"] = format_str.format(**row["info"])
         choice = row["choice"]
-        chosen = row["summaries"][choice]["text"]
-        rejected = row["summaries"][1 - choice]["text"]
+        # need to remove the leading space
+        chosen = row["summaries"][choice]["text"].strip()
+        rejected = row["summaries"][1 - choice]["text"].strip()
         row["chosen"] = [{"role": "user", "content": row["prompt"]}, {"role": "assistant", "content": chosen}]
         row["rejected"] = [{"role": "user", "content": row["prompt"]}, {"role": "assistant", "content": rejected}]
         return row
