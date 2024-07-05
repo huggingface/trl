@@ -31,6 +31,4 @@ def strtobool(val: str) -> bool:
         return True
     if val in ("n", "no", "f", "false", "off", "0"):
         return False
-    raise ValueError(
-        f"Invalid truth value, it should be a string but {val} was provided instead."
-    )
+    raise ValueError(f"Invalid truth value, it should be a string but {val} was provided instead.")
