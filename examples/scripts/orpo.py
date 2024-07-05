@@ -76,9 +76,13 @@ if __name__ == "__main__":
     ################
     # Model & Tokenizer
     ################
-    model = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code
+    )
     peft_config = get_peft_config(model_config)
-    tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path)
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code
+    )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
