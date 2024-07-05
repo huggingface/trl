@@ -1297,15 +1297,18 @@ class SFTTrainerTester(unittest.TestCase):
         # Now test when `torch_dtype` is provided but is wrong
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(
-            output_dir=tmp_dir,
-            eval_strategy="steps",
-            max_steps=4,
-            eval_steps=2,
-            save_steps=2,
-            per_device_train_batch_size=2,
-            model_init_kwargs={"torch_dtype": -1},
+                output_dir=tmp_dir,
+                eval_strategy="steps",
+                max_steps=4,
+                eval_steps=2,
+                save_steps=2,
+                per_device_train_batch_size=2,
+                model_init_kwargs={"torch_dtype": -1},
             )
-            with pytest.raises(ValueError, match="Invalid `torch_dtype` passed to the SFTConfig. Expected a string with either `torch.dtype` or 'auto', but got -1."):
+            with pytest.raises(
+                ValueError,
+                match="Invalid `torch_dtype` passed to the SFTConfig. Expected a string with either `torch.dtype` or 'auto', but got -1.",
+            ):
                 _ = SFTTrainer(
                     model=self.model_id,
                     args=training_args,

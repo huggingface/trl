@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import pytest
 import tempfile
 import unittest
 
+import pytest
 import torch
 from datasets import Dataset, features
 from parameterized import parameterized
@@ -873,7 +873,10 @@ class DPOTrainerTester(unittest.TestCase):
                 model_init_kwargs={"torch_dtype": -1},
             )
 
-            with pytest.raises(ValueError, match="Invalid `torch_dtype` passed to the DPOConfig. Expected a string with either `torch.dtype` or 'auto', but got -1."):
+            with pytest.raises(
+                ValueError,
+                match="Invalid `torch_dtype` passed to the DPOConfig. Expected a string with either `torch.dtype` or 'auto', but got -1.",
+            ):
                 _ = DPOTrainer(
                     model=self.model_id,
                     tokenizer=self.tokenizer,
@@ -889,7 +892,10 @@ class DPOTrainerTester(unittest.TestCase):
                 ref_model_init_kwargs={"torch_dtype": -1},
             )
 
-            with pytest.raises(ValueError, match="Invalid `torch_dtype` passed to the DPOConfig. Expected a string with either `torch.dtype` or 'auto', but got -1."):
+            with pytest.raises(
+                ValueError,
+                match="Invalid `torch_dtype` passed to the DPOConfig. Expected a string with either `torch.dtype` or 'auto', but got -1.",
+            ):
                 _ = DPOTrainer(
                     model=self.model_id,
                     ref_model=self.model_id,
