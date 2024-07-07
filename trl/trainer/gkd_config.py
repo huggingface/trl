@@ -23,5 +23,6 @@ class GKDConfig(SFTConfig):
     lmbda: float = 1.0
     max_new_tokens_response: int = 1024
     loss_type: str = "kl"
+    teacher_model_name_or_path: Optional[str] = None
     teacher_model_init_kwargs: Optional[Dict] = None
     disable_dropout: bool = True

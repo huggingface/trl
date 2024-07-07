@@ -13,12 +13,11 @@
 # limitations under the License.
 
 import warnings
-from typing import Any, Dict, List, Optional, Union
+from typing import Optional, Union, Dict, Any
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 from transformers import AutoModelForCausalLM, PreTrainedModel
 
 from .gkd_config import GKDConfig
@@ -69,6 +68,7 @@ class GKDTrainer(SFTTrainer):
             self.teacher_model = self.accelerator.prepare_model(self.teacher_model, evaluation_mode=True)
 
         self.loss_function = nn.KLDivLoss(reduction="batchmean")
+        self.lmbda = args.lmbda
 
     def compute_loss(self, model, inputs, return_outputs=False):
         # compute student output
@@ -85,3 +85,57 @@ class GKDTrainer(SFTTrainer):
 
         # Return weighted student loss
         return (loss, outputs_student) if return_outputs else loss
+
+    def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
+        """
+        Perform a training step on a batch of inputs.
+
+        Subclass and override to inject custom behavior.
+
+        Args:
+            model (`nn.Module`):
+                The model to train.
+            inputs (`Dict[str, Union[torch.Tensor, Any]]`):
+                The inputs and targets of the model.
+
+                The dictionary will be unpacked before being fed to the model. Most models expect the targets under the
+                argument `labels`. Check your model's documentation for all accepted arguments.
+
+        Return:
+            `torch.Tensor`: The tensor with training loss on this batch.
+        """
+        model.eval()
+        inputs = self._prepare_inputs(inputs)
+
+        # Sample a random value for on-policy vs off-policy
+        u = torch.rand(1).item()
+
+        if u >= self.lmbda:
+            # On-policy: Generate outputs from the student model
+            with torch.no_grad():
+                generated_outputs = self.model.generate(
+                    inputs["input_ids"],
+                    max_new_tokens=self.args.max_new_tokens_response,
+                    temperature=1.0,
+                )
+                inputs["input_ids"] = generated_outputs[:, :-1]
+                inputs["labels"] = generated_outputs[:, 1:]
+
+        model.train()
+        with self.compute_loss_context_manager():
+            loss = self.compute_loss(model, inputs)
+
+        del inputs
+        torch.cuda.empty_cache()
+
+        if self.args.n_gpu > 1:
+            loss = loss.mean()  # mean() to average on multi-gpu parallel training
+
+        # if self.use_apex:
+        #     with amp.scale_loss(loss, self.optimizer) as scaled_loss:
+        #         scaled_loss.backward()
+        # else:
+        #     self.accelerator.backward(loss)
+        self.accelerator.backward(loss)
+
+        return loss.detach() / self.args.gradient_accumulation_steps
