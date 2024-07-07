@@ -41,8 +41,9 @@ def main():
 
         trl_examples_dir = os.path.dirname(__file__)
 
-    # Force-use rich
-    os.environ["TRL_USE_RICH"] = "1"
+    # Force-use rich if the `TRL_USE_RICH` env var is not set
+    if "TRL_USE_RICH" not in os.environ:
+        os.environ["TRL_USE_RICH"] = "1"
 
     if command_name == "chat":
         command = f"""
