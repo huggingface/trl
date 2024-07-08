@@ -146,7 +146,10 @@ class SFTTrainer(Trainer):
             warnings.warn(f"No `SFTConfig` passed, using `output_dir={output_dir}`.")
             args = SFTConfig(output_dir=output_dir)
         elif args is not None and args.__class__.__name__ == "TrainingArguments":
-            args = SFTConfig(**args.to_dict())
+            args_as_dict = args.to_dict()
+            # Manually copy token values as TrainingArguments.to_dict() redacts them
+            args_as_dict.update({k: getattr(args, k) for k in args_as_dict.keys() if k.endswith("_token")})
+            args = SFTConfig(**args_as_dict)
 
         if model_init_kwargs is not None:
             warnings.warn(
@@ -159,11 +162,19 @@ class SFTTrainer(Trainer):
             raise ValueError("You passed model_init_kwargs to the SFTConfig, but your model is already instantiated.")
         else:
             model_init_kwargs = args.model_init_kwargs
-            model_init_kwargs["torch_dtype"] = (
-                model_init_kwargs["torch_dtype"]
-                if model_init_kwargs["torch_dtype"] in ["auto", None]
-                else getattr(torch, model_init_kwargs["torch_dtype"])
-            )
+
+            torch_dtype = model_init_kwargs["torch_dtype"]
+            if torch_dtype is not None:
+                # Convert to `torch.dtype` if an str is passed
+                if isinstance(torch_dtype, str) and torch_dtype != "auto":
+                    torch_dtype = getattr(torch, torch_dtype)
+
+                if torch_dtype != "auto" and not isinstance(torch_dtype, torch.dtype):
+                    raise ValueError(
+                        f"Invalid `torch_dtype` passed to the SFTConfig. Expected a string with either `torch.dtype` or 'auto', but got {torch_dtype}."
+                    )
+
+            model_init_kwargs["torch_dtype"] = torch_dtype
 
         if infinite is not None:
             warnings.warn(
