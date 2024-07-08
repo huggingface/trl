@@ -23,21 +23,23 @@ os.environ["WANDB_LOG_MODEL"] = "end"
 
 """
 # regular:
-python examples/scripts/sft.py \
+python examples/scripts/srpo/sft_srpo.py \
     --model_name_or_path="EleutherAI/pythia-1b-deduped" \
     --report_to="wandb" \
-    --learning_rate=2e-5 \
+    --learning_rate=2e-4 \
     --per_device_train_batch_size=64 \
-    --gradient_accumulation_steps=16 \
     --output_dir="srpo_sft" \
     --logging_steps=1 \
     --num_train_epochs=2 \
+    --max_seq_length=512 \
     --max_steps=-1 \
+    --eval_steps=20 \
     --lr_scheduler_type="cosine" \
     --warmup_ratio=0.03 \
     --weight_decay=0.1 \
     --dataset_name="trl-internal-testing/tldr-preference-sft-trl-style" \
     --torch_dtype="bfloat16" \
+    --add_special_tokens=False \
     --gradient_checkpointing
 
 # peft:
@@ -89,6 +91,8 @@ from trl import (
     get_kbit_device_map,
 )
 
+from trl.trainer.utils import SIMPLE_SFT_CHAT_TEMPLATE
+
 tqdm.pandas()
 
 if TRL_USE_RICH:
@@ -123,15 +127,18 @@ if __name__ == "__main__":
         attn_implementation="flash_attention_2"
     )
     tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path, use_fast=True)
-    tokenizer.pad_token = tokenizer.eos_token
+    if tokenizer.chat_template is None:
+        tokenizer.chat_template = SIMPLE_SFT_CHAT_TEMPLATE
+
+    tokenizer.add_special_tokens({"pad_token": "[PAD]"})
 
     ################
     # Dataset
     ################
     raw_datasets = load_dataset(args.dataset_name)
 
-    train_dataset = raw_datasets[args.dataset_train_split]
-    eval_dataset = raw_datasets[args.dataset_test_split]
+    train_dataset = raw_datasets["train"]
+    eval_dataset = raw_datasets["validation"]
 
     ################
     # Optional rich context managers
@@ -142,7 +149,25 @@ if __name__ == "__main__":
         if not TRL_USE_RICH
         else console.status(f"[bold green]Training completed! Saving the model to {training_args.output_dir}")
     )
+    def prepare_dataset(dataset, tokenizer):
+        """pre-tokenize the dataset before training; only collate during training"""
 
+        def tokenize(element):
+            input_ids = tokenizer.apply_chat_template(
+                element["messages"][:1],
+                padding=False,
+                add_generation_prompt=True,
+            )
+            return {"input_ids": input_ids, "lengths": len(input_ids)}
+
+        return dataset.map(
+            tokenize,
+            remove_columns=dataset.column_names,
+            num_proc=1 if config.sanity_check else multiprocessing.cpu_count(),
+            load_from_cache_file=not config.sanity_check,
+        )
+
+    
     ################
     # Training
     ################
