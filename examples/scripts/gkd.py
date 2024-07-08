@@ -34,9 +34,11 @@ import logging
 import os
 from contextlib import nullcontext
 
+
 TRL_USE_RICH = os.environ.get("TRL_USE_RICH", False)
 
 from trl.commands.cli_utils import SFTScriptArguments, TrlParser, init_zero_verbose
+
 
 if TRL_USE_RICH:
     init_zero_verbose()
@@ -49,6 +51,7 @@ import torch
 from datasets import load_dataset
 from tqdm.rich import tqdm
 from transformers import AutoTokenizer
+
 from trl import (
     GKDConfig,
     GKDTrainer,
@@ -58,6 +61,7 @@ from trl import (
     get_peft_config,
     get_quantization_config,
 )
+
 
 tqdm.pandas()
 

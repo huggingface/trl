@@ -12,8 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import random
 import warnings
-from typing import Optional, Union, Dict, Any
+from typing import Any, Dict, Optional, Union
 
 import torch
 import torch.nn as nn
@@ -67,20 +68,21 @@ class GKDTrainer(SFTTrainer):
         else:
             self.teacher_model = self.accelerator.prepare_model(self.teacher_model, evaluation_mode=True)
 
-        self.loss_function = nn.KLDivLoss(reduction="batchmean")
+        self.loss_function = nn.KLDivLoss(reduction="batchmean", log_target=True)
         self.lmbda = args.lmbda
 
     def compute_loss(self, model, inputs, return_outputs=False):
         # compute student output
         outputs_student = model(**inputs)
-        # compute teacher output
-        with torch.no_grad():
-            outputs_teacher = self.teacher_model(**inputs)
+
+        # compute teacher output in eval mode
+        self.teacher_model.eval()
+        outputs_teacher = self.teacher_model(**inputs)
 
         # compute forward KL divergence of student w.r.t teacher
         loss = self.loss_function(
             F.log_softmax(outputs_student.logits, dim=-1),
-            F.softmax(outputs_teacher.logits, dim=-1),
+            F.log_softmax(outputs_teacher.logits.detach(), dim=-1),
         )
 
         # Return weighted student loss
@@ -104,13 +106,7 @@ class GKDTrainer(SFTTrainer):
         Return:
             `torch.Tensor`: The tensor with training loss on this batch.
         """
-        model.eval()
-        inputs = self._prepare_inputs(inputs)
-
-        # Sample a random value for on-policy vs off-policy
-        u = torch.rand(1).item()
-
-        if u >= self.lmbda:
+        if random.random() >= self.lmbda:
             # On-policy: Generate outputs from the student model
             with torch.no_grad():
                 generated_outputs = self.model.generate(
@@ -121,6 +117,7 @@ class GKDTrainer(SFTTrainer):
                 inputs["input_ids"] = generated_outputs[:, :-1]
                 inputs["labels"] = generated_outputs[:, 1:]
 
+        inputs = self._prepare_inputs(inputs)
         model.train()
         with self.compute_loss_context_manager():
             loss = self.compute_loss(model, inputs)
@@ -131,11 +128,6 @@ class GKDTrainer(SFTTrainer):
         if self.args.n_gpu > 1:
             loss = loss.mean()  # mean() to average on multi-gpu parallel training
 
-        # if self.use_apex:
-        #     with amp.scale_loss(loss, self.optimizer) as scaled_loss:
-        #         scaled_loss.backward()
-        # else:
-        #     self.accelerator.backward(loss)
         self.accelerator.backward(loss)
 
         return loss.detach() / self.args.gradient_accumulation_steps
