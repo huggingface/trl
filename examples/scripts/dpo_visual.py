@@ -147,21 +147,6 @@ if __name__ == "__main__":
         row["prompt"] = processor.apply_chat_template(row["prompt"], tokenize=False)
         row["chosen"] = processor.apply_chat_template(row["chosen"], tokenize=False)
         row["rejected"] = processor.apply_chat_template(row["rejected"], tokenize=False)
-
-        # Resize the image to ensure it fits within the maximum allowable
-        # size of the processor to prevent OOM errors.
-        size_dict = processor.image_processor.size
-        if "width" in size_dict and "height" in size_dict:
-            size = (size_dict["width"], size_dict["height"])
-        elif "longest_edge" in size_dict:
-            size = (size_dict["longest_edge"], size_dict["longest_edge"])
-        else:
-            size = None
-
-        if "images" in row and size is not None:
-            for img in row["images"]:
-                img.thumbnail(size)
-
         return row
 
     with PartialState().local_main_process_first():
