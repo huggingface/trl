@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-accelerate launch examples/scripts/vdpo.py \
+accelerate launch examples/scripts/dpo_visual.py \
     --dataset_name HuggingFaceH4/rlaif-v_formatted \
     --model_name_or_path HuggingFaceM4/idefics2-8b \
     --per_device_train_batch_size 1 \
@@ -107,15 +107,15 @@ if __name__ == "__main__":
         do_image_splitting=False,
     )
     tokenizer = processor.tokenizer
-    
+
     # Set up the chat template
     if model.config.model_type == "idefics2":
-        pass # the processor is already set up a chat template
+        pass  # the processor already has a valid chat template
     elif model.config.model_type == "paligemma":
         processor.chat_template = """{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% for message in messages %}<|im_start|>{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] if item['type'] == 'text' %}{{ item['text'] }}<|im_end|>{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}{% if add_generation_prompt %}ASSISTANT: {% endif %}"""
     elif model.config.model_type == "llava":
         processor.chat_template = """{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% for message in messages %}{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}{% if add_generation_prompt %}ASSISTANT: {% endif %}"""
-    
+
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     if args.ignore_bias_buffers:
@@ -147,12 +147,19 @@ if __name__ == "__main__":
         row["chosen"] = processor.apply_chat_template(row["chosen"], tokenize=False)
         row["rejected"] = processor.apply_chat_template(row["rejected"], tokenize=False)
 
-        if "images" in row:
-            for idx, img in enumerate(row["images"]):  # Resize each image so the largest side is 640 pixels
-                ratio = min(1.0, 640 / max(img.size))
-                new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
-                row["images"][idx] = img.resize(new_size)
-            row["images"] = row["images"]
+        # Resize the image to ensure it fits within the maximum allowable
+        # size of the processor to prevent OOM errors.
+        size_dict = processor.image_processor.size
+        if "width" in size_dict and "height" in size_dict:
+            size = (size_dict["width"], size_dict["height"])
+        elif "longest_edge" in size_dict:
+            size = (size_dict["longest_edge"], size_dict["longest_edge"])
+        else:
+            size = None
+
+        if "images" in row and size is not None:
+            for img in row["images"]:
+                img.thumbnail(size)
 
         return row
 
