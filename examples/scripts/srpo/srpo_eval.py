@@ -21,9 +21,23 @@ os.environ["HF_HOME"] = f"{os.environ['HUGGINGFACE_CACHE']}/misc"
 os.environ["TRANSFORMERS_CACHE"] = f"{os.environ['HUGGINGFACE_CACHE']}/transformers"
 os.environ["WANDB_LOG_MODEL"] = "end"
 """
-# pretrained:
+# SFT trained:
 python examples/scripts/srpo/srpo_eval.py \
-    --model_name_or_path=./final_trained \
+    --per_device_train_batch_size 4 \
+    --per_device_eval_batch_size 4 \
+    --learning_rate 3e-6 \
+    --gradient_accumulation_steps 64 \
+    --logging_steps 10 \
+    --eval_steps 500 \
+    --output_dir="srpo_tldr" \
+    --warmup_steps 150 \
+    --bf16 \
+    --logging_first_step \
+    --no_remove_unused_columns
+
+# RLHF trained:
+python examples/scripts/srpo/srpo_eval.py \
+    --model_name_or_path=./srpo_tldr \
     --per_device_train_batch_size 4 \
     --per_device_eval_batch_size 4 \
     --learning_rate 3e-6 \
@@ -69,6 +83,7 @@ if TRL_USE_RICH:
     from rich.logging import RichHandler
 
 import torch
+import wandb
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -115,13 +130,23 @@ if __name__ == "__main__":
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
-    model = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, **model_kwargs)
-    peft_config = get_peft_config(model_config)
-    if peft_config is None:
-        model_ref = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, **model_kwargs)
-    else:
-        model_ref = None
-    tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path)
+    # with wandb.init(entity="frasermince") as run:
+    #     # Pass the name and version of Artifact
+    #     artifact = run.use_artifact('unchart/huggingface/model-qltcdvjl:v1', type='model')
+
+    #     # Download model weights to a folder and return the path
+    #     model_dir = artifact.download()
+
+    # print("***MODEL DIR", model_dir)
+    # model = AutoModelForCausalLM.from_pretrained(model_dir, **model_kwargs)
+    untrained_model_name_or_path = "EleutherAI/pythia-1b-deduped"
+    sft_model_name_or_path = "./srpo_sft"
+    rlhf_model_name_or_path = "./srpo_tldr"
+    model_sft = AutoModelForCausalLM.from_pretrained(sft_model_name_or_path, **model_kwargs)
+    model_untrained = AutoModelForCausalLM.from_pretrained(untrained_model_name_or_path, **model_kwargs)
+    model_rlhf = AutoModelForCausalLM.from_pretrained(rlhf_model_name_or_path, **model_kwargs)
+    model_ref = None
+    tokenizer = AutoTokenizer.from_pretrained(untrained_model_name_or_path)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     if tokenizer.chat_template is None:
@@ -198,21 +223,41 @@ SUMMARY. Write a both precise and concise summary of the contents of the POST.""
     #     )
 
     print("BEFORE ITEMS")
+    model_untrained.cuda()
+    model_sft.cuda()
+    model_rlhf.cuda()
+    model_untrained.eval()
+    model_sft.eval()
+    model_rlhf.eval()
+
     for item in test_dataset:
         zero_prompt = prefix_zero_prompt + "\n" + item["prompt"] + post_revision_prompt
         print("ITEM", zero_prompt)
         inputs = tokenizer(zero_prompt, return_tensors="pt")
-        print("USING MODEL", model)
-        output = model.generate(
-            input_ids=inputs["input_ids"],
-            attention_mask=inputs["attention_mask"],
+        untrained_output = model_untrained.generate(
+            input_ids=inputs["input_ids"].cuda(),
+            attention_mask=inputs["attention_mask"].cuda(),
             max_length=1024,
             do_sample=True,
             pad_token_id=tokenizer.pad_token_id,
         )
+        sft_output = model_sft.generate(
+            input_ids=inputs["input_ids"].cuda(),
+            attention_mask=inputs["attention_mask"].cuda(),
+            max_length=1024,
+            do_sample=True,
+            pad_token_id=tokenizer.pad_token_id,
+        )
+        rlhf_output = model_rlhf.generate(
+            input_ids=inputs["input_ids"].cuda(),
+            attention_mask=inputs["attention_mask"].cuda(),
+            max_length=1024,
+            do_sample=True,
+            pad_token_id=tokenizer.pad_token_id,
+        )
+        untrained_decoded_output = tokenizer.batch_decode(untrained_output)
+        sft_decoded_output = tokenizer.batch_decode(sft_output)
+        rlhf_decoded_output = tokenizer.batch_decode(rlhf_output)
         import pdb; pdb.set_trace()
-        print("HAS OUTPUT")
-        decoded_output = tokenizer.batch_decode(output)
-
     # with save_context:
     #     trainer.save_model(training_args.output_dir)

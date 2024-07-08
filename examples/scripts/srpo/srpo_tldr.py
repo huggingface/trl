@@ -21,22 +21,28 @@ os.environ["HF_HOME"] = f"{os.environ['HUGGINGFACE_CACHE']}/misc"
 os.environ["TRANSFORMERS_CACHE"] = f"{os.environ['HUGGINGFACE_CACHE']}/transformers"
 os.environ["WANDB_LOG_MODEL"] = "end"
 """
-# pretrained:
+# post sft:
 python examples/scripts/srpo/srpo_tldr.py \
-    --model_name_or_path=./final_trained \
-    --per_device_train_batch_size 4 \
-    --per_device_eval_batch_size 4 \
-    --learning_rate 3e-6 \
-    --gradient_accumulation_steps 64 \
+    --model_name_or_path=./srpo_sft_1 \
+    --per_device_train_batch_size=32 \
+    --learning_rate=2e-4 \
+    --gradient_accumulation_steps=8 \
     --logging_steps 10 \
     --eval_steps 500 \
     --output_dir="srpo_tldr" \
-    --warmup_steps 150 \
-    --bf16 \
     --logging_first_step \
     --no_remove_unused_columns \
     --report_to=wandb \
-    --generate_during_eval=True
+    --torch_dtype="bfloat16" \
+    --lr_scheduler_type="cosine" \
+    --warmup_steps=150 \
+    --weight_decay=0.1 \
+    --use_peft \
+    --lora_r=16 \
+    --lora_alpha=32 \
+    --num_train_epochs=5 \
+    --gradient_checkpointing
+
 
 # regular:
 python examples/scripts/srpo/srpo_tldr.py \
@@ -51,7 +57,7 @@ python examples/scripts/srpo/srpo_tldr.py \
     --bf16 \
     --logging_first_step \
     --no_remove_unused_columns \
-    --report_to=wandb
+    --report_to=wandb \
     --generate_during_eval=True
 
 # peft:
@@ -81,6 +87,7 @@ from contextlib import nullcontext
 TRL_USE_RICH = os.environ.get("TRL_USE_RICH", False)
 
 from trl.commands.cli_utils import SRPOScriptArguments, init_zero_verbose, TrlParser
+from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
 
 if TRL_USE_RICH:
     init_zero_verbose()
@@ -130,11 +137,12 @@ if __name__ == "__main__":
     model_kwargs = dict(
         revision=model_config.model_revision,
         trust_remote_code=model_config.trust_remote_code,
-        attn_implementation=model_config.attn_implementation,
+        # attn_implementation=model_config.attn_implementation,
         torch_dtype=torch_dtype,
         use_cache=False if training_args.gradient_checkpointing else True,
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
+        attn_implementation="flash_attention_2",
     )
     model = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, **model_kwargs)
     peft_config = get_peft_config(model_config)
@@ -143,10 +151,11 @@ if __name__ == "__main__":
     else:
         model_ref = None
     tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
     if tokenizer.chat_template is None:
-        tokenizer.chat_template = "{% for message in messages %}{{message['role'] + ': ' + message['content'] + '\n\n'}}{% endfor %}{{ eos_token }}"
+        tokenizer.chat_template = SIMPLE_QUERY_CHAT_TEMPLATE
+    tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+    # if tokenizer.chat_template is None:
+    #     tokenizer.chat_template = "{% for message in messages %}{{message['role'] + ': ' + message['content'] + '\n\n'}}{% endfor %}{{ eos_token }}"
     if args.ignore_bias_buffers:
         # torch distributed hack
         model._ddp_params_and_buffers_to_ignore = [
@@ -199,7 +208,7 @@ if __name__ == "__main__":
         return row
 
     # train_dataset = train_dataset.map(
-    train_dataset = train_dataset.select(range(10)).map(
+    train_dataset = train_dataset.map(
          process,
          num_proc=multiprocessing.cpu_count(),
          # load_from_cache_file=False,
@@ -225,15 +234,15 @@ SUMMARY. Write a both precise and concise summary of the contents of the POST.""
             model,
             model_ref,
             args=training_args,
-            # train_dataset=train_dataset,
-            eval_dataset=train_dataset,
+            train_dataset=train_dataset,
+            # eval_dataset=train_dataset,
             tokenizer=tokenizer,
             peft_config=get_peft_config(model_config),
             callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
         )
 
-    # trainer.train()
-    trainer.evaluate()
+    trainer.train()
+    # trainer.evaluate()
 
-    # with save_context:
-    #     trainer.save_model(training_args.output_dir)
+    with save_context:
+        trainer.save_model(training_args.output_dir)

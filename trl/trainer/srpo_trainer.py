@@ -496,7 +496,10 @@ class SRPOTrainer(Trainer):
             args.dataset_num_proc = dataset_num_proc
         self.dataset_num_proc = args.dataset_num_proc
 
-        self.args = args
+        self.prefix_zero_prompt = args.prefix_zero_prompt
+        self.prefix_n_prompt = args.prefix_n_prompt
+        self.post_revision_prompt = args.post_revision_prompt
+
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
         with PartialState().local_main_process_first():
@@ -738,7 +741,8 @@ class SRPOTrainer(Trainer):
         )
 
     
-    def tokenize_row(self, feature, model: Optional[Union[PreTrainedModel, nn.Module]] = None) -> Dict:
+    def tokenize_row(self, feature,  model: Optional[Union[PreTrainedModel, nn.Module]] = None) -> Dict:
+        
         """Tokenize a single row from a DPO specific dataset.
 
         At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
@@ -764,9 +768,9 @@ class SRPOTrainer(Trainer):
 
             if not isinstance(prompt, str):
                 raise ValueError(f"prompt should be an str but got {type(prompt)}")
-            zero_prompt = self.args.prefix_zero_prompt + "\n" + prompt + self.args.post_revision_prompt
-            chosen_prompt = self.args.prefix_n_prompt + "\n" + prompt + "EXAMPLE SUMMARY: " + chosen + "\n\n" + self.args.post_revision_prompt
-            rejected_prompt = self.args.prefix_n_prompt + "\n" + prompt + "EXAMPLE SUMMARY: " + rejected + "\n\n" + self.args.post_revision_prompt
+            zero_prompt = self.prefix_zero_prompt + "\n" + prompt + self.post_revision_prompt
+            chosen_prompt = self.prefix_n_prompt + "\n" + prompt + "EXAMPLE SUMMARY: " + chosen + "\n\n" + self.post_revision_prompt
+            rejected_prompt = self.prefix_n_prompt + "\n" + prompt + "EXAMPLE SUMMARY: " + rejected + "\n\n" + self.post_revision_prompt
 
             prompt_tokens = self.tokenizer(zero_prompt, add_special_tokens=False)
             prompt_tokens = {f"prompt_{k}": v for k, v in prompt_tokens.items()}
@@ -923,13 +927,14 @@ class SRPOTrainer(Trainer):
             batch["prompt_attention_mask"] = prompt_tokens["attention_mask"]
 
 
-            if model is not None and hasattr(model, "prepare_decoder_input_ids_from_labels"):
-                batch["rejected_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
-                    labels=torch.tensor(batch["rejected_labels"])
-                )
-                batch["chosen_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
-                    labels=torch.tensor(batch["chosen_labels"])
-                )
+            # if model is not None and hasattr(model, "prepare_decoder_input_ids_from_labels"):
+            #     batch["rejected_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
+            #         labels=torch.tensor(batch["rejected_labels"])
+            #     )
+            #     batch["chosen_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
+            #         labels=torch.tensor(batch["chosen_labels"])
+            #     )
+
         
         return batch
 
@@ -1253,9 +1258,8 @@ class SRPOTrainer(Trainer):
         chosen_rewards = reward_ratios["chosen_zero_ratio"]
         rejected_rewards = reward_ratios["rejected_zero_ratio"]
 
-        import pdb; pdb.set_trace()
-        reward_accuracies = (policy_logits["chosen"] > policy_logits["rejected"]).float()
-        improvement_accuracies = (policy_logits["improve_to_chosen_given_rejected"] > policy_logits["improve_to_rejected_given_chosen"]).float()
+        reward_accuracies = (chosen_rewards > rejected_rewards).float()
+        improvement_accuracies = (reward_ratios["rejected_to_chosen_improvement_ratio"] > reward_ratios["chosen_to_rejected_improvement_ratio"]).float()
         # if self.args.rpo_alpha is not None:
         #     losses = losses * self.args.rpo_alpha + policy_nll_loss
 
@@ -1368,7 +1372,6 @@ class SRPOTrainer(Trainer):
 
         with torch.no_grad(), prediction_context_manager():
             loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="eval")
-        import pdb; pdb.set_trace()
 
         # force log the metrics
         self.store_metrics(metrics, train_eval="eval")
