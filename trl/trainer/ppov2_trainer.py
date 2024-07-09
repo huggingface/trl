@@ -23,7 +23,8 @@ from transformers import (
     TrainerState,
 )
 from transformers.integrations import get_reporting_integration_callbacks
-from transformers.trainer_callback import CallbackHandler, DefaultFlowCallback
+from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
+from transformers.trainer_callback import CallbackHandler, PrinterCallback
 
 from ..core import masked_mean, masked_whiten
 from ..models.utils import unwrap_model_for_generation
@@ -129,6 +130,7 @@ class PPOv2Trainer(Trainer):
         self.local_seed = args.seed + accelerator.process_index * 100003  # Prime
         if args.num_sample_generations > 0:
             self.sample_generations_freq = max(1, args.num_updates // args.num_sample_generations)
+        self.local_dataloader_batch_size = args.local_batch_size
 
         #########
         # setup model, optimizer, and others
@@ -147,14 +149,15 @@ class PPOv2Trainer(Trainer):
             is_local_process_zero=self.is_local_process_zero(),
             is_world_process_zero=self.is_world_process_zero(),
         )
-        DEFAULT_CALLBACKS = [DefaultFlowCallback]
         default_callbacks = DEFAULT_CALLBACKS + get_reporting_integration_callbacks(self.args.report_to)
-        if self.callbacks is None:
-            self.callbacks = default_callbacks
+        self.callbacks = default_callbacks if callbacks is None else default_callbacks + callbacks
         self.callback_handler = CallbackHandler(
             self.callbacks, self.model, self.tokenizer, self.optimizer, self.lr_scheduler
         )
+        self.add_callback(PrinterCallback if self.args.disable_tqdm else DEFAULT_PROGRESS_CALLBACK)
         self.control = TrainerControl()
+        self.current_flos = 0
+        self.hp_search_backend = None
         self.is_deepspeed_enabled = getattr(self.accelerator.state, "deepspeed_plugin", None) is not None
         self.is_fsdp_enabled = getattr(self.accelerator.state, "fsdp_plugin", None) is not None
         # Create distant repo and output directory if needed
@@ -170,7 +173,7 @@ class PPOv2Trainer(Trainer):
         #########
         self.dataloader = DataLoader(
             self.train_dataset,
-            batch_size=args.local_batch_size,
+            batch_size=self.local_dataloader_batch_size,
             shuffle=True,
             collate_fn=DataCollatorWithPadding(tokenizer),
             drop_last=True,  # needed; otherwise the last batch will be of ragged shape
@@ -191,10 +194,10 @@ class PPOv2Trainer(Trainer):
 
         if self.is_deepspeed_enabled:
             self.reward_model = prepare_deepspeed(
-                self.reward_model, args.per_device_train_batch_size, args.bf16, args.fp16
+                self.reward_model, args.per_device_train_batch_size, args.fp16, args.bf16
             )
             self.ref_policy = prepare_deepspeed(
-                self.ref_policy, args.per_device_train_batch_size, args.bf16, args.fp16
+                self.ref_policy, args.per_device_train_batch_size, args.fp16, args.bf16
             )
         else:
             self.ref_policy = self.ref_policy.to(self.accelerator.device)
@@ -280,9 +283,9 @@ class PPOv2Trainer(Trainer):
                 postprocessed_responses = []
                 logprobs = []
                 ref_logprobs = []
-                values = []
                 scores = []
                 sequence_lengths = []
+                values = []
                 with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
                     for i in range(0, queries.shape[0], args.local_rollout_forward_batch_size):
                         query = queries[i : i + args.local_rollout_forward_batch_size]
@@ -294,7 +297,7 @@ class PPOv2Trainer(Trainer):
                         )
                         response = query_response[:, context_length:]
 
-                        # use the logits during generation directly, instead of using the following
+                        # use the logits during generation directly (which are already adjusted by temperature)
                         all_logprob = F.log_softmax(logits, dim=-1)
                         logprob = torch.gather(all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
                         del logits, all_logprob
@@ -332,17 +335,17 @@ class PPOv2Trainer(Trainer):
                         postprocessed_responses.append(postprocessed_response)
                         logprobs.append(logprob)
                         ref_logprobs.append(ref_logprob)
-                        values.append(value)
                         sequence_lengths.append(sequence_length)
                         scores.append(score)
+                        values.append(value)
                 query_responses = torch.cat(query_responses, 0)
                 responses = torch.cat(responses, 0)
                 postprocessed_responses = torch.cat(postprocessed_responses, 0)
                 logprobs = torch.cat(logprobs, 0)
                 ref_logprobs = torch.cat(ref_logprobs, 0)
-                values = torch.cat(values, 0)
                 sequence_lengths = torch.cat(sequence_lengths, 0)
                 scores = torch.cat(scores, 0)
+                values = torch.cat(values, 0)
                 del (logprob, ref_logprob, full_value, value, score, unwrapped_model)
                 torch.cuda.empty_cache()
                 gc.collect()
@@ -356,12 +359,12 @@ class PPOv2Trainer(Trainer):
                 # accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
 
                 # be very careful with `padding_mask_p1`; see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
-                sequence_lengths_p1 = sequence_lengths + 1
                 response_idxs = torch.arange(responses.shape[1], device=responses.device).repeat(responses.shape[0], 1)
                 padding_mask = response_idxs > sequence_lengths.unsqueeze(1)
-                padding_mask_p1 = response_idxs > (sequence_lengths_p1.unsqueeze(1))
                 logprobs = torch.masked_fill(logprobs, padding_mask, INVALID_LOGPROB)
                 ref_logprobs = torch.masked_fill(ref_logprobs, padding_mask, INVALID_LOGPROB)
+                sequence_lengths_p1 = sequence_lengths + 1
+                padding_mask_p1 = response_idxs > (sequence_lengths_p1.unsqueeze(1))
                 values = torch.masked_fill(values, padding_mask_p1, 0)
 
                 # 4. compute rewards
@@ -404,12 +407,12 @@ class PPOv2Trainer(Trainer):
                         with accelerator.accumulate(model):
                             micro_batch_end = micro_batch_start + args.per_device_train_batch_size
                             micro_batch_inds = mini_batch_inds[micro_batch_start:micro_batch_end]
-                            mb_return = returns[micro_batch_inds]
                             mb_advantage = advantages[micro_batch_inds]
-                            mb_values = values[micro_batch_inds]
                             mb_responses = responses[micro_batch_inds]
                             mb_query_responses = query_responses[micro_batch_inds]
                             mb_logprobs = logprobs[micro_batch_inds]
+                            mb_return = returns[micro_batch_inds]
+                            mb_values = values[micro_batch_inds]
 
                             output, vpred_temp = forward(model, mb_query_responses, tokenizer.pad_token_id)
                             logits = output.logits[:, context_length - 1 : -1]
@@ -526,6 +529,12 @@ class PPOv2Trainer(Trainer):
                 returns,
             )
             torch.cuda.empty_cache()
+
+        # HF trainer specifics
+        self.control = self.callback_handler.on_train_end(args, self.state, self.control)
+        if self.control.should_save:
+            self._save_checkpoint(model, trial=None, metrics=None)
+            self.control = self.callback_handler.on_save(self.args, self.state, self.control)
 
     def generate_completions(self, sampling: bool = False):
         args = self.args

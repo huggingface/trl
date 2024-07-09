@@ -1,14 +1,10 @@
 from dataclasses import dataclass
 
-from transformers import (
-    TrainingArguments,
-)
-
-from ..trainer.utils import OnpolicyRuntimeConfig
+from ..trainer.utils import OnPolicyConfig
 
 
 @dataclass
-class PPOv2Config(OnpolicyRuntimeConfig, TrainingArguments):
+class PPOv2Config(OnPolicyConfig):
     reward_model_path: str = "EleutherAI/pythia-160m"
     """the path to the reward model"""
 

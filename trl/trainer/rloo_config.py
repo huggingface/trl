@@ -1,14 +1,10 @@
 from dataclasses import dataclass
 
-from transformers import (
-    TrainingArguments,
-)
-
-from ..trainer.utils import OnpolicyRuntimeConfig
+from ..trainer.utils import OnPolicyConfig
 
 
 @dataclass
-class RLOOConfig(OnpolicyRuntimeConfig, TrainingArguments):
+class RLOOConfig(OnPolicyConfig):
     # ppo config
     num_ppo_epochs: int = 4
     """the number of epochs to train"""

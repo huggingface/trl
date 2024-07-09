@@ -36,6 +36,7 @@ from transformers import (
     DataCollatorForLanguageModeling,
     PreTrainedModel,
     PreTrainedTokenizerBase,
+    TrainingArguments,
 )
 from transformers.trainer import TrainerCallback
 from transformers.trainer_utils import has_length
@@ -963,7 +964,7 @@ SIMPLE_QUERY_CHAT_TEMPLATE = "{% for message in messages %}{{' ' + message['cont
 
 
 @dataclass
-class OnpolicyRuntimeConfig:
+class OnPolicyConfig(TrainingArguments):
     # common config
     exp_name: str = os.path.basename(__file__)[: -len(".py")]
     """the name of this experiment"""
@@ -971,7 +972,6 @@ class OnpolicyRuntimeConfig:
     """a unique name of this run"""
     sanity_check: bool = False
     """wether to run in debug mode"""
-
 
     # batch size related config
     num_mini_batches: int = 1

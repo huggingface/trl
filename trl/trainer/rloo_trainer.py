@@ -23,7 +23,8 @@ from transformers import (
     TrainerState,
 )
 from transformers.integrations import get_reporting_integration_callbacks
-from transformers.trainer_callback import CallbackHandler, DefaultFlowCallback
+from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
+from transformers.trainer_callback import CallbackHandler, PrinterCallback
 
 from ..models.utils import unwrap_model_for_generation
 from ..trainer.utils import (
@@ -56,8 +57,6 @@ class RLOOTrainer(Trainer):
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
         # less commonly used
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
-        # compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
-        # model_init: Optional[Callable[[torch.nn.Module], None]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
     ) -> None:
         self.args = config
@@ -132,14 +131,15 @@ class RLOOTrainer(Trainer):
             is_local_process_zero=self.is_local_process_zero(),
             is_world_process_zero=self.is_world_process_zero(),
         )
-        DEFAULT_CALLBACKS = [DefaultFlowCallback]
         default_callbacks = DEFAULT_CALLBACKS + get_reporting_integration_callbacks(self.args.report_to)
-        if self.callbacks is None:
-            self.callbacks = default_callbacks
+        self.callbacks = default_callbacks if callbacks is None else default_callbacks + callbacks
         self.callback_handler = CallbackHandler(
             self.callbacks, self.model, self.tokenizer, self.optimizer, self.lr_scheduler
         )
+        self.add_callback(PrinterCallback if self.args.disable_tqdm else DEFAULT_PROGRESS_CALLBACK)
         self.control = TrainerControl()
+        self.current_flos = 0
+        self.hp_search_backend = None
         self.is_deepspeed_enabled = getattr(self.accelerator.state, "deepspeed_plugin", None) is not None
         self.is_fsdp_enabled = getattr(self.accelerator.state, "fsdp_plugin", None) is not None
         # Create distant repo and output directory if needed
@@ -176,10 +176,10 @@ class RLOOTrainer(Trainer):
 
         if self.is_deepspeed_enabled:
             self.reward_model = prepare_deepspeed(
-                self.reward_model, args.per_device_train_batch_size, args.bf16, args.fp16
+                self.reward_model, args.per_device_train_batch_size, args.fp16, args.bf16
             )
             self.ref_policy = prepare_deepspeed(
-                self.ref_policy, args.per_device_train_batch_size, args.bf16, args.fp16
+                self.ref_policy, args.per_device_train_batch_size, args.fp16, args.bf16
             )
             self.deepspeed = self.model
         else:
@@ -255,7 +255,7 @@ class RLOOTrainer(Trainer):
                         )
                         response = query_response[:, context_length:]
 
-                        # use the logits during generation directly, instead of using the following
+                        # use the logits during generation directly (which are already adjusted by temperature)
                         all_logprob = F.log_softmax(logits, dim=-1)
                         logprob = torch.gather(all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
                         del logits, all_logprob
@@ -420,6 +420,12 @@ class RLOOTrainer(Trainer):
 
             if args.num_sample_generations > 0 and (update - 1) % self.sample_generations_freq == 0:
                 self.generate_completions(sampling=True)
+
+        # HF trainer specifics
+        self.control = self.callback_handler.on_train_end(args, self.state, self.control)
+        if self.control.should_save:
+            self._save_checkpoint(model, trial=None, metrics=None)
+            self.control = self.callback_handler.on_save(self.args, self.state, self.control)
 
     def generate_completions(self, sampling: bool = False):
         args = self.args
