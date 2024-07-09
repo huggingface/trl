@@ -1,19 +1,23 @@
 from dataclasses import dataclass
 from typing import Dict, Literal, Optional
 
-from trl.trainer.rloo_config import RLOOConfig
+from trl.trainer.utils import OnPolicyConfig
 
 
 @dataclass
-class OnlineDPOConfig(RLOOConfig):
-    save_generations: bool = False
+class OnlineDPOConfig(OnPolicyConfig):
+    reward_model_path: str = "EleutherAI/pythia-160m"
+    """the path to the reward model"""
+    # ppo config
+    num_ppo_epochs: int = 4
+    """the number of epochs to train"""
 
     # DPO stuff w/o max_length which is included in RLOOConfig
-    beta: float = 0.1
+    beta: float = 0.05
     label_smoothing: float = 0
-    loss_type: Literal["sigmoid", "hinge", "ipo", "kto_pair", "bco_pair", "sppo_hard", "nca_pair", "robust"] = (
-        "sigmoid"
-    )
+    loss_type: Literal[
+        "sigmoid", "hinge", "ipo", "kto_pair", "bco_pair", "sppo_hard", "nca_pair", "robust"
+    ] = "sigmoid"
     label_pad_token_id: int = -100
     padding_value: int = 0
     truncation_mode: str = "keep_end"
