@@ -27,6 +27,8 @@ from .utils import disable_dropout_in_model
 
 
 class GKDTrainer(SFTTrainer):
+    _tag_names = ["trl", "gkd"]
+
     def __init__(
         self,
         teacher_model: Union[PreTrainedModel, nn.Module, str],
