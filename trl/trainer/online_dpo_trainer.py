@@ -12,13 +12,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from accelerate import Accelerator
-from accelerate.utils import gather_object
+from accelerate.utils import broadcast, gather_object
 from datasets import Dataset
 from torch.utils.data import DataLoader
 from transformers import (
     DataCollatorWithPadding,
     GenerationConfig,
     PreTrainedTokenizer,
+    Trainer,
     TrainerCallback,
     TrainerControl,
     TrainerState,
@@ -27,9 +28,8 @@ from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, PrinterCallback
 
-from trl.models.utils import unwrap_model_for_generation
-from trl.trainer.rloo_trainer import INVALID_LOGPROB, RLOOTrainer
-from trl.trainer.utils import (
+from ..models.utils import unwrap_model_for_generation
+from ..trainer.utils import (
     disable_dropout_in_model,
     exact_div,
     first_true_indices,
@@ -40,8 +40,10 @@ from trl.trainer.utils import (
     print_rich_table,
     truncate_response,
 )
-
 from .online_dpo_config import OnlineDPOConfig
+
+
+INVALID_LOGPROB = 1.0
 
 
 @dataclass
@@ -49,7 +51,7 @@ class OnlineTrainerState(TrainerState):
     episode: int = 0
 
 
-class OnlineDPOTrainer(RLOOTrainer):
+class OnlineDPOTrainer(Trainer):
     def __init__(
         self,
         config: OnlineDPOConfig,
@@ -62,12 +64,7 @@ class OnlineDPOTrainer(RLOOTrainer):
         data_collator: Optional[DataCollatorWithPadding] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
         # less commonly used
-        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (
-            None,
-            None,
-        ),
-        # compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
-        # model_init: Optional[Callable[[torch.nn.Module], None]] = None,
+        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         callbacks: Optional[List[TrainerCallback]] = None,
     ) -> None:
         self.args = config
@@ -92,7 +89,7 @@ class OnlineDPOTrainer(RLOOTrainer):
         # calculate various batch sizes
         #########
         if args.total_episodes is None:  # allow the users to define episodes in terms of epochs.
-            args.total_episodes = args.num_train_epochs * self.train_dataset_len
+            args.total_episodes = int(args.num_train_epochs * self.train_dataset_len)
         accelerator = Accelerator(gradient_accumulation_steps=args.gradient_accumulation_steps)
         self.accelerator = accelerator
         args.world_size = accelerator.num_processes
@@ -102,27 +99,18 @@ class OnlineDPOTrainer(RLOOTrainer):
         args.micro_batch_size = int(args.per_device_train_batch_size * args.world_size)
         args.batch_size = int(args.local_batch_size * args.world_size)
         args.mini_batch_size = exact_div(
-            args.batch_size,
-            args.num_mini_batches,
-            "`batch_size` must be a multiple of `num_mini_batches`",
+            args.batch_size, args.num_mini_batches, "`batch_size` must be a multiple of `num_mini_batches`"
         )
         args.local_mini_batch_size = exact_div(
-            args.local_batch_size,
-            args.num_mini_batches,
-            "`local_batch_size` must be a multiple of `num_mini_batches`",
+            args.local_batch_size, args.num_mini_batches, "`local_batch_size` must be a multiple of `num_mini_batches`"
         )
-        if args.whiten_rewards:
-            assert (
-                args.local_mini_batch_size >= 8
-            ), f"Per-rank minibatch size {args.local_mini_batch_size} is insufficient for whitening"
-        # `per_rank_rollout_batch_size` is our `args.local_batch_size`
-        # `per_rank_minibatch_size` is our `args.local_mini_batch_size`
         args.num_updates = args.total_episodes // args.batch_size
+        time_tensor = torch.tensor(int(time.time()), device=accelerator.device)
+        time_int = broadcast(time_tensor, 0).item()  # avoid different timestamps across processes
+        args.run_name = f"{args.exp_name}__{args.seed}__{time_int}"
         self.local_seed = args.seed + accelerator.process_index * 100003  # Prime
         if args.num_sample_generations > 0:
             self.sample_generations_freq = max(1, args.num_updates // args.num_sample_generations)
-
-        self.local_dataloader_batch_size = args.local_batch_size
 
         ### DPO stuff
         self.beta = config.beta
@@ -145,19 +133,13 @@ class OnlineDPOTrainer(RLOOTrainer):
             is_local_process_zero=self.is_local_process_zero(),
             is_world_process_zero=self.is_world_process_zero(),
         )
-
         default_callbacks = DEFAULT_CALLBACKS + get_reporting_integration_callbacks(self.args.report_to)
-        callbacks = default_callbacks if callbacks is None else default_callbacks + callbacks
+        self.callbacks = default_callbacks if callbacks is None else default_callbacks + callbacks
         self.callback_handler = CallbackHandler(
-            callbacks,
-            self.model,
-            self.tokenizer,
-            self.optimizer,
-            self.lr_scheduler,
+            self.callbacks, self.model, self.tokenizer, self.optimizer, self.lr_scheduler
         )
         self.add_callback(PrinterCallback if self.args.disable_tqdm else DEFAULT_PROGRESS_CALLBACK)
         self.control = TrainerControl()
-
         self.current_flos = 0
         self.hp_search_backend = None
         self.is_deepspeed_enabled = getattr(self.accelerator.state, "deepspeed_plugin", None) is not None
@@ -168,7 +150,6 @@ class OnlineDPOTrainer(RLOOTrainer):
             self.init_hf_repo()
         if self.args.should_save:
             os.makedirs(self.args.output_dir, exist_ok=True)
-
         self.backup_model = None
 
         #########
@@ -176,7 +157,7 @@ class OnlineDPOTrainer(RLOOTrainer):
         #########
         self.dataloader = DataLoader(
             self.train_dataset,
-            batch_size=self.local_dataloader_batch_size,
+            batch_size=args.local_batch_size,
             shuffle=True,
             collate_fn=DataCollatorWithPadding(tokenizer),
             drop_last=True,  # needed; otherwise the last batch will be of ragged shape
@@ -197,17 +178,21 @@ class OnlineDPOTrainer(RLOOTrainer):
 
         if self.is_deepspeed_enabled:
             self.reward_model = prepare_deepspeed(
-                self.reward_model, args.per_device_train_batch_size, config.fp16, config.bf16
+                self.reward_model, args.per_device_train_batch_size, args.fp16, args.bf16
             )
             self.ref_policy = prepare_deepspeed(
-                self.ref_policy, args.per_device_train_batch_size, config.fp16, config.bf16
+                self.ref_policy, args.per_device_train_batch_size, args.fp16, args.bf16
             )
             self.deepspeed = self.model
         else:
             self.ref_policy = self.ref_policy.to(self.accelerator.device)
             self.reward_model = self.reward_model.to(self.accelerator.device)
 
-        self.ref_model = self.ref_policy
+    def get_train_dataloader(self) -> DataLoader:
+        return self.dataloader
+
+    def get_eval_dataloader(self) -> DataLoader:
+        return self.eval_dataloader
 
     def train(self):
         args = self.args
@@ -298,7 +283,8 @@ class OnlineDPOTrainer(RLOOTrainer):
                             generation_config,
                         )
                         response = query_response[:, context_length:]
-                        logits /= args.temperature + 1e-7
+
+                        # use the logits during generation directly (which are already adjusted by temperature)
                         all_logprob = F.log_softmax(logits, dim=-1)
                         logprob = torch.gather(all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
                         del logits, all_logprob
@@ -335,9 +321,9 @@ class OnlineDPOTrainer(RLOOTrainer):
                         scores.append(score)
                 query_responses = torch.cat(query_responses, 0)
                 responses = torch.cat(responses, 0)
+                postprocessed_responses = torch.cat(postprocessed_responses, 0)
                 logprobs = torch.cat(logprobs, 0)
                 ref_logprobs = torch.cat(ref_logprobs, 0)
-                postprocessed_responses = torch.cat(postprocessed_responses, 0)
                 sequence_lengths = torch.cat(sequence_lengths, 0)
                 scores = torch.cat(scores, 0)
                 del (logprob, ref_logprob, score)
@@ -358,11 +344,12 @@ class OnlineDPOTrainer(RLOOTrainer):
                 logprobs = torch.masked_fill(logprobs, padding_mask, INVALID_LOGPROB)
                 ref_logprobs = torch.masked_fill(ref_logprobs, padding_mask, INVALID_LOGPROB)
 
+                # 4. compute rewards
                 kl = logprobs - ref_logprobs
-                non_score_reward = (-args.kl_coef * kl).sum(1)
+                non_score_reward = (-args.beta * kl).sum(1)
                 rlhf_reward = scores + non_score_reward
 
-                # num_examples should be same as args.local_batch_size
+                # num_examples should be same as args.local_batch_size divided by 2
                 num_examples = scores.size(0) // 2
                 first_half = scores[:num_examples]
                 second_half = scores[num_examples:]
@@ -377,26 +364,11 @@ class OnlineDPOTrainer(RLOOTrainer):
                 )
 
                 scores_margin = scores[chosen_indices] - scores[rejected_indices]
-
-                if self.args.save_generations:
-                    decoded_queries = tokenizer.batch_decode(queries[:num_examples], skip_special_tokens=True)
-                    decoded_chosen = tokenizer.batch_decode(postprocessed_responses[chosen_indices])
-                    decoded_rejected = tokenizer.batch_decode(postprocessed_responses[rejected_indices])
-
-                    # WARNING, if pad token == eos token, this will remove the eos from the end
-                    decoded_chosen = [r.split(tokenizer.pad_token)[0] for r in decoded_chosen]
-                    decoded_rejected = [r.split(tokenizer.pad_token)[0] for r in decoded_rejected]
-
-                    saved_data["prompt"].extend(gather_object(decoded_queries))
-                    saved_data["chosen"].extend(gather_object(decoded_chosen))
-                    saved_data["rejected"].extend(gather_object(decoded_rejected))
-                    saved_data["update"].extend(gather_object([update for _ in range(num_examples)]))
-
                 torch.cuda.empty_cache()
 
             # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
             for ppo_epoch_idx in range(args.num_ppo_epochs):
-                b_inds = np.arange(args.local_batch_size)
+                b_inds = np.random.permutation(args.local_batch_size)
                 minibatch_idx = 0
                 all_chosen_rewards = []
                 all_rejected_rewards = []
@@ -412,7 +384,6 @@ class OnlineDPOTrainer(RLOOTrainer):
                             micro_batch_inds = mini_batch_inds[micro_batch_start:micro_batch_end]
 
                             ## chosen
-                            breakpoint()
                             chosen_mb_inds = chosen_indices[micro_batch_inds]
                             chosen_responses = responses[chosen_mb_inds]
 
@@ -477,14 +448,14 @@ class OnlineDPOTrainer(RLOOTrainer):
                             accelerator.backward(loss)
                             optimizer.step()
                             optimizer.zero_grad()
-
-                            loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = loss.detach()
-                            all_chosen_rewards.append(chosen_rewards)
-                            all_chosen_logprobs.append(chosen_logprobs_sum)
-                            all_rejected_rewards.append(rejected_rewards)
-                            all_rejected_logprobs.append(rejected_logprobs_sum)
-                            #     entropy_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = entropy.mean()
-                            #     ratio_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = new_ratio.mean()
+                            with torch.no_grad():
+                                loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = loss.detach()
+                                all_chosen_rewards.append(chosen_rewards)
+                                all_chosen_logprobs.append(chosen_logprobs_sum)
+                                all_rejected_rewards.append(rejected_rewards)
+                                all_rejected_logprobs.append(rejected_logprobs_sum)
+                                #     entropy_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = entropy.mean()
+                                #     ratio_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = new_ratio.mean()
                         gradient_accumulation_idx += 1
                     minibatch_idx += 1
                     self.state.global_step += 1
@@ -562,15 +533,11 @@ class OnlineDPOTrainer(RLOOTrainer):
             if args.num_sample_generations > 0 and (update - 1) % self.sample_generations_freq == 0:
                 self.generate_completions(sampling=True)
 
+        # HF trainer specifics
         self.control = self.callback_handler.on_train_end(args, self.state, self.control)
         if self.control.should_save:
             self._save_checkpoint(model, trial=None, metrics=None)
             self.control = self.callback_handler.on_save(self.args, self.state, self.control)
-
-        if self.args.save_generations:
-            if accelerator.is_local_main_process:
-                dataset = Dataset.from_dict(saved_data)
-                dataset.save_to_disk(os.path.join(self.args.output_dir, "online_dataset"))
 
     def generate_completions(self, sampling: bool = False):
         args = self.args
