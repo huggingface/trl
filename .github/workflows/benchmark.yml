@@ -29,14 +29,14 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           status: pending
       - name: Checkout `main` branch
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Checkout PR branch
         run: gh pr checkout $PR_NUMBER
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.issue.number }}
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
       # - name: Cleanup pip packages (specific to self-hosted runners)
