@@ -5,6 +5,9 @@ from ..trainer.utils import OnPolicyConfig
 
 @dataclass
 class RLOOConfig(OnPolicyConfig):
+    reward_model_path: str = "EleutherAI/pythia-160m"
+    """the path to the reward model"""
+
     # ppo config
     num_ppo_epochs: int = 4
     """the number of epochs to train"""
