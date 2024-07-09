@@ -30,11 +30,11 @@ from transformers.trainer_callback import CallbackHandler, PrinterCallback
 
 from ..models.utils import unwrap_model_for_generation
 from ..trainer.utils import (
+    batch_generation,
     disable_dropout_in_model,
     exact_div,
     first_true_indices,
     forward,
-    generate,
     get_reward,
     prepare_deepspeed,
     print_rich_table,
@@ -60,7 +60,6 @@ class OnlineDPOTrainer(Trainer):
         ref_policy: nn.Module,
         reward_model: nn.Module,
         train_dataset: Dataset,
-        loss_type: str = "sigmoid",
         data_collator: Optional[DataCollatorWithPadding] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
         # less commonly used
@@ -111,6 +110,11 @@ class OnlineDPOTrainer(Trainer):
         self.local_seed = args.seed + accelerator.process_index * 100003  # Prime
         if args.num_sample_generations > 0:
             self.sample_generations_freq = max(1, args.num_updates // args.num_sample_generations)
+        self.local_dataloader_batch_size = exact_div(
+            args.local_batch_size,
+            args.num_generation_per_prompt,
+            "`local_batch_size` must be a multiple of `num_generation_per_prompt`",
+        )  # DPO logic: repeats the same prompt args.rloo_k times
 
         ### DPO stuff
         self.beta = config.beta
@@ -157,7 +161,7 @@ class OnlineDPOTrainer(Trainer):
         #########
         self.dataloader = DataLoader(
             self.train_dataset,
-            batch_size=args.local_batch_size,
+            batch_size=self.local_dataloader_batch_size,
             shuffle=True,
             collate_fn=DataCollatorWithPadding(tokenizer),
             drop_last=True,  # needed; otherwise the last batch will be of ragged shape
@@ -226,13 +230,10 @@ class OnlineDPOTrainer(Trainer):
         start_time = time.time()
         stats_shape = (args.num_ppo_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
         loss_stats = torch.zeros(stats_shape, device=device)
-
-        # approxkl_stats = torch.zeros(stats_shape, device=device)
-        # pg_clipfrac_stats = torch.zeros(stats_shape, device=device)
-        # vf_loss_stats = torch.zeros(stats_shape, device=device)
-        # vf_clipfrac_stats = torch.zeros(stats_shape, device=device)
-        # entropy_stats = torch.zeros(stats_shape, device=device)
-        # ratio_stats = torch.zeros(stats_shape, device=device)
+        chosen_rewards_stats = torch.zeros(stats_shape, device=device)
+        rejected_rewards_stats = torch.zeros(stats_shape, device=device)
+        chosen_logprobs_stats = torch.zeros(stats_shape, device=device)
+        rejected_logprobs_stats = torch.zeros(stats_shape, device=device)
         model.train()
         self.state.max_steps = args.num_updates * args.num_mini_batches
         self.state.num_train_epochs = args.total_episodes / self.train_dataset_len
@@ -257,7 +258,6 @@ class OnlineDPOTrainer(Trainer):
                 self.state.save_steps = args.save_steps
 
         self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
-        saved_data = {"prompt": [], "chosen": [], "rejected": [], "update": []}
 
         for update in range(1, args.num_updates + 1):
             self.state.episode += 1 * args.batch_size
@@ -265,6 +265,7 @@ class OnlineDPOTrainer(Trainer):
             data = next(iter_dataloader)
             with torch.no_grad():
                 queries = data["input_ids"].to(device)
+                queries = queries.repeat(args.num_generation_per_prompt, 1)
                 context_length = queries.shape[1]
                 query_responses = []
                 responses = []
@@ -274,52 +275,52 @@ class OnlineDPOTrainer(Trainer):
                 scores = []
                 sequence_lengths = []
                 with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
-                    for i in range(0, queries.shape[0], args.local_rollout_forward_batch_size):
-                        query = queries[i : i + args.local_rollout_forward_batch_size]
-                        query_response, logits = generate(
-                            unwrapped_model,
-                            query,
-                            tokenizer.pad_token_id,
-                            generation_config,
-                        )
-                        response = query_response[:, context_length:]
+                    query_responses, logitss = batch_generation(
+                        unwrapped_model,
+                        queries,
+                        args.local_rollout_forward_batch_size,
+                        tokenizer.pad_token_id,
+                        generation_config,
+                    )
 
-                        # use the logits during generation directly (which are already adjusted by temperature)
-                        all_logprob = F.log_softmax(logits, dim=-1)
-                        logprob = torch.gather(all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
-                        del logits, all_logprob
-                        torch.cuda.empty_cache()
+                for i in range(0, queries.shape[0], args.local_rollout_forward_batch_size):
+                    query = queries[i : i + args.local_rollout_forward_batch_size]
+                    query_response = query_responses[i : i + args.local_rollout_forward_batch_size]
+                    response = query_response[:, context_length:]
+                    logits = logitss[i : i + args.local_rollout_forward_batch_size]
+                    all_logprob = F.log_softmax(logits, dim=-1)
+                    logprob = torch.gather(all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
+                    del logits, all_logprob
+                    torch.cuda.empty_cache()
 
-                        ref_output = forward(ref_policy, query_response, tokenizer.pad_token_id)
-                        ref_logits = ref_output.logits[:, context_length - 1 : -1]
-                        ref_logits /= args.temperature + 1e-7
-                        ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
-                        ref_logprob = torch.gather(ref_all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
-                        del ref_output, ref_logits, ref_all_logprob
-                        torch.cuda.empty_cache()
+                    ref_output = forward(ref_policy, query_response, tokenizer.pad_token_id)
+                    ref_logits = ref_output.logits[:, context_length - 1 : -1]
+                    ref_logits /= args.temperature + 1e-7
+                    ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
+                    ref_logprob = torch.gather(ref_all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
+                    del ref_output, ref_logits, ref_all_logprob
+                    torch.cuda.empty_cache()
 
-                        # Response Processing 1. truncate response after the first occurrence of `stop_token_id`
-                        postprocessed_response = response
-                        if args.stop_token_id is not None:  # handle the edge case when stop_token_id exists but is 0
-                            postprocessed_response = truncate_response(
-                                args.stop_token_id, tokenizer.pad_token_id, response
-                            )
-
-                        # Response Processing 2. run reward model on the truncated responses
-                        postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
-                        sequence_length = first_true_indices(postprocessed_response == tokenizer.pad_token_id) - 1
-                        _, score, _ = get_reward(
-                            reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
+                    # Response Processing 1. truncate response after the first occurrence of `stop_token_id`
+                    postprocessed_response = response
+                    if args.stop_token_id is not None:  # handle the edge case when stop_token_id exists but is 0
+                        postprocessed_response = truncate_response(
+                            args.stop_token_id, tokenizer.pad_token_id, response
                         )
 
-                        query_responses.append(query_response)
-                        responses.append(response)
-                        postprocessed_responses.append(postprocessed_response)
-                        logprobs.append(logprob)
-                        ref_logprobs.append(ref_logprob)
-                        sequence_lengths.append(sequence_length)
-                        scores.append(score)
-                query_responses = torch.cat(query_responses, 0)
+                    # Response Processing 2. run reward model on the truncated responses
+                    postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
+                    sequence_length = first_true_indices(postprocessed_response == tokenizer.pad_token_id) - 1
+                    _, score, _ = get_reward(
+                        reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
+                    )
+
+                    responses.append(response)
+                    postprocessed_responses.append(postprocessed_response)
+                    logprobs.append(logprob)
+                    ref_logprobs.append(ref_logprob)
+                    sequence_lengths.append(sequence_length)
+                    scores.append(score)
                 responses = torch.cat(responses, 0)
                 postprocessed_responses = torch.cat(postprocessed_responses, 0)
                 logprobs = torch.cat(logprobs, 0)
@@ -368,21 +369,24 @@ class OnlineDPOTrainer(Trainer):
 
             # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
             for ppo_epoch_idx in range(args.num_ppo_epochs):
-                b_inds = np.random.permutation(args.local_batch_size)
+                b_inds = np.random.permutation(args.local_batch_size // args.num_generation_per_prompt)
                 minibatch_idx = 0
-                all_chosen_rewards = []
-                all_rejected_rewards = []
-                all_chosen_logprobs = []
-                all_rejected_logprobs = []
-                for mini_batch_start in range(0, args.local_batch_size, args.local_mini_batch_size):
-                    mini_batch_end = mini_batch_start + args.local_mini_batch_size
+                for mini_batch_start in range(
+                    0,
+                    args.local_batch_size // args.num_generation_per_prompt,
+                    args.local_mini_batch_size // args.num_generation_per_prompt,
+                ):
+                    mini_batch_end = mini_batch_start + args.local_mini_batch_size // args.num_generation_per_prompt
                     mini_batch_inds = b_inds[mini_batch_start:mini_batch_end]
                     gradient_accumulation_idx = 0
-                    for micro_batch_start in range(0, args.local_mini_batch_size, args.per_device_train_batch_size):
+                    for micro_batch_start in range(
+                        0,
+                        args.local_mini_batch_size // args.num_generation_per_prompt,
+                        args.per_device_train_batch_size,
+                    ):
                         with accelerator.accumulate(model):
                             micro_batch_end = micro_batch_start + args.per_device_train_batch_size
                             micro_batch_inds = mini_batch_inds[micro_batch_start:micro_batch_end]
-
                             ## chosen
                             chosen_mb_inds = chosen_indices[micro_batch_inds]
                             chosen_responses = responses[chosen_mb_inds]
@@ -393,7 +397,7 @@ class OnlineDPOTrainer(Trainer):
 
                             concat_mb_inds = torch.cat((chosen_mb_inds, rejected_mb_inds), dim=0)
                             concat_query_responses = query_responses[concat_mb_inds]
-
+                            # breakpoint()
                             concat_output = forward(model, concat_query_responses, tokenizer.pad_token_id)
                             num_examples = chosen_mb_inds.shape[0]
                             chosen_logits = concat_output.logits[:num_examples]
@@ -441,21 +445,26 @@ class OnlineDPOTrainer(Trainer):
                             else:
                                 raise NotImplementedError(f"invalid loss type {self.loss_type}")
 
-                            chosen_rewards = self.beta * (chosen_logprobs_sum - chosen_ref_logprobs_sum).detach()
-                            rejected_rewards = self.beta * (rejected_logprobs_sum - rejected_ref_logprobs_sum).detach()
-
                             loss = losses.mean()
                             accelerator.backward(loss)
                             optimizer.step()
                             optimizer.zero_grad()
                             with torch.no_grad():
-                                loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = loss.detach()
-                                all_chosen_rewards.append(chosen_rewards)
-                                all_chosen_logprobs.append(chosen_logprobs_sum)
-                                all_rejected_rewards.append(rejected_rewards)
-                                all_rejected_logprobs.append(rejected_logprobs_sum)
-                                #     entropy_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = entropy.mean()
-                                #     ratio_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = new_ratio.mean()
+                                chosen_rewards = self.beta * (chosen_logprobs_sum - chosen_ref_logprobs_sum)
+                                rejected_rewards = self.beta * (rejected_logprobs_sum - rejected_ref_logprobs_sum)
+                                loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = loss
+                                chosen_rewards_stats[
+                                    ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
+                                ] = chosen_rewards
+                                rejected_rewards_stats[
+                                    ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
+                                ] = rejected_rewards
+                                chosen_logprobs_stats[
+                                    ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
+                                ] = chosen_logprobs_sum
+                                rejected_logprobs_stats[
+                                    ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
+                                ] = rejected_logprobs_sum
                         gradient_accumulation_idx += 1
                     minibatch_idx += 1
                     self.state.global_step += 1
@@ -470,24 +479,11 @@ class OnlineDPOTrainer(Trainer):
                     )
                     # fmt: on
                     torch.cuda.empty_cache()
-
-            all_chosen_rewards = torch.cat(all_chosen_rewards, 0)
-            all_rejected_rewards = torch.cat(all_rejected_rewards, 0)
-            all_chosen_logprobs = torch.cat(all_chosen_logprobs, 0)
-            all_rejected_logprobs = torch.cat(all_rejected_logprobs, 0)
-
             with torch.no_grad():
                 mean_kl = kl.sum(1).mean()
                 mean_entropy = (-logprobs).sum(1).mean()
                 mean_non_score_reward = non_score_reward.mean()
                 eps = int(self.state.episode / (time.time() - start_time))
-                # policy_chosen_logps = logprobs[chosen_indices]
-                # policy_rejected_logps = logprobs[rejected_indices]
-
-                chosen_rewards = self.accelerator.gather(all_chosen_rewards)
-                chosen_logprobs = self.accelerator.gather(all_chosen_logprobs)
-                rejected_rewards = self.accelerator.gather(all_rejected_rewards)
-                rejected_logprobs = self.accelerator.gather(all_rejected_logprobs)
 
                 metrics = {}
                 metrics["eps"] = eps
@@ -501,27 +497,17 @@ class OnlineDPOTrainer(Trainer):
                 metrics["rewards/rejected"] = rejected_rewards.mean().item()
                 metrics["rewards/accuracies"] = (chosen_rewards > rejected_rewards).float().mean().item()
                 metrics["rewards/margins"] = (chosen_rewards - rejected_rewards).mean().item()
-                metrics["logps/rejected"] = rejected_logprobs.mean().item()
-                metrics["logps/chosen"] = chosen_logprobs.mean().item()
                 metrics["loss/policy_avg"] = self.accelerator.gather(loss_stats).mean().item()
-                # metrics["logits/rejected"] = policy_rejected_logits.detach().mean().cpu()
-                # metrics["logits/chosen"] = policy_chosen_logits.detach().mean().cpu()
+                metrics["train/rewards/chosen"] = self.accelerator.gather(chosen_rewards_stats).mean().item()
+                metrics["train/rewards/rejected"] = self.accelerator.gather(rejected_rewards_stats).mean().item()
+                metrics["train/logps/chosen"] = self.accelerator.gather(chosen_logprobs_stats).mean().item()
+                metrics["train/logps/rejected"] = self.accelerator.gather(rejected_logprobs_stats).mean().item()
                 metrics["val/num_eos_tokens"] = (responses == tokenizer.eos_token_id).sum().item()
                 metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
                 metrics["episode"] = self.state.episode
                 self.state.epoch = self.state.episode / self.train_dataset_len  # used by self.log
                 self.log(metrics)
-            del (
-                kl,
-                mean_kl,
-                mean_entropy,
-                scores,
-                scores_margin,
-                all_chosen_rewards,
-                all_chosen_logprobs,
-                all_rejected_rewards,
-                all_rejected_logprobs,
-            )
+            del (kl, mean_kl, mean_entropy, scores, scores_margin)
 
             self.control = self.callback_handler.on_step_end(args, self.state, self.control)
             if self.control.should_save:
@@ -551,32 +537,35 @@ class OnlineDPOTrainer(Trainer):
         )
 
         table = defaultdict(list)
-        for batch in self.eval_dataloader:
-            query = batch["input_ids"]
-            with torch.no_grad():
-                context_length = query.shape[1]
-                with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
-                    query_response, _ = generate(
+        with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
+            for batch in self.eval_dataloader:
+                query = batch["input_ids"]
+                with torch.no_grad():
+                    context_length = query.shape[1]
+                    query_response, _ = batch_generation(
                         unwrapped_model,
                         query,
+                        query.shape[0],
                         tokenizer.pad_token_id,
                         generation_config,
                     )
-                response = query_response[:, context_length:]
-                postprocessed_response = response
-                if args.stop_token_id is not None:  # handle the edge case when stop_token_id exists but is 0
-                    postprocessed_response = truncate_response(args.stop_token_id, tokenizer.pad_token_id, response)
-                table["query"].extend(gather_object(tokenizer.batch_decode(query, skip_special_tokens=True)))
-                table["model response"].extend(gather_object(tokenizer.batch_decode(postprocessed_response)))
+                    response = query_response[:, context_length:]
+                    postprocessed_response = response
+                    if args.stop_token_id is not None:  # handle the edge case when stop_token_id exists but is 0
+                        postprocessed_response = truncate_response(
+                            args.stop_token_id, tokenizer.pad_token_id, response
+                        )
+                    table["query"].extend(gather_object(tokenizer.batch_decode(query, skip_special_tokens=True)))
+                    table["model response"].extend(gather_object(tokenizer.batch_decode(postprocessed_response)))
 
-                postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
-                _, score, _ = get_reward(
-                    self.reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
-                )
-                table["score"].extend(self.accelerator.gather(score).float().cpu().numpy())
+                    postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
+                    _, score, _ = get_reward(
+                        self.reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
+                    )
+                    table["score"].extend(self.accelerator.gather(score).float().cpu().numpy())
 
-            if sampling:
-                break
+                if sampling:
+                    break
         df = pd.DataFrame(table)
         if self.accelerator.process_index == 0:
             print_rich_table(df.iloc[0 : 0 + 5])

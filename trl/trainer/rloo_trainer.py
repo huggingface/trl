@@ -97,12 +97,6 @@ class RLOOTrainer(Trainer):
         args.local_mini_batch_size = exact_div(
             args.local_batch_size, args.num_mini_batches, "`local_batch_size` must be a multiple of `num_mini_batches`"
         )
-        if args.whiten_rewards:
-            assert (
-                args.local_mini_batch_size >= 8
-            ), f"Per-rank minibatch size {args.local_mini_batch_size} is insufficient for whitening"
-        # `per_rank_rollout_batch_size` is our `args.local_batch_size`
-        # `per_rank_minibatch_size` is our `args.local_mini_batch_size`
         args.num_updates = args.total_episodes // args.batch_size
         time_tensor = torch.tensor(int(time.time()), device=accelerator.device)
         time_int = broadcast(time_tensor, 0).item()  # avoid different timestamps across processes
@@ -258,7 +252,6 @@ class RLOOTrainer(Trainer):
                     query_response = query_responses[i : i + args.local_rollout_forward_batch_size]
                     response = query_response[:, context_length:]
                     logits = logitss[i : i + args.local_rollout_forward_batch_size]
-                    response = query_response[:, context_length:]
                     all_logprob = F.log_softmax(logits, dim=-1)
                     logprob = torch.gather(all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
                     del logits, all_logprob

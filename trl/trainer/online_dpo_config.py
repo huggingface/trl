@@ -8,11 +8,14 @@ from trl.trainer.utils import OnPolicyConfig
 class OnlineDPOConfig(OnPolicyConfig):
     reward_model_path: str = "EleutherAI/pythia-160m"
     """the path to the reward model"""
+
     # ppo config
     num_ppo_epochs: int = 4
     """the number of epochs to train"""
 
     # DPO stuff w/o max_length which is included in RLOOConfig
+    num_generation_per_prompt: int = 2
+    """the number of generations per prompt (currently only support 2)"""
     beta: float = 0.05
     label_smoothing: float = 0
     loss_type: Literal[
