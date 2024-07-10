@@ -108,7 +108,9 @@ if __name__ == "__main__":
         quantization_config=quantization_config,
     )
     training_args.model_init_kwargs = model_kwargs
-    tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path, use_fast=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, use_fast=True
+    )
     tokenizer.pad_token = tokenizer.eos_token
 
     ################
