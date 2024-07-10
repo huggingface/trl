@@ -310,7 +310,6 @@ class RewardTrainer(Trainer):
             if num_print_samples >= 0 and len(table["chosen_text"]) >= num_print_samples:
                 break
         df = pd.DataFrame(table)
-        print_rich_table(pd.DataFrame(table))
         if self.accelerator.process_index == 0:
             print_rich_table(df[:num_print_samples])
             if "wandb" in self.args.report_to:
