@@ -19,7 +19,7 @@ from .sft_config import SFTConfig
 
 @dataclass
 class GKDConfig(SFTConfig):
-    temperature: float = 2.0
+    temperature: float = 1.0
     lmbda: float = 1.0
     max_new_tokens_response: int = 128
     loss_type: str = "kl"

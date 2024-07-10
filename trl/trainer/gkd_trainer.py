@@ -72,6 +72,7 @@ class GKDTrainer(SFTTrainer):
 
         self.loss_function = nn.KLDivLoss(reduction="batchmean", log_target=True)
         self.lmbda = args.lmbda
+        self.temperature = args.temperature
 
     def compute_loss(self, model, inputs, return_outputs=False):
         # compute student output
@@ -114,7 +115,7 @@ class GKDTrainer(SFTTrainer):
                 generated_outputs = self.model.generate(
                     inputs["input_ids"],
                     max_new_tokens=self.args.max_new_tokens_response,
-                    temperature=1.0,
+                    temperature=self.temperature,
                 )
                 inputs["input_ids"] = generated_outputs[:, :-1]
                 inputs["labels"] = generated_outputs[:, 1:]
