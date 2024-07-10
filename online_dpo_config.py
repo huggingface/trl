@@ -11,9 +11,9 @@ class OnlineDPOConfig(RLOOConfig):
     # DPO stuff w/o max_length which is included in RLOOConfig
     beta: float = 0.1
     label_smoothing: float = 0
-    loss_type: Literal["sigmoid", "hinge", "ipo", "kto_pair", "bco_pair", "sppo_hard", "nca_pair", "robust"] = (
-        "sigmoid"
-    )
+    loss_type: Literal[
+        "sigmoid", "hinge", "ipo", "kto_pair", "bco_pair", "sppo_hard", "nca_pair", "robust"
+    ] = "sigmoid"
     label_pad_token_id: int = -100
     padding_value: int = 0
     truncation_mode: str = "keep_end"

@@ -122,6 +122,7 @@ class OnlineDPOTrainer(RLOOTrainer):
         if args.num_sample_generations > 0:
             self.sample_generations_freq = max(1, args.num_updates // args.num_sample_generations)
 
+        assert args.rloo_k == 2, "currently only supports generating 2 completions per prompt"
         self.local_dataloader_batch_size = args.local_batch_size
 
         ### DPO stuff
@@ -197,10 +198,16 @@ class OnlineDPOTrainer(RLOOTrainer):
 
         if self.is_deepspeed_enabled:
             self.reward_model = prepare_deepspeed(
-                self.reward_model, args.per_device_train_batch_size, config.fp16, config.bf16
+                self.reward_model,
+                args.per_device_train_batch_size,
+                config.fp16,
+                config.bf16,
             )
             self.ref_policy = prepare_deepspeed(
-                self.ref_policy, args.per_device_train_batch_size, config.fp16, config.bf16
+                self.ref_policy,
+                args.per_device_train_batch_size,
+                config.fp16,
+                config.bf16,
             )
             self.deepspeed = self.model
         else:
@@ -239,15 +246,13 @@ class OnlineDPOTrainer(RLOOTrainer):
         self.state.global_step = 0
         self.state.episode = 0
         start_time = time.time()
-        stats_shape = (args.num_ppo_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
+        stats_shape = (
+            args.num_ppo_epochs,
+            args.num_mini_batches,
+            args.gradient_accumulation_steps,
+        )
         loss_stats = torch.zeros(stats_shape, device=device)
 
-        # approxkl_stats = torch.zeros(stats_shape, device=device)
-        # pg_clipfrac_stats = torch.zeros(stats_shape, device=device)
-        # vf_loss_stats = torch.zeros(stats_shape, device=device)
-        # vf_clipfrac_stats = torch.zeros(stats_shape, device=device)
-        # entropy_stats = torch.zeros(stats_shape, device=device)
-        # ratio_stats = torch.zeros(stats_shape, device=device)
         model.train()
         self.state.max_steps = args.num_updates * args.num_mini_batches
         self.state.num_train_epochs = args.total_episodes / self.train_dataset_len
@@ -280,6 +285,7 @@ class OnlineDPOTrainer(RLOOTrainer):
             data = next(iter_dataloader)
             with torch.no_grad():
                 queries = data["input_ids"].to(device)
+                queries = queries.repeat(args.rloo_k, 1)
                 context_length = queries.shape[1]
                 query_responses = []
                 responses = []
@@ -323,7 +329,10 @@ class OnlineDPOTrainer(RLOOTrainer):
                         postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
                         sequence_length = first_true_indices(postprocessed_response == tokenizer.pad_token_id) - 1
                         _, score, _ = get_reward(
-                            reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
+                            reward_model,
+                            postprocessed_query_response,
+                            tokenizer.pad_token_id,
+                            context_length,
                         )
 
                         query_responses.append(query_response)
@@ -349,7 +358,11 @@ class OnlineDPOTrainer(RLOOTrainer):
                 # only query humans on responses that pass that filter
                 contain_eos_token = torch.any(postprocessed_responses == tokenizer.eos_token_id, dim=-1)
                 if args.non_eos_penalty:
-                    scores = torch.where(contain_eos_token, scores, torch.full_like(scores, args.penalty_reward_value))
+                    scores = torch.where(
+                        contain_eos_token,
+                        scores,
+                        torch.full_like(scores, args.penalty_reward_value),
+                    )
                 # accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
 
                 # be very careful with `padding_mask_p1`; see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
@@ -370,10 +383,14 @@ class OnlineDPOTrainer(RLOOTrainer):
                 num_examples_range = torch.arange(num_examples).to(scores.device)
 
                 chosen_indices = torch.where(
-                    first_half >= second_half, num_examples_range.clone(), num_examples_range.clone() + num_examples
+                    first_half >= second_half,
+                    num_examples_range.clone(),
+                    num_examples_range.clone() + num_examples,
                 )
                 rejected_indices = torch.where(
-                    first_half < second_half, num_examples_range.clone(), num_examples_range.clone() + num_examples
+                    first_half < second_half,
+                    num_examples_range.clone(),
+                    num_examples_range.clone() + num_examples,
                 )
 
                 scores_margin = scores[chosen_indices] - scores[rejected_indices]
@@ -435,7 +452,9 @@ class OnlineDPOTrainer(RLOOTrainer):
                                 chosen_all_logprobs, 2, chosen_responses.unsqueeze(-1)
                             ).squeeze(-1)
                             chosen_logprobs = torch.masked_fill(
-                                chosen_logprobs, padding_mask[chosen_mb_inds], INVALID_LOGPROB
+                                chosen_logprobs,
+                                padding_mask[chosen_mb_inds],
+                                INVALID_LOGPROB,
                             )
                             chosen_ref_logprobs = ref_logprobs[chosen_mb_inds]
                             chosen_logprobs_sum = (chosen_logprobs * ~padding_mask[chosen_mb_inds]).sum(1)
@@ -446,10 +465,14 @@ class OnlineDPOTrainer(RLOOTrainer):
                             rejected_logits /= args.temperature + 1e-7
                             rejected_all_logprobs = F.log_softmax(rejected_logits, dim=-1)
                             rejected_logprobs = torch.gather(
-                                rejected_all_logprobs, 2, rejected_responses.unsqueeze(-1)
+                                rejected_all_logprobs,
+                                2,
+                                rejected_responses.unsqueeze(-1),
                             ).squeeze(-1)
                             rejected_logprobs = torch.masked_fill(
-                                rejected_logprobs, padding_mask[rejected_mb_inds], INVALID_LOGPROB
+                                rejected_logprobs,
+                                padding_mask[rejected_mb_inds],
+                                INVALID_LOGPROB,
                             )
                             rejected_ref_logprobs = ref_logprobs[rejected_mb_inds]
                             rejected_logprobs_sum = (rejected_logprobs * ~padding_mask[rejected_mb_inds]).sum(1)
@@ -603,7 +626,10 @@ class OnlineDPOTrainer(RLOOTrainer):
 
                 postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
                 _, score, _ = get_reward(
-                    self.reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
+                    self.reward_model,
+                    postprocessed_query_response,
+                    tokenizer.pad_token_id,
+                    context_length,
                 )
                 table["score"].extend(self.accelerator.gather(score).float().cpu().numpy())
 
