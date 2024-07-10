@@ -304,7 +304,6 @@ class OnlineDPOTrainer(RLOOTrainer):
                             generation_config,
                         )
                         response = query_response[:, context_length:]
-                        logits /= args.temperature + 1e-7
                         all_logprob = F.log_softmax(logits, dim=-1)
                         logprob = torch.gather(all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
                         del logits, all_logprob
