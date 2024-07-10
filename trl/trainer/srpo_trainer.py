@@ -496,16 +496,13 @@ class SRPOTrainer(Trainer):
             args.dataset_num_proc = dataset_num_proc
         self.dataset_num_proc = args.dataset_num_proc
 
-        self.prefix_zero_prompt = args.prefix_zero_prompt
-        self.prefix_n_prompt = args.prefix_n_prompt
-        self.post_revision_prompt = args.post_revision_prompt
-
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
         with PartialState().local_main_process_first():
             # tokenize the dataset
             if train_dataset is not None:
                 train_dataset = train_dataset.map(self.tokenize_row, num_proc=self.dataset_num_proc)
+                # train_dataset = train_dataset.map(self.tokenize_row)
             if eval_dataset is not None:
                 eval_dataset = eval_dataset.map(self.tokenize_row, num_proc=self.dataset_num_proc)
 
@@ -690,7 +687,7 @@ class SRPOTrainer(Trainer):
 
         return super().get_eval_dataloader(eval_dataset=eval_dataset)
 
-    def build_tokenized_answer(self, prompt, answer):
+    def build_tokenized_answer(self, prompt, answer, example=None):
         """
         Llama tokenizer does satisfy `enc(a + b) = enc(a) + enc(b)`.
         It does ensure `enc(a + b) = enc(a) + enc(a + b)[len(enc(a)):]`.
@@ -698,8 +695,14 @@ class SRPOTrainer(Trainer):
             https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
         """
 
-        full_tokenized = self.tokenizer(prompt + answer, add_special_tokens=False)
-        prompt_input_ids = self.tokenizer(prompt, add_special_tokens=False)["input_ids"]
+        if example:
+            full = self.tokenizer.apply_chat_template(prompt, example=example, answer=answer, add_special_tokens=False, tokenize=False)
+            template_prompt = self.tokenizer.apply_chat_template(prompt, example=example, add_special_tokens=False, tokenize=False)
+        else:
+            full = self.tokenizer.apply_chat_template(prompt, answer=answer, add_special_tokens=False, tokenize=False)
+            template_prompt = self.tokenizer.apply_chat_template(prompt, add_special_tokens=False, tokenize=False)
+        full_tokenized = self.tokenizer(full, add_special_tokens=False)
+        prompt_input_ids = self.tokenizer(template_prompt, add_special_tokens=False)["input_ids"]
 
         answer_input_ids = full_tokenized["input_ids"][len(prompt_input_ids) :]
         answer_attention_mask = full_tokenized["attention_mask"][len(prompt_input_ids) :]
@@ -768,12 +771,8 @@ class SRPOTrainer(Trainer):
 
             if not isinstance(prompt, str):
                 raise ValueError(f"prompt should be an str but got {type(prompt)}")
-            zero_prompt = self.prefix_zero_prompt + "\n" + prompt + self.post_revision_prompt
-            chosen_prompt = self.prefix_n_prompt + "\n" + prompt + "EXAMPLE SUMMARY: " + chosen + "\n\n" + self.post_revision_prompt
-            rejected_prompt = self.prefix_n_prompt + "\n" + prompt + "EXAMPLE SUMMARY: " + rejected + "\n\n" + self.post_revision_prompt
 
-            prompt_tokens = self.tokenizer(zero_prompt, add_special_tokens=False)
-            prompt_tokens = {f"prompt_{k}": v for k, v in prompt_tokens.items()}
+            # prompt_tokens = self.tokenizer(zero_prompt, add_special_tokens=False)
 
             
            
@@ -784,16 +783,19 @@ class SRPOTrainer(Trainer):
             # n_revision_rejected_prompt = self.args.prefix_n_prompt + rejected_tokens[prompt] + "EXAMPLE SUMMARY: " + rejected_tokens[input_ids] + "\n\n" + post_revision_prompt
             
             # chosen_tokens = self.build_tokenized_answer(n_prompt, chosen)
-
+            batch["untemplated_prompt"] = prompt
+            prompt = self.tokenizer.apply_chat_template(prompt, add_special_tokens=False, tokenize=False)
+            prompt_tokens = self.tokenizer(prompt, add_special_tokens=False)
+            prompt_tokens = {f"prompt_{k}": v for k, v in prompt_tokens.items()}
             if not isinstance(rejected, str):
                 raise ValueError(f"rejected should be an str but got {type(rejected)}")
             # rejected_tokens = self.build_tokenized_answer(n_prompt, rejected)
-            improve_to_chosen_given_rejected_tokens = self.build_tokenized_answer(rejected_prompt, chosen)
-            improve_to_chosen_given_chosen_tokens = self.build_tokenized_answer(chosen_prompt, chosen)
-            improve_to_rejected_given_rejected_tokens = self.build_tokenized_answer(rejected_prompt, rejected)
-            improve_to_rejected_given_chosen_tokens = self.build_tokenized_answer(chosen_prompt, rejected)
-            rejected = self.build_tokenized_answer(zero_prompt, rejected)
-            chosen = self.build_tokenized_answer(zero_prompt, chosen)
+            improve_to_chosen_given_rejected_tokens = self.build_tokenized_answer(prompt, chosen, example=rejected)
+            improve_to_chosen_given_chosen_tokens = self.build_tokenized_answer(prompt, chosen, example=chosen)
+            improve_to_rejected_given_rejected_tokens = self.build_tokenized_answer(prompt, rejected, example=rejected)
+            improve_to_rejected_given_chosen_tokens = self.build_tokenized_answer(prompt, rejected, example=chosen)
+            rejected = self.build_tokenized_answer(prompt, rejected)
+            chosen = self.build_tokenized_answer(prompt, chosen)
             token_set = {
                 "zero_prompt": prompt_tokens,
                 "improve_to_chosen_given_rejected": improve_to_chosen_given_rejected_tokens,
@@ -865,6 +867,7 @@ class SRPOTrainer(Trainer):
             # if combined sequence is too long, truncate the prompt
             for _, answer_tokens in token_set.items():
                 if len(answer_tokens["prompt_input_ids"]) + longer_response_length > self.max_length:
+                    print("***TOO LONG PROMPT", len(answer_tokens["prompt_input_ids"]) + longer_response_length, " > ", self.max_length)
                     if self.truncation_mode == "keep_start":
                         for k in ["prompt_input_ids", "prompt_attention_mask"]:
                             answer_tokens[k] = answer_tokens[k][: self.max_prompt_length]
@@ -878,6 +881,7 @@ class SRPOTrainer(Trainer):
             for key, answer_tokens in token_set.items():
                 if key != "zero_prompt":
                     if len(answer_tokens["prompt_input_ids"]) + longer_response_length > self.max_length:
+                        print("***TOO LONG ANSWER", len(answer_tokens["prompt_input_ids"]) + longer_response_length, " > ", self.max_length)
                         for k in ["input_ids", "attention_mask"]:
                             answer_tokens[k] = answer_tokens[k][: self.max_length - self.max_prompt_length]
 
@@ -910,6 +914,7 @@ class SRPOTrainer(Trainer):
                         continue
                     batch[f"{k}_{type_key}"] = tokens
 
+            batch["prompt"] = prompt
         else:
             chosen_tokens = self.tokenizer(
                 chosen, truncation=True, max_length=self.max_target_length, add_special_tokens=True
@@ -1270,7 +1275,7 @@ class SRPOTrainer(Trainer):
         metrics[f"{prefix}rewards/improvement_accuracies"] = improvement_accuracies.mean().cpu()
         metrics[f"{prefix}rewards/margins"] = (chosen_rewards - rejected_rewards).mean().cpu()
         metrics[f"{prefix}logps/rejected"] = policy_logps["rejected"].detach().mean().cpu()
-        metrics[f"{prefix}logps/chosen"] = policy_logps["rejected"].detach().mean().cpu()
+        metrics[f"{prefix}logps/chosen"] = policy_logps["chosen"].detach().mean().cpu()
         metrics[f"{prefix}logits/rejected"] = policy_logits["rejected"].detach().mean().cpu()
         metrics[f"{prefix}logits/chosen"] = policy_logits["chosen"].detach().mean().cpu()
         if self.args.rpo_alpha is not None:
@@ -1304,7 +1309,7 @@ class SRPOTrainer(Trainer):
             return (loss, metrics)
         return loss
 
-    def get_batch_samples(self, model, batch: Dict[str, torch.LongTensor]) -> Tuple[str, str]:
+    def get_batch_samples(self, model, batch: Dict[str, torch.LongTensor]) -> Tuple[List[str], List[str], List[List[str]]]:
         """Generate samples from the model and reference model for the given batch of inputs."""
 
         # If one uses `generate_during_eval` with peft + bf16, we need to explicitly call generate with
@@ -1319,6 +1324,37 @@ class SRPOTrainer(Trainer):
                 do_sample=True,
                 pad_token_id=self.tokenizer.pad_token_id,
             )
+            policy_output_decoded = self.tokenizer.batch_decode(policy_output, skip_special_tokens=True)
+            revisions = []
+            for i in range(len(policy_output_decoded)):
+                revisions.append([])
+            prev_prompts = batch["prompt"]
+            self.tokenizer.padding_side = "left"
+            for n in range(5):
+                new_prompts = []
+                for i, output in enumerate(policy_output_decoded):
+                    prompt = prev_prompts[i]
+                    untemplated_prompt = batch["untemplated_prompt"][i]
+                    current_revision = output[len(prompt):]
+                    revisions[i].append(current_revision)
+                    new_prompt = self.tokenizer.apply_chat_template(untemplated_prompt, example=current_revision, add_special_tokens=False, tokenize=False)
+                    new_prompts.append(new_prompt)
+                prev_prompts = new_prompts
+                inputs = self.tokenizer(new_prompts, return_tensors="pt", padding="longest", pad_to_max_length=True)
+                n_rlhf_output = model.generate(
+                    input_ids=inputs["input_ids"].cuda(),
+                    attention_mask=inputs["attention_mask"].cuda(),
+                    max_length=700,
+                    do_sample=True,
+                    pad_token_id=self.tokenizer.pad_token_id,
+                )
+                policy_output_decoded = self.tokenizer.batch_decode(n_rlhf_output, skip_special_tokens=True)
+            current_revisions = []
+            for i, output in enumerate(policy_output_decoded):
+                prompt = prev_prompts[i]
+                untemplated_prompt = batch["untemplated_prompt"][i]
+                current_revision = output[len(prompt):]
+                revisions[i].append(current_revision)
 
             # if reference_output in batch use that otherwise use the reference model
             if "reference_output" in batch:
@@ -1348,7 +1384,7 @@ class SRPOTrainer(Trainer):
         reference_output = pad_to_length(reference_output, self.max_length, self.tokenizer.pad_token_id)
         reference_output_decoded = self.tokenizer.batch_decode(reference_output, skip_special_tokens=True)
 
-        return policy_output_decoded, reference_output_decoded
+        return policy_output_decoded, reference_output_decoded, revisions
 
     def prediction_step(
         self,
@@ -1420,21 +1456,29 @@ class SRPOTrainer(Trainer):
             random_batch = self.data_collator(random_batch_dataset)
             random_batch = self._prepare_inputs(random_batch)
 
-            policy_output_decoded, ref_output_decoded = self.get_batch_samples(self.model, random_batch)
+            policy_output_decoded, ref_output_decoded, revisions = self.get_batch_samples(self.model, random_batch)
 
-            self.log(
-                {
-                    "game_log": wandb.Table(
-                        columns=["Prompt", "Policy", "Ref Model"],
-                        rows=[
-                            [prompt, pol[len(prompt) :], ref[len(prompt) :]]
-                            for prompt, pol, ref in zip(
-                                random_batch["prompt"], policy_output_decoded, ref_output_decoded
-                            )
-                        ],
-                    )
-                }
-            )
+            rows = []
+            # self.tokenizer.batch_decode(random_batch["zero_prompt_prompt_input_ids"])
+            for prompt, pol, ref, revision in zip(random_batch["prompt"], policy_output_decoded, ref_output_decoded, revisions):
+                rows.append([
+                    prompt, 
+                    pol[len(prompt):], 
+                    ref[len(prompt):], 
+                    revision[0], 
+                    revision[1], 
+                    revision[2], 
+                    revision[3], 
+                    revision[4], 
+                    revision[5]
+                ])
+            wandb_table = {
+                "game_log": wandb.Table(
+                    columns=["Prompt", "Policy", "Ref Model", "0 Revision", "1 Revision", "2 Revision", "3 Revision", "4 Revision", "5 Revision"],
+                    rows=rows,
+                )
+            }
+            wandb.log(wandb_table)
             self.state.log_history.pop()
 
         # Base evaluation

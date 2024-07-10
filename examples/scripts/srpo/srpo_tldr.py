@@ -25,11 +25,13 @@ os.environ["WANDB_LOG_MODEL"] = "end"
 python examples/scripts/srpo/srpo_tldr.py \
     --model_name_or_path=./srpo_sft_1 \
     --per_device_train_batch_size=32 \
-    --learning_rate=2e-4 \
-    --gradient_accumulation_steps=8 \
-    --logging_steps 10 \
-    --eval_steps 500 \
-    --output_dir="srpo_tldr" \
+    --learning_rate=5e-5 \
+    --gradient_accumulation_steps=4 \
+    --logging_steps=10 \
+    --eval_steps=100 \
+    --eval_strategy="steps" \
+    --save_steps=100 \
+    --output_dir="srpo_tldr_new" \
     --logging_first_step \
     --no_remove_unused_columns \
     --report_to=wandb \
@@ -41,6 +43,9 @@ python examples/scripts/srpo/srpo_tldr.py \
     --lora_r=16 \
     --lora_alpha=32 \
     --num_train_epochs=5 \
+    --max_length=700 \
+    --max_prompt_length=700 \
+    --generate_during_eval=True \
     --gradient_checkpointing
 
 
@@ -151,8 +156,21 @@ if __name__ == "__main__":
     else:
         model_ref = None
     tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path)
-    if tokenizer.chat_template is None:
-        tokenizer.chat_template = SIMPLE_QUERY_CHAT_TEMPLATE
+    # if tokenizer.chat_template is None:
+    #     tokenizer.chat_template = SIMPLE_QUERY_CHAT_TEMPLATE
+
+    tokenizer.chat_template = """Below is a reddit POST and the corresponding SUBREDDIT and TITLE{{", and an EXAMPLE SUMMARY." if example else "."}}
+Write a both precise and concise summary of the contents of the POST.
+{{messages}}
+{%- if example %}
+EXAMPLE SUMMARY: {{example + "\n"}}
+{%- endif %}
+
+TL;DR:
+{%- if answer %}
+{{answer}}
+{%- endif %}
+"""
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
     # if tokenizer.chat_template is None:
     #     tokenizer.chat_template = "{% for message in messages %}{{message['role'] + ': ' + message['content'] + '\n\n'}}{% endfor %}{{ eos_token }}"
@@ -188,6 +206,12 @@ if __name__ == "__main__":
             row["prompt"] = row["prompt"][:-6]
         row["chosen"] = row["chosen"][1]["content"]
         row["rejected"] = row["rejected"][1]["content"]
+        if len(row["chosen"]) > len(row["rejected"]):
+            longest = len(tokenizer.apply_chat_template(row["prompt"], example=row["chosen"], padding=False)) + len(row["chosen"])
+        else:
+            longest = len(tokenizer.apply_chat_template(row["prompt"], example=row["rejected"], padding=False)) + len(row["rejected"])
+
+        row["longest_length"] = longest
         # row["chosen"] = tokenizer.apply_chat_template(
         #     row["chosen"],
         #     padding=False,
@@ -202,32 +226,26 @@ if __name__ == "__main__":
         # )
         return row
 
-    def process_dpo(row):
-        row["chosen"] = tokenizer.apply_chat_template(row["chosen"], tokenize=False)
-        row["rejected"] = tokenizer.apply_chat_template(row["rejected"], tokenize=False)
-        return row
-
     # train_dataset = train_dataset.map(
     train_dataset = train_dataset.map(
          process,
          num_proc=multiprocessing.cpu_count(),
          # load_from_cache_file=False,
     )
-    # eval_dataset = eval_dataset.select(range(100)).map(
-    #     process,
-    #     num_proc=multiprocessing.cpu_count(),
-    #     # load_from_cache_file=False,
-    # )
+    eval_dataset = eval_dataset.map(
+        process,
+        num_proc=multiprocessing.cpu_count(),
+        # load_from_cache_file=False,
+    )
 
+    print("***STARTING LENGTH", len(train_dataset))
+    train_dataset = train_dataset.filter(lambda x: x["longest_length"] <= 700)
+    print("***FILTERED LENGTH", len(train_dataset))
+    eval_dataset = eval_dataset.filter(lambda x: x["longest_length"] <= 700).select(range(1000))
     ################
     # Training
     ################
-    training_args.prefix_zero_prompt = """Below is a reddit POST and the corresponding SUBREDDIT and TITLE.
-Write a both precise and concise summary of the contents of the POST."""
-    training_args.prefix_n_prompt = """Below is a reddit POST and the corresponding SUBREDDIT, TITLE, and an EXAMPLE
-SUMMARY. Write a both precise and concise summary of the contents of the POST."""
-
-    training_args.post_revision_prompt = "TL;DR:"
+    
     training_args.dataset_num_proc = multiprocessing.cpu_count()
     with init_context:
         trainer = SRPOTrainer(
@@ -235,7 +253,7 @@ SUMMARY. Write a both precise and concise summary of the contents of the POST.""
             model_ref,
             args=training_args,
             train_dataset=train_dataset,
-            # eval_dataset=train_dataset,
+            eval_dataset=eval_dataset,
             tokenizer=tokenizer,
             peft_config=get_peft_config(model_config),
             callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
