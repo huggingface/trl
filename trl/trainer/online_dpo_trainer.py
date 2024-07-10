@@ -412,7 +412,7 @@ class OnlineDPOTrainer(RLOOTrainer):
 
             # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
             for ppo_epoch_idx in range(args.num_ppo_epochs):
-                b_inds = np.arange(args.local_batch_size)
+                b_inds = np.random.permutation(args.local_batch_size)
                 minibatch_idx = 0
                 all_chosen_rewards = []
                 all_rejected_rewards = []
