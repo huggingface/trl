@@ -55,9 +55,10 @@ import multiprocessing
 import os
 from contextlib import nullcontext
 
-TRL_USE_RICH = os.environ.get("TRL_USE_RICH", False)
-
 from trl.commands.cli_utils import DPOScriptArguments, init_zero_verbose, TrlParser
+from trl.env_utils import strtobool
+
+TRL_USE_RICH = strtobool(os.getenv("TRL_USE_RICH", "0"))
 
 if TRL_USE_RICH:
     init_zero_verbose()
