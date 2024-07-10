@@ -11,39 +11,43 @@ from transformers import (
 
 from trl import ModelConfig
 from trl.trainer.ppov2_trainer import PPOv2Config, PPOv2Trainer
-from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
+from trl.trainer.utils import ZEPHYR_CHAT_TEMPLATE
 
 
 """
-python examples/scripts/ppo/ppo_tldr.py \
+python -i examples/scripts/ppo/ppo_zephyr.py \
     --learning_rate 3e-6 \
-    --output_dir models/minimal/ppo \
+    --output_dir models/ppo/ppo \
+    --per_device_train_batch_size 1 \
+    --gradient_accumulation_steps 32 \
+    --total_episodes 10000 \
+    --model_name_or_path EleutherAI/pythia-1b-deduped \
+    --sft_model_path EleutherAI/pythia-1b-deduped  \
+    --reward_model_path EleutherAI/pythia-1b-deduped  \
+    --non_eos_penalty \
+    --stop_token eos \
+    --response_length 512 \
+
+accelerate launch --num_processes 7 --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
+    examples/scripts/ppo/ppo_zephyr.py \
+    --num_ppo_epochs 1 \
+    --num_mini_batches 1 \
+    --learning_rate 1e-6 \
+    --output_dir models/ppo/ppo_zephyr_1e-6_warmup_0.2 \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 64 \
-    --total_episodes 30000 \
-    --model_name_or_path EleutherAI/pythia-1b-deduped \
-    --sft_model_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr \
-    --reward_model_path cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr \
+    --local_rollout_forward_batch_size 4 \
+    --total_episodes 300000 \
+    --model_name_or_path alignment-handbook/zephyr-7b-sft-full \
+    --sft_model_path alignment-handbook/zephyr-7b-sft-full \
+    --reward_model_path vwxyzjn/rm_zephyr \
+    --kl_coef 0.10 \
     --non_eos_penalty \
     --stop_token eos \
-    --response_length 53 \
-    --sanity_check
-
-accelerate launch --num_processes 3 --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/scripts/ppo/ppo_tldr.py \
-    --output_dir models/minimal/ppo_tldr \
-    --learning_rate 3e-6 \
-    --per_device_train_batch_size 16 \
-    --gradient_accumulation_steps 4 \
-    --total_episodes 1000000 \
-    --model_name_or_path EleutherAI/pythia-1b-deduped \
-    --sft_model_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr \
-    --reward_model_path cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr \
-    --local_rollout_forward_batch_size 16 \
-    --non_eos_penalty \
-    --stop_token eos \
+    --response_length 1024 \
+    --warmup_ratio 0.2 \
     --generation_backend vllm \
-    --vllm_device cuda:3
+    --vllm_device cuda:7
 """
 
 
@@ -59,32 +63,38 @@ if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained(
         model_config.model_name_or_path,
         padding_side="left",
-        trust_remote_code=model_config.trust_remote_code,
+        trust_remote_code=True,
     )
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
     if tokenizer.chat_template is None:
-        tokenizer.chat_template = SIMPLE_QUERY_CHAT_TEMPLATE
+        tokenizer.chat_template = ZEPHYR_CHAT_TEMPLATE
     value_model = AutoModelForSequenceClassification.from_pretrained(
-        config.reward_model_path, trust_remote_code=model_config.trust_remote_code, num_labels=1
+        config.reward_model_path,
+        attn_implementation="flash_attention_2",
+        num_labels=1,
     )
     reward_model = AutoModelForSequenceClassification.from_pretrained(
-        config.reward_model_path, trust_remote_code=model_config.trust_remote_code, num_labels=1
+        config.reward_model_path,
+        attn_implementation="flash_attention_2",
+        num_labels=1,
     )
     ref_policy = AutoModelForCausalLM.from_pretrained(
-        config.sft_model_path, trust_remote_code=model_config.trust_remote_code
+        config.sft_model_path,
+        attn_implementation="flash_attention_2",
     )
     policy = AutoModelForCausalLM.from_pretrained(
-        config.sft_model_path, trust_remote_code=model_config.trust_remote_code
+        config.sft_model_path,
+        attn_implementation="flash_attention_2",
     )
     ################
     # Dataset
     ################
-    raw_datasets = load_dataset("trl-internal-testing/tldr-preference-sft-trl-style")
+    raw_datasets = load_dataset("HuggingFaceH4/ultrachat_200k")
     if config.sanity_check:
         for key in raw_datasets:
             raw_datasets[key] = raw_datasets[key].select(range(1000))
-    train_dataset = raw_datasets["train"]
-    eval_dataset = raw_datasets["validation"]
+    train_dataset = raw_datasets["train_sft"]
+    eval_dataset = raw_datasets["test_sft"]
 
     def prepare_dataset(dataset, tokenizer):
         """pre-tokenize the dataset before training; only collate during training"""
@@ -107,9 +117,8 @@ if __name__ == "__main__":
     train_dataset = prepare_dataset(train_dataset, tokenizer)
     eval_dataset = prepare_dataset(eval_dataset, tokenizer)
     # filtering
-    train_dataset = train_dataset.filter(lambda x: x["lengths"] <= 512)
-    eval_dataset = eval_dataset.filter(lambda x: x["lengths"] <= 512)
-    assert train_dataset[0]["input_ids"][-1] != tokenizer.eos_token_id, "The last token should not be an EOS token"
+    train_dataset = train_dataset.filter(lambda x: x["lengths"] <= 1024)
+    eval_dataset = eval_dataset.filter(lambda x: x["lengths"] <= 1024)
     ################
     # Training
     ################
@@ -125,6 +134,5 @@ if __name__ == "__main__":
     )
     trainer.train()
     trainer.save_model(config.output_dir)
-    if config.push_to_hub:
-        trainer.push_to_hub()
+    trainer.push_to_hub()
     trainer.generate_completions()

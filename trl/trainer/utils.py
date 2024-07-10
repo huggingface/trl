@@ -25,6 +25,7 @@ from accelerate.state import AcceleratorState, PartialState
 from accelerate.utils import is_deepspeed_available
 from rich.console import Console, Group
 from rich.live import Live
+from rich.markup import escape
 from rich.panel import Panel
 from rich.progress import Progress
 from rich.table import Table
@@ -949,7 +950,9 @@ def print_rich_table(df: pd.DataFrame) -> Table:
     for column in df.columns:
         table.add_column(column)
     for _, row in df.iterrows():
-        table.add_row(*row.astype(str).tolist())
+        row_list = row.astype(str).tolist()
+        row_list = [escape(item) for item in row_list]
+        table.add_row(*row_list)
     console.print(table)
 
 
@@ -959,6 +962,9 @@ SIMPLE_SFT_CHAT_TEMPLATE = "{% for message in messages %}{{' ' + message['conten
 SIMPLE_QUERY_CHAT_TEMPLATE = "{% for message in messages %}{{' ' + message['content']}}{% endfor %}"
 # SIMPLE_QUERY_CHAT_TEMPLATE is a variant of SIMPLE_SFT_CHAT_TEMPLATE, which does not end the content with EOS token. The idea
 # is to have the generated response to end with an EOS token, but the query itself should not end with EOS tokens.
+
+ZEPHYR_CHAT_TEMPLATE = "{% for message in messages %}\n{% if message['role'] == 'user' %}\n{{ '<|user|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'system' %}\n{{ '<|system|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'assistant' %}\n{{ '<|assistant|>\n'  + message['content'] + eos_token }}\n{% endif %}\n{% if loop.last and add_generation_prompt %}\n{{ '<|assistant|>' }}\n{% endif %}\n{% endfor %}"
+# ZEPHYR_CHAT_TEMPLATE is taken from https://huggingface.co/HuggingFaceH4/zephyr-7b-beta
 
 
 @dataclass
