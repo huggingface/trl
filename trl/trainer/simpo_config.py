@@ -37,6 +37,8 @@ class SimPOConfig(TrainingArguments):
             The beta factor in SimPO loss.
         gamma_beta_ratio (`float`, defaults to 0.25):
             The ratio between the target reward margin (gamma) and beta in SimPO loss.
+        sft_weight (`float`, defaults to 0.0):
+            SFT loss weight added to the SimPO loss (0.0 is not using SFT).
         label_smoothing (`float`, defaults to 0):
             The label smoothing factor. This argument is required if you want to use the default data collator.
         loss_type (`str`, defaults to `sigmoid`):
@@ -66,6 +68,7 @@ class SimPOConfig(TrainingArguments):
 
     beta: float = 2.0
     gamma_beta_ratio: float = 0.25
+    sft_weight: float = 0.0
     label_smoothing: float = 0
     loss_type: Literal["sigmoid", "hinge"] = "sigmoid"
     disable_dropout: bool = True
@@ -79,3 +82,4 @@ class SimPOConfig(TrainingArguments):
     model_init_kwargs: Optional[Dict] = None
 
     dataset_num_proc: Optional[int] = None
+    
