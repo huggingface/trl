@@ -140,13 +140,26 @@ if __name__ == "__main__":
     # print("***MODEL DIR", model_dir)
     # model = AutoModelForCausalLM.from_pretrained(model_dir, **model_kwargs)
     untrained_model_name_or_path = "EleutherAI/pythia-1b-deduped"
-    sft_model_name_or_path = "./srpo_sft"
-    rlhf_model_name_or_path = "./srpo_tldr"
+    sft_model_name_or_path = "./srpo_sft_1"
+    rlhf_model_name_or_path = "./srpo_tldr_real"
     model_sft = AutoModelForCausalLM.from_pretrained(sft_model_name_or_path, **model_kwargs)
     model_untrained = AutoModelForCausalLM.from_pretrained(untrained_model_name_or_path, **model_kwargs)
     model_rlhf = AutoModelForCausalLM.from_pretrained(rlhf_model_name_or_path, **model_kwargs)
     model_ref = None
     tokenizer = AutoTokenizer.from_pretrained(untrained_model_name_or_path)
+    tokenizer.chat_template = """Below is a reddit POST and the corresponding SUBREDDIT and TITLE{{", and an EXAMPLE SUMMARY." if example else "."}}
+Write a both precise and concise summary of the contents of the POST.
+{{messages}}
+{%- if example %}
+EXAMPLE SUMMARY: {{example + "\n"}}
+{%- endif %}
+
+TL;DR:
+{%- if answer %}
+{{answer}}
+{%- endif %}
+"""
+
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     if tokenizer.chat_template is None:
@@ -231,9 +244,9 @@ SUMMARY. Write a both precise and concise summary of the contents of the POST.""
     model_rlhf.eval()
 
     for item in test_dataset:
-        zero_prompt = prefix_zero_prompt + "\n" + item["prompt"] + post_revision_prompt
-        print("ITEM", zero_prompt)
-        inputs = tokenizer(zero_prompt, return_tensors="pt")
+        templated_zero = tokenizer.apply_chat_template(item["prompt"], add_special_tokens=False, tokenize=False)
+        print("ITEM", templated_zero)
+        inputs = tokenizer(templated_zero, return_tensors="pt")
         untrained_output = model_untrained.generate(
             input_ids=inputs["input_ids"].cuda(),
             attention_mask=inputs["attention_mask"].cuda(),
@@ -244,20 +257,36 @@ SUMMARY. Write a both precise and concise summary of the contents of the POST.""
         sft_output = model_sft.generate(
             input_ids=inputs["input_ids"].cuda(),
             attention_mask=inputs["attention_mask"].cuda(),
-            max_length=1024,
+            max_length=700,
             do_sample=True,
             pad_token_id=tokenizer.pad_token_id,
         )
         rlhf_output = model_rlhf.generate(
             input_ids=inputs["input_ids"].cuda(),
             attention_mask=inputs["attention_mask"].cuda(),
-            max_length=1024,
+            max_length=700,
             do_sample=True,
             pad_token_id=tokenizer.pad_token_id,
         )
         untrained_decoded_output = tokenizer.batch_decode(untrained_output)
-        sft_decoded_output = tokenizer.batch_decode(sft_output)
-        rlhf_decoded_output = tokenizer.batch_decode(rlhf_output)
+        sft_decoded_output = tokenizer.batch_decode(sft_output)[0]
+        rlhf_decoded_output = tokenizer.batch_decode(rlhf_output)[0]
+        print(f"SFT: {sft_decoded_output[len(templated_zero):]}")
+        current_tldr = rlhf_decoded_output[len(templated_zero):]
+        print(f"0 Revision {current_tldr}")
+        for n in range(5):
+            templated_n = tokenizer.apply_chat_template(item["prompt"], example=current_tldr, add_special_tokens=False, tokenize=False)
+            n_inputs = tokenizer(templated_n, return_tensors="pt")
+            n_rlhf_output = model_rlhf.generate(
+                input_ids=n_inputs["input_ids"].cuda(),
+                attention_mask=n_inputs["attention_mask"].cuda(),
+                max_length=700,
+                do_sample=True,
+                pad_token_id=tokenizer.pad_token_id,
+            )
+            n_rlhf_decoded_output = tokenizer.batch_decode(n_rlhf_output)[0]
+            current_tldr = n_rlhf_decoded_output[len(templated_n):]
+            print(f"{n + 1} REVISION {current_tldr}")
         import pdb; pdb.set_trace()
     # with save_context:
     #     trainer.save_model(training_args.output_dir)
