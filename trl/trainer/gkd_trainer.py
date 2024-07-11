@@ -107,7 +107,7 @@ class GKDTrainer(SFTTrainer):
         kl_student = F.kl_div(interpolated_probs.log(), student_probs, reduction="none")
 
         # Combine KL divergences
-        jsd = beta * kl_teacher + (1 - beta) * kl_student
+        jsd = beta * kl_student + (1 - beta) * kl_teacher
 
         # Apply reduction
         if reduction == "batchmean":
