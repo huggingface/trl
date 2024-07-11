@@ -29,20 +29,24 @@ python examples/scripts/online_dpo.py \
     --stop_token eos \
     --response_length 53 \
     --sanity_check
-python examples/scripts/online_dpo.py \
+accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
+    examples/scripts/online_dpo.py \
     --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
     --learning_rate 3e-6 \
     --output_dir models/minimal/online_dpo \
-    --per_device_train_batch_size 1 \
-    --gradient_accumulation_steps 64 \
-    --total_episodes 30000 \
+    --per_device_train_batch_size 16 \
+    --local_rollout_forward_batch_size 32 \
+    --gradient_accumulation_steps 4 \
+    --total_episodes 1000000 \
     --model_name_or_path EleutherAI/pythia-1b-deduped \
     --sft_model_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr \
     --reward_model_path cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr \
+    --save_strategy no \
     --non_eos_penalty \
     --stop_token eos \
+    --beta 0.1 \
     --response_length 53 \
-    --sanity_check
+    --push_to_hub
 """
 
 
@@ -51,7 +55,7 @@ class ScriptArguments:
     dataset_name: str = None
     dataset_text_field: str = "prompt"
     dataset_train_split: str = "train"
-    dataset_test_split: Optional[str] = "test"
+    dataset_test_split: Optional[str] = "validation"
     max_length: int = 512
 
 
