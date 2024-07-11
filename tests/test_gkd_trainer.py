@@ -11,28 +11,19 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import copy
 import os
 import tempfile
 import unittest
 
-import numpy as np
-import pytest
-import torch
-from datasets import Dataset, Image, Sequence
+from datasets import Dataset
 from transformers import (
     AutoModelForCausalLM,
-    AutoProcessor,
     AutoTokenizer,
-    LlavaForConditionalGeneration,
-    TrainingArguments,
 )
 
 from trl import GKDConfig, GKDTrainer
-from trl.import_utils import is_peft_available, is_pil_available
-from trl.trainer import ConstantLengthDataset, DataCollatorForCompletionOnlyLM
-
-from .testing_utils import require_peft, requires_pil
+from trl.import_utils import is_peft_available
+from trl.trainer import ConstantLengthDataset
 
 
 def formatting_prompts_func(example):
@@ -49,7 +40,8 @@ def formatting_prompts_func_batched(example):
 
 
 if is_peft_available():
-    from peft import LoraConfig, PeftModel
+    pass
+
 
 class GKDTrainerTester(unittest.TestCase):
     r""" """

@@ -70,9 +70,54 @@ class GKDTrainer(SFTTrainer):
         else:
             self.teacher_model = self.accelerator.prepare_model(self.teacher_model, evaluation_mode=True)
 
-        self.loss_function = nn.KLDivLoss(reduction="batchmean", log_target=True)
         self.lmbda = args.lmbda
+        self.beta = args.beta
         self.temperature = args.temperature
+
+    @staticmethod
+    def generalized_jsd_loss(student_logits, teacher_logits, beta=0.5, temperature=1.0, reduction="batchmean"):
+        """
+        Compute the Generalized Jensen-Shannon Divergence loss for knowledge distillation using F.kl_div.
+
+        Args:
+        - student_logits: Tensor of shape (batch_size, sequence_length, vocab_size)
+        - teacher_logits: Tensor of shape (batch_size, sequence_length, vocab_size)
+        - beta: Interpolation coefficient between 0 and 1 (default: 0.5)
+        - temperature: Softmax temperature (default: 1.0)
+        - reduction: Specifies the reduction to apply to the output (default: 'batchmean')
+
+        Returns:
+        - loss: Scalar tensor with the generalized JSD loss
+        """
+
+        # Apply temperature scaling
+        student_logits = student_logits / temperature
+        teacher_logits = teacher_logits / temperature
+
+        # Compute log probabilities for student and probabilities for teacher
+        student_log_probs = F.log_softmax(student_logits, dim=-1)
+        teacher_probs = F.softmax(teacher_logits, dim=-1)
+
+        # Compute the interpolated distribution
+        student_probs = student_log_probs.exp()
+        interpolated_probs = beta * teacher_probs + (1 - beta) * student_probs
+
+        # Compute KL divergences using F.kl_div
+        kl_teacher = F.kl_div(interpolated_probs.log(), teacher_probs, reduction="none")
+        kl_student = F.kl_div(interpolated_probs.log(), student_probs, reduction="none")
+
+        # Combine KL divergences
+        jsd = beta * kl_teacher + (1 - beta) * kl_student
+
+        # Apply reduction
+        if reduction == "batchmean":
+            return jsd.sum() / (jsd.size(0) * jsd.size(1))
+        elif reduction == "sum":
+            return jsd.sum()
+        elif reduction == "mean":
+            return jsd.mean()
+        else:
+            return jsd
 
     def compute_loss(self, model, inputs, return_outputs=False):
         # compute student output
@@ -82,10 +127,9 @@ class GKDTrainer(SFTTrainer):
         self.teacher_model.eval()
         outputs_teacher = self.teacher_model(**inputs)
 
-        # compute forward KL divergence of student w.r.t teacher
-        loss = self.loss_function(
-            F.log_softmax(outputs_student.logits, dim=-1),
-            F.log_softmax(outputs_teacher.logits.detach(), dim=-1),
+        # compute the generalized JSD loss of student w.r.t teacher with parameter beta
+        loss = self.generalized_jsd_loss(
+            outputs_student.logits, outputs_teacher.logits, beta=self.beta
         )
 
         # Return weighted student loss

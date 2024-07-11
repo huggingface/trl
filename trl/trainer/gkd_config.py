@@ -21,6 +21,7 @@ from .sft_config import SFTConfig
 class GKDConfig(SFTConfig):
     temperature: float = 1.0
     lmbda: float = 1.0
+    beta: float = 0.5
     max_new_tokens_response: int = 128
     loss_type: str = "kl"
     teacher_model_name_or_path: Optional[str] = None
