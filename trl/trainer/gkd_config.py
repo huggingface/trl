@@ -40,6 +40,7 @@ class GKDConfig(SFTConfig):
         disable_dropout (:obj:`bool`, `optional`, defaults to `True`):
             Whether to disable dropout in the model being trained.
     """
+
     temperature: float = 1.0
     lmbda: float = 0.5
     beta: float = 0.5

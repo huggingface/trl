@@ -103,8 +103,8 @@ class GKDTrainer(SFTTrainer):
         interpolated_probs = beta * teacher_probs + (1 - beta) * student_probs
 
         # Compute KL divergences using F.kl_div
-        kl_teacher = F.kl_div(interpolated_probs.log(), teacher_probs, reduction="none")
-        kl_student = F.kl_div(interpolated_probs.log(), student_probs, reduction="none")
+        kl_teacher = F.kl_div(interpolated_probs.log(), teacher_logits, reduction="none", log_target=True)
+        kl_student = F.kl_div(interpolated_probs.log(), student_logits, reduction="none", log_target=True)
 
         # Combine KL divergences
         jsd = beta * kl_student + (1 - beta) * kl_teacher
@@ -128,9 +128,7 @@ class GKDTrainer(SFTTrainer):
         outputs_teacher = self.teacher_model(**inputs)
 
         # compute the generalized JSD loss of student w.r.t teacher with parameter beta
-        loss = self.generalized_jsd_loss(
-            outputs_student.logits, outputs_teacher.logits, beta=self.beta
-        )
+        loss = self.generalized_jsd_loss(outputs_student.logits, outputs_teacher.logits, beta=self.beta)
 
         # Return weighted student loss
         return (loss, outputs_student) if return_outputs else loss
