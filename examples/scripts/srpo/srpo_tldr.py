@@ -25,13 +25,13 @@ os.environ["WANDB_LOG_MODEL"] = "end"
 python examples/scripts/srpo/srpo_tldr.py \
     --model_name_or_path=./srpo_sft_1 \
     --per_device_train_batch_size=32 \
-    --learning_rate=5e-5 \
+    --learning_rate=2e-5 \
     --gradient_accumulation_steps=4 \
     --logging_steps=10 \
     --eval_steps=100 \
     --eval_strategy="steps" \
     --save_steps=100 \
-    --output_dir="srpo_tldr_new" \
+    --output_dir="srpo_tldr_peft_fix" \
     --logging_first_step \
     --no_remove_unused_columns \
     --report_to=wandb \
@@ -47,6 +47,35 @@ python examples/scripts/srpo/srpo_tldr.py \
     --max_prompt_length=700 \
     --generate_during_eval=True \
     --gradient_checkpointing
+
+#Checkpoint continue
+python examples/scripts/srpo/srpo_tldr.py \
+    --model_name_or_path=./srpo_sft_1 \
+    --resume_from_checkpoint=./srpo_tldr_peft_fix/checkpoint-300 \
+    --per_device_train_batch_size=32 \
+    --learning_rate=2e-5 \
+    --gradient_accumulation_steps=4 \
+    --logging_steps=10 \
+    --eval_steps=100 \
+    --eval_strategy="steps" \
+    --save_steps=100 \
+    --output_dir="srpo_tldr_peft_fix" \
+    --logging_first_step \
+    --no_remove_unused_columns \
+    --report_to=wandb \
+    --torch_dtype="bfloat16" \
+    --lr_scheduler_type="cosine" \
+    --warmup_steps=150 \
+    --weight_decay=0.1 \
+    --use_peft \
+    --lora_r=16 \
+    --lora_alpha=32 \
+    --num_train_epochs=5 \
+    --max_length=700 \
+    --max_prompt_length=700 \
+    --generate_during_eval=True \
+    --gradient_checkpointing
+
 
 
 # regular:
@@ -257,9 +286,10 @@ TL;DR:
             tokenizer=tokenizer,
             peft_config=get_peft_config(model_config),
             callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
+            
         )
 
-    trainer.train()
+    trainer.train(resume_from_checkpoint="./srpo_tldr_peft_fix/checkpoint-2100")
     # trainer.evaluate()
 
     with save_context:

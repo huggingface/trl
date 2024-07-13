@@ -13,6 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import os
+from tqdm import tqdm
+from alpaca_farm.auto_annotations import PairwiseAutoAnnotator
+import json
 
 os.environ["HUGGINGFACE_CACHE"] = "/workspace/.cache/huggingface"
 os.environ["DATA_DIR"] = "./data"
@@ -141,12 +144,18 @@ if __name__ == "__main__":
     # model = AutoModelForCausalLM.from_pretrained(model_dir, **model_kwargs)
     untrained_model_name_or_path = "EleutherAI/pythia-1b-deduped"
     sft_model_name_or_path = "./srpo_sft_1"
-    rlhf_model_name_or_path = "./srpo_tldr_real"
-    model_sft = AutoModelForCausalLM.from_pretrained(sft_model_name_or_path, **model_kwargs)
-    model_untrained = AutoModelForCausalLM.from_pretrained(untrained_model_name_or_path, **model_kwargs)
-    model_rlhf = AutoModelForCausalLM.from_pretrained(rlhf_model_name_or_path, **model_kwargs)
+    rlhf_model_name_or_path = "./srpo_tldr_peft_fix"
+    rlhf_pretrained_model = "cleanrl/EleutherAI_pythia-1b-deduped__ppo__tldr"
+    
     model_ref = None
     tokenizer = AutoTokenizer.from_pretrained(untrained_model_name_or_path)
+    zero_instruction = """Below is a reddit POST and the corresponding SUBREDDIT and TITLE.
+Write a both precise and concise summary of the contents of the POST.
+"""
+    n_instruction = """Below is a reddit POST and the corresponding SUBREDDIT and TITLE, and an EXAMPLE SUMMARY.
+Write a both precise and concise summary of the contents of the POST.
+"""
+
     tokenizer.chat_template = """Below is a reddit POST and the corresponding SUBREDDIT and TITLE{{", and an EXAMPLE SUMMARY." if example else "."}}
 Write a both precise and concise summary of the contents of the POST.
 {{messages}}
@@ -159,16 +168,8 @@ TL;DR:
 {{answer}}
 {%- endif %}
 """
-
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-    if tokenizer.chat_template is None:
-        tokenizer.chat_template = "{% for message in messages %}{{message['role'] + ': ' + message['content'] + '\n\n'}}{% endfor %}{{ eos_token }}"
-    if args.ignore_bias_buffers:
-        # torch distributed hack
-        model._ddp_params_and_buffers_to_ignore = [
-            name for name, buffer in model.named_buffers() if buffer.dtype == torch.bool
-        ]
 
     ################
     # Optional rich context managers
@@ -186,71 +187,75 @@ TL;DR:
     raw_datasets = load_dataset("trl-internal-testing/tldr-preference-sft-trl-style")
     test_dataset = raw_datasets["test"]
 
-    if args.sanity_check:
-        for key in ds:
-            ds[key] = ds[key].select(range(50))
+    # if args.sanity_check:
+    #     for key in ds:
+    #         ds[key] = ds[key].select(range(50))
 
     def process(row):
         if row["prompt"].endswith("TL;DR:"):
             row["prompt"] = row["prompt"][:-6]
-        # row["chosen"] = tokenizer.apply_chat_template(
-        #     row["chosen"],
-        #     padding=False,
-        #     add_generation_prompt=True,
-        #     tokenize=False
-        # )
-        # row["rejected"] = tokenizer.apply_chat_template(
-        #     row["rejected"], 
-        #     padding=False,
-        #     add_generation_prompt=True,
-        #     tokenize=False
-        # )
+        row["message"] = row["messages"][1]["content"]
+        longest = len(tokenizer.apply_chat_template(row["prompt"], example=row["message"], padding=False)) + 30
+
+        row["longest_length"] = longest
+        return row
+
         return row
 
     # train_dataset = train_dataset.map(
-    test_dataset = test_dataset.select(range(1000)).map(
+    test_dataset = test_dataset.map(
          process,
          num_proc=multiprocessing.cpu_count(),
     )
 
-    ################
-    # Training
-    ################
-    prefix_zero_prompt = """Below is a reddit POST and the corresponding SUBREDDIT and TITLE.
-Write a both precise and concise summary of the contents of the POST."""
-    prefix_n_prompt = """Below is a reddit POST and the corresponding SUBREDDIT, TITLE, and an EXAMPLE
-SUMMARY. Write a both precise and concise summary of the contents of the POST."""
+    test_dataset = test_dataset.filter(lambda x: x["longest_length"] <= 700).select(range(100))
+    
+    model_sft = AutoModelForCausalLM.from_pretrained(sft_model_name_or_path, **model_kwargs)
+    model_untrained = AutoModelForCausalLM.from_pretrained(untrained_model_name_or_path, **model_kwargs)
+    model_rlhf = AutoModelForCausalLM.from_pretrained(rlhf_model_name_or_path, **model_kwargs)
+    model_rlhf_pretrained = AutoModelForCausalLM.from_pretrained(rlhf_pretrained_model, **model_kwargs)
 
-    post_revision_prompt = "TL;DR:"
-    training_args.dataset_num_proc = multiprocessing.cpu_count()
-    # with init_context:
-    #     trainer = SRPOTrainer(
-    #         model,
-    #         model_ref,
-    #         args=training_args,
-    #         # train_dataset=train_dataset,
-    #         eval_dataset=train_dataset,
-    #         tokenizer=tokenizer,
-    #         peft_config=get_peft_config(model_config),
-    #         callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
-    #     )
-
-    print("BEFORE ITEMS")
     model_untrained.cuda()
     model_sft.cuda()
     model_rlhf.cuda()
+    model_rlhf_pretrained.cuda()
     model_untrained.eval()
     model_sft.eval()
     model_rlhf.eval()
+    model_rlhf_pretrained.eval()
 
-    for item in test_dataset:
+    annotator = PairwiseAutoAnnotator()
+    model_names = ["RLHF Pretrained", "Untrained", "SFT", "RLHF"] + [f"RLHF Revision {i+1}" for i in range(5)]
+    preferred = {}
+    generations = []
+    for m in model_names:
+        preferred[m] = 0
+
+    import pdb; pdb.set_trace()
+    should_print = False
+
+    total_alpaca_inputs = []
+    prompts = []
+    for item in tqdm(test_dataset):
+        generation = {}
+        post = item["post"]
+        sft_summary = item["summary"] 
+        zero_alpaca_farm_input_untrained = {"instruction": zero_instruction, "input": post, "output_1": sft_summary}
+        zero_alpaca_farm_input_sft = {"instruction": zero_instruction, "input": post, "output_1": sft_summary}
+        zero_alpaca_farm_input_rlhf = {"instruction": zero_instruction, "input": post, "output_1": sft_summary}
+        zero_alpaca_farm_input_rlhf_pretrained = {"instruction": zero_instruction, "input": post, "output_1": sft_summary}
+        n_alpaca_farm_input = {"instruction": n_instruction, "input": post, "output_1": sft_summary}
         templated_zero = tokenizer.apply_chat_template(item["prompt"], add_special_tokens=False, tokenize=False)
-        print("ITEM", templated_zero)
+        rlhf_templated_zero = item["prompt"] + "TL;DR:"
+        if should_print:
+            print("******************************************************************")
+            print("ITEM", templated_zero)
         inputs = tokenizer(templated_zero, return_tensors="pt")
+        rlhf_inputs = tokenizer(rlhf_templated_zero, return_tensors="pt")
         untrained_output = model_untrained.generate(
             input_ids=inputs["input_ids"].cuda(),
             attention_mask=inputs["attention_mask"].cuda(),
-            max_length=1024,
+            max_length=700,
             do_sample=True,
             pad_token_id=tokenizer.pad_token_id,
         )
@@ -268,13 +273,33 @@ SUMMARY. Write a both precise and concise summary of the contents of the POST.""
             do_sample=True,
             pad_token_id=tokenizer.pad_token_id,
         )
-        untrained_decoded_output = tokenizer.batch_decode(untrained_output)
-        sft_decoded_output = tokenizer.batch_decode(sft_output)[0]
-        rlhf_decoded_output = tokenizer.batch_decode(rlhf_output)[0]
-        print(f"SFT: {sft_decoded_output[len(templated_zero):]}")
+        rlhf_pretrained_output = model_rlhf_pretrained.generate(
+            input_ids=rlhf_inputs["input_ids"].cuda(),
+            attention_mask=rlhf_inputs["attention_mask"].cuda(),
+            max_length=700,
+            do_sample=True,
+            pad_token_id=tokenizer.pad_token_id,
+        )
+        untrained_decoded_output = tokenizer.batch_decode(untrained_output, skip_special_tokens=True)[0]
+        sft_decoded_output = tokenizer.batch_decode(sft_output, skip_special_tokens=True)[0]
+        rlhf_decoded_output = tokenizer.batch_decode(rlhf_output, skip_special_tokens=True)[0]
+        rlhf_pretrained_decoded_output = tokenizer.batch_decode(rlhf_pretrained_output, skip_special_tokens=True)[0]
+
+        if should_print:
+            print(f"SFT: {sft_decoded_output[len(templated_zero):]}")
+        untrained_tldr = untrained_decoded_output[len(templated_zero):]
+        sft_tldr = sft_decoded_output[len(templated_zero):]
         current_tldr = rlhf_decoded_output[len(templated_zero):]
-        print(f"0 Revision {current_tldr}")
+        rlhf_pretrained_tldr = rlhf_pretrained_decoded_output[len(templated_zero):]
+        zero_alpaca_farm_input_untrained["output_2"] = untrained_tldr
+        zero_alpaca_farm_input_sft["output_2"] = sft_tldr
+        zero_alpaca_farm_input_rlhf["output_2"] = current_tldr
+        zero_alpaca_farm_input_rlhf_pretrained["output_2"] = rlhf_pretrained_tldr
+        if should_print:
+            print(f"0 REVISION {current_tldr}")
+        n_alpaca_farm_inputs = [n_alpaca_farm_input.copy() for a in range(5)]
         for n in range(5):
+
             templated_n = tokenizer.apply_chat_template(item["prompt"], example=current_tldr, add_special_tokens=False, tokenize=False)
             n_inputs = tokenizer(templated_n, return_tensors="pt")
             n_rlhf_output = model_rlhf.generate(
@@ -284,9 +309,36 @@ SUMMARY. Write a both precise and concise summary of the contents of the POST.""
                 do_sample=True,
                 pad_token_id=tokenizer.pad_token_id,
             )
-            n_rlhf_decoded_output = tokenizer.batch_decode(n_rlhf_output)[0]
+            n_rlhf_decoded_output = tokenizer.batch_decode(n_rlhf_output, skip_special_tokens=True)[0]
             current_tldr = n_rlhf_decoded_output[len(templated_n):]
-            print(f"{n + 1} REVISION {current_tldr}")
-        import pdb; pdb.set_trace()
-    # with save_context:
-    #     trainer.save_model(training_args.output_dir)
+            n_alpaca_farm_inputs[n]["output_2"] = current_tldr
+            if should_print:
+                print(f"{n + 1} REVISION {current_tldr}")
+        if should_print:
+            print("Pretrained RLHF", rlhf_pretrained_tldr)
+            print("DATASET TLDR", sft_summary)
+            print("******************************************************************")
+        alpaca_inputs =  [zero_alpaca_farm_input_rlhf_pretrained] + [zero_alpaca_farm_input_untrained] + [zero_alpaca_farm_input_sft] + [zero_alpaca_farm_input_rlhf] + n_alpaca_farm_inputs
+        total_alpaca_inputs.append(alpaca_inputs)
+        
+        prompts.append(post)
+        
+    for i, alpaca_inputs in enumerate(total_alpaca_inputs):
+        result = annotator.annotate_pairs(alpaca_inputs)
+        generation = {"prompt": prompts[i]}
+        for j, res in enumerate(result):
+                # generation[model_names[i]] = {"inputs": alpaca_inputs[i], "preference": res["preference"]}
+                generation[model_names[j]] = {"inputs": alpaca_inputs[j], "preference": res["preference"]}
+                if should_print:
+                    print(f"Model: {model_names[j]}, Preference: {res['preference']}")
+                # import pdb; pdb.set_trace()
+                if res["preference"] == 2:
+                    preferred[model_names[j]] += 1
+        generations.append(generation)
+
+
+    overall = {"generations": generations, "preferred": preferred}
+
+    with open('generations.json', 'w') as f:
+        json.dump(overall, f)
+    

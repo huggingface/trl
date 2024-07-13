@@ -1114,7 +1114,9 @@ class SRPOTrainer(Trainer):
             "chosen_to_chosen_improvement_ratio": chosen_to_chosen_improvement_ratio.detach(),
             "chosen_to_rejected_improvement_ratio": chosen_to_rejected_improvement_ratio.detach(),
             "chosen_zero_ratio": chosen_zero_ratio.detach(),
-            "rejected_zero_ratio": rejected_zero_ratio.detach()
+            "rejected_zero_ratio": rejected_zero_ratio.detach(),
+            "generative_loss": generative_loss.detach(),
+            "self_improvement_loss": self_improvement_loss.detach()
         }
         return losses, reward_ratios
 
@@ -1215,7 +1217,6 @@ class SRPOTrainer(Trainer):
             result["logits"][key] = all_logits[i * len_chosen : (i + 1) * len_chosen]
             
 
-
         # chosen_logps = all_logps[:len_chosen]
         # rejected_logps = all_logps[len_chosen:]
 
@@ -1278,6 +1279,8 @@ class SRPOTrainer(Trainer):
         metrics[f"{prefix}logps/chosen"] = policy_logps["chosen"].detach().mean().cpu()
         metrics[f"{prefix}logits/rejected"] = policy_logits["rejected"].detach().mean().cpu()
         metrics[f"{prefix}logits/chosen"] = policy_logits["chosen"].detach().mean().cpu()
+        for key, item in reward_ratios.items():
+            metrics[f"{prefix}ratios/{key}"] = item.detach().mean().cpu()
         if self.args.rpo_alpha is not None:
             metrics[f"{prefix}nll_loss"] = policy_nll_loss.detach().mean().cpu()
 
@@ -1344,7 +1347,7 @@ class SRPOTrainer(Trainer):
                 n_rlhf_output = model.generate(
                     input_ids=inputs["input_ids"].cuda(),
                     attention_mask=inputs["attention_mask"].cuda(),
-                    max_length=700,
+                    max_length=self.max_length,
                     do_sample=True,
                     pad_token_id=self.tokenizer.pad_token_id,
                 )
