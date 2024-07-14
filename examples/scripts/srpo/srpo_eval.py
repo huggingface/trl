@@ -15,95 +15,28 @@
 
 """
 # SFT trained:
-python examples/scripts/srpo/srpo_eval.py \
-    --per_device_train_batch_size 4 \
-    --per_device_eval_batch_size 4 \
-    --learning_rate 3e-6 \
-    --gradient_accumulation_steps 64 \
-    --logging_steps 10 \
-    --eval_steps 500 \
-    --output_dir="srpo_tldr" \
-    --warmup_steps 150 \
-    --bf16 \
-    --logging_first_step \
-    --no_remove_unused_columns
-
-# RLHF trained:
-python examples/scripts/srpo/srpo_eval.py \
-    --model_name_or_path=./srpo_tldr \
-    --per_device_train_batch_size 4 \
-    --per_device_eval_batch_size 4 \
-    --learning_rate 3e-6 \
-    --gradient_accumulation_steps 64 \
-    --logging_steps 10 \
-    --eval_steps 500 \
-    --output_dir="srpo_tldr" \
-    --warmup_steps 150 \
-    --bf16 \
-    --logging_first_step \
-    --no_remove_unused_columns
-
-untrained:
-python examples/scripts/srpo/srpo_eval.py \
-    --model_name_or_path=EleutherAI/pythia-1b-deduped \
-    --per_device_train_batch_size 4 \
-    --per_device_eval_batch_size 4 \
-    --learning_rate 3e-6 \
-    --gradient_accumulation_steps 64 \
-    --logging_steps 10 \
-    --eval_steps 500 \
-    --output_dir="srpo_tldr" \
-    --warmup_steps 150 \
-    --bf16 \
-    --logging_first_step \
-    --no_remove_unused_columns
+python examples/scripts/srpo/srpo_eval.py
 """
-from tqdm import tqdm
-from alpaca_farm.auto_annotations import PairwiseAutoAnnotator
 import json
-import logging
 import multiprocessing
-import os
-from contextlib import nullcontext
 
-TRL_USE_RICH = os.environ.get("TRL_USE_RICH", False)
+from alpaca_farm.auto_annotations import PairwiseAutoAnnotator
+from tqdm import tqdm
 
-from trl.commands.cli_utils import SRPOScriptArguments, init_zero_verbose, TrlParser
 
-if TRL_USE_RICH:
-    init_zero_verbose()
-    FORMAT = "%(message)s"
+from trl.commands.cli_utils import SRPOScriptArguments, TrlParser
 
-    from rich.console import Console
-    from rich.logging import RichHandler
 
 import torch
-import wandb
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from trl import (
-    SRPOConfig,
-    ModelConfig,
-    get_kbit_device_map,
-    get_quantization_config,
-)
-
-
-if TRL_USE_RICH:
-    logging.basicConfig(
-        format=FORMAT, datefmt="[%X]", handlers=[RichHandler()], level=logging.INFO
-    )
+from trl import ModelConfig, SRPOConfig, get_kbit_device_map, get_quantization_config
 
 
 if __name__ == "__main__":
     parser = TrlParser((SRPOScriptArguments, SRPOConfig, ModelConfig))
     args, training_args, model_config = parser.parse_args_and_config()
-
-    # Force use our print callback
-    if TRL_USE_RICH:
-        training_args.disable_tqdm = True
-        console = Console()
 
     ################
     # Model & Tokenizer
@@ -154,22 +87,6 @@ TL;DR:
         tokenizer.pad_token = tokenizer.eos_token
 
     ################
-    # Optional rich context managers
-    ###############
-    init_context = (
-        nullcontext()
-        if not TRL_USE_RICH
-        else console.status("[bold green]Initializing the DPOTrainer...")
-    )
-    save_context = (
-        nullcontext()
-        if not TRL_USE_RICH
-        else console.status(
-            f"[bold green]Training completed! Saving the model to {training_args.output_dir}"
-        )
-    )
-
-    ################
     # Dataset
     ################
     raw_datasets = load_dataset("trl-internal-testing/tldr-preference-sft-trl-style")
@@ -193,8 +110,6 @@ TL;DR:
         )
 
         row["longest_length"] = longest
-        return row
-
         return row
 
     # train_dataset = train_dataset.map(

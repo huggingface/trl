@@ -39,35 +39,6 @@ python examples/scripts/dpo/dpo_tldr.py \
     --generate_during_eval=True \
     --gradient_checkpointing
 
-#Checkpoint continue
-python examples/scripts/dpo/dpo_tldr.py \
-    --model_name_or_path=./dpo_sft_1 \
-    --resume_from_checkpoint=./dpo_tldr_peft_fix/checkpoint-300 \
-    --per_device_train_batch_size=32 \
-    --learning_rate=2e-5 \
-    --gradient_accumulation_steps=4 \
-    --logging_steps=10 \
-    --eval_steps=100 \
-    --eval_strategy="steps" \
-    --save_steps=100 \
-    --output_dir="dpo_tldr_peft_fix" \
-    --logging_first_step \
-    --no_remove_unused_columns \
-    --report_to=wandb \
-    --torch_dtype="bfloat16" \
-    --lr_scheduler_type="cosine" \
-    --warmup_steps=150 \
-    --weight_decay=0.1 \
-    --use_peft \
-    --lora_r=16 \
-    --lora_alpha=32 \
-    --num_train_epochs=5 \
-    --max_length=700 \
-    --max_prompt_length=700 \
-    --generate_during_eval=True \
-    --gradient_checkpointing
-
-
 
 # regular:
 python examples/scripts/dpo/dpo_tldr.py \
@@ -101,7 +72,8 @@ python examples/scripts/dpo/dpo_tldr.py \
     --lora_r=16 \
     --lora_alpha=8 \
     --no_remove_unused_columns \
-    --report_to=wandb
+    --report_to=wandb \
+    --generate_during_eval=True
 """
 
 import logging
@@ -112,7 +84,6 @@ from contextlib import nullcontext
 TRL_USE_RICH = os.environ.get("TRL_USE_RICH", False)
 
 from trl.commands.cli_utils import DPOScriptArguments, init_zero_verbose, TrlParser
-from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
 
 if TRL_USE_RICH:
     init_zero_verbose()
