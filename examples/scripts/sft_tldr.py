@@ -12,15 +12,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import os
-
-os.environ["HUGGINGFACE_CACHE"] = "/workspace/.cache/huggingface"
-os.environ["DATA_DIR"] = "./data"
-os.environ["HF_DATASETS_CACHE"] = f"{os.environ['HUGGINGFACE_CACHE']}/datasets"
-os.environ["HF_HOME"] = f"{os.environ['HUGGINGFACE_CACHE']}/misc"
-os.environ["TRANSFORMERS_CACHE"] = f"{os.environ['HUGGINGFACE_CACHE']}/transformers"
-os.environ["WANDB_LOG_MODEL"] = "end"
-
 """
 # regular:
 python examples/scripts/srpo/sft_srpo.py \
@@ -96,7 +87,9 @@ from trl.trainer.utils import SIMPLE_SFT_CHAT_TEMPLATE
 tqdm.pandas()
 
 if TRL_USE_RICH:
-    logging.basicConfig(format=FORMAT, datefmt="[%X]", handlers=[RichHandler()], level=logging.INFO)
+    logging.basicConfig(
+        format=FORMAT, datefmt="[%X]", handlers=[RichHandler()], level=logging.INFO
+    )
 
 
 if __name__ == "__main__":
@@ -124,9 +117,11 @@ if __name__ == "__main__":
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
         # load_in_4bit=True,
-        attn_implementation="flash_attention_2"
+        attn_implementation="flash_attention_2",
     )
-    tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path, use_fast=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_config.model_name_or_path, use_fast=True
+    )
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_SFT_CHAT_TEMPLATE
 
@@ -143,12 +138,19 @@ if __name__ == "__main__":
     ################
     # Optional rich context managers
     ###############
-    init_context = nullcontext() if not TRL_USE_RICH else console.status("[bold green]Initializing the SFTTrainer...")
+    init_context = (
+        nullcontext()
+        if not TRL_USE_RICH
+        else console.status("[bold green]Initializing the SFTTrainer...")
+    )
     save_context = (
         nullcontext()
         if not TRL_USE_RICH
-        else console.status(f"[bold green]Training completed! Saving the model to {training_args.output_dir}")
+        else console.status(
+            f"[bold green]Training completed! Saving the model to {training_args.output_dir}"
+        )
     )
+
     def prepare_dataset(dataset, tokenizer):
         """pre-tokenize the dataset before training; only collate during training"""
 
@@ -167,7 +169,6 @@ if __name__ == "__main__":
             load_from_cache_file=not config.sanity_check,
         )
 
-    
     ################
     # Training
     ################

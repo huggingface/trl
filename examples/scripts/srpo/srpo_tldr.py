@@ -12,14 +12,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import os
-
-os.environ["HUGGINGFACE_CACHE"] = "/workspace/.cache/huggingface"
-os.environ["DATA_DIR"] = "./data"
-os.environ["HF_DATASETS_CACHE"] = f"{os.environ['HUGGINGFACE_CACHE']}/datasets"
-os.environ["HF_HOME"] = f"{os.environ['HUGGINGFACE_CACHE']}/misc"
-os.environ["TRANSFORMERS_CACHE"] = f"{os.environ['HUGGINGFACE_CACHE']}/transformers"
-os.environ["WANDB_LOG_MODEL"] = "end"
 """
 # post sft:
 python examples/scripts/srpo/srpo_tldr.py \
