@@ -12,17 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import os
-from tqdm import tqdm
-from alpaca_farm.auto_annotations import PairwiseAutoAnnotator
-import json
 
-os.environ["HUGGINGFACE_CACHE"] = "/workspace/.cache/huggingface"
-os.environ["DATA_DIR"] = "./data"
-os.environ["HF_DATASETS_CACHE"] = f"{os.environ['HUGGINGFACE_CACHE']}/datasets"
-os.environ["HF_HOME"] = f"{os.environ['HUGGINGFACE_CACHE']}/misc"
-os.environ["TRANSFORMERS_CACHE"] = f"{os.environ['HUGGINGFACE_CACHE']}/transformers"
-os.environ["WANDB_LOG_MODEL"] = "end"
 """
 # SFT trained:
 python examples/scripts/srpo/srpo_eval.py \
@@ -68,7 +58,9 @@ python examples/scripts/srpo/srpo_eval.py \
     --logging_first_step \
     --no_remove_unused_columns
 """
-
+from tqdm import tqdm
+from alpaca_farm.auto_annotations import PairwiseAutoAnnotator
+import json
 import logging
 import multiprocessing
 import os
