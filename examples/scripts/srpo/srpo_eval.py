@@ -92,18 +92,16 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl import (
     SRPOConfig,
-    SRPOTrainer,
-    DPOTrainer,
     ModelConfig,
-    RichProgressCallback,
     get_kbit_device_map,
-    get_peft_config,
     get_quantization_config,
 )
 
 
 if TRL_USE_RICH:
-    logging.basicConfig(format=FORMAT, datefmt="[%X]", handlers=[RichHandler()], level=logging.INFO)
+    logging.basicConfig(
+        format=FORMAT, datefmt="[%X]", handlers=[RichHandler()], level=logging.INFO
+    )
 
 
 if __name__ == "__main__":
@@ -133,20 +131,12 @@ if __name__ == "__main__":
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
-    # with wandb.init(entity="frasermince") as run:
-    #     # Pass the name and version of Artifact
-    #     artifact = run.use_artifact('unchart/huggingface/model-qltcdvjl:v1', type='model')
 
-    #     # Download model weights to a folder and return the path
-    #     model_dir = artifact.download()
-
-    # print("***MODEL DIR", model_dir)
-    # model = AutoModelForCausalLM.from_pretrained(model_dir, **model_kwargs)
     untrained_model_name_or_path = "EleutherAI/pythia-1b-deduped"
     sft_model_name_or_path = "./srpo_sft_1"
     rlhf_model_name_or_path = "./srpo_tldr_peft_fix"
     rlhf_pretrained_model = "dpo_tldr"
-    
+
     model_ref = None
     tokenizer = AutoTokenizer.from_pretrained(untrained_model_name_or_path)
     zero_instruction = """Below is a reddit POST and the corresponding SUBREDDIT and TITLE.
@@ -174,11 +164,17 @@ TL;DR:
     ################
     # Optional rich context managers
     ###############
-    init_context = nullcontext() if not TRL_USE_RICH else console.status("[bold green]Initializing the DPOTrainer...")
+    init_context = (
+        nullcontext()
+        if not TRL_USE_RICH
+        else console.status("[bold green]Initializing the DPOTrainer...")
+    )
     save_context = (
         nullcontext()
         if not TRL_USE_RICH
-        else console.status(f"[bold green]Training completed! Saving the model to {training_args.output_dir}")
+        else console.status(
+            f"[bold green]Training completed! Saving the model to {training_args.output_dir}"
+        )
     )
 
     ################
@@ -195,7 +191,14 @@ TL;DR:
         if row["prompt"].endswith("TL;DR:"):
             row["prompt"] = row["prompt"][:-6]
         row["message"] = row["messages"][1]["content"]
-        longest = len(tokenizer.apply_chat_template(row["prompt"], example=row["message"], padding=False)) + 30
+        longest = (
+            len(
+                tokenizer.apply_chat_template(
+                    row["prompt"], example=row["message"], padding=False
+                )
+            )
+            + 30
+        )
 
         row["longest_length"] = longest
         return row
@@ -204,34 +207,41 @@ TL;DR:
 
     # train_dataset = train_dataset.map(
     test_dataset = test_dataset.map(
-         process,
-         num_proc=multiprocessing.cpu_count(),
+        process,
+        num_proc=multiprocessing.cpu_count(),
     )
 
-    test_dataset = test_dataset.filter(lambda x: x["longest_length"] <= 700).select(range(10))
-    
-    model_sft = AutoModelForCausalLM.from_pretrained(sft_model_name_or_path, **model_kwargs)
-    model_untrained = AutoModelForCausalLM.from_pretrained(untrained_model_name_or_path, **model_kwargs)
-    model_rlhf = AutoModelForCausalLM.from_pretrained(rlhf_model_name_or_path, **model_kwargs)
-    model_rlhf_pretrained = AutoModelForCausalLM.from_pretrained(rlhf_pretrained_model, **model_kwargs)
+    test_dataset = test_dataset.filter(lambda x: x["longest_length"] <= 700).select(
+        range(10)
+    )
 
-    model_untrained.cuda()
-    model_sft.cuda()
-    model_rlhf.cuda()
-    model_rlhf_pretrained.cuda()
-    model_untrained.eval()
-    model_sft.eval()
-    model_rlhf.eval()
-    model_rlhf_pretrained.eval()
+    model_sft = AutoModelForCausalLM.from_pretrained(
+        sft_model_name_or_path, **model_kwargs
+    )
+    model_untrained = AutoModelForCausalLM.from_pretrained(
+        untrained_model_name_or_path, **model_kwargs
+    )
+    model_rlhf = AutoModelForCausalLM.from_pretrained(
+        rlhf_model_name_or_path, **model_kwargs
+    )
+    model_rlhf_pretrained = AutoModelForCausalLM.from_pretrained(
+        rlhf_pretrained_model, **model_kwargs
+    )
+
+    model_untrained.cuda().eval()
+    model_sft.cuda().eval()
+    model_rlhf.cuda().eval()
+    model_rlhf_pretrained.cuda().eval()
 
     annotator = PairwiseAutoAnnotator()
-    model_names = ["RLHF Pretrained", "Untrained", "SFT", "RLHF"] + [f"RLHF Revision {i+1}" for i in range(5)]
+    model_names = ["RLHF Pretrained", "Untrained", "SFT", "RLHF"] + [
+        f"RLHF Revision {i+1}" for i in range(5)
+    ]
     preferred = {}
     generations = []
     for m in model_names:
         preferred[m] = 0
 
-    import pdb; pdb.set_trace()
     should_print = False
 
     total_alpaca_inputs = []
@@ -239,13 +249,35 @@ TL;DR:
     for item in tqdm(test_dataset):
         generation = {}
         post = item["post"]
-        sft_summary = item["summary"] 
-        zero_alpaca_farm_input_untrained = {"instruction": zero_instruction, "input": post, "output_1": sft_summary}
-        zero_alpaca_farm_input_sft = {"instruction": zero_instruction, "input": post, "output_1": sft_summary}
-        zero_alpaca_farm_input_rlhf = {"instruction": zero_instruction, "input": post, "output_1": sft_summary}
-        zero_alpaca_farm_input_rlhf_pretrained = {"instruction": zero_instruction, "input": post, "output_1": sft_summary}
-        n_alpaca_farm_input = {"instruction": n_instruction, "input": post, "output_1": sft_summary}
-        templated_zero = tokenizer.apply_chat_template(item["prompt"], add_special_tokens=False, tokenize=False)
+        sft_summary = item["summary"]
+        zero_alpaca_farm_input_untrained = {
+            "instruction": zero_instruction,
+            "input": post,
+            "output_1": sft_summary,
+        }
+        zero_alpaca_farm_input_sft = {
+            "instruction": zero_instruction,
+            "input": post,
+            "output_1": sft_summary,
+        }
+        zero_alpaca_farm_input_rlhf = {
+            "instruction": zero_instruction,
+            "input": post,
+            "output_1": sft_summary,
+        }
+        zero_alpaca_farm_input_rlhf_pretrained = {
+            "instruction": zero_instruction,
+            "input": post,
+            "output_1": sft_summary,
+        }
+        n_alpaca_farm_input = {
+            "instruction": n_instruction,
+            "input": post,
+            "output_1": sft_summary,
+        }
+        templated_zero = tokenizer.apply_chat_template(
+            item["prompt"], add_special_tokens=False, tokenize=False
+        )
         rlhf_templated_zero = item["prompt"] + "TL;DR:"
         if should_print:
             print("******************************************************************")
@@ -280,28 +312,41 @@ TL;DR:
             do_sample=True,
             pad_token_id=tokenizer.pad_token_id,
         )
-        untrained_decoded_output = tokenizer.batch_decode(untrained_output, skip_special_tokens=True)[0]
-        sft_decoded_output = tokenizer.batch_decode(sft_output, skip_special_tokens=True)[0]
-        rlhf_decoded_output = tokenizer.batch_decode(rlhf_output, skip_special_tokens=True)[0]
-        rlhf_pretrained_decoded_output = tokenizer.batch_decode(rlhf_pretrained_output, skip_special_tokens=True)[0]
+        untrained_decoded_output = tokenizer.batch_decode(
+            untrained_output, skip_special_tokens=True
+        )[0]
+        sft_decoded_output = tokenizer.batch_decode(
+            sft_output, skip_special_tokens=True
+        )[0]
+        rlhf_decoded_output = tokenizer.batch_decode(
+            rlhf_output, skip_special_tokens=True
+        )[0]
+        rlhf_pretrained_decoded_output = tokenizer.batch_decode(
+            rlhf_pretrained_output, skip_special_tokens=True
+        )[0]
 
         if should_print:
             print(f"SFT: {sft_decoded_output[len(templated_zero):]}")
-        untrained_tldr = untrained_decoded_output[len(templated_zero):]
-        sft_tldr = sft_decoded_output[len(templated_zero):]
-        current_tldr = rlhf_decoded_output[len(templated_zero):]
-        rlhf_pretrained_tldr = rlhf_pretrained_decoded_output[len(templated_zero):]
+        untrained_tldr = untrained_decoded_output[len(templated_zero) :]
+        sft_tldr = sft_decoded_output[len(templated_zero) :]
+        current_tldr = rlhf_decoded_output[len(templated_zero) :]
+        rlhf_pretrained_tldr = rlhf_pretrained_decoded_output[len(templated_zero) :]
         zero_alpaca_farm_input_untrained["output_2"] = untrained_tldr
         zero_alpaca_farm_input_sft["output_2"] = sft_tldr
         zero_alpaca_farm_input_rlhf["output_2"] = current_tldr
         zero_alpaca_farm_input_rlhf_pretrained["output_2"] = rlhf_pretrained_tldr
-        import pdb; pdb.set_trace()
+
         if should_print:
             print(f"0 REVISION {current_tldr}")
         n_alpaca_farm_inputs = [n_alpaca_farm_input.copy() for a in range(5)]
         for n in range(5):
 
-            templated_n = tokenizer.apply_chat_template(item["prompt"], example=current_tldr, add_special_tokens=False, tokenize=False)
+            templated_n = tokenizer.apply_chat_template(
+                item["prompt"],
+                example=current_tldr,
+                add_special_tokens=False,
+                tokenize=False,
+            )
             n_inputs = tokenizer(templated_n, return_tensors="pt")
             n_rlhf_output = model_rlhf.generate(
                 input_ids=n_inputs["input_ids"].cuda(),
@@ -310,8 +355,10 @@ TL;DR:
                 do_sample=True,
                 pad_token_id=tokenizer.pad_token_id,
             )
-            n_rlhf_decoded_output = tokenizer.batch_decode(n_rlhf_output, skip_special_tokens=True)[0]
-            current_tldr = n_rlhf_decoded_output[len(templated_n):]
+            n_rlhf_decoded_output = tokenizer.batch_decode(
+                n_rlhf_output, skip_special_tokens=True
+            )[0]
+            current_tldr = n_rlhf_decoded_output[len(templated_n) :]
             n_alpaca_farm_inputs[n]["output_2"] = current_tldr
             if should_print:
                 print(f"{n + 1} REVISION {current_tldr}")
@@ -319,28 +366,33 @@ TL;DR:
             print("Pretrained RLHF", rlhf_pretrained_tldr)
             print("DATASET TLDR", sft_summary)
             print("******************************************************************")
-        alpaca_inputs =  [zero_alpaca_farm_input_rlhf_pretrained] + [zero_alpaca_farm_input_untrained] + [zero_alpaca_farm_input_sft] + [zero_alpaca_farm_input_rlhf] + n_alpaca_farm_inputs
+        alpaca_inputs = (
+            [zero_alpaca_farm_input_rlhf_pretrained]
+            + [zero_alpaca_farm_input_untrained]
+            + [zero_alpaca_farm_input_sft]
+            + [zero_alpaca_farm_input_rlhf]
+            + n_alpaca_farm_inputs
+        )
 
         total_alpaca_inputs.append(alpaca_inputs)
-        
+
         prompts.append(post)
-        
+
     for i, alpaca_inputs in enumerate(total_alpaca_inputs):
         result = annotator.annotate_pairs(alpaca_inputs)
         generation = {"prompt": prompts[i]}
         for j, res in enumerate(result):
-                # generation[model_names[i]] = {"inputs": alpaca_inputs[i], "preference": res["preference"]}
-                generation[model_names[j]] = {"inputs": alpaca_inputs[j], "preference": res["preference"]}
-                if should_print:
-                    print(f"Model: {model_names[j]}, Preference: {res['preference']}")
-                # import pdb; pdb.set_trace()
-                if res["preference"] == 2:
-                    preferred[model_names[j]] += 1
+            generation[model_names[j]] = {
+                "inputs": alpaca_inputs[j],
+                "preference": res["preference"],
+            }
+            if should_print:
+                print(f"Model: {model_names[j]}, Preference: {res['preference']}")
+            if res["preference"] == 2:
+                preferred[model_names[j]] += 1
         generations.append(generation)
-
 
     overall = {"generations": generations, "preferred": preferred}
 
-    with open('dpo_generations.json', 'w') as f:
+    with open("dpo_generations.json", "w") as f:
         json.dump(overall, f)
-    

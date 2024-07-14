@@ -1,4 +1,3 @@
-
 # DPO Authors: Rafael Rafailov, Archit Sharma, Eric Mitchell, Stefano Ermon, Christopher D. Manning, and Chelsea Finn 2023
 # Copyright 2023 The HuggingFace Team. All rights reserved.
 #
@@ -136,7 +135,16 @@ class SRPOTrainer(Trainer):
         ref_model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
         beta: float = 0.01,
         label_smoothing: float = 0,
-        loss_type: Literal["sigmoid", "hinge", "ipo", "kto_pair", "bco_pair", "robust", "aot", "aot_pair"] = "sigmoid",
+        loss_type: Literal[
+            "sigmoid",
+            "hinge",
+            "ipo",
+            "kto_pair",
+            "bco_pair",
+            "robust",
+            "aot",
+            "aot_pair",
+        ] = "sigmoid",
         args: Optional[SRPOConfig] = None,
         data_collator: Optional[DataCollator] = None,
         label_pad_token_id: int = -100,
@@ -147,8 +155,13 @@ class SRPOTrainer(Trainer):
         tokenizer: Optional[PreTrainedTokenizerBase] = None,
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
-        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
-        preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
+        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (
+            None,
+            None,
+        ),
+        preprocess_logits_for_metrics: Optional[
+            Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
+        ] = None,
         max_length: Optional[int] = None,
         max_prompt_length: Optional[int] = None,
         max_target_length: Optional[int] = None,
@@ -227,7 +240,9 @@ class SRPOTrainer(Trainer):
                 "You passed a ref model_id to the DPOTrainer. This will automatically create an "
                 "`AutoModelForCausalLM`"
             )
-            ref_model = AutoModelForCausalLM.from_pretrained(ref_model, **ref_model_init_kwargs)
+            ref_model = AutoModelForCausalLM.from_pretrained(
+                ref_model, **ref_model_init_kwargs
+            )
 
         # Initialize this variable to False. This helps tracking the case when `peft_module_casting_to_bf16`
         # has been called in order to properly call autocast if needed.
@@ -255,17 +270,23 @@ class SRPOTrainer(Trainer):
                     " if you want to use a different ref_model."
                 )
 
-            if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
+            if getattr(model, "is_loaded_in_8bit", False) or getattr(
+                model, "is_loaded_in_4bit", False
+            ):
                 _support_gc_kwargs = hasattr(
                     args, "gradient_checkpointing_kwargs"
                 ) and "gradient_checkpointing_kwargs" in list(
                     inspect.signature(prepare_model_for_kbit_training).parameters
                 )
 
-                prepare_model_kwargs = {"use_gradient_checkpointing": args.gradient_checkpointing}
+                prepare_model_kwargs = {
+                    "use_gradient_checkpointing": args.gradient_checkpointing
+                }
 
                 if _support_gc_kwargs:
-                    prepare_model_kwargs["gradient_checkpointing_kwargs"] = args.gradient_checkpointing_kwargs
+                    prepare_model_kwargs["gradient_checkpointing_kwargs"] = (
+                        args.gradient_checkpointing_kwargs
+                    )
 
                 model = prepare_model_for_kbit_training(model, **prepare_model_kwargs)
             elif getattr(args, "gradient_checkpointing", False):
@@ -277,7 +298,9 @@ class SRPOTrainer(Trainer):
                     def make_inputs_require_grad(module, input, output):
                         output.requires_grad_(True)
 
-                    model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
+                    model.get_input_embeddings().register_forward_hook(
+                        make_inputs_require_grad
+                    )
 
             # get peft model with the given config
             model = get_peft_model(model, peft_config)
@@ -298,7 +321,9 @@ class SRPOTrainer(Trainer):
                 def make_inputs_require_grad(module, input, output):
                     output.requires_grad_(True)
 
-                model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
+                model.get_input_embeddings().register_forward_hook(
+                    make_inputs_require_grad
+                )
 
         if generate_during_eval:
             warnings.warn(
@@ -446,7 +471,9 @@ class SRPOTrainer(Trainer):
                 "You passed `padding_value` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
             args.padding_value = padding_value
-        self.padding_value = args.padding_value if padding_value is not None else tokenizer.pad_token_id
+        self.padding_value = (
+            args.padding_value if padding_value is not None else tokenizer.pad_token_id
+        )
         self.max_prompt_length = args.max_prompt_length
         if truncation_mode != "keep_end":
             warnings.warn(
@@ -473,7 +500,10 @@ class SRPOTrainer(Trainer):
                 "You passed `label_smoothing` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
             args.label_smoothing = label_smoothing
-        if args.loss_type in ["hinge", "ipo", "kto_pair", "bco_pair"] and args.label_smoothing > 0:
+        if (
+            args.loss_type in ["hinge", "ipo", "kto_pair", "bco_pair"]
+            and args.label_smoothing > 0
+        ):
             warnings.warn(
                 "You are using a loss type that does not support label smoothing. Ignoring label_smoothing parameter."
             )
@@ -501,10 +531,13 @@ class SRPOTrainer(Trainer):
         with PartialState().local_main_process_first():
             # tokenize the dataset
             if train_dataset is not None:
-                train_dataset = train_dataset.map(self.tokenize_row, num_proc=self.dataset_num_proc)
-                # train_dataset = train_dataset.map(self.tokenize_row)
+                train_dataset = train_dataset.map(
+                    self.tokenize_row, num_proc=self.dataset_num_proc
+                )
             if eval_dataset is not None:
-                eval_dataset = eval_dataset.map(self.tokenize_row, num_proc=self.dataset_num_proc)
+                eval_dataset = eval_dataset.map(
+                    self.tokenize_row, num_proc=self.dataset_num_proc
+                )
 
         super().__init__(
             model=model,
@@ -531,7 +564,10 @@ class SRPOTrainer(Trainer):
 
         # Deepspeed Zero-3 does not support precompute_ref_log_probs
         if self.is_deepspeed_enabled:
-            if self.accelerator.state.deepspeed_plugin.zero_stage == 3 and self.precompute_ref_log_probs:
+            if (
+                self.accelerator.state.deepspeed_plugin.zero_stage == 3
+                and self.precompute_ref_log_probs
+            ):
                 raise ValueError(
                     "You cannot use `precompute_ref_log_probs=True` with Deepspeed ZeRO-3. Please set `precompute_ref_log_probs=False`."
                 )
@@ -549,7 +585,9 @@ class SRPOTrainer(Trainer):
             if self.is_deepspeed_enabled:
                 self.ref_model = self._prepare_deepspeed(self.ref_model)
             else:
-                self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
+                self.ref_model = self.accelerator.prepare_model(
+                    self.ref_model, evaluation_mode=True
+                )
 
         if args.sync_ref_model:
             if precompute_ref_log_probs:
@@ -557,7 +595,11 @@ class SRPOTrainer(Trainer):
                     "You cannot use `precompute_ref_log_probs=True` with TR-DPO method. Please set `precompute_ref_log_probs=False`."
                 )
 
-            self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
+            self.add_callback(
+                SyncRefModelCallback(
+                    ref_model=self.ref_model, accelerator=self.accelerator
+                )
+            )
         if self.loss_type == "bco_pair":
             self.running = RunningMoments(self.accelerator)
 
@@ -573,14 +615,21 @@ class SRPOTrainer(Trainer):
                     if getattr(model.config, "hidden_sizes", None)
                     else getattr(model.config, "hidden_size", None)
                 )
-                if hidden_size is not None and config_kwargs["zero_optimization"]["stage"] == 3:
+                if (
+                    hidden_size is not None
+                    and config_kwargs["zero_optimization"]["stage"] == 3
+                ):
                     # Note that `stage3_prefetch_bucket_size` can produce DeepSpeed messages like: `Invalidate trace cache @ step 0: expected module 1, but got module 0`
                     # This is expected and is not an error, see: https://github.com/microsoft/DeepSpeed/discussions/4081
                     config_kwargs.update(
                         {
-                            "zero_optimization.reduce_bucket_size": hidden_size * hidden_size,
-                            "zero_optimization.stage3_param_persistence_threshold": 10 * hidden_size,
-                            "zero_optimization.stage3_prefetch_bucket_size": 0.9 * hidden_size * hidden_size,
+                            "zero_optimization.reduce_bucket_size": hidden_size
+                            * hidden_size,
+                            "zero_optimization.stage3_param_persistence_threshold": 10
+                            * hidden_size,
+                            "zero_optimization.stage3_prefetch_bucket_size": 0.9
+                            * hidden_size
+                            * hidden_size,
                         }
                     )
 
@@ -609,20 +658,32 @@ class SRPOTrainer(Trainer):
             }
 
             # prepare dataloader
-            data_loader = self.accelerator.prepare(DataLoader(self.train_dataset, **dataloader_params))
+            data_loader = self.accelerator.prepare(
+                DataLoader(self.train_dataset, **dataloader_params)
+            )
 
             reference_chosen_logps = []
             reference_rejected_logps = []
-            for padded_batch in tqdm(iterable=data_loader, desc="Train dataset reference log probs"):
-                reference_chosen_logp, reference_rejected_logp = self.compute_reference_log_probs(padded_batch)
-                reference_chosen_logp, reference_rejected_logp = self.accelerator.gather_for_metrics(
-                    (reference_chosen_logp, reference_rejected_logp)
+            for padded_batch in tqdm(
+                iterable=data_loader, desc="Train dataset reference log probs"
+            ):
+                reference_chosen_logp, reference_rejected_logp = (
+                    self.compute_reference_log_probs(padded_batch)
+                )
+                reference_chosen_logp, reference_rejected_logp = (
+                    self.accelerator.gather_for_metrics(
+                        (reference_chosen_logp, reference_rejected_logp)
+                    )
                 )
                 reference_chosen_logps.append(reference_chosen_logp.cpu())
                 reference_rejected_logps.append(reference_rejected_logp.cpu())
 
-            all_reference_chosen_logps = torch.cat(reference_chosen_logps).float().numpy()
-            all_reference_rejected_logps = torch.cat(reference_rejected_logps).float().numpy()
+            all_reference_chosen_logps = (
+                torch.cat(reference_chosen_logps).float().numpy()
+            )
+            all_reference_rejected_logps = (
+                torch.cat(reference_rejected_logps).float().numpy()
+            )
 
             self.train_dataset = self.train_dataset.add_column(
                 name="reference_chosen_logps", column=all_reference_chosen_logps
@@ -660,22 +721,36 @@ class SRPOTrainer(Trainer):
             }
 
             # prepare dataloader
-            data_loader = self.accelerator.prepare(DataLoader(eval_dataset, **dataloader_params))
+            data_loader = self.accelerator.prepare(
+                DataLoader(eval_dataset, **dataloader_params)
+            )
 
             reference_chosen_logps = []
             reference_rejected_logps = []
-            for padded_batch in tqdm(iterable=data_loader, desc="Eval dataset reference log probs"):
-                reference_chosen_logp, reference_rejected_logp = self.compute_reference_log_probs(padded_batch)
-                reference_chosen_logp, reference_rejected_logp = self.accelerator.gather_for_metrics(
-                    (reference_chosen_logp, reference_rejected_logp)
+            for padded_batch in tqdm(
+                iterable=data_loader, desc="Eval dataset reference log probs"
+            ):
+                reference_chosen_logp, reference_rejected_logp = (
+                    self.compute_reference_log_probs(padded_batch)
+                )
+                reference_chosen_logp, reference_rejected_logp = (
+                    self.accelerator.gather_for_metrics(
+                        (reference_chosen_logp, reference_rejected_logp)
+                    )
                 )
                 reference_chosen_logps.append(reference_chosen_logp.cpu())
                 reference_rejected_logps.append(reference_rejected_logp.cpu())
 
-            all_reference_chosen_logps = torch.cat(reference_chosen_logps).float().numpy()
-            all_reference_rejected_logps = torch.cat(reference_rejected_logps).float().numpy()
+            all_reference_chosen_logps = (
+                torch.cat(reference_chosen_logps).float().numpy()
+            )
+            all_reference_rejected_logps = (
+                torch.cat(reference_rejected_logps).float().numpy()
+            )
 
-            eval_dataset = eval_dataset.add_column(name="reference_chosen_logps", column=all_reference_chosen_logps)
+            eval_dataset = eval_dataset.add_column(
+                name="reference_chosen_logps", column=all_reference_chosen_logps
+            )
             eval_dataset = eval_dataset.add_column(
                 name="reference_rejected_logps", column=all_reference_rejected_logps
             )
@@ -696,16 +771,32 @@ class SRPOTrainer(Trainer):
         """
 
         if example:
-            full = self.tokenizer.apply_chat_template(prompt, example=example, answer=answer, add_special_tokens=False, tokenize=False)
-            template_prompt = self.tokenizer.apply_chat_template(prompt, example=example, add_special_tokens=False, tokenize=False)
+            full = self.tokenizer.apply_chat_template(
+                prompt,
+                example=example,
+                answer=answer,
+                add_special_tokens=False,
+                tokenize=False,
+            )
+            template_prompt = self.tokenizer.apply_chat_template(
+                prompt, example=example, add_special_tokens=False, tokenize=False
+            )
         else:
-            full = self.tokenizer.apply_chat_template(prompt, answer=answer, add_special_tokens=False, tokenize=False)
-            template_prompt = self.tokenizer.apply_chat_template(prompt, add_special_tokens=False, tokenize=False)
+            full = self.tokenizer.apply_chat_template(
+                prompt, answer=answer, add_special_tokens=False, tokenize=False
+            )
+            template_prompt = self.tokenizer.apply_chat_template(
+                prompt, add_special_tokens=False, tokenize=False
+            )
         full_tokenized = self.tokenizer(full, add_special_tokens=False)
-        prompt_input_ids = self.tokenizer(template_prompt, add_special_tokens=False)["input_ids"]
+        prompt_input_ids = self.tokenizer(template_prompt, add_special_tokens=False)[
+            "input_ids"
+        ]
 
         answer_input_ids = full_tokenized["input_ids"][len(prompt_input_ids) :]
-        answer_attention_mask = full_tokenized["attention_mask"][len(prompt_input_ids) :]
+        answer_attention_mask = full_tokenized["attention_mask"][
+            len(prompt_input_ids) :
+        ]
 
         # Concat tokens to form `enc(a) + enc(a + b)[len(enc(a)):]`
         full_concat_input_ids = np.concatenate([prompt_input_ids, answer_input_ids])
@@ -714,7 +805,9 @@ class SRPOTrainer(Trainer):
         full_input_ids = np.array(full_tokenized["input_ids"])
 
         if len(full_input_ids) != len(full_concat_input_ids):
-            raise ValueError("Prompt input ids and answer input ids should have the same length.")
+            raise ValueError(
+                "Prompt input ids and answer input ids should have the same length."
+            )
 
         # On some tokenizers, like Llama-2 tokenizer, there are occasions where tokens
         # can be merged together when tokenizing prompt+answer. This could result
@@ -724,17 +817,26 @@ class SRPOTrainer(Trainer):
 
         # If tokenized prompt is different than both prompt+answer, then it means the
         # last token has changed due to merging.
-        if prompt_input_ids != full_tokenized["input_ids"][:response_token_ids_start_idx]:
+        if (
+            prompt_input_ids
+            != full_tokenized["input_ids"][:response_token_ids_start_idx]
+        ):
             response_token_ids_start_idx -= 1
 
         prompt_input_ids = full_tokenized["input_ids"][:response_token_ids_start_idx]
-        prompt_attention_mask = full_tokenized["attention_mask"][:response_token_ids_start_idx]
+        prompt_attention_mask = full_tokenized["attention_mask"][
+            :response_token_ids_start_idx
+        ]
 
         if len(prompt_input_ids) != len(prompt_attention_mask):
-            raise ValueError("Prompt input ids and attention mask should have the same length.")
+            raise ValueError(
+                "Prompt input ids and attention mask should have the same length."
+            )
 
         answer_input_ids = full_tokenized["input_ids"][response_token_ids_start_idx:]
-        answer_attention_mask = full_tokenized["attention_mask"][response_token_ids_start_idx:]
+        answer_attention_mask = full_tokenized["attention_mask"][
+            response_token_ids_start_idx:
+        ]
 
         return dict(
             prompt_input_ids=prompt_input_ids,
@@ -743,9 +845,9 @@ class SRPOTrainer(Trainer):
             attention_mask=answer_attention_mask,
         )
 
-    
-    def tokenize_row(self, feature,  model: Optional[Union[PreTrainedModel, nn.Module]] = None) -> Dict:
-        
+    def tokenize_row(
+        self, feature, model: Optional[Union[PreTrainedModel, nn.Module]] = None
+    ) -> Dict:
         """Tokenize a single row from a DPO specific dataset.
 
         At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
@@ -768,32 +870,33 @@ class SRPOTrainer(Trainer):
             #  2. https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
             #  3. https://github.com/LianjiaTech/BELLE/issues/337
 
-
             if not isinstance(prompt, str):
                 raise ValueError(f"prompt should be an str but got {type(prompt)}")
 
-            # prompt_tokens = self.tokenizer(zero_prompt, add_special_tokens=False)
-
-            
-           
             if not isinstance(chosen, str):
                 raise ValueError(f"chosen should be an str but got {type(chosen)}")
-            # zero_revision_prompt = self.args.prefix_zero_prompt + chosen_tokens[prompt] + post_revision_prompt
-            # n_revision_chosen_prompt = self.args.prefix_n_prompt + chosen_tokens[prompt] + "EXAMPLE SUMMARY: " + chosen_tokens[input_ids] + "\n\n" + post_revision_prompt
-            # n_revision_rejected_prompt = self.args.prefix_n_prompt + rejected_tokens[prompt] + "EXAMPLE SUMMARY: " + rejected_tokens[input_ids] + "\n\n" + post_revision_prompt
-            
-            # chosen_tokens = self.build_tokenized_answer(n_prompt, chosen)
+
             batch["untemplated_prompt"] = prompt
-            prompt = self.tokenizer.apply_chat_template(prompt, add_special_tokens=False, tokenize=False)
+            prompt = self.tokenizer.apply_chat_template(
+                prompt, add_special_tokens=False, tokenize=False
+            )
             prompt_tokens = self.tokenizer(prompt, add_special_tokens=False)
             prompt_tokens = {f"prompt_{k}": v for k, v in prompt_tokens.items()}
             if not isinstance(rejected, str):
                 raise ValueError(f"rejected should be an str but got {type(rejected)}")
             # rejected_tokens = self.build_tokenized_answer(n_prompt, rejected)
-            improve_to_chosen_given_rejected_tokens = self.build_tokenized_answer(prompt, chosen, example=rejected)
-            improve_to_chosen_given_chosen_tokens = self.build_tokenized_answer(prompt, chosen, example=chosen)
-            improve_to_rejected_given_rejected_tokens = self.build_tokenized_answer(prompt, rejected, example=rejected)
-            improve_to_rejected_given_chosen_tokens = self.build_tokenized_answer(prompt, rejected, example=chosen)
+            improve_to_chosen_given_rejected_tokens = self.build_tokenized_answer(
+                prompt, chosen, example=rejected
+            )
+            improve_to_chosen_given_chosen_tokens = self.build_tokenized_answer(
+                prompt, chosen, example=chosen
+            )
+            improve_to_rejected_given_rejected_tokens = self.build_tokenized_answer(
+                prompt, rejected, example=rejected
+            )
+            improve_to_rejected_given_chosen_tokens = self.build_tokenized_answer(
+                prompt, rejected, example=chosen
+            )
             rejected = self.build_tokenized_answer(prompt, rejected)
             chosen = self.build_tokenized_answer(prompt, chosen)
             token_set = {
@@ -803,14 +906,11 @@ class SRPOTrainer(Trainer):
                 "improve_to_rejected_given_rejected": improve_to_rejected_given_rejected_tokens,
                 "improve_to_rejected_given_chosen": improve_to_rejected_given_chosen_tokens,
                 "rejected": rejected,
-                "chosen": chosen
+                "chosen": chosen,
             }
-
-
 
             # Last prompt token might get merged by tokenizer and
             # it should not be included for generation if that happens
-
 
             # TODO figure out what this logic is supposed to do. Look at dpo_trainer :765
             # prompt_len_input_ids, len_per_set = perform_for_all_token_sets(len, "prompt_input_ids", min)
@@ -835,7 +935,7 @@ class SRPOTrainer(Trainer):
             for _, tokens in token_set.items():
                 tokens["prompt_input_ids"] = [bos_token_id] + tokens["prompt_input_ids"]
                 tokens["prompt_attention_mask"] = [1] + tokens["prompt_attention_mask"]
-            
+
             # if prompt_len_input_ids == 0 or bos_token_id != prompt_tokens["prompt_input_ids"][0]:
             #     prompt_tokens["prompt_input_ids"] = [bos_token_id] + prompt_tokens["prompt_input_ids"]
             #     prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens["prompt_attention_mask"]
@@ -860,53 +960,86 @@ class SRPOTrainer(Trainer):
             #     rejected_tokens["input_ids"].append(eos_token_id)
             #     rejected_tokens["attention_mask"].append(1)
 
-            longer_response_length = max([len(tokens["input_ids"]) for key, tokens in token_set.items() if key != "zero_prompt"])
+            longer_response_length = max(
+                [
+                    len(tokens["input_ids"])
+                    for key, tokens in token_set.items()
+                    if key != "zero_prompt"
+                ]
+            )
             # TODO 2: I am truncating after adding prompt instructions for now. This should be revisited because I could see this causing issues due to instructions being truncated.
             # TODO: Now that the revision will be added to the prompt this truncation must happen at another time?
             # This needs to be revisited to figure out when and how to truncate
             # if combined sequence is too long, truncate the prompt
             for _, answer_tokens in token_set.items():
-                if len(answer_tokens["prompt_input_ids"]) + longer_response_length > self.max_length:
-                    print("***TOO LONG PROMPT", len(answer_tokens["prompt_input_ids"]) + longer_response_length, " > ", self.max_length)
+                if (
+                    len(answer_tokens["prompt_input_ids"]) + longer_response_length
+                    > self.max_length
+                ):
+                    print(
+                        "***TOO LONG PROMPT",
+                        len(answer_tokens["prompt_input_ids"]) + longer_response_length,
+                        " > ",
+                        self.max_length,
+                    )
                     if self.truncation_mode == "keep_start":
                         for k in ["prompt_input_ids", "prompt_attention_mask"]:
-                            answer_tokens[k] = answer_tokens[k][: self.max_prompt_length]
+                            answer_tokens[k] = answer_tokens[k][
+                                : self.max_prompt_length
+                            ]
                     elif self.truncation_mode == "keep_end":
                         for k in ["prompt_input_ids", "prompt_attention_mask"]:
-                            answer_tokens[k] = answer_tokens[k][-self.max_prompt_length :]
+                            answer_tokens[k] = answer_tokens[k][
+                                -self.max_prompt_length :
+                            ]
                     else:
-                        raise ValueError(f"Unknown truncation mode: {self.truncation_mode}")
+                        raise ValueError(
+                            f"Unknown truncation mode: {self.truncation_mode}"
+                        )
 
             # if that's still too long, truncate the response
             for key, answer_tokens in token_set.items():
                 if key != "zero_prompt":
-                    if len(answer_tokens["prompt_input_ids"]) + longer_response_length > self.max_length:
-                        print("***TOO LONG ANSWER", len(answer_tokens["prompt_input_ids"]) + longer_response_length, " > ", self.max_length)
+                    if (
+                        len(answer_tokens["prompt_input_ids"]) + longer_response_length
+                        > self.max_length
+                    ):
+                        print(
+                            "***TOO LONG ANSWER",
+                            len(answer_tokens["prompt_input_ids"])
+                            + longer_response_length,
+                            " > ",
+                            self.max_length,
+                        )
                         for k in ["input_ids", "attention_mask"]:
-                            answer_tokens[k] = answer_tokens[k][: self.max_length - self.max_prompt_length]
-
+                            answer_tokens[k] = answer_tokens[k][
+                                : self.max_length - self.max_prompt_length
+                            ]
 
             result_sets = {}
             for key, answer_tokens in token_set.items():
                 if key != "zero_prompt":
                     sequence_tokens = {
-                        k: answer_tokens[f"prompt_{k}"] + answer_tokens[k] for k in ["input_ids", "attention_mask"]
+                        k: answer_tokens[f"prompt_{k}"] + answer_tokens[k]
+                        for k in ["input_ids", "attention_mask"]
                     }
                     result_sets[key] = sequence_tokens
                     result_sets[key]["labels"] = result_sets[key]["input_ids"][:]
-                    result_sets[key]["labels"][: len(answer_tokens["prompt_input_ids"])] = [
-                        self.label_pad_token_id
-                    ] * len(answer_tokens["prompt_input_ids"])
+                    result_sets[key]["labels"][
+                        : len(answer_tokens["prompt_input_ids"])
+                    ] = [self.label_pad_token_id] * len(
+                        answer_tokens["prompt_input_ids"]
+                    )
             result_sets["zero_prompt"] = token_set["zero_prompt"]
             # rejected_sequence_tokens["labels"] = rejected_sequence_tokens["input_ids"][:]
             # rejected_sequence_tokens["labels"][: len(rejected_tokens["prompt_input_ids"])] = [
             #     self.label_pad_token_id
             # ] * len(rejected_tokens["prompt_input_ids"])
 
-                # "improve_to_chosen_given_rejected": improve_to_chosen_given_rejected_tokens,
-                # "improve_to_chosen_given_chosen": improve_to_chosen_given_chosen_tokens,
-                # "improve_to_rejected_given_rejected": improve_to_rejected_given_rejected_tokens,
-                # "improve_to_rejected_given_chosen": improve_to_rejected_given_chosen_tokens
+            # "improve_to_chosen_given_rejected": improve_to_chosen_given_rejected_tokens,
+            # "improve_to_chosen_given_chosen": improve_to_chosen_given_chosen_tokens,
+            # "improve_to_rejected_given_rejected": improve_to_rejected_given_rejected_tokens,
+            # "improve_to_rejected_given_chosen": improve_to_rejected_given_chosen_tokens
 
             for k, toks in result_sets.items():
                 for type_key, tokens in toks.items():
@@ -917,20 +1050,28 @@ class SRPOTrainer(Trainer):
             batch["prompt"] = prompt
         else:
             chosen_tokens = self.tokenizer(
-                chosen, truncation=True, max_length=self.max_target_length, add_special_tokens=True
+                chosen,
+                truncation=True,
+                max_length=self.max_target_length,
+                add_special_tokens=True,
             )
             rejected_tokens = self.tokenizer(
-                rejected, truncation=True, max_length=self.max_target_length, add_special_tokens=True
+                rejected,
+                truncation=True,
+                max_length=self.max_target_length,
+                add_special_tokens=True,
             )
             prompt_tokens = self.tokenizer(
-                prompt, truncation=True, max_length=self.max_prompt_length, add_special_tokens=True
+                prompt,
+                truncation=True,
+                max_length=self.max_prompt_length,
+                add_special_tokens=True,
             )
 
             batch["chosen_labels"] = chosen_tokens["input_ids"]
             batch["rejected_labels"] = rejected_tokens["input_ids"]
             batch["prompt_input_ids"] = prompt_tokens["input_ids"]
             batch["prompt_attention_mask"] = prompt_tokens["attention_mask"]
-
 
             # if model is not None and hasattr(model, "prepare_decoder_input_ids_from_labels"):
             #     batch["rejected_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
@@ -940,15 +1081,16 @@ class SRPOTrainer(Trainer):
             #         labels=torch.tensor(batch["chosen_labels"])
             #     )
 
-        
         return batch
 
     @contextmanager
     def null_ref_context(self):
         """Context manager for handling null reference model (that is, peft adapter manipulation)."""
-        with self.accelerator.unwrap_model(
-            self.model
-        ).disable_adapter() if self.is_peft_model and not self.ref_adapter_name else nullcontext():
+        with (
+            self.accelerator.unwrap_model(self.model).disable_adapter()
+            if self.is_peft_model and not self.ref_adapter_name
+            else nullcontext()
+        ):
             if self.ref_adapter_name:
                 self.model.set_adapter(self.ref_adapter_name)
             yield
@@ -957,7 +1099,11 @@ class SRPOTrainer(Trainer):
 
     def compute_reference_log_probs(self, padded_batch: Dict) -> Dict:
         """Computes log probabilities of the reference model for a single padded batch of a DPO specific dataset."""
-        compte_ref_context_manager = torch.cuda.amp.autocast if self._peft_has_been_casted_to_bf16 else nullcontext
+        compte_ref_context_manager = (
+            torch.cuda.amp.autocast
+            if self._peft_has_been_casted_to_bf16
+            else nullcontext
+        )
 
         # compute reference logps
         with torch.no_grad(), compte_ref_context_manager():
@@ -1002,12 +1148,15 @@ class SRPOTrainer(Trainer):
             A dictionary containing the concatenated inputs under the key 'concatenated_input_ids'.
         """
         concatenated_batch = {}
-        
 
         if is_encoder_decoder:
-            max_length = max([batch[f"{key}_labels"].shape[1] for key in self.srpo_keys])
+            max_length = max(
+                [batch[f"{key}_labels"].shape[1] for key in self.srpo_keys]
+            )
         else:
-            max_length = max([batch[f"{key}_input_ids"].shape[1] for key in self.srpo_keys])
+            max_length = max(
+                [batch[f"{key}_input_ids"].shape[1] for key in self.srpo_keys]
+            )
 
         for key in self.srpo_keys:
             for k in batch:
@@ -1021,13 +1170,19 @@ class SRPOTrainer(Trainer):
                     concatenated_key = k.replace(key, "concatenated")
                     concatenated_batch[concatenated_key] = torch.cat(
                         (
-                            concatenated_batch.get(concatenated_key, torch.tensor([], dtype=batch[k].dtype)).to(device),
-                            pad_to_length(batch[k], max_length, pad_value=pad_value).to(device)
+                            concatenated_batch.get(
+                                concatenated_key, torch.tensor([], dtype=batch[k].dtype)
+                            ).to(device),
+                            pad_to_length(batch[k], max_length, pad_value=pad_value).to(
+                                device
+                            ),
                         ),
                     )
         # TODO: fix encoder decoder here.
         if is_encoder_decoder:
-            concatenated_batch["concatenated_input_ids"] = batch["zero_prompt_input_ids"].repeat(2, 1).to(device=device)
+            concatenated_batch["concatenated_input_ids"] = (
+                batch["zero_prompt_input_ids"].repeat(2, 1).to(device=device)
+            )
             concatenated_batch["concatenated_attention_mask"] = (
                 batch["prompt_attention_mask"].repeat(2, 1).to(device=device)
             )
@@ -1053,7 +1208,6 @@ class SRPOTrainer(Trainer):
     #     log_terms = rejected_to_chosen_improvement_ratio + chosen_zero_ratio - (chosen_to_rejected_improvement_ratio + rejected_zero_ratio)
     #     return (self.beta * log_terms - 1) ** 2
 
-
     def srpo_loss(
         self,
         policy_logps,
@@ -1072,34 +1226,76 @@ class SRPOTrainer(Trainer):
             The losses tensor contains the DPO loss for each example in the batch.
             The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
         """
-        
-        improve_to_chosen_given_rejected = policy_logps["improve_to_chosen_given_rejected"].to(self.accelerator.device)
-        improve_to_rejected_given_rejected = policy_logps["improve_to_rejected_given_rejected"].to(self.accelerator.device)
-        improve_to_chosen_given_chosen = policy_logps["improve_to_chosen_given_chosen"].to(self.accelerator.device)
-        improve_to_rejected_given_chosen = policy_logps["improve_to_rejected_given_chosen"].to(self.accelerator.device)
+
+        improve_to_chosen_given_rejected = policy_logps[
+            "improve_to_chosen_given_rejected"
+        ].to(self.accelerator.device)
+        improve_to_rejected_given_rejected = policy_logps[
+            "improve_to_rejected_given_rejected"
+        ].to(self.accelerator.device)
+        improve_to_chosen_given_chosen = policy_logps[
+            "improve_to_chosen_given_chosen"
+        ].to(self.accelerator.device)
+        improve_to_rejected_given_chosen = policy_logps[
+            "improve_to_rejected_given_chosen"
+        ].to(self.accelerator.device)
         chosen_logps = policy_logps["chosen"].to(self.accelerator.device)
         rejected_logps = policy_logps["rejected"].to(self.accelerator.device)
 
-        ref_improve_to_chosen_given_rejected = reference_logps["improve_to_chosen_given_rejected"].to(self.accelerator.device)
-        ref_improve_to_rejected_given_rejected = reference_logps["improve_to_rejected_given_rejected"].to(self.accelerator.device)
-        ref_improve_to_chosen_given_chosen = reference_logps["improve_to_chosen_given_chosen"].to(self.accelerator.device)
-        ref_improve_to_rejected_given_chosen = reference_logps["improve_to_rejected_given_chosen"].to(self.accelerator.device)
+        ref_improve_to_chosen_given_rejected = reference_logps[
+            "improve_to_chosen_given_rejected"
+        ].to(self.accelerator.device)
+        ref_improve_to_rejected_given_rejected = reference_logps[
+            "improve_to_rejected_given_rejected"
+        ].to(self.accelerator.device)
+        ref_improve_to_chosen_given_chosen = reference_logps[
+            "improve_to_chosen_given_chosen"
+        ].to(self.accelerator.device)
+        ref_improve_to_rejected_given_chosen = reference_logps[
+            "improve_to_rejected_given_chosen"
+        ].to(self.accelerator.device)
         ref_chosen_logps = reference_logps["chosen"].to(self.accelerator.device)
         ref_rejected_logps = reference_logps["rejected"].to(self.accelerator.device)
 
-        rejected_to_chosen_improvement_ratio = improve_to_chosen_given_rejected - ref_improve_to_chosen_given_rejected
-        rejected_to_rejected_improvement_ratio = improve_to_rejected_given_rejected - ref_improve_to_rejected_given_rejected
-        given_rejected = (0.5 - self.beta * (rejected_to_chosen_improvement_ratio - rejected_to_rejected_improvement_ratio)) ** 2
+        rejected_to_chosen_improvement_ratio = (
+            improve_to_chosen_given_rejected - ref_improve_to_chosen_given_rejected
+        )
+        rejected_to_rejected_improvement_ratio = (
+            improve_to_rejected_given_rejected - ref_improve_to_rejected_given_rejected
+        )
+        given_rejected = (
+            0.5
+            - self.beta
+            * (
+                rejected_to_chosen_improvement_ratio
+                - rejected_to_rejected_improvement_ratio
+            )
+        ) ** 2
 
-        chosen_to_chosen_improvement_ratio = improve_to_chosen_given_chosen - ref_improve_to_chosen_given_chosen
+        chosen_to_chosen_improvement_ratio = (
+            improve_to_chosen_given_chosen - ref_improve_to_chosen_given_chosen
+        )
 
-        chosen_to_rejected_improvement_ratio = improve_to_rejected_given_chosen - ref_improve_to_rejected_given_chosen
-        given_chosen = (0.5 - self.beta * (chosen_to_chosen_improvement_ratio - chosen_to_rejected_improvement_ratio)) ** 2
+        chosen_to_rejected_improvement_ratio = (
+            improve_to_rejected_given_chosen - ref_improve_to_rejected_given_chosen
+        )
+        given_chosen = (
+            0.5
+            - self.beta
+            * (
+                chosen_to_chosen_improvement_ratio
+                - chosen_to_rejected_improvement_ratio
+            )
+        ) ** 2
         self_improvement_loss = given_rejected + given_chosen
 
         chosen_zero_ratio = chosen_logps - ref_chosen_logps
         rejected_zero_ratio = rejected_logps - ref_rejected_logps
-        log_terms = rejected_to_chosen_improvement_ratio + chosen_zero_ratio - (chosen_to_rejected_improvement_ratio + rejected_zero_ratio)
+        log_terms = (
+            rejected_to_chosen_improvement_ratio
+            + chosen_zero_ratio
+            - (chosen_to_rejected_improvement_ratio + rejected_zero_ratio)
+        )
         generative_loss = (self.beta * log_terms - 1) ** 2
         losses = (1 - self.alpha) * generative_loss + self.alpha * self_improvement_loss
         # TODO Deal with reference_free
@@ -1116,7 +1312,7 @@ class SRPOTrainer(Trainer):
             "chosen_zero_ratio": chosen_zero_ratio.detach(),
             "rejected_zero_ratio": rejected_zero_ratio.detach(),
             "generative_loss": generative_loss.detach(),
-            "self_improvement_loss": self_improvement_loss.detach()
+            "self_improvement_loss": self_improvement_loss.detach(),
         }
         return losses, reward_ratios
 
@@ -1139,7 +1335,9 @@ class SRPOTrainer(Trainer):
             A Tuple of two tensor of shape ((batch_size,), (batch_size,)) containing the sum of log probabilities of the given labels under the given logits in the first tensor and the number of non-masked tokens in the second tensor.
         """
         if logits.shape[:-1] != labels.shape:
-            raise ValueError("Logits (batch and sequence length dim) and labels must have the same shape.")
+            raise ValueError(
+                "Logits (batch and sequence length dim) and labels must have the same shape."
+            )
 
         if not is_encoder_decoder:
             labels = labels[:, 1:].clone()
@@ -1149,7 +1347,9 @@ class SRPOTrainer(Trainer):
         # dummy token; we'll ignore the losses on these tokens later
         labels[labels == label_pad_token_id] = 0
 
-        per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
+        per_token_logps = torch.gather(
+            logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)
+        ).squeeze(2)
 
         return (per_token_logps * loss_mask).sum(-1), loss_mask.sum(-1)
 
@@ -1173,7 +1373,9 @@ class SRPOTrainer(Trainer):
         model_kwargs = (
             {
                 "labels": concatenated_batch["concatenated_labels"],
-                "decoder_input_ids": concatenated_batch.pop("concatenated_decoder_input_ids", None),
+                "decoder_input_ids": concatenated_batch.pop(
+                    "concatenated_decoder_input_ids", None
+                ),
             }
             if self.is_encoder_decoder
             else {}
@@ -1215,7 +1417,6 @@ class SRPOTrainer(Trainer):
         for i, key in enumerate(self.srpo_keys):
             result["logps"][key] = all_logps[i * len_chosen : (i + 1) * len_chosen]
             result["logits"][key] = all_logits[i * len_chosen : (i + 1) * len_chosen]
-            
 
         # chosen_logps = all_logps[:len_chosen]
         # rejected_logps = all_logps[len_chosen:]
@@ -1257,15 +1458,15 @@ class SRPOTrainer(Trainer):
                     reference_result = self.concatenated_forward(self.ref_model, batch)
                 reference_logps = reference_result["logps"]
 
-        losses, reward_ratios = self.srpo_loss(
-            policy_logps,
-            reference_logps
-        )
+        losses, reward_ratios = self.srpo_loss(policy_logps, reference_logps)
         chosen_rewards = reward_ratios["chosen_zero_ratio"]
         rejected_rewards = reward_ratios["rejected_zero_ratio"]
 
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
-        improvement_accuracies = (reward_ratios["rejected_to_chosen_improvement_ratio"] > reward_ratios["chosen_to_rejected_improvement_ratio"]).float()
+        improvement_accuracies = (
+            reward_ratios["rejected_to_chosen_improvement_ratio"]
+            > reward_ratios["chosen_to_rejected_improvement_ratio"]
+        ).float()
         # if self.args.rpo_alpha is not None:
         #     losses = losses * self.args.rpo_alpha + policy_nll_loss
 
@@ -1273,12 +1474,22 @@ class SRPOTrainer(Trainer):
         metrics[f"{prefix}rewards/chosen"] = chosen_rewards.mean().cpu()
         metrics[f"{prefix}rewards/rejected"] = rejected_rewards.mean().cpu()
         metrics[f"{prefix}rewards/accuracies"] = reward_accuracies.mean().cpu()
-        metrics[f"{prefix}rewards/improvement_accuracies"] = improvement_accuracies.mean().cpu()
-        metrics[f"{prefix}rewards/margins"] = (chosen_rewards - rejected_rewards).mean().cpu()
-        metrics[f"{prefix}logps/rejected"] = policy_logps["rejected"].detach().mean().cpu()
+        metrics[f"{prefix}rewards/improvement_accuracies"] = (
+            improvement_accuracies.mean().cpu()
+        )
+        metrics[f"{prefix}rewards/margins"] = (
+            (chosen_rewards - rejected_rewards).mean().cpu()
+        )
+        metrics[f"{prefix}logps/rejected"] = (
+            policy_logps["rejected"].detach().mean().cpu()
+        )
         metrics[f"{prefix}logps/chosen"] = policy_logps["chosen"].detach().mean().cpu()
-        metrics[f"{prefix}logits/rejected"] = policy_logits["rejected"].detach().mean().cpu()
-        metrics[f"{prefix}logits/chosen"] = policy_logits["chosen"].detach().mean().cpu()
+        metrics[f"{prefix}logits/rejected"] = (
+            policy_logits["rejected"].detach().mean().cpu()
+        )
+        metrics[f"{prefix}logits/chosen"] = (
+            policy_logits["chosen"].detach().mean().cpu()
+        )
         for key, item in reward_ratios.items():
             metrics[f"{prefix}ratios/{key}"] = item.detach().mean().cpu()
         if self.args.rpo_alpha is not None:
@@ -1298,10 +1509,16 @@ class SRPOTrainer(Trainer):
                 "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
             )
 
-        compute_loss_context_manager = torch.cuda.amp.autocast if self._peft_has_been_casted_to_bf16 else nullcontext
+        compute_loss_context_manager = (
+            torch.cuda.amp.autocast
+            if self._peft_has_been_casted_to_bf16
+            else nullcontext
+        )
 
         with compute_loss_context_manager():
-            loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="train")
+            loss, metrics = self.get_batch_loss_metrics(
+                model, inputs, train_eval="train"
+            )
 
         # Make sure to move the loss to the device the original accumulating loss is at back in the `Trainer` class:
         loss = loss.to(self.args.device)
@@ -1312,12 +1529,18 @@ class SRPOTrainer(Trainer):
             return (loss, metrics)
         return loss
 
-    def get_batch_samples(self, model, batch: Dict[str, torch.LongTensor]) -> Tuple[List[str], List[str], List[List[str]]]:
+    def get_batch_samples(
+        self, model, batch: Dict[str, torch.LongTensor]
+    ) -> Tuple[List[str], List[str], List[List[str]]]:
         """Generate samples from the model and reference model for the given batch of inputs."""
 
         # If one uses `generate_during_eval` with peft + bf16, we need to explicitly call generate with
         # the torch cuda amp context manager as some hidden states are silently casted to full precision.
-        generate_context_manager = nullcontext if not self._peft_has_been_casted_to_bf16 else torch.cuda.amp.autocast
+        generate_context_manager = (
+            nullcontext
+            if not self._peft_has_been_casted_to_bf16
+            else torch.cuda.amp.autocast
+        )
 
         with generate_context_manager():
             policy_output = model.generate(
@@ -1327,7 +1550,9 @@ class SRPOTrainer(Trainer):
                 do_sample=True,
                 pad_token_id=self.tokenizer.pad_token_id,
             )
-            policy_output_decoded = self.tokenizer.batch_decode(policy_output, skip_special_tokens=True)
+            policy_output_decoded = self.tokenizer.batch_decode(
+                policy_output, skip_special_tokens=True
+            )
             revisions = []
             for i in range(len(policy_output_decoded)):
                 revisions.append([])
@@ -1338,12 +1563,22 @@ class SRPOTrainer(Trainer):
                 for i, output in enumerate(policy_output_decoded):
                     prompt = prev_prompts[i]
                     untemplated_prompt = batch["untemplated_prompt"][i]
-                    current_revision = output[len(prompt):]
+                    current_revision = output[len(prompt) :]
                     revisions[i].append(current_revision)
-                    new_prompt = self.tokenizer.apply_chat_template(untemplated_prompt, example=current_revision, add_special_tokens=False, tokenize=False)
+                    new_prompt = self.tokenizer.apply_chat_template(
+                        untemplated_prompt,
+                        example=current_revision,
+                        add_special_tokens=False,
+                        tokenize=False,
+                    )
                     new_prompts.append(new_prompt)
                 prev_prompts = new_prompts
-                inputs = self.tokenizer(new_prompts, return_tensors="pt", padding="longest", pad_to_max_length=True)
+                inputs = self.tokenizer(
+                    new_prompts,
+                    return_tensors="pt",
+                    padding="longest",
+                    pad_to_max_length=True,
+                )
                 n_rlhf_output = model.generate(
                     input_ids=inputs["input_ids"].cuda(),
                     attention_mask=inputs["attention_mask"].cuda(),
@@ -1351,12 +1586,14 @@ class SRPOTrainer(Trainer):
                     do_sample=True,
                     pad_token_id=self.tokenizer.pad_token_id,
                 )
-                policy_output_decoded = self.tokenizer.batch_decode(n_rlhf_output, skip_special_tokens=True)
+                policy_output_decoded = self.tokenizer.batch_decode(
+                    n_rlhf_output, skip_special_tokens=True
+                )
             current_revisions = []
             for i, output in enumerate(policy_output_decoded):
                 prompt = prev_prompts[i]
                 untemplated_prompt = batch["untemplated_prompt"][i]
-                current_revision = output[len(prompt):]
+                current_revision = output[len(prompt) :]
                 revisions[i].append(current_revision)
 
             # if reference_output in batch use that otherwise use the reference model
@@ -1381,11 +1618,19 @@ class SRPOTrainer(Trainer):
                         pad_token_id=self.tokenizer.pad_token_id,
                     )
 
-        policy_output = pad_to_length(policy_output, self.max_length, self.tokenizer.pad_token_id)
-        policy_output_decoded = self.tokenizer.batch_decode(policy_output, skip_special_tokens=True)
+        policy_output = pad_to_length(
+            policy_output, self.max_length, self.tokenizer.pad_token_id
+        )
+        policy_output_decoded = self.tokenizer.batch_decode(
+            policy_output, skip_special_tokens=True
+        )
 
-        reference_output = pad_to_length(reference_output, self.max_length, self.tokenizer.pad_token_id)
-        reference_output_decoded = self.tokenizer.batch_decode(reference_output, skip_special_tokens=True)
+        reference_output = pad_to_length(
+            reference_output, self.max_length, self.tokenizer.pad_token_id
+        )
+        reference_output_decoded = self.tokenizer.batch_decode(
+            reference_output, skip_special_tokens=True
+        )
 
         return policy_output_decoded, reference_output_decoded, revisions
 
@@ -1407,10 +1652,16 @@ class SRPOTrainer(Trainer):
             else:
                 ignore_keys = []
 
-        prediction_context_manager = torch.cuda.amp.autocast if self._peft_has_been_casted_to_bf16 else nullcontext
+        prediction_context_manager = (
+            torch.cuda.amp.autocast
+            if self._peft_has_been_casted_to_bf16
+            else nullcontext
+        )
 
         with torch.no_grad(), prediction_context_manager():
-            loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="eval")
+            loss, metrics = self.get_batch_loss_metrics(
+                model, inputs, train_eval="eval"
+            )
 
         # force log the metrics
         self.store_metrics(metrics, train_eval="eval")
@@ -1423,13 +1674,17 @@ class SRPOTrainer(Trainer):
             "eval_logits/chosen": metrics["eval_logits/chosen"],
             "eval_logits/rejected": metrics["eval_logits/rejected"],
         }
-        logits = tuple(v.unsqueeze(dim=0) for k, v in logits_dict.items() if k not in ignore_keys)
+        logits = tuple(
+            v.unsqueeze(dim=0) for k, v in logits_dict.items() if k not in ignore_keys
+        )
         logits = torch.stack(logits).mean(axis=1).to(self.accelerator.device)
         labels = torch.zeros(logits.shape[0], device=self.accelerator.device)
 
         return (loss.detach(), logits, labels)
 
-    def store_metrics(self, metrics: Dict[str, float], train_eval: Literal["train", "eval"] = "train") -> None:
+    def store_metrics(
+        self, metrics: Dict[str, float], train_eval: Literal["train", "eval"] = "train"
+    ) -> None:
         for key, value in metrics.items():
             self._stored_metrics[train_eval][key].append(value)
 
@@ -1452,32 +1707,53 @@ class SRPOTrainer(Trainer):
         if self.generate_during_eval:
             # Generate random indices within the range of the total number of samples
             num_samples = len(dataloader.dataset)
-            random_indices = random.sample(range(num_samples), k=self.args.eval_batch_size)
+            random_indices = random.sample(
+                range(num_samples), k=self.args.eval_batch_size
+            )
 
             # Use dataloader.dataset.select to get the random batch without iterating over the DataLoader
             random_batch_dataset = dataloader.dataset.select(random_indices)
             random_batch = self.data_collator(random_batch_dataset)
             random_batch = self._prepare_inputs(random_batch)
 
-            policy_output_decoded, ref_output_decoded, revisions = self.get_batch_samples(self.model, random_batch)
+            policy_output_decoded, ref_output_decoded, revisions = (
+                self.get_batch_samples(self.model, random_batch)
+            )
 
             rows = []
             # self.tokenizer.batch_decode(random_batch["zero_prompt_prompt_input_ids"])
-            for prompt, pol, ref, revision in zip(random_batch["prompt"], policy_output_decoded, ref_output_decoded, revisions):
-                rows.append([
-                    prompt, 
-                    pol[len(prompt):], 
-                    ref[len(prompt):], 
-                    revision[0], 
-                    revision[1], 
-                    revision[2], 
-                    revision[3], 
-                    revision[4], 
-                    revision[5]
-                ])
+            for prompt, pol, ref, revision in zip(
+                random_batch["prompt"],
+                policy_output_decoded,
+                ref_output_decoded,
+                revisions,
+            ):
+                rows.append(
+                    [
+                        prompt,
+                        pol[len(prompt) :],
+                        ref[len(prompt) :],
+                        revision[0],
+                        revision[1],
+                        revision[2],
+                        revision[3],
+                        revision[4],
+                        revision[5],
+                    ]
+                )
             wandb_table = {
                 "game_log": wandb.Table(
-                    columns=["Prompt", "Policy", "Ref Model", "0 Revision", "1 Revision", "2 Revision", "3 Revision", "4 Revision", "5 Revision"],
+                    columns=[
+                        "Prompt",
+                        "Policy",
+                        "Ref Model",
+                        "0 Revision",
+                        "1 Revision",
+                        "2 Revision",
+                        "3 Revision",
+                        "4 Revision",
+                        "5 Revision",
+                    ],
                     rows=rows,
                 )
             }
@@ -1486,7 +1762,11 @@ class SRPOTrainer(Trainer):
 
         # Base evaluation
         initial_output = super().evaluation_loop(
-            dataloader, description, prediction_loss_only, ignore_keys, metric_key_prefix
+            dataloader,
+            description,
+            prediction_loss_only,
+            ignore_keys,
+            metric_key_prefix,
         )
 
         return initial_output
@@ -1508,11 +1788,20 @@ class SRPOTrainer(Trainer):
         return super().log(logs)
 
     @wraps(Trainer.push_to_hub)
-    def push_to_hub(self, commit_message: Optional[str] = "End of training", blocking: bool = True, **kwargs) -> str:
+    def push_to_hub(
+        self,
+        commit_message: Optional[str] = "End of training",
+        blocking: bool = True,
+        **kwargs,
+    ) -> str:
         """
         Overwrite the `push_to_hub` method in order to force-add the tag "dpo" when pushing the
         model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
         """
-        kwargs = trl_sanitze_kwargs_for_tagging(model=self.model, tag_names=self._tag_names, kwargs=kwargs)
+        kwargs = trl_sanitze_kwargs_for_tagging(
+            model=self.model, tag_names=self._tag_names, kwargs=kwargs
+        )
 
-        return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)
+        return super().push_to_hub(
+            commit_message=commit_message, blocking=blocking, **kwargs
+        )
