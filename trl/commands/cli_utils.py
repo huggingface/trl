@@ -90,6 +90,7 @@ class SFTScriptArguments:
         metadata={"help": "Whether to apply `use_reentrant` for gradient_checkpointing"},
     )
 
+
 @dataclass
 class SRPOScriptArguments:
     dataset_name: str = field(default=None, metadata={"help": "the dataset name"})

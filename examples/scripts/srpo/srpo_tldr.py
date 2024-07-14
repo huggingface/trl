@@ -124,9 +124,7 @@ python examples/scripts/srpo/srpo_tldr.py \
 
 
 if TRL_USE_RICH:
-    logging.basicConfig(
-        format=FORMAT, datefmt="[%X]", handlers=[RichHandler()], level=logging.INFO
-    )
+    logging.basicConfig(format=FORMAT, datefmt="[%X]", handlers=[RichHandler()], level=logging.INFO)
 
 
 if __name__ == "__main__":
@@ -156,14 +154,10 @@ if __name__ == "__main__":
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
-    model = AutoModelForCausalLM.from_pretrained(
-        model_config.model_name_or_path, **model_kwargs
-    )
+    model = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, **model_kwargs)
     peft_config = get_peft_config(model_config)
     if peft_config is None:
-        model_ref = AutoModelForCausalLM.from_pretrained(
-            model_config.model_name_or_path, **model_kwargs
-        )
+        model_ref = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, **model_kwargs)
     else:
         model_ref = None
     tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path)
@@ -190,17 +184,11 @@ TL;DR:
     ################
     # Optional rich context managers
     ###############
-    init_context = (
-        nullcontext()
-        if not TRL_USE_RICH
-        else console.status("[bold green]Initializing the DPOTrainer...")
-    )
+    init_context = nullcontext() if not TRL_USE_RICH else console.status("[bold green]Initializing the DPOTrainer...")
     save_context = (
         nullcontext()
         if not TRL_USE_RICH
-        else console.status(
-            f"[bold green]Training completed! Saving the model to {training_args.output_dir}"
-        )
+        else console.status(f"[bold green]Training completed! Saving the model to {training_args.output_dir}")
     )
 
     ################
@@ -223,17 +211,13 @@ TL;DR:
         # Given SRPO uses example and current answer we choose the longest of
         # chosen and rejected and use that for both to find max length
         if len(row["chosen"]) > len(row["rejected"]):
-            longest = len(
-                tokenizer.apply_chat_template(
-                    row["prompt"], example=row["chosen"], padding=False
-                )
-            ) + len(row["chosen"])
+            longest = len(tokenizer.apply_chat_template(row["prompt"], example=row["chosen"], padding=False)) + len(
+                row["chosen"]
+            )
         else:
-            longest = len(
-                tokenizer.apply_chat_template(
-                    row["prompt"], example=row["rejected"], padding=False
-                )
-            ) + len(row["rejected"])
+            longest = len(tokenizer.apply_chat_template(row["prompt"], example=row["rejected"], padding=False)) + len(
+                row["rejected"]
+            )
 
         row["longest_length"] = longest
 
@@ -250,12 +234,8 @@ TL;DR:
         # load_from_cache_file=False,
     )
 
-    train_dataset = train_dataset.filter(
-        lambda x: x["longest_length"] <= training_args.max_length
-    )
-    eval_dataset = eval_dataset.filter(
-        lambda x: x["longest_length"] <= training_args.max_length
-    ).select(range(1000))
+    train_dataset = train_dataset.filter(lambda x: x["longest_length"] <= training_args.max_length)
+    eval_dataset = eval_dataset.filter(lambda x: x["longest_length"] <= training_args.max_length).select(range(1000))
     ################
     # Training
     ################

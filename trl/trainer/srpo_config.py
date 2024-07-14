@@ -1,4 +1,3 @@
-
 # Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -104,6 +103,6 @@ class SRPOConfig(TrainingArguments):
     ref_model_mixup_alpha: float = 0.9
     ref_model_sync_steps: int = 64
     rpo_alpha: Optional[float] = None
-    prefix_zero_prompt: Optional[str] = None,
-    prefix_n_prompt: Optional[str] = None,
-    post_revision_prompt: Optional[str] = None,
+    prefix_zero_prompt: Optional[str] = (None,)
+    prefix_n_prompt: Optional[str] = (None,)
+    post_revision_prompt: Optional[str] = (None,)

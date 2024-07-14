@@ -87,9 +87,7 @@ from trl.trainer.utils import SIMPLE_SFT_CHAT_TEMPLATE
 tqdm.pandas()
 
 if TRL_USE_RICH:
-    logging.basicConfig(
-        format=FORMAT, datefmt="[%X]", handlers=[RichHandler()], level=logging.INFO
-    )
+    logging.basicConfig(format=FORMAT, datefmt="[%X]", handlers=[RichHandler()], level=logging.INFO)
 
 
 if __name__ == "__main__":
@@ -103,11 +101,7 @@ if __name__ == "__main__":
     ################
     # Model & Tokenizer
     ################
-    torch_dtype = (
-        model_config.torch_dtype
-        if model_config.torch_dtype in ["auto", None]
-        else model_config.torch_dtype
-    )
+    torch_dtype = model_config.torch_dtype if model_config.torch_dtype in ["auto", None] else model_config.torch_dtype
     quantization_config = get_quantization_config(model_config)
     model_kwargs = dict(
         revision=model_config.model_revision,
@@ -119,9 +113,7 @@ if __name__ == "__main__":
         # load_in_4bit=True,
         attn_implementation="flash_attention_2",
     )
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_config.model_name_or_path, use_fast=True
-    )
+    tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path, use_fast=True)
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_SFT_CHAT_TEMPLATE
 
@@ -138,17 +130,11 @@ if __name__ == "__main__":
     ################
     # Optional rich context managers
     ###############
-    init_context = (
-        nullcontext()
-        if not TRL_USE_RICH
-        else console.status("[bold green]Initializing the SFTTrainer...")
-    )
+    init_context = nullcontext() if not TRL_USE_RICH else console.status("[bold green]Initializing the SFTTrainer...")
     save_context = (
         nullcontext()
         if not TRL_USE_RICH
-        else console.status(
-            f"[bold green]Training completed! Saving the model to {training_args.output_dir}"
-        )
+        else console.status(f"[bold green]Training completed! Saving the model to {training_args.output_dir}")
     )
 
     def prepare_dataset(dataset, tokenizer):
