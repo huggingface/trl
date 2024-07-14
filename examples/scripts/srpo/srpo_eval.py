@@ -145,7 +145,7 @@ if __name__ == "__main__":
     untrained_model_name_or_path = "EleutherAI/pythia-1b-deduped"
     sft_model_name_or_path = "./srpo_sft_1"
     rlhf_model_name_or_path = "./srpo_tldr_peft_fix"
-    rlhf_pretrained_model = "cleanrl/EleutherAI_pythia-1b-deduped__ppo__tldr"
+    rlhf_pretrained_model = "dpo_tldr"
     
     model_ref = None
     tokenizer = AutoTokenizer.from_pretrained(untrained_model_name_or_path)
@@ -208,7 +208,7 @@ TL;DR:
          num_proc=multiprocessing.cpu_count(),
     )
 
-    test_dataset = test_dataset.filter(lambda x: x["longest_length"] <= 700).select(range(100))
+    test_dataset = test_dataset.filter(lambda x: x["longest_length"] <= 700).select(range(10))
     
     model_sft = AutoModelForCausalLM.from_pretrained(sft_model_name_or_path, **model_kwargs)
     model_untrained = AutoModelForCausalLM.from_pretrained(untrained_model_name_or_path, **model_kwargs)
@@ -251,7 +251,7 @@ TL;DR:
             print("******************************************************************")
             print("ITEM", templated_zero)
         inputs = tokenizer(templated_zero, return_tensors="pt")
-        rlhf_inputs = tokenizer(rlhf_templated_zero, return_tensors="pt")
+        rlhf_inputs = tokenizer(templated_zero, return_tensors="pt")
         untrained_output = model_untrained.generate(
             input_ids=inputs["input_ids"].cuda(),
             attention_mask=inputs["attention_mask"].cuda(),
@@ -295,6 +295,7 @@ TL;DR:
         zero_alpaca_farm_input_sft["output_2"] = sft_tldr
         zero_alpaca_farm_input_rlhf["output_2"] = current_tldr
         zero_alpaca_farm_input_rlhf_pretrained["output_2"] = rlhf_pretrained_tldr
+        import pdb; pdb.set_trace()
         if should_print:
             print(f"0 REVISION {current_tldr}")
         n_alpaca_farm_inputs = [n_alpaca_farm_input.copy() for a in range(5)]
@@ -319,6 +320,7 @@ TL;DR:
             print("DATASET TLDR", sft_summary)
             print("******************************************************************")
         alpaca_inputs =  [zero_alpaca_farm_input_rlhf_pretrained] + [zero_alpaca_farm_input_untrained] + [zero_alpaca_farm_input_sft] + [zero_alpaca_farm_input_rlhf] + n_alpaca_farm_inputs
+
         total_alpaca_inputs.append(alpaca_inputs)
         
         prompts.append(post)
@@ -339,6 +341,6 @@ TL;DR:
 
     overall = {"generations": generations, "preferred": preferred}
 
-    with open('generations.json', 'w') as f:
+    with open('dpo_generations.json', 'w') as f:
         json.dump(overall, f)
     
