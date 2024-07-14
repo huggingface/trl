@@ -169,7 +169,6 @@ TL;DR:
             print("******************************************************************")
             print("ITEM", templated_zero)
         inputs = tokenizer(templated_zero, return_tensors="pt")
-        rlhf_inputs = tokenizer(templated_zero, return_tensors="pt")
         untrained_output = model_untrained.generate(
             input_ids=inputs["input_ids"].cuda(),
             attention_mask=inputs["attention_mask"].cuda(),
@@ -192,8 +191,8 @@ TL;DR:
             pad_token_id=tokenizer.pad_token_id,
         )
         rlhf_pretrained_output = model_rlhf_pretrained.generate(
-            input_ids=rlhf_inputs["input_ids"].cuda(),
-            attention_mask=rlhf_inputs["attention_mask"].cuda(),
+            input_ids=inputs["input_ids"].cuda(),
+            attention_mask=inputs["attention_mask"].cuda(),
             max_length=700,
             do_sample=True,
             pad_token_id=tokenizer.pad_token_id,
