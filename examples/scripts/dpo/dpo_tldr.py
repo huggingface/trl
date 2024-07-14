@@ -109,9 +109,7 @@ from trl import (
 
 
 if TRL_USE_RICH:
-    logging.basicConfig(
-        format=FORMAT, datefmt="[%X]", handlers=[RichHandler()], level=logging.INFO
-    )
+    logging.basicConfig(format=FORMAT, datefmt="[%X]", handlers=[RichHandler()], level=logging.INFO)
 
 
 if __name__ == "__main__":
@@ -142,14 +140,10 @@ if __name__ == "__main__":
         quantization_config=quantization_config,
         attn_implementation="flash_attention_2",
     )
-    model = AutoModelForCausalLM.from_pretrained(
-        model_config.model_name_or_path, **model_kwargs
-    )
+    model = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, **model_kwargs)
     peft_config = get_peft_config(model_config)
     if peft_config is None:
-        model_ref = AutoModelForCausalLM.from_pretrained(
-            model_config.model_name_or_path, **model_kwargs
-        )
+        model_ref = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, **model_kwargs)
     else:
         model_ref = None
     tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path)
@@ -176,17 +170,11 @@ TL;DR:
     ################
     # Optional rich context managers
     ###############
-    init_context = (
-        nullcontext()
-        if not TRL_USE_RICH
-        else console.status("[bold green]Initializing the DPOTrainer...")
-    )
+    init_context = nullcontext() if not TRL_USE_RICH else console.status("[bold green]Initializing the DPOTrainer...")
     save_context = (
         nullcontext()
         if not TRL_USE_RICH
-        else console.status(
-            f"[bold green]Training completed! Saving the model to {training_args.output_dir}"
-        )
+        else console.status(f"[bold green]Training completed! Saving the model to {training_args.output_dir}")
     )
 
     ################
@@ -206,21 +194,15 @@ TL;DR:
         row["chosen"] = row["chosen"][1]["content"]
         row["rejected"] = row["rejected"][1]["content"]
         if len(row["chosen"]) > len(row["rejected"]):
-            longest = len(
-                tokenizer.apply_chat_template(
-                    row["prompt"], example=row["chosen"], padding=False
-                )
-            ) + len(row["chosen"])
+            longest = len(tokenizer.apply_chat_template(row["prompt"], example=row["chosen"], padding=False)) + len(
+                row["chosen"]
+            )
         else:
-            longest = len(
-                tokenizer.apply_chat_template(
-                    row["prompt"], example=row["rejected"], padding=False
-                )
-            ) + len(row["rejected"])
+            longest = len(tokenizer.apply_chat_template(row["prompt"], example=row["rejected"], padding=False)) + len(
+                row["rejected"]
+            )
 
-        row["prompt"] = tokenizer.apply_chat_template(
-            row["prompt"], add_special_tokens=False, tokenize=False
-        )
+        row["prompt"] = tokenizer.apply_chat_template(row["prompt"], add_special_tokens=False, tokenize=False)
 
         row["longest_length"] = longest
 
@@ -236,9 +218,7 @@ TL;DR:
     )
 
     train_dataset = train_dataset.filter(lambda x: x["longest_length"] <= 700)
-    eval_dataset = eval_dataset.filter(lambda x: x["longest_length"] <= 700).select(
-        range(1000)
-    )
+    eval_dataset = eval_dataset.filter(lambda x: x["longest_length"] <= 700).select(range(1000))
     ################
     # Training
     ################

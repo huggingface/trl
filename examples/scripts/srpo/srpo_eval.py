@@ -100,14 +100,7 @@ TL;DR:
         if row["prompt"].endswith("TL;DR:"):
             row["prompt"] = row["prompt"][:-6]
         row["message"] = row["messages"][1]["content"]
-        longest = (
-            len(
-                tokenizer.apply_chat_template(
-                    row["prompt"], example=row["message"], padding=False
-                )
-            )
-            + 30
-        )
+        longest = len(tokenizer.apply_chat_template(row["prompt"], example=row["message"], padding=False)) + 30
 
         row["longest_length"] = longest
         return row
@@ -118,22 +111,12 @@ TL;DR:
         num_proc=multiprocessing.cpu_count(),
     )
 
-    test_dataset = test_dataset.filter(lambda x: x["longest_length"] <= 700).select(
-        range(10)
-    )
+    test_dataset = test_dataset.filter(lambda x: x["longest_length"] <= 700).select(range(10))
 
-    model_sft = AutoModelForCausalLM.from_pretrained(
-        sft_model_name_or_path, **model_kwargs
-    )
-    model_untrained = AutoModelForCausalLM.from_pretrained(
-        untrained_model_name_or_path, **model_kwargs
-    )
-    model_rlhf = AutoModelForCausalLM.from_pretrained(
-        rlhf_model_name_or_path, **model_kwargs
-    )
-    model_rlhf_pretrained = AutoModelForCausalLM.from_pretrained(
-        rlhf_pretrained_model, **model_kwargs
-    )
+    model_sft = AutoModelForCausalLM.from_pretrained(sft_model_name_or_path, **model_kwargs)
+    model_untrained = AutoModelForCausalLM.from_pretrained(untrained_model_name_or_path, **model_kwargs)
+    model_rlhf = AutoModelForCausalLM.from_pretrained(rlhf_model_name_or_path, **model_kwargs)
+    model_rlhf_pretrained = AutoModelForCausalLM.from_pretrained(rlhf_pretrained_model, **model_kwargs)
 
     model_untrained.cuda().eval()
     model_sft.cuda().eval()
@@ -141,9 +124,7 @@ TL;DR:
     model_rlhf_pretrained.cuda().eval()
 
     annotator = PairwiseAutoAnnotator()
-    model_names = ["RLHF Pretrained", "Untrained", "SFT", "RLHF"] + [
-        f"RLHF Revision {i+1}" for i in range(5)
-    ]
+    model_names = ["RLHF Pretrained", "Untrained", "SFT", "RLHF"] + [f"RLHF Revision {i+1}" for i in range(5)]
     preferred = {}
     generations = []
     for m in model_names:
@@ -182,9 +163,7 @@ TL;DR:
             "input": post,
             "output_1": sft_summary,
         }
-        templated_zero = tokenizer.apply_chat_template(
-            item["prompt"], add_special_tokens=False, tokenize=False
-        )
+        templated_zero = tokenizer.apply_chat_template(item["prompt"], add_special_tokens=False, tokenize=False)
         rlhf_templated_zero = item["prompt"] + "TL;DR:"
         if should_print:
             print("******************************************************************")
@@ -219,18 +198,10 @@ TL;DR:
             do_sample=True,
             pad_token_id=tokenizer.pad_token_id,
         )
-        untrained_decoded_output = tokenizer.batch_decode(
-            untrained_output, skip_special_tokens=True
-        )[0]
-        sft_decoded_output = tokenizer.batch_decode(
-            sft_output, skip_special_tokens=True
-        )[0]
-        rlhf_decoded_output = tokenizer.batch_decode(
-            rlhf_output, skip_special_tokens=True
-        )[0]
-        rlhf_pretrained_decoded_output = tokenizer.batch_decode(
-            rlhf_pretrained_output, skip_special_tokens=True
-        )[0]
+        untrained_decoded_output = tokenizer.batch_decode(untrained_output, skip_special_tokens=True)[0]
+        sft_decoded_output = tokenizer.batch_decode(sft_output, skip_special_tokens=True)[0]
+        rlhf_decoded_output = tokenizer.batch_decode(rlhf_output, skip_special_tokens=True)[0]
+        rlhf_pretrained_decoded_output = tokenizer.batch_decode(rlhf_pretrained_output, skip_special_tokens=True)[0]
 
         if should_print:
             print(f"SFT: {sft_decoded_output[len(templated_zero):]}")
@@ -247,7 +218,6 @@ TL;DR:
             print(f"0 REVISION {current_tldr}")
         n_alpaca_farm_inputs = [n_alpaca_farm_input.copy() for a in range(5)]
         for n in range(5):
-
             templated_n = tokenizer.apply_chat_template(
                 item["prompt"],
                 example=current_tldr,
@@ -262,9 +232,7 @@ TL;DR:
                 do_sample=True,
                 pad_token_id=tokenizer.pad_token_id,
             )
-            n_rlhf_decoded_output = tokenizer.batch_decode(
-                n_rlhf_output, skip_special_tokens=True
-            )[0]
+            n_rlhf_decoded_output = tokenizer.batch_decode(n_rlhf_output, skip_special_tokens=True)[0]
             current_tldr = n_rlhf_decoded_output[len(templated_n) :]
             n_alpaca_farm_inputs[n]["output_2"] = current_tldr
             if should_print:
