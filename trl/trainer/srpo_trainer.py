@@ -53,7 +53,6 @@ from .utils import (
     trl_sanitze_kwargs_for_tagging,
 )
 
-
 if is_peft_available():
     from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
 
@@ -884,7 +883,7 @@ class SRPOTrainer(Trainer):
             prompt_tokens = {f"prompt_{k}": v for k, v in prompt_tokens.items()}
             if not isinstance(rejected, str):
                 raise ValueError(f"rejected should be an str but got {type(rejected)}")
-            # rejected_tokens = self.build_tokenized_answer(n_prompt, rejected)
+
             improve_to_chosen_given_rejected_tokens = self.build_tokenized_answer(
                 prompt, chosen, example=rejected
             )
@@ -947,12 +946,6 @@ class SRPOTrainer(Trainer):
                     len(answer_tokens["prompt_input_ids"]) + longer_response_length
                     > self.max_length
                 ):
-                    print(
-                        "***TOO LONG PROMPT",
-                        len(answer_tokens["prompt_input_ids"]) + longer_response_length,
-                        " > ",
-                        self.max_length,
-                    )
                     if self.truncation_mode == "keep_start":
                         for k in ["prompt_input_ids", "prompt_attention_mask"]:
                             answer_tokens[k] = answer_tokens[k][
@@ -975,13 +968,6 @@ class SRPOTrainer(Trainer):
                         len(answer_tokens["prompt_input_ids"]) + longer_response_length
                         > self.max_length
                     ):
-                        print(
-                            "***TOO LONG ANSWER",
-                            len(answer_tokens["prompt_input_ids"])
-                            + longer_response_length,
-                            " > ",
-                            self.max_length,
-                        )
                         for k in ["input_ids", "attention_mask"]:
                             answer_tokens[k] = answer_tokens[k][
                                 : self.max_length - self.max_prompt_length
