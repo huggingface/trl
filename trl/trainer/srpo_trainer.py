@@ -1,4 +1,4 @@
-# DPO Authors: Rafael Rafailov, Archit Sharma, Eric Mitchell, Stefano Ermon, Christopher D. Manning, and Chelsea Finn 2023
+# SRPO Authors: Eugene Choi, Arash Ahmadian, Matthieu Geist, Olivier Pietquin, Mohammad Gheshlaghi 2024
 # Copyright 2023 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -918,33 +918,11 @@ class SRPOTrainer(Trainer):
             # for k, v in prompt_tokens.items():
             #     prompt_tokens[k] = v[:prompt_len_input_ids]
 
-            # Make sure prompts only have one different token at most an
-            # and length only differs by 1 at most
-            # num_diff_tokens = sum(
-            #     [a != b for a, b in zip(chosen_tokens["prompt_input_ids"], rejected_tokens["prompt_input_ids"])]
-            # )
-            # num_diff_len = abs(chosen_prompt_len_input_ids - rejected_prompt_len_input_ids)
-            # if num_diff_tokens > 1 or num_diff_len > 1:
-            #     raise ValueError(
-            #         "Chosen and rejected prompt_input_ids might only differ on the "
-            #         "last token due to tokenizer merge ops."
-            #     )
-
             # add BOS token to head of prompt. Avoid adding if it's already there
             bos_token_id = self.tokenizer.bos_token_id
             for _, tokens in token_set.items():
                 tokens["prompt_input_ids"] = [bos_token_id] + tokens["prompt_input_ids"]
                 tokens["prompt_attention_mask"] = [1] + tokens["prompt_attention_mask"]
-
-            # if prompt_len_input_ids == 0 or bos_token_id != prompt_tokens["prompt_input_ids"][0]:
-            #     prompt_tokens["prompt_input_ids"] = [bos_token_id] + prompt_tokens["prompt_input_ids"]
-            #     prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens["prompt_attention_mask"]
-            # if chosen_prompt_len_input_ids == 0 or bos_token_id != chosen_tokens["prompt_input_ids"][0]:
-            #     chosen_tokens["prompt_input_ids"] = [bos_token_id] + chosen_tokens["prompt_input_ids"]
-            #     chosen_tokens["prompt_attention_mask"] = [1] + chosen_tokens["prompt_attention_mask"]
-            # if rejected_prompt_len_input_ids == 0 or bos_token_id != rejected_tokens["prompt_input_ids"][0]:
-            #     rejected_tokens["prompt_input_ids"] = [bos_token_id] + rejected_tokens["prompt_input_ids"]
-            #     rejected_tokens["prompt_attention_mask"] = [1] + rejected_tokens["prompt_attention_mask"]
 
             # add EOS token to end of answer. Avoid adding if it's already there
             eos_token_id = self.tokenizer.eos_token_id
@@ -952,13 +930,6 @@ class SRPOTrainer(Trainer):
                 if key != "zero_prompt":
                     tokens["input_ids"].append(eos_token_id)
                     tokens["attention_mask"].append(1)
-
-            # if len(chosen_tokens["input_ids"]) == 0 or eos_token_id != chosen_tokens["input_ids"][-1]:
-            #     chosen_tokens["input_ids"].append(eos_token_id)
-            #     chosen_tokens["attention_mask"].append(1)
-            # if len(rejected_tokens["input_ids"]) == 0 or eos_token_id != rejected_tokens["input_ids"][-1]:
-            #     rejected_tokens["input_ids"].append(eos_token_id)
-            #     rejected_tokens["attention_mask"].append(1)
 
             longer_response_length = max(
                 [
@@ -1031,15 +1002,6 @@ class SRPOTrainer(Trainer):
                         answer_tokens["prompt_input_ids"]
                     )
             result_sets["zero_prompt"] = token_set["zero_prompt"]
-            # rejected_sequence_tokens["labels"] = rejected_sequence_tokens["input_ids"][:]
-            # rejected_sequence_tokens["labels"][: len(rejected_tokens["prompt_input_ids"])] = [
-            #     self.label_pad_token_id
-            # ] * len(rejected_tokens["prompt_input_ids"])
-
-            # "improve_to_chosen_given_rejected": improve_to_chosen_given_rejected_tokens,
-            # "improve_to_chosen_given_chosen": improve_to_chosen_given_chosen_tokens,
-            # "improve_to_rejected_given_rejected": improve_to_rejected_given_rejected_tokens,
-            # "improve_to_rejected_given_chosen": improve_to_rejected_given_chosen_tokens
 
             for k, toks in result_sets.items():
                 for type_key, tokens in toks.items():
