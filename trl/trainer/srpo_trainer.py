@@ -1010,25 +1010,6 @@ class SRPOTrainer(Trainer):
 
         return concatenated_batch
 
-    # def self_improvement_loss(self, policy_logps, reference_logps):
-    #     rejected_to_chosen_improvement_ratio = policy_logps["improve_to_chosen_given_rejected"] - reference_logps["improve_to_chosen_given_rejected"]
-    #     rejected_to_rejected_improvement_ratio = policy_logps["improve_to_rejected_given_rejected"] - reference_logps["improve_to_rejected_given_rejected"]
-    #     given_rejected = (0.5 - self.beta * (rejected_to_chosen_improvement_ratio - rejected_to_rejected_improvement_ratio)) ** 2
-
-    #     chosen_to_chosen_improvement_ratio = policy_logps["improve_to_chosen_given_chosen"] - reference_logps["improve_to_chosen_given_chosen"]
-
-    #     chosen_to_rejected_improvement_ratio = policy_logps["improve_to_rejected_given_chosen"] - reference_logps["improve_to_rejected_given_chosen"]
-    #     given_chosen = (0.5 - self.beta * (chosen_to_chosen_improvement_ratio - chosen_to_rejected_improvement_ratio)) ** 2
-    #     return given_rejected + given_chosen, chosen_to_chosen_improvement_ratio, chosen_to_rejected_improvement_ratio, rejected_to_chosen_improvement_ratio, rejected_to_rejected_improvement_ratio
-
-    # def generative_loss(self, policy_logps, reference_logps):
-    #     rejected_to_chosen_improvement_ratio = policy_logps["improve_to_chosen_given_rejected"] - reference_logps["improve_to_chosen_given_rejected"]
-    #     chosen_to_rejected_improvement_ratio = policy_logps["improve_to_rejected_given_chosen"] - reference_logps["improve_to_rejected_given_chosen"]
-    #     chosen_zero_ratio = policy_logps["chosen"] - reference_logps["chosen"]
-    #     rejected_zero_ratio = policy_logps["rejected"] - reference_logps["rejected"]
-    #     log_terms = rejected_to_chosen_improvement_ratio + chosen_zero_ratio - (chosen_to_rejected_improvement_ratio + rejected_zero_ratio)
-    #     return (self.beta * log_terms - 1) ** 2
-
     def srpo_loss(
         self,
         policy_logps,
@@ -1211,12 +1192,6 @@ class SRPOTrainer(Trainer):
             result["logps"][key] = all_logps[i * len_chosen : (i + 1) * len_chosen]
             result["logits"][key] = all_logits[i * len_chosen : (i + 1) * len_chosen]
 
-        # chosen_logps = all_logps[:len_chosen]
-        # rejected_logps = all_logps[len_chosen:]
-
-        # chosen_logits = all_logits[:len_chosen]
-        # rejected_logits = all_logits[len_chosen:]
-
         # TODO should contain nll_loss
         return result
 
@@ -1329,7 +1304,7 @@ class SRPOTrainer(Trainer):
                 revisions.append([])
             prev_prompts = batch["prompt"]
             self.tokenizer.padding_side = "left"
-            for n in range(5):
+            for _ in range(5):
                 new_prompts = []
                 for i, output in enumerate(policy_output_decoded):
                     prompt = prev_prompts[i]
@@ -1358,7 +1333,7 @@ class SRPOTrainer(Trainer):
                     pad_token_id=self.tokenizer.pad_token_id,
                 )
                 policy_output_decoded = self.tokenizer.batch_decode(n_rlhf_output, skip_special_tokens=True)
-            current_revisions = []
+
             for i, output in enumerate(policy_output_decoded):
                 prompt = prev_prompts[i]
                 untemplated_prompt = batch["untemplated_prompt"][i]
