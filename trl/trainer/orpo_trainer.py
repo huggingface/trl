@@ -266,6 +266,7 @@ class ORPOTrainer(Trainer):
         self.tokenizer = tokenizer
 
         self.beta = args.beta
+        self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
@@ -439,21 +440,26 @@ class ORPOTrainer(Trainer):
                     "last token due to tokenizer merge ops."
                 )
 
-            # add BOS token to head of prompt
-            prompt_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + prompt_tokens["prompt_input_ids"]
-            chosen_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + chosen_tokens["prompt_input_ids"]
-            rejected_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + rejected_tokens["prompt_input_ids"]
+            # add BOS token to head of prompt. Avoid adding if it's already there
+            bos_token_id = self.tokenizer.bos_token_id
+            if prompt_len_input_ids == 0 or bos_token_id != prompt_tokens["prompt_input_ids"][0]:
+                prompt_tokens["prompt_input_ids"] = [bos_token_id] + prompt_tokens["prompt_input_ids"]
+                prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens["prompt_attention_mask"]
+            if chosen_prompt_len_input_ids == 0 or bos_token_id != chosen_tokens["prompt_input_ids"][0]:
+                chosen_tokens["prompt_input_ids"] = [bos_token_id] + chosen_tokens["prompt_input_ids"]
+                chosen_tokens["prompt_attention_mask"] = [1] + chosen_tokens["prompt_attention_mask"]
+            if rejected_prompt_len_input_ids == 0 or bos_token_id != rejected_tokens["prompt_input_ids"][0]:
+                rejected_tokens["prompt_input_ids"] = [bos_token_id] + rejected_tokens["prompt_input_ids"]
+                rejected_tokens["prompt_attention_mask"] = [1] + rejected_tokens["prompt_attention_mask"]
 
-            prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens["prompt_attention_mask"]
-            chosen_tokens["prompt_attention_mask"] = [1] + chosen_tokens["prompt_attention_mask"]
-            rejected_tokens["prompt_attention_mask"] = [1] + rejected_tokens["prompt_attention_mask"]
-
-            # add EOS token to end of answer
-            chosen_tokens["input_ids"].append(self.tokenizer.eos_token_id)
-            chosen_tokens["attention_mask"].append(1)
-
-            rejected_tokens["input_ids"].append(self.tokenizer.eos_token_id)
-            rejected_tokens["attention_mask"].append(1)
+            # add EOS token to end of answer. Avoid adding if it's already there
+            eos_token_id = self.tokenizer.eos_token_id
+            if len(chosen_tokens["input_ids"]) == 0 or eos_token_id != chosen_tokens["input_ids"][-1]:
+                chosen_tokens["input_ids"].append(eos_token_id)
+                chosen_tokens["attention_mask"].append(1)
+            if len(rejected_tokens["input_ids"]) == 0 or eos_token_id != rejected_tokens["input_ids"][-1]:
+                rejected_tokens["input_ids"].append(eos_token_id)
+                rejected_tokens["attention_mask"].append(1)
 
             longer_response_length = max(len(chosen_tokens["input_ids"]), len(rejected_tokens["input_ids"]))
 
@@ -683,6 +689,9 @@ class ORPOTrainer(Trainer):
             else {}
         )
 
+        if self.aux_loss_enabled:
+            model_kwargs["output_router_logits"] = True
+
         outputs = model(
             concatenated_batch["concatenated_input_ids"],
             attention_mask=concatenated_batch["concatenated_attention_mask"],
@@ -709,6 +718,8 @@ class ORPOTrainer(Trainer):
             labels = concatenated_batch["concatenated_labels"].clone()
         else:
             labels = concatenated_batch["concatenated_input_ids"].clone()
+            attention_mask = concatenated_batch["concatenated_attention_mask"]
+            labels = torch.where(attention_mask == 1, labels, self.label_pad_token_id)
 
         chosen_nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
 
@@ -726,6 +737,9 @@ class ORPOTrainer(Trainer):
         chosen_logits = all_logits[:len_chosen]
         rejected_logits = all_logits[len_chosen:]
 
+        if self.aux_loss_enabled:
+            return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, chosen_nll_loss, outputs.aux_loss)
+
         return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, chosen_nll_loss)
 
     def get_batch_loss_metrics(
@@ -737,13 +751,16 @@ class ORPOTrainer(Trainer):
         """Compute the ORPO loss and other metrics for the given batch of inputs for train or test."""
         metrics = {}
 
+        forward_output = self.concatenated_forward(model, batch)
         (
             policy_chosen_logps,
             policy_rejected_logps,
             policy_chosen_logits,
             policy_rejected_logits,
             policy_nll_loss,
-        ) = self.concatenated_forward(model, batch)
+        ) = forward_output[:5]
+        if self.aux_loss_enabled:
+            aux_loss = forward_output[5]
 
         losses, chosen_rewards, rejected_rewards, log_odds_ratio, log_odds_chosen = self.odds_ratio_loss(
             policy_chosen_logps, policy_rejected_logps
@@ -765,6 +782,9 @@ class ORPOTrainer(Trainer):
         metrics[f"{prefix}nll_loss"] = policy_nll_loss.detach().mean().cpu()
         metrics[f"{prefix}log_odds_ratio"] = log_odds_ratio
         metrics[f"{prefix}log_odds_chosen"] = log_odds_chosen
+
+        if self.aux_loss_enabled:
+            loss += getattr(model.config, "router_aux_loss_coef", 0.0) * aux_loss
 
         return loss, metrics
 

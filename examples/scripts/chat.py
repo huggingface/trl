@@ -211,19 +211,24 @@ def parse_settings(user_input, current_args, interface):
 
 
 def load_model_and_tokenizer(args):
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, revision=args.model_revision)
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.model_name_or_path,
+        revision=args.model_revision,
+        trust_remote_code=args.trust_remote_code,
+    )
 
     torch_dtype = args.torch_dtype if args.torch_dtype in ["auto", None] else getattr(torch, args.torch_dtype)
     quantization_config = get_quantization_config(args)
     model_kwargs = dict(
         revision=args.model_revision,
-        trust_remote_code=args.trust_remote_code,
         attn_implementation=args.attn_implementation,
         torch_dtype=torch_dtype,
         device_map="auto",
         quantization_config=quantization_config,
     )
-    model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path, **model_kwargs)
+    model = AutoModelForCausalLM.from_pretrained(
+        args.model_name_or_path, trust_remote_code=args.trust_remote_code, **model_kwargs
+    )
 
     if getattr(model, "hf_device_map", None) is None:
         model = model.to(args.device)

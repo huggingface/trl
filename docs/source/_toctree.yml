@@ -27,6 +27,10 @@
     title: Supervised Fine-Tuning
   - local: ppo_trainer
     title: PPO Trainer
+  - local: ppov2_trainer
+    title: PPOv2 Trainer
+  - local: rloo_trainer
+    title: RLOO Trainer
   - local: best_of_n
     title: Best of N Sampling
   - local: dpo_trainer
@@ -37,6 +41,8 @@
     title: CPO Trainer
   - local: ddpo_trainer
     title: Denoising Diffusion Policy Optimization
+  - local: alignprop_trainer
+    title: AlignProp Trainer
   - local: orpo_trainer
     title: ORPO Trainer
   - local: iterative_sft_trainer

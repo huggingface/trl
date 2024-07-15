@@ -105,7 +105,7 @@ class KTOTrainerTester(unittest.TestCase):
                 remove_unused_columns=False,
                 gradient_accumulation_steps=1,
                 learning_rate=9e-1,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 beta=0.1,
                 precompute_ref_log_probs=pre_compute,
                 loss_type=loss_type,
@@ -153,7 +153,7 @@ class KTOTrainerTester(unittest.TestCase):
                 remove_unused_columns=False,
                 gradient_accumulation_steps=1,
                 learning_rate=9e-1,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 beta=0.1,
             )
 
@@ -234,7 +234,7 @@ class KTOTrainerTester(unittest.TestCase):
                 remove_unused_columns=False,
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 beta=0.1,
             )
 
@@ -271,7 +271,7 @@ class KTOTrainerTester(unittest.TestCase):
                 remove_unused_columns=False,
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 beta=0.1,
                 loss_type="bco",
             )
@@ -331,7 +331,7 @@ class KTOTrainerTester(unittest.TestCase):
                 remove_unused_columns=False,
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 beta=0.1,
             )
 
@@ -371,7 +371,7 @@ class KTOTrainerTester(unittest.TestCase):
                 remove_unused_columns=False,
                 gradient_accumulation_steps=1,
                 learning_rate=9e-1,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 beta=0.1,
                 generate_during_eval=True,
             )
@@ -417,7 +417,7 @@ class KTOTrainerTester(unittest.TestCase):
                 remove_unused_columns=False,
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 beta=0.1,
             )
 

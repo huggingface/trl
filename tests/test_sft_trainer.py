@@ -25,6 +25,7 @@ from transformers import (
     AutoProcessor,
     AutoTokenizer,
     LlavaForConditionalGeneration,
+    TrainingArguments,
 )
 
 from trl import SFTConfig, SFTTrainer
@@ -213,12 +214,40 @@ class SFTTrainerTester(unittest.TestCase):
             decoded_text = self.tokenizer.decode(example["input_ids"])
             assert ("Question" in decoded_text) and ("Answer" in decoded_text)
 
+    def test_sft_trainer_backward_compatibility(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(
+                output_dir=tmp_dir,
+                eval_strategy="steps",
+                max_steps=4,
+                eval_steps=2,
+                save_steps=2,
+                per_device_train_batch_size=2,
+                hub_token="not_a_real_token",
+            )
+
+            trainer = SFTTrainer(
+                model=self.model_id,
+                args=training_args,
+                train_dataset=self.train_dataset,
+                eval_dataset=self.eval_dataset,
+            )
+
+            assert trainer.args.hub_token == training_args.hub_token
+
+            trainer.train()
+
+            assert trainer.state.log_history[(-1)]["train_loss"] is not None
+            assert trainer.state.log_history[0]["eval_loss"] is not None
+
+            assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2")
+
     def test_sft_trainer(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 max_steps=4,
                 eval_steps=2,
                 save_steps=2,
@@ -245,7 +274,7 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 max_steps=2,
                 eval_steps=1,
                 save_steps=1,
@@ -263,7 +292,7 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 max_steps=2,
                 eval_steps=1,
                 save_steps=1,
@@ -281,7 +310,7 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 max_steps=2,
                 eval_steps=1,
                 save_steps=1,
@@ -298,7 +327,7 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 max_steps=2,
                 eval_steps=1,
                 save_steps=1,
@@ -315,7 +344,7 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 max_steps=2,
                 eval_steps=1,
                 save_steps=1,
@@ -331,7 +360,7 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 max_steps=2,
                 eval_steps=1,
                 save_steps=1,
@@ -352,7 +381,7 @@ class SFTTrainerTester(unittest.TestCase):
                 training_args = SFTConfig(
                     output_dir=tmp_dir,
                     dataloader_drop_last=True,
-                    evaluation_strategy="steps",
+                    eval_strategy="steps",
                     max_steps=2,
                     eval_steps=1,
                     save_steps=1,
@@ -372,7 +401,7 @@ class SFTTrainerTester(unittest.TestCase):
                 training_args = SFTConfig(
                     output_dir=tmp_dir,
                     dataloader_drop_last=True,
-                    evaluation_strategy="steps",
+                    eval_strategy="steps",
                     max_steps=2,
                     eval_steps=1,
                     save_steps=1,
@@ -390,7 +419,7 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 max_steps=2,
                 eval_steps=1,
                 save_steps=1,
@@ -409,7 +438,7 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 max_steps=2,
                 eval_steps=1,
                 save_steps=1,
@@ -436,7 +465,7 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 max_steps=2,
                 save_steps=1,
                 num_train_epochs=2,
@@ -463,7 +492,7 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 max_steps=2,
                 save_steps=1,
                 num_train_epochs=2,
@@ -489,7 +518,7 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 max_steps=2,
                 eval_steps=1,
                 save_steps=1,
@@ -515,7 +544,7 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 max_steps=2,
                 save_steps=1,
                 per_device_train_batch_size=2,
@@ -542,7 +571,7 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 max_steps=2,
                 save_steps=1,
                 per_device_train_batch_size=2,
@@ -569,7 +598,7 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 max_steps=2,
                 save_steps=1,
                 per_device_train_batch_size=2,
@@ -593,7 +622,7 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 max_steps=2,
                 save_steps=1,
                 per_device_train_batch_size=2,
@@ -618,7 +647,7 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 max_steps=1,
                 eval_steps=1,
                 save_steps=1,
@@ -740,7 +769,7 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 max_steps=5,
                 eval_steps=1,
                 save_steps=1,
@@ -799,7 +828,7 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 max_steps=2,
                 eval_steps=1,
                 save_steps=1,
@@ -864,7 +893,7 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 max_steps=4,
                 eval_steps=2,
                 save_steps=2,
@@ -905,7 +934,7 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 max_steps=4,
                 eval_steps=2,
                 save_steps=2,
@@ -947,7 +976,7 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 max_steps=4,
                 eval_steps=2,
                 save_steps=2,
@@ -1009,7 +1038,7 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 max_steps=4,
                 eval_steps=2,
                 save_steps=2,
@@ -1042,7 +1071,7 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 max_steps=4,
                 eval_steps=2,
                 save_steps=2,
@@ -1065,7 +1094,7 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 max_steps=4,
                 eval_steps=2,
                 save_steps=2,
@@ -1089,7 +1118,7 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 max_steps=4,
                 eval_steps=2,
                 save_steps=2,
@@ -1111,7 +1140,7 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 max_steps=4,
                 eval_steps=2,
                 save_steps=2,
@@ -1136,7 +1165,7 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 max_steps=4,
                 eval_steps=2,
                 save_steps=2,
@@ -1156,13 +1185,36 @@ class SFTTrainerTester(unittest.TestCase):
             assert trainer.train_dataset.features == self.dummy_vsft_instruction_dataset.features
             assert trainer.eval_dataset.features == self.dummy_vsft_instruction_dataset.features
 
+    def test_sft_trainer_skip_prepare_dataset_with_no_packing(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = SFTConfig(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                eval_strategy="steps",
+                max_steps=4,
+                eval_steps=2,
+                save_steps=2,
+                per_device_train_batch_size=2,
+                gradient_checkpointing=True,
+                remove_unused_columns=False,
+                packing=False,
+                dataset_kwargs={"skip_prepare_dataset": True},
+            )
+
+            trainer = SFTTrainer(
+                model=self.model_id,
+                args=training_args,
+                train_dataset=self.dummy_dataset,
+            )
+            assert trainer.train_dataset.features == self.dummy_dataset.features
+
     @requires_pil
     def test_sft_trainer_llava(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                evaluation_strategy="steps",
+                eval_strategy="steps",
                 max_steps=4,
                 eval_steps=2,
                 save_steps=2,
@@ -1221,3 +1273,45 @@ class SFTTrainerTester(unittest.TestCase):
             assert trainer.state.log_history[0]["eval_loss"] is not None
 
             assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2")
+
+    def test_sft_trainer_torch_dtype(self):
+        # See https://github.com/huggingface/trl/issues/1751
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = SFTConfig(
+                output_dir=tmp_dir,
+                eval_strategy="steps",
+                max_steps=4,
+                eval_steps=2,
+                save_steps=2,
+                per_device_train_batch_size=2,
+                model_init_kwargs={"torch_dtype": torch.float16},
+            )
+            trainer = SFTTrainer(
+                model=self.model_id,
+                args=training_args,
+                train_dataset=self.train_dataset,
+                eval_dataset=self.eval_dataset,
+            )
+            assert trainer.model.config.torch_dtype == torch.float16
+
+        # Now test when `torch_dtype` is provided but is wrong
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = SFTConfig(
+                output_dir=tmp_dir,
+                eval_strategy="steps",
+                max_steps=4,
+                eval_steps=2,
+                save_steps=2,
+                per_device_train_batch_size=2,
+                model_init_kwargs={"torch_dtype": -1},
+            )
+            with pytest.raises(
+                ValueError,
+                match="Invalid `torch_dtype` passed to the SFTConfig. Expected a string with either `torch.dtype` or 'auto', but got -1.",
+            ):
+                _ = SFTTrainer(
+                    model=self.model_id,
+                    args=training_args,
+                    train_dataset=self.train_dataset,
+                    eval_dataset=self.eval_dataset,
+                )

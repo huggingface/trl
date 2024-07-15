@@ -100,6 +100,9 @@ class PreTrainedModelWrapper(nn.Module):
         if hasattr(pretrained_model, "gradient_checkpointing_enable"):
             self.gradient_checkpointing_enable = pretrained_model.gradient_checkpointing_enable
 
+        if hasattr(pretrained_model, "enable_input_require_grads"):
+            self.enable_input_require_grads = pretrained_model.enable_input_require_grads
+
         self.supports_rm_adapter = supports_rm_adapter
         self.rm_adapter_name = rm_adapter_name
         self.policy_adapter_name = "default"
@@ -212,7 +215,7 @@ class PreTrainedModelWrapper(nn.Module):
 
                 # Wrap the pretrained model with the trained peft adapter
                 pretrained_model = PeftModel.from_pretrained(
-                    pretrained_model, pretrained_model_name_or_path, is_trainable=is_trainable
+                    pretrained_model, pretrained_model_name_or_path, is_trainable=is_trainable, token=token
                 )
                 logging.info("Trained peft adapter loaded")
             else:
