@@ -57,13 +57,14 @@ if __name__ == "__main__":
     quantization_config = get_quantization_config(model_config)
     model_kwargs = dict(
         revision=model_config.model_revision,
-        trust_remote_code=model_config.trust_remote_code,
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
-    tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path, use_fast=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, use_fast=True
+    )
     model = AutoModelForSequenceClassification.from_pretrained(
-        model_config.model_name_or_path, num_labels=1, **model_kwargs
+        model_config.model_name_or_path, num_labels=1, trust_remote_code=model_config.trust_remote_code, **model_kwargs
     )
 
     if model_config.lora_task_type != "SEQ_CLS":
