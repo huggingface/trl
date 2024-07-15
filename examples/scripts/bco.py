@@ -169,7 +169,7 @@ if __name__ == "__main__":
     model = AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
     )
-    model_ref = AutoModelForCausalLM.from_pretrained(
+    ref_model = AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
     )
 
@@ -216,7 +216,7 @@ if __name__ == "__main__":
     # Initialize the KTO trainer
     kto_trainer = KTOTrainer(
         model,
-        model_ref,
+        ref_model,
         args=kto_args,
         train_dataset=formatted_dataset["train"],
         eval_dataset=formatted_dataset["test"],

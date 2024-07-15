@@ -147,7 +147,7 @@ from trl.core import respond_to_batch
 
 # get models
 model = AutoModelForCausalLMWithValueHead.from_pretrained('gpt2')
-model_ref = create_reference_model(model)
+ref_model = create_reference_model(model)
 
 tokenizer = AutoTokenizer.from_pretrained('gpt2')
 tokenizer.pad_token = tokenizer.eos_token
@@ -163,7 +163,7 @@ query_tensor = tokenizer.encode(query_txt, return_tensors="pt")
 response_tensor  = respond_to_batch(model, query_tensor)
 
 # create a ppo trainer
-ppo_trainer = PPOTrainer(ppo_config, model, model_ref, tokenizer)
+ppo_trainer = PPOTrainer(ppo_config, model, ref_model, tokenizer)
 
 # define a reward for response
 # (this could be any reward such as human feedback or output from another model)
