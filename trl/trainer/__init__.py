@@ -38,6 +38,8 @@ _import_structure = {
     "iterative_sft_trainer": ["IterativeSFTTrainer"],
     "kto_config": ["KTOConfig"],
     "kto_trainer": ["KTOTrainer"],
+    "bco_config": ["BCOConfig"],
+    "bco_trainer": ["BCOTrainer"],
     "model_config": ["ModelConfig"],
     "orpo_config": ["ORPOConfig"],
     "orpo_trainer": ["ORPOTrainer"],
@@ -86,6 +88,8 @@ if TYPE_CHECKING:
     from .alignprop_config import AlignPropConfig
     from .kto_config import KTOConfig
     from .kto_trainer import KTOTrainer
+    from .bco_config import BCOConfig
+    from .bco_trainer import BCOTrainer
     from .model_config import ModelConfig
     from .orpo_config import ORPOConfig
     from .orpo_trainer import ORPOTrainer
