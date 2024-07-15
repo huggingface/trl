@@ -1,5 +1,6 @@
 import unittest
-from trl.trainer.judges import PairRMJudge, MockJudge, MockAPIJudge, HuggingFaceJudge, OpenAIJudge
+
+from trl.trainer.judges import HuggingFaceJudge, MockAPIJudge, MockJudge, OpenAIJudge, PairRMJudge
 
 
 class TestJudges(unittest.TestCase):
