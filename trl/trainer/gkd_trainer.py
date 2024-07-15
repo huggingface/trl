@@ -19,11 +19,12 @@ from typing import Any, Dict, Optional, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import AutoModelForCausalLM, PreTrainedModel
+from transformers import AutoModelForCausalLM, GenerationConfig, PreTrainedModel
 
+from ..models.utils import unwrap_model_for_generation
 from .gkd_config import GKDConfig
 from .sft_trainer import SFTTrainer
-from .utils import disable_dropout_in_model
+from .utils import disable_dropout_in_model, generate
 
 
 class GKDTrainer(SFTTrainer):
@@ -153,11 +154,19 @@ class GKDTrainer(SFTTrainer):
         """
         if random.random() >= self.lmbda:
             # On-policy: Generate outputs from the student model with temperature self.temperature
-            with torch.no_grad():
-                generated_outputs = self.model.generate(
-                    inputs["input_ids"],
+            with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+                generation_config = GenerationConfig(
                     max_new_tokens=self.args.max_new_tokens_response,
                     temperature=self.temperature,
+                    top_k=0.0,
+                    top_p=1.0,
+                    do_sample=True,
+                )
+                generated_outputs, _ = generate(
+                    unwrapped_model,
+                    inputs["input_ids"],
+                    pad_token_id=self.tokenizer.pad_token_id,
+                    generation_config=generation_config,
                 )
                 inputs["input_ids"] = generated_outputs[:, :-1]
                 inputs["labels"] = generated_outputs[:, 1:]
