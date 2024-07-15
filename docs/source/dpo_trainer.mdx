@@ -108,7 +108,7 @@ training_args = DPOConfig(
 )
 dpo_trainer = DPOTrainer(
     model,
-    model_ref,
+    ref_model,
     args=training_args,
     train_dataset=train_dataset,
     tokenizer=tokenizer,  # for visual language models, use tokenizer=processor instead
@@ -227,7 +227,7 @@ The saved model is fully compatible with Hugging Face's transformers library. Le
 You have three main options (plus several variants) for how the reference model works when using PEFT, assuming the model that you would like to further enhance with DPO was tuned using (Q)LoRA.
 
 1. Simply create two instances of the model, each loading your adapter - works fine but is very inefficient.
-2. Merge the adapter into the base model, create another adapter on top, then leave the `model_ref` param null, in which case DPOTrainer will unload the adapter for reference inference - efficient, but has potential downsides discussed below.
+2. Merge the adapter into the base model, create another adapter on top, then leave the `ref_model` param null, in which case DPOTrainer will unload the adapter for reference inference - efficient, but has potential downsides discussed below.
 3. Load the adapter twice with different names, then use `set_adapter` during training to swap between the adapter being DPO'd and the reference adapter - slightly less efficient compared to 2 (~adapter size VRAM overhead), but avoids the pitfalls.
 
 ### Downsides to merging QLoRA before DPO (approach 2)

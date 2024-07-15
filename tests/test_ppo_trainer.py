@@ -114,7 +114,7 @@ class PPOTrainerTester(unittest.TestCase):
 
         # get models and tokenizer
         cls.gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(cls.model_id)
-        cls.gpt2_model_ref = AutoModelForCausalLMWithValueHead.from_pretrained(cls.model_id)
+        cls.gpt2_ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(cls.model_id)
         cls.gpt2_tokenizer = AutoTokenizer.from_pretrained(cls.model_id)
 
         cls.gpt2_tokenizer.pad_token = cls.gpt2_tokenizer.eos_token
@@ -175,7 +175,7 @@ class PPOTrainerTester(unittest.TestCase):
         ppo_trainer = PPOTrainer(
             config=self.ppo_config,
             model=self.gpt2_model,
-            ref_model=self.gpt2_model_ref,
+            ref_model=self.gpt2_ref_model,
             tokenizer=self.gpt2_tokenizer,
             dataset=dummy_dataset,
         )
@@ -190,7 +190,7 @@ class PPOTrainerTester(unittest.TestCase):
         ppo_trainer = PPOTrainer(
             config=self.ppo_config,
             model=self.gpt2_model,
-            ref_model=self.gpt2_model_ref,
+            ref_model=self.gpt2_ref_model,
             tokenizer=self.gpt2_tokenizer,
             dataset=dummy_dataset,
         )
@@ -218,7 +218,7 @@ class PPOTrainerTester(unittest.TestCase):
         ppo_trainer = PPOTrainer(
             config=self.ppo_config,
             model=self.gpt2_model,
-            ref_model=self.gpt2_model_ref,
+            ref_model=self.gpt2_ref_model,
             tokenizer=self.gpt2_tokenizer,
             dataset=dummy_dataset,
         )
@@ -434,7 +434,7 @@ class PPOTrainerTester(unittest.TestCase):
             _ = PPOTrainer(
                 config=self.ppo_config,
                 model=self.gpt2_model,
-                ref_model=self.gpt2_model_ref,
+                ref_model=self.gpt2_ref_model,
                 tokenizer=self.gpt2_tokenizer,
                 dataset=dummy_dataset,
                 num_shared_layers=num_shared_layers,
@@ -532,7 +532,7 @@ class PPOTrainerTester(unittest.TestCase):
             ppo_trainer = PPOTrainer(
                 config=self.ppo_config,
                 model=self.gpt2_model,
-                ref_model=self.gpt2_model_ref,
+                ref_model=self.gpt2_ref_model,
                 tokenizer=self.gpt2_tokenizer,
             )
         ppo_trainer.optimizer.zero_grad = partial(ppo_trainer.optimizer.zero_grad, set_to_none=False)
@@ -1267,7 +1267,7 @@ class PPOTrainerTester(unittest.TestCase):
         ppo_trainer = PPOTrainer(
             config=ppo_config,
             model=self.gpt2_model,
-            ref_model=self.gpt2_model_ref,
+            ref_model=self.gpt2_ref_model,
             tokenizer=self.gpt2_tokenizer,
             dataset=dummy_dataset,
         )
