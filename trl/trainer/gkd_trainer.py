@@ -80,14 +80,14 @@ class GKDTrainer(SFTTrainer):
         Compute the Generalized Jensen-Shannon Divergence loss for knowledge distillation using F.kl_div.
 
         Args:
-        - student_logits: Tensor of shape (batch_size, sequence_length, vocab_size)
-        - teacher_logits: Tensor of shape (batch_size, sequence_length, vocab_size)
-        - beta: Interpolation coefficient between 0 and 1 (default: 0.5)
-        - temperature: Softmax temperature (default: 1.0)
-        - reduction: Specifies the reduction to apply to the output (default: 'batchmean')
+            student_logits: Tensor of shape (batch_size, sequence_length, vocab_size)
+            teacher_logits: Tensor of shape (batch_size, sequence_length, vocab_size)
+            beta: Interpolation coefficient between 0 and 1 (default: 0.5)
+            temperature: Softmax temperature (default: 1.0)
+            reduction: Specifies the reduction to apply to the output (default: 'batchmean')
 
         Returns:
-        - loss: Scalar tensor with the generalized JSD loss
+            loss: Scalar tensor with the generalized JSD loss
         """
 
         # Apply temperature scaling
