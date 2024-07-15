@@ -110,7 +110,6 @@ class SRPOScriptArguments:
         default=False,
         metadata={"help": "Whether to apply `use_reentrant` for gradient_checkpointing"},
     )
-    # revisions: int = field(default=5, metadata={"help": "Number of revisions for SRPO"},)
 
 
 @dataclass
