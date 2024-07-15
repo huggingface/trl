@@ -1,3 +1,4 @@
+# flake8: noqa
 # Copyright 2023 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +29,24 @@ python examples/scripts/gkd.py \
     --push_to_hub \
     --gradient_checkpointing
 
+# peft:
+python examples/scripts/gkd.py \
+    --model_name_or_path="facebook/opt-125m" \
+    --teacher_model_name_or_path="facebook/opt-350m" \
+    --dataset_text_field="text" \
+    --report_to="wandb" \
+    --learning_rate=1.41e-5 \
+    --per_device_train_batch_size=64 \
+    --gradient_accumulation_steps=16 \
+    --output_dir="sft_openassistant-guanaco" \
+    --logging_steps=1 \
+    --num_train_epochs=3 \
+    --max_steps=-1 \
+    --push_to_hub \
+    --gradient_checkpointing \
+    --use_peft \
+    --lora_r=64 \
+    --lora_alpha=16
 """
 
 import logging
@@ -35,9 +54,10 @@ import os
 from contextlib import nullcontext
 
 from trl.commands.cli_utils import SFTScriptArguments, TrlParser, init_zero_verbose
+from trl.env_utils import strtobool
 
 
-TRL_USE_RICH = os.environ.get("TRL_USE_RICH", False)
+TRL_USE_RICH = strtobool(os.getenv("TRL_USE_RICH", "0"))
 
 if TRL_USE_RICH:
     init_zero_verbose()
