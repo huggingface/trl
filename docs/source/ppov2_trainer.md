@@ -199,7 +199,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
     --model_name_or_path EleutherAI/pythia-6.9b-deduped \
     --sft_model_path cleanrl/EleutherAI_pythia-6.9b-deduped__sft__tldr \
     --reward_model_path cleanrl/EleutherAI_pythia-6.9b-deduped__reward__tldr \
-    --local_rollout_forward_batch_size 2 \
+    --local_rollout_forward_batch_size 4 \
     --non_eos_penalty \
     --stop_token eos \
 ```
@@ -229,7 +229,18 @@ python -i examples/scripts/evals/generate_tldr.py \
 # response1    472
 # Name: count, dtype: int64
 ```
+import matplotlib.pyplot as plt
 
+ys = [34.4, 53.2, 52.8]
+xs = ["SFT policy", "RLOO policy 1B", "PPO Policy 1B"]
+
+plt.bar(xs, ys)
+plt.ylabel('Win rate against reference summaries')
+plt.xlabel('Model Name')
+plt.title('Win Rate Comparison')
+
+plt.show()
+```
 The PPO checkpoint gets a 52.8% preferred rate vs the 34.4% preference rate of the SFT checkpoint. This is a good sign that the PPO training is working as intended.
 
 

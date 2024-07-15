@@ -455,16 +455,16 @@ class OnlineDPOTrainer(Trainer):
                                 loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = loss
                                 chosen_rewards_stats[
                                     ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
-                                ] = chosen_rewards
+                                ] = chosen_rewards.mean()
                                 rejected_rewards_stats[
                                     ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
-                                ] = rejected_rewards
+                                ] = rejected_rewards.mean()
                                 chosen_logprobs_stats[
                                     ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
-                                ] = chosen_logprobs_sum
+                                ] = chosen_logprobs_sum.mean()
                                 rejected_logprobs_stats[
                                     ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
-                                ] = rejected_logprobs_sum
+                                ] = rejected_logprobs_sum.mean()
                         gradient_accumulation_idx += 1
                     minibatch_idx += 1
                     self.state.global_step += 1
