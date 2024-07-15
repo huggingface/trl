@@ -177,7 +177,7 @@ class PairRMJudge(BaseJudge):
         return ranks[:, 0].tolist()
 
 
-class MockJudge:
+class MockJudge(BaseJudge):
     """
     Mock judge that randomly selects a model for each completion pair.
     """
