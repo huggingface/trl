@@ -11,42 +11,38 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import Optional, Union
+from typing import List, Optional, Union
 
 import torch
 from accelerate import Accelerator
 from accelerate.state import AcceleratorState
-from accelerate.utils import is_deepspeed_available
+from accelerate.utils import gather_object, is_deepspeed_available
+from datasets import Dataset
 from rich.console import Console, Group
 from rich.live import Live
 from rich.panel import Panel
 from rich.progress import Progress
-from transformers import PreTrainedModel
-from transformers.trainer import TrainerCallback
-from transformers.trainer_utils import has_length
-
-
-if is_deepspeed_available():
-    import deepspeed
-from typing import List
-
-from accelerate.utils import gather_object
-from datasets import Dataset
 from tqdm import tqdm
 from transformers import (
     GenerationConfig,
+    PreTrainedModel,
     TrainerCallback,
     TrainerControl,
     TrainerState,
     TrainingArguments,
     is_wandb_available,
 )
+from transformers.trainer_utils import has_length
 
 from ..models.utils import unwrap_model_for_generation
 
 
+if is_deepspeed_available():
+    import deepspeed
+
 if is_wandb_available():
     import wandb
+
 
 class SyncRefModelCallback(TrainerCallback):
     def __init__(
