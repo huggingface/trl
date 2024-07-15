@@ -34,11 +34,10 @@ import logging
 import os
 from contextlib import nullcontext
 
-
-TRL_USE_RICH = os.environ.get("TRL_USE_RICH", False)
-
 from trl.commands.cli_utils import SFTScriptArguments, TrlParser, init_zero_verbose
 
+
+TRL_USE_RICH = os.environ.get("TRL_USE_RICH", False)
 
 if TRL_USE_RICH:
     init_zero_verbose()
@@ -47,7 +46,6 @@ if TRL_USE_RICH:
     from rich.console import Console
     from rich.logging import RichHandler
 
-import torch
 from datasets import load_dataset
 from tqdm.rich import tqdm
 from transformers import AutoTokenizer
@@ -81,29 +79,26 @@ if __name__ == "__main__":
     ################
     # Model & Tokenizer
     ################
-    torch_dtype = (
-        model_config.torch_dtype
-        if model_config.torch_dtype in ["auto", None]
-        else getattr(torch, model_config.torch_dtype)
-    )
     quantization_config = get_quantization_config(model_config)
     model_kwargs = dict(
         revision=model_config.model_revision,
         trust_remote_code=model_config.trust_remote_code,
         attn_implementation=model_config.attn_implementation,
-        torch_dtype=torch_dtype,
+        torch_dtype=model_config.torch_dtype,
         use_cache=False if training_args.gradient_checkpointing else True,
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
-    tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path, use_fast=True)
+    training_args.model_init_kwargs = model_kwargs
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, use_fast=True
+    )
     tokenizer.pad_token = tokenizer.eos_token
 
     ################
     # Dataset
     ################
     raw_datasets = load_dataset(args.dataset_name)
-
     train_dataset = raw_datasets[args.dataset_train_split]
     eval_dataset = raw_datasets[args.dataset_test_split]
 
@@ -124,7 +119,6 @@ if __name__ == "__main__":
         trainer = GKDTrainer(
             model=model_config.model_name_or_path,
             teacher_model=training_args.teacher_model_name_or_path,
-            model_init_kwargs=model_kwargs,
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
@@ -132,4 +126,8 @@ if __name__ == "__main__":
             peft_config=get_peft_config(model_config),
             callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
         )
+
     trainer.train()
+
+    with save_context:
+        trainer.save_model(training_args.output_dir)
