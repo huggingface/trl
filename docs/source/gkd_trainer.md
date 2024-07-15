@@ -6,9 +6,11 @@ TRL support the Genralized Knowledge Distillation (GKD) Trainer which is a new a
 2. GKD allows flexibility in choosing different divergence measures between student and teacher models, which can be useful when the student lacks the capacity to fully mimic the teacher.
 
 
-The GKD Trainer is a wrapper around the `SFTTrainer` class that takes in a teacher model argument.
+The GKD Trainer is a wrapper around the `SFTTrainer` class that takes in a teacher model argument. It needs two parameters to be set via the `GKDConfig`:
+* `lmbda`:  the parameter that controls the student data fraction (i.e., the proportion of on-policy student-generated outputs), in other words the data mixing (supervised vs. on-policy);
+* `beta`: controls the interpolation in the Generalized Jensen-Shannon Divergence, when `beta=0` the loss approximates reverse KL divergence,  when `beta=1` the loss approximates forward KL divergence and for ranges in between it interpolates between the two.
 
-
+The authors find that on-policy data (high `lmbda`) performs better and the optimal `beta` varied depending on the task and evaluation method.
 
 ## GKDTrainer
 
