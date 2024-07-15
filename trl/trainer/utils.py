@@ -972,8 +972,6 @@ class OnlineTrainerState(TrainerState):
 @dataclass
 class OnPolicyConfig(TrainingArguments):
     # common config
-    exp_name: str = os.path.basename(__file__)[: -len(".py")]
-    """the name of this experiment"""
     run_name: Optional[str] = None
     """a unique name of this run"""
     sanity_check: bool = False
