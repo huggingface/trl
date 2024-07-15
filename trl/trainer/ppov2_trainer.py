@@ -1,4 +1,5 @@
 import gc
+import math
 import os
 import time
 from collections import OrderedDict, defaultdict
@@ -20,7 +21,6 @@ from transformers import (
     Trainer,
     TrainerCallback,
     TrainerControl,
-    TrainerState,
 )
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
@@ -29,6 +29,7 @@ from transformers.trainer_callback import CallbackHandler, PrinterCallback
 from ..core import masked_mean, masked_whiten
 from ..models.utils import unwrap_model_for_generation
 from ..trainer.utils import (
+    OnlineTrainerState,
     batch_generation,
     disable_dropout_in_model,
     exact_div,
@@ -96,7 +97,6 @@ class PPOv2Trainer(Trainer):
         self.data_collator = data_collator
         self.eval_dataset = eval_dataset
         self.optimizer, self.lr_scheduler = optimizers
-        self.callbacks = callbacks
 
         #########
         # calculate various batch sizes
@@ -145,7 +145,7 @@ class PPOv2Trainer(Trainer):
         #########
         ### trainer specifics
         #########
-        self.state = TrainerState(
+        self.state = OnlineTrainerState(
             is_local_process_zero=self.is_local_process_zero(),
             is_world_process_zero=self.is_world_process_zero(),
         )
@@ -260,7 +260,6 @@ class PPOv2Trainer(Trainer):
         )
 
         accelerator.print("===training policy===")
-        global_step = 0
         start_time = time.time()
         stats_shape = (args.num_ppo_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
         approxkl_stats = torch.zeros(stats_shape, device=device)
@@ -271,8 +270,32 @@ class PPOv2Trainer(Trainer):
         entropy_stats = torch.zeros(stats_shape, device=device)
         ratio_stats = torch.zeros(stats_shape, device=device)
         model.train()
+
+        # trainer state initialization
+        self.state.global_step = 0
+        self.state.episode = 0
+        self.state.max_steps = args.num_updates * args.num_mini_batches
+        self.state.num_train_epochs = args.total_episodes / self.train_dataset_len
+        # Compute absolute values for logging, eval, and save if given as ratio
+        if args.logging_steps is not None:
+            if args.logging_steps < 1:
+                self.state.logging_steps = math.ceil(self.state.max_steps * args.logging_steps)
+            else:
+                self.state.logging_steps = args.logging_steps
+        if args.eval_steps is not None:
+            if args.eval_steps < 1:
+                self.state.eval_steps = math.ceil(self.state.max_steps * args.eval_steps)
+            else:
+                self.state.eval_steps = args.eval_steps
+        if args.save_steps is not None:
+            if args.save_steps < 1:
+                self.state.save_steps = math.ceil(self.state.max_steps * args.save_steps)
+            else:
+                self.state.save_steps = args.save_steps
+        self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
+
         for update in range(1, args.num_updates + 1):
-            global_step += 1 * args.batch_size
+            self.state.episode += 1 * args.batch_size
             self.lr_scheduler.step()
             data = next(iter_dataloader)
             with torch.no_grad():
@@ -299,7 +322,6 @@ class PPOv2Trainer(Trainer):
                     query_response = query_responses[i : i + args.local_rollout_forward_batch_size]
                     response = query_response[:, context_length:]
                     logits = logitss[i : i + args.local_rollout_forward_batch_size]
-                    response = query_response[:, context_length:]
                     all_logprob = F.log_softmax(logits, dim=-1)
                     logprob = torch.gather(all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
                     del logits, all_logprob
@@ -481,7 +503,7 @@ class PPOv2Trainer(Trainer):
                 mean_entropy = (-logprobs).sum(1).mean()
                 mean_non_score_reward = non_score_reward.sum(1).mean()
                 rlhf_reward = mean_non_score_reward + scores.mean()
-                eps = int(global_step / (time.time() - start_time))
+                eps = int(self.state.episode / (time.time() - start_time))
                 metrics = {}
                 metrics["eps"] = eps
                 metrics["objective/kl"] = self.accelerator.gather(mean_kl).mean().item()
@@ -499,10 +521,15 @@ class PPOv2Trainer(Trainer):
                 metrics["val/ratio_var"] = self.accelerator.gather(ratio_stats).var().item()
                 metrics["val/num_eos_tokens"] = (responses == tokenizer.eos_token_id).sum().item()
                 metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
-                metrics["episode"] = global_step
-                self.state.epoch = global_step / self.train_dataset_len  # used by self.log
+                metrics["episode"] = self.state.episode
+                self.state.epoch = self.state.episode / self.train_dataset_len  # used by self.log
                 self.log(metrics)
             del kl, mean_kl, mean_entropy, mean_non_score_reward, scores, metrics, non_score_reward
+
+            self.control = self.callback_handler.on_step_end(args, self.state, self.control)
+            if self.control.should_save:
+                self._save_checkpoint(model, trial=None, metrics=metrics)
+                self.control = self.callback_handler.on_save(self.args, self.state, self.control)
             torch.cuda.empty_cache()
             gc.collect()
 

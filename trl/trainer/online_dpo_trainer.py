@@ -39,16 +39,12 @@ from ..trainer.utils import (
     prepare_deepspeed,
     print_rich_table,
     truncate_response,
+    OnlineTrainerState,
 )
 from .online_dpo_config import OnlineDPOConfig
 
 
 INVALID_LOGPROB = 1.0
-
-
-@dataclass
-class OnlineTrainerState(TrainerState):
-    episode: int = 0
 
 
 class OnlineDPOTrainer(Trainer):
@@ -225,8 +221,6 @@ class OnlineDPOTrainer(Trainer):
         )
 
         accelerator.print("===training policy===")
-        self.state.global_step = 0
-        self.state.episode = 0
         start_time = time.time()
         stats_shape = (args.num_ppo_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
         loss_stats = torch.zeros(stats_shape, device=device)
@@ -235,11 +229,12 @@ class OnlineDPOTrainer(Trainer):
         chosen_logprobs_stats = torch.zeros(stats_shape, device=device)
         rejected_logprobs_stats = torch.zeros(stats_shape, device=device)
         model.train()
+
+        # trainer state initialization
+        self.state.global_step = 0
+        self.state.episode = 0
         self.state.max_steps = args.num_updates * args.num_mini_batches
         self.state.num_train_epochs = args.total_episodes / self.train_dataset_len
-        self.state.is_local_process_zero = self.is_local_process_zero()
-        self.state.is_world_process_zero = self.is_world_process_zero()
-
         # Compute absolute values for logging, eval, and save if given as ratio
         if args.logging_steps is not None:
             if args.logging_steps < 1:
@@ -256,7 +251,6 @@ class OnlineDPOTrainer(Trainer):
                 self.state.save_steps = math.ceil(self.state.max_steps * args.save_steps)
             else:
                 self.state.save_steps = args.save_steps
-
         self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
 
         for update in range(1, args.num_updates + 1):
@@ -267,7 +261,6 @@ class OnlineDPOTrainer(Trainer):
                 queries = data["input_ids"].to(device)
                 queries = queries.repeat(args.num_generation_per_prompt, 1)
                 context_length = queries.shape[1]
-                query_responses = []
                 responses = []
                 postprocessed_responses = []
                 logprobs = []
@@ -397,7 +390,6 @@ class OnlineDPOTrainer(Trainer):
 
                             concat_mb_inds = torch.cat((chosen_mb_inds, rejected_mb_inds), dim=0)
                             concat_query_responses = query_responses[concat_mb_inds]
-                            # breakpoint()
                             concat_output = forward(model, concat_query_responses, tokenizer.pad_token_id)
                             num_examples = chosen_mb_inds.shape[0]
                             chosen_logits = concat_output.logits[:num_examples]
@@ -484,7 +476,6 @@ class OnlineDPOTrainer(Trainer):
                 mean_entropy = (-logprobs).sum(1).mean()
                 mean_non_score_reward = non_score_reward.mean()
                 eps = int(self.state.episode / (time.time() - start_time))
-
                 metrics = {}
                 metrics["eps"] = eps
                 metrics["objective/kl"] = self.accelerator.gather(mean_kl).mean().item()

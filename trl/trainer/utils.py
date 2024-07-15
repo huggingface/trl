@@ -37,6 +37,7 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     TrainingArguments,
+    TrainerState,
 )
 from transformers.trainer import TrainerCallback
 from transformers.trainer_utils import has_length
@@ -961,6 +962,11 @@ SIMPLE_SFT_CHAT_TEMPLATE = "{% for message in messages %}{{' ' + message['conten
 SIMPLE_QUERY_CHAT_TEMPLATE = "{% for message in messages %}{{' ' + message['content']}}{% endfor %}"
 # SIMPLE_QUERY_CHAT_TEMPLATE is a variant of SIMPLE_SFT_CHAT_TEMPLATE, which does not end the content with EOS token. The idea
 # is to have the generated response to end with an EOS token, but the query itself should not end with EOS tokens.
+
+
+@dataclass
+class OnlineTrainerState(TrainerState):
+    episode: int = 0
 
 
 @dataclass

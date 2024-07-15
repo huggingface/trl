@@ -20,7 +20,6 @@ from transformers import (
     Trainer,
     TrainerCallback,
     TrainerControl,
-    TrainerState,
 )
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
@@ -28,6 +27,7 @@ from transformers.trainer_callback import CallbackHandler, PrinterCallback
 
 from ..models.utils import unwrap_model_for_generation
 from ..trainer.utils import (
+    OnlineTrainerState,
     batch_generation,
     disable_dropout_in_model,
     exact_div,
@@ -76,7 +76,6 @@ class RLOOTrainer(Trainer):
         self.data_collator = data_collator
         self.eval_dataset = eval_dataset
         self.optimizer, self.lr_scheduler = optimizers
-        self.callbacks = callbacks
 
         #########
         # calculate various batch sizes
@@ -121,7 +120,7 @@ class RLOOTrainer(Trainer):
         #########
         ### trainer specifics
         #########
-        self.state = TrainerState(
+        self.state = OnlineTrainerState(
             is_local_process_zero=self.is_local_process_zero(),
             is_world_process_zero=self.is_world_process_zero(),
         )
@@ -191,6 +190,7 @@ class RLOOTrainer(Trainer):
         accelerator = self.accelerator
         optimizer = self.optimizer
         model = self.model
+        self.model_wrapped = self.model
         ref_policy = self.ref_policy
         reward_model = self.reward_model
         tokenizer = self.tokenizer
@@ -212,7 +212,6 @@ class RLOOTrainer(Trainer):
         )
 
         accelerator.print("===training policy===")
-        global_step = 0
         start_time = time.time()
         stats_shape = (args.num_ppo_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
         approxkl_stats = torch.zeros(stats_shape, device=device)
@@ -223,8 +222,32 @@ class RLOOTrainer(Trainer):
         entropy_stats = torch.zeros(stats_shape, device=device)
         ratio_stats = torch.zeros(stats_shape, device=device)
         model.train()
+
+        # trainer state initialization
+        self.state.global_step = 0
+        self.state.episode = 0
+        self.state.max_steps = args.num_updates * args.num_mini_batches
+        self.state.num_train_epochs = args.total_episodes / self.train_dataset_len
+        # Compute absolute values for logging, eval, and save if given as ratio
+        if args.logging_steps is not None:
+            if args.logging_steps < 1:
+                self.state.logging_steps = math.ceil(self.state.max_steps * args.logging_steps)
+            else:
+                self.state.logging_steps = args.logging_steps
+        if args.eval_steps is not None:
+            if args.eval_steps < 1:
+                self.state.eval_steps = math.ceil(self.state.max_steps * args.eval_steps)
+            else:
+                self.state.eval_steps = args.eval_steps
+        if args.save_steps is not None:
+            if args.save_steps < 1:
+                self.state.save_steps = math.ceil(self.state.max_steps * args.save_steps)
+            else:
+                self.state.save_steps = args.save_steps
+        self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
+
         for update in range(1, args.num_updates + 1):
-            global_step += 1 * args.batch_size
+            self.state.episode += 1 * args.batch_size
             self.lr_scheduler.step()
             data = next(iter_dataloader)
             with torch.no_grad():
@@ -373,6 +396,7 @@ class RLOOTrainer(Trainer):
                                 ratio_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = new_ratio.mean()
                         gradient_accumulation_idx += 1
                     minibatch_idx += 1
+                    self.state.global_step += 1
                     # del everything and empty cache
                     # fmt: off
                     del (
@@ -387,7 +411,7 @@ class RLOOTrainer(Trainer):
                 mean_kl = kl.sum(1).mean()
                 mean_entropy = (-logprobs).sum(1).mean()
                 mean_non_score_reward = non_score_reward.mean()
-                eps = int(global_step / (time.time() - start_time))
+                eps = int(self.state.episode / (time.time() - start_time))
                 metrics = {}
                 metrics["eps"] = eps
                 metrics["objective/kl"] = self.accelerator.gather(mean_kl).mean().item()
@@ -405,10 +429,15 @@ class RLOOTrainer(Trainer):
                 metrics["val/ratio_var"] = self.accelerator.gather(ratio_stats).var().item()
                 metrics["val/num_eos_tokens"] = (responses == tokenizer.eos_token_id).sum().item()
                 metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
-                metrics["episode"] = global_step
-                self.state.epoch = global_step / self.train_dataset_len  # used by self.log
+                metrics["episode"] = self.state.episode
+                self.state.epoch = self.state.episode / self.train_dataset_len  # used by self.log
                 self.log(metrics)
             del kl, mean_kl, mean_entropy, scores
+
+            self.control = self.callback_handler.on_step_end(args, self.state, self.control)
+            if self.control.should_save:
+                self._save_checkpoint(model, trial=None, metrics=metrics)
+                self.control = self.callback_handler.on_save(self.args, self.state, self.control)
             torch.cuda.empty_cache()
             gc.collect()
 
