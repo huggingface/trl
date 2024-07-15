@@ -57,6 +57,12 @@ _import_structure = {
         "SFTTrainer",
         "FDivergenceConstants",
         "FDivergenceType",
+        "WinRateCallback",
+        "HuggingFaceJudge",
+        "MockAPIJudge",
+        "MockJudge",
+        "OpenAIJudge",
+        "PairRMJudge",
     ],
     "commands": [],
     "commands.cli_utils": ["init_zero_verbose", "SFTScriptArguments", "DPOScriptArguments", "TrlParser"],
@@ -129,6 +135,12 @@ if TYPE_CHECKING:
         SFTTrainer,
         FDivergenceConstants,
         FDivergenceType,
+        WinRateCallback,
+        HuggingFaceJudge,
+        MockAPIJudge,
+        MockJudge,
+        OpenAIJudge,
+        PairRMJudge,
     )
     from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config, RichProgressCallback
     from .commands.cli_utils import init_zero_verbose, SFTScriptArguments, DPOScriptArguments, TrlParser

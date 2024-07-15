@@ -50,7 +50,7 @@ _import_structure = {
     "base": ["BaseTrainer"],
     "ddpo_config": ["DDPOConfig"],
     "callbacks": ["WinRateCallback"],
-    "judges": ["MockJudge", "PairRMJudge", "OpenAIJudge", "HuggingFaceJudge"],
+    "judges": ["HuggingFaceJudge", "MockAPIJudge", "MockJudge", "OpenAIJudge", "PairRMJudge"],
 }
 
 try:
@@ -97,6 +97,8 @@ if TYPE_CHECKING:
     from .reward_trainer import RewardTrainer, compute_accuracy
     from .sft_config import SFTConfig
     from .sft_trainer import SFTTrainer
+    from .callbacks import WinRateCallback
+    from .judges import HuggingFaceJudge, MockAPIJudge, MockJudge, OpenAIJudge, PairRMJudge
 
     try:
         if not is_diffusers_available():
