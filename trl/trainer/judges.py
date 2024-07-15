@@ -3,7 +3,7 @@ import os
 import random
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 from accelerate import Accelerator
@@ -51,7 +51,9 @@ Evaluate the models based on the quality and relevance of their outputs, and sel
 
 
 class BaseJudge(ABC):
-    """Base class for LLM judges."""
+    """
+    Base class for LLM judges.
+    """
 
     @abstractmethod
     def judge(self, prompts: List[str], completion_pairs: List[List[str]], shuffle_order: bool = True) -> List[int]:
@@ -80,18 +82,21 @@ class BaseJudge(ABC):
 
 
 class BaseAPIJudge(BaseJudge):
-    """Base class for LLM judges reached via an API.
+    """
+    Base class for LLM judges reached via an API.
 
     The subclasses of this class should implement the `get_response` method to interact with the API.
 
     Args:
-        system_prompt (`str`, *optional*): The system prompt to be used for the judge.
+        system_prompt (`str`, *optional*): The system prompt to be used for the judge. If not provided, a default prompt is used.
         max_tries (`int`, *optional*): The maximum number of retries for a request. Defaults to 5.
         max_workers (`int`, *optional*): The maximum number of parallel requests. Defaults to 8.
     """
 
     # TODO: add max_requests parameter to limit the number of requests made
-    def __init__(self, system_prompt: str = DEFAULT_SYSTEM_PROMPT, max_tries: int = 5, max_workers: int = 8):
+    def __init__(self, system_prompt: Optional[str] = None, max_tries: int = 5, max_workers: int = 8):
+        if system_prompt is None:
+            system_prompt = DEFAULT_SYSTEM_PROMPT
         self.system_prompt = system_prompt
         self.max_tries = max_tries
         self.thread_pool_executor = ThreadPoolExecutor(max_workers=max_workers)
@@ -148,7 +153,8 @@ class BaseAPIJudge(BaseJudge):
 
 
 class PairRMJudge(BaseJudge):
-    """LLM judge based on the PairRM model from AllenAI.
+    """
+    LLM judge based on the PairRM model from AllenAI.
 
     See: https://huggingface.co/llm-blender/PairRM
     """
@@ -172,24 +178,38 @@ class PairRMJudge(BaseJudge):
 
 
 class MockJudge:
-    """Mock judge that randomly selects a model for each completion pair."""
+    """
+    Mock judge that randomly selects a model for each completion pair.
+    """
 
     def judge(self, prompts: List[str], completion_pairs: List[List[str]]) -> List[int]:
         return [random.choice([0, 1]) for _ in range(len(prompts))]
 
 
 class MockAPIJudge(BaseAPIJudge):
-    """Mock judge that returns a random choice instead of interacting with an API."""
+    """
+    Mock judge that returns a random choice instead of interacting with an API.
+    """
 
     def get_response(self, content: str) -> str:
         return random.choice(["0", "1"])
 
 
 class HuggingFaceJudge(BaseAPIJudge):
+    """
+    Judge based on the Hugging Face API.
+
+    Args:
+        model (`str`, *optional*): The model to use for the judge. Defaults to "meta-llama/Meta-Llama-3-70B-Instruct".
+        system_prompt (`str`, *optional*): The system prompt to be used for the judge. If not provided, a default prompt is used.
+        max_tries (`int`, *optional*): The maximum number of retries for a request. Defaults to 5.
+        max_workers (`int`, *optional*): The maximum number of parallel requests. Defaults to 8.
+    """
+
     def __init__(
         self,
         model="meta-llama/Meta-Llama-3-70B-Instruct",
-        system_prompt: str = DEFAULT_SYSTEM_PROMPT,
+        system_prompt: Optional[str] = None,
         max_tries: int = 5,
         max_workers: int = 8,
     ):
@@ -210,10 +230,20 @@ class HuggingFaceJudge(BaseAPIJudge):
 
 
 class OpenAIJudge(BaseAPIJudge):
+    """
+    Judge based on the OpenAI API.
+
+    Args:
+        model (`str`, *optional*): The model to use for the judge. Defaults to "gpt-4-turbo-preview".
+        system_prompt (`str`, *optional*): The system prompt to be used for the judge. If not provided, a default prompt is used.
+        max_tries (`int`, *optional*): The maximum number of retries for a request. Defaults to 5.
+        max_workers (`int`, *optional*): The maximum number of parallel requests. Defaults to 8.
+    """
+
     def __init__(
         self,
         model="gpt-4-turbo-preview",
-        system_prompt: str = DEFAULT_SYSTEM_PROMPT,
+        system_prompt: Optional[str] = None,
         max_tries: int = 5,
         max_workers: int = 8,
     ):
