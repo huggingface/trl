@@ -43,11 +43,11 @@ from transformers.trainer_utils import EvalLoopOutput
 
 from ..import_utils import is_peft_available, is_wandb_available
 from ..models import PreTrainedModelWrapper, create_reference_model
+from .callbacks import SyncRefModelCallback
 from .dpo_config import DPOConfig, FDivergenceConstants, FDivergenceType
 from .utils import (
     DPODataCollatorWithPadding,
     RunningMoments,
-    SyncRefModelCallback,
     cap_exp,
     disable_dropout_in_model,
     pad_to_length,
