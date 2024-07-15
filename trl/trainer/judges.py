@@ -2,9 +2,10 @@ import logging
 import os
 import random
 from abc import ABC, abstractmethod
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from typing import List
 
+import numpy as np
 from accelerate import Accelerator
 from huggingface_hub import InferenceClient
 from requests import HTTPError
@@ -50,39 +51,47 @@ Evaluate the models based on the quality and relevance of their outputs, and sel
 
 
 class BaseJudge(ABC):
-    """Base class for local LLM judges."""
-
-    def shuffle_pairs(self, pairs: List[List[str]]) -> List[List[str]]:
-        """Shuffles each pair of completions to mitigate positional bias."""
-        shuffled_pairs = []
-        for pair in pairs:
-            shuffled_pair = pair.copy()
-            random.shuffle(shuffled_pair)
-            shuffled_pairs.append(shuffled_pair)
-        return shuffled_pairs
+    """Base class for LLM judges."""
 
     @abstractmethod
-    def judge_single(self, prompt: str, completion_pair: List[str]) -> int:
-        """Judge a single completion pair."""
+    def judge(self, prompts: List[str], completion_pairs: List[List[str]], shuffle_order: bool = True) -> List[int]:
+        """
+        Judge the completion pairs for the given prompts.
+
+        Args:
+            prompts (`List[str]`): List of prompts.
+            completion_pairs (`List[List[str]]`): List of completion pairs, where each pair is a list of two strings.
+            shuffle_order (`bool`): Whether to shuffle the order of the completion pairs, to avoid positional bias.
+
+        Returns:
+            List of integers, where each integer is the index of the completion pair that is preferred.
+
+        Example:
+
+        >>> from trl.trainer.judges import HuggingFaceJudge
+        >>> judge = HuggingFaceJudge()
+        >>> judge.judge(
+                prompts=["What is the capital of France?", "What is the capital of Germany?"],
+                completion_pairs=[["Paris", "Marseille"], ["Munich", "Berlin"]]
+            )
+        [0, 1]
+        """
         raise NotImplementedError("Judge subclasses must implement this method.")
 
-    def judge_batch(self, prompts: List[str], completion_pairs: List[List[str]]) -> List[int]:
-        """Judge a batch of completion pairs."""
-        results = []
-        completion_pairs = self.shuffle_pairs(completion_pairs)
-        for prompt, completion_pair in zip(prompts, completion_pairs):
-            result = self.judge_single(prompt, completion_pair)
-            results.append(result)
-        return results
 
+class BaseAPIJudge(BaseJudge):
+    """Base class for LLM judges reached via an API.
 
-class BaseAPIJudge(ABC):
-    """Base class for LLM judges reached via an API."""
+    The subclasses of this class should implement the `get_response` method to interact with the API.
+
+    Args:
+        system_prompt (`str`, *optional*): The system prompt to be used for the judge.
+        max_tries (`int`, *optional*): The maximum number of retries for a request. Defaults to 5.
+        max_workers (`int`, *optional*): The maximum number of parallel requests. Defaults to 8.
+    """
 
     # TODO: add max_requests parameter to limit the number of requests made
-    def __init__(self, system_prompt: str = None, max_tries: int = 5, max_workers: int = 8):
-        if system_prompt is None:
-            system_prompt = DEFAULT_SYSTEM_PROMPT
+    def __init__(self, system_prompt: str = DEFAULT_SYSTEM_PROMPT, max_tries: int = 5, max_workers: int = 8):
         self.system_prompt = system_prompt
         self.max_tries = max_tries
         self.thread_pool_executor = ThreadPoolExecutor(max_workers=max_workers)
@@ -92,56 +101,100 @@ class BaseAPIJudge(ABC):
 
     @abstractmethod
     def get_response(self, content: str) -> str:
+        """
+        Get the response from the API for the given content.
+
+        Args:
+            content (`str`): The string content.
+
+        Returns:
+            The response from the API as a string.
+        """
+
         raise NotImplementedError("Judge subclasses must implement this method.")
 
-    def judge(self, prompt: str, completion_pair: List[str], shuffle_order: bool) -> int:
-        if self.max_tries <= 0:
-            logging.info(
-                f"Max retries reached for prompt:\n\n{prompt}\nand completion pair:\n\n{completion_pair}\n\nReturning random choice."
+    def judge_single(self, prompt: str, completion_pair: List[str], shuffle_order: bool = True) -> int:
+        flipped = random.choice([True, False]) if shuffle_order else False
+        completion_pair = completion_pair[::-1] if flipped else completion_pair
+
+        retry = 0
+        while retry < self.max_tries:
+            content = self.system_prompt.format(
+                prompt=prompt, response1=completion_pair[0], response2=completion_pair[1]
             )
-            return random.choice([0, 1])
+            reply = self.get_response(content)
+            reply = reply.strip()
 
-        shuffle_index = 0 if not shuffle_order else random.choice([0, 1])
-        content = self.system_prompt.format(
-            prompt=prompt, response1=completion_pair[shuffle_index], response2=completion_pair[1 - shuffle_index]
+            if reply in ["0"]:
+                return 0 if not flipped else 1
+            elif reply in ["1"]:
+                return 1 if not flipped else 0
+            else:
+                logging.info(f"Judge gave response `{reply}` instead of the expected 0 or 1. Retrying.")
+                retry += 1
+
+        logging.info(
+            f"Max retries reached for prompt:\n\n{prompt}\nand completion pair:\n\n{completion_pair}\n\nReturning random choice."
         )
-        reply = self.get_response(content)
-        reply = reply.strip()
+        return random.choice([0, 1])
 
-        if reply in [
-            "0",
-        ]:
-            return shuffle_index
-        elif reply in [
-            "1",
-        ]:
-            return 1 - shuffle_index
-        else:
-            logging.info(f"Judge gave response `{reply}` instead of the expected 0 or 1. Retrying.")
-            self.max_tries -= 1
-            return self.judge(prompt, completion_pair, shuffle_order)
-
-    def judge_single(self, prompt: str, completion_pair: List[str], shuffle_order: bool = True) -> Future:
-        return self.thread_pool_executor.submit(self.judge, prompt, completion_pair, shuffle_order)
-
-    def judge_batch(
-        self, prompts: List[str], completion_pairs: List[List[str]], shuffle_order: bool = True
-    ) -> List[int]:
+    def judge(self, prompts: List[str], completion_pairs: List[List[str]], shuffle_order: bool = True) -> List[int]:
         futures = []
         for prompt, completion_pair in zip(prompts, completion_pairs):
-            future = self.judge_single(prompt, completion_pair, shuffle_order=shuffle_order)
+            future = self.thread_pool_executor.submit(self.judge_single, prompt, completion_pair, shuffle_order)
             futures.append(future)
 
-        results = [f.result() for f in futures]
+        return [f.result() for f in futures]
 
-        return results
+
+class PairRMJudge(BaseJudge):
+    """LLM judge based on the PairRM model from AllenAI.
+
+    See: https://huggingface.co/llm-blender/PairRM
+    """
+
+    def __init__(self):
+        if not is_llmblender_available():
+            raise ValueError("llm-blender is not installed. Please install it with 'pip install llm-blender'.")
+        self.blender = llm_blender.Blender()
+        self.blender.loadranker("llm-blender/PairRM", device=Accelerator().device)
+
+    def judge(self, prompts: List[str], completion_pairs: List[List[str]], shuffle_order: bool = True) -> List[int]:
+        if shuffle_order:
+            flip_mask = np.random.choice([True, False], size=len(prompts))
+            completion_pairs = [pair[::-1] if flip else pair for flip, pair in zip(flip_mask, completion_pairs)]
+        ranks = self.blender.rank(prompts, completion_pairs)
+        ranks -= 1  # PairRM is 1-indexed, so we subtract 1 to make it 0-indexed
+        if shuffle_order:
+            # Flip back the ranks to the original order
+            ranks[flip_mask] = ranks[flip_mask][:, ::-1]
+        return ranks[:, 0].tolist()
+
+
+class MockJudge:
+    """Mock judge that randomly selects a model for each completion pair."""
+
+    def judge(self, prompts: List[str], completion_pairs: List[List[str]]) -> List[int]:
+        return [random.choice([0, 1]) for _ in range(len(prompts))]
+
+
+class MockAPIJudge(BaseAPIJudge):
+    """Mock judge that returns a random choice instead of interacting with an API."""
+
+    def get_response(self, content: str) -> str:
+        return random.choice(["0", "1"])
 
 
 class HuggingFaceJudge(BaseAPIJudge):
-    def __init__(self, max_workers=8, model="meta-llama/Meta-Llama-3-70B-Instruct"):
-        super().__init__(max_workers=max_workers)
+    def __init__(
+        self,
+        model="meta-llama/Meta-Llama-3-70B-Instruct",
+        system_prompt: str = DEFAULT_SYSTEM_PROMPT,
+        max_tries: int = 5,
+        max_workers: int = 8,
+    ):
+        super().__init__(system_prompt=system_prompt, max_tries=max_tries, max_workers=max_workers)
         self.client = InferenceClient(model=model)
-        self.model_name = model
 
     def get_response(self, content: str) -> str:
         try:
@@ -157,45 +210,27 @@ class HuggingFaceJudge(BaseAPIJudge):
 
 
 class OpenAIJudge(BaseAPIJudge):
-    def __init__(self, max_workers=8, model_name="gpt-4-turbo-preview"):
+    def __init__(
+        self,
+        model="gpt-4-turbo-preview",
+        system_prompt: str = DEFAULT_SYSTEM_PROMPT,
+        max_tries: int = 5,
+        max_workers: int = 8,
+    ):
         if not is_openai_available():
             raise ValueError("OpenAI client is not installed. Please install it with 'pip install openai'.")
-        super().__init__(max_workers=max_workers)
-        self.client = OpenAI(api_key=os.environ["OPENAI_API_KEY"], max_retries=5)
-        self.model_name = model_name
+        super().__init__(system_prompt=system_prompt, max_tries=max_tries, max_workers=max_workers)
+        self.client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        self.model = model
 
     def get_response(self, content: str) -> str:
         try:
             response = self.client.chat.completions.create(
-                model=self.model_name,
+                model=self.model,
                 messages=[{"role": "user", "content": content}],
                 max_tokens=1,  # TODO: let users configure these variables
             )
             return response.choices[0].message.content
         except BadRequestError as e:
-            logging.info(f"Unable to reach to OpenAI API due to error: {e}\nReturning random choice (0,1)")
+            logging.warn(f"Unable to reach to OpenAI API due to error: {e}\nReturning random choice (0, 1)")
             return random.choice(["0", "1"])
-
-
-class PairRMJudge(BaseJudge):
-    """LLM judge based on the PairRM model from AllenAI.
-
-    See: https://huggingface.co/llm-blender/PairRM
-    """
-
-    def __init__(self):
-        if not is_llmblender_available():
-            raise ValueError("llm-blender is not installed. Please install it with 'pip install llm-blender'.")
-        self.blender = llm_blender.Blender()
-        self.blender.loadranker("llm-blender/PairRM", device=Accelerator().device)
-
-    def judge_single(self, prompt: str, completion_pair: List[str]) -> int:
-        ranks = self.blender.rank([prompt], [completion_pair])
-        # PairRM is 1-indexed, so we subtract 1 to make it 0-indexed
-        ranks -= 1
-        return ranks[0][0]
-
-
-class MockJudge(BaseJudge):
-    def judge_single(self, prompt: str, completion_pair: List[str]) -> int:
-        return random.choice([0, 1])
