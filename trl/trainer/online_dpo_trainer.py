@@ -3,7 +3,6 @@ import math
 import os
 import time
 from collections import defaultdict
-from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -22,7 +21,6 @@ from transformers import (
     Trainer,
     TrainerCallback,
     TrainerControl,
-    TrainerState,
 )
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
@@ -30,6 +28,7 @@ from transformers.trainer_callback import CallbackHandler, PrinterCallback
 
 from ..models.utils import unwrap_model_for_generation
 from ..trainer.utils import (
+    OnlineTrainerState,
     batch_generation,
     disable_dropout_in_model,
     exact_div,
@@ -39,7 +38,6 @@ from ..trainer.utils import (
     prepare_deepspeed,
     print_rich_table,
     truncate_response,
-    OnlineTrainerState,
 )
 from .online_dpo_config import OnlineDPOConfig
 
@@ -476,6 +474,8 @@ class OnlineDPOTrainer(Trainer):
                 mean_entropy = (-logprobs).sum(1).mean()
                 mean_non_score_reward = non_score_reward.mean()
                 eps = int(self.state.episode / (time.time() - start_time))
+                g_chosen_reward = self.accelerator.gather(chosen_rewards_stats)
+                g_rejected_reward = self.accelerator.gather(rejected_rewards_stats)
                 metrics = {}
                 metrics["eps"] = eps
                 metrics["objective/kl"] = self.accelerator.gather(mean_kl).mean().item()
@@ -484,15 +484,13 @@ class OnlineDPOTrainer(Trainer):
                 metrics["objective/rlhf_reward"] = self.accelerator.gather(rlhf_reward).mean().item()
                 metrics["objective/scores"] = self.accelerator.gather(scores.mean()).mean().item()
                 metrics["objective/scores_margin"] = self.accelerator.gather(scores_margin.mean()).mean().item()
-                metrics["rewards/chosen"] = chosen_rewards.mean().item()
-                metrics["rewards/rejected"] = rejected_rewards.mean().item()
-                metrics["rewards/accuracies"] = (chosen_rewards > rejected_rewards).float().mean().item()
-                metrics["rewards/margins"] = (chosen_rewards - rejected_rewards).mean().item()
+                metrics["rewards/chosen"] = g_chosen_reward.mean().item()
+                metrics["rewards/rejected"] = g_rejected_reward.mean().item()
+                metrics["rewards/accuracies"] = (g_chosen_reward > g_rejected_reward).float().mean().item()
+                metrics["rewards/margins"] = (g_chosen_reward - g_rejected_reward).mean().item()
                 metrics["loss/policy_avg"] = self.accelerator.gather(loss_stats).mean().item()
-                metrics["train/rewards/chosen"] = self.accelerator.gather(chosen_rewards_stats).mean().item()
-                metrics["train/rewards/rejected"] = self.accelerator.gather(rejected_rewards_stats).mean().item()
-                metrics["train/logps/chosen"] = self.accelerator.gather(chosen_logprobs_stats).mean().item()
-                metrics["train/logps/rejected"] = self.accelerator.gather(rejected_logprobs_stats).mean().item()
+                metrics["logps/chosen"] = self.accelerator.gather(chosen_logprobs_stats).mean().item()
+                metrics["logps/rejected"] = self.accelerator.gather(rejected_logprobs_stats).mean().item()
                 metrics["val/num_eos_tokens"] = (responses == tokenizer.eos_token_id).sum().item()
                 metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
                 metrics["episode"] = self.state.episode
