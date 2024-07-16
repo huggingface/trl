@@ -35,31 +35,14 @@ from trl import ModelConfig, SRPOConfig, get_kbit_device_map, get_quantization_c
 
 
 if __name__ == "__main__":
-    parser = TrlParser((SRPOScriptArguments, SRPOConfig, ModelConfig))
-    args, training_args, model_config = parser.parse_args_and_config()
-
     ################
     # Model & Tokenizer
     ################
-    torch_dtype = (
-        model_config.torch_dtype
-        if model_config.torch_dtype in ["auto", None]
-        else getattr(torch, model_config.torch_dtype)
-    )
-    quantization_config = get_quantization_config(model_config)
-    model_kwargs = dict(
-        revision=model_config.model_revision,
-        trust_remote_code=model_config.trust_remote_code,
-        attn_implementation=model_config.attn_implementation,
-        torch_dtype=torch_dtype,
-        use_cache=False if training_args.gradient_checkpointing else True,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
-        quantization_config=quantization_config,
-    )
+    torch_dtype = torch.bfloat16
 
     untrained_model_name_or_path = "EleutherAI/pythia-1b-deduped"
     sft_model_name_or_path = "./srpo_sft_1"
-    rlhf_model_name_or_path = "./srpo_tldr_peft_fix"
+    rlhf_model_name_or_path = "./srpo_tldr_final_full"
     rlhf_pretrained_model = "dpo_tldr"
 
     model_ref = None
@@ -92,10 +75,6 @@ TL;DR:
     raw_datasets = load_dataset("trl-internal-testing/tldr-preference-sft-trl-style")
     test_dataset = raw_datasets["test"]
 
-    # if args.sanity_check:
-    #     for key in ds:
-    #         ds[key] = ds[key].select(range(50))
-
     def process(row):
         if row["prompt"].endswith("TL;DR:"):
             row["prompt"] = row["prompt"][:-6]
@@ -105,18 +84,17 @@ TL;DR:
         row["longest_length"] = longest
         return row
 
-    # train_dataset = train_dataset.map(
     test_dataset = test_dataset.map(
         process,
         num_proc=multiprocessing.cpu_count(),
     )
 
-    test_dataset = test_dataset.filter(lambda x: x["longest_length"] <= 700).select(range(10))
+    test_dataset = test_dataset.filter(lambda x: x["longest_length"] <= 700).select(range(100))
 
-    model_sft = AutoModelForCausalLM.from_pretrained(sft_model_name_or_path, **model_kwargs)
-    model_untrained = AutoModelForCausalLM.from_pretrained(untrained_model_name_or_path, **model_kwargs)
-    model_rlhf = AutoModelForCausalLM.from_pretrained(rlhf_model_name_or_path, **model_kwargs)
-    model_rlhf_pretrained = AutoModelForCausalLM.from_pretrained(rlhf_pretrained_model, **model_kwargs)
+    model_sft = AutoModelForCausalLM.from_pretrained(sft_model_name_or_path)
+    model_untrained = AutoModelForCausalLM.from_pretrained(untrained_model_name_or_path)
+    model_rlhf = AutoModelForCausalLM.from_pretrained(rlhf_model_name_or_path)
+    model_rlhf_pretrained = AutoModelForCausalLM.from_pretrained(rlhf_pretrained_model)
 
     model_untrained.cuda().eval()
     model_sft.cuda().eval()
