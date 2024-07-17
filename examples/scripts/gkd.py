@@ -79,14 +79,70 @@ from trl import (
     get_peft_config,
     get_quantization_config,
 )
-
+from trl.trainer.utils import pad
 
 tqdm.pandas()
 
 if TRL_USE_RICH:
     logging.basicConfig(format=FORMAT, datefmt="[%X]", handlers=[RichHandler()], level=logging.INFO)
 
+import torch
+from typing import List, Dict, Any, Union
+from transformers import DataCollatorForLanguageModeling
 
+class DataCollatorForLastCompletionLM(DataCollatorForLanguageModeling):
+    """
+    Data collator for language modeling that ignores all tokens except the last completion.
+    It also separates prompts and completions for easy access.
+
+    Args:
+        tokenizer: The tokenizer to use for encoding the data.
+        mlm (bool): Whether to use masked language modeling. Default is False.
+        response_template (str): The template that marks the start of a response.
+        ignore_index (int): The index to use for ignoring tokens in loss calculation.
+    """
+
+    def __init__(self, tokenizer, mlm: bool = False, response_template: str = "### Response:\n", ignore_index: int = -100):
+        super().__init__(tokenizer=tokenizer, mlm=mlm)
+        self.response_template = self.tokenizer.encode(response_template, add_special_tokens=False)
+        self.ignore_index = ignore_index
+
+    def torch_call(self, examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
+        batch = super().torch_call(examples)
+
+        prompts = []
+        completions = []
+
+        for i in range(len(examples)):
+            input_ids = batch["input_ids"][i]
+            labels = batch["labels"][i]
+
+            # Find all occurrences of the response template
+            response_starts = [j for j in range(len(input_ids) - len(self.response_template) + 1)
+                               if input_ids[j:j+len(self.response_template)].tolist() == self.response_template]
+
+            if not response_starts:
+                # If no response template is found, treat the whole input as a prompt
+                prompts.append(input_ids)
+                completions.append(torch.tensor([]))
+                labels[:] = self.ignore_index
+            else:
+                # Get the start of the last response
+                last_response_start = response_starts[-1]
+
+                # Separate prompt and completion
+                prompts.append(input_ids[:last_response_start])
+                completions.append(input_ids[last_response_start+len(self.response_template):])
+
+                # Set labels for all tokens before the last response to ignore_index
+                labels[:last_response_start+len(self.response_template)] = self.ignore_index
+
+        # Add prompts and completions to the batch
+        batch["prompts"] = pad(prompts, padding_value=self.tokenizer.pad_token_id, padding_side="left")
+        batch["completions"] = pad(completions, padding_value=self.tokenizer.pad_token_id, padding_side="right")
+
+        return batch
+    
 if __name__ == "__main__":
     parser = TrlParser((SFTScriptArguments, GKDConfig, ModelConfig))
     args, training_args, model_config = parser.parse_args_and_config()
@@ -111,9 +167,22 @@ if __name__ == "__main__":
     )
     training_args.model_init_kwargs = model_kwargs
     tokenizer = AutoTokenizer.from_pretrained(
-        model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, use_fast=True
+        model_config.model_name_or_path, 
+        trust_remote_code=model_config.trust_remote_code, 
+        use_fast=True,
     )
     tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.model_max_length = 1024
+
+    instruction_template = "### Human:"
+    response_template = "### Assistant:"
+    collator = DataCollatorForLastCompletionLM(
+        # instruction_template=instruction_template, 
+        response_template=response_template, 
+        tokenizer=tokenizer, 
+        mlm=False,
+    )
+
 
     ################
     # Dataset
@@ -145,6 +214,7 @@ if __name__ == "__main__":
             tokenizer=tokenizer,
             peft_config=get_peft_config(model_config),
             callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
+            data_collator=collator,
         )
 
     trainer.train()

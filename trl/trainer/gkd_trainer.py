@@ -158,18 +158,30 @@ class GKDTrainer(SFTTrainer):
                 generation_config = GenerationConfig(
                     max_new_tokens=self.args.max_new_tokens_response,
                     temperature=self.temperature,
-                    top_k=0.0,
-                    top_p=1.0,
                     do_sample=True,
                 )
-                generated_outputs, _ = generate(
-                    unwrapped_model,
-                    inputs["input_ids"],
-                    pad_token_id=self.tokenizer.pad_token_id,
+                attention_mask = inputs["prompts"] != self.tokenizer.pad_token_id
+
+                # gen output with respect to the prompt only
+                generated_outputs = unwrapped_model.generate(
+                    input_ids=torch.masked_fill(inputs["prompts"], ~attention_mask, 0),
+                    attention_mask=attention_mask,
                     generation_config=generation_config,
+                    return_dict_in_generate=True,
                 )
-                inputs["input_ids"] = generated_outputs[:, :-1]
-                inputs["labels"] = generated_outputs[:, 1:]
+
+                # generated_outputs, _ = generate(
+                #     unwrapped_model,
+                #     inputs["input_ids"],
+                #     pad_token_id=self.tokenizer.pad_token_id,
+                #     generation_config=generation_config,
+                # )
+                import pdb
+                pdb.set_trace()
+                # set padding token -100
+                inputs["labels"] = generated_outputs.sequences
+                # set padding token 
+                
 
         inputs = self._prepare_inputs(inputs)
         model.train()
