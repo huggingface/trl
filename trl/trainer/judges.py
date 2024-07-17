@@ -53,6 +53,19 @@ Evaluate the models based on the quality and relevance of their outputs, and sel
 class BaseJudge(ABC):
     """
     Base class for LLM judges.
+
+    Example:
+    ```python
+    class MockJudge(BaseJudge):
+        def judge(self, prompts, completion_pairs, shuffle_order=True):
+            return [random.choice([0, 1]) for _ in range(len(prompts))]
+
+    judge = MockJudge()
+    judge.judge(
+        prompts=["What is the capital of France?", "What is the capital of Germany?"],
+        completion_pairs=[["Paris", "Marseille"], ["Munich", "Berlin"]]
+    )  # [0, 0]
+    ```
     """
 
     @abstractmethod
@@ -67,16 +80,6 @@ class BaseJudge(ABC):
 
         Returns:
             List of integers, where each integer is the index of the completion pair that is preferred.
-
-        Example:
-
-        >>> from trl.trainer.judges import HuggingFaceJudge
-        >>> judge = HuggingFaceJudge()
-        >>> judge.judge(
-                prompts=["What is the capital of France?", "What is the capital of Germany?"],
-                completion_pairs=[["Paris", "Marseille"], ["Munich", "Berlin"]]
-            )
-        [0, 1]
         """
         raise NotImplementedError("Judge subclasses must implement this method.")
 
@@ -91,6 +94,19 @@ class BaseAPIJudge(BaseJudge):
         system_prompt (`str`, *optional*): The system prompt to be used for the judge. If not provided, a default prompt is used.
         max_tries (`int`, *optional*): The maximum number of retries for a request. Defaults to 5.
         max_workers (`int`, *optional*): The maximum number of parallel requests. Defaults to 8.
+
+    Example:
+    ```python
+    class MockAPIJudge(BaseAPIJudge):
+        def get_response(self, content):
+            return random.choice(["0", "1"])
+
+    judge = MockAPIJudge()
+    judge.judge(
+        prompts=["What is the capital of France?", "What is the capital of Germany?"],
+        completion_pairs=[["Paris", "Marseille"], ["Munich", "Berlin"]]
+    )  # [1, 1]
+    ```
     """
 
     # TODO: add max_requests parameter to limit the number of requests made
