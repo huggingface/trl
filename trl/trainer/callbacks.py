@@ -243,3 +243,4 @@ class WinRateCallback(TrainerCallback):
                 )
                 # pop Table otherwise it is included in the history which cannot be pickled and causes an error
                 self.trainer.state.log_history.pop()
+
