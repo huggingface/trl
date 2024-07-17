@@ -450,13 +450,6 @@ class SFTTrainer(Trainer):
         # After training we make sure to retrieve back the original forward pass method
         # for the embedding layer by removing the forward post hook.
         if self.neftune_noise_alpha is not None:
-            unwrapped_model = unwrap_model(self.model)
-            if is_peft_available() and isinstance(unwrapped_model, PeftModel):
-                embeddings = unwrapped_model.base_model.model.get_input_embeddings()
-            else:
-                embeddings = unwrapped_model.get_input_embeddings()
-
-            del embeddings.neftune_noise_alpha
             self.neftune_hook_handle.remove()
 
         return output
@@ -654,6 +647,5 @@ class SFTTrainer(Trainer):
             embeddings = unwrapped_model.get_input_embeddings()
 
         embeddings.neftune_noise_alpha = self.neftune_noise_alpha
-        hook_handle = embeddings.register_forward_hook(neftune_post_forward_hook)
-        self.neftune_hook_handle = hook_handle
+        self.neftune_hook_handle = embeddings.register_forward_hook(neftune_post_forward_hook)
         return model
