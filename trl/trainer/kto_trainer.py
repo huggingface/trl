@@ -1518,7 +1518,7 @@ class KTOTrainer(Trainer):
             target_batch = {
                 "prompt_input_ids": random_batch["prompt_input_ids"][target_indicies],
                 "prompt_attention_mask": random_batch["prompt_attention_mask"][target_indicies],
-                "prompt": itemgetter(*target_indicies)(random_batch["prompt"])
+                "prompt": itemgetter(*target_indicies)(random_batch["prompt"]),
             }
             policy_output_decoded, ref_output_decoded = self.get_batch_samples(self.model, target_batch)
 
