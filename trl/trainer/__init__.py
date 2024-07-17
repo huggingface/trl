@@ -50,7 +50,15 @@ _import_structure = {
     "base": ["BaseTrainer"],
     "ddpo_config": ["DDPOConfig"],
     "callbacks": ["WinRateCallback"],
-    "judges": ["BaseJudge", "BaseAPIJudge", "HuggingFaceJudge", "MockAPIJudge", "MockJudge", "OpenAIJudge", "PairRMJudge"],
+    "judges": [
+        "BaseJudge",
+        "BaseAPIJudge",
+        "HuggingFaceJudge",
+        "MockAPIJudge",
+        "MockJudge",
+        "OpenAIJudge",
+        "PairRMJudge",
+    ],
 }
 
 try:
