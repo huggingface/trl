@@ -11,7 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import os
 import random
 import warnings
 from collections import deque
@@ -30,8 +29,8 @@ from transformers import (
     BitsAndBytesConfig,
     DataCollatorForLanguageModeling,
     PreTrainedTokenizerBase,
-    TrainingArguments,
     TrainerState,
+    TrainingArguments,
 )
 
 from ..import_utils import is_peft_available, is_unsloth_available, is_xpu_available
