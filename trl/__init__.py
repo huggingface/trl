@@ -1,6 +1,6 @@
 # flake8: noqa
 
-__version__ = "0.9.5.dev0"
+__version__ = "0.9.6.dev0"
 
 from typing import TYPE_CHECKING
 from .import_utils import _LazyModule, is_diffusers_available, OptionalDependencyNotAvailable
@@ -58,7 +58,8 @@ _import_structure = {
     ],
     "commands": [],
     "commands.cli_utils": ["init_zero_verbose", "SFTScriptArguments", "DPOScriptArguments", "TrlParser"],
-    "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config", "RichProgressCallback"],
+    "trainer.callbacks": ["RichProgressCallback", "SyncRefModelCallback"],
+    "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config"],
     "multitask_prompt_tuning": [
         "MultitaskPromptEmbedding",
         "MultitaskPromptTuningConfig",
@@ -126,7 +127,8 @@ if TYPE_CHECKING:
         FDivergenceConstants,
         FDivergenceType,
     )
-    from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config, RichProgressCallback
+    from .trainer.callbacks import RichProgressCallback, SyncRefModelCallback
+    from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config
     from .commands.cli_utils import init_zero_verbose, SFTScriptArguments, DPOScriptArguments, TrlParser
 
     try:

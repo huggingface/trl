@@ -51,9 +51,10 @@ import logging
 import os
 from contextlib import nullcontext
 
-TRL_USE_RICH = os.environ.get("TRL_USE_RICH", False)
-
 from trl.commands.cli_utils import init_zero_verbose, SFTScriptArguments, TrlParser
+from trl.env_utils import strtobool
+
+TRL_USE_RICH = strtobool(os.getenv("TRL_USE_RICH", "0"))
 
 if TRL_USE_RICH:
     init_zero_verbose()
@@ -94,24 +95,22 @@ if __name__ == "__main__":
         console = Console()
 
     ################
-    # Model & Tokenizer
+    # Model init kwargs & Tokenizer
     ################
-    torch_dtype = (
-        model_config.torch_dtype
-        if model_config.torch_dtype in ["auto", None]
-        else getattr(torch, model_config.torch_dtype)
-    )
     quantization_config = get_quantization_config(model_config)
     model_kwargs = dict(
         revision=model_config.model_revision,
         trust_remote_code=model_config.trust_remote_code,
         attn_implementation=model_config.attn_implementation,
-        torch_dtype=torch_dtype,
+        torch_dtype=model_config.torch_dtype,
         use_cache=False if training_args.gradient_checkpointing else True,
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
-    tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path, use_fast=True)
+    training_args.model_init_kwargs = model_kwargs
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, use_fast=True
+    )
     tokenizer.pad_token = tokenizer.eos_token
 
     ################
@@ -138,7 +137,6 @@ if __name__ == "__main__":
     with init_context:
         trainer = SFTTrainer(
             model=model_config.model_name_or_path,
-            model_init_kwargs=model_kwargs,
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,

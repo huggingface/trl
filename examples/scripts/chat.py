@@ -21,6 +21,7 @@ init_zero_verbose()
 import copy
 import json
 import os
+import sys
 import pwd
 import re
 import time
@@ -211,19 +212,24 @@ def parse_settings(user_input, current_args, interface):
 
 
 def load_model_and_tokenizer(args):
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, revision=args.model_revision)
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.model_name_or_path,
+        revision=args.model_revision,
+        trust_remote_code=args.trust_remote_code,
+    )
 
     torch_dtype = args.torch_dtype if args.torch_dtype in ["auto", None] else getattr(torch, args.torch_dtype)
     quantization_config = get_quantization_config(args)
     model_kwargs = dict(
         revision=args.model_revision,
-        trust_remote_code=args.trust_remote_code,
         attn_implementation=args.attn_implementation,
         torch_dtype=torch_dtype,
         device_map="auto",
         quantization_config=quantization_config,
     )
-    model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path, **model_kwargs)
+    model = AutoModelForCausalLM.from_pretrained(
+        args.model_name_or_path, trust_remote_code=args.trust_remote_code, **model_kwargs
+    )
 
     if getattr(model, "hf_device_map", None) is None:
         model = model.to(args.device)
@@ -253,12 +259,11 @@ def parse_eos_tokens(tokenizer, eos_tokens, eos_token_ids):
 
 def chat_cli():
     parser = TrlParser(ChatArguments)
-    args = parser.parse_args_into_dataclasses()[0]
-    if args.config == "default":
-        args.config = os.path.join(os.path.dirname(__file__), "config/default_chat_config.yaml")
-    if args.config.lower() == "none":
-        args.config = None
-    args = parser.update_dataclasses_with_config([args])[0]
+
+    if "--config" not in sys.argv:
+        sys.argv.append("--config")
+        sys.argv.append(os.path.join(os.path.dirname(__file__), "config/default_chat_config.yaml"))
+    args = parser.parse_args_and_config()[0]
     if args.examples is None:
         args.examples = {}
 

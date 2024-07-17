@@ -166,10 +166,16 @@ if __name__ == "__main__":
     kto_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
     # Load a pretrained model
-    model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path)
-    model_ref = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
+    )
+    ref_model = AutoModelForCausalLM.from_pretrained(
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
+    )
 
-    tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
+    )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -193,13 +199,15 @@ if __name__ == "__main__":
     accelerator = Accelerator()
     embedding_model = AutoModel.from_pretrained(
         "nomic-ai/nomic-embed-text-v1.5",
-        trust_remote_code=True,
+        trust_remote_code=model_args.trust_remote_code,
         safe_serialization=True,
         torch_dtype=torch.bfloat16,
         device_map="auto",
     )
     embedding_model = accelerator.prepare_model(embedding_model)
-    embedding_tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+    embedding_tokenizer = AutoTokenizer.from_pretrained(
+        "bert-base-uncased", trust_remote_code=model_args.trust_remote_code
+    )
     embedding_func = partial(
         embed_prompt,
         model=embedding_model,
@@ -208,7 +216,7 @@ if __name__ == "__main__":
     # Initialize the KTO trainer
     kto_trainer = KTOTrainer(
         model,
-        model_ref,
+        ref_model,
         args=kto_args,
         train_dataset=formatted_dataset["train"],
         eval_dataset=formatted_dataset["test"],
