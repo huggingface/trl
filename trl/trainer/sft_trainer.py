@@ -456,8 +456,8 @@ class SFTTrainer(Trainer):
             else:
                 embeddings = unwrapped_model.get_input_embeddings()
 
-            self.neftune_hook_handle.remove()
             del embeddings.neftune_noise_alpha
+            self.neftune_hook_handle.remove()
 
         return output
 
