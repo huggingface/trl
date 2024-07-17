@@ -3,7 +3,7 @@ import math
 import os
 import time
 from collections import defaultdict
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -52,8 +52,9 @@ class OnlineDPOTrainer(Trainer):
         tokenizer: PreTrainedTokenizer,
         policy: nn.Module,
         ref_policy: nn.Module,
-        reward_model: nn.Module,
         train_dataset: Dataset,
+        reward_model: Optional[nn.Module] = None,
+        judge: Optional[Any] = None,
         data_collator: Optional[DataCollatorWithPadding] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
         # less commonly used
@@ -71,9 +72,10 @@ class OnlineDPOTrainer(Trainer):
         self.policy.generation_config.pad_token_id = None  # generate tokens without truncation / padding
 
         self.ref_policy = ref_policy
-        self.reward_model = reward_model
         self.train_dataset = train_dataset
         self.train_dataset_len = len(train_dataset)
+        self.reward_model = reward_model
+        self.judge = judge
         self.data_collator = data_collator
         self.eval_dataset = eval_dataset
         self.optimizer, self.lr_scheduler = optimizers
@@ -117,7 +119,10 @@ class OnlineDPOTrainer(Trainer):
         #########
         # setup model, optimizer, and others
         #########
-        for module in [policy, ref_policy, reward_model]:
+        setup_dropout_models = [policy, ref_policy]
+        if reward_model is not None:
+            setup_dropout_models.append(reward_model)
+        for module in setup_dropout_models:
             disable_dropout_in_model(module)
         if args.stop_token and args.stop_token == "eos":
             args.stop_token_id = tokenizer.eos_token_id
@@ -175,16 +180,18 @@ class OnlineDPOTrainer(Trainer):
         self.eval_dataloader = accelerator.prepare(self.eval_dataloader)
 
         if self.is_deepspeed_enabled:
-            self.reward_model = prepare_deepspeed(
-                self.reward_model, args.per_device_train_batch_size, args.fp16, args.bf16
-            )
+            if reward_model is not None:
+                self.reward_model = prepare_deepspeed(
+                    self.reward_model, args.per_device_train_batch_size, args.fp16, args.bf16
+                )
             self.ref_policy = prepare_deepspeed(
                 self.ref_policy, args.per_device_train_batch_size, args.fp16, args.bf16
             )
             self.deepspeed = self.model
         else:
             self.ref_policy = self.ref_policy.to(self.accelerator.device)
-            self.reward_model = self.reward_model.to(self.accelerator.device)
+            if reward_model is not None:
+                self.reward_model = self.reward_model.to(self.accelerator.device)
 
     def get_train_dataloader(self) -> DataLoader:
         return self.dataloader
@@ -302,23 +309,43 @@ class OnlineDPOTrainer(Trainer):
                     # Response Processing 2. run reward model on the truncated responses
                     postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
                     sequence_length = first_true_indices(postprocessed_response == tokenizer.pad_token_id) - 1
-                    _, score, _ = get_reward(
-                        reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
-                    )
+                    if reward_model is not None:
+                        _, score, _ = get_reward(
+                            reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
+                        )
 
                     responses.append(response)
                     postprocessed_responses.append(postprocessed_response)
                     logprobs.append(logprob)
                     ref_logprobs.append(ref_logprob)
                     sequence_lengths.append(sequence_length)
-                    scores.append(score)
+                    # scores.append(score)
                 responses = torch.cat(responses, 0)
                 postprocessed_responses = torch.cat(postprocessed_responses, 0)
                 logprobs = torch.cat(logprobs, 0)
                 ref_logprobs = torch.cat(ref_logprobs, 0)
                 sequence_lengths = torch.cat(sequence_lengths, 0)
-                scores = torch.cat(scores, 0)
-                del (logprob, ref_logprob, score)
+                # scores = torch.cat(scores, 0)
+
+                scores = torch.zeros(args.local_batch_size).to(device)
+                num_examples = postprocessed_responses.size(0) // 2
+                if self.judge is not None:
+                    df = pd.DataFrame(
+                        {
+                            "prompt": tokenizer.batch_decode(query[:num_examples], skip_special_tokens=True),
+                            "response0": tokenizer.batch_decode(
+                                postprocessed_responses[:num_examples], skip_special_tokens=True
+                            ),
+                            "response1": tokenizer.batch_decode(
+                                postprocessed_responses[num_examples:], skip_special_tokens=True
+                            ),
+                        }
+                    )
+                    judge_df = self.judge.judge(df)
+                    scores[:num_examples] = torch.tensor(judge_df["preferred"] == "response0", dtype=torch.float)
+                    scores[num_examples:] = torch.tensor(judge_df["preferred"] == "response1", dtype=torch.float)
+
+                del (logprob, ref_logprob)
                 torch.cuda.empty_cache()
                 gc.collect()
 
@@ -328,7 +355,9 @@ class OnlineDPOTrainer(Trainer):
                 contain_eos_token = torch.any(postprocessed_responses == tokenizer.eos_token_id, dim=-1)
                 if args.non_eos_penalty:
                     scores = torch.where(contain_eos_token, scores, torch.full_like(scores, args.penalty_reward_value))
-                # accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
+                accelerator.print(
+                    f"{scores.shape, scores.sum()=}, {(contain_eos_token.sum() / len(contain_eos_token))=}"
+                )
 
                 # be very careful with `padding_mask_p1`; see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
                 response_idxs = torch.arange(responses.shape[1], device=responses.device).repeat(responses.shape[0], 1)
@@ -342,7 +371,6 @@ class OnlineDPOTrainer(Trainer):
                 rlhf_reward = scores + non_score_reward
 
                 # num_examples should be same as args.local_batch_size divided by 2
-                num_examples = scores.size(0) // 2
                 first_half = scores[:num_examples]
                 second_half = scores[num_examples:]
 
@@ -548,10 +576,10 @@ class OnlineDPOTrainer(Trainer):
                     table["model response"].extend(gather_object(tokenizer.batch_decode(postprocessed_response)))
 
                     postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
-                    _, score, _ = get_reward(
-                        self.reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
-                    )
-                    table["score"].extend(self.accelerator.gather(score).float().cpu().numpy())
+                    # _, score, _ = get_reward(
+                    #     self.reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
+                    # )
+                    # table["score"].extend(self.accelerator.gather(score).float().cpu().numpy())
 
                 if sampling:
                     break
