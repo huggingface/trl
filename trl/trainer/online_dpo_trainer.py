@@ -39,16 +39,16 @@ from ..trainer.utils import (
     print_rich_table,
     truncate_response,
 )
-from .rloo_config import RLOOConfig
+from .online_dpo_config import OnlineDPOConfig
 
 
 INVALID_LOGPROB = 1.0
 
 
-class RLOOTrainer(Trainer):
+class OnlineDPOTrainer(Trainer):
     def __init__(
         self,
-        config: RLOOConfig,
+        config: OnlineDPOConfig,
         tokenizer: PreTrainedTokenizer,
         policy: nn.Module,
         ref_policy: nn.Module,
@@ -107,8 +107,14 @@ class RLOOTrainer(Trainer):
         if args.num_sample_generations > 0:
             self.sample_generations_freq = max(1, args.num_total_batches // args.num_sample_generations)
         self.local_dataloader_batch_size = exact_div(
-            args.local_batch_size, args.rloo_k, "`local_batch_size` must be a multiple of rloo_k"
-        )  # RLOO logic: needed because RLOO repeats the same prompt args.rloo_k times
+            args.local_batch_size,
+            args.num_generation_per_prompt,
+            "`local_batch_size` must be a multiple of `num_generation_per_prompt`",
+        )  # DPO logic: repeats the same prompt args.rloo_k times
+
+        ### DPO stuff
+        self.beta = config.beta
+        self.loss_type = config.loss_type
 
         #########
         # setup model, optimizer, and others
@@ -219,13 +225,11 @@ class RLOOTrainer(Trainer):
         accelerator.print("===training policy===")
         start_time = time.time()
         stats_shape = (args.num_ppo_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
-        approxkl_stats = torch.zeros(stats_shape, device=device)
-        pg_clipfrac_stats = torch.zeros(stats_shape, device=device)
-        pg_loss_stats = torch.zeros(stats_shape, device=device)
-        vf_loss_stats = torch.zeros(stats_shape, device=device)
-        vf_clipfrac_stats = torch.zeros(stats_shape, device=device)
-        entropy_stats = torch.zeros(stats_shape, device=device)
-        ratio_stats = torch.zeros(stats_shape, device=device)
+        loss_stats = torch.zeros(stats_shape, device=device)
+        chosen_rewards_stats = torch.zeros(stats_shape, device=device)
+        rejected_rewards_stats = torch.zeros(stats_shape, device=device)
+        chosen_logprobs_stats = torch.zeros(stats_shape, device=device)
+        rejected_logprobs_stats = torch.zeros(stats_shape, device=device)
         model.train()
 
         # trainer state initialization
@@ -257,9 +261,8 @@ class RLOOTrainer(Trainer):
             data = next(iter_dataloader)
             with torch.no_grad():
                 queries = data["input_ids"].to(device)
-                queries = queries.repeat(args.rloo_k, 1)
+                queries = queries.repeat(args.num_generation_per_prompt, 1)
                 context_length = queries.shape[1]
-                query_responses = []
                 responses = []
                 postprocessed_responses = []
                 logprobs = []
@@ -339,76 +342,134 @@ class RLOOTrainer(Trainer):
 
                 # 4. compute rewards
                 kl = logprobs - ref_logprobs
-                non_score_reward = (-args.kl_coef * kl).sum(1)
+                non_score_reward = (-args.beta * kl).sum(1)
                 rlhf_reward = scores + non_score_reward
 
-                # vectorized RLOO advantages implementation
-                rlhf_reward = rlhf_reward.reshape(args.rloo_k, -1)
-                baseline = (rlhf_reward.sum(0) - rlhf_reward) / (args.rloo_k - 1)
-                advantages = rlhf_reward - baseline
-                advantages = advantages.flatten()
+                # num_examples should be same as args.local_batch_size divided by 2
+                num_examples = scores.size(0) // 2
+                first_half = scores[:num_examples]
+                second_half = scores[num_examples:]
+
+                num_examples_range = torch.arange(num_examples).to(scores.device)
+
+                chosen_indices = torch.where(
+                    first_half >= second_half, num_examples_range.clone(), num_examples_range.clone() + num_examples
+                )
+                rejected_indices = torch.where(
+                    first_half < second_half, num_examples_range.clone(), num_examples_range.clone() + num_examples
+                )
+
+                scores_margin = scores[chosen_indices] - scores[rejected_indices]
                 torch.cuda.empty_cache()
 
             # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
             for ppo_epoch_idx in range(args.num_ppo_epochs):
-                b_inds = np.random.permutation(args.local_batch_size)
+                b_inds = np.random.permutation(args.local_batch_size // args.num_generation_per_prompt)
                 minibatch_idx = 0
-                for mini_batch_start in range(0, args.local_batch_size, args.local_mini_batch_size):
-                    mini_batch_end = mini_batch_start + args.local_mini_batch_size
+                for mini_batch_start in range(
+                    0,
+                    args.local_batch_size // args.num_generation_per_prompt,
+                    args.local_mini_batch_size // args.num_generation_per_prompt,
+                ):
+                    mini_batch_end = mini_batch_start + args.local_mini_batch_size // args.num_generation_per_prompt
                     mini_batch_inds = b_inds[mini_batch_start:mini_batch_end]
                     gradient_accumulation_idx = 0
-                    for micro_batch_start in range(0, args.local_mini_batch_size, args.per_device_train_batch_size):
+                    for micro_batch_start in range(
+                        0,
+                        args.local_mini_batch_size // args.num_generation_per_prompt,
+                        args.per_device_train_batch_size,
+                    ):
                         with accelerator.accumulate(model):
                             micro_batch_end = micro_batch_start + args.per_device_train_batch_size
                             micro_batch_inds = mini_batch_inds[micro_batch_start:micro_batch_end]
-                            mb_advantage = advantages[micro_batch_inds]
-                            mb_responses = responses[micro_batch_inds]
-                            mb_query_responses = query_responses[micro_batch_inds]
-                            mb_logprobs = logprobs[micro_batch_inds]
+                            ## chosen
+                            chosen_mb_inds = chosen_indices[micro_batch_inds]
+                            chosen_responses = responses[chosen_mb_inds]
 
-                            output = forward(model, mb_query_responses, tokenizer.pad_token_id)
-                            logits = output.logits[:, context_length - 1 : -1]
-                            logits /= args.temperature + 1e-7
-                            new_all_logprobs = F.log_softmax(logits, dim=-1)
-                            new_logprobs = torch.gather(new_all_logprobs, 2, mb_responses.unsqueeze(-1)).squeeze(-1)
-                            new_logprobs = torch.masked_fill(
-                                new_logprobs, padding_mask[micro_batch_inds], INVALID_LOGPROB
+                            ## rejected
+                            rejected_mb_inds = rejected_indices[micro_batch_inds]
+                            rejected_responses = responses[rejected_mb_inds]
+
+                            concat_mb_inds = torch.cat((chosen_mb_inds, rejected_mb_inds), dim=0)
+                            concat_query_responses = query_responses[concat_mb_inds]
+                            concat_output = forward(model, concat_query_responses, tokenizer.pad_token_id)
+                            num_examples = chosen_mb_inds.shape[0]
+                            chosen_logits = concat_output.logits[:num_examples]
+                            rejected_logits = concat_output.logits[num_examples:]
+
+                            # chosen
+                            chosen_logits = chosen_logits[:, context_length - 1 : -1]
+                            chosen_logits /= args.temperature + 1e-7
+                            chosen_all_logprobs = F.log_softmax(chosen_logits, dim=-1)
+                            chosen_logprobs = torch.gather(
+                                chosen_all_logprobs, 2, chosen_responses.unsqueeze(-1)
+                            ).squeeze(-1)
+                            chosen_logprobs = torch.masked_fill(
+                                chosen_logprobs, padding_mask[chosen_mb_inds], INVALID_LOGPROB
                             )
-                            new_ratio = (new_logprobs - mb_logprobs).exp()
-                            new_logprobs = new_logprobs.sum(1)
-                            mb_logprobs = mb_logprobs.sum(1)
-                            logprobs_diff = new_logprobs - mb_logprobs
-                            ratio = torch.exp(logprobs_diff)
-                            pg_losses = -mb_advantage * ratio
-                            pg_losses2 = -mb_advantage * torch.clamp(ratio, 1.0 - args.cliprange, 1.0 + args.cliprange)
-                            pg_loss_max = torch.max(pg_losses, pg_losses2)
-                            pg_loss = pg_loss_max.mean()
-                            loss = pg_loss
+                            chosen_ref_logprobs = ref_logprobs[chosen_mb_inds]
+                            chosen_logprobs_sum = (chosen_logprobs * ~padding_mask[chosen_mb_inds]).sum(1)
+                            chosen_ref_logprobs_sum = (chosen_ref_logprobs * ~padding_mask[chosen_mb_inds]).sum(1)
+
+                            # rejected
+                            rejected_logits = rejected_logits[:, context_length - 1 : -1]
+                            rejected_logits /= args.temperature + 1e-7
+                            rejected_all_logprobs = F.log_softmax(rejected_logits, dim=-1)
+                            rejected_logprobs = torch.gather(
+                                rejected_all_logprobs, 2, rejected_responses.unsqueeze(-1)
+                            ).squeeze(-1)
+                            rejected_logprobs = torch.masked_fill(
+                                rejected_logprobs, padding_mask[rejected_mb_inds], INVALID_LOGPROB
+                            )
+                            rejected_ref_logprobs = ref_logprobs[rejected_mb_inds]
+                            rejected_logprobs_sum = (rejected_logprobs * ~padding_mask[rejected_mb_inds]).sum(1)
+                            rejected_ref_logprobs_sum = (rejected_ref_logprobs * ~padding_mask[rejected_mb_inds]).sum(
+                                1
+                            )
+
+                            pi_logratios = chosen_logprobs_sum - rejected_logprobs_sum
+                            ref_logratios = chosen_ref_logprobs_sum - rejected_ref_logprobs_sum
+
+                            logits = pi_logratios - ref_logratios
+
+                            if self.loss_type == "sigmoid":
+                                losses = -F.logsigmoid(self.beta * logits)
+                            elif self.loss_type == "ipo":
+                                losses = (logits - 1 / (2 * self.beta)) ** 2
+                            else:
+                                raise NotImplementedError(f"invalid loss type {self.loss_type}")
+
+                            loss = losses.mean()
                             accelerator.backward(loss)
                             optimizer.step()
                             optimizer.zero_grad()
                             with torch.no_grad():
-                                pg_clipfrac = (pg_losses2 > pg_losses).float().mean()
-                                prob_dist = torch.nn.functional.softmax(logits, dim=-1)
-                                entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1)
-                                approxkl = 0.5 * (logprobs_diff**2).mean()
-                                approxkl_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = approxkl
-                                pg_clipfrac_stats[
+                                chosen_rewards = self.beta * (chosen_logprobs_sum - chosen_ref_logprobs_sum)
+                                rejected_rewards = self.beta * (rejected_logprobs_sum - rejected_ref_logprobs_sum)
+                                loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = loss
+                                chosen_rewards_stats[
                                     ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
-                                ] = pg_clipfrac
-                                pg_loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = pg_loss
-                                entropy_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = entropy.mean()
-                                ratio_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = new_ratio.mean()
+                                ] = chosen_rewards.mean()
+                                rejected_rewards_stats[
+                                    ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
+                                ] = rejected_rewards.mean()
+                                chosen_logprobs_stats[
+                                    ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
+                                ] = chosen_logprobs_sum.mean()
+                                rejected_logprobs_stats[
+                                    ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
+                                ] = rejected_logprobs_sum.mean()
                         gradient_accumulation_idx += 1
                     minibatch_idx += 1
                     self.state.global_step += 1
                     # del everything and empty cache
                     # fmt: off
                     del (
-                        output, logits, new_all_logprobs, new_logprobs,
-                        logprobs_diff, ratio, pg_losses, pg_losses2,
-                        pg_loss, loss, pg_clipfrac, prob_dist, entropy, approxkl,
-                        mb_advantage, mb_responses, mb_query_responses, mb_logprobs,
+                        loss, logits,
+                        concat_output, concat_query_responses,
+                        chosen_logits, rejected_logits,
+                        chosen_logprobs, rejected_logprobs,
+                        chosen_responses, rejected_responses,
                     )
                     # fmt: on
                     torch.cuda.empty_cache()
@@ -417,6 +478,8 @@ class RLOOTrainer(Trainer):
                 mean_entropy = (-logprobs).sum(1).mean()
                 mean_non_score_reward = non_score_reward.mean()
                 eps = int(self.state.episode / (time.time() - start_time))
+                g_chosen_reward = self.accelerator.gather(chosen_rewards_stats)
+                g_rejected_reward = self.accelerator.gather(rejected_rewards_stats)
                 metrics = {}
                 metrics["eps"] = eps
                 metrics["objective/kl"] = self.accelerator.gather(mean_kl).mean().item()
@@ -424,21 +487,21 @@ class RLOOTrainer(Trainer):
                 metrics["objective/non_score_reward"] = self.accelerator.gather(mean_non_score_reward).mean().item()
                 metrics["objective/rlhf_reward"] = self.accelerator.gather(rlhf_reward).mean().item()
                 metrics["objective/scores"] = self.accelerator.gather(scores.mean()).mean().item()
-                metrics["policy/approxkl_avg"] = self.accelerator.gather(approxkl_stats).mean().item()
-                metrics["policy/clipfrac_avg"] = self.accelerator.gather(pg_clipfrac_stats).mean().item()
-                metrics["loss/policy_avg"] = self.accelerator.gather(pg_loss_stats).mean().item()
-                metrics["loss/value_avg"] = self.accelerator.gather(vf_loss_stats).mean().item()
-                metrics["val/clipfrac_avg"] = self.accelerator.gather(vf_clipfrac_stats).mean().item()
-                metrics["policy/entropy_avg"] = self.accelerator.gather(entropy_stats).mean().item()
-                metrics["val/ratio"] = self.accelerator.gather(ratio_stats).mean().item()
-                metrics["val/ratio_var"] = self.accelerator.gather(ratio_stats).var().item()
+                metrics["objective/scores_margin"] = self.accelerator.gather(scores_margin.mean()).mean().item()
+                metrics["rewards/chosen"] = g_chosen_reward.mean().item()
+                metrics["rewards/rejected"] = g_rejected_reward.mean().item()
+                metrics["rewards/accuracies"] = (g_chosen_reward > g_rejected_reward).float().mean().item()
+                metrics["rewards/margins"] = (g_chosen_reward - g_rejected_reward).mean().item()
+                metrics["loss/policy_avg"] = self.accelerator.gather(loss_stats).mean().item()
+                metrics["logps/chosen"] = self.accelerator.gather(chosen_logprobs_stats).mean().item()
+                metrics["logps/rejected"] = self.accelerator.gather(rejected_logprobs_stats).mean().item()
                 metrics["val/num_eos_tokens"] = (responses == tokenizer.eos_token_id).sum().item()
                 metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
                 metrics["episode"] = self.state.episode
                 self.state.epoch = self.state.episode / self.train_dataset_len  # used by self.log
                 self.state.global_step += 1
                 self.log(metrics)
-            del kl, mean_kl, mean_entropy, scores
+            del (kl, mean_kl, mean_entropy, scores, scores_margin)
 
             self.control = self.callback_handler.on_step_end(args, self.state, self.control)
             if self.control.should_save:

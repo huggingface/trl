@@ -25,6 +25,7 @@ python examples/scripts/ppo/ppo.py \
     --total_episodes 10 \
     --model_name_or_path EleutherAI/pythia-14m \
     --non_eos_penalty \
+    --save_strategy no \
     --stop_token eos \
 """
     if platform.system() == "Windows":
@@ -48,6 +49,7 @@ python examples/scripts/ppo/ppo.py \
     --num_train_epochs 0.003 \
     --model_name_or_path EleutherAI/pythia-14m \
     --non_eos_penalty \
+    --save_strategy no \
     --stop_token eos \
 """
     if platform.system() == "Windows":
