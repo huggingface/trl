@@ -23,6 +23,7 @@ class TestJudges(unittest.TestCase):
         self.assertEqual(len(ranks), 2)
         self.assertTrue(all(isinstance(rank, int) for rank in ranks))
 
+    @unittest.skip("This test needs to be run manually since it requires a valid Hugging Face API key.")
     def test_hugging_face_judge(self):
         judge = HuggingFaceJudge()
         prompts, completion_pairs = self._get_prompts_and_completion_pairs()

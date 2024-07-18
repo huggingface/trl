@@ -220,6 +220,7 @@ class HuggingFaceJudge(BaseAPIJudge):
         system_prompt (`str`, *optional*): The system prompt to be used for the judge. If not provided, a default prompt is used.
         max_tries (`int`, *optional*): The maximum number of retries for a request. Defaults to 5.
         max_workers (`int`, *optional*): The maximum number of parallel requests. Defaults to 8.
+        token (`str`, *optional*): The Hugging Face API token to use for the InferenceClient.
     """
 
     def __init__(
@@ -228,9 +229,10 @@ class HuggingFaceJudge(BaseAPIJudge):
         system_prompt: Optional[str] = None,
         max_tries: int = 5,
         max_workers: int = 8,
+        token: Optional[str] = None,
     ):
         super().__init__(system_prompt=system_prompt, max_tries=max_tries, max_workers=max_workers)
-        self.client = InferenceClient(model=model)
+        self.client = InferenceClient(model=model, token=token)
 
     def get_response(self, content: str) -> str:
         try:
