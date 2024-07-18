@@ -27,6 +27,7 @@ python examples/scripts/rloo/rloo.py \
     --total_episodes 10 \
     --model_name_or_path EleutherAI/pythia-14m \
     --non_eos_penalty \
+    --save_strategy no \
     --stop_token eos \
 """
     if platform.system() == "Windows":

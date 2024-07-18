@@ -15,7 +15,7 @@ import random
 import warnings
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -29,6 +29,8 @@ from transformers import (
     BitsAndBytesConfig,
     DataCollatorForLanguageModeling,
     PreTrainedTokenizerBase,
+    TrainerState,
+    TrainingArguments,
 )
 
 from ..import_utils import is_peft_available, is_unsloth_available, is_xpu_available
@@ -840,12 +842,49 @@ SIMPLE_QUERY_CHAT_TEMPLATE = "{% for message in messages %}{{' ' + message['cont
 
 
 @dataclass
-class OnpolicyRuntimeConfig:
+class OnlineTrainerState(TrainerState):
+    episode: int = 0
+
+
+@dataclass
+class OnPolicyConfig(TrainingArguments):
+    # common config
+    run_name: Optional[str] = None
+    """a unique name of this run"""
+    sanity_check: bool = False
+    """wether to run in debug mode"""
+
+    # batch size related config
+    num_mini_batches: int = 1
+    """Number of minibatches to split a batch into"""
+    total_episodes: Optional[int] = None
+    """The total number of episodes in the dataset"""
+    local_rollout_forward_batch_size: int = 64
+    """per rank no grad forward pass in the rollout phase"""
+    num_sample_generations: int = 10
+    """the number of debugging samples generations (i.e., `generate_completions` calls) throughout training"""
+
+    # other config
+    response_length: int = 53
+    """the length of the response"""
+    stop_token: Optional[Literal["eos"]] = None
+    """the stop token"""
+    stop_token_id: Optional[int] = None
+    """the truncation token id"""
+    temperature: float = 0.7
+    """the sampling temperature"""
+    penalty_reward_value: int = -1
+    """the reward value for responses that do not contain `stop_token_id`"""
+    non_eos_penalty: bool = False
+    """whether to penalize responses that do not contain `stop_token_id`"""
+    sft_model_path: str = "EleutherAI/pythia-160m"
+    """the path to the sft model"""
+
     # various batch sizes
     world_size: Optional[int] = None
     """The number of processes (GPUs) to use"""
-    num_updates: Optional[int] = None
-    """The number of updates to train"""
+    num_total_batches: Optional[int] = None
+    """The number of total batches to train"""
     micro_batch_size: Optional[int] = None
     """The micro batch size across devices (HF's `per_device_train_batch_size` * `world_size`)"""
     local_batch_size: Optional[int] = None
@@ -1077,3 +1116,26 @@ def generate(
     )
     logits = torch.stack(output.scores, 1)
     return torch.cat((queries, output.sequences[:, context_length:]), dim=1), logits
+
+
+@torch.no_grad()
+def batch_generation(
+    model: torch.nn.Module,
+    queries: torch.Tensor,
+    local_rollout_forward_batch_size: int,
+    pad_token_id: int,
+    generation_config: dict,
+):
+    query_responses = []
+    logitss = []
+    for i in range(0, queries.shape[0], local_rollout_forward_batch_size):
+        query = queries[i : i + local_rollout_forward_batch_size]
+        query_response, logits = generate(
+            model,
+            query,
+            pad_token_id,
+            generation_config,
+        )
+        query_responses.append(query_response)
+        logitss.append(logits)
+    return torch.cat(query_responses, 0), torch.cat(logitss, 0)
