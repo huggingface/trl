@@ -883,8 +883,8 @@ class OnPolicyConfig(TrainingArguments):
     # various batch sizes
     world_size: Optional[int] = None
     """The number of processes (GPUs) to use"""
-    num_updates: Optional[int] = None
-    """The number of updates to train"""
+    num_total_batches: Optional[int] = None
+    """The number of total batches to train"""
     micro_batch_size: Optional[int] = None
     """The micro batch size across devices (HF's `per_device_train_batch_size` * `world_size`)"""
     local_batch_size: Optional[int] = None
