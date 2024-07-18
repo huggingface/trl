@@ -54,26 +54,47 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --beta 0.1 \
     --response_length 53 \
     --push_to_hub
-python \
+
+accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/online_dpo_llmjudge.py \
     --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
     --learning_rate 3e-6 \
-    --output_dir models/minimal/online_dpo_llmjudge_tldr \
+    --output_dir models/minimal/online_dpo_llmjudge_tldr_6.9b \
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 16 \
-    --local_rollout_forward_batch_size 32 \
+    --local_rollout_forward_batch_size 8 \
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \
     --total_episodes 1000000 \
-    --model_name_or_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr  \
-    --sft_model_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr \
-    --reward_model_path cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr \
+    --model_name_or_path EleutherAI/pythia-6.9b-deduped \
+    --sft_model_path cleanrl/EleutherAI_pythia-6.9b-deduped__sft__tldr \
+    --reward_model_path cleanrl/EleutherAI_pythia-6.9b-deduped__reward__tldr \
     --save_strategy no \
     --non_eos_penalty \
     --stop_token eos \
     --beta 0.1 \
     --response_length 53 \
     --push_to_hub
+
+
+python -m vllm.entrypoints.openai.api_server --model NousResearch/Meta-Llama-3-8B-Instruct --dtype auto --api-key token-abc123
+python examples/scripts/online_dpo_llmjudge.py \
+    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
+    --learning_rate 3e-6 \
+    --output_dir models/minimal/online_dpo_llmjudge \
+    --per_device_train_batch_size 1 \
+    --gradient_accumulation_steps 64 \
+    --total_episodes 30000 \
+    --model_name_or_path EleutherAI/pythia-14m \
+    --sft_model_path EleutherAI/pythia-14m \
+    --reward_model_path EleutherAI/pythia-14m \
+    --non_eos_penalty \
+    --stop_token eos \
+    --response_length 53 \
+    --sanity_check \
+    --base_url https://ip-26-0-166-125/v1 \
+    --api_key token-abc123 \
+    --model NousResearch/Meta-Llama-3-8B-Instruct
 """
 
 
@@ -134,6 +155,8 @@ class LLMJudgeConfig:
     model: str = "gpt-3.5-turbo-0125"
     max_parallel_requests: Optional[int] = None
     llm_judge_template: str = ""
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None
 
     def __post_init__(self):
         if "gpt-3.5" in self.model:
@@ -142,12 +165,14 @@ class LLMJudgeConfig:
             self.max_parallel_requests = 11
         elif "gpt-4" in self.model:
             self.max_parallel_requests = 13
+        else:  # assume self-hosted
+            self.max_parallel_requests = 11
 
 
 class LLMJudge:
     def __init__(self, ljc: LLMJudgeConfig):
         self.ljc = ljc
-        self.async_client = AsyncOpenAI()
+        self.async_client = AsyncOpenAI(api_key=ljc.api_key, base_url=ljc.base_url)
 
     async def process_text(self, post: str, response0: str, response1: str, i: int, limiter=None):
         text = self.ljc.llm_judge_template.replace("{{post}}", post)
@@ -223,8 +248,8 @@ class LLMJudge:
 
 
 if __name__ == "__main__":
-    parser = TrlParser((ScriptArguments, OnlineDPOConfig, ModelConfig))
-    args, config, model_config = parser.parse_args_and_config()
+    parser = TrlParser((ScriptArguments, OnlineDPOConfig, ModelConfig, LLMJudgeConfig))
+    args, config, model_config, judge_config = parser.parse_args_and_config()
 
     ################
     # Model & Tokenizer
@@ -237,7 +262,9 @@ if __name__ == "__main__":
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_QUERY_CHAT_TEMPLATE
-    judge = LLMJudge(LLMJudgeConfig(n=-1, max_parallel_requests=20, llm_judge_template=TEMPLATE))
+    judge_config.n = -1
+    judge_config.llm_judge_template = TEMPLATE
+    judge = LLMJudge(judge_config)
     ref_policy = AutoModelForCausalLM.from_pretrained(config.sft_model_path)
     policy = AutoModelForCausalLM.from_pretrained(config.sft_model_path)
     ################
