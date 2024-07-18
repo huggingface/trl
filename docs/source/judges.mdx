@@ -1,0 +1,62 @@
+# Judges
+
+TRL provides judges to easily compare two completions.
+
+Make sure to have installed the required dependencies by running:
+
+```bash
+pip install trl[llm_judge]
+```
+
+## Define your own judge
+
+To define your own judge, you need to subclass [`BaseJudge`] and implement the [`BaseJudge.judge`] method that returns a list of 0/1 indicating which completion is better. Here is a dummy example where we define a simple judge that favors longer completions:
+
+```python
+from trl import BaseJudge
+
+class LengthBasedJudge(BaseJudge):
+    def judge(self, prompts, completion_pairs, shuffle_order=False):
+        return [0 if len(c1) > len(c2) else 1 for c1, c2 in completion_pairs]
+```
+
+You can then use this judge as follows:
+
+```python
+judge = LengthBasedJudge()
+judge.judge(
+    prompts=["What is the capital of France?", "What is the biggest planet in the solar system?"],
+    completion_pairs=[["Paris", "The capital of France is Paris."], ["Jupiter is the biggest planet in the solar system.", "Jupiter"]],
+)  # Outputs: [1, 0]
+```
+
+TRL also provides a [`BaseAPIJudge`] class that can be used to define judges that interact with an API. You can subclass [`BaseAPIJudge`] and implement the [`BaseAPIJudge.get_response`] method that should return the response from the API. For an example, see the [`HuggingFaceJudge`] class.
+
+
+## BaseJudge
+
+[[autodoc]] BaseJudge
+
+## BaseAPIJudge
+
+[[autodoc]] BaseAPIJudge
+
+## HuggingFaceJudge
+
+[[autodoc]] HuggingFaceJudge
+
+## MockAPIJudge
+
+[[autodoc]] MockAPIJudge
+
+## MockJudge
+
+[[autodoc]] MockJudge
+
+## OpenAIJudge
+
+[[autodoc]] OpenAIJudge
+
+## PairRMJudge
+
+[[autodoc]] PairRMJudge
