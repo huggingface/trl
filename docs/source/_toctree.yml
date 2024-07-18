@@ -47,6 +47,8 @@
     title: ORPO Trainer
   - local: iterative_sft_trainer
     title: Iterative Supervised Fine-Tuning
+  - local: callbacks
+    title: Callback Classes
   - local: judges
     title: Judge Classes
   - local: text_environments

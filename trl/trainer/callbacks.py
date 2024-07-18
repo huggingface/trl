@@ -215,17 +215,15 @@ class WinRateCallback(TrainerCallback):
     def on_train_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         tokenizer = kwargs["tokenizer"]
         tokenizer.padding_side = "left"
-        with self.trainer.accelerator.split_between_processes(
-            self.eval_dataset["prompt"], apply_padding=True
-        ) as prompts:
+        accelerator = self.trainer.accelerator
+        with accelerator.split_between_processes(self.eval_dataset["prompt"], apply_padding=True) as prompts:
             self.ref_completions = self.generate_completions_for_model(self.trainer.ref_model, tokenizer, prompts)
 
     def on_evaluate(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         model = kwargs["model"]
         tokenizer = kwargs["tokenizer"]
-        with self.trainer.accelerator.split_between_processes(
-            self.eval_dataset["prompt"], apply_padding=True
-        ) as prompts:
+        accelerator = self.trainer.accelerator
+        with accelerator.split_between_processes(self.eval_dataset["prompt"], apply_padding=True) as prompts:
             completions = self.generate_completions_for_model(model, tokenizer, prompts)
             completion_pairs = list(zip(self.ref_completions, completions))
             winner_indices = self.judge.judge(self.eval_dataset["prompt"], completion_pairs)
