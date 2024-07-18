@@ -5,7 +5,7 @@ from trl import HuggingFaceJudge, MockAPIJudge, MockJudge
 
 class TestJudges(unittest.TestCase):
     def _get_prompts_and_completion_pairs(self):
-        prompts = ["What is the capital of France?", "What is the biggest planet in the solar system?"]
+        prompts = ["The capital of France is", "The biggest planet in the solar system is"]
         completion_pairs = [["Paris", "Marseille"], ["Saturn", "Jupiter"]]
         return prompts, completion_pairs
 
