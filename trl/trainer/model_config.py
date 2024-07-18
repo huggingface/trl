@@ -16,7 +16,9 @@ class ModelConfig:
     )
     model_revision: str = field(
         default="main",
-        metadata={"help": "The specific model version to use (can be a branch name, tag name or commit id)."},
+        metadata={
+            "help": "The specific model version to use (can be a branch name, tag name or commit id)."
+        },
     )
     torch_dtype: Optional[str] = field(
         default=None,
@@ -28,7 +30,9 @@ class ModelConfig:
             "choices": ["auto", "bfloat16", "float16", "float32"],
         },
     )
-    trust_remote_code: bool = field(default=False, metadata={"help": "Trust remote code when loading a model."})
+    trust_remote_code: bool = field(
+        default=False, metadata={"help": "Trust remote code when loading a model."}
+    )
     attn_implementation: Optional[str] = field(
         default=None,
         metadata={
@@ -62,19 +66,39 @@ class ModelConfig:
         metadata={"help": ("Model layers to unfreeze & train")},
     )
     lora_task_type: str = field(
-        default="CAUSAL_LM", metadata={"help": "The task_type to pass for LoRA (use SEQ_CLS for reward modeling)"}
+        default="CAUSAL_LM",
+        metadata={
+            "help": "The task_type to pass for LoRA (use SEQ_CLS for reward modeling)"
+        },
     )
     load_in_8bit: bool = field(
-        default=False, metadata={"help": "use 8 bit precision for the base model - works only with LoRA"}
+        default=False,
+        metadata={
+            "help": "use 8 bit precision for the base model - works only with LoRA"
+        },
     )
     load_in_4bit: bool = field(
-        default=False, metadata={"help": "use 4 bit precision for the base model - works only with LoRA"}
+        default=False,
+        metadata={
+            "help": "use 4 bit precision for the base model - works only with LoRA"
+        },
     )
 
     bnb_4bit_quant_type: Optional[str] = field(
         default="nf4", metadata={"help": "precise the quantization type (fp4 or nf4)"}
     )
-    use_bnb_nested_quant: bool = field(default=False, metadata={"help": "use nested quantization"})
+    use_bnb_nested_quant: bool = field(
+        default=False, metadata={"help": "use nested quantization"}
+    )
+    bnb_4bit_quant_storage: Optional[str] = field(
+        default="uint8",
+        metadata={
+            "help": (
+                "Storage type to pack the quantized 4-bit params. "
+                "Use bfloat16 for QLoRA fine-tuning with FSDP."
+            )
+        },
+    )
 
     def to_dict(self):
         output_dict = {}
@@ -86,5 +110,8 @@ class ModelConfig:
         if self.load_in_8bit and self.load_in_4bit:
             raise ValueError("You can't use 8 bit and 4 bit precision at the same time")
 
-        if isinstance(self.lora_target_modules, list) and len(self.lora_target_modules) == 1:
+        if (
+            isinstance(self.lora_target_modules, list)
+            and len(self.lora_target_modules) == 1
+        ):
             self.lora_target_modules = self.lora_target_modules[0]
