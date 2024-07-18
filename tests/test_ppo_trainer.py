@@ -21,7 +21,7 @@ from functools import partial
 
 import pytest
 import torch
-from huggingface_hub import HfApi, HfFolder, delete_repo
+from huggingface_hub import HfApi
 from parameterized import parameterized
 from pytest import mark
 from requests.exceptions import HTTPError
