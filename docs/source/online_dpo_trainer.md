@@ -225,7 +225,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
 - [🐝 Tracked experiment](https://wandb.ai/huggingface/trl/runs/dd2o3g35)
 
 
-To evaluate, we use vLLM to load the checkpoints and GPT3.5 as a judge model to evaluate the generated TL;DR against the reference TL;DR.
+To evaluate, we use vLLM to load the checkpoints and GPT4 as a judge model to evaluate the generated TL;DR against the reference TL;DR.
 ```bash
 #### using GPT4 as a judge
 python -i examples/scripts/evals/generate_tldr.py \
