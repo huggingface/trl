@@ -332,7 +332,7 @@ class OnlineDPOTrainer(Trainer):
                 if self.judge is not None:
                     df = pd.DataFrame(
                         {
-                            "prompt": tokenizer.batch_decode(query[:num_examples], skip_special_tokens=True),
+                            "prompt": tokenizer.batch_decode(queries[:num_examples], skip_special_tokens=True),
                             "response0": tokenizer.batch_decode(
                                 postprocessed_responses[:num_examples], skip_special_tokens=True
                             ),
