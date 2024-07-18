@@ -11,19 +11,29 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import Optional, Union
+from typing import List, Optional, Union
 
 import torch
 from accelerate import Accelerator
 from accelerate.state import AcceleratorState
-from accelerate.utils import is_deepspeed_available
+from accelerate.utils import gather_object, is_deepspeed_available
 from rich.console import Console, Group
 from rich.live import Live
 from rich.panel import Panel
 from rich.progress import Progress
-from transformers import PreTrainedModel
-from transformers.trainer import TrainerCallback
+from transformers import (
+    GenerationConfig,
+    PreTrainedModel,
+    Trainer,
+    TrainerCallback,
+    TrainerControl,
+    TrainerState,
+    TrainingArguments,
+)
 from transformers.trainer_utils import has_length
+
+from ..models.utils import unwrap_model_for_generation
+from .judges import BaseJudge
 
 
 if is_deepspeed_available():
@@ -138,3 +148,88 @@ class RichProgressCallback(TrainerCallback):
             self.rich_console = None
             self.training_status = None
             self.current_step = None
+
+
+class WinRateCallback(TrainerCallback):
+    """
+    A [`~transformers.TrainerCallback`] that computes the win rate of a model based on a reference.
+
+    Usage:
+    ```python
+    trainer = DPOTrainer(...)
+    win_rate_callback = WinRateCallback(..., trainer=trainer)
+    trainer.add_callback(win_rate_callback)
+    ```
+
+    Args:
+        prompts (`List[str]`):
+            The prompts to generate completions for.
+        judge (`BaseJudge`):
+            The judge to use for comparing completions.
+        trainer (`Trainer`):
+            The trainer.
+        generation_config (`GenerationConfig`, *optional*):
+            The generation config to use for generating completions.
+        batch_size (`int`, *optional*):
+            The batch size to use for generating completions. Defaults to 4.
+    """
+
+    def __init__(
+        self,
+        prompts: List[str],
+        judge: BaseJudge,
+        trainer: Trainer,
+        generation_config: Optional[GenerationConfig] = None,
+        batch_size: int = 4,
+    ):
+        self.prompts = prompts
+        self.generation_config = generation_config
+        self.judge = judge
+        self.ref_completions = []
+        self.trainer = trainer
+        self.eval_dataset = self.trainer.eval_dataset
+        if not hasattr(trainer, "ref_model"):
+            raise AttributeError("Trainer must have a `ref_model` attribute.")
+        self.batch_size = batch_size
+
+    def generate_completions_for_model(self, model, tokenizer, prompts):
+        completions = []
+        with unwrap_model_for_generation(model, self.trainer.accelerator) as unwrapped_model:
+            unwrapped_model.eval()
+            for idx in range(0, len(prompts), self.batch_size):
+                batch = prompts[idx : idx + self.batch_size]
+                tokenized_batch = tokenizer(batch, return_tensors="pt", padding=True, truncation=True).to(model.device)
+                generations = unwrapped_model.generate(
+                    **tokenized_batch,
+                    generation_config=self.generation_config,
+                )
+                for prompt, generation in zip(tokenized_batch.input_ids, generations):
+                    # Remove prompt from generation
+                    generation = generation[len(prompt) :]
+                    completion = tokenizer.decode(generation, skip_special_tokens=True)
+                    completions.append(completion)
+
+            unwrapped_model.train()
+        return completions
+
+    def on_train_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
+        tokenizer = kwargs["tokenizer"]
+        tokenizer.padding_side = "left"
+        accelerator = self.trainer.accelerator
+        with accelerator.split_between_processes(self.eval_dataset["prompt"], apply_padding=True) as prompts:
+            self.ref_completions = self.generate_completions_for_model(self.trainer.ref_model, tokenizer, prompts)
+
+    def on_evaluate(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
+        model = kwargs["model"]
+        tokenizer = kwargs["tokenizer"]
+        accelerator = self.trainer.accelerator
+        with accelerator.split_between_processes(self.eval_dataset["prompt"], apply_padding=True) as prompts:
+            completions = self.generate_completions_for_model(model, tokenizer, prompts)
+            completion_pairs = list(zip(self.ref_completions, completions))
+            winner_indices = self.judge.judge(self.eval_dataset["prompt"], completion_pairs)
+            winner_indices = gather_object(winner_indices)
+
+        # Logging
+        if self.trainer.accelerator.is_main_process:
+            win_rate = sum(winner_idx == 1 for winner_idx in winner_indices) / len(winner_indices)
+            self.trainer.log({"eval_win_rate": win_rate})
