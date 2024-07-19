@@ -1,8 +1,8 @@
+import asyncio
 import logging
 import os
 import random
 from abc import ABC, abstractmethod
-from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 
 import numpy as np
@@ -68,6 +68,35 @@ class BasePairwiseJudge(ABC):
     ```
     """
 
+    DEFAULT_SYSTEM_PROMPT = '''I require a leaderboard for various large language models. I'll provide you with prompts given to these models and their corresponding outputs. Your task is to assess these responses, and select the model that produces the best output from a human perspective.
+
+## Instruction
+
+{{
+    "instruction": """{prompt}""",
+}}
+
+## Model Outputs
+
+Here are the unordered outputs from the models. Each output is associated with a specific model, identified by a unique model identifier.
+
+{{
+    {{
+        "model_identifier": "0",
+        "output": """{response0}"""
+    }},
+    {{
+        "model_identifier": "1",
+        "output": """{response1}"""
+    }}
+}}
+
+## Task
+
+Evaluate the models based on the quality and relevance of their outputs, and select the model that generated the best output. Answer by providing the model identifier of the best model. We will use your output as the name of the best model, so make sure your output only contains one of the following model identifiers and nothing else (no quotes, no spaces, no new lines, ...): 0 or 1.
+
+## Best Model Identifier'''
+
     @abstractmethod
     def judge(self, prompts: List[str], completion_pairs: List[List[str]], shuffle_order: bool = True) -> List[int]:
         """
@@ -84,20 +113,19 @@ class BasePairwiseJudge(ABC):
         raise NotImplementedError("Judge subclasses must implement this method.")
 
 
-class BaseAPIJudge(BasePairwiseJudge):
+class BasePairwiseAPIJudge(BasePairwiseJudge):
     """
-    Base class for LLM judges reached via an API.
+    Base class for LLM pairwise judges reached via an API.
 
     The subclasses of this class should implement the `get_response` method to interact with the API.
 
     Args:
         system_prompt (`str`, *optional*): The system prompt to be used for the judge. If not provided, a default prompt is used.
         max_tries (`int`, *optional*): The maximum number of retries for a request. Defaults to 5.
-        max_workers (`int`, *optional*): The maximum number of parallel requests. Defaults to 8.
 
     Example:
     ```python
-    class MockAPIJudge(BaseAPIJudge):
+    class MockAPIJudge(BasePairwiseAPIJudge):
         def get_response(self, content):
             return random.choice(["0", "1"])
 
@@ -110,15 +138,11 @@ class BaseAPIJudge(BasePairwiseJudge):
     """
 
     # TODO: add max_requests parameter to limit the number of requests made
-    def __init__(self, system_prompt: Optional[str] = None, max_tries: int = 5, max_workers: int = 8):
+    def __init__(self, system_prompt: Optional[str] = None, max_tries: int = 5):
         if system_prompt is None:
-            system_prompt = DEFAULT_SYSTEM_PROMPT
+            system_prompt = self.DEFAULT_SYSTEM_PROMPT
         self.system_prompt = system_prompt
         self.max_tries = max_tries
-        self.thread_pool_executor = ThreadPoolExecutor(max_workers=max_workers)
-
-    def __del__(self) -> None:
-        self.thread_pool_executor.shutdown()
 
     @abstractmethod
     def get_response(self, content: str) -> str:
@@ -134,7 +158,7 @@ class BaseAPIJudge(BasePairwiseJudge):
 
         raise NotImplementedError("Judge subclasses must implement this method.")
 
-    def judge_single(self, prompt: str, completion_pair: List[str], shuffle_order: bool = True) -> int:
+    async def judge_single(self, prompt: str, completion_pair: List[str], shuffle_order: bool = True) -> int:
         flipped = random.choice([True, False]) if shuffle_order else False
         completion_pair = completion_pair[::-1] if flipped else completion_pair
 
@@ -159,13 +183,18 @@ class BaseAPIJudge(BasePairwiseJudge):
         )
         return random.choice([0, 1])
 
-    def judge(self, prompts: List[str], completion_pairs: List[List[str]], shuffle_order: bool = True) -> List[int]:
-        futures = []
-        for prompt, completion_pair in zip(prompts, completion_pairs):
-            future = self.thread_pool_executor.submit(self.judge_single, prompt, completion_pair, shuffle_order)
-            futures.append(future)
+    async def _judge(
+        self, prompts: List[str], completion_pairs: List[List[str]], shuffle_order: bool = True
+    ) -> List[int]:
+        responses = [
+            self.judge_single(prompt, completion_pair, shuffle_order)
+            for prompt, completion_pair in zip(prompts, completion_pairs)
+        ]
+        responses = await asyncio.gather(*responses)
+        return responses
 
-        return [f.result() for f in futures]
+    def judge(self, prompts: List[str], completion_pairs: List[List[str]], shuffle_order: bool = True) -> List[int]:
+        return asyncio.run(self._judge(prompts, completion_pairs, shuffle_order))
 
 
 class PairRMJudge(BasePairwiseJudge):
@@ -202,7 +231,7 @@ class MockJudge(BasePairwiseJudge):
         return [random.choice([0, 1]) for _ in range(len(prompts))]
 
 
-class MockAPIJudge(BaseAPIJudge):
+class MockAPIJudge(BasePairwiseAPIJudge):
     """
     Mock judge that returns a random choice instead of interacting with an API.
     """
@@ -211,7 +240,7 @@ class MockAPIJudge(BaseAPIJudge):
         return random.choice(["0", "1"])
 
 
-class HuggingFaceJudge(BaseAPIJudge):
+class HuggingFaceJudge(BasePairwiseAPIJudge):
     """
     Judge based on the Hugging Face API.
 
@@ -228,10 +257,9 @@ class HuggingFaceJudge(BaseAPIJudge):
         model="meta-llama/Meta-Llama-3-70B-Instruct",
         system_prompt: Optional[str] = None,
         max_tries: int = 5,
-        max_workers: int = 8,
         token: Optional[str] = None,
     ):
-        super().__init__(system_prompt=system_prompt, max_tries=max_tries, max_workers=max_workers)
+        super().__init__(system_prompt=system_prompt, max_tries=max_tries)
         self.client = InferenceClient(model=model, token=token)
 
     def get_response(self, content: str) -> str:
@@ -247,7 +275,7 @@ class HuggingFaceJudge(BaseAPIJudge):
             return random.choice(["0", "1"])
 
 
-class OpenAIJudge(BaseAPIJudge):
+class OpenAIJudge(BasePairwiseAPIJudge):
     """
     Judge based on the OpenAI API.
 
