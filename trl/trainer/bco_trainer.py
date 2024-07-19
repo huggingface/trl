@@ -29,7 +29,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from accelerate import PartialState
 from accelerate.utils import is_deepspeed_available, tqdm
-from datasets import Dataset, interleave_datasets
+from datasets import Dataset
 from torch.utils.data import DataLoader, SequentialSampler
 from transformers import (
     AutoModelForCausalLM,
@@ -605,13 +605,6 @@ class BCOTrainer(Trainer):
             desirable = desirable.shuffle(seed=args.data_seed)
             undesirable = undesirable.shuffle(seed=args.data_seed)
 
-            # split the dataset and interleave them together with equal probability of choosing chosen or rejected
-            interleaved_train_dataset = interleave_datasets(
-                [desirable, undesirable],
-                stopping_strategy="all_exhausted",
-            )
-            train_dataset = interleaved_train_dataset
-
         super().__init__(
             model=model,
             args=args,
@@ -679,17 +672,23 @@ class BCOTrainer(Trainer):
         """
         dtype = prompt_embeddings.dtype
         device = prompt_embeddings.device
-        sample_size = prompt_embeddings.shape[0]
+        rank = self.accelerator.process_index
 
-        padded_prompt_embeddings = self.accelerator.pad_across_processes(prompt_embeddings)
+        padded_prompt_embeddings = self.accelerator.pad_across_processes(
+            prompt_embeddings, pad_index=self.embedding_tokenizer.pad_token_id
+        )
+        sample_size = padded_prompt_embeddings.shape[0]
         nonzero = padded_prompt_embeddings.sum(dim=1) != 0
         prompt_embeddings = self.accelerator.gather(padded_prompt_embeddings)
+
+        # cannot predict for all empty values
+        if prompt_embeddings.shape[0] == 0:
+            return torch.tensor([], device=device, dtype=dtype)
 
         prob = self.clf.predict_proba(prompt_embeddings.cpu().numpy())[:, 1]
         prob = torch.as_tensor(prob, dtype=dtype, device=device)
         prob = self.accelerator.reduce(prob, reduction="mean")
 
-        rank = self.accelerator.process_index
         prob = prob[sample_size * rank : sample_size * (rank + 1)]
         prob = prob[nonzero]
 
@@ -1105,7 +1104,7 @@ class BCOTrainer(Trainer):
 
         if self.match_underlying_distribution:
             chosen_weight = torch.ones_like(chosen_losses)
-            rejected_weight = self._get_udm_weight(rejected_embeddings) if rejected_embeddings.shape[0] > 0 else 0.0
+            rejected_weight = self._get_udm_weight(rejected_embeddings)
 
             losses = torch.cat((chosen_weight * chosen_losses, rejected_weight * rejected_losses), dim=0)
         else:
