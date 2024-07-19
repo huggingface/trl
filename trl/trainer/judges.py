@@ -35,11 +35,11 @@ Here are the unordered outputs from the models. Each output is associated with a
 {{
     {{
         "model_identifier": "0",
-        "output": """{response1}"""
+        "output": """{response0}"""
     }},
     {{
         "model_identifier": "1",
-        "output": """{response2}"""
+        "output": """{response1}"""
     }}
 }}
 
@@ -50,13 +50,13 @@ Evaluate the models based on the quality and relevance of their outputs, and sel
 ## Best Model Identifier'''
 
 
-class BaseJudge(ABC):
+class BasePairwiseJudge(ABC):
     """
-    Base class for LLM judges.
+    Base class for LLM pairwise judges.
 
     Example:
     ```python
-    class MockJudge(BaseJudge):
+    class MockJudge(BasePairwiseJudge):
         def judge(self, prompts, completion_pairs, shuffle_order=True):
             return [random.choice([0, 1]) for _ in range(len(prompts))]
 
@@ -84,7 +84,7 @@ class BaseJudge(ABC):
         raise NotImplementedError("Judge subclasses must implement this method.")
 
 
-class BaseAPIJudge(BaseJudge):
+class BaseAPIJudge(BasePairwiseJudge):
     """
     Base class for LLM judges reached via an API.
 
@@ -141,7 +141,7 @@ class BaseAPIJudge(BaseJudge):
         retry = 0
         while retry < self.max_tries:
             content = self.system_prompt.format(
-                prompt=prompt, response1=completion_pair[0], response2=completion_pair[1]
+                prompt=prompt, response0=completion_pair[0], response1=completion_pair[1]
             )
             reply = self.get_response(content)
             reply = reply.strip()
@@ -168,7 +168,7 @@ class BaseAPIJudge(BaseJudge):
         return [f.result() for f in futures]
 
 
-class PairRMJudge(BaseJudge):
+class PairRMJudge(BasePairwiseJudge):
     """
     LLM judge based on the PairRM model from AllenAI.
 
@@ -193,7 +193,7 @@ class PairRMJudge(BaseJudge):
         return ranks[:, 0].tolist()
 
 
-class MockJudge(BaseJudge):
+class MockJudge(BasePairwiseJudge):
     """
     Mock judge that randomly selects a model for each completion pair.
     """

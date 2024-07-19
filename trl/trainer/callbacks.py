@@ -33,7 +33,7 @@ from transformers import (
 from transformers.trainer_utils import has_length
 
 from ..models.utils import unwrap_model_for_generation
-from .judges import BaseJudge
+from .judges import BasePairwiseJudge
 
 
 if is_deepspeed_available():
@@ -164,7 +164,7 @@ class WinRateCallback(TrainerCallback):
     Args:
         prompts (`List[str]`):
             The prompts to generate completions for.
-        judge (`BaseJudge`):
+        judge (`BasePairwiseJudge`):
             The judge to use for comparing completions.
         trainer (`Trainer`):
             The trainer.
@@ -177,7 +177,7 @@ class WinRateCallback(TrainerCallback):
     def __init__(
         self,
         prompts: List[str],
-        judge: BaseJudge,
+        judge: BasePairwiseJudge,
         trainer: Trainer,
         generation_config: Optional[GenerationConfig] = None,
         batch_size: int = 4,

@@ -51,7 +51,7 @@ _import_structure = {
     "ddpo_config": ["DDPOConfig"],
     "callbacks": ["RichProgressCallback", "SyncRefModelCallback", "WinRateCallback"],
     "judges": [
-        "BaseJudge",
+        "BasePairwiseJudge",
         "BaseAPIJudge",
         "HuggingFaceJudge",
         "MockAPIJudge",
@@ -106,7 +106,7 @@ if TYPE_CHECKING:
     from .sft_config import SFTConfig
     from .sft_trainer import SFTTrainer
     from .callbacks import RichProgressCallback, SyncRefModelCallback, WinRateCallback
-    from .judges import BaseJudge, BaseAPIJudge, HuggingFaceJudge, MockAPIJudge, MockJudge, OpenAIJudge, PairRMJudge
+    from .judges import BasePairwiseJudge, BaseAPIJudge, HuggingFaceJudge, MockAPIJudge, MockJudge, OpenAIJudge, PairRMJudge
 
     try:
         if not is_diffusers_available():
