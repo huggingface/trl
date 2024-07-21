@@ -166,7 +166,9 @@ class PairRMJudge(BasePairwiseJudge):
 
 class HfPairwiseJudge(BasePairwiseJudge):
     """
-    Pairwise judge based on the Hugging Face API.
+    Pairwise judge based on the Hugging Face API with chat completion.
+
+    This judge is relevant for assessing the quality chat models, where the completion is a response to a given prompt.
 
     Args:
         model (`str`, *optional*): The model to use for the judge. Defaults to "meta-llama/Meta-Llama-3-70B-Instruct".
@@ -216,6 +218,8 @@ class HfPairwiseJudge(BasePairwiseJudge):
 class OpenAIPairwiseJudge(BasePairwiseJudge):
     """
     Judge based on the OpenAI API.
+
+    This judge is relevant for assessing the quality chat models, where the completion is a response to a given prompt.
 
     Args:
         model (`str`, *optional*): The model to use for the judge. Defaults to "gpt-4-turbo-preview".
