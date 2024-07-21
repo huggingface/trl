@@ -24,7 +24,7 @@ from transformers import AutoModelForCausalLM, GenerationConfig, PreTrainedModel
 from ..models.utils import unwrap_model_for_generation
 from .gkd_config import GKDConfig
 from .sft_trainer import SFTTrainer
-from .utils import disable_dropout_in_model, generate
+from .utils import disable_dropout_in_model
 
 
 class GKDTrainer(SFTTrainer):
@@ -122,11 +122,15 @@ class GKDTrainer(SFTTrainer):
 
     def compute_loss(self, model, inputs, return_outputs=False):
         # compute student output
-        outputs_student = model(**inputs)
+        outputs_student = model(
+            input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], labels=inputs["labels"]
+        )
 
         # compute teacher output in eval mode
         self.teacher_model.eval()
-        outputs_teacher = self.teacher_model(**inputs)
+        outputs_teacher = self.teacher_model(
+            input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], labels=inputs["labels"]
+        )
 
         # compute the generalized JSD loss of student w.r.t teacher with parameter beta
         loss = self.generalized_jsd_loss(outputs_student.logits, outputs_teacher.logits, beta=self.beta)
@@ -162,26 +166,20 @@ class GKDTrainer(SFTTrainer):
                 )
                 attention_mask = inputs["prompts"] != self.tokenizer.pad_token_id
 
-                # gen output with respect to the prompt only
+                # generate output with respect to the prompt only
                 generated_outputs = unwrapped_model.generate(
                     input_ids=torch.masked_fill(inputs["prompts"], ~attention_mask, 0),
                     attention_mask=attention_mask,
                     generation_config=generation_config,
                     return_dict_in_generate=True,
                 )
-
-                # generated_outputs, _ = generate(
-                #     unwrapped_model,
-                #     inputs["input_ids"],
-                #     pad_token_id=self.tokenizer.pad_token_id,
-                #     generation_config=generation_config,
-                # )
-                import pdb
-                pdb.set_trace()
-                # set padding token -100
-                inputs["labels"] = generated_outputs.sequences
-                # set padding token 
-                
+                # set input_ids to the generated output and attention_mask to 1 where the generated output is not the pad token
+                inputs["input_ids"] = torch.where(generated_outputs.sequences != -100, generated_outputs.sequences, self.tokenizer.pad_token_id)
+                inputs["attention_mask"] = torch.where(generated_outputs.sequences != -100, 1, 0)
+                # set all but the last self.args.max_new_tokens_response to -100  in labels
+                labels = generated_outputs.sequences
+                labels[:, : -self.args.max_new_tokens_response] = -100
+                inputs["labels"] = labels
 
         inputs = self._prepare_inputs(inputs)
         model.train()
