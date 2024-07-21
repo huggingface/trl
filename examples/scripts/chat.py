@@ -21,6 +21,7 @@ init_zero_verbose()
 import copy
 import json
 import os
+import sys
 import pwd
 import re
 import time
@@ -258,12 +259,11 @@ def parse_eos_tokens(tokenizer, eos_tokens, eos_token_ids):
 
 def chat_cli():
     parser = TrlParser(ChatArguments)
-    args = parser.parse_args_into_dataclasses()[0]
-    if args.config == "default":
-        args.config = os.path.join(os.path.dirname(__file__), "config/default_chat_config.yaml")
-    if args.config.lower() == "none":
-        args.config = None
-    args = parser.update_dataclasses_with_config([args])[0]
+
+    if "--config" not in sys.argv:
+        sys.argv.append("--config")
+        sys.argv.append(os.path.join(os.path.dirname(__file__), "config/default_chat_config.yaml"))
+    args = parser.parse_args_and_config()[0]
     if args.examples is None:
         args.examples = {}
 
