@@ -133,7 +133,11 @@ class GKDTrainer(SFTTrainer):
         )
 
         # compute the generalized JSD loss of student w.r.t teacher with parameter beta
-        loss = self.generalized_jsd_loss(outputs_student.logits, outputs_teacher.logits, beta=self.beta)
+        loss = self.generalized_jsd_loss(
+            outputs_student.logits[:, -self.args.max_new_tokens_response :, :],
+            outputs_teacher.logits[:, -self.args.max_new_tokens_response :, :],
+            beta=self.beta,
+        )
 
         # Return weighted student loss
         return (loss, outputs_student) if return_outputs else loss
@@ -174,7 +178,9 @@ class GKDTrainer(SFTTrainer):
                     return_dict_in_generate=True,
                 )
                 # set input_ids to the generated output and attention_mask to 1 where the generated output is not the pad token
-                inputs["input_ids"] = torch.where(generated_outputs.sequences != -100, generated_outputs.sequences, self.tokenizer.pad_token_id)
+                inputs["input_ids"] = torch.where(
+                    generated_outputs.sequences != -100, generated_outputs.sequences, self.tokenizer.pad_token_id
+                )
                 inputs["attention_mask"] = torch.where(generated_outputs.sequences != -100, 1, 0)
                 # set all but the last self.args.max_new_tokens_response to -100  in labels
                 labels = generated_outputs.sequences
