@@ -51,13 +51,13 @@ _import_structure = {
     "ddpo_config": ["DDPOConfig"],
     "callbacks": ["RichProgressCallback", "SyncRefModelCallback", "WinRateCallback"],
     "judges": [
+        "BaseJudge",
+        "BaseRankJudge",
         "BasePairwiseJudge",
-        "BaseAPIJudge",
-        "HuggingFaceJudge",
-        "MockAPIJudge",
-        "MockJudge",
-        "OpenAIJudge",
-        "PairRMJudge",
+        "RandomRankJudge",
+        "RandomPairwiseJudge",
+        "HfPairwiseJudge",
+        "OpenAIPairwiseJudge",
     ],
 }
 
@@ -107,13 +107,13 @@ if TYPE_CHECKING:
     from .sft_trainer import SFTTrainer
     from .callbacks import RichProgressCallback, SyncRefModelCallback, WinRateCallback
     from .judges import (
+        BaseJudge,
+        BaseRankJudge,
         BasePairwiseJudge,
-        BaseAPIJudge,
-        HuggingFaceJudge,
-        MockAPIJudge,
-        MockJudge,
-        OpenAIJudge,
-        PairRMJudge,
+        RandomRankJudge,
+        RandomPairwiseJudge,
+        HfPairwiseJudge,
+        OpenAIPairwiseJudge,
     )
 
     try:

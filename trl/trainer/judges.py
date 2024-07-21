@@ -1,14 +1,12 @@
-import asyncio
+import concurrent.futures
 import logging
-import os
 import random
 from abc import ABC, abstractmethod
-from typing import List, Optional
+from typing import List, Optional, Union
 
 import numpy as np
 from accelerate import Accelerator
 from huggingface_hub import InferenceClient
-from requests import HTTPError
 
 from ..import_utils import is_llmblender_available, is_openai_available
 
@@ -17,10 +15,10 @@ if is_llmblender_available():
     import llm_blender
 
 if is_openai_available():
-    from openai import BadRequestError, OpenAI
+    from openai import OpenAI
 
 
-DEFAULT_SYSTEM_PROMPT = '''I require a leaderboard for various large language models. I'll provide you with prompts given to these models and their corresponding outputs. Your task is to assess these responses, and select the model that produces the best output from a human perspective.
+DEFAULT_PAIRWISE_SYSTEM_PROMPT = '''I require a leaderboard for various large language models. I'll provide you with prompts given to these models and their corresponding outputs. Your task is to assess these responses, and select the model that produces the best output from a human perspective.
 
 ## Instruction
 
@@ -45,156 +43,94 @@ Here are the unordered outputs from the models. Each output is associated with a
 
 ## Task
 
-Evaluate the models based on the quality and relevance of their outputs, and select the model that generated the best output. Answer by providing the model identifier of the best model. We will use your output as the name of the best model, so make sure your output only contains one of the following model identifiers and nothing else (no quotes, no spaces, no new lines, ...): 0 or 1.
+Evaluate the models on the basis of the quality and relevance of their results, and select the model that generated the best result. Reply with the ID of the best model. Our evaluation will only take into account the first character of your answer, so make sure it contains only one of the identifiers and nothing else (no quotation marks, no spaces, no new lines, ...).
+'''
 
-## Best Model Identifier'''
 
-
-class BasePairwiseJudge(ABC):
+class BaseJudge(ABC):
     """
-    Base class for LLM pairwise judges.
+    Base class for judges. The subclasses of this class should implement the `judge` method.
+    """
+
+    @abstractmethod
+    def judge(self, prompts: List[str], completions: List[str], shuffle_order: bool = True) -> List:
+        raise NotImplementedError("Judge subclasses must implement the `judge` method.")
+
+
+class BaseRankJudge(ABC):
+    """
+    Base class for LLM ranking judges.
 
     Example:
     ```python
-    class MockJudge(BasePairwiseJudge):
-        def judge(self, prompts, completion_pairs, shuffle_order=True):
-            return [random.choice([0, 1]) for _ in range(len(prompts))]
+    class MyRankJudge(BaseRankJudge):
+        def judge(self, prompts, completions, shuffle_order=True):
+            return ...  # Your ranking logic here
 
-    judge = MockJudge()
+    judge = MyRankJudge()
     judge.judge(
-        prompts=["What is the capital of France?", "What is the capital of Germany?"],
-        completion_pairs=[["Paris", "Marseille"], ["Munich", "Berlin"]]
-    )  # [0, 0]
+        prompts=["The capital of France is", "The capital of Germany is"],
+        completions=[[" Paris", " Marseille", "Lyon"], [" Munich", " Berlin"]]
+    )  # [[0, 1, 2], [1, 0]]
     ```
     """
 
-    DEFAULT_SYSTEM_PROMPT = '''I require a leaderboard for various large language models. I'll provide you with prompts given to these models and their corresponding outputs. Your task is to assess these responses, and select the model that produces the best output from a human perspective.
+    @abstractmethod
+    def judge(self, prompts: List[str], completions: List[List[str]], shuffle_order: bool = True) -> List[List[int]]:
+        """
+        Judge the completion for the given prompts and return the ranks of each completion.
 
-## Instruction
+        Args:
+            prompts (`List[str]`): List of prompts.
+            completions (`List[List[str]]`): List of completion, where each element is a list of completions for the corresponding prompt.
+            shuffle_order (`bool`): Whether to shuffle the order of the completions to avoid positional bias.
 
-{{
-    "instruction": """{prompt}""",
-}}
+        Returns:
+            List of lists of idxs, where each list contains the ranks of the completions for the corresponding prompt.
+            E.g., [1, 2, 0] means that the second completion (idx=1) is the best, followed by the third, and then the first.
+        """
+        raise NotImplementedError("Judge subclasses must implement the `judge` method.")
 
-## Model Outputs
 
-Here are the unordered outputs from the models. Each output is associated with a specific model, identified by a unique model identifier.
-
-{{
-    {{
-        "model_identifier": "0",
-        "output": """{response0}"""
-    }},
-    {{
-        "model_identifier": "1",
-        "output": """{response1}"""
-    }}
-}}
-
-## Task
-
-Evaluate the models based on the quality and relevance of their outputs, and select the model that generated the best output. Answer by providing the model identifier of the best model. We will use your output as the name of the best model, so make sure your output only contains one of the following model identifiers and nothing else (no quotes, no spaces, no new lines, ...): 0 or 1.
-
-## Best Model Identifier'''
+class BasePairwiseJudge(BaseJudge):
+    """
+    Base class for pairwise judges.
+    """
 
     @abstractmethod
-    def judge(self, prompts: List[str], completion_pairs: List[List[str]], shuffle_order: bool = True) -> List[int]:
+    def judge(self, prompts: List[str], completions: List[List[str]], shuffle_order: bool = True) -> List[int]:
         """
         Judge the completion pairs for the given prompts.
 
         Args:
             prompts (`List[str]`): List of prompts.
-            completion_pairs (`List[List[str]]`): List of completion pairs, where each pair is a list of two strings.
-            shuffle_order (`bool`): Whether to shuffle the order of the completion pairs, to avoid positional bias.
+            completions (`List[List[str]]`): List of completion, where each element is a list of completions for the corresponding prompt.
+            shuffle_order (`bool`): Whether to shuffle the order of the completions to avoid positional bias.
 
         Returns:
-            List of integers, where each integer is the index of the completion pair that is preferred.
+            List of idxs, where each idx is the rank of the best completion for the corresponding prompt.
+            E.g., 1 means that the second completion (idx=1) is the best.
         """
-        raise NotImplementedError("Judge subclasses must implement this method.")
+        raise NotImplementedError("Judge subclasses must implement the `judge` method.")
 
 
-class BasePairwiseAPIJudge(BasePairwiseJudge):
+class RandomRankJudge(BaseRankJudge):
     """
-    Base class for LLM pairwise judges reached via an API.
-
-    The subclasses of this class should implement the `get_response` method to interact with the API.
-
-    Args:
-        system_prompt (`str`, *optional*): The system prompt to be used for the judge. If not provided, a default prompt is used.
-        max_tries (`int`, *optional*): The maximum number of retries for a request. Defaults to 5.
-
-    Example:
-    ```python
-    class MockAPIJudge(BasePairwiseAPIJudge):
-        def get_response(self, content):
-            return random.choice(["0", "1"])
-
-    judge = MockAPIJudge()
-    judge.judge(
-        prompts=["What is the capital of France?", "What is the capital of Germany?"],
-        completion_pairs=[["Paris", "Marseille"], ["Munich", "Berlin"]]
-    )  # [1, 1]
-    ```
+    Random rank, for testing purposes.
     """
 
-    # TODO: add max_requests parameter to limit the number of requests made
-    def __init__(self, system_prompt: Optional[str] = None, max_tries: int = 5):
-        if system_prompt is None:
-            system_prompt = self.DEFAULT_SYSTEM_PROMPT
-        self.system_prompt = system_prompt
-        self.max_tries = max_tries
+    def judge(self, prompts, completions, shuffle_order=True):
+        num_completions = [len(completions[i]) for i in range(len(prompts))]
+        return [random.sample(range(n), n) for n in num_completions]
 
-    @abstractmethod
-    def get_response(self, content: str) -> str:
-        """
-        Get the response from the API for the given content.
 
-        Args:
-            content (`str`): The string content.
+class RandomPairwiseJudge(BasePairwiseJudge):
+    """
+    Random pairwise judge, for testing purposes.
+    """
 
-        Returns:
-            The response from the API as a string.
-        """
-
-        raise NotImplementedError("Judge subclasses must implement this method.")
-
-    async def judge_single(self, prompt: str, completion_pair: List[str], shuffle_order: bool = True) -> int:
-        flipped = random.choice([True, False]) if shuffle_order else False
-        completion_pair = completion_pair[::-1] if flipped else completion_pair
-
-        retry = 0
-        while retry < self.max_tries:
-            content = self.system_prompt.format(
-                prompt=prompt, response0=completion_pair[0], response1=completion_pair[1]
-            )
-            reply = self.get_response(content)
-            reply = reply.strip()
-
-            if reply in ["0"]:
-                return 0 if not flipped else 1
-            elif reply in ["1"]:
-                return 1 if not flipped else 0
-            else:
-                logging.info(f"Judge gave response `{reply}` instead of the expected 0 or 1. Retrying.")
-                retry += 1
-
-        logging.info(
-            f"Max retries reached for prompt:\n\n{prompt}\nand completion pair:\n\n{completion_pair}\n\nReturning random choice."
-        )
-        return random.choice([0, 1])
-
-    async def _judge(
-        self, prompts: List[str], completion_pairs: List[List[str]], shuffle_order: bool = True
-    ) -> List[int]:
-        responses = [
-            self.judge_single(prompt, completion_pair, shuffle_order)
-            for prompt, completion_pair in zip(prompts, completion_pairs)
-        ]
-        responses = await asyncio.gather(*responses)
-        return responses
-
-    def judge(self, prompts: List[str], completion_pairs: List[List[str]], shuffle_order: bool = True) -> List[int]:
-        return asyncio.run(self._judge(prompts, completion_pairs, shuffle_order))
+    def judge(self, prompts, completions, shuffle_order=True):
+        return [random.randint(0, len(completion) - 1) for completion in completions]
 
 
 class PairRMJudge(BasePairwiseJudge):
@@ -210,103 +146,140 @@ class PairRMJudge(BasePairwiseJudge):
         self.blender = llm_blender.Blender()
         self.blender.loadranker("llm-blender/PairRM", device=Accelerator().device)
 
-    def judge(self, prompts: List[str], completion_pairs: List[List[str]], shuffle_order: bool = True) -> List[int]:
+    def judge(self, prompts: List[str], completions: List[List[str]], shuffle_order: bool = True) -> List[int]:
+        # Shuffle the order of the completions to avoid positional bias
         if shuffle_order:
             flip_mask = np.random.choice([True, False], size=len(prompts))
-            completion_pairs = [pair[::-1] if flip else pair for flip, pair in zip(flip_mask, completion_pairs)]
-        ranks = self.blender.rank(prompts, completion_pairs)
+            completions = [pair[::-1] if flip else pair for flip, pair in zip(flip_mask, completions)]
+
+        # Rank the completions
+        ranks = self.blender.rank(prompts, completions)
         ranks -= 1  # PairRM is 1-indexed, so we subtract 1 to make it 0-indexed
+
+        # Flip back the ranks to the original order if needed
         if shuffle_order:
-            # Flip back the ranks to the original order
             ranks[flip_mask] = ranks[flip_mask][:, ::-1]
+
+        # Return the ranks
         return ranks[:, 0].tolist()
 
 
-class MockJudge(BasePairwiseJudge):
+class HfPairwiseJudge(BasePairwiseJudge):
     """
-    Mock judge that randomly selects a model for each completion pair.
-    """
-
-    def judge(self, prompts: List[str], completion_pairs: List[List[str]]) -> List[int]:
-        return [random.choice([0, 1]) for _ in range(len(prompts))]
-
-
-class MockAPIJudge(BasePairwiseAPIJudge):
-    """
-    Mock judge that returns a random choice instead of interacting with an API.
-    """
-
-    def get_response(self, content: str) -> str:
-        return random.choice(["0", "1"])
-
-
-class HuggingFaceJudge(BasePairwiseAPIJudge):
-    """
-    Judge based on the Hugging Face API.
+    Pairwise judge based on the Hugging Face API.
 
     Args:
         model (`str`, *optional*): The model to use for the judge. Defaults to "meta-llama/Meta-Llama-3-70B-Instruct".
-        system_prompt (`str`, *optional*): The system prompt to be used for the judge. If not provided, a default prompt is used.
-        max_tries (`int`, *optional*): The maximum number of retries for a request. Defaults to 5.
-        max_workers (`int`, *optional*): The maximum number of parallel requests. Defaults to 8.
         token (`str`, *optional*): The Hugging Face API token to use for the InferenceClient.
+        system_prompt (`str`, *optional*): The system prompt to be used for the judge. If not provided, a default prompt is used.
+            Note that the system prompt should contain the following placeholders: `{prompt}`, `{response0}`, and `{response1}`.
+            Also, the inference is called with `max_tokens=1`, consequently the system prompt should ask for a single token response.
     """
 
     def __init__(
         self,
         model="meta-llama/Meta-Llama-3-70B-Instruct",
-        system_prompt: Optional[str] = None,
-        max_tries: int = 5,
         token: Optional[str] = None,
+        system_prompt: Optional[str] = None,
     ):
-        super().__init__(system_prompt=system_prompt, max_tries=max_tries)
         self.client = InferenceClient(model=model, token=token)
+        self.system_prompt = system_prompt or DEFAULT_PAIRWISE_SYSTEM_PROMPT
 
-    def get_response(self, content: str) -> str:
-        try:
-            response = self.client.chat_completion(
-                messages=[{"role": "user", "content": content}],
-                max_tokens=1,
-                stop=["<|eot_id|>"],  # For llama-3 models
+    def judge(self, prompts: List[str], completions: List[List[str]], shuffle_order: bool = True) -> List[int]:
+        # Shuffle the order of the completions to avoid positional bias
+        if shuffle_order:
+            flip_mask = np.random.choice([True, False], size=len(prompts))
+            completions = [pair[::-1] if flip else pair for flip, pair in zip(flip_mask, completions)]
+
+        # Prepare the contents and call the inference
+        ranks = []
+        for prompt, completion_pair in zip(prompts, completions):
+            content = self.system_prompt.format(
+                prompt=prompt, response0=completion_pair[0], response1=completion_pair[1]
             )
-            return response.choices[0].message.content
-        except HTTPError as e:
-            logging.info(f"Unable to reach the Hugging Face API due to error: {e}\nReturning random choice (0,1)")
-            return random.choice(["0", "1"])
+
+            completion = self.client.chat_completion(messages=[{"role": "user", "content": content}], max_tokens=1)
+            response = completion.choices[0].message.content
+            if response in ["0", "1"]:
+                ranks.append(int(response))
+            else:
+                logging.warning(f"Invalid response from the model: {response}, using random choice instead.")
+                ranks.append(random.choice([0, 1]))
+
+        # Flip back the ranks to the original order if needed
+        if shuffle_order:
+            ranks = [ranks[i] if not flip else 1 - ranks[i] for i, flip in enumerate(flip_mask)]
+
+        return ranks
 
 
-class OpenAIJudge(BasePairwiseAPIJudge):
+class OpenAIPairwiseJudge(BasePairwiseJudge):
     """
     Judge based on the OpenAI API.
 
     Args:
         model (`str`, *optional*): The model to use for the judge. Defaults to "gpt-4-turbo-preview".
         system_prompt (`str`, *optional*): The system prompt to be used for the judge. If not provided, a default prompt is used.
-        max_tries (`int`, *optional*): The maximum number of retries for a request. Defaults to 5.
-        max_workers (`int`, *optional*): The maximum number of parallel requests. Defaults to 8.
+            Note that the system prompt should contain the following placeholders: `{prompt}`, `{response0}`, and `{response1}`.
+            Also, the inference is called with `max_tokens=1`, consequently the system prompt should ask for a single token response.
+        max_requests (`int`, *optional*): The maximum number of requests to make to the OpenAI API. Defaults to 1_000. If set to `None`, there is no limit.
+
     """
 
     def __init__(
-        self,
-        model="gpt-4-turbo-preview",
-        system_prompt: Optional[str] = None,
-        max_tries: int = 5,
-        max_workers: int = 8,
+        self, model="gpt-4-turbo-preview", system_prompt: Optional[str] = None, max_requests: Union[int, None] = 1_000
     ):
         if not is_openai_available():
             raise ValueError("OpenAI client is not installed. Please install it with 'pip install openai'.")
-        super().__init__(system_prompt=system_prompt, max_tries=max_tries, max_workers=max_workers)
-        self.client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        self.client = OpenAI()
         self.model = model
+        self.system_prompt = system_prompt or DEFAULT_PAIRWISE_SYSTEM_PROMPT
+        self.max_requests = max_requests
+        self.num_requests = 0
+        self._warned = False
 
-    def get_response(self, content: str) -> str:
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": content}],
-                max_tokens=1,  # TODO: let users configure these variables
-            )
-            return response.choices[0].message.content
-        except BadRequestError as e:
-            logging.warn(f"Unable to reach to OpenAI API due to error: {e}\nReturning random choice (0, 1)")
-            return random.choice(["0", "1"])
+    def judge(self, prompts: List[str], completions: List[List[str]], shuffle_order: bool = True) -> List[int]:
+        # Check if the limit of requests is reached, if so, use random choice instead
+        if self.max_requests is not None and self.num_requests >= self.max_requests:
+            if not self._warned:  # Print the warning only once
+                logging.warning(
+                    f"Reached the maximum number of requests ({self.max_requests}). From now on, using random choice instead. "
+                    " To increase the limit, set `max_requests` to a higher value, or to `None` for no limit."
+                )
+                self._warned = True
+            return [random.choice([0, 1]) for _ in prompts]
+
+        # Shuffle the order of the completions to avoid positional bias
+        if shuffle_order:
+            flip_mask = np.random.choice([True, False], size=len(prompts))
+            completions = [pair[::-1] if flip else pair for flip, pair in zip(flip_mask, completions)]
+
+        # Define a function to get the rank for a single prompt, will be called concurrently
+        def get_rank(prompt, candidates):
+            content = self.system_prompt.format(prompt=prompt, response0=candidates[0], response1=candidates[1])
+            messages = [{"role": "user", "content": content}]
+            completion = self.client.chat.completions.create(model=self.model, messages=messages, max_tokens=1)
+            response = completion.choices[0].message.content
+            if response in ["0", "1"]:
+                return int(response)
+            else:
+                logging.warning(f"Invalid response from the model: {response}, using random choice instead.")
+                return random.choice([0, 1])
+
+        # Call the completions concurrently
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future_to_prompt = {
+                executor.submit(get_rank, prompt, completion_pair): i
+                for i, (prompt, completion_pair) in enumerate(zip(prompts, completions))
+            }
+            ranks = [future.result() for future in concurrent.futures.as_completed(future_to_prompt)]
+
+        # Flip back the ranks to the original order if needed
+        if shuffle_order:
+            ranks = [ranks[i] if not flip else 1 - ranks[i] for i, flip in enumerate(flip_mask)]
+
+        # Update the number of requests
+        self.num_requests += len(prompts)
+
+        # Return the ranks
+        return ranks
