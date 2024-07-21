@@ -49,6 +49,8 @@ _import_structure = {
         "ORPOTrainer",
         "PPOConfig",
         "PPOTrainer",
+        "VASConfig",
+        "VASTrainer",
         "RewardConfig",
         "RewardTrainer",
         "SFTConfig",
@@ -56,6 +58,7 @@ _import_structure = {
         "FDivergenceConstants",
         "FDivergenceType",
     ],
+    "inference": ["VASInference"],
     "commands": [],
     "commands.cli_utils": ["init_zero_verbose", "SFTScriptArguments", "DPOScriptArguments", "TrlParser"],
     "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config", "RichProgressCallback"],
@@ -119,6 +122,8 @@ if TYPE_CHECKING:
         ORPOTrainer,
         PPOConfig,
         PPOTrainer,
+        VASConfig,
+        VASTrainer,
         RewardConfig,
         RewardTrainer,
         SFTConfig,
@@ -126,6 +131,7 @@ if TYPE_CHECKING:
         FDivergenceConstants,
         FDivergenceType,
     )
+    from .inference import VASInference
     from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config, RichProgressCallback
     from .commands.cli_utils import init_zero_verbose, SFTScriptArguments, DPOScriptArguments, TrlParser
 
