@@ -1,10 +1,12 @@
 from dataclasses import dataclass, field
+from typing import Optional
 
 from datasets import load_dataset
-from trl import OpenAIPairwiseJudge, HfPairwiseJudge
 from transformers import HfArgumentParser
 from vllm import LLM, SamplingParams
-from typing import Optional
+
+from trl import HfPairwiseJudge, OpenAIPairwiseJudge
+
 
 """
 Examples:
@@ -39,6 +41,7 @@ class ScriptArguments:
         },
     )
     num_examples: Optional[int] = field(default=None, metadata={"help": "The number of examples to evaluate."})
+
 
 # Parse the arguments
 parser = HfArgumentParser(ScriptArguments)
