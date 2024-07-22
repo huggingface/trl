@@ -169,7 +169,7 @@ This PPOv2 implementation is based on the [The N+ Implementation Details of RLHF
 
 ## Benchmark experiments
 
-To validate the PPO implementation works, we ran experiments on the 1B model. Here are the commands we used to run the experiments. We take the SFT / RM models directly from [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://arxiv.org/pdf/2403.17031).
+To validate the PPO implementation works, we ran experiment on the 1B model. Here are the command we used to run the experiment. We take the SFT / RM models directly from [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://arxiv.org/pdf/2403.17031).
 
 ```
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \

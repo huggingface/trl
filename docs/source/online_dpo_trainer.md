@@ -61,7 +61,7 @@ The logged metrics are as follows. Here is an example [tracked run at Weights an
 
 To help you understand what your model is doing, we periodically log some sample completions from the model. Here is an example of a completion. In an example [tracked run at Weights and Biases](https://wandb.ai/huggingface/trl/runs/dd2o3g35), it looks like the following, allowing you to see the model's response at different stages of training. By default we generate `--num_sample_generations 10` during training, but you can customize the number of generations.
 
-![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/ppov2_completions.gif?download=true)
+![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/ppov2_completions.gif)
 
 
 In the logs the sampled generations look like 
@@ -159,7 +159,7 @@ In the logs the sampled generations look like
 │ worth it.                       │                                 │          │
 │                                 │                                 │          │
 │ TL;DR:                          │                                 │          │
-├─────────────────────────────────┼─────────────────────────────────┼──────────┤
+└─────────────────────────────────┴─────────────────────────────────┴──────────┘
 ```
 
 ## Implementation details
@@ -219,69 +219,45 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
     --push_to_hub
 ```
 
-1B experiment can be found here:
+Checkpoints and experiment tracking are available at:
 
 - [🤗 Model checkpoint](https://huggingface.co/vwxyzjn/ppo_tldr)
 - [🐝 Tracked experiment](https://wandb.ai/huggingface/trl/runs/dd2o3g35)
 
 
-To evaluate, we use vLLM to load the checkpoints and GPT4 as a judge model to evaluate the generated TL;DR against the reference TL;DR.
+To evaluate, we use [vLLM](https://github.com/vllm-project/vllm) to load the checkpoints and GPT-4o mini as a judge model to evaluate the generated TL;DR against the reference TL;DR.
+For more information on how to use judges, see [Judges](judges).
+
 ```bash
-#### using GPT4 as a judge
-python -i examples/scripts/evals/generate_tldr.py \
-    --model_name_or_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr \
-    --judge_model gpt-4-0613 \
-    --output_path examples/scripts/evals/sft_tldr.csv \
-    --n 1000
-# preferred
-# response1    790
-# response0    210
-# Name: count, dtype: int64
-python -i examples/scripts/evals/generate_tldr.py \
-    --model_name_or_path cleanrl/EleutherAI_pythia-6.9b-deduped__sft__tldr \
-    --judge_model gpt-4-0613 \
-    --output_path examples/scripts/evals/sft_tldr.csv \
-    --n 1000
-# preferred
-# response1    691
-# response0    309
-# Name: count, dtype: int64
-python -i examples/scripts/evals/generate_tldr.py \
-    --model_name_or_path vwxyzjn/online_dpo_tldr \
-    --judge_model gpt-4-0613 \
-    --output_path examples/scripts/evals/online_dpo_tldr.csv \
-    --n 1000
-# preferred
-# response0    532
-# response1    468
-# Name: count, dtype: int64
-python -i examples/scripts/evals/generate_tldr.py \
-    --model_name_or_path vwxyzjn/online_dpo_tldr_6.9b \
-    --judge_model gpt-4-0613 \
-    --output_path examples/scripts/evals/online_dpo_tldr_6.9b.csv \
-    --n 1000
-# preferred
-# response0    780
-# response1    220
-# Name: count, dtype: int64
+$ python examples/scripts/evals/judge_tldr.py --model_name_or_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr --judge_model gpt-4o-mini --num_examples 1000
+Model win rate: 33.00%
+python examples/scripts/evals/judge_tldr.py --model_name_or_path cleanrl/EleutherAI_pythia-6.9b-deduped__sft__tldr --judge_model gpt-4o-mini --num_examples 1000
+Model win rate: 41.50%
+python examples/scripts/evals/judge_tldr.py --model_name_or_path vwxyzjn/online_dpo_tldr --judge_model gpt-4o-mini --num_examples 1000
+Model win rate: 62.60%
+python examples/scripts/evals/judge_tldr.py --model_name_or_path vwxyzjn/online_dpo_tldr_6.9b --judge_model gpt-4o-mini --num_examples 1000
+Model win rate: 74.20%
 ```
 
 We can then plot the RLHF scaling chart.
 
 ```python
 import matplotlib.pyplot as plt
+
 data = {
-    "SFT": [[1e9, 6.9e9], [210 / 1000, 309 / 1000]],
-    "online DPO": [[1e9, 6.9e9], [532 / 1000, 780 / 1000]],
+    "SFT": [[1e9, 6.9e9], [0.33, 0.415]],
+    "Online DPO": [[1e9, 6.9e9], [0.626, 0.742]],
 }
 for model, (x, y) in data.items():
     plt.scatter(x, y, label=model)
-plt.axhline(y=0.5, color="black", linestyle="-.", label="human reference summary")
+
+plt.axhline(y=0.5, color="black", linestyle="-.", label="Human reference summary")
 plt.title("RLHF scaling by model size")
 plt.xlabel("Model size")
-plt.ylabel("Win rate against reference summaries\n(according to GPT-4-0613)")
+plt.ylabel("Win rate against reference summaries\n(according to GPT-4o mini)")
 plt.xscale("log")
-plt.xlim(5e8, 1e10)
+plt.xlim(5e8, 1.2e10)
+plt.xticks([1e9, 1e10], ["1B", "10B"])
 plt.legend()
 plt.grid(True, which="both", ls="--", c="0.7")
 plt.tight_layout()
@@ -289,7 +265,6 @@ plt.savefig("plot.png")
 ```
 
 
-![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/online%20DPO%20scaling.png?download=true)
+![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/online_dpo_scaling.png)
 
 The online DPO checkpoint gets increasingly more win rate as we scale up the model sizes. This is a good sign that the online DPO implementation is working as intended.
-
