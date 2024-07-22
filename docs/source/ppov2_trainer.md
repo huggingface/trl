@@ -13,7 +13,7 @@ References:
 To just run a PPO script to make sure the trainer can run, you can run the following command to train a PPO model with a dummy reward model.
 
 ```bash
-python -i examples/scripts/ppo/ppo.py \
+python examples/scripts/ppo/ppo.py \
     --learning_rate 3e-6 \
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \
@@ -22,7 +22,7 @@ python -i examples/scripts/ppo/ppo.py \
     --gradient_accumulation_steps 1 \
     --total_episodes 10000 \
     --model_name_or_path EleutherAI/pythia-1b-deduped \
-    --non_eos_penalty \
+    --non_eos_penalty
 ```
 
 
