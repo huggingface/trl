@@ -43,7 +43,7 @@ Here are the unordered outputs from the models. Each output is associated with a
 
 ## Task
 
-Evaluate the models on the basis of the quality and relevance of their results, and select the model that generated the best result. Reply with the ID of the best model. Our evaluation will only take into account the first character of your answer, so make sure it contains only one of the identifiers and nothing else (no quotation marks, no spaces, no new lines, ...).
+Evaluate the models on the basis of the quality and relevance of their results, and select the model that generated the best result. Reply with the identifier of the best model. Our evaluation will only take into account the first character of your answer, so make sure it contains only one of the identifiers and nothing else (no quotation marks, no spaces, no new lines, ...).
 '''
 
 
@@ -193,25 +193,26 @@ class HfPairwiseJudge(BasePairwiseJudge):
             flip_mask = np.random.choice([True, False], size=len(prompts))
             completions = [pair[::-1] if flip else pair for flip, pair in zip(flip_mask, completions)]
 
-        # Prepare the contents and call the inference
-        ranks = []
-        for prompt, completion_pair in zip(prompts, completions):
-            content = self.system_prompt.format(
-                prompt=prompt, response0=completion_pair[0], response1=completion_pair[1]
-            )
-
+        # Define a function to get the rank for a single prompt, will be called concurrently
+        def get_rank(prompt, candidates):
+            content = self.system_prompt.format(prompt=prompt, response0=candidates[0], response1=candidates[1])
             completion = self.client.chat_completion(messages=[{"role": "user", "content": content}], max_tokens=1)
             response = completion.choices[0].message.content
             if response in ["0", "1"]:
-                ranks.append(int(response))
+                return int(response)
             else:
                 logging.warning(f"Invalid response from the model: {response}, using random choice instead.")
-                ranks.append(random.choice([0, 1]))
+                return random.choice([0, 1])
+
+        # Call the completions concurrently
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            ranks = list(executor.map(get_rank, prompts, completions))
 
         # Flip back the ranks to the original order if needed
         if shuffle_order:
             ranks = [ranks[i] if not flip else 1 - ranks[i] for i, flip in enumerate(flip_mask)]
 
+        # Return the ranks
         return ranks
 
 
@@ -272,11 +273,7 @@ class OpenAIPairwiseJudge(BasePairwiseJudge):
 
         # Call the completions concurrently
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            future_to_prompt = {
-                executor.submit(get_rank, prompt, completion_pair): i
-                for i, (prompt, completion_pair) in enumerate(zip(prompts, completions))
-            }
-            ranks = [future.result() for future in concurrent.futures.as_completed(future_to_prompt)]
+            ranks = list(executor.map(get_rank, prompts, completions))
 
         # Flip back the ranks to the original order if needed
         if shuffle_order:
