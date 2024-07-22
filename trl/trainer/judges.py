@@ -222,11 +222,11 @@ class OpenAIPairwiseJudge(BasePairwiseJudge):
     This judge is relevant for assessing the quality chat models, where the completion is a response to a given prompt.
 
     Args:
-        model (`str`, *optional*): The model to use for the judge. Defaults to "gpt-4-turbo-preview".
+        model (`str`, *optional*): The model to use for the judge. Defaults to `"gpt-4-turbo-preview"`.
         system_prompt (`str`, *optional*): The system prompt to be used for the judge. If not provided, a default prompt is used.
             Note that the system prompt should contain the following placeholders: `{prompt}`, `{response0}`, and `{response1}`.
             Also, the inference is called with `max_tokens=1`, consequently the system prompt should ask for a single token response.
-        max_requests (`int`, *optional*): The maximum number of requests to make to the OpenAI API. Defaults to 1_000. If set to `None`, there is no limit.
+        max_requests (`int`, *optional*): The maximum number of requests to make to the OpenAI API. Defaults to 1000. If set to `None`, there is no limit.
 
     """
 
