@@ -82,7 +82,7 @@ class BaseRankJudge(ABC):
 
         Args:
             prompts (`List[str]`): List of prompts.
-            completions (`List[List[str]]`): List of completion, where each element is a list of completions for the corresponding prompt.
+            completions (`List[List[str]]`): List of completions list, where each element is a list of completions for the corresponding prompt.
             shuffle_order (`bool`): Whether to shuffle the order of the completions to avoid positional bias.
 
         Returns:
@@ -104,7 +104,7 @@ class BasePairwiseJudge(BaseJudge):
 
         Args:
             prompts (`List[str]`): List of prompts.
-            completions (`List[List[str]]`): List of completion, where each element is a list of completions for the corresponding prompt.
+            completions (`List[List[str]]`): List of completions pairs, where each element is a pair of completions for the corresponding prompt.
             shuffle_order (`bool`): Whether to shuffle the order of the completions to avoid positional bias.
 
         Returns:
