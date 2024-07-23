@@ -10,7 +10,7 @@ from transformers import (
 
 from trl import ModelConfig
 from trl.commands.cli_utils import TrlParser
-from trl.trainer.online_dpo_trainer import OnlineDPOConfig, OnlineDPOTrainer
+from trl.trainer import OnlineDPOConfig, OnlineDPOTrainer
 from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
 
 
