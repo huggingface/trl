@@ -172,6 +172,7 @@ The [`setup_chat_format`] function in `trl` easily sets up a model and tokenizer
 
 ```python
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from trl import setup_chat_format
 
 # Load model and tokenizer
 model = AutoModelForCausalLM.from_pretrained("facebook/opt-350m")
