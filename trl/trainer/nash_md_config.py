@@ -12,8 +12,7 @@ class NashMDConfig(OnPolicyConfig):
     reward_model_path: str = "EleutherAI/pythia-160m"
     """the path to the reward model"""
 
-    # ppo config
-    num_ppo_epochs: int = 4
+    num_nash_epochs: int = 4
     """the number of epochs to train"""
 
     # DPO stuff w/o max_length which is included in RLOOConfig

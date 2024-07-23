@@ -2,23 +2,20 @@ import gc
 import math
 import os
 import time
-from collections import defaultdict
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
-import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from accelerate import Accelerator
-from accelerate.utils import broadcast, gather_object
+from accelerate.utils import broadcast
 from datasets import Dataset
 from torch.utils.data import DataLoader
 from transformers import (
     DataCollatorWithPadding,
     GenerationConfig,
     PreTrainedTokenizer,
-    Trainer,
     TrainerCallback,
     TrainerControl,
 )
@@ -36,16 +33,16 @@ from ..trainer.utils import (
     forward,
     get_reward,
     prepare_deepspeed,
-    print_rich_table,
     truncate_response,
 )
 from .nash_md_config import NashMDConfig
+from .online_dpo_trainer import OnlineDPOTrainer
 
 
 INVALID_LOGPROB = 1.0
 
 
-class NashMDTrainer(Trainer):
+class NashMDTrainer(OnlineDPOTrainer):
     def __init__(
         self,
         config: NashMDConfig,
@@ -186,12 +183,6 @@ class NashMDTrainer(Trainer):
             self.ref_policy = self.ref_policy.to(self.accelerator.device)
             self.reward_model = self.reward_model.to(self.accelerator.device)
 
-    def get_train_dataloader(self) -> DataLoader:
-        return self.dataloader
-
-    def get_eval_dataloader(self) -> DataLoader:
-        return self.eval_dataloader
-
     def train(self):
         args = self.args
         accelerator = self.accelerator
@@ -220,7 +211,7 @@ class NashMDTrainer(Trainer):
 
         accelerator.print("===training policy===")
         start_time = time.time()
-        stats_shape = (args.num_ppo_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
+        stats_shape = (args.num_nash_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
         loss_stats = torch.zeros(stats_shape, device=device)
         chosen_rewards_stats = torch.zeros(stats_shape, device=device)
         rejected_rewards_stats = torch.zeros(stats_shape, device=device)
@@ -284,13 +275,14 @@ class NashMDTrainer(Trainer):
                     del logits, all_logprob
                     torch.cuda.empty_cache()
 
-                    ref_output = forward(ref_policy, query_response, tokenizer.pad_token_id)
-                    ref_logits = ref_output.logits[:, context_length - 1 : -1]
-                    ref_logits /= args.temperature + 1e-7
-                    ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
-                    ref_logprob = torch.gather(ref_all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
-                    del ref_output, ref_logits, ref_all_logprob
-                    torch.cuda.empty_cache()
+                    with torch.no_grad():
+                        ref_output = forward(ref_policy, query_response, tokenizer.pad_token_id)
+                        ref_logits = ref_output.logits[:, context_length - 1 : -1]
+                        ref_logits /= args.temperature + 1e-7
+                        ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
+                        ref_logprob = torch.gather(ref_all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
+                        del ref_output, ref_logits, ref_all_logprob
+                        torch.cuda.empty_cache()
 
                     # Response Processing 1. truncate response after the first occurrence of `stop_token_id`
                     postprocessed_response = response
@@ -312,6 +304,7 @@ class NashMDTrainer(Trainer):
                     ref_logprobs.append(ref_logprob)
                     sequence_lengths.append(sequence_length)
                     scores.append(score)
+
                 responses = torch.cat(responses, 0)
                 postprocessed_responses = torch.cat(postprocessed_responses, 0)
                 logprobs = torch.cat(logprobs, 0)
@@ -359,7 +352,7 @@ class NashMDTrainer(Trainer):
                 torch.cuda.empty_cache()
 
             # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
-            for ppo_epoch_idx in range(args.num_ppo_epochs):
+            for epoch_idx in range(args.num_nash_epochs):
                 b_inds = np.random.permutation(args.local_batch_size // args.num_generation_per_prompt)
                 minibatch_idx = 0
                 for mini_batch_start in range(
@@ -442,18 +435,18 @@ class NashMDTrainer(Trainer):
                             with torch.no_grad():
                                 chosen_rewards = self.beta * (chosen_logprobs_sum - chosen_ref_logprobs_sum)
                                 rejected_rewards = self.beta * (rejected_logprobs_sum - rejected_ref_logprobs_sum)
-                                loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = loss
+                                loss_stats[epoch_idx, minibatch_idx, gradient_accumulation_idx] = loss
                                 chosen_rewards_stats[
-                                    ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
+                                    epoch_idx, minibatch_idx, gradient_accumulation_idx
                                 ] = chosen_rewards.mean()
                                 rejected_rewards_stats[
-                                    ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
+                                    epoch_idx, minibatch_idx, gradient_accumulation_idx
                                 ] = rejected_rewards.mean()
                                 chosen_logprobs_stats[
-                                    ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
+                                    epoch_idx, minibatch_idx, gradient_accumulation_idx
                                 ] = chosen_logprobs_sum.mean()
                                 rejected_logprobs_stats[
-                                    ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
+                                    epoch_idx, minibatch_idx, gradient_accumulation_idx
                                 ] = rejected_logprobs_sum.mean()
                         gradient_accumulation_idx += 1
                     minibatch_idx += 1
@@ -514,53 +507,3 @@ class NashMDTrainer(Trainer):
         if self.control.should_save:
             self._save_checkpoint(model, trial=None, metrics=None)
             self.control = self.callback_handler.on_save(self.args, self.state, self.control)
-
-    def generate_completions(self, sampling: bool = False):
-        args = self.args
-        tokenizer = self.tokenizer
-        generation_config = GenerationConfig(
-            max_new_tokens=self.args.response_length,
-            temperature=(0.01 + 1e-7),
-            top_k=0.0,
-            top_p=1.0,
-            do_sample=True,
-        )
-
-        table = defaultdict(list)
-        with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
-            for batch in self.eval_dataloader:
-                query = batch["input_ids"]
-                with torch.no_grad():
-                    context_length = query.shape[1]
-                    query_response, _ = batch_generation(
-                        unwrapped_model,
-                        query,
-                        query.shape[0],
-                        tokenizer.pad_token_id,
-                        generation_config,
-                    )
-                    response = query_response[:, context_length:]
-                    postprocessed_response = response
-                    if args.stop_token_id is not None:  # handle the edge case when stop_token_id exists but is 0
-                        postprocessed_response = truncate_response(
-                            args.stop_token_id, tokenizer.pad_token_id, response
-                        )
-                    table["query"].extend(gather_object(tokenizer.batch_decode(query, skip_special_tokens=True)))
-                    table["model response"].extend(gather_object(tokenizer.batch_decode(postprocessed_response)))
-
-                    postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
-                    _, score, _ = get_reward(
-                        self.reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
-                    )
-                    table["score"].extend(self.accelerator.gather(score).float().cpu().numpy())
-
-                if sampling:
-                    break
-        df = pd.DataFrame(table)
-        if self.accelerator.process_index == 0:
-            print_rich_table(df.iloc[0 : 0 + 5])
-        if "wandb" in args.report_to:
-            import wandb
-
-            if wandb.run is not None:
-                wandb.log({"completions": wandb.Table(dataframe=df)})
