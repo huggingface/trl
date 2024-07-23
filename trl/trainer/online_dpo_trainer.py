@@ -63,12 +63,11 @@ class OnlineDPOTrainer(Trainer):
         self.args = config
         args = config
         self.tokenizer = tokenizer
-        self.policy = policy
 
-        self.policy.generation_config.eos_token_id = (
-            None  # disable `pad_token_id` and `eos_token_id` because we just want to
-        )
-        self.policy.generation_config.pad_token_id = None  # generate tokens without truncation / padding
+        # disable `pad_token_id` and `eos_token_id` because we just want to
+        policy.generation_config.eos_token_id = None
+        # generate tokens without truncation / padding
+        policy.generation_config.pad_token_id = None
 
         self.ref_policy = ref_policy
         self.reward_model = reward_model
