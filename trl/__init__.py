@@ -24,6 +24,8 @@ _import_structure = {
         "is_pil_available",
         "is_wandb_available",
         "is_xpu_available",
+        "is_llmblender_available",
+        "is_openai_available",
     ],
     "models": [
         "AutoModelForCausalLMWithValueHead",
@@ -57,6 +59,14 @@ _import_structure = {
         "SFTTrainer",
         "FDivergenceConstants",
         "FDivergenceType",
+        "WinRateCallback",
+        "BaseJudge",
+        "BaseAPIJudge",
+        "HuggingFaceJudge",
+        "MockAPIJudge",
+        "MockJudge",
+        "OpenAIJudge",
+        "PairRMJudge",
     ],
     "commands": [],
     "commands.cli_utils": ["init_zero_verbose", "SFTScriptArguments", "DPOScriptArguments", "TrlParser"],
@@ -97,6 +107,8 @@ if TYPE_CHECKING:
         is_pil_available,
         is_wandb_available,
         is_xpu_available,
+        is_llmblender_available,
+        is_openai_available,
     )
     from .models import (
         AutoModelForCausalLMWithValueHead,
@@ -130,6 +142,14 @@ if TYPE_CHECKING:
         SFTTrainer,
         FDivergenceConstants,
         FDivergenceType,
+        WinRateCallback,
+        BaseJudge,
+        BaseAPIJudge,
+        HuggingFaceJudge,
+        MockAPIJudge,
+        MockJudge,
+        OpenAIJudge,
+        PairRMJudge,
     )
     from .trainer.callbacks import RichProgressCallback, SyncRefModelCallback, WinRateCallback
     from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config

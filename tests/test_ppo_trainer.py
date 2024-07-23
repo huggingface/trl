@@ -21,7 +21,7 @@ from functools import partial
 
 import pytest
 import torch
-from huggingface_hub import HfApi, HfFolder, delete_repo
+from huggingface_hub import HfApi
 from parameterized import parameterized
 from pytest import mark
 from requests.exceptions import HTTPError
@@ -30,7 +30,7 @@ from transformers import AutoTokenizer
 from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead, PPOConfig, PPOTrainer, set_seed
 from trl.core import respond_to_batch
 
-from .testing_constants import CI_HUB_ENDPOINT, CI_HUB_USER, CI_HUB_USER_TOKEN
+from .testing_constants import CI_HUB_ENDPOINT, CI_HUB_USER
 from .testing_utils import require_peft, require_torch_multi_gpu
 
 
@@ -105,9 +105,7 @@ class PPOTrainerTester(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         set_seed(42)
-        cls._token = CI_HUB_USER_TOKEN
         cls._api = HfApi(endpoint=CI_HUB_ENDPOINT)
-        HfFolder.save_token(CI_HUB_USER_TOKEN)
 
         # model_id
         cls.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
@@ -135,7 +133,7 @@ class PPOTrainerTester(unittest.TestCase):
     def tearDownClass(cls):
         for model in [f"{CI_HUB_USER}/test-ppo-trainer"]:
             try:
-                delete_repo(token=cls._token, repo_id=model)
+                cls._api.delete_repo(repo_id=model)
             except HTTPError:
                 pass
 
