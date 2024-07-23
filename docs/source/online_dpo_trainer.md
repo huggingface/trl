@@ -174,7 +174,7 @@ To validate the online DPO implementation works, we ran experiments on the 1B an
 
 
 ```
-# 1B PPO experiment
+# 1B Online DPO experiment
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
     examples/scripts/online_dpo.py \
     --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
@@ -183,7 +183,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --per_device_train_batch_size 16 \
     --gradient_accumulation_steps 4 \
     --local_rollout_forward_batch_size 32 \
-    --num_ppo_epochs 1 \
+    --num_epochs 1 \
     --num_mini_batches 1 \
     --total_episodes 1000000 \
     --model_name_or_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr  \
@@ -196,7 +196,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --response_length 53 \
     --push_to_hub
 
-# 6.9B PPO experiment
+# 6.9B Online DPO experiment
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/online_dpo.py \
     --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
@@ -205,7 +205,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 16 \
     --local_rollout_forward_batch_size 8 \
-    --num_ppo_epochs 1 \
+    --num_epochs 1 \
     --num_mini_batches 1 \
     --total_episodes 1000000 \
     --model_name_or_path EleutherAI/pythia-6.9b-deduped \
