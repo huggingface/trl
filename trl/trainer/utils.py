@@ -627,9 +627,10 @@ class RunningMoments:
         tot_sum = old_sum + new_sum
 
         self.mean += (delta * xs_count / tot_count).item()
-        self.var = (tot_sum / tot_count).item()
-        self.std = (self.var * tot_count / (tot_count - 1)).float().sqrt().item()
-        self.count = tot_count.item()
+        new_var = (tot_sum / tot_count)
+        self.std = (new_var * tot_count / (tot_count - 1)).float().sqrt().item()
+        self.var = new_var.item()
+        self.count = tot_count
 
         return xs_mean.item(), (xs_var * xs_count / (xs_count - 1)).float().sqrt().item()
 
