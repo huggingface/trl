@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 import torch
+from accelerate import Accelerator
 from accelerate.state import AcceleratorState, PartialState
 from rich.console import Console
 from rich.table import Table
@@ -584,7 +585,7 @@ class RunningMoments:
         tot_sum = old_sum + new_sum
 
         self.mean += (delta * xs_count / tot_count).item()
-        new_var = (tot_sum / tot_count)
+        new_var = tot_sum / tot_count
         self.std = (new_var * tot_count / (tot_count - 1)).float().sqrt().item()
         self.var = new_var.item()
         self.count = tot_count

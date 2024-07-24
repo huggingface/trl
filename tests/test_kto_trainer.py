@@ -13,14 +13,12 @@
 # limitations under the License.
 import tempfile
 import unittest
-from functools import partial
 
 import torch
-from accelerate import Accelerator
 from datasets import Dataset
 from parameterized import parameterized
 from pytest import mark
-from transformers import AutoModel, AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
 from trl import KTOConfig, KTOTrainer
 from trl.trainer.kto_trainer import _get_kl_dataset, _process_tokens, _tokenize
