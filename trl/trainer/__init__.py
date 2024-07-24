@@ -16,7 +16,11 @@
 
 # There is a circular import in the PPOTrainer if we let isort sort these
 from typing import TYPE_CHECKING
-from ..import_utils import _LazyModule, is_diffusers_available, OptionalDependencyNotAvailable
+from ..import_utils import (
+    _LazyModule,
+    is_diffusers_available,
+    OptionalDependencyNotAvailable,
+)
 
 _import_structure = {
     "callbacks": ["RichProgressCallback", "SyncRefModelCallback", "WinRateCallback"],
@@ -41,6 +45,8 @@ _import_structure = {
     "model_config": ["ModelConfig"],
     "nash_md_config": ["NashMDConfig"],
     "nasn_md_trainer": ["NashMDTrainer"],
+    "online_dpo_config": ["OnlineDPOConfig"],
+    "online_dpo_trainer": ["OnlineDPOTrainer"],
     "orpo_config": ["ORPOConfig"],
     "orpo_trainer": ["ORPOTrainer"],
     "ppo_config": ["PPOConfig"],
@@ -104,6 +110,8 @@ if TYPE_CHECKING:
     from .model_config import ModelConfig
     from .nash_md_config import NashMDConfig
     from .nash_md_trainer import NashMDTrainer
+    from .online_dpo_config import OnlineDPOConfig
+    from .online_dpo_trainer import OnlineDPOTrainer
     from .orpo_config import ORPOConfig
     from .orpo_trainer import ORPOTrainer
     from .ppo_config import PPOConfig
@@ -113,7 +121,15 @@ if TYPE_CHECKING:
     from .sft_config import SFTConfig
     from .sft_trainer import SFTTrainer
     from .callbacks import RichProgressCallback, SyncRefModelCallback, WinRateCallback
-    from .judges import BaseJudge, BaseAPIJudge, HuggingFaceJudge, MockAPIJudge, MockJudge, OpenAIJudge, PairRMJudge
+    from .judges import (
+        BaseJudge,
+        BaseAPIJudge,
+        HuggingFaceJudge,
+        MockAPIJudge,
+        MockJudge,
+        OpenAIJudge,
+        PairRMJudge,
+    )
 
     try:
         if not is_diffusers_available():
@@ -125,4 +141,6 @@ if TYPE_CHECKING:
 else:
     import sys
 
-    sys.modules[__name__] = _LazyModule(__name__, globals()["__file__"], _import_structure, module_spec=__spec__)
+    sys.modules[__name__] = _LazyModule(
+        __name__, globals()["__file__"], _import_structure, module_spec=__spec__
+    )

@@ -10,7 +10,7 @@ from transformers import (
 
 from trl import ModelConfig
 from trl.commands.cli_utils import TrlParser
-from trl.trainer.online_dpo_trainer import OnlineDPOConfig, OnlineDPOTrainer
+from trl.trainer import OnlineDPOConfig, OnlineDPOTrainer
 from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
 
 
@@ -36,7 +36,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --output_dir models/minimal/online_dpo \
     --per_device_train_batch_size 16 \
     --local_rollout_forward_batch_size 32 \
-    --num_ppo_epochs 1 \
+    --num_epochs 1 \
     --num_mini_batches 1 \
     --gradient_accumulation_steps 4 \
     --total_episodes 1000000 \
@@ -96,8 +96,9 @@ if __name__ == "__main__":
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_QUERY_CHAT_TEMPLATE
     reward_model = AutoModelForSequenceClassification.from_pretrained(config.reward_model_path, num_labels=1)
-    ref_policy = AutoModelForCausalLM.from_pretrained(config.sft_model_path)
-    policy = AutoModelForCausalLM.from_pretrained(config.sft_model_path)
+    ref_model = AutoModelForCausalLM.from_pretrained(config.sft_model_path)
+    model = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path)
+
     ################
     # Dataset
     ################
@@ -120,8 +121,8 @@ if __name__ == "__main__":
     trainer = OnlineDPOTrainer(
         config=config,
         tokenizer=tokenizer,
-        policy=policy,
-        ref_policy=ref_policy,
+        model=model,
+        ref_model=ref_model,
         reward_model=reward_model,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
