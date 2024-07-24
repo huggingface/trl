@@ -1,6 +1,6 @@
 # Online DPO Trainer
 
-TRL supports training LLMs with online DPO ([Guo et al., 2024](https://arxiv.org/abs/2402.04792)) with a reward model (RM). The idea of online DPO is to generate completions based on prompts and either have an RM or a LLM judge to rank the responses. Then the policy is updated with the ranked responses using the DPO loss.
+TRL supports training LLMs with online DPO ([Guo et al., 2024](https://arxiv.org/abs/2402.04792)) with a reward model (RM). The idea of online DPO is to generate completions based on prompts and either have an RM or a LLM judge to rank the responses. Then the model is updated with the ranked responses using the DPO loss.
 
 While [Guo et al. (2024)](https://arxiv.org/abs/2402.04792) used a LLM judge, in this implementation we just used a RM.
 
@@ -32,8 +32,8 @@ python examples/scripts/online_dpo.py \
 The logged metrics are as follows. Here is an example [tracked run at Weights and Biases](https://wandb.ai/huggingface/trl/runs/dd2o3g35)
 
 * `eps`: Tracks the number of episodes per second.
-* `objective/kl`: The mean Kullback-Leibler (KL) divergence between the current policy and reference policy.
-* `objective/entropy`: The mean entropy of the policy, indicating the randomness of the actions chosen by the policy.
+* `objective/kl`: The mean Kullback-Leibler (KL) divergence between the current model and reference model.
+* `objective/entropy`: The mean entropy of the model, indicating the randomness of the actions chosen by the model.
 * `objective/non_score_reward`: The mean reward from non-score-related sources, basically `beta * kl.sum(1)`, where `beta` is the KL penalty coefficient and `kl` is the per-token KL divergence.
 * `objective/rlhf_reward`: The mean RLHF reward, which is `score - non_score_reward`.
 * `objective/scores`: The mean scores returned by the reward model / environment.

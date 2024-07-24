@@ -50,8 +50,8 @@ class OnlineDPOTrainer(Trainer):
         self,
         config: OnlineDPOConfig,
         tokenizer: PreTrainedTokenizer,
-        policy: nn.Module,
-        ref_policy: nn.Module,
+        model: nn.Module,
+        ref_model: nn.Module,
         reward_model: nn.Module,
         train_dataset: Dataset,
         data_collator: Optional[DataCollatorWithPadding] = None,
@@ -65,11 +65,11 @@ class OnlineDPOTrainer(Trainer):
         self.tokenizer = tokenizer
 
         # disable `pad_token_id` and `eos_token_id` because we just want to
-        policy.generation_config.eos_token_id = None
+        model.generation_config.eos_token_id = None
         # generate tokens without truncation / padding
-        policy.generation_config.pad_token_id = None
+        model.generation_config.pad_token_id = None
 
-        self.ref_policy = ref_policy
+        self.ref_policy = ref_model
         self.reward_model = reward_model
         self.train_dataset = train_dataset
         self.train_dataset_len = len(train_dataset)
@@ -119,13 +119,13 @@ class OnlineDPOTrainer(Trainer):
         # setup model, optimizer, and others
         #########
         if args.disable_dropout:
-            disable_dropout_in_model(policy)
+            disable_dropout_in_model(model)
         self.ref_policy.eval()
         self.reward_model.eval()
 
         if args.stop_token and args.stop_token == "eos":
             args.stop_token_id = tokenizer.eos_token_id
-        self.model = policy
+        self.model = model
         self.create_optimizer_and_scheduler(
             num_training_steps=args.num_total_batches
         )  # note that we are calling `self.lr_scheduler.step()` manually only at the batch level

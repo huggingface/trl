@@ -104,8 +104,8 @@ class TestOnlineDPOTrainer(unittest.TestCase):
             )
 
             trainer = OnlineDPOTrainer(
-                policy=model,
-                ref_policy=model,
+                model=model,
+                ref_model=model,
                 reward_model=reward_model,
                 config=training_args,
                 tokenizer=tokenizer,
