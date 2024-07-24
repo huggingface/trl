@@ -97,7 +97,7 @@ if __name__ == "__main__":
         tokenizer.chat_template = SIMPLE_QUERY_CHAT_TEMPLATE
     reward_model = AutoModelForSequenceClassification.from_pretrained(config.reward_model_path, num_labels=1)
     ref_model = AutoModelForCausalLM.from_pretrained(config.sft_model_path)
-    model = AutoModelForCausalLM.from_pretrained(config.model_name_or_path)
+    model = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path)
     ################
     # Dataset
     ################
