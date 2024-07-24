@@ -50,8 +50,8 @@ class OnlineDPOTrainer(Trainer):
         self,
         config: OnlineDPOConfig,
         tokenizer: PreTrainedTokenizer,
-        policy: nn.Module,
-        ref_policy: nn.Module,
+        model: nn.Module,
+        ref_model: nn.Module,
         reward_model: nn.Module,
         train_dataset: Dataset,
         data_collator: Optional[DataCollatorWithPadding] = None,
@@ -63,14 +63,13 @@ class OnlineDPOTrainer(Trainer):
         self.args = config
         args = config
         self.tokenizer = tokenizer
-        self.policy = policy
 
-        self.policy.generation_config.eos_token_id = (
-            None  # disable `pad_token_id` and `eos_token_id` because we just want to
-        )
-        self.policy.generation_config.pad_token_id = None  # generate tokens without truncation / padding
+        # disable `pad_token_id` and `eos_token_id` because we just want to
+        model.generation_config.eos_token_id = None
+        # generate tokens without truncation / padding
+        model.generation_config.pad_token_id = None
 
-        self.ref_policy = ref_policy
+        self.ref_model = ref_model
         self.reward_model = reward_model
         self.train_dataset = train_dataset
         self.train_dataset_len = len(train_dataset)
@@ -119,11 +118,14 @@ class OnlineDPOTrainer(Trainer):
         #########
         # setup model, optimizer, and others
         #########
-        for module in [policy, ref_policy, reward_model]:
-            disable_dropout_in_model(module)
+        if args.disable_dropout:
+            disable_dropout_in_model(model)
+        self.ref_model.eval()
+        self.reward_model.eval()
+
         if args.stop_token and args.stop_token == "eos":
             args.stop_token_id = tokenizer.eos_token_id
-        self.model = policy
+        self.model = model
         self.create_optimizer_and_scheduler(
             num_training_steps=args.num_total_batches
         )  # note that we are calling `self.lr_scheduler.step()` manually only at the batch level
@@ -182,12 +184,10 @@ class OnlineDPOTrainer(Trainer):
             self.reward_model = prepare_deepspeed(
                 self.reward_model, args.per_device_train_batch_size, args.fp16, args.bf16
             )
-            self.ref_policy = prepare_deepspeed(
-                self.ref_policy, args.per_device_train_batch_size, args.fp16, args.bf16
-            )
+            self.ref_model = prepare_deepspeed(self.ref_model, args.per_device_train_batch_size, args.fp16, args.bf16)
             self.deepspeed = self.model
         else:
-            self.ref_policy = self.ref_policy.to(self.accelerator.device)
+            self.ref_model = self.ref_model.to(self.accelerator.device)
             self.reward_model = self.reward_model.to(self.accelerator.device)
 
     def get_train_dataloader(self) -> DataLoader:
@@ -201,8 +201,7 @@ class OnlineDPOTrainer(Trainer):
         accelerator = self.accelerator
         optimizer = self.optimizer
         model = self.model
-        self.model_wrapped = self.model
-        ref_policy = self.ref_policy
+        ref_model = self.ref_model
         reward_model = self.reward_model
         tokenizer = self.tokenizer
         dataloader = self.dataloader
@@ -224,7 +223,7 @@ class OnlineDPOTrainer(Trainer):
 
         accelerator.print("===training policy===")
         start_time = time.time()
-        stats_shape = (args.num_ppo_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
+        stats_shape = (args.num_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
         loss_stats = torch.zeros(stats_shape, device=device)
         chosen_rewards_stats = torch.zeros(stats_shape, device=device)
         rejected_rewards_stats = torch.zeros(stats_shape, device=device)
@@ -288,13 +287,14 @@ class OnlineDPOTrainer(Trainer):
                     del logits, all_logprob
                     torch.cuda.empty_cache()
 
-                    ref_output = forward(ref_policy, query_response, tokenizer.pad_token_id)
-                    ref_logits = ref_output.logits[:, context_length - 1 : -1]
-                    ref_logits /= args.temperature + 1e-7
-                    ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
-                    ref_logprob = torch.gather(ref_all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
-                    del ref_output, ref_logits, ref_all_logprob
-                    torch.cuda.empty_cache()
+                    with torch.no_grad():
+                        ref_output = forward(ref_model, query_response, tokenizer.pad_token_id)
+                        ref_logits = ref_output.logits[:, context_length - 1 : -1]
+                        ref_logits /= args.temperature + 1e-7
+                        ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
+                        ref_logprob = torch.gather(ref_all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
+                        del ref_output, ref_logits, ref_all_logprob
+                        torch.cuda.empty_cache()
 
                     # Response Processing 1. truncate response after the first occurrence of `stop_token_id`
                     postprocessed_response = response
@@ -304,11 +304,12 @@ class OnlineDPOTrainer(Trainer):
                         )
 
                     # Response Processing 2. run reward model on the truncated responses
-                    postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
-                    sequence_length = first_true_indices(postprocessed_response == tokenizer.pad_token_id) - 1
-                    _, score, _ = get_reward(
-                        reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
-                    )
+                    with torch.no_grad():
+                        postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
+                        sequence_length = first_true_indices(postprocessed_response == tokenizer.pad_token_id) - 1
+                        _, score, _ = get_reward(
+                            reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
+                        )
 
                     responses.append(response)
                     postprocessed_responses.append(postprocessed_response)
@@ -363,7 +364,7 @@ class OnlineDPOTrainer(Trainer):
                 torch.cuda.empty_cache()
 
             # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
-            for ppo_epoch_idx in range(args.num_ppo_epochs):
+            for epoch_idx in range(args.num_epochs):
                 b_inds = np.random.permutation(args.local_batch_size // args.num_generation_per_prompt)
                 minibatch_idx = 0
                 for mini_batch_start in range(
@@ -446,18 +447,18 @@ class OnlineDPOTrainer(Trainer):
                             with torch.no_grad():
                                 chosen_rewards = self.beta * (chosen_logprobs_sum - chosen_ref_logprobs_sum)
                                 rejected_rewards = self.beta * (rejected_logprobs_sum - rejected_ref_logprobs_sum)
-                                loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = loss
+                                loss_stats[epoch_idx, minibatch_idx, gradient_accumulation_idx] = loss
                                 chosen_rewards_stats[
-                                    ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
+                                    epoch_idx, minibatch_idx, gradient_accumulation_idx
                                 ] = chosen_rewards.mean()
                                 rejected_rewards_stats[
-                                    ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
+                                    epoch_idx, minibatch_idx, gradient_accumulation_idx
                                 ] = rejected_rewards.mean()
                                 chosen_logprobs_stats[
-                                    ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
+                                    epoch_idx, minibatch_idx, gradient_accumulation_idx
                                 ] = chosen_logprobs_sum.mean()
                                 rejected_logprobs_stats[
-                                    ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
+                                    epoch_idx, minibatch_idx, gradient_accumulation_idx
                                 ] = rejected_logprobs_sum.mean()
                         gradient_accumulation_idx += 1
                     minibatch_idx += 1
