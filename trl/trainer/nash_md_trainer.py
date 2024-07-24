@@ -47,8 +47,8 @@ class NashMDTrainer(OnlineDPOTrainer):
         self,
         config: NashMDConfig,
         tokenizer: PreTrainedTokenizer,
-        policy: nn.Module,
-        ref_policy: nn.Module,
+        model: nn.Module,
+        ref_model: nn.Module,
         reward_model: nn.Module,
         train_dataset: Dataset,
         data_collator: Optional[DataCollatorWithPadding] = None,
@@ -60,14 +60,14 @@ class NashMDTrainer(OnlineDPOTrainer):
         self.args = config
         args = config
         self.tokenizer = tokenizer
-        self.policy = policy
+        self.model = model
 
-        self.policy.generation_config.eos_token_id = (
+        self.model.generation_config.eos_token_id = (
             None  # disable `pad_token_id` and `eos_token_id` because we just want to
         )
-        self.policy.generation_config.pad_token_id = None  # generate tokens without truncation / padding
+        self.model.generation_config.pad_token_id = None  # generate tokens without truncation / padding
 
-        self.ref_policy = ref_policy
+        self.ref_model = ref_model
         self.reward_model = reward_model
         self.train_dataset = train_dataset
         self.train_dataset_len = len(train_dataset)
@@ -114,11 +114,13 @@ class NashMDTrainer(OnlineDPOTrainer):
         #########
         # setup model, optimizer, and others
         #########
-        for module in [policy, ref_policy, reward_model]:
-            disable_dropout_in_model(module)
+        if args.disable_dropout:
+            disable_dropout_in_model(self.model)
+        self.reward_model.eval()
+        self.ref_model = self.ref_model.eval()
+
         if args.stop_token and args.stop_token == "eos":
             args.stop_token_id = tokenizer.eos_token_id
-        self.model = policy
         self.create_optimizer_and_scheduler(num_training_steps=args.num_updates)
 
         #########
@@ -175,12 +177,12 @@ class NashMDTrainer(OnlineDPOTrainer):
             self.reward_model = prepare_deepspeed(
                 self.reward_model, args.per_device_train_batch_size, args.fp16, args.bf16
             )
-            self.ref_policy = prepare_deepspeed(
-                self.ref_policy, args.per_device_train_batch_size, args.fp16, args.bf16
+            self.ref_model = prepare_deepspeed(
+                self.ref_model, args.per_device_train_batch_size, args.fp16, args.bf16
             )
             self.deepspeed = self.model
         else:
-            self.ref_policy = self.ref_policy.to(self.accelerator.device)
+            self.ref_model = self.ref_model.to(self.accelerator.device)
             self.reward_model = self.reward_model.to(self.accelerator.device)
 
     def train(self):
@@ -188,8 +190,7 @@ class NashMDTrainer(OnlineDPOTrainer):
         accelerator = self.accelerator
         optimizer = self.optimizer
         model = self.model
-        self.model_wrapped = self.model
-        ref_policy = self.ref_policy
+        ref_model = self.ref_model
         reward_model = self.reward_model
         tokenizer = self.tokenizer
         dataloader = self.dataloader
@@ -276,7 +277,7 @@ class NashMDTrainer(OnlineDPOTrainer):
                     torch.cuda.empty_cache()
 
                     with torch.no_grad():
-                        ref_output = forward(ref_policy, query_response, tokenizer.pad_token_id)
+                        ref_output = forward(ref_model, query_response, tokenizer.pad_token_id)
                         ref_logits = ref_output.logits[:, context_length - 1 : -1]
                         ref_logits /= args.temperature + 1e-7
                         ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
@@ -351,7 +352,7 @@ class NashMDTrainer(OnlineDPOTrainer):
                 scores_margin = scores[chosen_indices] - scores[rejected_indices]
                 torch.cuda.empty_cache()
 
-            # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
+            # Do multiple epochs of training, with a fresh random shuffle in each epoch
             for epoch_idx in range(args.num_nash_epochs):
                 b_inds = np.random.permutation(args.local_batch_size // args.num_generation_per_prompt)
                 minibatch_idx = 0
