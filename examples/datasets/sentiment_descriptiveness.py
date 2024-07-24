@@ -177,7 +177,7 @@ if __name__ == "__main__":
         )
         sft_card.text = f"""\
 # TRL's Preference Dataset: {args.task}
-The dataset comes from https://arxiv.org/abs/1909.08593, one of the earliest RLHF work from OpenAI.
+The dataset comes from https://huggingface.co/papers/1909.08593, one of the earliest RLHF work from OpenAI.
 We preprocess the dataset using our standard `prompt, chosen, rejected` format.
 ## Reproduce this dataset
 1. Download the `{file_name}` from the {repo_full_url}.

@@ -44,7 +44,7 @@ if is_peft_available():
 class AdaptiveKLController:
     """
     Adaptive KL controller described in the paper:
-    https://arxiv.org/pdf/1909.08593.pdf
+    https://huggingface.co/papers/1909.08593
     """
 
     def __init__(self, init_kl_coef, target, horizon):
