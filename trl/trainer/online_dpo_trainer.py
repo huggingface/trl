@@ -69,7 +69,7 @@ class OnlineDPOTrainer(Trainer):
         # generate tokens without truncation / padding
         model.generation_config.pad_token_id = None
 
-        self.ref_policy = ref_model
+        self.ref_model = ref_model
         self.reward_model = reward_model
         self.train_dataset = train_dataset
         self.train_dataset_len = len(train_dataset)
@@ -120,7 +120,7 @@ class OnlineDPOTrainer(Trainer):
         #########
         if args.disable_dropout:
             disable_dropout_in_model(model)
-        self.ref_policy.eval()
+        self.ref_model.eval()
         self.reward_model.eval()
 
         if args.stop_token and args.stop_token == "eos":
@@ -184,12 +184,12 @@ class OnlineDPOTrainer(Trainer):
             self.reward_model = prepare_deepspeed(
                 self.reward_model, args.per_device_train_batch_size, args.fp16, args.bf16
             )
-            self.ref_policy = prepare_deepspeed(
-                self.ref_policy, args.per_device_train_batch_size, args.fp16, args.bf16
+            self.ref_model = prepare_deepspeed(
+                self.ref_model, args.per_device_train_batch_size, args.fp16, args.bf16
             )
             self.deepspeed = self.model
         else:
-            self.ref_policy = self.ref_policy.to(self.accelerator.device)
+            self.ref_model = self.ref_model.to(self.accelerator.device)
             self.reward_model = self.reward_model.to(self.accelerator.device)
 
     def get_train_dataloader(self) -> DataLoader:
@@ -203,8 +203,7 @@ class OnlineDPOTrainer(Trainer):
         accelerator = self.accelerator
         optimizer = self.optimizer
         model = self.model
-        self.model_wrapped = self.model
-        ref_policy = self.ref_policy
+        ref_model = self.ref_model
         reward_model = self.reward_model
         tokenizer = self.tokenizer
         dataloader = self.dataloader
@@ -291,7 +290,7 @@ class OnlineDPOTrainer(Trainer):
                     torch.cuda.empty_cache()
 
                     with torch.no_grad():
-                        ref_output = forward(ref_policy, query_response, tokenizer.pad_token_id)
+                        ref_output = forward(ref_model, query_response, tokenizer.pad_token_id)
                         ref_logits = ref_output.logits[:, context_length - 1 : -1]
                         ref_logits /= args.temperature + 1e-7
                         ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
