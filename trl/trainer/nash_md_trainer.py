@@ -177,9 +177,7 @@ class NashMDTrainer(OnlineDPOTrainer):
             self.reward_model = prepare_deepspeed(
                 self.reward_model, args.per_device_train_batch_size, args.fp16, args.bf16
             )
-            self.ref_model = prepare_deepspeed(
-                self.ref_model, args.per_device_train_batch_size, args.fp16, args.bf16
-            )
+            self.ref_model = prepare_deepspeed(self.ref_model, args.per_device_train_batch_size, args.fp16, args.bf16)
             self.deepspeed = self.model
         else:
             self.ref_model = self.ref_model.to(self.accelerator.device)
@@ -212,7 +210,7 @@ class NashMDTrainer(OnlineDPOTrainer):
 
         accelerator.print("===training policy===")
         start_time = time.time()
-        stats_shape = (args.num_nash_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
+        stats_shape = (args.num_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
         loss_stats = torch.zeros(stats_shape, device=device)
         chosen_rewards_stats = torch.zeros(stats_shape, device=device)
         rejected_rewards_stats = torch.zeros(stats_shape, device=device)
@@ -353,7 +351,7 @@ class NashMDTrainer(OnlineDPOTrainer):
                 torch.cuda.empty_cache()
 
             # Do multiple epochs of training, with a fresh random shuffle in each epoch
-            for epoch_idx in range(args.num_nash_epochs):
+            for epoch_idx in range(args.num_epochs):
                 b_inds = np.random.permutation(args.local_batch_size // args.num_generation_per_prompt)
                 minibatch_idx = 0
                 for mini_batch_start in range(
