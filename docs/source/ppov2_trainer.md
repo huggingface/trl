@@ -1,12 +1,12 @@
 # PPOv2 Trainer
 
-TRL supports training LLMs with [Proximal Policy Optimization (PPO)](https://arxiv.org/abs/1707.06347).
+TRL supports training LLMs with [Proximal Policy Optimization (PPO)](https://huggingface.co/papers/1707.06347).
 
 References:
 - [Fine-Tuning Language Models from Human Preferences](https://github.com/openai/lm-human-preferences)
 - [Learning to Summarize from Human Feedback](https://github.com/openai/summarize-from-feedback)
 - [The N Implementation Details of RLHF with PPO](https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo)
-- [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://arxiv.org/pdf/2403.17031)
+- [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://huggingface.co/papers/2403.17031)
 
 ## Get started
 
@@ -165,11 +165,11 @@ In the logs the sampled generations look like
 
 ## Implementation details
 
-This PPOv2 implementation is based on the [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://arxiv.org/pdf/2403.17031).
+This PPOv2 implementation is based on the [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://huggingface.co/papers/2403.17031).
 
 ## Benchmark experiments
 
-To validate the PPO implementation works, we ran experiments on the 1B and 6.9B models. Here are the commands we used to run the experiments. We take the SFT / RM models directly from [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://arxiv.org/pdf/2403.17031).
+To validate the PPO implementation works, we ran experiments on the 1B and 6.9B models. Here are the commands we used to run the experiments. We take the SFT / RM models directly from [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://huggingface.co/papers/2403.17031).
 
 
 ```

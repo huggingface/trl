@@ -644,7 +644,7 @@ class KTOTrainer(Trainer):
             num_undesirable = max(len(train_dataset["label"]) - num_desirable, 1)  # "label" is binary
 
             if num_desirable != num_undesirable:
-                # The lower and upper bounds come from Eq. (8) of https://arxiv.org/abs/2402.01306
+                # The lower and upper bounds come from Eq. (8) of https://huggingface.co/papers/2402.01306
                 des_weight_lower_bound = round((num_undesirable * self.undesirable_weight / num_desirable) * 1, 2)
                 des_weight_upper_bound = round((num_undesirable * self.undesirable_weight / num_desirable) * 1.33, 2)
                 und_weight_lower_bound = round((num_desirable * self.desirable_weight / num_undesirable) / 1.33, 2)
