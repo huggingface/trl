@@ -11,9 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import tempfile
 import unittest
 
+import pytest
 import torch
 from datasets import Dataset, features
 from parameterized import parameterized
@@ -839,6 +841,68 @@ class DPOTrainerTester(unittest.TestCase):
 
             # train the model
             trainer.train()
+
+    def test_dpo_trainer_torch_dtype(self):
+        # See https://github.com/huggingface/trl/issues/1751
+        dummy_dataset = self._init_dummy_dataset()
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            dpo_config = DPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=1,
+                model_init_kwargs={"torch_dtype": "float16"},
+                ref_model_init_kwargs={"torch_dtype": "float16"},
+            )
+
+            trainer = DPOTrainer(
+                model=self.model_id,
+                ref_model=self.model_id,
+                tokenizer=self.tokenizer,
+                args=dpo_config,
+                train_dataset=dummy_dataset,
+            )
+            assert trainer.model.config.torch_dtype == torch.float16
+            assert trainer.ref_model.config.torch_dtype == torch.float16
+
+        # Now test when `torch_dtype` is provided but is wrong to either the model or the ref_model
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            dpo_config = DPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=1,
+                model_init_kwargs={"torch_dtype": -1},
+            )
+
+            with pytest.raises(
+                ValueError,
+                match="Invalid `torch_dtype` passed to the DPOConfig. Expected a string with either `torch.dtype` or 'auto', but got -1.",
+            ):
+                _ = DPOTrainer(
+                    model=self.model_id,
+                    tokenizer=self.tokenizer,
+                    args=dpo_config,
+                    train_dataset=dummy_dataset,
+                )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            dpo_config = DPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=1,
+                ref_model_init_kwargs={"torch_dtype": -1},
+            )
+
+            with pytest.raises(
+                ValueError,
+                match="Invalid `torch_dtype` passed to the DPOConfig. Expected a string with either `torch.dtype` or 'auto', but got -1.",
+            ):
+                _ = DPOTrainer(
+                    model=self.model_id,
+                    ref_model=self.model_id,
+                    tokenizer=self.tokenizer,
+                    args=dpo_config,
+                    train_dataset=dummy_dataset,
+                )
 
     def test_dpo_loss_alpha_div_f(self):
         model_id = "trl-internal-testing/tiny-random-LlamaForCausalLM"

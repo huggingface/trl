@@ -73,7 +73,7 @@ training_args = KTOConfig(
 
 kto_trainer = KTOTrainer(
     model,
-    model_ref,
+    ref_model,
     args=training_args,
     train_dataset=train_dataset,
     tokenizer=tokenizer,
