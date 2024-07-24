@@ -44,7 +44,7 @@ _import_structure = {
     "kto_trainer": ["KTOTrainer"],
     "model_config": ["ModelConfig"],
     "nash_md_config": ["NashMDConfig"],
-    "nasn_md_trainer": ["NashMDTrainer"],
+    "nash_md_trainer": ["NashMDTrainer"],
     "online_dpo_config": ["OnlineDPOConfig"],
     "online_dpo_trainer": ["OnlineDPOTrainer"],
     "orpo_config": ["ORPOConfig"],
@@ -141,6 +141,4 @@ if TYPE_CHECKING:
 else:
     import sys
 
-    sys.modules[__name__] = _LazyModule(
-        __name__, globals()["__file__"], _import_structure, module_spec=__spec__
-    )
+    sys.modules[__name__] = _LazyModule(__name__, globals()["__file__"], _import_structure, module_spec=__spec__)
