@@ -17,7 +17,6 @@ import unittest
 
 import pytest
 import torch
-from pkg_resources import get_distribution, parse_version
 from transformers import AutoModel, AutoModelForCausalLM, AutoModelForSeq2SeqLM
 
 from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead, create_reference_model
@@ -39,7 +38,7 @@ ALL_CAUSAL_LM_MODELS = [
 
 ALL_SEQ2SEQ_MODELS = [
     "trl-internal-testing/tiny-random-BartForConditionalGeneration",
-    "trl-internal-testing/tiny-random-BigBirdPegasusForConditionalGeneration",
+    # "trl-internal-testing/tiny-random-BigBirdPegasusForConditionalGeneration",
     "trl-internal-testing/tiny-random-BlenderbotForConditionalGeneration",
     "trl-internal-testing/tiny-random-BlenderbotSmallForConditionalGeneration",
     "trl-internal-testing/tiny-random-FSMTForConditionalGeneration",
@@ -138,15 +137,6 @@ class VHeadModelTester:
         Test if the model can be saved and loaded using transformers and get the same weights - sharded case
         """
         for model_name in self.all_model_names:
-            # Skip the test for the model that has a bug in transformers (can be removed when we bump transformers dependency)
-            transformer_version = get_distribution("transformers").version
-            is_above_4_44 = parse_version(transformer_version) > parse_version("4.44.0.dev0")
-            if (
-                model_name == "trl-internal-testing/tiny-random-BigBirdPegasusForConditionalGeneration"
-                and not is_above_4_44
-            ):
-                continue
-
             transformers_model = self.trl_model_class.transformers_parent_class.from_pretrained(model_name)
 
             trl_model = self.trl_model_class.from_pretrained(model_name)
@@ -161,43 +151,36 @@ class VHeadModelTester:
                     transformers_model_from_save.state_dict()[key], transformers_model.state_dict()[key]
                 )
 
-    @pytest.mark.parametrize("model_name", ALL_CAUSAL_LM_MODELS)
     def test_from_save_transformers(self, model_name):
         """
         Test if the model can be saved and loaded using transformers and get the same weights.
         We override the test of the super class to check if the weights are the same.
         """
-        # Skip the test for the model that has a bug in transformers (can be removed when we bump transformers dependency)
-        transformer_version = get_distribution("transformers").version
-        is_above_4_44 = parse_version(transformer_version) > parse_version("4.44.0.dev0")
-        if (
-            model_name == "trl-internal-testing/tiny-random-BigBirdPegasusForConditionalGeneration"
-            and not is_above_4_44
-        ):
-            pytest.skip("Skip the test for the model that has a bug in transformers")
+        for model_name in self.all_model_names:
+            transformers_model = self.trl_model_class.transformers_parent_class.from_pretrained(model_name)
 
-        transformers_model = self.trl_model_class.transformers_parent_class.from_pretrained(model_name)
+            trl_model = self.trl_model_class.from_pretrained(model_name)
 
-        trl_model = self.trl_model_class.from_pretrained(model_name)
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                trl_model.save_pretrained(tmp_dir)
+                transformers_model_from_save = self.trl_model_class.transformers_parent_class.from_pretrained(tmp_dir)
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            trl_model.save_pretrained(tmp_dir)
-            transformers_model_from_save = self.trl_model_class.transformers_parent_class.from_pretrained(tmp_dir)
+            # Check if the weights are the same
+            for key in transformers_model.state_dict():
+                assert torch.allclose(
+                    transformers_model_from_save.state_dict()[key], transformers_model.state_dict()[key]
+                )
 
-        # Check if the weights are the same
-        for key in transformers_model.state_dict():
-            assert torch.allclose(transformers_model_from_save.state_dict()[key], transformers_model.state_dict()[key])
+            # Check if the trl model has the same keys as the transformers model
+            # except the v_head
+            for key in trl_model.state_dict():
+                if "v_head" not in key:
+                    assert key in transformers_model.state_dict()
+                    # check if the weights are the same
+                    assert torch.allclose(trl_model.state_dict()[key], transformers_model.state_dict()[key])
 
-        # Check if the trl model has the same keys as the transformers model
-        # except the v_head
-        for key in trl_model.state_dict():
-            if "v_head" not in key:
-                assert key in transformers_model.state_dict()
-                # check if the weights are the same
-                assert torch.allclose(trl_model.state_dict()[key], transformers_model.state_dict()[key])
-
-        # check if they have the same modules
-        assert set(transformers_model_from_save.state_dict().keys()) == set(transformers_model.state_dict().keys())
+            # check if they have the same modules
+            assert set(transformers_model_from_save.state_dict().keys()) == set(transformers_model.state_dict().keys())
 
 
 class CausalLMValueHeadModelTester(VHeadModelTester, unittest.TestCase):
