@@ -144,9 +144,7 @@ class BaseAPIJudge(BaseJudge):
 
         raise NotImplementedError("Judge subclasses must implement this method.")
 
-    def judge_single(
-        self, prompt: str, completion_pair: List[str], shuffle_order: bool = True
-    ) -> int:
+    def judge_single(self, prompt: str, completion_pair: List[str], shuffle_order: bool = True) -> int:
         flipped = random.choice([True, False]) if shuffle_order else False
         completion_pair = completion_pair[::-1] if flipped else completion_pair
 
@@ -165,9 +163,7 @@ class BaseAPIJudge(BaseJudge):
             elif reply in ["1"]:
                 return 1 if not flipped else 0
             else:
-                logging.info(
-                    f"Judge gave response `{reply}` instead of the expected 0 or 1. Retrying."
-                )
+                logging.info(f"Judge gave response `{reply}` instead of the expected 0 or 1. Retrying.")
                 retry += 1
 
         logging.info(
@@ -183,9 +179,7 @@ class BaseAPIJudge(BaseJudge):
     ) -> List[int]:
         futures = []
         for prompt, completion_pair in zip(prompts, completion_pairs):
-            future = self.thread_pool_executor.submit(
-                self.judge_single, prompt, completion_pair, shuffle_order
-            )
+            future = self.thread_pool_executor.submit(self.judge_single, prompt, completion_pair, shuffle_order)
             futures.append(future)
 
         return [f.result() for f in futures]
@@ -200,9 +194,7 @@ class PairRMJudge(BaseJudge):
 
     def __init__(self):
         if not is_llmblender_available():
-            raise ValueError(
-                "llm-blender is not installed. Please install it with 'pip install llm-blender'."
-            )
+            raise ValueError("llm-blender is not installed. Please install it with 'pip install llm-blender'.")
         self.blender = llm_blender.Blender()
         self.blender.loadranker("llm-blender/PairRM", device=Accelerator().device)
 
@@ -214,10 +206,7 @@ class PairRMJudge(BaseJudge):
     ) -> List[int]:
         if shuffle_order:
             flip_mask = np.random.choice([True, False], size=len(prompts))
-            completion_pairs = [
-                pair[::-1] if flip else pair
-                for flip, pair in zip(flip_mask, completion_pairs)
-            ]
+            completion_pairs = [pair[::-1] if flip else pair for flip, pair in zip(flip_mask, completion_pairs)]
         ranks = self.blender.rank(prompts, completion_pairs)
         ranks -= 1  # PairRM is 1-indexed, so we subtract 1 to make it 0-indexed
         if shuffle_order:
@@ -264,9 +253,7 @@ class HuggingFaceJudge(BaseAPIJudge):
         max_workers: int = 8,
         token: Optional[str] = None,
     ):
-        super().__init__(
-            system_prompt=system_prompt, max_tries=max_tries, max_workers=max_workers
-        )
+        super().__init__(system_prompt=system_prompt, max_tries=max_tries, max_workers=max_workers)
         self.client = InferenceClient(model=model, token=token)
 
     def get_response(self, content: str) -> str:
@@ -278,9 +265,7 @@ class HuggingFaceJudge(BaseAPIJudge):
             )
             return response.choices[0].message.content
         except HTTPError as e:
-            logging.info(
-                f"Unable to reach the Hugging Face API due to error: {e}\nReturning random choice (0,1)"
-            )
+            logging.info(f"Unable to reach the Hugging Face API due to error: {e}\nReturning random choice (0,1)")
             return random.choice(["0", "1"])
 
 
@@ -303,12 +288,8 @@ class OpenAIJudge(BaseAPIJudge):
         max_workers: int = 8,
     ):
         if not is_openai_available():
-            raise ValueError(
-                "OpenAI client is not installed. Please install it with 'pip install openai'."
-            )
-        super().__init__(
-            system_prompt=system_prompt, max_tries=max_tries, max_workers=max_workers
-        )
+            raise ValueError("OpenAI client is not installed. Please install it with 'pip install openai'.")
+        super().__init__(system_prompt=system_prompt, max_tries=max_tries, max_workers=max_workers)
         self.client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
         self.model = model
 
@@ -321,7 +302,5 @@ class OpenAIJudge(BaseAPIJudge):
             )
             return response.choices[0].message.content
         except BadRequestError as e:
-            logging.warn(
-                f"Unable to reach to OpenAI API due to error: {e}\nReturning random choice (0, 1)"
-            )
+            logging.warn(f"Unable to reach to OpenAI API due to error: {e}\nReturning random choice (0, 1)")
             return random.choice(["0", "1"])

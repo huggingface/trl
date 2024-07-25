@@ -51,18 +51,14 @@ class SyncRefModelCallback(TrainerCallback):
 
     @staticmethod
     def _sync_target_model(model, target_model, alpha):
-        for target_param, copy_param in zip(
-            target_model.parameters(), model.parameters()
-        ):
+        for target_param, copy_param in zip(target_model.parameters(), model.parameters()):
             target_param.data.mul_(1.0 - alpha).add_(copy_param.data, alpha=alpha)
 
     @staticmethod
     def sync_target_model(model, target_model, alpha):
         deepspeed_plugin = AcceleratorState().deepspeed_plugin
         if deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3:
-            with deepspeed.zero.GatheredParameters(
-                list(model.parameters()), modifier_rank=0
-            ):
+            with deepspeed.zero.GatheredParameters(list(model.parameters()), modifier_rank=0):
                 if deepspeed.comm.get_rank() == 0:
                     SyncRefModelCallback._sync_target_model(model, target_model, alpha)
         else:
@@ -71,10 +67,7 @@ class SyncRefModelCallback(TrainerCallback):
     def on_step_end(self, args, state, control, **kwargs):
         model: PreTrainedModel = kwargs["model"]
 
-        if (
-            self.ref_model is not None
-            and state.global_step % args.ref_model_sync_steps == 0
-        ):
+        if self.ref_model is not None and state.global_step % args.ref_model_sync_steps == 0:
             if self.accelerator:
                 model = self.accelerator.unwrap_model(model)
             self.sync_target_model(model, self.ref_model, args.ref_model_mixup_alpha)
@@ -107,16 +100,10 @@ class RichProgressCallback(TrainerCallback):
 
             self.training_status = self.rich_console.status("Nothing to log yet ...")
 
-            self.rich_group = Live(
-                Panel(
-                    Group(self.training_bar, self.prediction_bar, self.training_status)
-                )
-            )
+            self.rich_group = Live(Panel(Group(self.training_bar, self.prediction_bar, self.training_status)))
             self.rich_group.start()
 
-            self.training_task_id = self.training_bar.add_task(
-                "[blue]Training the model", total=state.max_steps
-            )
+            self.training_task_id = self.training_bar.add_task("[blue]Training the model", total=state.max_steps)
             self.current_step = 0
 
     def on_step_end(self, args, state, control, **kwargs):
@@ -212,15 +199,11 @@ class WinRateCallback(TrainerCallback):
 
     def generate_completions_for_model(self, model, tokenizer, prompts):
         completions = []
-        with unwrap_model_for_generation(
-            model, self.trainer.accelerator
-        ) as unwrapped_model:
+        with unwrap_model_for_generation(model, self.trainer.accelerator) as unwrapped_model:
             unwrapped_model.eval()
             for idx in range(0, len(prompts), self.batch_size):
                 batch = prompts[idx : idx + self.batch_size]
-                tokenized_batch = tokenizer(
-                    batch, return_tensors="pt", padding=True, truncation=True
-                ).to(model.device)
+                tokenized_batch = tokenizer(batch, return_tensors="pt", padding=True, truncation=True).to(model.device)
                 generations = unwrapped_model.generate(
                     **tokenized_batch,
                     generation_config=self.generation_config,
@@ -244,12 +227,8 @@ class WinRateCallback(TrainerCallback):
         tokenizer = kwargs["tokenizer"]
         tokenizer.padding_side = "left"
         accelerator = self.trainer.accelerator
-        with accelerator.split_between_processes(
-            self.eval_dataset["prompt"], apply_padding=True
-        ) as prompts:
-            self.ref_completions = self.generate_completions_for_model(
-                self.trainer.ref_model, tokenizer, prompts
-            )
+        with accelerator.split_between_processes(self.eval_dataset["prompt"], apply_padding=True) as prompts:
+            self.ref_completions = self.generate_completions_for_model(self.trainer.ref_model, tokenizer, prompts)
 
     def on_evaluate(
         self,
@@ -261,19 +240,13 @@ class WinRateCallback(TrainerCallback):
         model = kwargs["model"]
         tokenizer = kwargs["tokenizer"]
         accelerator = self.trainer.accelerator
-        with accelerator.split_between_processes(
-            self.eval_dataset["prompt"], apply_padding=True
-        ) as prompts:
+        with accelerator.split_between_processes(self.eval_dataset["prompt"], apply_padding=True) as prompts:
             completions = self.generate_completions_for_model(model, tokenizer, prompts)
             completion_pairs = list(zip(self.ref_completions, completions))
-            winner_indices = self.judge.judge(
-                self.eval_dataset["prompt"], completion_pairs
-            )
+            winner_indices = self.judge.judge(self.eval_dataset["prompt"], completion_pairs)
             winner_indices = gather_object(winner_indices)
 
         # Logging
         if self.trainer.accelerator.is_main_process:
-            win_rate = sum(winner_idx == 1 for winner_idx in winner_indices) / len(
-                winner_indices
-            )
+            win_rate = sum(winner_idx == 1 for winner_idx in winner_indices) / len(winner_indices)
             self.trainer.log({"eval_win_rate": win_rate})
