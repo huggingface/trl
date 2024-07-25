@@ -92,8 +92,8 @@ class BCOConfig(TrainingArguments):
     def __post_init__(self):
         super().__post_init__()
 
-        if self.loss_type == "bco" and not is_sklearn_available():
+        if not is_sklearn_available():
             raise ImportError(
-                "You need to install scikit-learn to use loss_type='bco' "
+                "You need to install scikit-learn to use `BCOTrainer` "
                 "You can install it with `pip install scikit-learn`."
             )
