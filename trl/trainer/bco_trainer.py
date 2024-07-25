@@ -659,7 +659,9 @@ class BCOTrainer(Trainer):
             (torch.ones_like(chosen_embeddings[:, 0]), torch.zeros_like(rejected_embeddings[:, 0])), dim=0
         )
 
-        self.clf = LogisticRegression(class_weight="balanced").fit(embeddings.cpu().numpy(), labels.cpu().numpy())
+        self.clf = LogisticRegression(class_weight="balanced").fit(
+            embeddings.cpu().float().numpy(), labels.cpu().numpy()
+        )
 
     @property
     def match_underlying_distribution(self):
@@ -685,7 +687,7 @@ class BCOTrainer(Trainer):
         if prompt_embeddings.shape[0] == 0:
             return torch.tensor([], device=device, dtype=dtype)
 
-        prob = self.clf.predict_proba(prompt_embeddings.cpu().numpy())[:, 1]
+        prob = self.clf.predict_proba(prompt_embeddings.cpu().float().numpy())[:, 1]
         prob = torch.as_tensor(prob, dtype=dtype, device=device)
         prob = self.accelerator.reduce(prob, reduction="mean")
 
