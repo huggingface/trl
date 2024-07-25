@@ -151,7 +151,7 @@ class VHeadModelTester:
                     transformers_model_from_save.state_dict()[key], transformers_model.state_dict()[key]
                 )
 
-    def test_from_save_transformers(self, model_name):
+    def test_from_save_transformers(self):
         """
         Test if the model can be saved and loaded using transformers and get the same weights.
         We override the test of the super class to check if the weights are the same.
