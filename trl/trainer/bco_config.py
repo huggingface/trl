@@ -83,7 +83,6 @@ class BCOConfig(TrainingArguments):
     ref_model_init_kwargs: Optional[Dict] = None
     dataset_num_proc: Optional[int] = None
 
-    loss_type: Literal["kto", "bco"] = "kto"
 
     # BCO config
     prompt_sample_size: int = 1024
