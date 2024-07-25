@@ -1,8 +1,8 @@
 # Online DPO Trainer
 
-TRL supports training LLMs with online DPO ([Guo et al., 2024](https://arxiv.org/abs/2402.04792)) with a reward model (RM). The idea of online DPO is to generate completions based on prompts and either have an RM or a LLM judge to rank the responses. Then the model is updated with the ranked responses using the DPO loss.
+TRL supports training LLMs with online DPO ([Guo et al., 2024](https://huggingface.co/papers/2402.04792)) with a reward model (RM). The idea of online DPO is to generate completions based on prompts and either have an RM or a LLM judge to rank the responses. Then the model is updated with the ranked responses using the DPO loss.
 
-While [Guo et al. (2024)](https://arxiv.org/abs/2402.04792) used a LLM judge, in this implementation we just used a RM.
+While [Guo et al. (2024)](https://huggingface.co/papers/2402.04792) used a LLM judge, in this implementation we just used a RM.
 
 
 ## Get started
@@ -164,13 +164,13 @@ In the logs the sampled generations look like
 
 ## Implementation details
 
-Many online implementation details are borrowed from the PPOv2Trainer, which is itself based on the [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://arxiv.org/pdf/2403.17031). Here are some additional implementation details:
+Many online implementation details are borrowed from the PPOv2Trainer, which is itself based on the [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://huggingface.co/papers/2403.17031). Here are some additional implementation details:
 
 1. When we turn on the EOS trick (i.e., replacing the score of completions that do not end with an EOS token with a scalar penalty score like `-1`) via `--non_eos_penalty --stop_token eos`, it's possible that the chosen and rejected completions have the same score. In this case, we will naively select the completion with the lower index and the chosen completion.
 
 ## Benchmark experiments
 
-To validate the online DPO implementation works, we ran experiments on the 1B and 6.9B models. Here are the commands we used to run the experiments. We take the SFT / RM models directly from [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://arxiv.org/pdf/2403.17031).
+To validate the online DPO implementation works, we ran experiments on the 1B and 6.9B models. Here are the commands we used to run the experiments. We take the SFT / RM models directly from [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://huggingface.co/papers/2403.17031).
 
 
 ```
