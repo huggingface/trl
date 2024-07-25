@@ -110,7 +110,10 @@ collator = DataCollatorForCompletionOnlyLM(instruction_template=instruction_temp
 
 trainer = SFTTrainer(
     model,
-    args=SFTConfig(output_dir="/tmp"),
+    args=SFTConfig(
+        output_dir="/tmp",
+        dataset_text_field = "text",
+    ),
     train_dataset=dataset,
     data_collator=collator,
 )
