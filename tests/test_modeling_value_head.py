@@ -38,7 +38,7 @@ ALL_CAUSAL_LM_MODELS = [
 
 ALL_SEQ2SEQ_MODELS = [
     "trl-internal-testing/tiny-random-BartForConditionalGeneration",
-    # "trl-internal-testing/tiny-random-BigBirdPegasusForConditionalGeneration",
+    "trl-internal-testing/tiny-random-BigBirdPegasusForConditionalGeneration",
     "trl-internal-testing/tiny-random-BlenderbotForConditionalGeneration",
     "trl-internal-testing/tiny-random-BlenderbotSmallForConditionalGeneration",
     "trl-internal-testing/tiny-random-FSMTForConditionalGeneration",
