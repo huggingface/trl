@@ -649,6 +649,7 @@ class BCOTrainer(Trainer):
         self.running = RunningMoments(accelerator=self.accelerator)
 
         if self.embedding_func is None:
+            warnings.warn("You did not pass `embedding_func` underlying distribution matching feature is deactivated.")
             return
 
         chosen_embeddings = self._get_sample_prompt_embeddings(desirable, sample_size=self.args.prompt_sample_size)
