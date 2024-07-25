@@ -595,10 +595,11 @@ class RunningMoments:
     def save_to_json(self, json_path: str):
         """Save the content of this instance in JSON format inside `json_path`."""
         # save everything except accelerator
-        save_dict = dataclasses.asdict(self, dict_factory=lambda x: {k: v for (k, v) in x if k != "accelerator"})
-        json_string = json.dumps(save_dict, indent=2, sort_keys=True) + "\n"
-        with open(json_path, "w", encoding="utf-8") as f:
-            f.write(json_string)
+        if self.accelerator.is_main_process:
+            save_dict = dataclasses.asdict(self, dict_factory=lambda x: {k: v for (k, v) in x if k != "accelerator"})
+            json_string = json.dumps(save_dict, indent=2, sort_keys=True) + "\n"
+            with open(json_path, "w", encoding="utf-8") as f:
+                f.write(json_string)
 
     @classmethod
     def load_from_json(cls, accelerator: Accelerator, json_path: str):
