@@ -17,7 +17,6 @@ import unittest
 
 import pytest
 import torch
-from pkg_resources import get_distribution, parse_version
 from transformers import AutoModel, AutoModelForCausalLM, AutoModelForSeq2SeqLM
 
 from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead, create_reference_model
@@ -138,15 +137,6 @@ class VHeadModelTester:
         Test if the model can be saved and loaded using transformers and get the same weights - sharded case
         """
         for model_name in self.all_model_names:
-            # Skip the test for the model that has a bug in transformers (can be removed when we bump transformers dependency)
-            transformer_version = get_distribution("transformers").version
-            is_above_4_44 = parse_version(transformer_version) > parse_version("4.44.0.dev0")
-            if (
-                model_name == "trl-internal-testing/tiny-random-BigBirdPegasusForConditionalGeneration"
-                and not is_above_4_44
-            ):
-                continue
-
             transformers_model = self.trl_model_class.transformers_parent_class.from_pretrained(model_name)
 
             trl_model = self.trl_model_class.from_pretrained(model_name)
@@ -167,15 +157,6 @@ class VHeadModelTester:
         We override the test of the super class to check if the weights are the same.
         """
         for model_name in self.all_model_names:
-            # Skip the test for the model that has a bug in transformers (can be removed when we bump transformers dependency)
-            transformer_version = get_distribution("transformers").version
-            is_above_4_44 = parse_version(transformer_version) > parse_version("4.44.0.dev0")
-            if (
-                model_name == "trl-internal-testing/tiny-random-BigBirdPegasusForConditionalGeneration"
-                and not is_above_4_44
-            ):
-                continue
-
             transformers_model = self.trl_model_class.transformers_parent_class.from_pretrained(model_name)
 
             trl_model = self.trl_model_class.from_pretrained(model_name)
