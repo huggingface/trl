@@ -681,7 +681,7 @@ class BCOTrainer(Trainer):
             prompt_embeddings, pad_index=self.embedding_tokenizer.pad_token_id
         )
         sample_size = padded_prompt_embeddings.shape[0]
-        nonzero = padded_prompt_embeddings.sum(dim=1) != 0
+        nonzero = padded_prompt_embeddings.mean(dim=1) != self.embedding_tokenizer.pad_token_id
         prompt_embeddings = self.accelerator.gather(padded_prompt_embeddings)
 
         # cannot predict for all empty values
