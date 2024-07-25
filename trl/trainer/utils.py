@@ -754,6 +754,7 @@ def get_quantization_config(model_config: ModelConfig) -> Optional[BitsAndBytesC
             bnb_4bit_compute_dtype=model_config.torch_dtype,  # For consistency with model weights, we use the same value as `torch_dtype`
             bnb_4bit_quant_type=model_config.bnb_4bit_quant_type,
             bnb_4bit_use_double_quant=model_config.use_bnb_nested_quant,
+            bnb_4bit_quant_storage=model_config.torch_dtype,
         )
     elif model_config.load_in_8bit:
         quantization_config = BitsAndBytesConfig(
