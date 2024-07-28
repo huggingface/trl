@@ -214,7 +214,7 @@ def scheduler_step(
         generator: random number generator.
         variance_noise (`torch.FloatTensor`): instead of generating noise for the variance using `generator`, we
             can directly provide the noise for the variance itself. This is useful for methods such as
-            CycleDiffusion. (https://arxiv.org/abs/2210.05559)
+            CycleDiffusion. (https://huggingface.co/papers/2210.05559)
 
     Returns:
         `DDPOSchedulerOutput`: the predicted sample at the previous timestep and the log probability of the sample
@@ -225,7 +225,7 @@ def scheduler_step(
             "Number of inference steps is 'None', you need to run 'set_timesteps' after creating the scheduler"
         )
 
-    # See formulas (12) and (16) of DDIM paper https://arxiv.org/pdf/2010.02502.pdf
+    # See formulas (12) and (16) of DDIM paper https://huggingface.co/papers/2010.02502
     # Ideally, read DDIM paper in-detail understanding
 
     # Notation (<variable name> -> <name in paper>
@@ -253,7 +253,7 @@ def scheduler_step(
     beta_prod_t = 1 - alpha_prod_t
 
     # 3. compute predicted original sample from predicted noise also called
-    # "predicted x_0" of formula (12) from https://arxiv.org/pdf/2010.02502.pdf
+    # "predicted x_0" of formula (12) from https://huggingface.co/papers/2010.02502
     if self.config.prediction_type == "epsilon":
         pred_original_sample = (sample - beta_prod_t ** (0.5) * model_output) / alpha_prod_t ** (0.5)
         pred_epsilon = model_output
@@ -287,10 +287,10 @@ def scheduler_step(
         # the pred_epsilon is always re-derived from the clipped x_0 in Glide
         pred_epsilon = (sample - alpha_prod_t ** (0.5) * pred_original_sample) / beta_prod_t ** (0.5)
 
-    # 6. compute "direction pointing to x_t" of formula (12) from https://arxiv.org/pdf/2010.02502.pdf
+    # 6. compute "direction pointing to x_t" of formula (12) from https://huggingface.co/papers/2010.02502
     pred_sample_direction = (1 - alpha_prod_t_prev - std_dev_t**2) ** (0.5) * pred_epsilon
 
-    # 7. compute x_t without "random noise" of formula (12) from https://arxiv.org/pdf/2010.02502.pdf
+    # 7. compute x_t without "random noise" of formula (12) from https://huggingface.co/papers/2010.02502
     prev_sample_mean = alpha_prod_t_prev ** (0.5) * pred_original_sample + pred_sample_direction
 
     if prev_sample is not None and generator is not None:
@@ -352,9 +352,9 @@ def pipeline_step(
             The number of denoising steps. More denoising steps usually lead to a higher quality image at the
             expense of slower inference.
         guidance_scale (`float`, *optional*, defaults to 7.5):
-            Guidance scale as defined in [Classifier-Free Diffusion Guidance](https://arxiv.org/abs/2207.12598).
+            Guidance scale as defined in [Classifier-Free Diffusion Guidance](https://huggingface.co/papers/2207.12598).
             `guidance_scale` is defined as `w` of equation 2. of [Imagen
-            Paper](https://arxiv.org/pdf/2205.11487.pdf). Guidance scale is enabled by setting `guidance_scale >
+            Paper](https://huggingface.co/papers/2205.11487). Guidance scale is enabled by setting `guidance_scale >
             1`. Higher guidance scale encourages to generate images that are closely linked to the text `prompt`,
             usually at the expense of lower image quality.
         negative_prompt (`str` or `List[str]`, *optional*):
@@ -364,7 +364,7 @@ def pipeline_step(
         num_images_per_prompt (`int`, *optional*, defaults to 1):
             The number of images to generate per prompt.
         eta (`float`, *optional*, defaults to 0.0):
-            Corresponds to parameter eta (η) in the DDIM paper: https://arxiv.org/abs/2010.02502. Only applies to
+            Corresponds to parameter eta (η) in the DDIM paper: https://huggingface.co/papers/2010.02502. Only applies to
             [`schedulers.DDIMScheduler`], will be ignored for others.
         generator (`torch.Generator` or `List[torch.Generator]`, *optional*):
             One or a list of [torch generator(s)](https://pytorch.org/docs/stable/generated/torch.Generator.html)
@@ -398,8 +398,8 @@ def pipeline_step(
             [diffusers.cross_attention](https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/cross_attention.py).
         guidance_rescale (`float`, *optional*, defaults to 0.7):
             Guidance rescale factor proposed by [Common Diffusion Noise Schedules and Sample Steps are
-            Flawed](https://arxiv.org/pdf/2305.08891.pdf) `guidance_scale` is defined as `φ` in equation 16. of
-            [Common Diffusion Noise Schedules and Sample Steps are Flawed](https://arxiv.org/pdf/2305.08891.pdf).
+            Flawed](https://huggingface.co/papers/2305.08891) `guidance_scale` is defined as `φ` in equation 16. of
+            [Common Diffusion Noise Schedules and Sample Steps are Flawed](https://huggingface.co/papers/2305.08891).
             Guidance rescale factor should fix overexposure when using zero terminal SNR.
 
     Examples:
@@ -432,7 +432,7 @@ def pipeline_step(
 
     device = self._execution_device
     # here `guidance_scale` is defined analog to the guidance weight `w` of equation (2)
-    # of the Imagen paper: https://arxiv.org/pdf/2205.11487.pdf . `guidance_scale = 1`
+    # of the Imagen paper: https://huggingface.co/papers/2205.11487 . `guidance_scale = 1`
     # corresponds to doing no classifier free guidance.
     do_classifier_free_guidance = guidance_scale > 1.0
 
@@ -491,7 +491,7 @@ def pipeline_step(
                 noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
 
             if do_classifier_free_guidance and guidance_rescale > 0.0:
-                # Based on 3.4. in https://arxiv.org/pdf/2305.08891.pdf
+                # Based on 3.4. in https://huggingface.co/papers/2305.08891
                 noise_pred = rescale_noise_cfg(noise_pred, noise_pred_text, guidance_rescale=guidance_rescale)
 
             # compute the previous noisy sample x_t -> x_t-1
@@ -563,15 +563,15 @@ def pipeline_step_with_grad(
             The number of denoising steps. More denoising steps usually lead to a higher quality image at the
             expense of slower inference.
         guidance_scale (`float`, *optional*, defaults to 7.5):
-            Guidance scale as defined in [Classifier-Free Diffusion Guidance](https://arxiv.org/abs/2207.12598).
+            Guidance scale as defined in [Classifier-Free Diffusion Guidance](https://huggingface.co/papers/2207.12598).
             `guidance_scale` is defined as `w` of equation 2. of [Imagen
-            Paper](https://arxiv.org/pdf/2205.11487.pdf). Guidance scale is enabled by setting `guidance_scale >
+            Paper](https://huggingface.co/papers/2205.11487). Guidance scale is enabled by setting `guidance_scale >
             1`. Higher guidance scale encourages to generate images that are closely linked to the text `prompt`,
             usually at the expense of lower image quality.
         truncated_backprop (`bool`, *optional*, defaults to True):
-            Truncated Backpropation to fixed timesteps, helps prevent collapse during diffusion reward training as shown in AlignProp (https://arxiv.org/abs/2310.03739).
+            Truncated Backpropation to fixed timesteps, helps prevent collapse during diffusion reward training as shown in AlignProp (https://huggingface.co/papers/2310.03739).
         truncated_backprop_rand (`bool`, *optional*, defaults to True):
-            Truncated Randomized Backpropation randomizes truncation to different diffusion timesteps, this helps prevent collapse during diffusion reward training as shown in AlignProp (https://arxiv.org/abs/2310.03739).
+            Truncated Randomized Backpropation randomizes truncation to different diffusion timesteps, this helps prevent collapse during diffusion reward training as shown in AlignProp (https://huggingface.co/papers/2310.03739).
             Enabling truncated_backprop_rand allows adapting earlier timesteps in diffusion while not resulting in a collapse.
         gradient_checkpoint (`bool`, *optional*, defaults to True):
             Adds gradient checkpointing to Unet forward pass. Reduces GPU memory consumption while slightly increasing the training time.
@@ -589,7 +589,7 @@ def pipeline_step_with_grad(
         num_images_per_prompt (`int`, *optional*, defaults to 1):
             The number of images to generate per prompt.
         eta (`float`, *optional*, defaults to 0.0):
-            Corresponds to parameter eta (η) in the DDIM paper: https://arxiv.org/abs/2010.02502. Only applies to
+            Corresponds to parameter eta (η) in the DDIM paper: https://huggingface.co/papers/2010.02502. Only applies to
             [`schedulers.DDIMScheduler`], will be ignored for others.
         generator (`torch.Generator` or `List[torch.Generator]`, *optional*):
             One or a list of [torch generator(s)](https://pytorch.org/docs/stable/generated/torch.Generator.html)
@@ -623,8 +623,8 @@ def pipeline_step_with_grad(
             [diffusers.cross_attention](https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/cross_attention.py).
         guidance_rescale (`float`, *optional*, defaults to 0.7):
             Guidance rescale factor proposed by [Common Diffusion Noise Schedules and Sample Steps are
-            Flawed](https://arxiv.org/pdf/2305.08891.pdf) `guidance_scale` is defined as `φ` in equation 16. of
-            [Common Diffusion Noise Schedules and Sample Steps are Flawed](https://arxiv.org/pdf/2305.08891.pdf).
+            Flawed](https://huggingface.co/papers/2305.08891) `guidance_scale` is defined as `φ` in equation 16. of
+            [Common Diffusion Noise Schedules and Sample Steps are Flawed](https://huggingface.co/papers/2305.08891).
             Guidance rescale factor should fix overexposure when using zero terminal SNR.
 
     Examples:
@@ -658,7 +658,7 @@ def pipeline_step_with_grad(
 
         device = pipeline._execution_device
         # here `guidance_scale` is defined analog to the guidance weight `w` of equation (2)
-        # of the Imagen paper: https://arxiv.org/pdf/2205.11487.pdf . `guidance_scale = 1`
+        # of the Imagen paper: https://huggingface.co/papers/2205.11487 . `guidance_scale = 1`
         # corresponds to doing no classifier free guidance.
         do_classifier_free_guidance = guidance_scale > 1.0
 
@@ -722,9 +722,9 @@ def pipeline_step_with_grad(
                     return_dict=False,
                 )[0]
 
-            #  truncating backpropagation is critical for preventing overoptimization (https://arxiv.org/abs/2304.05977).
+            #  truncating backpropagation is critical for preventing overoptimization (https://huggingface.co/papers/2304.05977).
             if truncated_backprop:
-                # Randomized truncation randomizes the truncation process (https://arxiv.org/abs/2310.03739)
+                # Randomized truncation randomizes the truncation process (https://huggingface.co/papers/2310.03739)
                 # the range of truncation is defined by truncated_rand_backprop_minmax
                 # Setting truncated_rand_backprop_minmax[0] to be low will allow the model to update earlier timesteps in the diffusion chain, while setitng it high will reduce the memory usage.
                 if truncated_backprop_rand:
@@ -744,7 +744,7 @@ def pipeline_step_with_grad(
                 noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
 
             if do_classifier_free_guidance and guidance_rescale > 0.0:
-                # Based on 3.4. in https://arxiv.org/pdf/2305.08891.pdf
+                # Based on 3.4. in https://huggingface.co/papers/2305.08891
                 noise_pred = rescale_noise_cfg(noise_pred, noise_pred_text, guidance_rescale=guidance_rescale)
 
             # compute the previous noisy sample x_t -> x_t-1

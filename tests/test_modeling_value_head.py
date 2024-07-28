@@ -33,12 +33,12 @@ ALL_CAUSAL_LM_MODELS = [
     "trl-internal-testing/tiny-random-CodeGenForCausalLM-sharded",
     "trl-internal-testing/tiny-random-GPTNeoXForCausalLM-safetensors-sharded",
     "trl-internal-testing/tiny-random-GPTNeoXForCausalLM-safetensors",
-    # "trl-internal-testing/tiny-random-LlamaForCausalLM", uncomment on the next transformers release
+    "trl-internal-testing/tiny-random-LlamaForCausalLM",
 ]
 
 ALL_SEQ2SEQ_MODELS = [
     "trl-internal-testing/tiny-random-BartForConditionalGeneration",
-    "trl-internal-testing/tiny-random-BigBirdPegasusForConditionalGeneration",
+    # "trl-internal-testing/tiny-random-BigBirdPegasusForConditionalGeneration",
     "trl-internal-testing/tiny-random-BlenderbotForConditionalGeneration",
     "trl-internal-testing/tiny-random-BlenderbotSmallForConditionalGeneration",
     "trl-internal-testing/tiny-random-FSMTForConditionalGeneration",

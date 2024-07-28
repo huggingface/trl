@@ -1130,7 +1130,7 @@ class DPOTrainer(Trainer):
                 + F.logsigmoid(-self.beta * logits) * self.label_smoothing
             ) / (1 - 2 * self.label_smoothing)
         elif self.loss_type == "exo_pair":
-            # eqn (16) of the EXO paper: https://arxiv.org/pdf/2402.00856
+            # eqn (16) of the EXO paper: https://huggingface.co/papers/2402.00856
             import math
 
             if self.label_smoothing == 0:
@@ -1157,7 +1157,7 @@ class DPOTrainer(Trainer):
                 -(self.beta * rejected_logratios - delta)
             )
         elif self.loss_type == "sppo_hard":
-            # In the paper (https://arxiv.org/pdf/2405.00675), SPPO employs a soft probability approach, estimated using the PairRM score. The probability calculation is conducted outside of the trainer class. The version described here is the hard probability version, where P in Equation (4.7) of Algorithm 1 is set to 1 for the winner and 0 for the loser.
+            # In the paper (https://huggingface.co/papers/2405.00675), SPPO employs a soft probability approach, estimated using the PairRM score. The probability calculation is conducted outside of the trainer class. The version described here is the hard probability version, where P in Equation (4.7) of Algorithm 1 is set to 1 for the winner and 0 for the loser.
             a = policy_chosen_logps - reference_chosen_logps
             b = policy_rejected_logps - reference_rejected_logps
 
