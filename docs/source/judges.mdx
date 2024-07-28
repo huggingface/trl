@@ -8,55 +8,68 @@ Make sure to have installed the required dependencies by running:
 pip install trl[llm_judge]
 ```
 
-## Define your own judge
+## Using the provided judges
 
-To define your own judge, you need to subclass [`BaseJudge`] and implement the [`BaseJudge.judge`] method that returns a list of 0/1 indicating which completion is better. Here is a dummy example where we define a simple judge that favors longer completions:
+TRL provides several judges out of the box. For example, you can use the `HfPairwiseJudge` to compare two completions using a pre-trained model from the Hugging Face model hub:
 
 ```python
-from trl import BaseJudge
+from trl import HfPairwiseJudge
 
-class LengthBasedJudge(BaseJudge):
-    def judge(self, prompts, completion_pairs, shuffle_order=False):
-        return [0 if len(c1) > len(c2) else 1 for c1, c2 in completion_pairs]
+judge = HfPairwiseJudge()
+judge.judge(
+    prompts=["What is the capital of France?", "What is the biggest planet in the solar system?"],
+    completions=[["Paris", "Lyon"], ["Saturn", "Jupiter"]],
+)  # Outputs: [0, 1]
+```
+
+## Define your own judge
+
+To define your own judge, we provide several base classes that you can subclass. For rank-based judges, you need to subclass [`BaseRankJudge`] and implement the [`BaseRankJudge.judge`] method. For pairwise judges, you need to subclass [`BasePairJudge`] and implement the [`BasePairJudge.judge`] method. If you want to define a judge that doesn't fit into these categories, you need to subclass [`BaseJudge`] and implement the [`BaseJudge.judge`] method.
+
+As an example, let's define a pairwise judge that prefers shorter completions:
+
+```python
+from trl import BasePairwiseJudge
+
+class PrefersShorterJudge(BasePairwiseJudge):
+    def judge(self, prompts, completions, shuffle_order=False):
+        return [0 if len(completion[0]) > len(completion[1]) else 1 for completion in completions]
 ```
 
 You can then use this judge as follows:
 
 ```python
-judge = LengthBasedJudge()
+judge = PrefersShorterJudge()
 judge.judge(
     prompts=["What is the capital of France?", "What is the biggest planet in the solar system?"],
-    completion_pairs=[["Paris", "The capital of France is Paris."], ["Jupiter is the biggest planet in the solar system.", "Jupiter"]],
-)  # Outputs: [1, 0]
+    completions=[["Paris", "The capital of France is Paris."], ["Jupiter is the biggest planet in the solar system.", "Jupiter"]],
+)  # Outputs: [0, 1]
 ```
-
-TRL also provides a [`BaseAPIJudge`] class that can be used to define judges that interact with an API. You can subclass [`BaseAPIJudge`] and implement the [`BaseAPIJudge.get_response`] method that should return the response from the API. For an example, see the [`HuggingFaceJudge`] class.
-
 
 ## BaseJudge
 
 [[autodoc]] BaseJudge
 
-## BaseAPIJudge
+## BaseRankJudge
 
-[[autodoc]] BaseAPIJudge
+[[autodoc]] BaseRankJudge
 
-## HuggingFaceJudge
+## BasePairwiseJudge
 
-[[autodoc]] HuggingFaceJudge
+[[autodoc]] BasePairwiseJudge
 
-## MockAPIJudge
+## RandomRankJudge
 
-[[autodoc]] MockAPIJudge
+[[autodoc]] RandomRankJudge
 
-## MockJudge
+## RandomPairwiseJudge
 
-[[autodoc]] MockJudge
+[[autodoc]] RandomPairwiseJudge
 
-## OpenAIJudge
+## HfPairwiseJudge
 
-[[autodoc]] OpenAIJudge
+[[autodoc]] HfPairwiseJudge
 
-## PairRMJudge
+## OpenAIPairwiseJudge
 
-[[autodoc]] PairRMJudge
+[[autodoc]] OpenAIPairwiseJudge
