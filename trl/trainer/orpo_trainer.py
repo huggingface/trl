@@ -614,7 +614,7 @@ class ORPOTrainer(Trainer):
             The `log(sigmoid(log_odds_chosen))` for logging purposes.
         """
 
-        # Derived from Eqs. (4) and (7) from https://arxiv.org/abs/2403.07691 by using log identities and exp(log(P(y|x)) = P(y|x)
+        # Derived from Eqs. (4) and (7) from https://huggingface.co/papers/2403.07691 by using log identities and exp(log(P(y|x)) = P(y|x)
         log_odds = (policy_chosen_logps - policy_rejected_logps) - (
             torch.log1p(-torch.exp(policy_chosen_logps)) - torch.log1p(-torch.exp(policy_rejected_logps))
         )

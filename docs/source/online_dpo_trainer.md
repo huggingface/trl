@@ -1,8 +1,8 @@
 # Online DPO Trainer
 
-TRL supports training LLMs with online DPO ([Guo et al., 2024](https://arxiv.org/abs/2402.04792)) with a reward model (RM). The idea of online DPO is to generate completions based on prompts and either have an RM or a LLM judge to rank the responses. Then the policy is updated with the ranked responses using the DPO loss.
+TRL supports training LLMs with online DPO ([Guo et al., 2024](https://huggingface.co/papers/2402.04792)) with a reward model (RM). The idea of online DPO is to generate completions based on prompts and either have an RM or a LLM judge to rank the responses. Then the model is updated with the ranked responses using the DPO loss.
 
-While [Guo et al. (2024)](https://arxiv.org/abs/2402.04792) used a LLM judge, in this implementation we just used a RM.
+While [Guo et al. (2024)](https://huggingface.co/papers/2402.04792) used a LLM judge, in this implementation we just used a RM.
 
 
 ## Get started
@@ -32,8 +32,8 @@ python examples/scripts/online_dpo.py \
 The logged metrics are as follows. Here is an example [tracked run at Weights and Biases](https://wandb.ai/huggingface/trl/runs/dd2o3g35)
 
 * `eps`: Tracks the number of episodes per second.
-* `objective/kl`: The mean Kullback-Leibler (KL) divergence between the current policy and reference policy.
-* `objective/entropy`: The mean entropy of the policy, indicating the randomness of the actions chosen by the policy.
+* `objective/kl`: The mean Kullback-Leibler (KL) divergence between the current model and reference model.
+* `objective/entropy`: The mean entropy of the model, indicating the randomness of the actions chosen by the model.
 * `objective/non_score_reward`: The mean reward from non-score-related sources, basically `beta * kl.sum(1)`, where `beta` is the KL penalty coefficient and `kl` is the per-token KL divergence.
 * `objective/rlhf_reward`: The mean RLHF reward, which is `score - non_score_reward`.
 * `objective/scores`: The mean scores returned by the reward model / environment.
@@ -164,17 +164,17 @@ In the logs the sampled generations look like
 
 ## Implementation details
 
-Many online implementation details are borrowed from the PPOv2Trainer, which is itself based on the [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://arxiv.org/pdf/2403.17031). Here are some additional implementation details:
+Many online implementation details are borrowed from the PPOv2Trainer, which is itself based on the [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://huggingface.co/papers/2403.17031). Here are some additional implementation details:
 
 1. When we turn on the EOS trick (i.e., replacing the score of completions that do not end with an EOS token with a scalar penalty score like `-1`) via `--non_eos_penalty --stop_token eos`, it's possible that the chosen and rejected completions have the same score. In this case, we will naively select the completion with the lower index and the chosen completion.
 
 ## Benchmark experiments
 
-To validate the online DPO implementation works, we ran experiments on the 1B and 6.9B models. Here are the commands we used to run the experiments. We take the SFT / RM models directly from [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://arxiv.org/pdf/2403.17031).
+To validate the online DPO implementation works, we ran experiments on the 1B and 6.9B models. Here are the commands we used to run the experiments. We take the SFT / RM models directly from [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://huggingface.co/papers/2403.17031).
 
 
 ```
-# 1B PPO experiment
+# 1B Online DPO experiment
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
     examples/scripts/online_dpo.py \
     --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
@@ -183,7 +183,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --per_device_train_batch_size 16 \
     --gradient_accumulation_steps 4 \
     --local_rollout_forward_batch_size 32 \
-    --num_ppo_epochs 1 \
+    --num_epochs 1 \
     --num_mini_batches 1 \
     --total_episodes 1000000 \
     --model_name_or_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr  \
@@ -196,7 +196,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --response_length 53 \
     --push_to_hub
 
-# 6.9B PPO experiment
+# 6.9B Online DPO experiment
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/online_dpo.py \
     --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
@@ -205,7 +205,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 16 \
     --local_rollout_forward_batch_size 8 \
-    --num_ppo_epochs 1 \
+    --num_epochs 1 \
     --num_mini_batches 1 \
     --total_episodes 1000000 \
     --model_name_or_path EleutherAI/pythia-6.9b-deduped \

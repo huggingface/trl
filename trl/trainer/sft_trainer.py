@@ -647,7 +647,7 @@ class SFTTrainer(Trainer):
 
     def _trl_activate_neftune(self, model):
         r"""
-        Activates the neftune as presented in this code: https://github.com/neelsjain/NEFTune and paper: https://arxiv.org/abs/2310.05914
+        Activates the neftune as presented in this code: https://github.com/neelsjain/NEFTune and paper: https://huggingface.co/papers/2310.05914
         Since in transformers Trainer we do have an `_activate_neftune` method, we need to rename this method to avoid conflicts.
         """
         unwrapped_model = unwrap_model(model)
