@@ -61,7 +61,7 @@ from accelerate import Accelerator
 from datasets import load_dataset
 
 from tqdm.rich import tqdm
-from transformers import AutoTokenizer, AutoProcessor, LlavaForConditionalGeneration
+from transformers import AutoProcessor, LlavaForConditionalGeneration
 
 from trl import (
     ModelConfig,
