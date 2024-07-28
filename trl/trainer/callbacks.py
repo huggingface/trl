@@ -33,7 +33,7 @@ from transformers import (
 from transformers.trainer_utils import has_length
 
 from ..models.utils import unwrap_model_for_generation
-from .judges import BaseJudge
+from .judges import BaseRankJudge
 
 
 if is_deepspeed_available():
@@ -164,7 +164,7 @@ class WinRateCallback(TrainerCallback):
     Args:
         prompts (`List[str]`):
             The prompts to generate completions for.
-        judge (`BaseJudge`):
+        judge (`BaseRankJudge`):
             The judge to use for comparing completions.
         trainer (`Trainer`):
             The trainer.
@@ -177,7 +177,7 @@ class WinRateCallback(TrainerCallback):
     def __init__(
         self,
         prompts: List[str],
-        judge: BaseJudge,
+        judge: BaseRankJudge,
         trainer: Trainer,
         generation_config: Optional[GenerationConfig] = None,
         batch_size: int = 4,
@@ -225,8 +225,8 @@ class WinRateCallback(TrainerCallback):
         accelerator = self.trainer.accelerator
         with accelerator.split_between_processes(self.eval_dataset["prompt"], apply_padding=True) as prompts:
             completions = self.generate_completions_for_model(model, tokenizer, prompts)
-            completion_pairs = list(zip(self.ref_completions, completions))
-            winner_indices = self.judge.judge(self.eval_dataset["prompt"], completion_pairs)
+            completions = list(zip(self.ref_completions, completions))
+            winner_indices = self.judge.judge(self.eval_dataset["prompt"], completions)
             winner_indices = gather_object(winner_indices)
 
         # Logging

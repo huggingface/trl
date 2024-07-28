@@ -13,7 +13,7 @@ References:
 To just run a PPO script to make sure the trainer can run, you can run the following command to train a PPO model with a dummy reward model.
 
 ```bash
-python -i examples/scripts/ppo/ppo.py \
+python examples/scripts/ppo/ppo.py \
     --learning_rate 3e-6 \
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \
@@ -22,7 +22,7 @@ python -i examples/scripts/ppo/ppo.py \
     --gradient_accumulation_steps 1 \
     --total_episodes 10000 \
     --model_name_or_path EleutherAI/pythia-1b-deduped \
-    --non_eos_penalty \
+    --non_eos_penalty
 ```
 
 
@@ -160,7 +160,7 @@ In the logs the sampled generations look like
 │ worth it.                       │                                 │          │
 │                                 │                                 │          │
 │ TL;DR:                          │                                 │          │
-├─────────────────────────────────┼─────────────────────────────────┼──────────┤
+└─────────────────────────────────┴─────────────────────────────────┴──────────┘
 ```
 
 ## Implementation details
@@ -169,11 +169,9 @@ This PPOv2 implementation is based on the [The N+ Implementation Details of RLHF
 
 ## Benchmark experiments
 
-To validate the PPO implementation works, we ran experiments on the 1B and 6.9B models. Here are the commands we used to run the experiments. We take the SFT / RM models directly from [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://huggingface.co/papers/2403.17031).
-
+To validate the PPO implementation works, we ran experiment on the 1B model. Here are the command we used to run the experiment. We take the SFT / RM models directly from [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://huggingface.co/papers/2403.17031).
 
 ```
-# 1B PPO experiment
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
     examples/scripts/ppo/ppo_tldr.py \
     --output_dir models/minimal/ppo_tldr \
@@ -187,55 +185,28 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --local_rollout_forward_batch_size 16 \
     --non_eos_penalty \
     --stop_token eos \
-
-# 6.9B PPO experiment
-accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/scripts/ppo/ppo_tldr.py \
-    --output_dir models/minimal/ppo_tldr_6.9b \
-    --learning_rate 3e-6 \
-    --per_device_train_batch_size 1 \
-    --gradient_accumulation_steps 64 \
-    --total_episodes 100000 \
-    --model_name_or_path EleutherAI/pythia-6.9b-deduped \
-    --sft_model_path cleanrl/EleutherAI_pythia-6.9b-deduped__sft__tldr \
-    --reward_model_path cleanrl/EleutherAI_pythia-6.9b-deduped__reward__tldr \
-    --local_rollout_forward_batch_size 4 \
-    --non_eos_penalty \
-    --stop_token eos \
 ```
 
-1B experiment can be found here:
+Checkpoints and experiment tracking are available at:
 
 - [🤗 Model checkpoint](https://huggingface.co/vwxyzjn/ppo_tldr)
 - [🐝 Tracked experiment](https://wandb.ai/huggingface/trl/runs/dd2o3g35)
 
+To evaluate, we use [vLLM](https://github.com/vllm-project/vllm) to load the checkpoints and GPT-4o mini as a judge model to evaluate the generated TL;DR against the reference TL;DR.
+For more information on how to use judges, see [Judges](judges).
 
-To evaluate, we use vLLM to load the checkpoints and GPT3.5 as a judge model to evaluate the generated TL;DR against the reference TL;DR.
 ```bash
-python -i examples/scripts/evals/generate_tldr.py \
-    --model_name_or_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr \
-    --output_path examples/scripts/minimal/evals/sft_tldr.csv \
-    --n 1000
-# preferred
-# response1    656
-# response0    344
-# Name: count, dtype: int64
-python -i examples/scripts/evals/generate_tldr.py \
-    --model_name_or_path vwxyzjn/ppo_tldr \
-    --output_path examples/scripts/minimal/evals/ppo_tldr.csv \
-    --n 1000
-# preferred
-# response0    528
-# response1    472
-# Name: count, dtype: int64
+$ python examples/scripts/evals/judge_tldr.py --model_name_or_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr --judge_model gpt-4o-mini --num_examples 1000
+Model win rate: 33.00%
+$ python examples/scripts/evals/judge_tldr.py --model_name_or_path vwxyzjn/ppo_tldr --judge_model gpt-4o-mini --num_examples 1000
+Model win rate: 64.70%
 ```
 
-The PPO checkpoint gets a 52.8% preferred rate vs the 34.4% preference rate of the SFT checkpoint. This is a good sign that the PPO training is working as intended.
-
+The PPO checkpoint gets a 64.7% preferred rate vs the 33.0% preference rate of the SFT checkpoint. This is a good sign that the PPO training is working as intended.
 
 Metrics:
 
-![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/benchmark/pr-1540/ppov2.png?download=true)
+![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/benchmark/pr-1540/ppov2.png)
 
 
 ```bash
@@ -252,6 +223,3 @@ python -m openrlbenchmark.rlops_multi_metrics \
     --output-filename benchmark/trl/pr-1540/ppov2 \
     --scan-history
 ```
-
-
-6.9B experiment is still TBD (experiments got preempted due to resource constraints).

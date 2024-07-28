@@ -54,12 +54,12 @@ _import_structure = {
     "callbacks": ["RichProgressCallback", "SyncRefModelCallback", "WinRateCallback"],
     "judges": [
         "BaseJudge",
-        "BaseAPIJudge",
-        "HuggingFaceJudge",
-        "MockAPIJudge",
-        "MockJudge",
-        "OpenAIJudge",
-        "PairRMJudge",
+        "BaseRankJudge",
+        "BasePairwiseJudge",
+        "RandomRankJudge",
+        "RandomPairwiseJudge",
+        "HfPairwiseJudge",
+        "OpenAIPairwiseJudge",
     ],
 }
 
@@ -110,7 +110,15 @@ if TYPE_CHECKING:
     from .sft_config import SFTConfig
     from .sft_trainer import SFTTrainer
     from .callbacks import RichProgressCallback, SyncRefModelCallback, WinRateCallback
-    from .judges import BaseJudge, BaseAPIJudge, HuggingFaceJudge, MockAPIJudge, MockJudge, OpenAIJudge, PairRMJudge
+    from .judges import (
+        BaseJudge,
+        BaseRankJudge,
+        BasePairwiseJudge,
+        RandomRankJudge,
+        RandomPairwiseJudge,
+        HfPairwiseJudge,
+        OpenAIPairwiseJudge,
+    )
 
     try:
         if not is_diffusers_available():
