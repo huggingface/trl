@@ -24,6 +24,7 @@ class NashMDConfig(OnPolicyConfig):
     # DPO stuff w/o max_length which is included in RLOOConfig
     num_generation_per_prompt: int = 2
     """the number of generations per prompt (currently only support 2)"""
-    beta: float = 0.05
+    beta: float = 0.5
+    """the logit mixture parameter"""
     loss_type: Literal["sigmoid", "ipo"] = "sigmoid"
     disable_dropout: bool = True

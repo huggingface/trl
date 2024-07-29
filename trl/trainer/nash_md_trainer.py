@@ -23,6 +23,7 @@ from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, PrinterCallback
 
+from ..models.modeling_base import GeometricMixtureWrapper
 from ..models.utils import unwrap_model_for_generation
 from ..trainer.utils import (
     OnlineTrainerState,
@@ -117,7 +118,6 @@ class NashMDTrainer(OnlineDPOTrainer):
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
         self.reward_model.eval()
-        self.ref_model = self.ref_model.eval()
 
         if args.stop_token and args.stop_token == "eos":
             args.stop_token_id = tokenizer.eos_token_id
@@ -188,7 +188,9 @@ class NashMDTrainer(OnlineDPOTrainer):
         accelerator = self.accelerator
         optimizer = self.optimizer
         model = self.model
-        ref_model = self.ref_model
+        ref_model = GeometricMixtureWrapper(
+            ref_model=self.ref_model, model=model, beta=args.beta, device=accelerator.device
+        )
         reward_model = self.reward_model
         tokenizer = self.tokenizer
         dataloader = self.dataloader
@@ -207,6 +209,7 @@ class NashMDTrainer(OnlineDPOTrainer):
             top_p=1.0,
             do_sample=True,
         )
+        ref_model.generation_config = generation_config
 
         accelerator.print("===training policy===")
         start_time = time.time()
@@ -263,6 +266,18 @@ class NashMDTrainer(OnlineDPOTrainer):
                         tokenizer.pad_token_id,
                         generation_config,
                     )
+
+                with unwrap_model_for_generation(ref_model, self.accelerator) as unwrapped_ref_model:
+                    mixture_query_responses, mixture_logits_responses = batch_generation(
+                        unwrapped_ref_model,
+                        queries,
+                        args.local_rollout_forward_batch_size,
+                        tokenizer.pad_token_id,
+                        generation_config,
+                    )
+                    import pdb
+
+                    pdb.set_trace()
 
                 for i in range(0, queries.shape[0], args.local_rollout_forward_batch_size):
                     query = queries[i : i + args.local_rollout_forward_batch_size]
