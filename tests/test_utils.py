@@ -100,6 +100,6 @@ class TestGetPEFTConfig(unittest.TestCase):
                 value = set(value)
             # Rename the argument to match the LoraConfig attribute name
             if arg in ["lora_r", "lora_task_type", "lora_target_modules", "lora_modules_to_save"]:
-                arg = arg.removeprefix("lora_")
+                arg = arg[len("lora_") :] if arg.startswith("lora_") else arg
 
             self.assertEqual(getattr(peft_config, arg), value)
