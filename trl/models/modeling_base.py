@@ -712,7 +712,7 @@ class GeometricMixtureWrapper(GenerationMixin):
         ref_model_logits = self.ref_model(*args, **kwargs).logits
 
         model_outputs.logits = torch.nn.functional.log_softmax(
-            self.beta * model_logits + (1 - self.beta) * ref_model_logits, dim=-1
+            self.beta * ref_model_logits + (1 - self.beta) * model_logits, dim=-1
         )
 
         return model_outputs
