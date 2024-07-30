@@ -621,6 +621,31 @@ model = AutoModelForCausalLM.from_pretrained(
 
 You may experience some issues with GPTQ Quantization after completing training. Lowering `gradient_accumulation_steps` to `4` will resolve most issues during the quantization process to GPTQ format.
 
+## Extending `SFTTrainer` for Vision Language Models
+
+We provide an example of how to extend the `SFTTrainer` for a Vision Language Models in the example [`examples/scripts/vsft_llava.py`](https...). This script involves using a custom collator that we tweaked to handle the data data processing as well.
+
+### Defining a custom collator
+
+```python
+def collate_fn(examples):
+    # Get the texts and images, and apply the chat template
+    texts = [processor.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False) for example in examples]
+    images = [example["images"][0] for example in examples]
+
+    # Tokenize the texts and process the images
+    batch = processor(texts, images, return_tensors="pt", padding=True)
+
+    # The labels are the input_ids, and we mask the padding tokens in the loss computation
+    labels = batch["input_ids"].clone()
+    labels[labels == processor.tokenizer.pad_token_id] = -100
+    batch["labels"] = labels
+
+    return batch
+```
+
+<iframe src="https://huggingface.co/datasets/HuggingFaceH4/llava-instruct-mix-vsft/embed/viewer/default/train" frameborder="0" width="100%" height="560px"></iframe>
+
 ## SFTTrainer
 
 [[autodoc]] SFTTrainer
