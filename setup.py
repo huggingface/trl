@@ -79,7 +79,7 @@ EXTRAS = {
         "scikit-learn",
         "Pillow",
     ],
-    "peft": ["peft>=0.4.0"],
+    "peft": ["peft>=0.8.0"],
     "diffusers": ["diffusers>=0.18.0"],
     "deepspeed": ["deepspeed>=0.9.5"],
     "benchmark": ["wandb", "ghapi", "openrlbenchmark==0.2.1a5", "requests", "deepspeed"],
