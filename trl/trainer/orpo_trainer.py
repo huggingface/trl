@@ -272,6 +272,7 @@ class ORPOTrainer(Trainer):
         self.max_prompt_length = max_prompt_length
         self.truncation_mode = args.truncation_mode
         self.tokenizer = tokenizer
+        self.low_vram_threshold = args.low_vram_threshold
 
         self.beta = args.beta
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
@@ -637,6 +638,7 @@ class ORPOTrainer(Trainer):
         average_log_prob: bool = False,
         label_pad_token_id: int = -100,
         is_encoder_decoder: bool = False,
+        low_vram_threshold: Optional[int] = None,
     ) -> torch.FloatTensor:
         """Compute the log probabilities of the given labels under the given logits.
 
@@ -661,7 +663,20 @@ class ORPOTrainer(Trainer):
         # dummy token; we'll ignore the losses on these tokens later
         labels[labels == label_pad_token_id] = 0
 
-        per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
+        tokens = logits.shape[1]
+        if low_vram_threshold is not None and tokens >= low_vram_threshold:
+            # Use CPU
+            logits = logits.cpu()
+            labels = labels.cpu()
+            loss_mask = loss_mask.cpu()
+
+        try:
+            per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
+        except torch.cuda.OutOfMemoryError as e:
+            warnings.warn(
+                f"*** Hint: set low_vram_threshold to less than or equal to {tokens} to avoid running out of VRAM. ***"
+            )
+            raise e
 
         if average_log_prob:
             return (per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)
@@ -732,6 +747,7 @@ class ORPOTrainer(Trainer):
             average_log_prob=True,
             is_encoder_decoder=self.is_encoder_decoder,
             label_pad_token_id=self.label_pad_token_id,
+            low_vram_threshold=self.low_vram_threshold,
         )
 
         chosen_logps = all_logps[:len_chosen]
