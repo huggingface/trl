@@ -91,8 +91,6 @@ if __name__ == "__main__":
     ################
     # Model, Tokenizer & Processor
     ################
-    LLAVA_CHAT_TEMPLATE = """{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. {% for message in messages %}{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}{% if add_generation_prompt %}ASSISTANT: {% endif %}"""
-
     torch_dtype = (
         model_config.torch_dtype
         if model_config.torch_dtype in ["auto", None]
@@ -109,8 +107,6 @@ if __name__ == "__main__":
     processor = AutoProcessor.from_pretrained(
         model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code
     )
-    tokenizer = processor.tokenizer
-    tokenizer.chat_template = LLAVA_CHAT_TEMPLATE
 
     model = LlavaForConditionalGeneration.from_pretrained(
         model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, **model_kwargs
@@ -119,34 +115,20 @@ if __name__ == "__main__":
     ################
     # Create a data collator to encode text and image pairs
     ################
+    def collate_fn(examples):
+        # Get the texts and images, and apply the chat template
+        texts = [processor.apply_chat_template(example["messages"], tokenize=False) for example in examples]
+        images = [example["images"][0] for example in examples]
 
-    class LLavaDataCollator:
-        def __init__(self, processor):
-            self.processor = processor
+        # Tokenize the texts and process the images
+        batch = processor(texts, images, return_tensors="pt", padding=True)
 
-        def __call__(self, examples):
-            texts = []
-            images = []
-            for example in examples:
-                if len(example["images"]) > 1:
-                    raise ValueError("This collator only supports one image per example")
-                messages = example["messages"]
-                text = self.processor.tokenizer.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=False
-                )
-                texts.append(text)
-                images.append(example["images"][0])
+        # The labels are the input_ids, and we mask the padding tokens in the loss computation
+        labels = batch["input_ids"].clone()
+        labels[labels == processor.tokenizer.pad_token_id] = -100
+        batch["labels"] = labels
 
-            batch = self.processor(texts, images, return_tensors="pt", padding=True)
-
-            labels = batch["input_ids"].clone()
-            if self.processor.tokenizer.pad_token_id is not None:
-                labels[labels == self.processor.tokenizer.pad_token_id] = -100
-            batch["labels"] = labels
-
-            return batch
-
-    data_collator = LLavaDataCollator(processor)
+        return batch
 
     ################
     # Dataset
@@ -172,13 +154,13 @@ if __name__ == "__main__":
         trainer = SFTTrainer(
             model=model,
             args=training_args,
+            data_collator=collate_fn,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            dataset_text_field="text",  # need a dummy field
-            tokenizer=tokenizer,
+            tokenizer=processor.tokenizer,
             peft_config=get_peft_config(model_config),
             callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
-            data_collator=data_collator,
+            dataset_text_field="",  # need a dummy field
             dataset_kwargs={"skip_prepare_dataset": True},
         )
 
