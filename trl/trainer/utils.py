@@ -1172,7 +1172,7 @@ def add_bos_token_if_needed(
     chosen_prompt_len_input_ids: int,
     chosen_tokens: Dict[str, List[int]],
     rejected_prompt_len_input_ids: int,
-    rejected_tokens: Dict[str, List[int]]
+    rejected_tokens: Dict[str, List[int]],
 ):
     if bos_token_id is not None:
         if prompt_len_input_ids == 0 or bos_token_id != prompt_tokens["prompt_input_ids"][0]:
@@ -1188,9 +1188,7 @@ def add_bos_token_if_needed(
 
 
 def add_eos_token_if_needed(
-    eos_token_id: int,
-    chosen_tokens: Dict[str, List[int]],
-    rejected_tokens: Dict[str, List[int]]
+    eos_token_id: int, chosen_tokens: Dict[str, List[int]], rejected_tokens: Dict[str, List[int]]
 ):
     if len(chosen_tokens["input_ids"]) == 0 or eos_token_id != chosen_tokens["input_ids"][-1]:
         chosen_tokens["input_ids"].append(eos_token_id)

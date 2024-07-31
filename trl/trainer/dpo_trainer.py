@@ -48,13 +48,13 @@ from .dpo_config import DPOConfig, FDivergenceConstants, FDivergenceType
 from .utils import (
     DPODataCollatorWithPadding,
     RunningMoments,
+    add_bos_token_if_needed,
+    add_eos_token_if_needed,
     cap_exp,
     disable_dropout_in_model,
     pad_to_length,
     peft_module_casting_to_bf16,
     trl_sanitze_kwargs_for_tagging,
-    add_bos_token_if_needed,
-    add_eos_token_if_needed
 )
 
 
@@ -866,14 +866,12 @@ class DPOTrainer(Trainer):
                 chosen_prompt_len_input_ids,
                 chosen_tokens,
                 rejected_prompt_len_input_ids,
-                rejected_tokens
+                rejected_tokens,
             )
 
             # add EOS token to end of answer. Avoid adding if it's already there
             chosen_tokens, rejected_tokens = add_eos_token_if_needed(
-                self.tokenizer.eos_token_id,
-                chosen_tokens,
-                rejected_tokens
+                self.tokenizer.eos_token_id, chosen_tokens, rejected_tokens
             )
 
             longer_response_length = max(len(chosen_tokens["input_ids"]), len(rejected_tokens["input_ids"]))
