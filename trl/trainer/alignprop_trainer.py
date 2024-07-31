@@ -43,7 +43,7 @@ tags:
 
 # {model_name}
 
-This is a pipeline that finetunes a diffusion model with reward backpropagation while using randomized truncation (https://arxiv.org/abs/2310.03739). The model can be used for image generation conditioned with text.
+This is a pipeline that finetunes a diffusion model with reward backpropagation while using randomized truncation (https://huggingface.co/papers/2310.03739). The model can be used for image generation conditioned with text.
 
 """
 
@@ -284,7 +284,7 @@ class AlignPropTrainer(BaseTrainer):
             loss (torch.Tensor)
             (all of these are of shape (1,))
         """
-        #  Loss is specific to Aesthetic Reward function used in AlignProp (https://arxiv.org/pdf/2310.03739.pdf)
+        #  Loss is specific to Aesthetic Reward function used in AlignProp (https://huggingface.co/papers/2310.03739)
         loss = 10.0 - (rewards).mean()
         return loss
 

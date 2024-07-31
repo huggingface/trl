@@ -39,6 +39,8 @@
     title: DPO Trainer
   - local: kto_trainer
     title: KTO Trainer
+  - local: bco_trainer
+    title: BCO Trainer
   - local: cpo_trainer
     title: CPO Trainer
   - local: ddpo_trainer
