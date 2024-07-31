@@ -13,13 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
+pip install pillow
+
 python examples/scripts/vsft_llava.py \
     --dataset_name HuggingFaceH4/llava-instruct-mix-vsft \
     --model_name_or_path llava-hf/llava-1.5-7b-hf \
     --per_device_train_batch_size 8 \
     --gradient_accumulation_steps 8 \
     --output_dir sft-llava-1.5-7b-hf \
-    --remove_unused_columns=False \
     --bf16 \
     --torch_dtype bfloat16 \
     --gradient_checkpointing \
@@ -83,6 +84,9 @@ if __name__ == "__main__":
     parser = TrlParser((SFTScriptArguments, SFTConfig, ModelConfig))
     sft_script_args, training_args, model_config = parser.parse_args_and_config()
     training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
+    training_args.dataset_text_field = ""  # need a dummy field
+    training_args.remove_unused_columns = False
+    training_args.dataset_kwargs = {"skip_prepare_dataset": True}
     # Force use our print callback
     if TRL_USE_RICH:
         training_args.disable_tqdm = True
@@ -160,8 +164,6 @@ if __name__ == "__main__":
             tokenizer=processor.tokenizer,
             peft_config=get_peft_config(model_config),
             callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
-            dataset_text_field="",  # need a dummy field
-            dataset_kwargs={"skip_prepare_dataset": True},
         )
 
     trainer.train()
