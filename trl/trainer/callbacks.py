@@ -108,19 +108,14 @@ class RichProgressCallback(TrainerCallback):
 
     def on_step_end(self, args, state, control, **kwargs):
         if state.is_world_process_zero:
-            self.training_bar.update(
-                self.training_task_id,
-                advance=state.global_step - self.current_step,
-                update=True,
-            )
+            self.training_bar.update(self.training_task_id, advance=state.global_step - self.current_step, update=True)
             self.current_step = state.global_step
 
     def on_prediction_step(self, args, state, control, eval_dataloader=None, **kwargs):
         if state.is_world_process_zero and has_length(eval_dataloader):
             if self.prediction_task_id is None:
                 self.prediction_task_id = self.prediction_bar.add_task(
-                    "[blue]Predicting on the evaluation dataset",
-                    total=len(eval_dataloader),
+                    "[blue]Predicting on the evaluation dataset", total=len(eval_dataloader)
                 )
             self.prediction_bar.update(self.prediction_task_id, advance=1, update=True)
 
@@ -217,26 +212,14 @@ class WinRateCallback(TrainerCallback):
             unwrapped_model.train()
         return completions
 
-    def on_train_begin(
-        self,
-        args: TrainingArguments,
-        state: TrainerState,
-        control: TrainerControl,
-        **kwargs,
-    ):
+    def on_train_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         tokenizer = kwargs["tokenizer"]
         tokenizer.padding_side = "left"
         accelerator = self.trainer.accelerator
         with accelerator.split_between_processes(self.eval_dataset["prompt"], apply_padding=True) as prompts:
             self.ref_completions = self.generate_completions_for_model(self.trainer.ref_model, tokenizer, prompts)
 
-    def on_evaluate(
-        self,
-        args: TrainingArguments,
-        state: TrainerState,
-        control: TrainerControl,
-        **kwargs,
-    ):
+    def on_evaluate(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         model = kwargs["model"]
         tokenizer = kwargs["tokenizer"]
         accelerator = self.trainer.accelerator
