@@ -1166,7 +1166,7 @@ def batch_generation(
 
 
 def add_bos_token_if_needed(
-    bos_token_id: int,
+    bos_token_id: Optional[int],
     prompt_len_input_ids: int,
     prompt_tokens: Dict[str, List[int]],
     chosen_prompt_len_input_ids: int,
