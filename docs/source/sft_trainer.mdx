@@ -730,15 +730,8 @@ trainer = SFTTrainer(
 
 A full example of training LLaVa 1.5 on the [HuggingFaceH4/llava-instruct-mix-vsft](https://huggingface.co/datasets/HuggingFaceH4/llava-instruct-mix-vsft) dataset can be found in the script [`examples/scripts/vsft_llava.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/vsft_llava.py).
 
-[Experiment tracking](https://wandb.ai/huggingface/trl/runs/2b2c5l7s)
-[Trained model](https://huggingface.co/HuggingFaceH4/sft-llava-1.5-7b-hf)
-
-We can verify that the fine-tuning process works as expected by evaluating the model with [VLMEvalKit](https://github.com/open-compass/VLMEvalKit).
-
-| Model           | MMBench | MME | SEEDBench_IMG |
-| --------------- | ------- | --- | ------------- |
-| LLaVA 1.5       | 62.89%  | 0.0 | 60.10%        |
-| LLAVA 1.5 + SFT | 0.0     | 0.0 | 0.0           |
+- [Experiment tracking](https://wandb.ai/huggingface/trl/runs/2b2c5l7s)
+- [Trained model](https://huggingface.co/HuggingFaceH4/sft-llava-1.5-7b-hf)
 
 ## SFTTrainer
 
