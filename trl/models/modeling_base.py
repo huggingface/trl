@@ -686,6 +686,7 @@ class GeometricMixtureWrapper(GenerationMixin):
     Args:
         model (`PreTrainedModel`):
         ref_model (`PreTrainedModel`):
+        generation_config (`GenerationConfig`):
         beta (`float`, *optional* - default: 0.5):
     """
 
@@ -693,12 +694,13 @@ class GeometricMixtureWrapper(GenerationMixin):
     _supports_cache_class = False
     _supports_static_cache = False
 
-    def __init__(self, model, ref_model, beta=0.5, device=None):
+    def __init__(self, model, ref_model, generation_config, beta=0.5, device=None):
         super().__init__()
 
         self.model = model.eval()
         self.config = model.config
         self.ref_model = ref_model.eval()
+        self.generation_config = generation_config
         self.beta = beta
         self.device = device
 

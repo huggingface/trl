@@ -188,9 +188,7 @@ class NashMDTrainer(OnlineDPOTrainer):
         accelerator = self.accelerator
         optimizer = self.optimizer
         model = self.model
-        ref_model = GeometricMixtureWrapper(
-            ref_model=self.ref_model, model=model, beta=args.beta, device=accelerator.device
-        )
+
         reward_model = self.reward_model
         tokenizer = self.tokenizer
         dataloader = self.dataloader
@@ -209,7 +207,13 @@ class NashMDTrainer(OnlineDPOTrainer):
             top_p=1.0,
             do_sample=True,
         )
-        ref_model.generation_config = generation_config
+        ref_model = GeometricMixtureWrapper(
+            ref_model=self.ref_model,
+            model=model,
+            generation_config=generation_config,
+            beta=args.beta,
+            device=accelerator.device,
+        )
 
         accelerator.print("===training policy===")
         start_time = time.time()
@@ -275,9 +279,6 @@ class NashMDTrainer(OnlineDPOTrainer):
                         tokenizer.pad_token_id,
                         generation_config,
                     )
-                    import pdb
-
-                    pdb.set_trace()
 
                 for i in range(0, queries.shape[0], args.local_rollout_forward_batch_size):
                     query = queries[i : i + args.local_rollout_forward_batch_size]
@@ -289,13 +290,13 @@ class NashMDTrainer(OnlineDPOTrainer):
                     del logits, all_logprob
                     torch.cuda.empty_cache()
 
-                    ref_output = forward(ref_model, query_response, tokenizer.pad_token_id)
-                    ref_logits = ref_output.logits[:, context_length - 1 : -1]
-                    ref_logits /= args.temperature + 1e-7
-                    ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
-                    ref_logprob = torch.gather(ref_all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
-                    del ref_output, ref_logits, ref_all_logprob
-                    torch.cuda.empty_cache()
+                    # ref_output = forward(ref_model, query_response, tokenizer.pad_token_id)
+                    # ref_logits = ref_output.logits[:, context_length - 1 : -1]
+                    # ref_logits /= args.temperature + 1e-7
+                    # ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
+                    # ref_logprob = torch.gather(ref_all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
+                    # del ref_output, ref_logits, ref_all_logprob
+                    # torch.cuda.empty_cache()
 
                     # generate 2nd response from the geometric mixture of the 2 logits
                     # make some mixture from the top layer of the model and then do generation...
@@ -307,12 +308,22 @@ class NashMDTrainer(OnlineDPOTrainer):
                             args.stop_token_id, tokenizer.pad_token_id, response
                         )
 
+                    # rename to judge_model
                     # Response Processing 2. run reward model on the truncated responses
                     postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
                     sequence_length = first_true_indices(postprocessed_response == tokenizer.pad_token_id) - 1
                     _, score, _ = get_reward(
                         reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
                     )
+                    # x -> y, y_mix
+                    # x -> score_1, score_2 ->  if score_1 > score_2, then x -> y
+                    # lets move to the judge API here and random shuffle
+                    # be careful: call it {x, y, y_mix} and {x, y_mix, y}, or soft/hard rank
+                    #
+
+                    import pdb
+
+                    pdb.set_trace()
 
                     responses.append(response)
                     postprocessed_responses.append(postprocessed_response)
