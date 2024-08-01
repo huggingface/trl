@@ -27,18 +27,6 @@ python examples/scripts/vsft_llava.py \
     --use_peft \
     --dataloader_num_workers 32 \
     --lora_target_modules=all-linear
-
-## Evaluation:
-
-To evaluate, first install the lmms-eval framework: pip install git+https://github.com/EvolvingLMMs-Lab/lmms-eval.git
-then run:
-accelerate launch --num_processes=8 -m lmms_eval \
-    --model llava_hf \
-    --model_args pretrained llava-hf/llava-1.5-7b-hf \
-    --tasks mmbench \
-    --batch_size 1 \
-    --output_path ./logs/ \
-    --log_sample
 """
 
 import logging
