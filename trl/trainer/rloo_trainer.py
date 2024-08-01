@@ -436,8 +436,8 @@ class RLOOTrainer(Trainer):
                 metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
                 metrics["episode"] = self.state.episode
                 self.state.epoch = self.state.episode / self.train_dataset_len  # used by self.log
-                self.log(metrics)
                 self.state.global_step += 1
+                self.log(metrics)
             del kl, mean_kl, mean_entropy, scores
 
             self.control = self.callback_handler.on_step_end(args, self.state, self.control)
