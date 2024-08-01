@@ -5,7 +5,6 @@ import time
 from collections import defaultdict
 from typing import Dict, List, Optional, Tuple, Union
 
-
 import numpy as np
 import pandas as pd
 import torch
@@ -22,6 +21,7 @@ from transformers import (
     Trainer,
     TrainerCallback,
     TrainerControl,
+    default_data_collator,
 )
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
@@ -40,6 +40,7 @@ from ..trainer.utils import (
     print_rich_table,
     truncate_response,
 )
+from .judges import BasePairwiseJudge
 from .online_dpo_config import OnlineDPOConfig
 
 
@@ -49,18 +50,17 @@ INVALID_LOGPROB = 1.0
 class OnlineDPOTrainer(Trainer):
     def __init__(
         self,
-        config: OnlineDPOConfig,
-        tokenizer: PreTrainedTokenizer,
         model: nn.Module,
+        config: OnlineDPOConfig,
         ref_model: nn.Module,
         reward_model: Optional[nn.Module] = None,
-        judge: Optional[Any] = None,
+        judge: Optional[BasePairwiseJudge] = None,
         data_collator: Optional[DataCollatorWithPadding] = None,
-        train_dataset: Dataset,
+        train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
-        # less commonly used
-        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        tokenizer: Optional[PreTrainedTokenizer] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
+        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
     ) -> None:
         self.args = config
         args = config
@@ -77,7 +77,8 @@ class OnlineDPOTrainer(Trainer):
         self.train_dataset = train_dataset
         self.train_dataset_len = len(train_dataset)
 
-        self.data_collator = data_collator
+        default_collator = default_data_collator if tokenizer is None else DataCollatorWithPadding(tokenizer)
+        self.data_collator = data_collator if data_collator is not None else default_collator
         self.eval_dataset = eval_dataset
         self.optimizer, self.lr_scheduler = optimizers
 
@@ -100,7 +101,9 @@ class OnlineDPOTrainer(Trainer):
         args.local_mini_batch_size = exact_div(
             args.local_batch_size, args.num_mini_batches, "`local_batch_size` must be a multiple of `num_mini_batches`"
         )
-        args.num_total_batches = math.ceil(args.total_episodes / args.batch_size)  # we may train for more than `total_episodes`
+        args.num_total_batches = math.ceil(
+            args.total_episodes / args.batch_size
+        )  # we may train for more than `total_episodes`
         time_tensor = torch.tensor(int(time.time()), device=accelerator.device)
         time_int = broadcast(time_tensor, 0).item()  # avoid different timestamps across processes
         args.run_name = f"{args.exp_name}__{args.seed}__{time_int}"
@@ -132,7 +135,6 @@ class OnlineDPOTrainer(Trainer):
         self.create_optimizer_and_scheduler(
             num_training_steps=args.num_total_batches
         )  # note that we are calling `self.lr_scheduler.step()` manually only at the batch level
-
 
         #########
         ### trainer specifics
@@ -394,7 +396,6 @@ class OnlineDPOTrainer(Trainer):
 
             # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
             for epoch_idx in range(args.num_epochs):
-
                 b_inds = np.random.permutation(args.local_batch_size // args.num_generation_per_prompt)
                 minibatch_idx = 0
                 for mini_batch_start in range(
@@ -584,7 +585,7 @@ class OnlineDPOTrainer(Trainer):
                     table["model response"].extend(gather_object(tokenizer.batch_decode(postprocessed_response)))
 
                     postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
-                   if reward_model is not None:
+                    if self.reward_model is not None:
                         _, score, _ = get_reward(
                             self.reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
                         )
