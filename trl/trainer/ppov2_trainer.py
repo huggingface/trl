@@ -535,7 +535,6 @@ class PPOv2Trainer(Trainer):
                 self._save_checkpoint(model, trial=None, metrics=metrics)
                 self.control = self.callback_handler.on_save(self.args, self.state, self.control)
             del kl, mean_kl, mean_entropy, mean_non_score_reward, scores, metrics, non_score_reward
-
             torch.cuda.empty_cache()
             gc.collect()
 
