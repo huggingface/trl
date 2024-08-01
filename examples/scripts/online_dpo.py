@@ -28,7 +28,6 @@ python examples/scripts/online_dpo.py \
     --stop_token eos \
     --response_length 53 \
     --sanity_check
-
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
     examples/scripts/online_dpo.py \
     --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
