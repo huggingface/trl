@@ -23,7 +23,6 @@ python examples/scripts/online_dpo.py \
     --gradient_accumulation_steps 64 \
     --total_episodes 30000 \
     --model_name_or_path EleutherAI/pythia-14m \
-    --sft_model_path EleutherAI/pythia-14m \
     --reward_model_path EleutherAI/pythia-14m \
     --non_eos_penalty \
     --stop_token eos \
@@ -41,7 +40,6 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --gradient_accumulation_steps 4 \
     --total_episodes 1000000 \
     --model_name_or_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr  \
-    --sft_model_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr \
     --reward_model_path cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr \
     --save_strategy no \
     --non_eos_penalty \
@@ -96,7 +94,7 @@ if __name__ == "__main__":
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_QUERY_CHAT_TEMPLATE
     reward_model = AutoModelForSequenceClassification.from_pretrained(config.reward_model_path, num_labels=1)
-    ref_model = AutoModelForCausalLM.from_pretrained(config.sft_model_path)
+    ref_model = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path)
     model = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path)
 
     ################
