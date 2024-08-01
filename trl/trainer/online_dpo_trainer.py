@@ -336,8 +336,6 @@ class OnlineDPOTrainer(Trainer):
                 sequence_lengths = torch.cat(sequence_lengths, 0)
                 scores = torch.cat(scores, 0)
 
-                scores = torch.zeros(args.local_batch_size).to(device)
-                num_examples = postprocessed_responses.size(0) // 2
                 if self.judge is not None:
                     df = pd.DataFrame(
                         {
