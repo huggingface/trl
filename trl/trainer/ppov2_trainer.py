@@ -534,10 +534,10 @@ class PPOv2Trainer(Trainer):
             if self.control.should_save:
                 self._save_checkpoint(model, trial=None, metrics=metrics)
                 self.control = self.callback_handler.on_save(self.args, self.state, self.control)
+            del kl, mean_kl, mean_entropy, mean_non_score_reward, scores, metrics, non_score_reward
 
             torch.cuda.empty_cache()
             gc.collect()
-            del kl, mean_kl, mean_entropy, mean_non_score_reward, scores, metrics, non_score_reward
 
             if args.num_sample_generations > 0 and (update - 1) % self.sample_generations_freq == 0:
                 self.generate_completions(sampling=True)

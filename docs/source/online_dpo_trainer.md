@@ -63,6 +63,7 @@ To help you understand what your model is doing, we periodically log some sample
 
 ![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/ppov2_completions.gif)
 
+
 In the logs the sampled generations look like 
 
 ```
@@ -170,6 +171,7 @@ Many online implementation details are borrowed from the PPOv2Trainer, which is 
 ## Benchmark experiments
 
 To validate the online DPO implementation works, we ran experiments on the 1B and 6.9B models. Here are the commands we used to run the experiments. We take the SFT / RM models directly from [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://huggingface.co/papers/2403.17031).
+
 
 ```
 # 1B Online DPO experiment

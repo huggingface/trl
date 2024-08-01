@@ -337,6 +337,7 @@ class OnlineDPOTrainer(Trainer):
                 scores = torch.cat(scores, 0)
 
                 if self.judge is not None:
+                    num_examples = postprocessed_responses.size(0) // 2
                     df = pd.DataFrame(
                         {
                             "prompt": tokenizer.batch_decode(queries[:num_examples], skip_special_tokens=True),
