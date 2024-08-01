@@ -204,7 +204,6 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
     --gradient_accumulation_steps 16 \
     --local_rollout_forward_batch_size 8 \
     --num_epochs 1 \
-    --num_epochs 1 \
     --num_mini_batches 1 \
     --total_episodes 1000000 \
     --model_name_or_path EleutherAI/pythia-6.9b-deduped \
