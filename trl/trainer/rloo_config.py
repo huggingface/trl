@@ -5,6 +5,8 @@ from ..trainer.utils import OnPolicyConfig
 
 @dataclass
 class RLOOConfig(OnPolicyConfig):
+    exp_name: str = os.path.basename(__file__)[: -len(".py")]
+    """the name of this experiment"""
     reward_model_path: str = "EleutherAI/pythia-160m"
     """the path to the reward model"""
 

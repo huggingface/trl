@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import os
+import dataclasses
+import json
 import random
 import warnings
 from collections import deque
@@ -23,24 +25,17 @@ import pandas as pd
 import torch
 from accelerate import Accelerator
 from accelerate.state import AcceleratorState, PartialState
-from accelerate.utils import is_deepspeed_available
-from rich.console import Console, Group
-from rich.live import Live
-from rich.panel import Panel
-from rich.progress import Progress
+from rich.console import Console
 from rich.table import Table
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import IterableDataset
 from transformers import (
     BitsAndBytesConfig,
     DataCollatorForLanguageModeling,
-    PreTrainedModel,
     PreTrainedTokenizerBase,
     TrainingArguments,
     TrainerState,
 )
-from transformers.trainer import TrainerCallback
-from transformers.trainer_utils import has_length
 
 from ..import_utils import is_peft_available, is_unsloth_available, is_xpu_available
 from ..trainer.model_config import ModelConfig
@@ -50,14 +45,10 @@ if is_peft_available():
     from peft import LoraConfig, PeftConfig
 
 
-if is_deepspeed_available():
-    import deepspeed
-
-
 class AdaptiveKLController:
     """
     Adaptive KL controller described in the paper:
-    https://arxiv.org/pdf/1909.08593.pdf
+    https://huggingface.co/papers/1909.08593
     """
 
     def __init__(self, init_kl_coef, target, horizon):
@@ -70,39 +61,6 @@ class AdaptiveKLController:
         proportional_error = np.clip(current / target - 1, -0.2, 0.2)
         mult = 1 + proportional_error * n_steps / self.horizon
         self.value *= mult
-
-
-class SyncRefModelCallback(TrainerCallback):
-    def __init__(
-        self,
-        ref_model: Union[PreTrainedModel, torch.nn.Module],
-        accelerator: Optional[Accelerator],
-    ):
-        self.accelerator = accelerator
-        self.ref_model = ref_model
-
-    @staticmethod
-    def _sync_target_model(model, target_model, alpha):
-        for target_param, copy_param in zip(target_model.parameters(), model.parameters()):
-            target_param.data.mul_(1.0 - alpha).add_(copy_param.data, alpha=alpha)
-
-    @staticmethod
-    def sync_target_model(model, target_model, alpha):
-        deepspeed_plugin = AcceleratorState().deepspeed_plugin
-        if deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3:
-            with deepspeed.zero.GatheredParameters(list(model.parameters()), modifier_rank=0):
-                if deepspeed.comm.get_rank() == 0:
-                    SyncRefModelCallback._sync_target_model(model, target_model, alpha)
-        else:
-            SyncRefModelCallback._sync_target_model(model, target_model, alpha)
-
-    def on_step_end(self, args, state, control, **kwargs):
-        model: PreTrainedModel = kwargs["model"]
-
-        if self.ref_model is not None and state.global_step % args.ref_model_sync_steps == 0:
-            if self.accelerator:
-                model = self.accelerator.unwrap_model(model)
-            self.sync_target_model(model, self.ref_model, args.ref_model_mixup_alpha)
 
 
 class FixedKLController:
@@ -593,17 +551,19 @@ class ConstantLengthDataset(IterableDataset):
                 }
 
 
+@dataclass
 class RunningMoments:
-    def __init__(self, accelerator):
-        """
-        Calculates the running mean and standard deviation of a data stream. Reference:
-        https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/utils.py#L75
-        """
-        self.mean = 0
-        self.std = 1
-        self.var = 1
-        self.count = 1e-24
-        self.accelerator = accelerator
+
+    """
+    Calculates the running mean and standard deviation of a data stream. Reference:
+    https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/utils.py#L75
+    """
+
+    accelerator: Accelerator
+    mean: float = 0
+    std: float = 1
+    var: float = 1
+    count: float = 1e-24
 
     @torch.no_grad()
     def update(self, xs: torch.Tensor) -> Tuple[float, float]:
@@ -625,12 +585,30 @@ class RunningMoments:
         old_sum = self.var * self.count + delta**2 * self.count * xs_count / tot_count
         tot_sum = old_sum + new_sum
 
-        self.mean += delta * xs_count / tot_count
-        self.var = tot_sum / tot_count
-        self.std = (self.var * tot_count / (tot_count - 1)).float().sqrt()
+        self.mean += (delta * xs_count / tot_count).item()
+        new_var = tot_sum / tot_count
+        self.std = (new_var * tot_count / (tot_count - 1)).float().sqrt().item()
+        self.var = new_var.item()
         self.count = tot_count
 
         return xs_mean.item(), (xs_var * xs_count / (xs_count - 1)).float().sqrt().item()
+
+    def save_to_json(self, json_path: str):
+        """Save the content of this instance in JSON format inside `json_path`."""
+        # save everything except accelerator
+        if self.accelerator.is_main_process:
+            save_dict = dataclasses.asdict(self, dict_factory=lambda x: {k: v for (k, v) in x if k != "accelerator"})
+            json_string = json.dumps(save_dict, indent=2, sort_keys=True) + "\n"
+            with open(json_path, "w", encoding="utf-8") as f:
+                f.write(json_string)
+
+    @classmethod
+    def load_from_json(cls, accelerator: Accelerator, json_path: str):
+        """Create an instance from the content of `json_path`."""
+        # load everything except accelerator
+        with open(json_path, encoding="utf-8") as f:
+            text = f.read()
+        return cls(accelerator=accelerator, **json.loads(text))
 
 
 @torch.no_grad()
@@ -800,6 +778,7 @@ def get_quantization_config(model_config: ModelConfig) -> Optional[BitsAndBytesC
             bnb_4bit_compute_dtype=model_config.torch_dtype,  # For consistency with model weights, we use the same value as `torch_dtype`
             bnb_4bit_quant_type=model_config.bnb_4bit_quant_type,
             bnb_4bit_use_double_quant=model_config.use_bnb_nested_quant,
+            bnb_4bit_quant_storage=model_config.torch_dtype,
         )
     elif model_config.load_in_8bit:
         quantization_config = BitsAndBytesConfig(
@@ -841,83 +820,6 @@ def get_peft_config(model_config: ModelConfig) -> "Optional[PeftConfig]":
     )
 
     return peft_config
-
-
-class RichProgressCallback(TrainerCallback):
-    """
-    A [`TrainerCallback`] that displays the progress of training or evaluation using Rich.
-    """
-
-    def __init__(self):
-        self.training_bar = None
-        self.prediction_bar = None
-
-        self.training_task_id = None
-        self.prediction_task_id = None
-
-        self.rich_group = None
-        self.rich_console = None
-
-        self.training_status = None
-        self.current_step = None
-
-    def on_train_begin(self, args, state, control, **kwargs):
-        if state.is_world_process_zero:
-            self.training_bar = Progress()
-            self.prediction_bar = Progress()
-
-            self.rich_console = Console()
-
-            self.training_status = self.rich_console.status("Nothing to log yet ...")
-
-            self.rich_group = Live(Panel(Group(self.training_bar, self.prediction_bar, self.training_status)))
-            self.rich_group.start()
-
-            self.training_task_id = self.training_bar.add_task("[blue]Training the model", total=state.max_steps)
-            self.current_step = 0
-
-    def on_step_end(self, args, state, control, **kwargs):
-        if state.is_world_process_zero:
-            self.training_bar.update(self.training_task_id, advance=state.global_step - self.current_step, update=True)
-            self.current_step = state.global_step
-
-    def on_prediction_step(self, args, state, control, eval_dataloader=None, **kwargs):
-        if state.is_world_process_zero and has_length(eval_dataloader):
-            if self.prediction_task_id is None:
-                self.prediction_task_id = self.prediction_bar.add_task(
-                    "[blue]Predicting on the evaluation dataset", total=len(eval_dataloader)
-                )
-            self.prediction_bar.update(self.prediction_task_id, advance=1, update=True)
-
-    def on_evaluate(self, args, state, control, **kwargs):
-        if state.is_world_process_zero:
-            if self.prediction_task_id is not None:
-                self.prediction_bar.remove_task(self.prediction_task_id)
-                self.prediction_task_id = None
-
-    def on_predict(self, args, state, control, **kwargs):
-        if state.is_world_process_zero:
-            if self.prediction_task_id is not None:
-                self.prediction_bar.remove_task(self.prediction_task_id)
-                self.prediction_task_id = None
-
-    def on_log(self, args, state, control, logs=None, **kwargs):
-        if state.is_world_process_zero and self.training_bar is not None:
-            _ = logs.pop("total_flos", None)
-            self.training_status.update(f"[bold green]Status = {str(logs)}")
-
-    def on_train_end(self, args, state, control, **kwargs):
-        if state.is_world_process_zero:
-            self.rich_group.stop()
-
-            self.training_bar = None
-            self.prediction_bar = None
-            self.training_task_id = None
-            self.prediction_task_id = None
-            self.rich_group = None
-            self.rich_console = None
-            self.training_status = None
-            self.current_step = None
 
 
 def get_exp_cap(value, decimal=4):
@@ -1006,8 +908,8 @@ class OnPolicyConfig(TrainingArguments):
     # various batch sizes
     world_size: Optional[int] = None
     """The number of processes (GPUs) to use"""
-    num_updates: Optional[int] = None
-    """The number of updates to train"""
+    num_total_batches: Optional[int] = None
+    """The number of total batches to train"""
     micro_batch_size: Optional[int] = None
     """The micro batch size across devices (HF's `per_device_train_batch_size` * `world_size`)"""
     local_batch_size: Optional[int] = None
@@ -1262,3 +1164,37 @@ def batch_generation(
         query_responses.append(query_response)
         logitss.append(logits)
     return torch.cat(query_responses, 0), torch.cat(logitss, 0)
+
+
+def add_bos_token_if_needed(
+    bos_token_id: Optional[int],
+    prompt_len_input_ids: int,
+    prompt_tokens: Dict[str, List[int]],
+    chosen_prompt_len_input_ids: int,
+    chosen_tokens: Dict[str, List[int]],
+    rejected_prompt_len_input_ids: int,
+    rejected_tokens: Dict[str, List[int]],
+):
+    if bos_token_id is not None:
+        if prompt_len_input_ids == 0 or bos_token_id != prompt_tokens["prompt_input_ids"][0]:
+            prompt_tokens["prompt_input_ids"] = [bos_token_id] + prompt_tokens["prompt_input_ids"]
+            prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens["prompt_attention_mask"]
+        if chosen_prompt_len_input_ids == 0 or bos_token_id != chosen_tokens["prompt_input_ids"][0]:
+            chosen_tokens["prompt_input_ids"] = [bos_token_id] + chosen_tokens["prompt_input_ids"]
+            chosen_tokens["prompt_attention_mask"] = [1] + chosen_tokens["prompt_attention_mask"]
+        if rejected_prompt_len_input_ids == 0 or bos_token_id != rejected_tokens["prompt_input_ids"][0]:
+            rejected_tokens["prompt_input_ids"] = [bos_token_id] + rejected_tokens["prompt_input_ids"]
+            rejected_tokens["prompt_attention_mask"] = [1] + rejected_tokens["prompt_attention_mask"]
+    return prompt_tokens, chosen_tokens, rejected_tokens
+
+
+def add_eos_token_if_needed(
+    eos_token_id: int, chosen_tokens: Dict[str, List[int]], rejected_tokens: Dict[str, List[int]]
+):
+    if len(chosen_tokens["input_ids"]) == 0 or eos_token_id != chosen_tokens["input_ids"][-1]:
+        chosen_tokens["input_ids"].append(eos_token_id)
+        chosen_tokens["attention_mask"].append(1)
+    if len(rejected_tokens["input_ids"]) == 0 or eos_token_id != rejected_tokens["input_ids"][-1]:
+        rejected_tokens["input_ids"].append(eos_token_id)
+        rejected_tokens["attention_mask"].append(1)
+    return chosen_tokens, rejected_tokens

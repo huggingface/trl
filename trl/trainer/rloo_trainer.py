@@ -1,4 +1,5 @@
 import gc
+import math
 import os
 import time
 from collections import defaultdict
@@ -96,13 +97,15 @@ class RLOOTrainer(Trainer):
         args.local_mini_batch_size = exact_div(
             args.local_batch_size, args.num_mini_batches, "`local_batch_size` must be a multiple of `num_mini_batches`"
         )
-        args.num_updates = args.total_episodes // args.batch_size
+        args.num_total_batches = math.ceil(
+            args.total_episodes / args.batch_size
+        )  # we may train for more than `total_episodes`
         time_tensor = torch.tensor(int(time.time()), device=accelerator.device)
         time_int = broadcast(time_tensor, 0).item()  # avoid different timestamps across processes
         args.run_name = f"{args.exp_name}__{args.seed}__{time_int}"
         self.local_seed = args.seed + accelerator.process_index * 100003  # Prime
         if args.num_sample_generations > 0:
-            self.sample_generations_freq = max(1, args.num_updates // args.num_sample_generations)
+            self.sample_generations_freq = max(1, args.num_total_batches // args.num_sample_generations)
         self.local_dataloader_batch_size = exact_div(
             args.local_batch_size, args.rloo_k, "`local_batch_size` must be a multiple of rloo_k"
         )  # RLOO logic: needed because RLOO repeats the same prompt args.rloo_k times
@@ -115,7 +118,9 @@ class RLOOTrainer(Trainer):
         if args.stop_token and args.stop_token == "eos":
             args.stop_token_id = tokenizer.eos_token_id
         self.model = policy
-        self.create_optimizer_and_scheduler(num_training_steps=args.num_updates)
+        self.create_optimizer_and_scheduler(
+            num_training_steps=args.num_total_batches
+        )  # note that we are calling `self.lr_scheduler.step()` manually only at the batch level
 
         #########
         ### trainer specifics
@@ -226,7 +231,7 @@ class RLOOTrainer(Trainer):
         # trainer state initialization
         self.state.global_step = 0
         self.state.episode = 0
-        self.state.max_steps = args.num_updates * args.num_mini_batches
+        self.state.max_steps = args.num_total_batches * args.num_mini_batches
         self.state.num_train_epochs = args.total_episodes / self.train_dataset_len
         # Compute absolute values for logging, eval, and save if given as ratio
         if args.logging_steps is not None:
@@ -246,7 +251,7 @@ class RLOOTrainer(Trainer):
                 self.state.save_steps = args.save_steps
         self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
 
-        for update in range(1, args.num_updates + 1):
+        for update in range(1, args.num_total_batches + 1):
             self.state.episode += 1 * args.batch_size
             self.lr_scheduler.step()
             data = next(iter_dataloader)

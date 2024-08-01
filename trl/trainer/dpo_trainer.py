@@ -43,11 +43,13 @@ from transformers.trainer_utils import EvalLoopOutput
 
 from ..import_utils import is_peft_available, is_wandb_available
 from ..models import PreTrainedModelWrapper, create_reference_model
+from .callbacks import SyncRefModelCallback
 from .dpo_config import DPOConfig, FDivergenceConstants, FDivergenceType
 from .utils import (
     DPODataCollatorWithPadding,
     RunningMoments,
-    SyncRefModelCallback,
+    add_bos_token_if_needed,
+    add_eos_token_if_needed,
     cap_exp,
     disable_dropout_in_model,
     pad_to_length,
@@ -181,11 +183,19 @@ class DPOTrainer(Trainer):
             )
         else:
             model_init_kwargs = args.model_init_kwargs
-            model_init_kwargs["torch_dtype"] = (
-                model_init_kwargs["torch_dtype"]
-                if model_init_kwargs["torch_dtype"] in ["auto", None]
-                else getattr(torch, model_init_kwargs["torch_dtype"])
-            )
+
+            torch_dtype = model_init_kwargs["torch_dtype"]
+            if torch_dtype is not None:
+                # Convert to `torch.dtype` if an str is passed
+                if isinstance(torch_dtype, str) and torch_dtype != "auto":
+                    torch_dtype = getattr(torch, torch_dtype)
+
+                if torch_dtype != "auto" and not isinstance(torch_dtype, torch.dtype):
+                    raise ValueError(
+                        f"Invalid `torch_dtype` passed to the DPOConfig. Expected a string with either `torch.dtype` or 'auto', but got {torch_dtype}."
+                    )
+
+            model_init_kwargs["torch_dtype"] = torch_dtype
 
         if ref_model_init_kwargs is not None:
             warnings.warn(
@@ -201,11 +211,18 @@ class DPOTrainer(Trainer):
             )
         else:
             ref_model_init_kwargs = args.ref_model_init_kwargs
-            ref_model_init_kwargs["torch_dtype"] = (
-                ref_model_init_kwargs["torch_dtype"]
-                if ref_model_init_kwargs["torch_dtype"] in ["auto", None]
-                else getattr(torch, ref_model_init_kwargs["torch_dtype"])
-            )
+            torch_dtype = ref_model_init_kwargs["torch_dtype"]
+            if torch_dtype is not None:
+                # Convert to `torch.dtype` if an str is passed
+                if isinstance(torch_dtype, str) and torch_dtype != "auto":
+                    torch_dtype = getattr(torch, torch_dtype)
+
+                if torch_dtype != "auto" and not isinstance(torch_dtype, torch.dtype):
+                    raise ValueError(
+                        f"Invalid `torch_dtype` passed to the DPOConfig. Expected a string with either `torch.dtype` or 'auto', but got {torch_dtype}."
+                    )
+
+            ref_model_init_kwargs["torch_dtype"] = torch_dtype
 
         if isinstance(model, str):
             warnings.warn(
@@ -708,9 +725,18 @@ class DPOTrainer(Trainer):
         if self.is_vision_model:
             if answer.count("<image>") > 0:
                 raise NotImplementedError("Answer contains <image> token, which is not supported yet.")
-            full_tokenized = self.processor(prompt + answer, images=images, add_special_tokens=False)
+            if "add_special_tokens" in inspect.signature(self.processor).parameters:
+                processor_kwargs = {"add_special_tokens": False}
+            else:
+                processor_kwargs = {}
+            full_tokenized = self.processor(prompt + answer, images=images, **processor_kwargs)
             full_tokenized = {k: v[0] for k, v in full_tokenized.items()}  # Unbatch, not done when using idefics
-            prompt_input_ids = self.processor(prompt, images=images, add_special_tokens=False)["input_ids"][0]
+            if not isinstance(full_tokenized["input_ids"], list):  # llava processor returns tensors
+                full_tokenized["input_ids"] = full_tokenized["input_ids"].tolist()
+                full_tokenized["attention_mask"] = full_tokenized["attention_mask"].tolist()
+            prompt_input_ids = self.processor(prompt, images=images, **processor_kwargs)["input_ids"][0]
+            if not isinstance(prompt_input_ids, list):  # llava processor returns tensors
+                prompt_input_ids = prompt_input_ids.tolist()
         else:
             full_tokenized = self.tokenizer(prompt + answer, add_special_tokens=False)
             prompt_input_ids = self.tokenizer(prompt, add_special_tokens=False)["input_ids"]
@@ -747,22 +773,18 @@ class DPOTrainer(Trainer):
         answer_input_ids = full_tokenized["input_ids"][response_token_ids_start_idx:]
         answer_attention_mask = full_tokenized["attention_mask"][response_token_ids_start_idx:]
 
+        return_dict = dict(
+            prompt_input_ids=prompt_input_ids,
+            prompt_attention_mask=prompt_attention_mask,
+            input_ids=answer_input_ids,
+            attention_mask=answer_attention_mask,
+        )
         if "pixel_values" in full_tokenized:
-            return dict(
-                prompt_input_ids=prompt_input_ids,
-                prompt_attention_mask=prompt_attention_mask,
-                prompt_pixel_values=full_tokenized["pixel_values"],
-                prompt_pixel_attention_mask=full_tokenized["pixel_attention_mask"],
-                input_ids=answer_input_ids,
-                attention_mask=answer_attention_mask,
-            )
-        else:
-            return dict(
-                prompt_input_ids=prompt_input_ids,
-                prompt_attention_mask=prompt_attention_mask,
-                input_ids=answer_input_ids,
-                attention_mask=answer_attention_mask,
-            )
+            return_dict["prompt_pixel_values"] = full_tokenized["pixel_values"]
+        if "pixel_attention_mask" in full_tokenized:
+            return_dict["prompt_pixel_attention_mask"] = full_tokenized["pixel_attention_mask"]
+
+        return return_dict
 
     def tokenize_row(self, feature, model: Optional[Union[PreTrainedModel, nn.Module]] = None) -> Dict:
         """Tokenize a single row from a DPO specific dataset.
@@ -790,8 +812,15 @@ class DPOTrainer(Trainer):
             if not isinstance(prompt, str):
                 raise ValueError(f"prompt should be an str but got {type(prompt)}")
             if self.is_vision_model:
-                prompt_tokens = self.processor(prompt, images=images, add_special_tokens=False)
+                if "add_special_tokens" in inspect.signature(self.processor).parameters:
+                    processor_kwargs = {"add_special_tokens": False}
+                else:
+                    processor_kwargs = {}
+                prompt_tokens = self.processor(prompt, images=images, **processor_kwargs)
                 prompt_tokens = {k: v[0] for k, v in prompt_tokens.items()}  # Unbatch, not done when using idefics
+                if not isinstance(prompt_tokens["input_ids"], list):  # llava processor returns tensors
+                    prompt_tokens["input_ids"] = prompt_tokens["input_ids"].tolist()
+                    prompt_tokens["attention_mask"] = prompt_tokens["attention_mask"].tolist()
             else:
                 prompt_tokens = self.tokenizer(prompt, add_special_tokens=False)
 
@@ -830,25 +859,20 @@ class DPOTrainer(Trainer):
                 )
 
             # add BOS token to head of prompt. Avoid adding if it's already there
-            bos_token_id = self.tokenizer.bos_token_id
-            if prompt_len_input_ids == 0 or bos_token_id != prompt_tokens["prompt_input_ids"][0]:
-                prompt_tokens["prompt_input_ids"] = [bos_token_id] + prompt_tokens["prompt_input_ids"]
-                prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens["prompt_attention_mask"]
-            if chosen_prompt_len_input_ids == 0 or bos_token_id != chosen_tokens["prompt_input_ids"][0]:
-                chosen_tokens["prompt_input_ids"] = [bos_token_id] + chosen_tokens["prompt_input_ids"]
-                chosen_tokens["prompt_attention_mask"] = [1] + chosen_tokens["prompt_attention_mask"]
-            if rejected_prompt_len_input_ids == 0 or bos_token_id != rejected_tokens["prompt_input_ids"][0]:
-                rejected_tokens["prompt_input_ids"] = [bos_token_id] + rejected_tokens["prompt_input_ids"]
-                rejected_tokens["prompt_attention_mask"] = [1] + rejected_tokens["prompt_attention_mask"]
+            prompt_tokens, chosen_tokens, rejected_tokens = add_bos_token_if_needed(
+                self.tokenizer.bos_token_id,
+                prompt_len_input_ids,
+                prompt_tokens,
+                chosen_prompt_len_input_ids,
+                chosen_tokens,
+                rejected_prompt_len_input_ids,
+                rejected_tokens,
+            )
 
             # add EOS token to end of answer. Avoid adding if it's already there
-            eos_token_id = self.tokenizer.eos_token_id
-            if len(chosen_tokens["input_ids"]) == 0 or eos_token_id != chosen_tokens["input_ids"][-1]:
-                chosen_tokens["input_ids"].append(eos_token_id)
-                chosen_tokens["attention_mask"].append(1)
-            if len(rejected_tokens["input_ids"]) == 0 or eos_token_id != rejected_tokens["input_ids"][-1]:
-                rejected_tokens["input_ids"].append(eos_token_id)
-                rejected_tokens["attention_mask"].append(1)
+            chosen_tokens, rejected_tokens = add_eos_token_if_needed(
+                self.tokenizer.eos_token_id, chosen_tokens, rejected_tokens
+            )
 
             longer_response_length = max(len(chosen_tokens["input_ids"]), len(rejected_tokens["input_ids"]))
 
@@ -1022,10 +1046,13 @@ class DPOTrainer(Trainer):
             )
 
         if is_vision_model:
-            concatenated_batch["pixel_values"] = batch["prompt_pixel_values"].repeat(2, 1, 1, 1, 1).to(device=device)
-            concatenated_batch["pixel_attention_mask"] = (
-                batch["prompt_pixel_attention_mask"].repeat(2, 1, 1, 1).to(device=device)
+            concatenated_batch["pixel_values"] = torch.cat(
+                [batch["prompt_pixel_values"], batch["prompt_pixel_values"]], dim=0
             )
+            if "prompt_pixel_attention_mask" in batch:
+                concatenated_batch["pixel_attention_mask"] = torch.cat(
+                    [batch["prompt_pixel_attention_mask"], batch["prompt_pixel_attention_mask"]], dim=0
+                )
         return concatenated_batch
 
     def dpo_loss(
@@ -1100,7 +1127,7 @@ class DPOTrainer(Trainer):
                 + F.logsigmoid(-self.beta * logits) * self.label_smoothing
             ) / (1 - 2 * self.label_smoothing)
         elif self.loss_type == "exo_pair":
-            # eqn (16) of the EXO paper: https://arxiv.org/pdf/2402.00856
+            # eqn (16) of the EXO paper: https://huggingface.co/papers/2402.00856
             import math
 
             if self.label_smoothing == 0:
@@ -1127,7 +1154,7 @@ class DPOTrainer(Trainer):
                 -(self.beta * rejected_logratios - delta)
             )
         elif self.loss_type == "sppo_hard":
-            # In the paper (https://arxiv.org/pdf/2405.00675), SPPO employs a soft probability approach, estimated using the PairRM score. The probability calculation is conducted outside of the trainer class. The version described here is the hard probability version, where P in Equation (4.7) of Algorithm 1 is set to 1 for the winner and 0 for the loser.
+            # In the paper (https://huggingface.co/papers/2405.00675), SPPO employs a soft probability approach, estimated using the PairRM score. The probability calculation is conducted outside of the trainer class. The version described here is the hard probability version, where P in Equation (4.7) of Algorithm 1 is set to 1 for the winner and 0 for the loser.
             a = policy_chosen_logps - reference_chosen_logps
             b = policy_rejected_logps - reference_rejected_logps
 
@@ -1247,7 +1274,8 @@ class DPOTrainer(Trainer):
 
         if self.is_vision_model:
             model_kwargs["pixel_values"] = concatenated_batch["pixel_values"]
-            model_kwargs["pixel_attention_mask"] = concatenated_batch["pixel_attention_mask"]
+            if "pixel_attention_mask" in concatenated_batch:
+                model_kwargs["pixel_attention_mask"] = concatenated_batch["pixel_attention_mask"]
 
         if self.aux_loss_enabled:
             model_kwargs["output_router_logits"] = True
@@ -1259,6 +1287,11 @@ class DPOTrainer(Trainer):
             **model_kwargs,
         )
         all_logits = outputs.logits
+
+        if all_logits.shape[:2] != concatenated_batch["concatenated_labels"].shape[:2]:
+            # for llava, the model returns logits for the entire sequence, including the image tokens (placed before the text tokens)
+            seq_len = concatenated_batch["concatenated_labels"].shape[1]
+            all_logits = all_logits[:, -seq_len:]
 
         all_logps, size_completion = self.get_batch_logps(
             all_logits,

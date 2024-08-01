@@ -10,7 +10,7 @@ from transformers import (
 
 from trl import ModelConfig
 from trl.commands.cli_utils import TrlParser
-from trl.trainer.online_dpo_trainer import OnlineDPOConfig, OnlineDPOTrainer
+from trl.trainer import OnlineDPOConfig, OnlineDPOTrainer
 from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
 
 
@@ -23,12 +23,12 @@ python examples/scripts/online_dpo.py \
     --gradient_accumulation_steps 64 \
     --total_episodes 30000 \
     --model_name_or_path EleutherAI/pythia-14m \
-    --sft_model_path EleutherAI/pythia-14m \
     --reward_model_path EleutherAI/pythia-14m \
     --non_eos_penalty \
     --stop_token eos \
     --response_length 53 \
     --sanity_check
+
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
     examples/scripts/online_dpo.py \
     --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
@@ -41,7 +41,6 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --gradient_accumulation_steps 4 \
     --total_episodes 1000000 \
     --model_name_or_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr  \
-    --sft_model_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr \
     --reward_model_path cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr \
     --save_strategy no \
     --non_eos_penalty \
@@ -96,8 +95,9 @@ if __name__ == "__main__":
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_QUERY_CHAT_TEMPLATE
     reward_model = AutoModelForSequenceClassification.from_pretrained(config.reward_model_path, num_labels=1)
-    ref_policy = AutoModelForCausalLM.from_pretrained(config.sft_model_path)
-    policy = AutoModelForCausalLM.from_pretrained(config.sft_model_path)
+    ref_model = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path)
+    model = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path)
+
     ################
     # Dataset
     ################
@@ -120,8 +120,8 @@ if __name__ == "__main__":
     trainer = OnlineDPOTrainer(
         config=config,
         tokenizer=tokenizer,
-        policy=policy,
-        ref_policy=ref_policy,
+        model=model,
+        ref_model=ref_model,
         reward_model=reward_model,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,

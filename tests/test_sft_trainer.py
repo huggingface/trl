@@ -223,6 +223,7 @@ class SFTTrainerTester(unittest.TestCase):
                 eval_steps=2,
                 save_steps=2,
                 per_device_train_batch_size=2,
+                hub_token="not_a_real_token",
             )
 
             trainer = SFTTrainer(
@@ -231,6 +232,8 @@ class SFTTrainerTester(unittest.TestCase):
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
             )
+
+            assert trainer.args.hub_token == training_args.hub_token
 
             trainer.train()
 
@@ -1270,3 +1273,45 @@ class SFTTrainerTester(unittest.TestCase):
             assert trainer.state.log_history[0]["eval_loss"] is not None
 
             assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2")
+
+    def test_sft_trainer_torch_dtype(self):
+        # See https://github.com/huggingface/trl/issues/1751
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = SFTConfig(
+                output_dir=tmp_dir,
+                eval_strategy="steps",
+                max_steps=4,
+                eval_steps=2,
+                save_steps=2,
+                per_device_train_batch_size=2,
+                model_init_kwargs={"torch_dtype": torch.float16},
+            )
+            trainer = SFTTrainer(
+                model=self.model_id,
+                args=training_args,
+                train_dataset=self.train_dataset,
+                eval_dataset=self.eval_dataset,
+            )
+            assert trainer.model.config.torch_dtype == torch.float16
+
+        # Now test when `torch_dtype` is provided but is wrong
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = SFTConfig(
+                output_dir=tmp_dir,
+                eval_strategy="steps",
+                max_steps=4,
+                eval_steps=2,
+                save_steps=2,
+                per_device_train_batch_size=2,
+                model_init_kwargs={"torch_dtype": -1},
+            )
+            with pytest.raises(
+                ValueError,
+                match="Invalid `torch_dtype` passed to the SFTConfig. Expected a string with either `torch.dtype` or 'auto', but got -1.",
+            ):
+                _ = SFTTrainer(
+                    model=self.model_id,
+                    args=training_args,
+                    train_dataset=self.train_dataset,
+                    eval_dataset=self.eval_dataset,
+                )

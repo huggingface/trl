@@ -16,12 +16,13 @@
 accelerate launch examples/scripts/dpo_visual.py \
     --dataset_name HuggingFaceH4/rlaif-v_formatted \
     --model_name_or_path HuggingFaceM4/idefics2-8b \
-    --per_device_train_batch_size 1 \
-    --gradient_accumulation_steps 16 \
+    --per_device_train_batch_size 2 \
+    --gradient_accumulation_steps 32 \
     --dataset_num_proc 32 \
     --output_dir dpo_idefics_rlaif-v \
     --bf16 \
     --torch_dtype bfloat16 \
+    --gradient_checkpointing \
     --use_peft \
     --lora_target_modules=all-linear
 """
@@ -82,21 +83,40 @@ if __name__ == "__main__":
 
     model_kwargs = dict(
         revision=model_config.model_revision,
-        trust_remote_code=model_config.trust_remote_code,
         attn_implementation=model_config.attn_implementation,
         torch_dtype=torch_dtype,
-        use_cache=False if training_args.gradient_checkpointing else True,
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
-    model = AutoModelForVision2Seq.from_pretrained(model_config.model_name_or_path, **model_kwargs)
+    model = AutoModelForVision2Seq.from_pretrained(
+        model_config.model_name_or_path,
+        trust_remote_code=model_config.trust_remote_code,
+        **model_kwargs,
+    )
     peft_config = get_peft_config(model_config)
     if peft_config is None:
-        model_ref = AutoModelForVision2Seq.from_pretrained(model_config.model_name_or_path, **model_kwargs)
+        ref_model = AutoModelForVision2Seq.from_pretrained(
+            model_config.model_name_or_path,
+            trust_remote_code=model_config.trust_remote_code,
+            **model_kwargs,
+        )
     else:
-        model_ref = None
-    processor = AutoProcessor.from_pretrained(model_config.model_name_or_path, do_image_splitting=False)
+        ref_model = None
+    processor = AutoProcessor.from_pretrained(
+        model_config.model_name_or_path,
+        trust_remote_code=model_config.trust_remote_code,
+        do_image_splitting=False,
+    )
     tokenizer = processor.tokenizer
+
+    # Set up the chat template
+    if model.config.model_type == "idefics2":
+        pass  # the processor already has a valid chat template
+    elif model.config.model_type == "paligemma":
+        processor.chat_template = """{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% for message in messages %}<|im_start|>{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] if item['type'] == 'text' %}{{ item['text'] }}<|im_end|>{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}{% if add_generation_prompt %}ASSISTANT: {% endif %}"""
+    elif model.config.model_type == "llava":
+        processor.chat_template = """{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% for message in messages %}{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}{% if add_generation_prompt %}ASSISTANT: {% endif %}"""
+
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     if args.ignore_bias_buffers:
@@ -124,31 +144,9 @@ if __name__ == "__main__":
             ds[key] = ds[key].select(range(50))
 
     def process(row):
-        # The prompt can be either a string or a list. In some datasets, the prompt is just a common string
-        # for both rejected and chosen (already included in chosen and rejected) and is not meant to be used
-        # separately. In other datasets, the prompt is intended to be used as a prefix for rejected and chosen,
-        # and in such cases, it is properly formatted as a list with keys "role" and "content".
-        # Example 1:
-        # row = {"prompt": "What does detox mean?",
-        #        "chosen": [{"content": "What does detox mean?", "role": "user"}, {"content": "It means to get rid of the toxins.", "role": "assistant"}],
-        #        "rejected": [{"content": "What does detox mean?", "role": "assistant"}, {"content": "I don't know.", "role": "user"}]}
-        # Example 2:
-        # row = {"prompt": [{"content": "What does detox mean?", "role": "user"}],
-        #        "chosen": [{"content": "It means to get rid of the toxins.", "role": "assistant"}],
-        #        "rejected": [{"content": "I don't know.", "role": "user"}]}
-        if "prompt" in row and isinstance(row["prompt"], list):
-            row["prompt"] = processor.apply_chat_template(row["prompt"], tokenize=False)
-
+        row["prompt"] = processor.apply_chat_template(row["prompt"], tokenize=False)
         row["chosen"] = processor.apply_chat_template(row["chosen"], tokenize=False)
         row["rejected"] = processor.apply_chat_template(row["rejected"], tokenize=False)
-
-        if "images" in row:
-            for idx, img in enumerate(row["images"]):  # Resize each image so the largest side is 640 pixels
-                ratio = min(1.0, 640 / max(img.size))
-                new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
-                row["images"][idx] = img.resize(new_size)
-            row["images"] = row["images"]
-
         return row
 
     with PartialState().local_main_process_first():
@@ -162,16 +160,16 @@ if __name__ == "__main__":
     with init_context:
         trainer = DPOTrainer(
             model,
-            model_ref,
+            ref_model,
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             tokenizer=processor,
-            peft_config=get_peft_config(model_config),
+            peft_config=peft_config,
             callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
         )
 
     trainer.train()
-    trainer.push_to_hub
+
     with save_context:
         trainer.save_model(training_args.output_dir)
