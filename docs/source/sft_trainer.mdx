@@ -110,7 +110,10 @@ collator = DataCollatorForCompletionOnlyLM(instruction_template=instruction_temp
 
 trainer = SFTTrainer(
     model,
-    args=SFTConfig(output_dir="/tmp"),
+    args=SFTConfig(
+        output_dir="/tmp",
+        dataset_text_field = "text",
+    ),
     train_dataset=dataset,
     data_collator=collator,
 )
@@ -172,6 +175,7 @@ The [`setup_chat_format`] function in `trl` easily sets up a model and tokenizer
 
 ```python
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from trl import setup_chat_format
 
 # Load model and tokenizer
 model = AutoModelForCausalLM.from_pretrained("facebook/opt-350m")
@@ -216,7 +220,7 @@ dataset = load_dataset("philschmid/dolly-15k-oai-style", split="train")
 
 ...
 
-sft_config = STFConfig(packing=True)
+sft_config = SFTConfig(packing=True)
 trainer = SFTTrainer(
     "facebook/opt-350m",
     args=sft_config,
@@ -290,7 +294,7 @@ def formatting_func(example):
     text = f"### Question: {example['question']}\n ### Answer: {example['answer']}"
     return text
 
-sft_config = STFConfig(packing=True)
+sft_config = SFTConfig(packing=True)
 trainer = SFTTrainer(
     "facebook/opt-350m",
     train_dataset=dataset,
@@ -382,7 +386,7 @@ model = AutoModelForCausalLM.from_pretrained(
 trainer = SFTTrainer(
     model,
     train_dataset=dataset,
-    args=STFConfig(),
+    args=SFTConfig(),
     peft_config=peft_config,
 )
 
@@ -490,7 +494,7 @@ trainer = SFTTrainer(
 
 ### Enhance the model's performances using NEFTune
 
-NEFTune is a technique to boost the performance of chat models and was introduced by the paper ["NEFTune: Noisy Embeddings Improve Instruction Finetuning"](https://arxiv.org/abs/2310.05914) from Jain et al. it consists of adding noise to the embedding vectors during training. According to the abstract of the paper:
+NEFTune is a technique to boost the performance of chat models and was introduced by the paper ["NEFTune: Noisy Embeddings Improve Instruction Finetuning"](https://huggingface.co/papers/2310.05914) from Jain et al. it consists of adding noise to the embedding vectors during training. According to the abstract of the paper:
 
 >  Standard finetuning of LLaMA-2-7B using Alpaca achieves 29.79% on AlpacaEval, which rises to 64.69% using noisy embeddings. NEFTune also improves over strong baselines on modern instruction datasets. Models trained with Evol-Instruct see a 10% improvement, with ShareGPT an 8% improvement, and with OpenPlatypus an 8% improvement. Even powerful models further refined with RLHF such as LLaMA-2-Chat benefit from additional training with NEFTune.
 
@@ -502,11 +506,11 @@ To use it in `SFTTrainer` simply pass `neftune_noise_alpha` when creating your `
 
 ```python
 from datasets import load_dataset
-from trl import STFConfig, SFTTrainer
+from trl import SFTConfig, SFTTrainer
 
 dataset = load_dataset("imdb", split="train")
 
-sft_config = STFConfig(
+sft_config = SFTConfig(
     neftune_noise_alpha=5,
 )
 trainer = SFTTrainer(

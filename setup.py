@@ -58,7 +58,7 @@ import os
 from setuptools import find_packages, setup
 
 
-__version__ = "0.9.5.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
+__version__ = "0.9.6.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
 
 REQUIRED_PKGS = [
     "torch>=1.4.0",
@@ -69,12 +69,22 @@ REQUIRED_PKGS = [
     "tyro>=0.5.11",
 ]
 EXTRAS = {
-    "test": ["parameterized", "pytest", "pytest-xdist", "accelerate", "pytest-cov", "pytest-xdist", "scikit-learn"],
+    "test": [
+        "parameterized",
+        "pytest",
+        "pytest-xdist",
+        "accelerate",
+        "pytest-cov",
+        "pytest-xdist",
+        "scikit-learn",
+        "Pillow",
+    ],
     "peft": ["peft>=0.4.0"],
     "diffusers": ["diffusers>=0.18.0"],
     "deepspeed": ["deepspeed>=0.9.5"],
     "benchmark": ["wandb", "ghapi", "openrlbenchmark==0.2.1a5", "requests", "deepspeed"],
     "quantization": ["bitsandbytes<=0.41.1"],
+    "llm_judge": ["openai>=1.23.2", "huggingface_hub>=0.22.2", "llm-blender>=0.0.2"],
 }
 EXTRAS["dev"] = []
 for reqs in EXTRAS.values():
