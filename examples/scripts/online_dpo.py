@@ -8,13 +8,14 @@ from transformers import (
     AutoTokenizer,
 )
 
-from trl import ModelConfig
+from trl import HfPairwiseJudge, ModelConfig
 from trl.commands.cli_utils import TrlParser
 from trl.trainer import OnlineDPOConfig, OnlineDPOTrainer
 from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
 
 
 """
+# Sanity check with minimal config and model
 python examples/scripts/online_dpo.py \
     --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
     --learning_rate 3e-6 \
@@ -28,25 +29,21 @@ python examples/scripts/online_dpo.py \
     --stop_token eos \
     --response_length 53 \
     --sanity_check
+
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
     examples/scripts/online_dpo.py \
+    --model_name_or_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr  \
     --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
+    --reward_model_path cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr \
     --learning_rate 3e-6 \
     --output_dir models/minimal/online_dpo \
     --per_device_train_batch_size 16 \
+    --gradient_accumulation_steps 4 \
     --local_rollout_forward_batch_size 32 \
     --num_epochs 1 \
-    --num_mini_batches 1 \
-    --gradient_accumulation_steps 4 \
     --total_episodes 1000000 \
-    --model_name_or_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr  \
-    --reward_model_path cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr \
-    --save_strategy no \
     --non_eos_penalty \
-    --stop_token eos \
-    --beta 0.1 \
-    --response_length 53 \
-    --push_to_hub
+    --stop_token eos
 """
 
 
@@ -93,9 +90,19 @@ if __name__ == "__main__":
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_QUERY_CHAT_TEMPLATE
-    reward_model = AutoModelForSequenceClassification.from_pretrained(config.reward_model_path, num_labels=1)
+
     ref_model = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path)
     model = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path)
+
+    if config.reward_model_path is not None:
+        reward_model = AutoModelForSequenceClassification.from_pretrained(config.reward_model_path, num_labels=1)
+    else:
+        reward_model = None
+
+    if config.judge is not None:
+        judge = HfPairwiseJudge()
+    else:
+        judge = None
 
     ################
     # Dataset
@@ -117,13 +124,14 @@ if __name__ == "__main__":
     ################
 
     trainer = OnlineDPOTrainer(
-        config=config,
-        tokenizer=tokenizer,
         model=model,
+        config=config,
         ref_model=ref_model,
         reward_model=reward_model,
+        judge=judge,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
+        tokenizer=tokenizer,
     )
     trainer.train()
     if not config.sanity_check:
