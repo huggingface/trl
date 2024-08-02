@@ -26,19 +26,16 @@ from .testing_utils import require_peft
 
 
 class RewardTrainerTester(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
-        cls.model = AutoModelForSequenceClassification.from_pretrained(cls.model_id)
-        cls.tokenizer = AutoTokenizer.from_pretrained(cls.model_id)
-        cls.tokenizer.pad_token = cls.tokenizer.eos_token
-
     def test_accuracy_metrics(self):
         dummy_eval_predictions = EvalPrediction(torch.FloatTensor([[0.1, 0.9], [0.9, 0.1]]), torch.LongTensor([0, 0]))
         accuracy = compute_accuracy(dummy_eval_predictions)
         assert accuracy["accuracy"] == 0.5
 
     def test_reward_trainer(self):
+        model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        model = AutoModelForSequenceClassification.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = RewardConfig(
                 output_dir=tmp_dir,
@@ -81,9 +78,9 @@ class RewardTrainerTester(unittest.TestCase):
             dummy_dataset = Dataset.from_dict(dummy_dataset_dict)
 
             trainer = RewardTrainer(
-                model=self.model,
+                model=model,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                tokenizer=tokenizer,
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
             )
@@ -107,6 +104,11 @@ class RewardTrainerTester(unittest.TestCase):
     @require_peft
     def test_reward_trainer_peft(self):
         from peft import LoraConfig, TaskType
+
+        model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        model = AutoModelForSequenceClassification.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token
 
         peft_config = LoraConfig(
             task_type=TaskType.SEQ_CLS,
@@ -158,9 +160,9 @@ class RewardTrainerTester(unittest.TestCase):
             dummy_dataset = Dataset.from_dict(dummy_dataset_dict)
 
             trainer = RewardTrainer(
-                model=self.model,
+                model=model,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                tokenizer=tokenizer,
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
                 peft_config=peft_config,
@@ -196,6 +198,10 @@ class RewardTrainerTester(unittest.TestCase):
             assert preds.predictions.shape == (4, 2)
 
     def test_reward_trainer_assert_value_error(self):
+        model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        model = AutoModelForSequenceClassification.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = RewardConfig(
                 output_dir=tmp_dir,
@@ -235,9 +241,9 @@ class RewardTrainerTester(unittest.TestCase):
             dummy_dataset = Dataset.from_dict(dummy_dataset_dict)
 
             trainer = RewardTrainer(
-                model=self.model,
+                model=model,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                tokenizer=tokenizer,
                 train_dataset=dummy_dataset,
             )
 
@@ -253,13 +259,17 @@ class RewardTrainerTester(unittest.TestCase):
 
             with self.assertWarns(UserWarning):
                 trainer = RewardTrainer(
-                    model=self.model,
+                    model=model,
                     args=training_args,
-                    tokenizer=self.tokenizer,
+                    tokenizer=tokenizer,
                     train_dataset=dummy_dataset,
                 )
 
     def test_reward_trainer_margin(self):
+        model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        model = AutoModelForSequenceClassification.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = RewardConfig(
                 output_dir=tmp_dir,
@@ -293,24 +303,27 @@ class RewardTrainerTester(unittest.TestCase):
             dummy_dataset = Dataset.from_dict(dummy_dataset_dict)
 
             trainer = RewardTrainer(
-                model=self.model,
+                model=model,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                tokenizer=tokenizer,
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
             )
 
             batch = [dummy_dataset[0]]
             batch = trainer.data_collator(batch)
+            batch = {k: v.to(trainer.model.device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
             loss, outputs = trainer.compute_loss(trainer.model, batch, return_outputs=True)
-
             l_val = -torch.nn.functional.logsigmoid(
                 outputs["rewards_chosen"] - outputs["rewards_rejected"] - batch["margin"]
             ).mean()
-
             assert abs(loss - l_val) < 1e-6
 
     def test_reward_trainer_tags(self):
+        model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        model = AutoModelForSequenceClassification.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = RewardConfig(
                 output_dir=tmp_dir,
@@ -353,9 +366,9 @@ class RewardTrainerTester(unittest.TestCase):
             dummy_dataset = Dataset.from_dict(dummy_dataset_dict)
 
             trainer = RewardTrainer(
-                model=self.model,
+                model=model,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                tokenizer=tokenizer,
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
             )
