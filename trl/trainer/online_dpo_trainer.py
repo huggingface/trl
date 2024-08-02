@@ -2,6 +2,7 @@ import gc
 import math
 import os
 import time
+import warnings
 from collections import defaultdict
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -72,8 +73,15 @@ class OnlineDPOTrainer(Trainer):
         model.generation_config.pad_token_id = None
 
         self.ref_model = ref_model
+        
         self.reward_model = reward_model
         self.judge = judge
+        if self.reward_model is not None and self.judge is not None:
+            warnings.warn(
+                "Both `reward_model` and `judge` are provided. Please choose provide only one of them. "
+                "Ignoring `judge` and using `reward_model`."
+            )
+
         self.train_dataset = train_dataset
         self.train_dataset_len = len(train_dataset)
 
