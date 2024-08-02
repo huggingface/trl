@@ -66,16 +66,16 @@ class SFTTrainer(Trainer):
             The model to train, can be a `PreTrainedModel`, a `torch.nn.Module` or a string with the model name to
             load from cache or download. The model can be also converted to a `PeftModel` if a `PeftConfig` object is
             passed to the `peft_config` argument.
-        args (Optional[`SFTConfig`]):
+        args (`Optional[SFTConfig]`):
             The arguments to tweak for training. Will default to a basic instance of [`SFTConfig`] with the `output_dir`
             set to a directory named *tmp_trainer* in the current directory if not provided.
-        data_collator (Optional[`transformers.DataCollator`]):
+        data_collator (`Optional[transformers.DataCollator]`):
             The data collator to use for training.
-        train_dataset (Optional[`datasets.Dataset`]):
+        train_dataset (`Optional[datasets.Dataset]`):
             The dataset to use for training. We recommend users to use `trl.trainer.ConstantLengthDataset` to create their dataset.
         eval_dataset (Optional[Union[`datasets.Dataset`, Dict[`str`, `datasets.Dataset`]]]):
             The dataset to use for evaluation. We recommend users to use `trl.trainer.ConstantLengthDataset` to create their dataset.
-        tokenizer (Optional[`transformers.PreTrainedTokenizer`]):
+        tokenizer (`Optional[transformers.PreTrainedTokenizer]`):
             The tokenizer to use for training. If not specified, the tokenizer associated to the model will be used.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
             The model initializer to use for training. If None is specified, the default model initializer will be used.
