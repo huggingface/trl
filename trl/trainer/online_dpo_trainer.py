@@ -76,6 +76,7 @@ class OnlineDPOTrainer(Trainer):
         self.data_collator = data_collator
         self.eval_dataset = eval_dataset
         self.optimizer, self.lr_scheduler = optimizers
+        self.num_generation_per_prompt = 2
 
         #########
         # calculate various batch sizes
@@ -107,7 +108,7 @@ class OnlineDPOTrainer(Trainer):
             self.sample_generations_freq = max(1, args.num_total_batches // args.num_sample_generations)
         self.local_dataloader_batch_size = exact_div(
             args.local_batch_size,
-            args.num_generation_per_prompt,
+            self.num_generation_per_prompt,
             "`local_batch_size` must be a multiple of `num_generation_per_prompt`",
         )  # DPO logic: repeats the same prompt args.rloo_k times
 
@@ -260,7 +261,7 @@ class OnlineDPOTrainer(Trainer):
             data = next(iter_dataloader)
             with torch.no_grad():
                 queries = data["input_ids"].to(device)
-                queries = queries.repeat(args.num_generation_per_prompt, 1)
+                queries = queries.repeat(self.num_generation_per_prompt, 1)
                 context_length = queries.shape[1]
                 responses = []
                 postprocessed_responses = []
@@ -365,19 +366,19 @@ class OnlineDPOTrainer(Trainer):
 
             # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
             for epoch_idx in range(args.num_epochs):
-                b_inds = np.random.permutation(args.local_batch_size // args.num_generation_per_prompt)
+                b_inds = np.random.permutation(args.local_batch_size // self.num_generation_per_prompt)
                 minibatch_idx = 0
                 for mini_batch_start in range(
                     0,
-                    args.local_batch_size // args.num_generation_per_prompt,
-                    args.local_mini_batch_size // args.num_generation_per_prompt,
+                    args.local_batch_size // self.num_generation_per_prompt,
+                    args.local_mini_batch_size // self.num_generation_per_prompt,
                 ):
-                    mini_batch_end = mini_batch_start + args.local_mini_batch_size // args.num_generation_per_prompt
+                    mini_batch_end = mini_batch_start + args.local_mini_batch_size // self.num_generation_per_prompt
                     mini_batch_inds = b_inds[mini_batch_start:mini_batch_end]
                     gradient_accumulation_idx = 0
                     for micro_batch_start in range(
                         0,
-                        args.local_mini_batch_size // args.num_generation_per_prompt,
+                        args.local_mini_batch_size // self.num_generation_per_prompt,
                         args.per_device_train_batch_size,
                     ):
                         with accelerator.accumulate(model):
