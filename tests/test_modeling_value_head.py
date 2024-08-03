@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import gc
+import os
 import tempfile
 import unittest
 
@@ -108,9 +109,10 @@ class VHeadModelTester:
             model = self.trl_model_class.from_pretrained(model_name)
 
             with tempfile.TemporaryDirectory() as tmp_dir:
-                model.save_pretrained(tmp_dir)
+                temp_file_path = os.path.join(tmp_dir, "tempfile")
+                model.save_pretrained(temp_file_path)
 
-                model_from_save = self.trl_model_class.from_pretrained(tmp_dir)
+                model_from_save = self.trl_model_class.from_pretrained(temp_file_path)
 
             # Check if the weights are the same
             for key in model_from_save.state_dict():
