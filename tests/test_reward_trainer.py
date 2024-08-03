@@ -36,6 +36,7 @@ class RewardTrainerTester(unittest.TestCase):
         model = AutoModelForSequenceClassification.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = RewardConfig(
                 output_dir=tmp_dir,
@@ -127,6 +128,7 @@ class RewardTrainerTester(unittest.TestCase):
                 gradient_accumulation_steps=2,
                 learning_rate=9e-1,
                 eval_strategy="steps",
+                report_to="none",
             )
 
             # fmt: off
@@ -202,12 +204,14 @@ class RewardTrainerTester(unittest.TestCase):
         model = AutoModelForSequenceClassification.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = RewardConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=1,
                 remove_unused_columns=False,
+                report_to="none",
             )
 
             # fmt: off
@@ -249,12 +253,15 @@ class RewardTrainerTester(unittest.TestCase):
 
             with pytest.raises(ValueError):
                 trainer.train()
+            
+
 
             training_args = RewardConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=1,
                 remove_unused_columns=True,
+                report_to="none",
             )
 
             with self.assertWarns(UserWarning):
@@ -270,6 +277,7 @@ class RewardTrainerTester(unittest.TestCase):
         model = AutoModelForSequenceClassification.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = RewardConfig(
                 output_dir=tmp_dir,
@@ -279,6 +287,7 @@ class RewardTrainerTester(unittest.TestCase):
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
                 eval_strategy="steps",
+                report_to="none",
             )
 
             # fmt: off
@@ -314,9 +323,11 @@ class RewardTrainerTester(unittest.TestCase):
             batch = trainer.data_collator(batch)
             batch = {k: v.to(trainer.model.device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
             loss, outputs = trainer.compute_loss(trainer.model, batch, return_outputs=True)
+
             l_val = -torch.nn.functional.logsigmoid(
                 outputs["rewards_chosen"] - outputs["rewards_rejected"] - batch["margin"]
             ).mean()
+
             assert abs(loss - l_val) < 1e-6
 
     def test_reward_trainer_tags(self):
@@ -324,6 +335,7 @@ class RewardTrainerTester(unittest.TestCase):
         model = AutoModelForSequenceClassification.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = RewardConfig(
                 output_dir=tmp_dir,
@@ -333,6 +345,7 @@ class RewardTrainerTester(unittest.TestCase):
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
                 eval_strategy="steps",
+                report_to="none",
             )
 
             # fmt: off
