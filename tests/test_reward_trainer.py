@@ -253,8 +253,6 @@ class RewardTrainerTester(unittest.TestCase):
 
             with pytest.raises(ValueError):
                 trainer.train()
-            
-
 
             training_args = RewardConfig(
                 output_dir=tmp_dir,
