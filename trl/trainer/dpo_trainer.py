@@ -538,7 +538,7 @@ class DPOTrainer(Trainer):
                 truncation_mode=self.truncation_mode,
                 label_pad_token_id=self.label_pad_token_id,
             )
-            tokenize_row_partial = partial(tokenize_row, tokenizer = tokenizer, processor=self.processor if self.is_vision_model else None, args=tokenize_row_config)
+            tokenize_row_partial = partial(tokenize_row, tokenizer = tokenizer, processor=self.processor if self.is_vision_model else None, tokenize_row_config=tokenize_row_config)
             train_dataset = train_dataset.map(tokenize_row_partial, num_proc=self.dataset_num_proc, writer_batch_size=10)
             if eval_dataset is not None:
                 eval_dataset = eval_dataset.map(
