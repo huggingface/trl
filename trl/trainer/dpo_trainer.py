@@ -18,8 +18,8 @@ import warnings
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from copy import deepcopy
-from functools import wraps, partial
 from dataclasses import dataclass
+from functools import partial, wraps
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
@@ -538,8 +538,15 @@ class DPOTrainer(Trainer):
                 truncation_mode=self.truncation_mode,
                 label_pad_token_id=self.label_pad_token_id,
             )
-            tokenize_row_partial = partial(tokenize_row, tokenizer = tokenizer, processor=self.processor if self.is_vision_model else None, tokenize_row_config=tokenize_row_config)
-            train_dataset = train_dataset.map(tokenize_row_partial, num_proc=self.dataset_num_proc, writer_batch_size=10)
+            tokenize_row_partial = partial(
+                tokenize_row,
+                tokenizer=tokenizer,
+                processor=self.processor if self.is_vision_model else None,
+                tokenize_row_config=tokenize_row_config,
+            )
+            train_dataset = train_dataset.map(
+                tokenize_row_partial, num_proc=self.dataset_num_proc, writer_batch_size=10
+            )
             if eval_dataset is not None:
                 eval_dataset = eval_dataset.map(
                     tokenize_row_partial, num_proc=self.dataset_num_proc, writer_batch_size=10
@@ -1384,15 +1391,15 @@ class DPOTrainer(Trainer):
 @dataclass
 class TokenizeRowConfig:
     is_vision_model: bool
-    is_encoder_decoder:bool
+    is_encoder_decoder: bool
     max_length: int
     max_prompt_length: int
     max_target_length: int
     truncation_mode: str
     label_pad_token_id: int
-    
 
-def build_tokenized_answer(tokenizer, processor, tokenize_row_config:TokenizeRowConfig, prompt, answer, images=None):
+
+def build_tokenized_answer(tokenizer, processor, tokenize_row_config: TokenizeRowConfig, prompt, answer, images=None):
     """
     Llama tokenizer does satisfy `enc(a + b) = enc(a) + enc(b)`.
     It does ensure `enc(a + b) = enc(a) + enc(a + b)[len(enc(a)):]`.
@@ -1464,7 +1471,13 @@ def build_tokenized_answer(tokenizer, processor, tokenize_row_config:TokenizeRow
     return return_dict
 
 
-def tokenize_row(feature, tokenizer, processor, tokenize_row_config:TokenizeRowConfig,  model: Optional[Union[PreTrainedModel, nn.Module]] = None) -> Dict:
+def tokenize_row(
+    feature,
+    tokenizer,
+    processor,
+    tokenize_row_config: TokenizeRowConfig,
+    model: Optional[Union[PreTrainedModel, nn.Module]] = None,
+) -> Dict:
     """Tokenize a single row from a DPO specific dataset.
 
     At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
@@ -1507,11 +1520,15 @@ def tokenize_row(feature, tokenizer, processor, tokenize_row_config:TokenizeRowC
         if not isinstance(chosen, str):
             raise ValueError(f"chosen should be an str but got {type(chosen)}")
 
-        chosen_tokens = build_tokenized_answer(tokenizer, processor, tokenize_row_config, prompt=prompt, answer=chosen, images=images)
+        chosen_tokens = build_tokenized_answer(
+            tokenizer, processor, tokenize_row_config, prompt=prompt, answer=chosen, images=images
+        )
 
         if not isinstance(rejected, str):
             raise ValueError(f"rejected should be an str but got {type(rejected)}")
-        rejected_tokens = build_tokenized_answer(tokenizer, processor, tokenize_row_config, prompt=prompt, answer=rejected, images=images)
+        rejected_tokens = build_tokenized_answer(
+            tokenizer, processor, tokenize_row_config, prompt=prompt, answer=rejected, images=images
+        )
 
         # Last prompt token might get merged by tokenizer and
         # it should not be included for generation if that happens
@@ -1570,7 +1587,9 @@ def tokenize_row(feature, tokenizer, processor, tokenize_row_config:TokenizeRowC
         for answer_tokens in [chosen_tokens, rejected_tokens]:
             if len(answer_tokens["prompt_input_ids"]) + longer_response_length > tokenize_row_config.max_length:
                 for k in ["input_ids", "attention_mask"]:
-                    answer_tokens[k] = answer_tokens[k][: tokenize_row_config.max_length - tokenize_row_config.max_prompt_length]
+                    answer_tokens[k] = answer_tokens[k][
+                        : tokenize_row_config.max_length - tokenize_row_config.max_prompt_length
+                    ]
 
         # Create labels
         chosen_sequence_tokens = {
