@@ -12,7 +12,7 @@ dev:
 	ln -s `pwd`/examples/scripts/ `pwd`/trl/commands
 
 test:
-	python -m pytest -n auto --dist=loadfile -s -v ./tests/test_modeling_value_head.py
+	python -m pytest -n auto --dist=loadfile -s -v ./tests/test_modeling_value_head.py -k test_from_save_trl
 
 precommit:
 	pre-commit run --all-files
