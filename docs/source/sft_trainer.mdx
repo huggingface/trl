@@ -533,12 +533,12 @@ Note however, that the amount of performance gain is _dataset dependent_ and in 
 
 You can further accelerate QLoRA / LoRA (2x faster, 60% less memory) using the [`unsloth`](https://github.com/unslothai/unsloth) library that is fully compatible with `SFTTrainer`. Currently `unsloth` supports only Llama (Yi, TinyLlama, Qwen, Deepseek etc) and Mistral architectures. Some benchmarks on 1x A100 listed below:
 
-| 1 A100 40GB     | Dataset   | 🤗  | 🤗 + Flash Attention 2 | 🦥 Unsloth     | 🦥 VRAM saved |
-|-----------------|-----------|-----|-------------------------|-----------------|----------------|
-| Code Llama 34b  | Slim Orca | 1x  | 1.01x                   | **1.94x**       | -22.7%         |
-| Llama-2 7b      | Slim Orca | 1x  | 0.96x                   | **1.87x**       | -39.3%         |
-| Mistral 7b      | Slim Orca | 1x  | 1.17x                   | **1.88x**       | -65.9%         |
-| Tiny Llama 1.1b | Alpaca    | 1x  | 1.55x                   | **2.74x**       | -57.8%         |
+| 1 A100 40GB     | Dataset   | 🤗   | 🤗 + Flash Attention 2 | 🦥 Unsloth | 🦥 VRAM saved |
+| --------------- | --------- | --- | --------------------- | --------- | ------------ |
+| Code Llama 34b  | Slim Orca | 1x  | 1.01x                 | **1.94x** | -22.7%       |
+| Llama-2 7b      | Slim Orca | 1x  | 0.96x                 | **1.87x** | -39.3%       |
+| Mistral 7b      | Slim Orca | 1x  | 1.17x                 | **1.88x** | -65.9%       |
+| Tiny Llama 1.1b | Alpaca    | 1x  | 1.55x                 | **2.74x** | -57.8%       |
 
 First install `unsloth` according to the [official documentation](https://github.com/unslothai/unsloth). Once installed, you can incorporate unsloth into your workflow in a very simple manner; instead of loading `AutoModelForCausalLM`, you just need to load a `FastLanguageModel` as follows:
 
@@ -620,6 +620,118 @@ model = AutoModelForCausalLM.from_pretrained(
 ## GPTQ Conversion
 
 You may experience some issues with GPTQ Quantization after completing training. Lowering `gradient_accumulation_steps` to `4` will resolve most issues during the quantization process to GPTQ format.
+
+## Extending `SFTTrainer` for Vision Language Models
+
+`SFTTrainer` does not inherently support vision-language data. However, we provide a guide on how to tweak the trainer to support vision-language data. Specifically, you need to use a custom data collator that is compatible with vision-language data. This guide outlines the steps to make these adjustments. For a concrete example, refer to the script [`examples/scripts/vsft_llava.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/vsft_llava.py) which demonstrates how to fine-tune the LLaVA 1.5 model on the [HuggingFaceH4/llava-instruct-mix-vsft](https://huggingface.co/datasets/HuggingFaceH4/llava-instruct-mix-vsft) dataset.
+
+### Preparing the Data
+
+The data format is flexible, provided it is compatible with the custom collator that we will define later. A common approach is to use conversational data. Given that the data includes both text and images, the format needs to be adjusted accordingly. Below is an example of a conversational data format involving both text and images:
+
+```python
+images = ["obama.png"]
+messages = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Who is this?"},
+            {"type": "image"}
+        ]
+    },
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": "Barack Obama"}
+        ]
+    },
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "What is he famous for?"}
+        ]
+    },
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": "He is the 44th President of the United States."}
+        ]
+    }
+]
+```
+
+To illustrate how this data format will be processed using the LLaVA model, you can use the following code:
+
+```python
+from transformers import AutoProcessor
+
+processor = AutoProcessor.from_pretrained("llava-hf/llava-1.5-7b-hf")
+print(processor.apply_chat_template(messages, tokenize=False))
+```
+
+The output will be formatted as follows:
+
+```txt
+Who is this? ASSISTANT: Barack Obama USER: What is he famous for? ASSISTANT: He is the 44th President of the United States. 
+```
+
+<iframe src="https://huggingface.co/datasets/HuggingFaceH4/llava-instruct-mix-vsft/embed/viewer/default/train" frameborder="0" width="100%" height="560px"></iframe>
+
+
+### A custom collator for processing multi-modal data
+
+Unlike the default behavior of `SFTTrainer`, processing multi-modal data is done on the fly during the data collation process. To do this, you need to define a custom collator that processes both the text and images. This collator must take a list of examples as input (see the previous section for an example of the data format) and return a batch of processed data. Below is an example of such a collator:
+
+```python
+def collate_fn(examples):
+    # Get the texts and images, and apply the chat template
+    texts = [processor.apply_chat_template(example["messages"], tokenize=False) for example in examples]
+    images = [example["images"][0] for example in examples]
+
+    # Tokenize the texts and process the images
+    batch = processor(texts, images, return_tensors="pt", padding=True)
+
+    # The labels are the input_ids, and we mask the padding tokens in the loss computation
+    labels = batch["input_ids"].clone()
+    labels[labels == processor.tokenizer.pad_token_id] = -100
+    batch["labels"] = labels
+
+    return batch
+```
+
+We can verify that the collator works as expected by running the following code:
+
+```python
+from datasets import load_dataset
+
+dataset = load_dataset("HuggingFaceH4/llava-instruct-mix-vsft", split="train")
+examples = [dataset[0], dataset[1]]  # Just two examples for the sake of the example
+collated_data = collate_fn(examples)
+print(collated_data.keys())  # dict_keys(['input_ids', 'attention_mask', 'pixel_values', 'labels'])
+```
+
+### Training the vision-language model
+
+Now that we have prepared the data and defined the collator, we can proceed with training the model. To ensure that the data is not processed as text-only, we need to set a couple of arguments in the `SFTConfig`, specifically `dataset_text_field` and `remove_unused_columns`. We also need to set `skip_prepare_dataset` to `True` to avoid the default processing of the dataset. Below is an example of how to set up the `SFTTrainer`.
+
+```python
+args.dataset_text_field = ""  # needs a dummy field
+args.remove_unused_columns = False
+args.dataset_kwargs = {"skip_prepare_dataset": True}
+
+trainer = SFTTrainer(
+    model=model,
+    args=args,
+    data_collator=collate_fn,
+    train_dataset=train_dataset,
+    tokenizer=processor.tokenizer,
+)
+```
+
+A full example of training LLaVa 1.5 on the [HuggingFaceH4/llava-instruct-mix-vsft](https://huggingface.co/datasets/HuggingFaceH4/llava-instruct-mix-vsft) dataset can be found in the script [`examples/scripts/vsft_llava.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/vsft_llava.py).
+
+- [Experiment tracking](https://wandb.ai/huggingface/trl/runs/2b2c5l7s)
+- [Trained model](https://huggingface.co/HuggingFaceH4/sft-llava-1.5-7b-hf)
 
 ## SFTTrainer
 
