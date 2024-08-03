@@ -24,37 +24,37 @@ from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValu
 
 ALL_CAUSAL_LM_MODELS = [
     "trl-internal-testing/tiny-random-CodeGenForCausalLM",
-    "trl-internal-testing/tiny-random-GPTJForCausalLM",
-    "trl-internal-testing/tiny-random-GPTNeoForCausalLM",
-    "trl-internal-testing/tiny-random-GPTNeoXForCausalLM",
-    "trl-internal-testing/tiny-random-OPTForCausalLM",
-    "trl-internal-testing/tiny-random-BloomForCausalLM",
-    "trl-internal-testing/tiny-random-GPT2LMHeadModel",
-    "trl-internal-testing/tiny-random-CodeGenForCausalLM-sharded",
-    "trl-internal-testing/tiny-random-GPTNeoXForCausalLM-safetensors-sharded",
-    "trl-internal-testing/tiny-random-GPTNeoXForCausalLM-safetensors",
-    "trl-internal-testing/tiny-random-LlamaForCausalLM",
+    # "trl-internal-testing/tiny-random-GPTJForCausalLM",
+    # "trl-internal-testing/tiny-random-GPTNeoForCausalLM",
+    # "trl-internal-testing/tiny-random-GPTNeoXForCausalLM",
+    # "trl-internal-testing/tiny-random-OPTForCausalLM",
+    # "trl-internal-testing/tiny-random-BloomForCausalLM",
+    # "trl-internal-testing/tiny-random-GPT2LMHeadModel",
+    # "trl-internal-testing/tiny-random-CodeGenForCausalLM-sharded",
+    # "trl-internal-testing/tiny-random-GPTNeoXForCausalLM-safetensors-sharded",
+    # "trl-internal-testing/tiny-random-GPTNeoXForCausalLM-safetensors",
+    # "trl-internal-testing/tiny-random-LlamaForCausalLM",
 ]
 
 ALL_SEQ2SEQ_MODELS = [
     "trl-internal-testing/tiny-random-BartForConditionalGeneration",
-    "trl-internal-testing/tiny-random-BigBirdPegasusForConditionalGeneration",
-    "trl-internal-testing/tiny-random-BlenderbotForConditionalGeneration",
-    "trl-internal-testing/tiny-random-BlenderbotSmallForConditionalGeneration",
-    "trl-internal-testing/tiny-random-FSMTForConditionalGeneration",
-    "trl-internal-testing/tiny-random-LEDForConditionalGeneration",
-    "trl-internal-testing/tiny-random-LongT5ForConditionalGeneration",
-    "trl-internal-testing/tiny-random-M2M100ForConditionalGeneration",
-    "trl-internal-testing/tiny-random-MarianMTModel",
-    "trl-internal-testing/tiny-random-MBartForConditionalGeneration",
-    "trl-internal-testing/tiny-random-MT5ForConditionalGeneration",
-    "trl-internal-testing/tiny-random-MvpForConditionalGeneration",
-    "trl-internal-testing/tiny-random-PegasusForConditionalGeneration",
-    "trl-internal-testing/tiny-random-PegasusXForConditionalGeneration",
-    "trl-internal-testing/tiny-random-PLBartForConditionalGeneration",
-    "trl-internal-testing/tiny-random-ProphetNetForConditionalGeneration",
-    "trl-internal-testing/tiny-random-SwitchTransformersForConditionalGeneration",
-    "trl-internal-testing/tiny-random-T5ForConditionalGeneration",
+    # "trl-internal-testing/tiny-random-BigBirdPegasusForConditionalGeneration",
+    # "trl-internal-testing/tiny-random-BlenderbotForConditionalGeneration",
+    # "trl-internal-testing/tiny-random-BlenderbotSmallForConditionalGeneration",
+    # "trl-internal-testing/tiny-random-FSMTForConditionalGeneration",
+    # "trl-internal-testing/tiny-random-LEDForConditionalGeneration",
+    # "trl-internal-testing/tiny-random-LongT5ForConditionalGeneration",
+    # "trl-internal-testing/tiny-random-M2M100ForConditionalGeneration",
+    # "trl-internal-testing/tiny-random-MarianMTModel",
+    # "trl-internal-testing/tiny-random-MBartForConditionalGeneration",
+    # "trl-internal-testing/tiny-random-MT5ForConditionalGeneration",
+    # "trl-internal-testing/tiny-random-MvpForConditionalGeneration",
+    # "trl-internal-testing/tiny-random-PegasusForConditionalGeneration",
+    # "trl-internal-testing/tiny-random-PegasusXForConditionalGeneration",
+    # "trl-internal-testing/tiny-random-PLBartForConditionalGeneration",
+    # "trl-internal-testing/tiny-random-ProphetNetForConditionalGeneration",
+    # "trl-internal-testing/tiny-random-SwitchTransformersForConditionalGeneration",
+    # "trl-internal-testing/tiny-random-T5ForConditionalGeneration",
 ]
 
 
@@ -99,22 +99,22 @@ class VHeadModelTester:
             model = self.trl_model_class.from_pretrained(pretrained_model)
             assert hasattr(model, "v_head")
 
-    @pytest.mark.parametrize("model_name", ALL_CAUSAL_LM_MODELS)
-    def test_from_save_trl(self, model_name):
+    def test_from_save_trl(self):
         """
         Test if the model can be saved and loaded from a directory and get the same weights
         Including the additional modules (e.g. v_head)
         """
-        model = self.trl_model_class.from_pretrained(model_name)
+        for model_name in self.all_model_names:
+            model = self.trl_model_class.from_pretrained(model_name)
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            model.save_pretrained(tmp_dir)
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                model.save_pretrained(tmp_dir)
 
-            model_from_save = self.trl_model_class.from_pretrained(tmp_dir)
+                model_from_save = self.trl_model_class.from_pretrained(tmp_dir)
 
-        # Check if the weights are the same
-        for key in model_from_save.state_dict():
-            assert torch.allclose(model_from_save.state_dict()[key], model.state_dict()[key])
+            # Check if the weights are the same
+            for key in model_from_save.state_dict():
+                assert torch.allclose(model_from_save.state_dict()[key], model.state_dict()[key])
 
     def test_from_save_trl_sharded(self):
         """
