@@ -99,22 +99,22 @@ class VHeadModelTester:
             model = self.trl_model_class.from_pretrained(pretrained_model)
             assert hasattr(model, "v_head")
 
-    def test_from_save_trl(self):
+    @pytest.mark.parametrize("model_name", ALL_CAUSAL_LM_MODELS)
+    def test_from_save_trl(self, model_name):
         """
         Test if the model can be saved and loaded from a directory and get the same weights
         Including the additional modules (e.g. v_head)
         """
-        for model_name in self.all_model_names:
-            model = self.trl_model_class.from_pretrained(model_name)
+        model = self.trl_model_class.from_pretrained(model_name)
 
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                model.save_pretrained(tmp_dir)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model.save_pretrained(tmp_dir)
 
-                model_from_save = self.trl_model_class.from_pretrained(tmp_dir)
+            model_from_save = self.trl_model_class.from_pretrained(tmp_dir)
 
-            # Check if the weights are the same
-            for key in model_from_save.state_dict():
-                assert torch.allclose(model_from_save.state_dict()[key], model.state_dict()[key])
+        # Check if the weights are the same
+        for key in model_from_save.state_dict():
+            assert torch.allclose(model_from_save.state_dict()[key], model.state_dict()[key])
 
     def test_from_save_trl_sharded(self):
         """
