@@ -252,16 +252,24 @@ class NashMDTrainer(OnlineDPOTrainer):
             self.state.episode += 1 * args.batch_size
             self.lr_scheduler.step()
             data = next(iter_dataloader)
+
             with torch.no_grad():
                 queries = data["input_ids"].to(device)
                 queries = queries.repeat(args.num_generation_per_prompt, 1)
                 context_length = queries.shape[1]
+
                 responses = []
                 postprocessed_responses = []
                 logprobs = []
-                ref_logprobs = []
                 scores = []
                 sequence_lengths = []
+
+                mixture_responses = []
+                mixture_postprocessed_responses = []
+                mixture_logprobs = []
+                mixture_scores = []
+                mixture_sequence_lengths = []
+
                 with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
                     query_responses, logits_responses = batch_generation(
                         unwrapped_model,
@@ -290,16 +298,13 @@ class NashMDTrainer(OnlineDPOTrainer):
                     del logits, all_logprob
                     torch.cuda.empty_cache()
 
-                    # ref_output = forward(ref_model, query_response, tokenizer.pad_token_id)
-                    # ref_logits = ref_output.logits[:, context_length - 1 : -1]
-                    # ref_logits /= args.temperature + 1e-7
-                    # ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
-                    # ref_logprob = torch.gather(ref_all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
-                    # del ref_output, ref_logits, ref_all_logprob
-                    # torch.cuda.empty_cache()
-
-                    # generate 2nd response from the geometric mixture of the 2 logits
-                    # make some mixture from the top layer of the model and then do generation...
+                    mixture_query_response = mixture_query_responses[i : i + args.local_rollout_forward_batch_size]
+                    mixture_response = mixture_query_response[:, context_length:]
+                    mixture_logits = mixture_logits_responses[i : i + args.local_rollout_forward_batch_size]
+                    mixture_all_logprob = F.log_softmax(mixture_logits, dim=-1)
+                    mixture_logprob = torch.gather(mixture_all_logprob, 2, mixture_response.unsqueeze(-1)).squeeze(-1)
+                    del mixture_logits, mixture_all_logprob
+                    torch.cuda.empty_cache()
 
                     # Response Processing 1. truncate response after the first occurrence of `stop_token_id`
                     postprocessed_response = response
@@ -308,37 +313,53 @@ class NashMDTrainer(OnlineDPOTrainer):
                             args.stop_token_id, tokenizer.pad_token_id, response
                         )
 
-                    # rename to judge_model
+                    # TODO use judge API here
                     # Response Processing 2. run reward model on the truncated responses
                     postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
                     sequence_length = first_true_indices(postprocessed_response == tokenizer.pad_token_id) - 1
                     _, score, _ = get_reward(
                         reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
                     )
-                    # x -> y, y_mix
-                    # x -> score_1, score_2 ->  if score_1 > score_2, then x -> y
-                    # lets move to the judge API here and random shuffle
-                    # be careful: call it {x, y, y_mix} and {x, y_mix, y}, or soft/hard rank
-                    #
 
-                    import pdb
+                    postprocessed_mixture_response = mixture_response
+                    if args.stop_token_id is not None:  # handle the edge case when stop_token_id exists but is 0
+                        postprocessed_mixture_response = truncate_response(
+                            args.stop_token_id, tokenizer.pad_token_id, mixture_response
+                        )
 
-                    pdb.set_trace()
+                    postprocessed_mixture_query_response = torch.cat((query, postprocessed_mixture_response), 1)
+                    mixture_sequence_length = (
+                        first_true_indices(postprocessed_mixture_response == tokenizer.pad_token_id) - 1
+                    )
+                    _, mixture_score, _ = get_reward(
+                        reward_model, postprocessed_mixture_query_response, tokenizer.pad_token_id, context_length
+                    )
 
                     responses.append(response)
                     postprocessed_responses.append(postprocessed_response)
                     logprobs.append(logprob)
-                    ref_logprobs.append(ref_logprob)
                     sequence_lengths.append(sequence_length)
                     scores.append(score)
+
+                    mixture_responses.append(mixture_response)
+                    mixture_postprocessed_responses.append(postprocessed_mixture_response)
+                    mixture_logprobs.append(mixture_logprob)
+                    mixture_sequence_lengths.append(mixture_sequence_length)
+                    mixture_scores.append(mixture_score)
 
                 responses = torch.cat(responses, 0)
                 postprocessed_responses = torch.cat(postprocessed_responses, 0)
                 logprobs = torch.cat(logprobs, 0)
-                ref_logprobs = torch.cat(ref_logprobs, 0)
                 sequence_lengths = torch.cat(sequence_lengths, 0)
                 scores = torch.cat(scores, 0)
-                del (logprob, ref_logprob, score)
+
+                mixture_responses = torch.cat(mixture_responses, 0)
+                mixture_postprocessed_responses = torch.cat(mixture_postprocessed_responses, 0)
+                mixture_logprobs = torch.cat(mixture_logprobs, 0)
+                mixture_sequence_lengths = torch.cat(mixture_sequence_lengths, 0)
+                mixture_scores = torch.cat(mixture_scores, 0)
+
+                del (logprob, score, mixture_logprob, mixture_score)
                 torch.cuda.empty_cache()
                 gc.collect()
 
@@ -348,33 +369,45 @@ class NashMDTrainer(OnlineDPOTrainer):
                 contain_eos_token = torch.any(postprocessed_responses == tokenizer.eos_token_id, dim=-1)
                 if args.non_eos_penalty:
                     scores = torch.where(contain_eos_token, scores, torch.full_like(scores, args.penalty_reward_value))
+
+                contains_eos_token = torch.any(postprocessed_mixture_response == tokenizer.eos_token_id, dim=-1)
+                if args.non_eos_penalty:
+                    mixture_scores = torch.where(
+                        contains_eos_token, mixture_scores, torch.full_like(mixture_scores, args.penalty_reward_value)
+                    )
+
                 # accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
 
                 # be very careful with `padding_mask_p1`; see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
                 response_idxs = torch.arange(responses.shape[1], device=responses.device).repeat(responses.shape[0], 1)
                 padding_mask = response_idxs > sequence_lengths.unsqueeze(1)
                 logprobs = torch.masked_fill(logprobs, padding_mask, INVALID_LOGPROB)
-                ref_logprobs = torch.masked_fill(ref_logprobs, padding_mask, INVALID_LOGPROB)
+
+                mixture_response_idxs = torch.arange(
+                    mixture_responses.shape[1], device=mixture_responses.device
+                ).repeat(mixture_responses.shape[0], 1)
+                mixture_padding_mask = mixture_response_idxs > mixture_sequence_lengths.unsqueeze(1)
+                mixture_logprobs = torch.masked_fill(mixture_logprobs, mixture_padding_mask, INVALID_LOGPROB)
 
                 # 4. compute rewards
-                kl = logprobs - ref_logprobs
+                kl = logprobs - mixture_logprobs
+
+                # TODO: check if this makes sense for beta
                 non_score_reward = (-args.beta * kl).sum(1)
-                rlhf_reward = scores + non_score_reward
+                rlhf_reward = scores + mixture_scores + non_score_reward
 
                 # num_examples should be same as args.local_batch_size divided by 2
-                num_examples = scores.size(0) // 2
-                first_half = scores[:num_examples]
-                second_half = scores[num_examples:]
-
+                num_examples = scores.size(0)
                 num_examples_range = torch.arange(num_examples).to(scores.device)
 
                 chosen_indices = torch.where(
-                    first_half >= second_half, num_examples_range.clone(), num_examples_range.clone() + num_examples
+                    scores >= mixture_scores, num_examples_range.clone(), num_examples_range.clone() + num_examples
                 )
                 rejected_indices = torch.where(
-                    first_half < second_half, num_examples_range.clone(), num_examples_range.clone() + num_examples
+                    scores < mixture_scores, num_examples_range.clone(), num_examples_range.clone() + num_examples
                 )
 
+                # TODO:
                 scores_margin = scores[chosen_indices] - scores[rejected_indices]
                 torch.cuda.empty_cache()
 
