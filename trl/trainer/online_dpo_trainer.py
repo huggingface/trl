@@ -449,18 +449,18 @@ class OnlineDPOTrainer(Trainer):
                                 chosen_rewards = self.beta * (chosen_logprobs_sum - chosen_ref_logprobs_sum)
                                 rejected_rewards = self.beta * (rejected_logprobs_sum - rejected_ref_logprobs_sum)
                                 loss_stats[epoch_idx, minibatch_idx, gradient_accumulation_idx] = loss
-                                chosen_rewards_stats[epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
-                                    chosen_rewards.mean()
-                                )
-                                rejected_rewards_stats[epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
-                                    rejected_rewards.mean()
-                                )
-                                chosen_logprobs_stats[epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
-                                    chosen_logprobs_sum.mean()
-                                )
-                                rejected_logprobs_stats[epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
-                                    rejected_logprobs_sum.mean()
-                                )
+                                chosen_rewards_stats[
+                                    epoch_idx, minibatch_idx, gradient_accumulation_idx
+                                ] = chosen_rewards.mean()
+                                rejected_rewards_stats[
+                                    epoch_idx, minibatch_idx, gradient_accumulation_idx
+                                ] = rejected_rewards.mean()
+                                chosen_logprobs_stats[
+                                    epoch_idx, minibatch_idx, gradient_accumulation_idx
+                                ] = chosen_logprobs_sum.mean()
+                                rejected_logprobs_stats[
+                                    epoch_idx, minibatch_idx, gradient_accumulation_idx
+                                ] = rejected_logprobs_sum.mean()
                         gradient_accumulation_idx += 1
                     minibatch_idx += 1
                     self.state.global_step += 1
