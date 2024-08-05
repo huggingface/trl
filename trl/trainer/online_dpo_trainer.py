@@ -333,7 +333,7 @@ class OnlineDPOTrainer(Trainer):
                 # only query humans on responses that pass that filter
                 contain_eos_token = torch.any(postprocessed_responses == tokenizer.eos_token_id, dim=-1)
                 if args.non_eos_penalty:
-                    scores = torch.where(contain_eos_token, args.penalty_reward_value, scores)
+                    scores = torch.where(contain_eos_token, scores, args.penalty_reward_value)
                 # accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
 
                 # be very careful with `padding_mask_p1`; see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
