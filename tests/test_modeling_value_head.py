@@ -12,50 +12,49 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import gc
-import os
 import tempfile
 import unittest
 
 import pytest
 import torch
-from transformers import AutoModelForCausalLM
+from transformers import AutoModel, AutoModelForCausalLM, AutoModelForSeq2SeqLM
 
-from trl import AutoModelForCausalLMWithValueHead
+from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead, create_reference_model
 
 
 ALL_CAUSAL_LM_MODELS = [
     "trl-internal-testing/tiny-random-CodeGenForCausalLM",
-    # "trl-internal-testing/tiny-random-GPTJForCausalLM",
-    # "trl-internal-testing/tiny-random-GPTNeoForCausalLM",
-    # "trl-internal-testing/tiny-random-GPTNeoXForCausalLM",
-    # "trl-internal-testing/tiny-random-OPTForCausalLM",
-    # "trl-internal-testing/tiny-random-BloomForCausalLM",
-    # "trl-internal-testing/tiny-random-GPT2LMHeadModel",
-    # "trl-internal-testing/tiny-random-CodeGenForCausalLM-sharded",
-    # "trl-internal-testing/tiny-random-GPTNeoXForCausalLM-safetensors-sharded",
-    # "trl-internal-testing/tiny-random-GPTNeoXForCausalLM-safetensors",
-    # "trl-internal-testing/tiny-random-LlamaForCausalLM",
+    "trl-internal-testing/tiny-random-GPTJForCausalLM",
+    "trl-internal-testing/tiny-random-GPTNeoForCausalLM",
+    "trl-internal-testing/tiny-random-GPTNeoXForCausalLM",
+    "trl-internal-testing/tiny-random-OPTForCausalLM",
+    "trl-internal-testing/tiny-random-BloomForCausalLM",
+    "trl-internal-testing/tiny-random-GPT2LMHeadModel",
+    "trl-internal-testing/tiny-random-CodeGenForCausalLM-sharded",
+    "trl-internal-testing/tiny-random-GPTNeoXForCausalLM-safetensors-sharded",
+    "trl-internal-testing/tiny-random-GPTNeoXForCausalLM-safetensors",
+    "trl-internal-testing/tiny-random-LlamaForCausalLM",
 ]
 
 ALL_SEQ2SEQ_MODELS = [
     "trl-internal-testing/tiny-random-BartForConditionalGeneration",
-    # "trl-internal-testing/tiny-random-BigBirdPegasusForConditionalGeneration",
-    # "trl-internal-testing/tiny-random-BlenderbotForConditionalGeneration",
-    # "trl-internal-testing/tiny-random-BlenderbotSmallForConditionalGeneration",
-    # "trl-internal-testing/tiny-random-FSMTForConditionalGeneration",
-    # "trl-internal-testing/tiny-random-LEDForConditionalGeneration",
-    # "trl-internal-testing/tiny-random-LongT5ForConditionalGeneration",
-    # "trl-internal-testing/tiny-random-M2M100ForConditionalGeneration",
-    # "trl-internal-testing/tiny-random-MarianMTModel",
-    # "trl-internal-testing/tiny-random-MBartForConditionalGeneration",
-    # "trl-internal-testing/tiny-random-MT5ForConditionalGeneration",
-    # "trl-internal-testing/tiny-random-MvpForConditionalGeneration",
-    # "trl-internal-testing/tiny-random-PegasusForConditionalGeneration",
-    # "trl-internal-testing/tiny-random-PegasusXForConditionalGeneration",
-    # "trl-internal-testing/tiny-random-PLBartForConditionalGeneration",
-    # "trl-internal-testing/tiny-random-ProphetNetForConditionalGeneration",
-    # "trl-internal-testing/tiny-random-SwitchTransformersForConditionalGeneration",
-    # "trl-internal-testing/tiny-random-T5ForConditionalGeneration",
+    "trl-internal-testing/tiny-random-BigBirdPegasusForConditionalGeneration",
+    "trl-internal-testing/tiny-random-BlenderbotForConditionalGeneration",
+    "trl-internal-testing/tiny-random-BlenderbotSmallForConditionalGeneration",
+    "trl-internal-testing/tiny-random-FSMTForConditionalGeneration",
+    "trl-internal-testing/tiny-random-LEDForConditionalGeneration",
+    "trl-internal-testing/tiny-random-LongT5ForConditionalGeneration",
+    "trl-internal-testing/tiny-random-M2M100ForConditionalGeneration",
+    "trl-internal-testing/tiny-random-MarianMTModel",
+    "trl-internal-testing/tiny-random-MBartForConditionalGeneration",
+    "trl-internal-testing/tiny-random-MT5ForConditionalGeneration",
+    "trl-internal-testing/tiny-random-MvpForConditionalGeneration",
+    "trl-internal-testing/tiny-random-PegasusForConditionalGeneration",
+    "trl-internal-testing/tiny-random-PegasusXForConditionalGeneration",
+    "trl-internal-testing/tiny-random-PLBartForConditionalGeneration",
+    "trl-internal-testing/tiny-random-ProphetNetForConditionalGeneration",
+    "trl-internal-testing/tiny-random-SwitchTransformersForConditionalGeneration",
+    "trl-internal-testing/tiny-random-T5ForConditionalGeneration",
 ]
 
 
@@ -109,9 +108,8 @@ class VHeadModelTester:
             model = self.trl_model_class.from_pretrained(model_name)
 
             with tempfile.TemporaryDirectory() as tmp_dir:
-                # check that the tmp_dir exists
-                assert os.path.exists(tmp_dir)
                 model.save_pretrained(tmp_dir)
+
                 model_from_save = self.trl_model_class.from_pretrained(tmp_dir)
 
             # Check if the weights are the same
@@ -304,3 +302,205 @@ class CausalLMValueHeadModelTester(VHeadModelTester, unittest.TestCase):
                 assert torch.allclose(
                     param, model_from_pretrained.state_dict()[name]
                 ), f"Parameter {name} is not the same after push_to_hub and from_pretrained"
+
+
+class Seq2SeqValueHeadModelTester(VHeadModelTester, unittest.TestCase):
+    """
+    Testing suite for v-head models.
+    """
+
+    all_model_names = ALL_SEQ2SEQ_MODELS
+    trl_model_class = AutoModelForSeq2SeqLMWithValueHead
+    transformers_model_class = AutoModelForSeq2SeqLM
+
+    def tearDown(self):
+        # free memory
+        gc.collect()
+
+    def test_inference(self):
+        r"""
+        Test if the model can be used for inference and outputs 3 values
+        - logits, loss, and value states
+        """
+        EXPECTED_OUTPUT_SIZE = 3
+
+        for model_name in self.all_model_names:
+            model = self.trl_model_class.from_pretrained(model_name)
+            input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
+            decoder_input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
+            outputs = model(input_ids, decoder_input_ids=decoder_input_ids)
+
+            # Check if the outputs are of the right size - here
+            # we always output 3 values - logits, loss, and value states
+            assert len(outputs) == EXPECTED_OUTPUT_SIZE
+
+    def test_dropout_config(self):
+        r"""
+        Test if we instantiate a model by adding `summary_drop_prob` to the config
+        it will be added to the v_head
+        """
+        for model_name in self.all_model_names:
+            pretrained_model = self.transformers_model_class.from_pretrained(model_name)
+            pretrained_model.config.summary_dropout_prob = 0.5
+            model = self.trl_model_class.from_pretrained(pretrained_model)
+
+            # Check if v head of the model has the same dropout as the config
+            assert model.v_head.dropout.p == pretrained_model.config.summary_dropout_prob
+
+    def test_dropout_kwargs(self):
+        r"""
+        Test if we instantiate a model by adding `summary_drop_prob` to the config
+        it will be added to the v_head
+        """
+        for model_name in self.all_model_names:
+            v_head_kwargs = {"summary_dropout_prob": 0.5}
+
+            model = self.trl_model_class.from_pretrained(model_name, **v_head_kwargs)
+
+            # Check if v head of the model has the same dropout as the config
+            assert model.v_head.dropout.p == 0.5
+
+            model = self.trl_model_class.from_pretrained(model_name, summary_dropout_prob=0.5)
+
+            # Check if v head of the model has the same dropout as the config
+            assert model.v_head.dropout.p == 0.5
+
+    def test_generate(self):
+        r"""
+        Test if `generate` works for every model
+        """
+        for model_name in self.all_model_names:
+            model = self.trl_model_class.from_pretrained(model_name)
+            input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
+            decoder_input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
+
+            # Just check if the generation works
+            _ = model.generate(input_ids, decoder_input_ids=decoder_input_ids)
+
+    def test_raise_error_not_causallm(self):
+        # Test with a model without a LM head
+        model_id = "trl-internal-testing/tiny-random-T5Model"
+        # This should raise a ValueError
+        with pytest.raises(ValueError):
+            pretrained_model = AutoModel.from_pretrained(model_id)
+            _ = self.trl_model_class.from_pretrained(pretrained_model)
+
+    @unittest.skip("This test needs to be run manually due to HF token issue.")
+    def test_push_to_hub(self):
+        for model_name in self.all_model_names:
+            model = self.trl_model_class.from_pretrained(model_name)
+            if "sharded" in model_name:
+                model.push_to_hub(model_name + "-ppo", use_auth_token=True, max_shard_size="1MB")
+            else:
+                model.push_to_hub(model_name + "-ppo", use_auth_token=True)
+
+            model_from_pretrained = self.trl_model_class.from_pretrained(model_name + "-ppo")
+            # check all keys
+            assert model.state_dict().keys() == model_from_pretrained.state_dict().keys()
+
+            for name, param in model.state_dict().items():
+                assert torch.allclose(
+                    param, model_from_pretrained.state_dict()[name]
+                ), f"Parameter {name} is not the same after push_to_hub and from_pretrained"
+
+    def test_transformers_bf16_kwargs(self):
+        r"""
+        Test if the transformers kwargs are correctly passed
+        Here we check that loading a model in half precision works as expected, i.e. the weights of
+        the `pretrained_model` attribute is loaded in half precision and you can run a dummy
+        forward pass without any issue.
+        """
+        for model_name in self.all_model_names:
+            trl_model = self.trl_model_class.from_pretrained(model_name, torch_dtype=torch.bfloat16)
+
+            lm_head_namings = self.trl_model_class.lm_head_namings
+
+            if model_name == "trl-internal-testing/tiny-random-FSMTForConditionalGeneration":
+                # skip the test for FSMT as it does not support mixed-prec
+                continue
+
+            assert any(hasattr(trl_model.pretrained_model, lm_head_naming) for lm_head_naming in lm_head_namings)
+
+            for lm_head_naming in lm_head_namings:
+                if hasattr(trl_model.pretrained_model, lm_head_naming):
+                    assert getattr(trl_model.pretrained_model, lm_head_naming).weight.dtype == torch.bfloat16
+
+            dummy_input = torch.LongTensor([[0, 1, 0, 1]])
+
+            # check dummy forward pass works in half precision
+            _ = trl_model(input_ids=dummy_input, decoder_input_ids=dummy_input)
+
+
+class ReferenceModelTest(unittest.TestCase):
+    def setUp(self):
+        self.model = AutoModelForCausalLMWithValueHead.from_pretrained(
+            "trl-internal-testing/tiny-random-GPT2LMHeadModel"
+        )
+        self.test_input = torch.tensor([[0, 1, 2, 3]])
+        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=1)
+        self.layer_format = "pretrained_model.transformer.h.{layer}.attn.c_attn.weight"
+
+    def test_independent_reference(self):
+        layer_0 = self.layer_format.format(layer=0)
+        layer_5 = self.layer_format.format(layer=4)
+
+        ref_model = create_reference_model(self.model)
+
+        first_layer_before = self.model.get_parameter(layer_0).data.clone()
+        last_layer_before = self.model.get_parameter(layer_5).data.clone()
+
+        first_ref_layer_before = ref_model.get_parameter(layer_0).data.clone()
+        last_ref_layer_before = ref_model.get_parameter(layer_5).data.clone()
+
+        output = self.model(input_ids=self.test_input, labels=self.test_input)
+        output[1].backward()
+        self.optimizer.step()
+
+        first_layer_after = self.model.get_parameter(layer_0).data.clone()
+        last_layer_after = self.model.get_parameter(layer_5).data.clone()
+
+        first_ref_layer_after = ref_model.get_parameter(layer_0).data.clone()
+        last_ref_layer_after = ref_model.get_parameter(layer_5).data.clone()
+
+        # before optimization ref and model are identical
+        assert (first_layer_before == first_ref_layer_before).all()
+        assert (last_layer_before == last_ref_layer_before).all()
+        # ref model stays identical after optimization
+        assert (first_ref_layer_before == first_ref_layer_after).all()
+        assert (last_ref_layer_before == last_ref_layer_after).all()
+        # optimized model changes
+        assert not (first_layer_before == first_layer_after).all()
+        assert not (last_layer_before == last_layer_after).all()
+
+    def test_shared_layers(self):
+        layer_0 = self.layer_format.format(layer=0)
+        layer_1 = self.layer_format.format(layer=1)
+
+        ref_model = create_reference_model(self.model, num_shared_layers=1)
+
+        first_layer_before = self.model.get_parameter(layer_0).data.clone()
+        second_layer_before = self.model.get_parameter(layer_1).data.clone()
+
+        first_ref_layer_before = ref_model.get_parameter(layer_0).data.clone()
+        second_ref_layer_before = ref_model.get_parameter(layer_1).data.clone()
+
+        output = self.model(input_ids=self.test_input, labels=self.test_input)
+        output[1].backward()
+        self.optimizer.step()
+
+        first_layer_after = self.model.get_parameter(layer_0).data.clone()
+        second_layer_after = self.model.get_parameter(layer_1).data.clone()
+
+        first_ref_layer_after = ref_model.get_parameter(layer_0).data.clone()
+        second_ref_layer_after = ref_model.get_parameter(layer_1).data.clone()
+
+        # before optimization ref and model are identical
+        assert (first_layer_before == first_ref_layer_before).all()
+        assert (second_layer_before == second_ref_layer_before).all()
+        # ref model stays identical after optimization
+        assert (first_ref_layer_before == first_ref_layer_after).all()
+        assert (second_ref_layer_before == second_ref_layer_after).all()
+        # first layer of optimized model stays the same
+        assert (first_layer_before == first_layer_after).all()
+        # other layers in optimized model change
+        assert not (second_layer_before == second_layer_after).all()
