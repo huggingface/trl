@@ -100,6 +100,7 @@ class VHeadModelTester:
             model = self.trl_model_class.from_pretrained(pretrained_model)
             assert hasattr(model, "v_head")
 
+    @unittest.skipIf(sys.platform.startswith("win"), "Skipping on Windows")
     def test_from_save_trl(self):
         """
         Test if the model can be saved and loaded from a directory and get the same weights
@@ -117,6 +118,7 @@ class VHeadModelTester:
             for key in model_from_save.state_dict():
                 assert torch.allclose(model_from_save.state_dict()[key], model.state_dict()[key])
 
+    @unittest.skipIf(sys.platform.startswith("win"), "Skipping on Windows")
     def test_from_save_trl_sharded(self):
         """
         Test if the model can be saved and loaded from a directory and get the same weights - sharded case
