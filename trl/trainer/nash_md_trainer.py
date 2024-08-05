@@ -368,13 +368,11 @@ class NashMDTrainer(OnlineDPOTrainer):
                 # only query humans on responses that pass that filter
                 contain_eos_token = torch.any(postprocessed_responses == tokenizer.eos_token_id, dim=-1)
                 if args.non_eos_penalty:
-                    scores = torch.where(contain_eos_token, scores, torch.full_like(scores, args.penalty_reward_value))
+                    scores = torch.where(contain_eos_token, args.penalty_reward_value, scores)
 
                 contains_eos_token = torch.any(postprocessed_mixture_response == tokenizer.eos_token_id, dim=-1)
                 if args.non_eos_penalty:
-                    mixture_scores = torch.where(
-                        contains_eos_token, mixture_scores, torch.full_like(mixture_scores, args.penalty_reward_value)
-                    )
+                    mixture_scores = torch.where(contains_eos_token, args.penalty_reward_value, mixture_scores)
 
                 # accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
 
@@ -396,19 +394,10 @@ class NashMDTrainer(OnlineDPOTrainer):
                 non_score_reward = (-args.beta * kl).sum(1)
                 rlhf_reward = scores + mixture_scores + non_score_reward
 
-                # num_examples should be same as args.local_batch_size divided by 2
-                num_examples = scores.size(0)
-                num_examples_range = torch.arange(num_examples).to(scores.device)
+                chosen_model_indices = scores >= mixture_scores
+                chosen_mixture_indices = scores < mixture_scores
 
-                chosen_indices = torch.where(
-                    scores >= mixture_scores, num_examples_range.clone(), num_examples_range.clone() + num_examples
-                )
-                rejected_indices = torch.where(
-                    scores < mixture_scores, num_examples_range.clone(), num_examples_range.clone() + num_examples
-                )
-
-                # TODO:
-                scores_margin = scores[chosen_indices] - scores[rejected_indices]
+                scores_margin = abs(scores - mixture_scores)
                 torch.cuda.empty_cache()
 
             # Do multiple epochs of training, with a fresh random shuffle in each epoch
