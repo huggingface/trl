@@ -333,7 +333,7 @@ class OnlineDPOTrainer(Trainer):
                 # only query humans on responses that pass that filter
                 contain_eos_token = torch.any(postprocessed_responses == tokenizer.eos_token_id, dim=-1)
                 if args.non_eos_penalty:
-                    scores = torch.where(contain_eos_token, scores, torch.full_like(scores, args.penalty_reward_value))
+                    scores = torch.where(contain_eos_token, args.penalty_reward_value, scores)
                 # accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
 
                 # be very careful with `padding_mask_p1`; see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
@@ -449,18 +449,18 @@ class OnlineDPOTrainer(Trainer):
                                 chosen_rewards = self.beta * (chosen_logprobs_sum - chosen_ref_logprobs_sum)
                                 rejected_rewards = self.beta * (rejected_logprobs_sum - rejected_ref_logprobs_sum)
                                 loss_stats[epoch_idx, minibatch_idx, gradient_accumulation_idx] = loss
-                                chosen_rewards_stats[
-                                    epoch_idx, minibatch_idx, gradient_accumulation_idx
-                                ] = chosen_rewards.mean()
-                                rejected_rewards_stats[
-                                    epoch_idx, minibatch_idx, gradient_accumulation_idx
-                                ] = rejected_rewards.mean()
-                                chosen_logprobs_stats[
-                                    epoch_idx, minibatch_idx, gradient_accumulation_idx
-                                ] = chosen_logprobs_sum.mean()
-                                rejected_logprobs_stats[
-                                    epoch_idx, minibatch_idx, gradient_accumulation_idx
-                                ] = rejected_logprobs_sum.mean()
+                                chosen_rewards_stats[epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
+                                    chosen_rewards.mean()
+                                )
+                                rejected_rewards_stats[epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
+                                    rejected_rewards.mean()
+                                )
+                                chosen_logprobs_stats[epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
+                                    chosen_logprobs_sum.mean()
+                                )
+                                rejected_logprobs_stats[epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
+                                    rejected_logprobs_sum.mean()
+                                )
                         gradient_accumulation_idx += 1
                     minibatch_idx += 1
                     self.state.global_step += 1
