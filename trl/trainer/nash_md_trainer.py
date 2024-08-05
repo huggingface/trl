@@ -368,7 +368,7 @@ class NashMDTrainer(OnlineDPOTrainer):
                 # only query humans on responses that pass that filter
                 contain_eos_token = torch.any(postprocessed_responses == tokenizer.eos_token_id, dim=-1)
                 if args.non_eos_penalty:
-                    scores = torch.where(contain_eos_token, args.penalty_reward_value, scores)
+                    scores = torch.where(contain_eos_token, scores, args.penalty_reward_value)
 
                 contains_eos_token = torch.any(postprocessed_mixture_response == tokenizer.eos_token_id, dim=-1)
                 if args.non_eos_penalty:
@@ -418,10 +418,16 @@ class NashMDTrainer(OnlineDPOTrainer):
                         args.per_device_train_batch_size,
                     ):
                         with accelerator.accumulate(model):
+                            import pdb
+
+                            pdb.set_trace()
                             micro_batch_end = micro_batch_start + args.per_device_train_batch_size
                             micro_batch_inds = mini_batch_inds[micro_batch_start:micro_batch_end]
+
+                            respo
+
                             ## chosen
-                            chosen_mb_inds = chosen_indices[micro_batch_inds]
+                            chosen_mb_inds = chosen_model_indices[micro_batch_inds]
                             chosen_responses = responses[chosen_mb_inds]
 
                             ## rejected
