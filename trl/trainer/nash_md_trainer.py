@@ -347,17 +347,23 @@ class NashMDTrainer(OnlineDPOTrainer):
                     mixture_sequence_lengths.append(mixture_sequence_length)
                     mixture_scores.append(mixture_score)
 
-                responses = torch.cat(responses, 0)
-                postprocessed_responses = torch.cat(postprocessed_responses, 0)
-                logprobs = torch.cat(logprobs, 0)
-                sequence_lengths = torch.cat(sequence_lengths, 0)
-                scores = torch.cat(scores, 0)
+                import pdb
 
-                mixture_responses = torch.cat(mixture_responses, 0)
-                mixture_postprocessed_responses = torch.cat(mixture_postprocessed_responses, 0)
-                mixture_logprobs = torch.cat(mixture_logprobs, 0)
-                mixture_sequence_lengths = torch.cat(mixture_sequence_lengths, 0)
-                mixture_scores = torch.cat(mixture_scores, 0)
+                pdb.set_trace()
+                responses = torch.cat(responses, 0)
+                # interleave responses and mixture_responses, postprocessed_responses, logprobs, sequence_lengths, scores
+                responses = torch.stack((responses, torch.cat(mixture_responses, 0)), 1).view(-1, responses.shape[-1])
+                postprocessed_responses = torch.cat(postprocessed_responses, 0)
+                postprocessed_responses = torch.stack(
+                    (postprocessed_responses, torch.cat(mixture_postprocessed_responses, 0)), 1
+                ).view(-1, postprocessed_responses.shape[-1])
+                logprobs = torch.cat(logprobs, 0)
+                ref_logprobs = torch.cat(mixture_logprobs, 0)
+
+                sequence_lengths = torch.stack(
+                    (torch.cat(sequence_lengths, 0), torch.cat(mixture_sequence_lengths, 0)), 1
+                ).view(-1)
+                scores = torch.stack((torch.cat(scores, 0), torch.cat(mixture_scores, 0)), 1).view(-1)
 
                 del (logprob, score, mixture_logprob, mixture_score)
                 torch.cuda.empty_cache()
@@ -368,39 +374,38 @@ class NashMDTrainer(OnlineDPOTrainer):
                 # only query humans on responses that pass that filter
                 contain_eos_token = torch.any(postprocessed_responses == tokenizer.eos_token_id, dim=-1)
                 if args.non_eos_penalty:
-                    scores = torch.where(contain_eos_token, scores, args.penalty_reward_value)
-
-                contains_eos_token = torch.any(postprocessed_mixture_response == tokenizer.eos_token_id, dim=-1)
-                if args.non_eos_penalty:
-                    mixture_scores = torch.where(contains_eos_token, args.penalty_reward_value, mixture_scores)
-
+                    scores = torch.where(contain_eos_token, scores, torch.full_like(scores, args.penalty_reward_value))
                 # accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
 
                 # be very careful with `padding_mask_p1`; see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
                 response_idxs = torch.arange(responses.shape[1], device=responses.device).repeat(responses.shape[0], 1)
                 padding_mask = response_idxs > sequence_lengths.unsqueeze(1)
                 logprobs = torch.masked_fill(logprobs, padding_mask, INVALID_LOGPROB)
-
-                mixture_response_idxs = torch.arange(
-                    mixture_responses.shape[1], device=mixture_responses.device
-                ).repeat(mixture_responses.shape[0], 1)
-                mixture_padding_mask = mixture_response_idxs > mixture_sequence_lengths.unsqueeze(1)
-                mixture_logprobs = torch.masked_fill(mixture_logprobs, mixture_padding_mask, INVALID_LOGPROB)
+                ref_logprobs = torch.masked_fill(ref_logprobs, padding_mask, INVALID_LOGPROB)
 
                 # 4. compute rewards
-                kl = logprobs - mixture_logprobs
-
-                # TODO: check if this makes sense for beta
+                kl = logprobs - ref_logprobs
                 non_score_reward = (-args.beta * kl).sum(1)
-                rlhf_reward = scores + mixture_scores + non_score_reward
+                rlhf_reward = scores + non_score_reward
 
-                chosen_model_indices = scores >= mixture_scores
-                chosen_mixture_indices = scores < mixture_scores
+                # num_examples should be same as args.local_batch_size divided by 2
+                num_examples = scores.size(0) // 2
+                first_half = scores[:num_examples]
+                second_half = scores[num_examples:]
 
-                scores_margin = abs(scores - mixture_scores)
+                num_examples_range = torch.arange(num_examples).to(scores.device)
+
+                chosen_indices = torch.where(
+                    first_half >= second_half, num_examples_range.clone(), num_examples_range.clone() + num_examples
+                )
+                rejected_indices = torch.where(
+                    first_half < second_half, num_examples_range.clone(), num_examples_range.clone() + num_examples
+                )
+
+                scores_margin = scores[chosen_indices] - scores[rejected_indices]
                 torch.cuda.empty_cache()
 
-            # Do multiple epochs of training, with a fresh random shuffle in each epoch
+            # Do multiple epochs of nash-md training, with a fresh random shuffle in each epoch
             for epoch_idx in range(args.num_epochs):
                 b_inds = np.random.permutation(args.local_batch_size // args.num_generation_per_prompt)
                 minibatch_idx = 0
@@ -418,16 +423,10 @@ class NashMDTrainer(OnlineDPOTrainer):
                         args.per_device_train_batch_size,
                     ):
                         with accelerator.accumulate(model):
-                            import pdb
-
-                            pdb.set_trace()
                             micro_batch_end = micro_batch_start + args.per_device_train_batch_size
                             micro_batch_inds = mini_batch_inds[micro_batch_start:micro_batch_end]
-
-                            respo
-
                             ## chosen
-                            chosen_mb_inds = chosen_model_indices[micro_batch_inds]
+                            chosen_mb_inds = chosen_indices[micro_batch_inds]
                             chosen_responses = responses[chosen_mb_inds]
 
                             ## rejected
