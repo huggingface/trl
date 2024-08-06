@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import random
 import warnings
 from typing import Any, Dict, Optional, Union
 
@@ -102,8 +103,8 @@ class GKDTrainer(SFTTrainer):
         interpolated_log_probs = beta * teacher_log_probs + (1 - beta) * student_log_probs
 
         # Compute KL divergences using F.kl_div
-        kl_teacher = F.kl_div(interpolated_log_probs, teacher_logits, reduction="none", log_target=True)
-        kl_student = F.kl_div(interpolated_log_probs, student_logits, reduction="none", log_target=True)
+        kl_teacher = F.kl_div(interpolated_log_probs, teacher_log_probs, reduction="none", log_target=True)
+        kl_student = F.kl_div(interpolated_log_probs, student_log_probs, reduction="none", log_target=True)
 
         # Compute the Generalized Jensen-Shannon Divergence
         jsd = beta * kl_student + (1 - beta) * kl_teacher
@@ -126,9 +127,10 @@ class GKDTrainer(SFTTrainer):
 
         # compute teacher output in eval mode
         self.teacher_model.eval()
-        outputs_teacher = self.teacher_model(
-            input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], labels=inputs["labels"]
-        )
+        with torch.no_grad():
+            outputs_teacher = self.teacher_model(
+                input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], labels=inputs["labels"]
+            )
 
         loss = 0
         batch_size = inputs["labels"].shape[0]
@@ -163,7 +165,7 @@ class GKDTrainer(SFTTrainer):
         Return:
             `torch.Tensor`: The tensor with training loss on this batch.
         """
-        if False:
+        if random.random() >= self.lmbda:
             # On-policy: Generate outputs from the student model with temperature self.temperature
             with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
                 generation_config = GenerationConfig(
