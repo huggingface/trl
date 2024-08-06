@@ -68,10 +68,8 @@ class ModelConfig:
         default=False,
         metadata={
             "help": (
-                "When set to True, uses <a href='https://doi.org/10.48550/arXiv.2312.03732'>Rank-Stabilized LoRA</a>"
-                " which sets the adapter scaling factor to `lora_alpha/math.sqrt(r)`, since it"
-                " was proven to work better. Otherwise, it will use the original default"
-                " value of `lora_alpha/r`."
+                "Use Rank-Stabilized LoRA (https://huggingface.co/papers/2312.03732), which sets the adapter "
+                "scaling factor to lora_alpha/√r, instead of the original default value of `lora_alpha/r`."
             )
         },
     )
