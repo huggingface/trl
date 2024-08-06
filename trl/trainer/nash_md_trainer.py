@@ -372,7 +372,7 @@ class NashMDTrainer(OnlineDPOTrainer):
 
                 contains_eos_token = torch.any(postprocessed_mixture_response == tokenizer.eos_token_id, dim=-1)
                 if args.non_eos_penalty:
-                    mixture_scores = torch.where(contains_eos_token, args.penalty_reward_value, mixture_scores)
+                    mixture_scores = torch.where(contains_eos_token, mixture_scores, args.penalty_reward_value)
 
                 # accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
 
@@ -424,7 +424,6 @@ class NashMDTrainer(OnlineDPOTrainer):
                             micro_batch_end = micro_batch_start + args.per_device_train_batch_size
                             micro_batch_inds = mini_batch_inds[micro_batch_start:micro_batch_end]
 
-                            respo
 
                             ## chosen
                             chosen_mb_inds = chosen_model_indices[micro_batch_inds]
