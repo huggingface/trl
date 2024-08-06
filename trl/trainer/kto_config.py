@@ -61,7 +61,7 @@ class KTOConfig(TrainingArguments):
         dataset_num_proc: (`Optional[int]`, *optional*, defaults to `None`):
             Number of processes to use for processing the datasets.
         loss_type: (`Literal["kto", "bco"]`, *optional*):
-            The type of loss to use. Either `"kto"` the default KTO loss, `"bco"` loss from [BCO](https://arxiv.org/abs/2404.04656) paper.
+            The type of loss to use. Either `"kto"` the default KTO loss, `"bco"` loss from [BCO](https://huggingface.co/papers/2404.04656) paper.
         prompt_sample_size: (`int`, defaults to 1024):
             Number of prompts that are fed to density ratio classifier.
         min_density_ratio: (`float`, defaults to 0.5):

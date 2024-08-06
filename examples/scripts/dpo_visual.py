@@ -95,13 +95,13 @@ if __name__ == "__main__":
     )
     peft_config = get_peft_config(model_config)
     if peft_config is None:
-        model_ref = AutoModelForVision2Seq.from_pretrained(
+        ref_model = AutoModelForVision2Seq.from_pretrained(
             model_config.model_name_or_path,
             trust_remote_code=model_config.trust_remote_code,
             **model_kwargs,
         )
     else:
-        model_ref = None
+        ref_model = None
     processor = AutoProcessor.from_pretrained(
         model_config.model_name_or_path,
         trust_remote_code=model_config.trust_remote_code,
@@ -160,7 +160,7 @@ if __name__ == "__main__":
     with init_context:
         trainer = DPOTrainer(
             model,
-            model_ref,
+            ref_model,
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,

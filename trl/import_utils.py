@@ -101,6 +101,14 @@ def is_sklearn_available() -> bool:
     return find_spec("sklearn") is not None
 
 
+def is_llmblender_available() -> bool:
+    return find_spec("llm_blender") is not None
+
+
+def is_openai_available() -> bool:
+    return find_spec("openai") is not None
+
+
 def is_xpu_available() -> bool:
     if is_accelerate_greater_20_0():
         import accelerate

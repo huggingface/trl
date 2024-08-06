@@ -38,10 +38,10 @@ class DPOConfig(TrainingArguments):
         beta (`float`, defaults to 0.1):
             The beta factor in DPO loss. Higher beta means less divergence from the initial policy. For the IPO loss, beta is the regularization parameter denoted by tau in the paper.
         label_smoothing (`float`, defaults to 0):
-            The robust DPO label smoothing parameter from the [cDPO](https://ericmitchell.ai/cdpo.pdf) report and [Robust DPO](https://arxiv.org/abs/2403.00409) paper that should be between 0 and 0.5.
+            The robust DPO label smoothing parameter from the [cDPO](https://ericmitchell.ai/cdpo.pdf) report and [Robust DPO](https://huggingface.co/papers/2403.00409) paper that should be between 0 and 0.5.
         loss_type (`str`, defaults to `"sigmoid"`):
-            The type of DPO loss to use. Either `"sigmoid"` the default DPO loss,`"hinge"` loss from [SLiC](https://arxiv.org/abs/2305.10425) paper, `"ipo"` from [IPO](https://arxiv.org/abs/2310.12036) paper,
-            `"bco_pair"` from [BCO](https://arxiv.org/abs/2404.04656) paper or `"robust"` from [Robust DPO](https://arxiv.org/abs/2403.00409) paper,
+            The type of DPO loss to use. Either `"sigmoid"` the default DPO loss,`"hinge"` loss from [SLiC](https://huggingface.co/papers/2305.10425) paper, `"ipo"` from [IPO](https://huggingface.co/papers/2310.12036) paper,
+            `"bco_pair"` from [BCO](https://huggingface.co/papers/2404.04656) paper or `"robust"` from [Robust DPO](https://huggingface.co/papers/2403.00409) paper,
             "aot" and "aot_pair" from alignment via optimal transport
         label_pad_token_id (`int`, defaults to `-100`):
             The label pad token id. This argument is required if you want to use the default data collator.
@@ -83,13 +83,13 @@ class DPOConfig(TrainingArguments):
         f_alpha_divergence_coef (`float`, *optional*, defaults to `1.0`):
             The alpha coef in alpha-divergence(u^-alpha) regularization function for DPO loss.
         sync_ref_model ('bool', defaults to `False`):
-            The flag for syncing reference model during training from the [TR-DPO](https://arxiv.org/pdf/2404.09656) paper.
+            The flag for syncing reference model during training from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper.
         ref_model_mixup_alpha ('float', defaults to 1.0):
-            The alpha parameter from the [TR-DPO](https://arxiv.org/pdf/2404.09656) paper.
+            The alpha parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper.
         ref_model_sync_steps ('int', defaults to 2):
-            The tau parameter from the [TR-DPO](https://arxiv.org/pdf/2404.09656) paper.
+            The tau parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper.
         rpo_alpha ('float', defaults to `None`):
-            The alpha parameter from the [RPO](https://arxiv.org/pdf/2404.19733) paper. If None, no weighting is applied and the loss is the same as the DPO loss.
+            The alpha parameter from the [RPO](https://huggingface.co/papers/2404.19733) paper. If None, no weighting is applied and the loss is the same as the DPO loss.
     """
 
     beta: float = 0.1

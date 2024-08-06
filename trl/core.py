@@ -52,7 +52,7 @@ def top_k_top_p_filtering(
             If > 0, only keep the top k tokens with highest probability (top-k filtering)
         top_p (`float`, *optional*, defaults to 1.0):
             If < 1.0, only keep the top tokens with cumulative probability >= top_p (nucleus filtering). Nucleus
-            filtering is described in Holtzman et al. (http://arxiv.org/abs/1904.09751)
+            filtering is described in Holtzman et al. (https://huggingface.co/papers/1904.09751)
         min_tokens_to_keep (`int`, *optional*, defaults to 1):
             Minimumber of tokens we keep per batch example in the output.
 

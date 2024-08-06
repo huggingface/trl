@@ -96,8 +96,9 @@ if __name__ == "__main__":
         tokenizer.chat_template = "{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"
 
     def process(row):
-        row["chosen"] = tokenizer.apply_chat_template(row["chosen"], tokenize=False)
-        row["rejected"] = tokenizer.apply_chat_template(row["rejected"], tokenize=False)
+        row["prompt"] = tokenizer.apply_chat_template(row["chosen"][:-1], tokenize=False)
+        row["chosen"] = tokenizer.apply_chat_template([row["chosen"][-1]], tokenize=False)
+        row["rejected"] = tokenizer.apply_chat_template([row["rejected"][-1]], tokenize=False)
         return row
 
     ds = ds.map(
