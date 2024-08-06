@@ -1,7 +1,6 @@
 import unittest
 
 import torch
-from pytest import mark
 
 from trl import is_peft_available
 from trl.trainer.model_config import ModelConfig
@@ -67,7 +66,6 @@ class TestPad(unittest.TestCase):
 
 
 @require_peft
-@mark.peft_test
 class TestGetPEFTConfig(unittest.TestCase):
     def test_create_peft_config_use_peft_false(self):
         r"""
