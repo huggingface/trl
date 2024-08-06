@@ -96,17 +96,16 @@ class GKDTrainer(SFTTrainer):
 
         # Compute log probabilities for student and probabilities for teacher
         student_log_probs = F.log_softmax(student_logits, dim=-1)
-        teacher_probs = F.softmax(teacher_logits, dim=-1)
+        teacher_log_probs = F.log_softmax(teacher_logits, dim=-1)
 
-        # Compute the interpolated distribution and add epsilon to avoid numerical instability when calcuating log
-        student_probs = student_log_probs.exp()
-        interpolated_probs = (beta * teacher_probs + (1 - beta) * student_probs) + 1e-8
+        # Compute the interpolated log probabilities
+        interpolated_log_probs = beta * teacher_log_probs + (1 - beta) * student_log_probs
 
         # Compute KL divergences using F.kl_div
-        kl_teacher = F.kl_div(interpolated_probs.log(), teacher_logits, reduction="none", log_target=True)
-        kl_student = F.kl_div(interpolated_probs.log(), student_logits, reduction="none", log_target=True)
+        kl_teacher = F.kl_div(interpolated_log_probs, teacher_logits, reduction="none", log_target=True)
+        kl_student = F.kl_div(interpolated_log_probs, student_logits, reduction="none", log_target=True)
 
-        # Combine KL divergences
+        # Compute the Generalized Jensen-Shannon Divergence
         jsd = beta * kl_student + (1 - beta) * kl_teacher
 
         # Apply reduction
