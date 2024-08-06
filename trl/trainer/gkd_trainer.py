@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import random
 import warnings
 from typing import Any, Dict, Optional, Union
 
@@ -106,7 +105,7 @@ class GKDTrainer(SFTTrainer):
         # Compute KL divergences using F.kl_div
         kl_teacher = F.kl_div(interpolated_probs.log(), teacher_logits, reduction="none", log_target=True)
         kl_student = F.kl_div(interpolated_probs.log(), student_logits, reduction="none", log_target=True)
-        
+
         # Combine KL divergences
         jsd = beta * kl_student + (1 - beta) * kl_teacher
 
@@ -136,8 +135,8 @@ class GKDTrainer(SFTTrainer):
         batch_size = inputs["labels"].shape[0]
         for i in range(batch_size):
             index = (inputs["labels"] != -100)[i]
-            student_logits = outputs_student.logits[i, index, :][-self.args.max_new_tokens_response:,:]
-            teacher_logits = outputs_teacher.logits[i, index, :][-self.args.max_new_tokens_response:,:]
+            student_logits = outputs_student.logits[i, index, :][-self.args.max_new_tokens_response :, :]
+            teacher_logits = outputs_teacher.logits[i, index, :][-self.args.max_new_tokens_response :, :]
             loss += self.generalized_jsd_loss(
                 student_logits=student_logits,
                 teacher_logits=teacher_logits,
@@ -145,7 +144,7 @@ class GKDTrainer(SFTTrainer):
             )
 
         # Return loss
-        return (loss/batch_size, outputs_student) if return_outputs else loss/batch_size
+        return (loss / batch_size, outputs_student) if return_outputs else loss / batch_size
 
     def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         """
