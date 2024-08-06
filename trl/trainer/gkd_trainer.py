@@ -76,7 +76,7 @@ class GKDTrainer(SFTTrainer):
         self.temperature = args.temperature
 
     @staticmethod
-    def generalized_jsd_loss(student_logits, teacher_logits, beta=0.5, temperature=1.0, reduction="batchmean"):
+    def generalized_jsd_loss(student_logits, teacher_logits, beta=0.5, temperature=1.0, reduction="mean"):
         """
         Compute the Generalized Jensen-Shannon Divergence loss for knowledge distillation using F.kl_div.
 
@@ -106,7 +106,7 @@ class GKDTrainer(SFTTrainer):
         # Compute KL divergences using F.kl_div
         kl_teacher = F.kl_div(interpolated_probs.log(), teacher_logits, reduction="none", log_target=True)
         kl_student = F.kl_div(interpolated_probs.log(), student_logits, reduction="none", log_target=True)
-
+        
         # Combine KL divergences
         jsd = beta * kl_student + (1 - beta) * kl_teacher
 
@@ -132,15 +132,20 @@ class GKDTrainer(SFTTrainer):
             input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], labels=inputs["labels"]
         )
 
-        # compute the generalized JSD loss of student w.r.t teacher with parameter beta
-        loss = self.generalized_jsd_loss(
-            outputs_student.logits[:, -self.args.max_new_tokens_response :, :],
-            outputs_teacher.logits[:, -self.args.max_new_tokens_response :, :],
-            beta=self.beta,
-        )
+        loss = 0
+        batch_size = inputs["labels"].shape[0]
+        for i in range(batch_size):
+            index = (inputs["labels"] != -100)[i]
+            student_logits = outputs_student.logits[i, index, :][-self.args.max_new_tokens_response:,:]
+            teacher_logits = outputs_teacher.logits[i, index, :][-self.args.max_new_tokens_response:,:]
+            loss += self.generalized_jsd_loss(
+                student_logits=student_logits,
+                teacher_logits=teacher_logits,
+                beta=self.beta,
+            )
 
-        # Return weighted student loss
-        return (loss, outputs_student) if return_outputs else loss
+        # Return loss
+        return (loss/batch_size, outputs_student) if return_outputs else loss/batch_size
 
     def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         """
@@ -160,7 +165,7 @@ class GKDTrainer(SFTTrainer):
         Return:
             `torch.Tensor`: The tensor with training loss on this batch.
         """
-        if random.random() >= self.lmbda:
+        if False:
             # On-policy: Generate outputs from the student model with temperature self.temperature
             with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
                 generation_config = GenerationConfig(
@@ -172,11 +177,12 @@ class GKDTrainer(SFTTrainer):
 
                 # generate output with respect to the prompt only
                 generated_outputs = unwrapped_model.generate(
-                    input_ids=torch.masked_fill(inputs["prompts"], ~attention_mask, 0),
+                    input_ids=torch.masked_fill(inputs["prompts"], ~attention_mask, self.tokenizer.pad_token_id),
                     attention_mask=attention_mask,
                     generation_config=generation_config,
                     return_dict_in_generate=True,
                 )
+
                 # set input_ids to the generated output and attention_mask to 1 where the generated output is not the pad token
                 inputs["input_ids"] = torch.where(
                     generated_outputs.sequences != -100, generated_outputs.sequences, self.tokenizer.pad_token_id
