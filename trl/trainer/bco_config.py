@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from dataclasses import dataclass
-from typing import Dict, Literal, Optional
+from typing import Dict, Optional
 
 from transformers import TrainingArguments
 
@@ -20,9 +20,9 @@ from ..import_utils import is_sklearn_available
 
 
 @dataclass
-class KTOConfig(TrainingArguments):
+class BCOConfig(TrainingArguments):
     r"""
-    KTOConfig collects all training arguments related to the [`KTOTrainer`] class.
+    BCOConfig collects all training arguments related to the [`BCOTrainer`] class.
 
     Using [`HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
@@ -36,11 +36,7 @@ class KTOConfig(TrainingArguments):
         max_completion_length (`int`, *optional*, defaults to `None`):
             The maximum length of the target. This argument is required if you want to use the default data collator and your model is an encoder-decoder.
         beta (`float`, defaults to 0.1):
-            The beta factor in KTO loss. Higher beta means less divergence from the initial policy.
-        desirable_weight (`float`, *optional*, defaults to 1.0):
-            The desirable losses are weighed by this factor to counter unequal number of desirable and undesirable paris.
-        undesirable_weight (`float`, *optional*, defaults to 1.0):
-            The undesirable losses are weighed by this factor to counter unequal number of desirable and undesirable pairs.
+            The beta factor in BCO loss. Higher beta means less divergence from the initial policy.
         label_pad_token_id (`int`, defaults to `-100`):
             The label pad token id. This argument is required if you want to use the default data collator.
         padding_value (`int`, defaults to `0`):
@@ -60,8 +56,6 @@ class KTOConfig(TrainingArguments):
             Dict of Optional kwargs to pass when instantiating the ref model from a string.
         dataset_num_proc: (`Optional[int]`, *optional*, defaults to `None`):
             Number of processes to use for processing the datasets.
-        loss_type: (`Literal["kto", "bco"]`, *optional*):
-            The type of loss to use. Either `"kto"` the default KTO loss, `"bco"` loss from [BCO](https://huggingface.co/papers/2404.04656) paper.
         prompt_sample_size: (`int`, defaults to 1024):
             Number of prompts that are fed to density ratio classifier.
         min_density_ratio: (`float`, defaults to 0.5):
@@ -77,11 +71,7 @@ class KTOConfig(TrainingArguments):
     max_completion_length: Optional[int] = None
     """The maximum length of the target. This argument is required if you want to use the default data collator and your model is an encoder-decoder."""
     beta: float = 0.1
-    """The beta factor in KTO loss. Higher beta means less divergence from the initial policy."""
-    desirable_weight: Optional[float] = 1.0
-    """The desirable losses are weighed by this factor."""
-    undesirable_weight: Optional[float] = 1.0
-    """The undesirable losses are weighed by this factor."""
+    """The beta factor in BCO loss. Higher beta means less divergence from the initial policy."""
 
     label_pad_token_id: int = -100
     padding_value: int = None
@@ -93,8 +83,6 @@ class KTOConfig(TrainingArguments):
     ref_model_init_kwargs: Optional[Dict] = None
     dataset_num_proc: Optional[int] = None
 
-    loss_type: Literal["kto", "bco"] = "kto"
-
     # BCO config
     prompt_sample_size: int = 1024
     min_density_ratio: float = 0.5
@@ -103,8 +91,8 @@ class KTOConfig(TrainingArguments):
     def __post_init__(self):
         super().__post_init__()
 
-        if self.loss_type == "bco" and not is_sklearn_available():
+        if not is_sklearn_available():
             raise ImportError(
-                "You need to install scikit-learn to use loss_type='bco' "
+                "You need to install scikit-learn to use `BCOTrainer` "
                 "You can install it with `pip install scikit-learn`."
             )

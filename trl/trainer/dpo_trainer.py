@@ -48,6 +48,8 @@ from .dpo_config import DPOConfig, FDivergenceConstants, FDivergenceType
 from .utils import (
     DPODataCollatorWithPadding,
     RunningMoments,
+    add_bos_token_if_needed,
+    add_eos_token_if_needed,
     cap_exp,
     disable_dropout_in_model,
     pad_to_length,
@@ -857,25 +859,20 @@ class DPOTrainer(Trainer):
                 )
 
             # add BOS token to head of prompt. Avoid adding if it's already there
-            bos_token_id = self.tokenizer.bos_token_id
-            if prompt_len_input_ids == 0 or bos_token_id != prompt_tokens["prompt_input_ids"][0]:
-                prompt_tokens["prompt_input_ids"] = [bos_token_id] + prompt_tokens["prompt_input_ids"]
-                prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens["prompt_attention_mask"]
-            if chosen_prompt_len_input_ids == 0 or bos_token_id != chosen_tokens["prompt_input_ids"][0]:
-                chosen_tokens["prompt_input_ids"] = [bos_token_id] + chosen_tokens["prompt_input_ids"]
-                chosen_tokens["prompt_attention_mask"] = [1] + chosen_tokens["prompt_attention_mask"]
-            if rejected_prompt_len_input_ids == 0 or bos_token_id != rejected_tokens["prompt_input_ids"][0]:
-                rejected_tokens["prompt_input_ids"] = [bos_token_id] + rejected_tokens["prompt_input_ids"]
-                rejected_tokens["prompt_attention_mask"] = [1] + rejected_tokens["prompt_attention_mask"]
+            prompt_tokens, chosen_tokens, rejected_tokens = add_bos_token_if_needed(
+                self.tokenizer.bos_token_id,
+                prompt_len_input_ids,
+                prompt_tokens,
+                chosen_prompt_len_input_ids,
+                chosen_tokens,
+                rejected_prompt_len_input_ids,
+                rejected_tokens,
+            )
 
             # add EOS token to end of answer. Avoid adding if it's already there
-            eos_token_id = self.tokenizer.eos_token_id
-            if len(chosen_tokens["input_ids"]) == 0 or eos_token_id != chosen_tokens["input_ids"][-1]:
-                chosen_tokens["input_ids"].append(eos_token_id)
-                chosen_tokens["attention_mask"].append(1)
-            if len(rejected_tokens["input_ids"]) == 0 or eos_token_id != rejected_tokens["input_ids"][-1]:
-                rejected_tokens["input_ids"].append(eos_token_id)
-                rejected_tokens["attention_mask"].append(1)
+            chosen_tokens, rejected_tokens = add_eos_token_if_needed(
+                self.tokenizer.eos_token_id, chosen_tokens, rejected_tokens
+            )
 
             longer_response_length = max(len(chosen_tokens["input_ids"]), len(rejected_tokens["input_ids"]))
 
@@ -1130,7 +1127,7 @@ class DPOTrainer(Trainer):
                 + F.logsigmoid(-self.beta * logits) * self.label_smoothing
             ) / (1 - 2 * self.label_smoothing)
         elif self.loss_type == "exo_pair":
-            # eqn (16) of the EXO paper: https://arxiv.org/pdf/2402.00856
+            # eqn (16) of the EXO paper: https://huggingface.co/papers/2402.00856
             import math
 
             if self.label_smoothing == 0:
@@ -1157,7 +1154,7 @@ class DPOTrainer(Trainer):
                 -(self.beta * rejected_logratios - delta)
             )
         elif self.loss_type == "sppo_hard":
-            # In the paper (https://arxiv.org/pdf/2405.00675), SPPO employs a soft probability approach, estimated using the PairRM score. The probability calculation is conducted outside of the trainer class. The version described here is the hard probability version, where P in Equation (4.7) of Algorithm 1 is set to 1 for the winner and 0 for the loser.
+            # In the paper (https://huggingface.co/papers/2405.00675), SPPO employs a soft probability approach, estimated using the PairRM score. The probability calculation is conducted outside of the trainer class. The version described here is the hard probability version, where P in Equation (4.7) of Algorithm 1 is set to 1 for the winner and 0 for the loser.
             a = policy_chosen_logps - reference_chosen_logps
             b = policy_rejected_logps - reference_rejected_logps
 

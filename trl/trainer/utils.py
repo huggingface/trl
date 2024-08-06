@@ -11,15 +11,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import dataclasses
+import json
 import random
 import warnings
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 import torch
+from accelerate import Accelerator
 from accelerate.state import AcceleratorState, PartialState
 from rich.console import Console
 from rich.table import Table
@@ -29,6 +32,8 @@ from transformers import (
     BitsAndBytesConfig,
     DataCollatorForLanguageModeling,
     PreTrainedTokenizerBase,
+    TrainerState,
+    TrainingArguments,
 )
 
 from ..import_utils import is_peft_available, is_unsloth_available, is_xpu_available
@@ -42,7 +47,7 @@ if is_peft_available():
 class AdaptiveKLController:
     """
     Adaptive KL controller described in the paper:
-    https://arxiv.org/pdf/1909.08593.pdf
+    https://huggingface.co/papers/1909.08593
     """
 
     def __init__(self, init_kl_coef, target, horizon):
@@ -545,17 +550,19 @@ class ConstantLengthDataset(IterableDataset):
                 }
 
 
+@dataclass
 class RunningMoments:
-    def __init__(self, accelerator):
-        """
-        Calculates the running mean and standard deviation of a data stream. Reference:
-        https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/utils.py#L75
-        """
-        self.mean = 0
-        self.std = 1
-        self.var = 1
-        self.count = 1e-24
-        self.accelerator = accelerator
+
+    """
+    Calculates the running mean and standard deviation of a data stream. Reference:
+    https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/utils.py#L75
+    """
+
+    accelerator: Accelerator
+    mean: float = 0
+    std: float = 1
+    var: float = 1
+    count: float = 1e-24
 
     @torch.no_grad()
     def update(self, xs: torch.Tensor) -> Tuple[float, float]:
@@ -577,16 +584,36 @@ class RunningMoments:
         old_sum = self.var * self.count + delta**2 * self.count * xs_count / tot_count
         tot_sum = old_sum + new_sum
 
-        self.mean += delta * xs_count / tot_count
-        self.var = tot_sum / tot_count
-        self.std = (self.var * tot_count / (tot_count - 1)).float().sqrt()
+        self.mean += (delta * xs_count / tot_count).item()
+        new_var = tot_sum / tot_count
+        self.std = (new_var * tot_count / (tot_count - 1)).float().sqrt().item()
+        self.var = new_var.item()
         self.count = tot_count
 
         return xs_mean.item(), (xs_var * xs_count / (xs_count - 1)).float().sqrt().item()
 
+    def save_to_json(self, json_path: str):
+        """Save the content of this instance in JSON format inside `json_path`."""
+        # save everything except accelerator
+        if self.accelerator.is_main_process:
+            save_dict = dataclasses.asdict(self, dict_factory=lambda x: {k: v for (k, v) in x if k != "accelerator"})
+            json_string = json.dumps(save_dict, indent=2, sort_keys=True) + "\n"
+            with open(json_path, "w", encoding="utf-8") as f:
+                f.write(json_string)
+
+    @classmethod
+    def load_from_json(cls, accelerator: Accelerator, json_path: str):
+        """Create an instance from the content of `json_path`."""
+        # load everything except accelerator
+        with open(json_path, encoding="utf-8") as f:
+            text = f.read()
+        return cls(accelerator=accelerator, **json.loads(text))
+
 
 @torch.no_grad()
-def get_global_statistics(accelerator, xs: torch.Tensor, mask=None, device="cpu") -> Tuple[float, float, int]:
+def get_global_statistics(
+    accelerator, xs: torch.Tensor, mask=None, device="cpu"
+) -> Tuple[torch.Tensor, torch.Tensor, int]:
     """
     Computes element-wise mean and variance of the tensor across processes. Reference:
     https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/utils.py#L57C1-L73C75
@@ -601,7 +628,7 @@ def get_global_statistics(accelerator, xs: torch.Tensor, mask=None, device="cpu"
     sum_var = accelerator.reduce(sum_var)
     global_var = sum_var / count
 
-    return global_mean.to(device), global_var.to(device), count.to(device)
+    return global_mean.to(device), global_var.to(device), count.item()
 
 
 def compute_accuracy(eval_pred) -> Dict[str, float]:
@@ -752,6 +779,7 @@ def get_quantization_config(model_config: ModelConfig) -> Optional[BitsAndBytesC
             bnb_4bit_compute_dtype=model_config.torch_dtype,  # For consistency with model weights, we use the same value as `torch_dtype`
             bnb_4bit_quant_type=model_config.bnb_4bit_quant_type,
             bnb_4bit_use_double_quant=model_config.use_bnb_nested_quant,
+            bnb_4bit_quant_storage=model_config.torch_dtype,
         )
     elif model_config.load_in_8bit:
         quantization_config = BitsAndBytesConfig(
@@ -840,12 +868,49 @@ SIMPLE_QUERY_CHAT_TEMPLATE = "{% for message in messages %}{{' ' + message['cont
 
 
 @dataclass
-class OnpolicyRuntimeConfig:
+class OnlineTrainerState(TrainerState):
+    episode: int = 0
+
+
+@dataclass
+class OnPolicyConfig(TrainingArguments):
+    # common config
+    run_name: Optional[str] = None
+    """a unique name of this run"""
+    sanity_check: bool = False
+    """wether to run in debug mode"""
+
+    # batch size related config
+    num_mini_batches: int = 1
+    """Number of minibatches to split a batch into"""
+    total_episodes: Optional[int] = None
+    """The total number of episodes in the dataset"""
+    local_rollout_forward_batch_size: int = 64
+    """per rank no grad forward pass in the rollout phase"""
+    num_sample_generations: int = 10
+    """the number of debugging samples generations (i.e., `generate_completions` calls) throughout training"""
+
+    # other config
+    response_length: int = 53
+    """the length of the response"""
+    stop_token: Optional[Literal["eos"]] = None
+    """the stop token"""
+    stop_token_id: Optional[int] = None
+    """the truncation token id"""
+    temperature: float = 0.7
+    """the sampling temperature"""
+    penalty_reward_value: int = -1
+    """the reward value for responses that do not contain `stop_token_id`"""
+    non_eos_penalty: bool = False
+    """whether to penalize responses that do not contain `stop_token_id`"""
+    sft_model_path: str = "EleutherAI/pythia-160m"
+    """the path to the sft model"""
+
     # various batch sizes
     world_size: Optional[int] = None
     """The number of processes (GPUs) to use"""
-    num_updates: Optional[int] = None
-    """The number of updates to train"""
+    num_total_batches: Optional[int] = None
+    """The number of total batches to train"""
     micro_batch_size: Optional[int] = None
     """The micro batch size across devices (HF's `per_device_train_batch_size` * `world_size`)"""
     local_batch_size: Optional[int] = None
@@ -1077,3 +1142,60 @@ def generate(
     )
     logits = torch.stack(output.scores, 1)
     return torch.cat((queries, output.sequences[:, context_length:]), dim=1), logits
+
+
+@torch.no_grad()
+def batch_generation(
+    model: torch.nn.Module,
+    queries: torch.Tensor,
+    local_rollout_forward_batch_size: int,
+    pad_token_id: int,
+    generation_config: dict,
+):
+    query_responses = []
+    logitss = []
+    for i in range(0, queries.shape[0], local_rollout_forward_batch_size):
+        query = queries[i : i + local_rollout_forward_batch_size]
+        query_response, logits = generate(
+            model,
+            query,
+            pad_token_id,
+            generation_config,
+        )
+        query_responses.append(query_response)
+        logitss.append(logits)
+    return torch.cat(query_responses, 0), torch.cat(logitss, 0)
+
+
+def add_bos_token_if_needed(
+    bos_token_id: Optional[int],
+    prompt_len_input_ids: int,
+    prompt_tokens: Dict[str, List[int]],
+    chosen_prompt_len_input_ids: int,
+    chosen_tokens: Dict[str, List[int]],
+    rejected_prompt_len_input_ids: int,
+    rejected_tokens: Dict[str, List[int]],
+):
+    if bos_token_id is not None:
+        if prompt_len_input_ids == 0 or bos_token_id != prompt_tokens["prompt_input_ids"][0]:
+            prompt_tokens["prompt_input_ids"] = [bos_token_id] + prompt_tokens["prompt_input_ids"]
+            prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens["prompt_attention_mask"]
+        if chosen_prompt_len_input_ids == 0 or bos_token_id != chosen_tokens["prompt_input_ids"][0]:
+            chosen_tokens["prompt_input_ids"] = [bos_token_id] + chosen_tokens["prompt_input_ids"]
+            chosen_tokens["prompt_attention_mask"] = [1] + chosen_tokens["prompt_attention_mask"]
+        if rejected_prompt_len_input_ids == 0 or bos_token_id != rejected_tokens["prompt_input_ids"][0]:
+            rejected_tokens["prompt_input_ids"] = [bos_token_id] + rejected_tokens["prompt_input_ids"]
+            rejected_tokens["prompt_attention_mask"] = [1] + rejected_tokens["prompt_attention_mask"]
+    return prompt_tokens, chosen_tokens, rejected_tokens
+
+
+def add_eos_token_if_needed(
+    eos_token_id: int, chosen_tokens: Dict[str, List[int]], rejected_tokens: Dict[str, List[int]]
+):
+    if len(chosen_tokens["input_ids"]) == 0 or eos_token_id != chosen_tokens["input_ids"][-1]:
+        chosen_tokens["input_ids"].append(eos_token_id)
+        chosen_tokens["attention_mask"].append(1)
+    if len(rejected_tokens["input_ids"]) == 0 or eos_token_id != rejected_tokens["input_ids"][-1]:
+        rejected_tokens["input_ids"].append(eos_token_id)
+        rejected_tokens["attention_mask"].append(1)
+    return chosen_tokens, rejected_tokens

@@ -66,16 +66,16 @@ class SFTTrainer(Trainer):
             The model to train, can be a `PreTrainedModel`, a `torch.nn.Module` or a string with the model name to
             load from cache or download. The model can be also converted to a `PeftModel` if a `PeftConfig` object is
             passed to the `peft_config` argument.
-        args (Optional[`SFTConfig`]):
+        args (`Optional[SFTConfig]`):
             The arguments to tweak for training. Will default to a basic instance of [`SFTConfig`] with the `output_dir`
             set to a directory named *tmp_trainer* in the current directory if not provided.
-        data_collator (Optional[`transformers.DataCollator`]):
+        data_collator (`Optional[transformers.DataCollator]`):
             The data collator to use for training.
-        train_dataset (Optional[`datasets.Dataset`]):
+        train_dataset (`Optional[datasets.Dataset]`):
             The dataset to use for training. We recommend users to use `trl.trainer.ConstantLengthDataset` to create their dataset.
         eval_dataset (Optional[Union[`datasets.Dataset`, Dict[`str`, `datasets.Dataset`]]]):
             The dataset to use for evaluation. We recommend users to use `trl.trainer.ConstantLengthDataset` to create their dataset.
-        tokenizer (Optional[`transformers.PreTrainedTokenizer`]):
+        tokenizer (`Optional[transformers.PreTrainedTokenizer]`):
             The tokenizer to use for training. If not specified, the tokenizer associated to the model will be used.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
             The model initializer to use for training. If None is specified, the default model initializer will be used.
@@ -566,7 +566,10 @@ class SFTTrainer(Trainer):
 
         signature_columns = ["input_ids", "labels", "attention_mask"]
 
-        extra_columns = list(set(dataset.column_names) - set(signature_columns))
+        if dataset.column_names is not None:  # None for IterableDataset
+            extra_columns = list(set(dataset.column_names) - set(signature_columns))
+        else:
+            extra_columns = []
 
         if not remove_unused_columns and len(extra_columns) > 0:
             warnings.warn(
@@ -574,13 +577,14 @@ class SFTTrainer(Trainer):
                 f"inspect dataset other columns (in this case {extra_columns}), you can subclass `DataCollatorForLanguageModeling` in case you used the default collator and create your own data collator in order to inspect the unused dataset columns."
             )
 
-        tokenized_dataset = dataset.map(
-            tokenize,
-            batched=True,
-            remove_columns=dataset.column_names if remove_unused_columns else None,
-            num_proc=self.dataset_num_proc,
-            batch_size=self.dataset_batch_size,
-        )
+        map_kwargs = {
+            "batched": True,
+            "remove_columns": dataset.column_names if remove_unused_columns else None,
+            "batch_size": self.dataset_batch_size,
+        }
+        if isinstance(dataset, datasets.Dataset):
+            map_kwargs["num_proc"] = self.dataset_num_proc  # this arg is not available for IterableDataset
+        tokenized_dataset = dataset.map(tokenize, **map_kwargs)
 
         return tokenized_dataset
 
@@ -637,7 +641,7 @@ class SFTTrainer(Trainer):
 
     def _trl_activate_neftune(self, model):
         r"""
-        Activates the neftune as presented in this code: https://github.com/neelsjain/NEFTune and paper: https://arxiv.org/abs/2310.05914
+        Activates the neftune as presented in this code: https://github.com/neelsjain/NEFTune and paper: https://huggingface.co/papers/2310.05914
         Since in transformers Trainer we do have an `_activate_neftune` method, we need to rename this method to avoid conflicts.
         """
         unwrapped_model = unwrap_model(model)

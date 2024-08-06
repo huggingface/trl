@@ -13,20 +13,22 @@
 # limitations under the License.
 import tempfile
 import unittest
+from functools import partial
 
 import torch
+from accelerate import Accelerator
 from datasets import Dataset
 from parameterized import parameterized
 from pytest import mark
-from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
+from transformers import AutoModel, AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
-from trl import KTOConfig, KTOTrainer
-from trl.trainer.kto_trainer import _get_kl_dataset, _process_tokens, _tokenize
+from trl import BCOConfig, BCOTrainer
+from trl.trainer.bco_trainer import _process_tokens, _tokenize
 
 from .testing_utils import require_no_wandb, require_peft
 
 
-class KTOTrainerTester(unittest.TestCase):
+class BCOTrainerTester(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
@@ -40,6 +42,11 @@ class KTOTrainerTester(unittest.TestCase):
         cls.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         cls.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         cls.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        # get embedding model
+        model_id = "facebook/bart-base"
+        cls.embedding_model = AutoModel.from_pretrained(model_id)
+        cls.embedding_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
     def _init_dummy_dataset(self):
         # fmt: off
@@ -79,15 +86,13 @@ class KTOTrainerTester(unittest.TestCase):
         [
             ["gpt2", True, True],
             ["gpt2", True, False],
-            # ["t5", True],
             ["gpt2", False, True],
             ["gpt2", False, False],
-            # ["t5", False],
         ]
     )
-    def test_kto_trainer(self, name, pre_compute, eval_dataset):
+    def test_bco_trainer(self, name, pre_compute, eval_dataset):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = KTOConfig(
+            training_args = BCOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -97,6 +102,7 @@ class KTOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 beta=0.1,
                 precompute_ref_log_probs=pre_compute,
+                report_to=[],
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -110,7 +116,7 @@ class KTOTrainerTester(unittest.TestCase):
                 ref_model = self.t5_ref_model
                 tokenizer = self.t5_tokenizer
 
-            trainer = KTOTrainer(
+            trainer = BCOTrainer(
                 model=model,
                 ref_model=ref_model,
                 args=training_args,
@@ -130,11 +136,11 @@ class KTOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 # check the params have changed - ignore 0 biases
                 if param.sum() != 0:
-                    self.assertFalse(torch.equal(param, new_param))
+                    self.assertFalse(torch.equal(param.cpu(), new_param.cpu()))
 
     def test_tokenize_and_process_tokens(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = KTOConfig(
+            training_args = BCOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -143,11 +149,12 @@ class KTOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
+                report_to=[],
             )
 
             dummy_dataset = self._init_dummy_dataset()
 
-            trainer = KTOTrainer(
+            trainer = BCOTrainer(
                 model=self.model,
                 ref_model=self.ref_model,
                 args=training_args,
@@ -170,21 +177,6 @@ class KTOTrainerTester(unittest.TestCase):
                 self.assertListEqual(tokenized_dataset["prompt_attention_mask"][0], [1, 1])
                 self.assertListEqual(tokenized_dataset["answer_input_ids"][0], [5968, 1219, 72, 3621, 284, 1826, 345])
                 self.assertListEqual(tokenized_dataset["answer_attention_mask"][0], [1, 1, 1, 1, 1, 1, 1])
-
-                # Test reversal of (prompt, completion) pairs for KL dataset
-                tokenized_kl_dataset = tokenized_dataset.map(_get_kl_dataset, batched=True, batch_size=2)
-                self.assertListEqual(
-                    tokenized_kl_dataset["prompt_input_ids"][0], tokenized_dataset["prompt_input_ids"][0]
-                )
-                self.assertListEqual(
-                    tokenized_kl_dataset["prompt_attention_mask"][0], tokenized_dataset["prompt_attention_mask"][0]
-                )
-                self.assertListEqual(
-                    tokenized_kl_dataset["answer_input_ids"][0], tokenized_dataset["answer_input_ids"][1]
-                )
-                self.assertListEqual(
-                    tokenized_kl_dataset["answer_attention_mask"][0], tokenized_dataset["answer_attention_mask"][1]
-                )
 
                 fn_kwargs = {
                     "prefix": "",
@@ -213,9 +205,9 @@ class KTOTrainerTester(unittest.TestCase):
                     [-100, -100, -100, 5968, 1219, 72, 3621, 284, 1826, 345, 50256],
                 )
 
-    def test_kto_trainer_without_providing_ref_model(self):
+    def test_bco_trainer_without_providing_ref_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = KTOConfig(
+            training_args = BCOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -224,11 +216,12 @@ class KTOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
+                report_to=[],
             )
 
             dummy_dataset = self._init_dummy_dataset()
 
-            trainer = KTOTrainer(
+            trainer = BCOTrainer(
                 model=self.model,
                 ref_model=None,
                 args=training_args,
@@ -248,11 +241,59 @@ class KTOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 # check the params have changed - ignore 0 biases
                 if param.sum() != 0:
-                    self.assertFalse(torch.equal(param, new_param))
+                    self.assertFalse(torch.equal(param.cpu(), new_param.cpu()))
+
+    def test_bco_trainer_udm(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = BCOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=4,
+                learning_rate=9e-1,
+                eval_strategy="steps",
+                beta=0.1,
+                report_to=[],
+            )
+
+            dummy_dataset = self._init_dummy_dataset()
+
+            def embed_prompt(input_ids, attention_mask, model):
+                outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+
+                return outputs.last_hidden_state.mean(dim=1)
+
+            embedding_model = Accelerator().prepare_model(self.embedding_model)
+            embedding_func = partial(embed_prompt, model=embedding_model)
+
+            trainer = BCOTrainer(
+                model=self.model,
+                ref_model=None,
+                args=training_args,
+                tokenizer=self.tokenizer,
+                train_dataset=dummy_dataset,
+                eval_dataset=dummy_dataset,
+                embedding_func=embedding_func,
+                embedding_tokenizer=self.embedding_tokenizer,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                # check the params have changed - ignore 0 biases
+                if param.sum() != 0:
+                    self.assertFalse(torch.equal(param.cpu(), new_param.cpu()))
 
     @require_peft
     @mark.peft_test
-    def test_kto_trainer_without_providing_ref_model_with_lora(self):
+    def test_bco_trainer_without_providing_ref_model_with_lora(self):
         from peft import LoraConfig
 
         lora_config = LoraConfig(
@@ -264,7 +305,7 @@ class KTOTrainerTester(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = KTOConfig(
+            training_args = BCOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -273,11 +314,12 @@ class KTOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
+                report_to=[],
             )
 
             dummy_dataset = self._init_dummy_dataset()
 
-            trainer = KTOTrainer(
+            trainer = BCOTrainer(
                 model=self.model,
                 ref_model=None,
                 args=training_args,
@@ -299,12 +341,12 @@ class KTOTrainerTester(unittest.TestCase):
                     new_param = trainer.model.get_parameter(n)
                     # check the params have changed - ignore 0 biases
                     if param.sum() != 0:
-                        self.assertFalse(torch.equal(param, new_param))
+                        self.assertFalse(torch.equal(param.cpu(), new_param.cpu()))
 
     @require_no_wandb
-    def test_kto_trainer_generate_during_eval_no_wandb(self):
+    def test_bco_trainer_generate_during_eval_no_wandb(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = KTOConfig(
+            training_args = BCOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -314,6 +356,7 @@ class KTOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 beta=0.1,
                 generate_during_eval=True,
+                report_to=[],
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -323,7 +366,7 @@ class KTOTrainerTester(unittest.TestCase):
                 expected_regex="`generate_during_eval=True` requires Weights and Biases to be installed."
                 " Please install with `pip install wandb` to resolve.",
             ):
-                KTOTrainer(
+                BCOTrainer(
                     model=self.model,
                     ref_model=None,
                     args=training_args,
@@ -334,7 +377,7 @@ class KTOTrainerTester(unittest.TestCase):
 
     @require_peft
     @mark.peft_test
-    def test_kto_lora_save(self):
+    def test_bco_lora_save(self):
         from peft import LoraConfig, get_peft_model
 
         lora_config = LoraConfig(
@@ -350,7 +393,7 @@ class KTOTrainerTester(unittest.TestCase):
         model_peft = get_peft_model(model, lora_config)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = KTOConfig(
+            training_args = BCOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -359,12 +402,13 @@ class KTOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
+                report_to=[],
             )
 
             dummy_dataset = self._init_dummy_dataset()
 
-            # kto train lora model with a lora config
-            trainer = KTOTrainer(
+            # bco train lora model with a lora config
+            trainer = BCOTrainer(
                 model=model_peft,
                 ref_model=None,
                 args=training_args,

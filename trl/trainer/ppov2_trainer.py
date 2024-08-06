@@ -1,4 +1,5 @@
 import gc
+import math
 import os
 import time
 from collections import OrderedDict, defaultdict
@@ -20,19 +21,20 @@ from transformers import (
     Trainer,
     TrainerCallback,
     TrainerControl,
-    TrainerState,
 )
 from transformers.integrations import get_reporting_integration_callbacks
-from transformers.trainer_callback import CallbackHandler, DefaultFlowCallback
+from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
+from transformers.trainer_callback import CallbackHandler, PrinterCallback
 
 from ..core import masked_mean, masked_whiten
 from ..models.utils import unwrap_model_for_generation
 from ..trainer.utils import (
+    OnlineTrainerState,
+    batch_generation,
     disable_dropout_in_model,
     exact_div,
     first_true_indices,
     forward,
-    generate,
     get_reward,
     prepare_deepspeed,
     print_rich_table,
@@ -95,7 +97,6 @@ class PPOv2Trainer(Trainer):
         self.data_collator = data_collator
         self.eval_dataset = eval_dataset
         self.optimizer, self.lr_scheduler = optimizers
-        self.callbacks = callbacks
 
         #########
         # calculate various batch sizes
@@ -122,13 +123,16 @@ class PPOv2Trainer(Trainer):
             ), f"Per-rank minibatch size {args.local_mini_batch_size} is insufficient for whitening"
         # `per_rank_rollout_batch_size` is our `args.local_batch_size`
         # `per_rank_minibatch_size` is our `args.local_mini_batch_size`
-        args.num_updates = args.total_episodes // args.batch_size
+        args.num_total_batches = math.ceil(
+            args.total_episodes / args.batch_size
+        )  # we may train for more than `total_episodes`
         time_tensor = torch.tensor(int(time.time()), device=accelerator.device)
         time_int = broadcast(time_tensor, 0).item()  # avoid different timestamps across processes
         args.run_name = f"{args.exp_name}__{args.seed}__{time_int}"
         self.local_seed = args.seed + accelerator.process_index * 100003  # Prime
         if args.num_sample_generations > 0:
-            self.sample_generations_freq = max(1, args.num_updates // args.num_sample_generations)
+            self.sample_generations_freq = max(1, args.num_total_batches // args.num_sample_generations)
+        self.local_dataloader_batch_size = args.local_batch_size
 
         #########
         # setup model, optimizer, and others
@@ -138,23 +142,26 @@ class PPOv2Trainer(Trainer):
         if args.stop_token and args.stop_token == "eos":
             args.stop_token_id = tokenizer.eos_token_id
         self.model = PolicyAndValueWrapper(policy, value_model)
-        self.create_optimizer_and_scheduler(num_training_steps=args.num_updates)
+        self.create_optimizer_and_scheduler(
+            num_training_steps=args.num_total_batches
+        )  # note that we are calling `self.lr_scheduler.step()` manually only at the batch level
 
         #########
         ### trainer specifics
         #########
-        self.state = TrainerState(
+        self.state = OnlineTrainerState(
             is_local_process_zero=self.is_local_process_zero(),
             is_world_process_zero=self.is_world_process_zero(),
         )
-        DEFAULT_CALLBACKS = [DefaultFlowCallback]
         default_callbacks = DEFAULT_CALLBACKS + get_reporting_integration_callbacks(self.args.report_to)
-        if self.callbacks is None:
-            self.callbacks = default_callbacks
+        self.callbacks = default_callbacks if callbacks is None else default_callbacks + callbacks
         self.callback_handler = CallbackHandler(
             self.callbacks, self.model, self.tokenizer, self.optimizer, self.lr_scheduler
         )
+        self.add_callback(PrinterCallback if self.args.disable_tqdm else DEFAULT_PROGRESS_CALLBACK)
         self.control = TrainerControl()
+        self.current_flos = 0
+        self.hp_search_backend = None
         self.is_deepspeed_enabled = getattr(self.accelerator.state, "deepspeed_plugin", None) is not None
         self.is_fsdp_enabled = getattr(self.accelerator.state, "fsdp_plugin", None) is not None
         # Create distant repo and output directory if needed
@@ -170,7 +177,7 @@ class PPOv2Trainer(Trainer):
         #########
         self.dataloader = DataLoader(
             self.train_dataset,
-            batch_size=args.local_batch_size,
+            batch_size=self.local_dataloader_batch_size,
             shuffle=True,
             collate_fn=DataCollatorWithPadding(tokenizer),
             drop_last=True,  # needed; otherwise the last batch will be of ragged shape
@@ -191,10 +198,10 @@ class PPOv2Trainer(Trainer):
 
         if self.is_deepspeed_enabled:
             self.reward_model = prepare_deepspeed(
-                self.reward_model, args.per_device_train_batch_size, args.bf16, args.fp16
+                self.reward_model, args.per_device_train_batch_size, args.fp16, args.bf16
             )
             self.ref_policy = prepare_deepspeed(
-                self.ref_policy, args.per_device_train_batch_size, args.bf16, args.fp16
+                self.ref_policy, args.per_device_train_batch_size, args.fp16, args.bf16
             )
         else:
             self.ref_policy = self.ref_policy.to(self.accelerator.device)
@@ -257,7 +264,6 @@ class PPOv2Trainer(Trainer):
         )
 
         accelerator.print("===training policy===")
-        global_step = 0
         start_time = time.time()
         stats_shape = (args.num_ppo_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
         approxkl_stats = torch.zeros(stats_shape, device=device)
@@ -268,81 +274,104 @@ class PPOv2Trainer(Trainer):
         entropy_stats = torch.zeros(stats_shape, device=device)
         ratio_stats = torch.zeros(stats_shape, device=device)
         model.train()
-        for update in range(1, args.num_updates + 1):
-            global_step += 1 * args.batch_size
+
+        # trainer state initialization
+        self.state.global_step = 0
+        self.state.episode = 0
+        self.state.max_steps = args.num_total_batches * args.num_mini_batches
+        self.state.num_train_epochs = args.total_episodes / self.train_dataset_len
+        # Compute absolute values for logging, eval, and save if given as ratio
+        if args.logging_steps is not None:
+            if args.logging_steps < 1:
+                self.state.logging_steps = math.ceil(self.state.max_steps * args.logging_steps)
+            else:
+                self.state.logging_steps = args.logging_steps
+        if args.eval_steps is not None:
+            if args.eval_steps < 1:
+                self.state.eval_steps = math.ceil(self.state.max_steps * args.eval_steps)
+            else:
+                self.state.eval_steps = args.eval_steps
+        if args.save_steps is not None:
+            if args.save_steps < 1:
+                self.state.save_steps = math.ceil(self.state.max_steps * args.save_steps)
+            else:
+                self.state.save_steps = args.save_steps
+        self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
+
+        for update in range(1, args.num_total_batches + 1):
+            self.state.episode += 1 * args.batch_size
             self.lr_scheduler.step()
             data = next(iter_dataloader)
             with torch.no_grad():
                 queries = data["input_ids"].to(device)
                 context_length = queries.shape[1]
-                query_responses = []
                 responses = []
                 postprocessed_responses = []
                 logprobs = []
                 ref_logprobs = []
-                values = []
                 scores = []
                 sequence_lengths = []
+                values = []
                 with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
-                    for i in range(0, queries.shape[0], args.local_rollout_forward_batch_size):
-                        query = queries[i : i + args.local_rollout_forward_batch_size]
-                        query_response, logits = generate(
-                            unwrapped_model.policy,
-                            query,
-                            tokenizer.pad_token_id,
-                            generation_config,
-                        )
-                        response = query_response[:, context_length:]
+                    query_responses, logitss = batch_generation(
+                        unwrapped_model.policy,
+                        queries,
+                        args.local_rollout_forward_batch_size,
+                        tokenizer.pad_token_id,
+                        generation_config,
+                    )
 
-                        # use the logits during generation directly, instead of using the following
-                        all_logprob = F.log_softmax(logits, dim=-1)
-                        logprob = torch.gather(all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
-                        del logits, all_logprob
-                        torch.cuda.empty_cache()
+                for i in range(0, queries.shape[0], args.local_rollout_forward_batch_size):
+                    query = queries[i : i + args.local_rollout_forward_batch_size]
+                    query_response = query_responses[i : i + args.local_rollout_forward_batch_size]
+                    response = query_response[:, context_length:]
+                    logits = logitss[i : i + args.local_rollout_forward_batch_size]
+                    all_logprob = F.log_softmax(logits, dim=-1)
+                    logprob = torch.gather(all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
+                    del logits, all_logprob
+                    torch.cuda.empty_cache()
 
-                        ref_output = forward(ref_policy, query_response, tokenizer.pad_token_id)
-                        ref_logits = ref_output.logits[:, context_length - 1 : -1]
-                        ref_logits /= args.temperature + 1e-7
-                        ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
-                        ref_logprob = torch.gather(ref_all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
-                        del ref_output, ref_logits, ref_all_logprob
-                        torch.cuda.empty_cache()
+                    ref_output = forward(ref_policy, query_response, tokenizer.pad_token_id)
+                    ref_logits = ref_output.logits[:, context_length - 1 : -1]
+                    ref_logits /= args.temperature + 1e-7
+                    ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
+                    ref_logprob = torch.gather(ref_all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
+                    del ref_output, ref_logits, ref_all_logprob
+                    torch.cuda.empty_cache()
 
-                        # Response Processing 1. truncate response after the first occurrence of `stop_token_id`
-                        postprocessed_response = response
-                        if args.stop_token_id is not None:  # handle the edge case when stop_token_id exists but is 0
-                            postprocessed_response = truncate_response(
-                                args.stop_token_id, tokenizer.pad_token_id, response
-                            )
-
-                        # Response Processing 2. run reward model on the truncated responses
-                        postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
-                        sequence_length = first_true_indices(postprocessed_response == tokenizer.pad_token_id) - 1
-                        unwrapped_value_model = accelerator.unwrap_model(model).value_model
-                        full_value, _, _ = get_reward(
-                            unwrapped_value_model, query_response, tokenizer.pad_token_id, context_length
-                        )
-                        value = full_value[:, context_length - 1 : -1].squeeze(-1)
-                        _, score, _ = get_reward(
-                            reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
+                    # Response Processing 1. truncate response after the first occurrence of `stop_token_id`
+                    postprocessed_response = response
+                    if args.stop_token_id is not None:  # handle the edge case when stop_token_id exists but is 0
+                        postprocessed_response = truncate_response(
+                            args.stop_token_id, tokenizer.pad_token_id, response
                         )
 
-                        query_responses.append(query_response)
-                        responses.append(response)
-                        postprocessed_responses.append(postprocessed_response)
-                        logprobs.append(logprob)
-                        ref_logprobs.append(ref_logprob)
-                        values.append(value)
-                        sequence_lengths.append(sequence_length)
-                        scores.append(score)
-                query_responses = torch.cat(query_responses, 0)
+                    # Response Processing 2. run reward model on the truncated responses
+                    postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
+                    sequence_length = first_true_indices(postprocessed_response == tokenizer.pad_token_id) - 1
+                    unwrapped_value_model = accelerator.unwrap_model(model).value_model
+                    full_value, _, _ = get_reward(
+                        unwrapped_value_model, query_response, tokenizer.pad_token_id, context_length
+                    )
+                    value = full_value[:, context_length - 1 : -1].squeeze(-1)
+                    _, score, _ = get_reward(
+                        reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
+                    )
+
+                    responses.append(response)
+                    postprocessed_responses.append(postprocessed_response)
+                    logprobs.append(logprob)
+                    ref_logprobs.append(ref_logprob)
+                    sequence_lengths.append(sequence_length)
+                    scores.append(score)
+                    values.append(value)
                 responses = torch.cat(responses, 0)
                 postprocessed_responses = torch.cat(postprocessed_responses, 0)
                 logprobs = torch.cat(logprobs, 0)
                 ref_logprobs = torch.cat(ref_logprobs, 0)
-                values = torch.cat(values, 0)
                 sequence_lengths = torch.cat(sequence_lengths, 0)
                 scores = torch.cat(scores, 0)
+                values = torch.cat(values, 0)
                 del (logprob, ref_logprob, full_value, value, score, unwrapped_model)
                 torch.cuda.empty_cache()
                 gc.collect()
@@ -356,12 +385,12 @@ class PPOv2Trainer(Trainer):
                 # accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
 
                 # be very careful with `padding_mask_p1`; see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
-                sequence_lengths_p1 = sequence_lengths + 1
                 response_idxs = torch.arange(responses.shape[1], device=responses.device).repeat(responses.shape[0], 1)
                 padding_mask = response_idxs > sequence_lengths.unsqueeze(1)
-                padding_mask_p1 = response_idxs > (sequence_lengths_p1.unsqueeze(1))
                 logprobs = torch.masked_fill(logprobs, padding_mask, INVALID_LOGPROB)
                 ref_logprobs = torch.masked_fill(ref_logprobs, padding_mask, INVALID_LOGPROB)
+                sequence_lengths_p1 = sequence_lengths + 1
+                padding_mask_p1 = response_idxs > (sequence_lengths_p1.unsqueeze(1))
                 values = torch.masked_fill(values, padding_mask_p1, 0)
 
                 # 4. compute rewards
@@ -404,12 +433,12 @@ class PPOv2Trainer(Trainer):
                         with accelerator.accumulate(model):
                             micro_batch_end = micro_batch_start + args.per_device_train_batch_size
                             micro_batch_inds = mini_batch_inds[micro_batch_start:micro_batch_end]
-                            mb_return = returns[micro_batch_inds]
                             mb_advantage = advantages[micro_batch_inds]
-                            mb_values = values[micro_batch_inds]
                             mb_responses = responses[micro_batch_inds]
                             mb_query_responses = query_responses[micro_batch_inds]
                             mb_logprobs = logprobs[micro_batch_inds]
+                            mb_return = returns[micro_batch_inds]
+                            mb_values = values[micro_batch_inds]
 
                             output, vpred_temp = forward(model, mb_query_responses, tokenizer.pad_token_id)
                             logits = output.logits[:, context_length - 1 : -1]
@@ -478,7 +507,7 @@ class PPOv2Trainer(Trainer):
                 mean_entropy = (-logprobs).sum(1).mean()
                 mean_non_score_reward = non_score_reward.sum(1).mean()
                 rlhf_reward = mean_non_score_reward + scores.mean()
-                eps = int(global_step / (time.time() - start_time))
+                eps = int(self.state.episode / (time.time() - start_time))
                 metrics = {}
                 metrics["eps"] = eps
                 metrics["objective/kl"] = self.accelerator.gather(mean_kl).mean().item()
@@ -496,10 +525,15 @@ class PPOv2Trainer(Trainer):
                 metrics["val/ratio_var"] = self.accelerator.gather(ratio_stats).var().item()
                 metrics["val/num_eos_tokens"] = (responses == tokenizer.eos_token_id).sum().item()
                 metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
-                metrics["episode"] = global_step
-                self.state.epoch = global_step / self.train_dataset_len  # used by self.log
+                metrics["episode"] = self.state.episode
+                self.state.epoch = self.state.episode / self.train_dataset_len  # used by self.log
                 self.state.global_step += 1
                 self.log(metrics)
+
+            self.control = self.callback_handler.on_step_end(args, self.state, self.control)
+            if self.control.should_save:
+                self._save_checkpoint(model, trial=None, metrics=metrics)
+                self.control = self.callback_handler.on_save(self.args, self.state, self.control)
             del kl, mean_kl, mean_entropy, mean_non_score_reward, scores, metrics, non_score_reward
             torch.cuda.empty_cache()
             gc.collect()
@@ -528,6 +562,12 @@ class PPOv2Trainer(Trainer):
             )
             torch.cuda.empty_cache()
 
+        # HF trainer specifics
+        self.control = self.callback_handler.on_train_end(args, self.state, self.control)
+        if self.control.should_save:
+            self._save_checkpoint(model, trial=None, metrics=None)
+            self.control = self.callback_handler.on_save(self.args, self.state, self.control)
+
     def generate_completions(self, sampling: bool = False):
         args = self.args
         tokenizer = self.tokenizer
@@ -540,32 +580,35 @@ class PPOv2Trainer(Trainer):
         )
 
         table = defaultdict(list)
-        for batch in self.eval_dataloader:
-            query = batch["input_ids"]
-            with torch.no_grad():
-                context_length = query.shape[1]
-                with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
-                    query_response, _ = generate(
+        with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
+            for batch in self.eval_dataloader:
+                query = batch["input_ids"]
+                with torch.no_grad():
+                    context_length = query.shape[1]
+                    query_response, _ = batch_generation(
                         unwrapped_model.policy,
                         query,
+                        query.shape[0],
                         tokenizer.pad_token_id,
                         generation_config,
                     )
-                response = query_response[:, context_length:]
-                postprocessed_response = response
-                if args.stop_token_id is not None:  # handle the edge case when stop_token_id exists but is 0
-                    postprocessed_response = truncate_response(args.stop_token_id, tokenizer.pad_token_id, response)
-                table["query"].extend(gather_object(tokenizer.batch_decode(query, skip_special_tokens=True)))
-                table["model response"].extend(gather_object(tokenizer.batch_decode(postprocessed_response)))
+                    response = query_response[:, context_length:]
+                    postprocessed_response = response
+                    if args.stop_token_id is not None:  # handle the edge case when stop_token_id exists but is 0
+                        postprocessed_response = truncate_response(
+                            args.stop_token_id, tokenizer.pad_token_id, response
+                        )
+                    table["query"].extend(gather_object(tokenizer.batch_decode(query, skip_special_tokens=True)))
+                    table["model response"].extend(gather_object(tokenizer.batch_decode(postprocessed_response)))
 
-                postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
-                _, score, _ = get_reward(
-                    self.reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
-                )
-                table["score"].extend(self.accelerator.gather(score).float().cpu().numpy())
+                    postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
+                    _, score, _ = get_reward(
+                        self.reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
+                    )
+                    table["score"].extend(self.accelerator.gather(score).float().cpu().numpy())
 
-            if sampling:
-                break
+                if sampling:
+                    break
         df = pd.DataFrame(table)
         if self.accelerator.process_index == 0:
             print_rich_table(df.iloc[0 : 0 + 5])

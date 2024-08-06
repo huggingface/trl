@@ -21,7 +21,6 @@ python examples/scripts/bco.py \
     --no_remove_unused_columns \
     --warmup_ratio 0.1 \
     --bf16 \
-    --loss_type bco \
     --report_to wandb
 
 # QLoRA:
@@ -46,7 +45,6 @@ python examples/scripts/bco.py \
     --no_remove_unused_columns \
     --warmup_ratio 0.1 \
     --bf16 \
-    --loss_type bco \
     --use_peft \
     --load_in_4bit \
     --lora_target_modules=all-linear \
@@ -65,14 +63,14 @@ from accelerate import Accelerator, PartialState
 from datasets import Dataset, load_dataset
 from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, PreTrainedModel
 
-from trl import KTOConfig, KTOTrainer, ModelConfig, get_peft_config, setup_chat_format
+from trl import BCOConfig, BCOTrainer, ModelConfig, get_peft_config, setup_chat_format
 
 
 # Define and parse arguments.
 @dataclass
 class ScriptArguments:
     """
-    The arguments for the KTO training script.
+    The arguments for the BCO training script.
     """
 
     llm_name: Literal["gpt-3.5-turbo", "llama-2-7b-chat", "llama-2-70b-chat"] = "gpt-3.5-turbo"
@@ -160,10 +158,10 @@ def embed_prompt(input_ids: torch.LongTensor, attention_mask: torch.LongTensor, 
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser((ScriptArguments, KTOConfig, ModelConfig))
-    script_args, kto_args, model_args = parser.parse_args_into_dataclasses()
+    parser = HfArgumentParser((ScriptArguments, BCOConfig, ModelConfig))
+    script_args, bco_args, model_args = parser.parse_args_into_dataclasses()
 
-    kto_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
+    bco_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
     # Load a pretrained model
     model = AutoModelForCausalLM.from_pretrained(
@@ -213,11 +211,11 @@ if __name__ == "__main__":
         model=embedding_model,
     )
 
-    # Initialize the KTO trainer
-    kto_trainer = KTOTrainer(
+    # Initialize the BCO trainer
+    bco_trainer = BCOTrainer(
         model,
         ref_model,
-        args=kto_args,
+        args=bco_args,
         train_dataset=formatted_dataset["train"],
         eval_dataset=formatted_dataset["test"],
         tokenizer=tokenizer,
@@ -227,5 +225,5 @@ if __name__ == "__main__":
     )
 
     # Train and push the model to the Hub
-    kto_trainer.train()
-    kto_trainer.save_model(kto_args.output_dir)
+    bco_trainer.train()
+    bco_trainer.save_model(bco_args.output_dir)
