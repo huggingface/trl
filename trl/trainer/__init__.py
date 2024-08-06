@@ -38,7 +38,11 @@ _import_structure = {
     "iterative_sft_trainer": ["IterativeSFTTrainer"],
     "kto_config": ["KTOConfig"],
     "kto_trainer": ["KTOTrainer"],
+    "bco_config": ["BCOConfig"],
+    "bco_trainer": ["BCOTrainer"],
     "model_config": ["ModelConfig"],
+    "online_dpo_config": ["OnlineDPOConfig"],
+    "online_dpo_trainer": ["OnlineDPOTrainer"],
     "orpo_config": ["ORPOConfig"],
     "orpo_trainer": ["ORPOTrainer"],
     "ppo_config": ["PPOConfig"],
@@ -54,12 +58,12 @@ _import_structure = {
     "callbacks": ["RichProgressCallback", "SyncRefModelCallback", "WinRateCallback"],
     "judges": [
         "BaseJudge",
-        "BaseAPIJudge",
-        "HuggingFaceJudge",
-        "MockAPIJudge",
-        "MockJudge",
-        "OpenAIJudge",
-        "PairRMJudge",
+        "BaseRankJudge",
+        "BasePairwiseJudge",
+        "RandomRankJudge",
+        "RandomPairwiseJudge",
+        "HfPairwiseJudge",
+        "OpenAIPairwiseJudge",
     ],
 }
 
@@ -98,7 +102,11 @@ if TYPE_CHECKING:
     from .alignprop_config import AlignPropConfig
     from .kto_config import KTOConfig
     from .kto_trainer import KTOTrainer
+    from .bco_config import BCOConfig
+    from .bco_trainer import BCOTrainer
     from .model_config import ModelConfig
+    from .online_dpo_config import OnlineDPOConfig
+    from .online_dpo_trainer import OnlineDPOTrainer
     from .orpo_config import ORPOConfig
     from .orpo_trainer import ORPOTrainer
     from .ppo_config import PPOConfig
@@ -110,7 +118,15 @@ if TYPE_CHECKING:
     from .gkd_trainer import GKDTrainer
     from .gkd_config import GKDConfig
     from .callbacks import RichProgressCallback, SyncRefModelCallback, WinRateCallback
-    from .judges import BaseJudge, BaseAPIJudge, HuggingFaceJudge, MockAPIJudge, MockJudge, OpenAIJudge, PairRMJudge
+    from .judges import (
+        BaseJudge,
+        BaseRankJudge,
+        BasePairwiseJudge,
+        RandomRankJudge,
+        RandomPairwiseJudge,
+        HfPairwiseJudge,
+        OpenAIPairwiseJudge,
+    )
 
     try:
         if not is_diffusers_available():
