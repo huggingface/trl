@@ -576,7 +576,10 @@ class SFTTrainer(Trainer):
 
         signature_columns = ["input_ids", "labels", "attention_mask"]
 
-        extra_columns = list(set(dataset.column_names) - set(signature_columns))
+        if dataset.column_names is not None:  # None for IterableDataset
+            extra_columns = list(set(dataset.column_names) - set(signature_columns))
+        else:
+            extra_columns = []
 
         if not remove_unused_columns and len(extra_columns) > 0:
             warnings.warn(
@@ -584,13 +587,14 @@ class SFTTrainer(Trainer):
                 f"inspect dataset other columns (in this case {extra_columns}), you can subclass `DataCollatorForLanguageModeling` in case you used the default collator and create your own data collator in order to inspect the unused dataset columns."
             )
 
-        tokenized_dataset = dataset.map(
-            tokenize,
-            batched=True,
-            remove_columns=dataset.column_names if remove_unused_columns else None,
-            num_proc=self.dataset_num_proc,
-            batch_size=self.dataset_batch_size,
-        )
+        map_kwargs = {
+            "batched": True,
+            "remove_columns": dataset.column_names if remove_unused_columns else None,
+            "batch_size": self.dataset_batch_size,
+        }
+        if isinstance(dataset, datasets.Dataset):
+            map_kwargs["num_proc"] = self.dataset_num_proc  # this arg is not available for IterableDataset
+        tokenized_dataset = dataset.map(tokenize, **map_kwargs)
 
         return tokenized_dataset
 
