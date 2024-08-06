@@ -174,7 +174,7 @@ class PPOTrainer(BaseTrainer):
                 PyTorch dataset or Hugging Face dataset. If a Hugging Face dataset is passed, the dataset
                 will be preprocessed by removing the columns that are not used by the model. If none is passed,
                 a warning will be raised in a multi-GPU setting.
-            optimizer (Optional[`torch.optim.Optimizer`]):
+            optimizer (`Optional[torch.optim.Optimizer]`):
                 Optimizer used for training. If `None`, the `Adam` is used as default.
             data_collator (Optional[function]):
                 Data collator function that is going to be used for `prepare_dataloader` method. Note this collator
@@ -182,7 +182,7 @@ class PPOTrainer(BaseTrainer):
             num_shared_layers (Optional[int]):
                 Number of shared layers between the model and the reference model. If `None`, all layers are shared.
                 used only if `ref_model` is `None`.
-            lr_scheduler (Optional[`torch.optim.lr_scheduler`]):
+            lr_scheduler (`Optional[torch.optim.lr_scheduler]`):
                 Learning rate scheduler used for training.
             training_data_collator (Optional[function]):
                 Custom data collator used for training.
@@ -614,7 +614,7 @@ class PPOTrainer(BaseTrainer):
             scores (List[`torch.FloatTensor`]):
                 List of tensors containing the scores.
             masks (List[`torch.LongTensor`], *optional*):
-                list of optional tensors containing the masks of shape (`query_length` + `response_length`)
+                list of optional tensors containing the masks of shape (`response_length`)
         Returns:
             `tuple`: The input processed data.
         """
@@ -1033,15 +1033,11 @@ class PPOTrainer(BaseTrainer):
                     if attention_mask[j, 0] == 0:  # offset left padding
                         start += attention_mask[j, :].nonzero()[0]
                     end = start + len(response_batch[j])
-                    if response_masks is not None:
-                        response_masks_batch[j] = torch.cat(
-                            (torch.zeros_like(query_batch[j]), response_masks_batch[j])
-                        )[1:]
 
                 masks[j, :start] = 0
                 masks[j, end:] = 0
                 if response_masks is not None:
-                    masks[j, start:end] = masks[j, start:end] * response_masks_batch[j][start:end]
+                    masks[j, start:end] = masks[j, start:end] * response_masks_batch[j]
 
             if return_logits:
                 all_logits.append(logits)

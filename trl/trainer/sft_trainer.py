@@ -40,11 +40,11 @@ from transformers.trainer_utils import EvalPrediction
 
 from ..extras.dataset_formatting import get_formatting_func_from_dataset
 from ..import_utils import is_peft_available
+from .callbacks import RichProgressCallback
 from .sft_config import SFTConfig
 from .utils import (
     ConstantLengthDataset,
     DataCollatorForCompletionOnlyLM,
-    RichProgressCallback,
     neftune_post_forward_hook,
     peft_module_casting_to_bf16,
     trl_sanitze_kwargs_for_tagging,
@@ -66,16 +66,16 @@ class SFTTrainer(Trainer):
             The model to train, can be a `PreTrainedModel`, a `torch.nn.Module` or a string with the model name to
             load from cache or download. The model can be also converted to a `PeftModel` if a `PeftConfig` object is
             passed to the `peft_config` argument.
-        args (Optional[`SFTConfig`]):
+        args (`Optional[SFTConfig]`):
             The arguments to tweak for training. Will default to a basic instance of [`SFTConfig`] with the `output_dir`
             set to a directory named *tmp_trainer* in the current directory if not provided.
-        data_collator (Optional[`transformers.DataCollator`]):
+        data_collator (`Optional[transformers.DataCollator]`):
             The data collator to use for training.
-        train_dataset (Optional[`datasets.Dataset`]):
+        train_dataset (`Optional[datasets.Dataset]`):
             The dataset to use for training. We recommend users to use `trl.trainer.ConstantLengthDataset` to create their dataset.
         eval_dataset (Optional[Union[`datasets.Dataset`, Dict[`str`, `datasets.Dataset`]]]):
             The dataset to use for evaluation. We recommend users to use `trl.trainer.ConstantLengthDataset` to create their dataset.
-        tokenizer (Optional[`transformers.PreTrainedTokenizer`]):
+        tokenizer (`Optional[transformers.PreTrainedTokenizer]`):
             The tokenizer to use for training. If not specified, the tokenizer associated to the model will be used.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
             The model initializer to use for training. If None is specified, the default model initializer will be used.
@@ -146,7 +146,10 @@ class SFTTrainer(Trainer):
             warnings.warn(f"No `SFTConfig` passed, using `output_dir={output_dir}`.")
             args = SFTConfig(output_dir=output_dir)
         elif args is not None and args.__class__.__name__ == "TrainingArguments":
-            args = SFTConfig(**args.to_dict())
+            args_as_dict = args.to_dict()
+            # Manually copy token values as TrainingArguments.to_dict() redacts them
+            args_as_dict.update({k: getattr(args, k) for k in args_as_dict.keys() if k.endswith("_token")})
+            args = SFTConfig(**args_as_dict)
 
         if model_init_kwargs is not None:
             warnings.warn(
@@ -159,11 +162,19 @@ class SFTTrainer(Trainer):
             raise ValueError("You passed model_init_kwargs to the SFTConfig, but your model is already instantiated.")
         else:
             model_init_kwargs = args.model_init_kwargs
-            model_init_kwargs["torch_dtype"] = (
-                model_init_kwargs["torch_dtype"]
-                if model_init_kwargs["torch_dtype"] in ["auto", None]
-                else getattr(torch, model_init_kwargs["torch_dtype"])
-            )
+
+            torch_dtype = model_init_kwargs["torch_dtype"]
+            if torch_dtype is not None:
+                # Convert to `torch.dtype` if an str is passed
+                if isinstance(torch_dtype, str) and torch_dtype != "auto":
+                    torch_dtype = getattr(torch, torch_dtype)
+
+                if torch_dtype != "auto" and not isinstance(torch_dtype, torch.dtype):
+                    raise ValueError(
+                        f"Invalid `torch_dtype` passed to the SFTConfig. Expected a string with either `torch.dtype` or 'auto', but got {torch_dtype}."
+                    )
+
+            model_init_kwargs["torch_dtype"] = torch_dtype
 
         if infinite is not None:
             warnings.warn(
@@ -565,7 +576,10 @@ class SFTTrainer(Trainer):
 
         signature_columns = ["input_ids", "labels", "attention_mask"]
 
-        extra_columns = list(set(dataset.column_names) - set(signature_columns))
+        if dataset.column_names is not None:  # None for IterableDataset
+            extra_columns = list(set(dataset.column_names) - set(signature_columns))
+        else:
+            extra_columns = []
 
         if not remove_unused_columns and len(extra_columns) > 0:
             warnings.warn(
@@ -573,13 +587,14 @@ class SFTTrainer(Trainer):
                 f"inspect dataset other columns (in this case {extra_columns}), you can subclass `DataCollatorForLanguageModeling` in case you used the default collator and create your own data collator in order to inspect the unused dataset columns."
             )
 
-        tokenized_dataset = dataset.map(
-            tokenize,
-            batched=True,
-            remove_columns=dataset.column_names if remove_unused_columns else None,
-            num_proc=self.dataset_num_proc,
-            batch_size=self.dataset_batch_size,
-        )
+        map_kwargs = {
+            "batched": True,
+            "remove_columns": dataset.column_names if remove_unused_columns else None,
+            "batch_size": self.dataset_batch_size,
+        }
+        if isinstance(dataset, datasets.Dataset):
+            map_kwargs["num_proc"] = self.dataset_num_proc  # this arg is not available for IterableDataset
+        tokenized_dataset = dataset.map(tokenize, **map_kwargs)
 
         return tokenized_dataset
 
@@ -636,7 +651,7 @@ class SFTTrainer(Trainer):
 
     def _trl_activate_neftune(self, model):
         r"""
-        Activates the neftune as presented in this code: https://github.com/neelsjain/NEFTune and paper: https://arxiv.org/abs/2310.05914
+        Activates the neftune as presented in this code: https://github.com/neelsjain/NEFTune and paper: https://huggingface.co/papers/2310.05914
         Since in transformers Trainer we do have an `_activate_neftune` method, we need to rename this method to avoid conflicts.
         """
         unwrapped_model = unwrap_model(model)

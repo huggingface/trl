@@ -11,33 +11,30 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import dataclasses
+import json
 import random
 import warnings
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 import torch
 from accelerate import Accelerator
 from accelerate.state import AcceleratorState, PartialState
-from accelerate.utils import is_deepspeed_available
-from rich.console import Console, Group
-from rich.live import Live
-from rich.panel import Panel
-from rich.progress import Progress
+from rich.console import Console
 from rich.table import Table
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import IterableDataset
 from transformers import (
     BitsAndBytesConfig,
     DataCollatorForLanguageModeling,
-    PreTrainedModel,
     PreTrainedTokenizerBase,
+    TrainerState,
+    TrainingArguments,
 )
-from transformers.trainer import TrainerCallback
-from transformers.trainer_utils import has_length
 
 from ..import_utils import is_peft_available, is_unsloth_available, is_xpu_available
 from ..trainer.model_config import ModelConfig
@@ -47,14 +44,10 @@ if is_peft_available():
     from peft import LoraConfig, PeftConfig
 
 
-if is_deepspeed_available():
-    import deepspeed
-
-
 class AdaptiveKLController:
     """
     Adaptive KL controller described in the paper:
-    https://arxiv.org/pdf/1909.08593.pdf
+    https://huggingface.co/papers/1909.08593
     """
 
     def __init__(self, init_kl_coef, target, horizon):
@@ -67,39 +60,6 @@ class AdaptiveKLController:
         proportional_error = np.clip(current / target - 1, -0.2, 0.2)
         mult = 1 + proportional_error * n_steps / self.horizon
         self.value *= mult
-
-
-class SyncRefModelCallback(TrainerCallback):
-    def __init__(
-        self,
-        ref_model: Union[PreTrainedModel, torch.nn.Module],
-        accelerator: Optional[Accelerator],
-    ):
-        self.accelerator = accelerator
-        self.ref_model = ref_model
-
-    @staticmethod
-    def _sync_target_model(model, target_model, alpha):
-        for target_param, copy_param in zip(target_model.parameters(), model.parameters()):
-            target_param.data.mul_(1.0 - alpha).add_(copy_param.data, alpha=alpha)
-
-    @staticmethod
-    def sync_target_model(model, target_model, alpha):
-        deepspeed_plugin = AcceleratorState().deepspeed_plugin
-        if deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3:
-            with deepspeed.zero.GatheredParameters(list(model.parameters()), modifier_rank=0):
-                if deepspeed.comm.get_rank() == 0:
-                    SyncRefModelCallback._sync_target_model(model, target_model, alpha)
-        else:
-            SyncRefModelCallback._sync_target_model(model, target_model, alpha)
-
-    def on_step_end(self, args, state, control, **kwargs):
-        model: PreTrainedModel = kwargs["model"]
-
-        if self.ref_model is not None and state.global_step % args.ref_model_sync_steps == 0:
-            if self.accelerator:
-                model = self.accelerator.unwrap_model(model)
-            self.sync_target_model(model, self.ref_model, args.ref_model_mixup_alpha)
 
 
 class FixedKLController:
@@ -336,6 +296,55 @@ class RewardDataCollatorWithPadding:
         return batch
 
 
+def pad(tensors: List[torch.Tensor], padding_value: int = 0, padding_side: str = "right") -> torch.Tensor:
+    """
+    Pads a list of tensors to the same shape along the first dimension.
+
+    Args:
+        tensors (`List[torch.Tensor]`):
+            List of input tensors to pad.
+        padding_value (`int`):
+            Value to use for padding. Default is 0.
+        padding_side (`str`):
+            Side on which to add padding. Must be 'left' or 'right'. Default is 'right'.
+
+    Returns:
+        `torch.Tensor`:
+            A single tensor containing the padded tensors.
+
+    Examples:
+        >>> import torch
+        >>> pad([torch.tensor([1, 2, 3]), torch.tensor([4, 5])])
+        tensor([[1, 2, 3],
+                [4, 5, 0]])
+        >>> pad([torch.tensor([[1, 2], [3, 4]]), torch.tensor([[5, 6]])])
+        tensor([[[1, 2],
+                [3, 4]],
+
+                [[5, 6],
+                [0, 0]]])
+    """
+    # Determine the maximum shape for each dimension
+    output_shape = np.max([t.shape for t in tensors], 0).tolist()
+
+    # Create an output tensor filled with the padding value
+    output = torch.full((len(tensors), *output_shape), padding_value, dtype=tensors[0].dtype, device=tensors[0].device)
+
+    for i, t in enumerate(tensors):
+        # Determine the slice for the sequence dimension
+        if padding_side == "left":
+            seq_slice = slice(output_shape[0] - t.shape[0], output_shape[0])
+        elif padding_side == "right":
+            seq_slice = slice(0, t.shape[0])
+        else:
+            raise ValueError("padding_side must be 'left' or 'right'")
+
+        slices = (seq_slice,) + tuple(slice(0, s) for s in t.shape[1:])
+        output[i][slices] = t
+
+    return output
+
+
 @dataclass
 class DPODataCollatorWithPadding:
     r"""
@@ -357,7 +366,7 @@ class DPODataCollatorWithPadding:
         # first, pad everything to the same length
         padded_batch = {}
         for k in features[0].keys():
-            if k.endswith("_input_ids") or k.endswith("_attention_mask") or k.endswith("_labels"):
+            if k.endswith(("_input_ids", "_attention_mask", "_labels", "_pixel_values")):
                 if self.is_encoder_decoder:
                     to_pad = [torch.LongTensor(ex[k]) for ex in features]
 
@@ -377,11 +386,7 @@ class DPODataCollatorWithPadding:
                         raise ValueError(f"Unexpected key in batch '{k}'")
                     padded_batch[k] = pad_sequence(to_pad, batch_first=True, padding_value=padding_value)
                 else:
-                    # adapted from https://stackoverflow.com/questions/73256206
-                    if "prompt" in k:
-                        to_pad = [torch.LongTensor(ex[k][::-1]) for ex in features]
-                    else:
-                        to_pad = [torch.LongTensor(ex[k]) for ex in features]
+                    # Set padding value based on the key
                     if k.endswith("_input_ids"):
                         if self.pad_token_id is None:
                             raise ValueError(
@@ -394,13 +399,26 @@ class DPODataCollatorWithPadding:
                         padding_value = self.label_pad_token_id
                     elif k.endswith("_attention_mask"):
                         padding_value = 0
+                    elif k.endswith("_pixel_values"):
+                        padding_value = 0  # TODO: check if this is correct
                     else:
                         raise ValueError(f"Unexpected key in batch '{k}'")
 
-                    padded_batch[k] = pad_sequence(to_pad, batch_first=True, padding_value=padding_value)
-                    # for the prompt, flip back so padding is on left side
-                    if "prompt" in k:
-                        padded_batch[k] = padded_batch[k].flip(dims=[1])
+                    # Set padding side based on the key
+                    if k in ["prompt_input_ids", "prompt_attention_mask"]:
+                        padding_side = "left"
+                    else:
+                        padding_side = "right"
+
+                    # Set the dtype
+                    if k.endswith("_pixel_values"):
+                        dtype = torch.float32  # will be downcasted if necessary by the Trainer
+                    else:
+                        dtype = torch.int64
+
+                    # Convert to tensor and pad
+                    to_pad = [torch.tensor(ex[k], dtype=dtype) for ex in features]
+                    padded_batch[k] = pad(to_pad, padding_value=padding_value, padding_side=padding_side)
             elif k.endswith("_logps"):
                 # the cached reference model logprobs
                 padded_batch[k] = torch.tensor([ex[k] for ex in features])
@@ -532,17 +550,19 @@ class ConstantLengthDataset(IterableDataset):
                 }
 
 
+@dataclass
 class RunningMoments:
-    def __init__(self, accelerator):
-        """
-        Calculates the running mean and standard deviation of a data stream. Reference:
-        https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/utils.py#L75
-        """
-        self.mean = 0
-        self.std = 1
-        self.var = 1
-        self.count = 1e-24
-        self.accelerator = accelerator
+
+    """
+    Calculates the running mean and standard deviation of a data stream. Reference:
+    https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/utils.py#L75
+    """
+
+    accelerator: Accelerator
+    mean: float = 0
+    std: float = 1
+    var: float = 1
+    count: float = 1e-24
 
     @torch.no_grad()
     def update(self, xs: torch.Tensor) -> Tuple[float, float]:
@@ -564,16 +584,36 @@ class RunningMoments:
         old_sum = self.var * self.count + delta**2 * self.count * xs_count / tot_count
         tot_sum = old_sum + new_sum
 
-        self.mean += delta * xs_count / tot_count
-        self.var = tot_sum / tot_count
-        self.std = (self.var * tot_count / (tot_count - 1)).float().sqrt()
+        self.mean += (delta * xs_count / tot_count).item()
+        new_var = tot_sum / tot_count
+        self.std = (new_var * tot_count / (tot_count - 1)).float().sqrt().item()
+        self.var = new_var.item()
         self.count = tot_count
 
         return xs_mean.item(), (xs_var * xs_count / (xs_count - 1)).float().sqrt().item()
 
+    def save_to_json(self, json_path: str):
+        """Save the content of this instance in JSON format inside `json_path`."""
+        # save everything except accelerator
+        if self.accelerator.is_main_process:
+            save_dict = dataclasses.asdict(self, dict_factory=lambda x: {k: v for (k, v) in x if k != "accelerator"})
+            json_string = json.dumps(save_dict, indent=2, sort_keys=True) + "\n"
+            with open(json_path, "w", encoding="utf-8") as f:
+                f.write(json_string)
+
+    @classmethod
+    def load_from_json(cls, accelerator: Accelerator, json_path: str):
+        """Create an instance from the content of `json_path`."""
+        # load everything except accelerator
+        with open(json_path, encoding="utf-8") as f:
+            text = f.read()
+        return cls(accelerator=accelerator, **json.loads(text))
+
 
 @torch.no_grad()
-def get_global_statistics(accelerator, xs: torch.Tensor, mask=None, device="cpu") -> Tuple[float, float, int]:
+def get_global_statistics(
+    accelerator, xs: torch.Tensor, mask=None, device="cpu"
+) -> Tuple[torch.Tensor, torch.Tensor, int]:
     """
     Computes element-wise mean and variance of the tensor across processes. Reference:
     https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/utils.py#L57C1-L73C75
@@ -588,7 +628,7 @@ def get_global_statistics(accelerator, xs: torch.Tensor, mask=None, device="cpu"
     sum_var = accelerator.reduce(sum_var)
     global_var = sum_var / count
 
-    return global_mean.to(device), global_var.to(device), count.to(device)
+    return global_mean.to(device), global_var.to(device), count.item()
 
 
 def compute_accuracy(eval_pred) -> Dict[str, float]:
@@ -739,6 +779,7 @@ def get_quantization_config(model_config: ModelConfig) -> Optional[BitsAndBytesC
             bnb_4bit_compute_dtype=model_config.torch_dtype,  # For consistency with model weights, we use the same value as `torch_dtype`
             bnb_4bit_quant_type=model_config.bnb_4bit_quant_type,
             bnb_4bit_use_double_quant=model_config.use_bnb_nested_quant,
+            bnb_4bit_quant_storage=model_config.torch_dtype,
         )
     elif model_config.load_in_8bit:
         quantization_config = BitsAndBytesConfig(
@@ -770,93 +811,43 @@ def get_peft_config(model_config: ModelConfig) -> "Optional[PeftConfig]":
         )
 
     peft_config = LoraConfig(
+        task_type=model_config.lora_task_type,
         r=model_config.lora_r,
+        target_modules=model_config.lora_target_modules,
         lora_alpha=model_config.lora_alpha,
         lora_dropout=model_config.lora_dropout,
         bias="none",
-        task_type=model_config.lora_task_type,
-        target_modules=model_config.lora_target_modules,
+        use_rslora=model_config.use_rslora,
         modules_to_save=model_config.lora_modules_to_save,
     )
 
     return peft_config
 
 
-class RichProgressCallback(TrainerCallback):
+def get_exp_cap(value, decimal=4):
     """
-    A [`TrainerCallback`] that displays the progress of training or evaluation using Rich.
+    Get the exponent cap of a value. This is used to cap the exponent of a value to avoid overflow.
+    The formula is : log(value.dtype.max)
+    E.g.
+      For float32 data type, the maximum exponent value is 88.7228 to 4 decimal points.
+    ```
+    Args:
+        value (`torch.Tensor`):
+            The input tensor to obtain the data type
+        decimal (`int`):
+            The number of decimal points of the output exponent cap.
+            eg: direct calling exp(log(torch.float32.max)) will result in inf
+            so we cap the exponent to 88.7228 to avoid overflow.
     """
+    vdtype_max = torch.zeros([1]).to(value.dtype) + torch.finfo(value.dtype).max
+    vdtype_log_max = torch.log(vdtype_max).to(value.device)
+    return torch.floor(vdtype_log_max * 10**decimal) / 10**decimal if decimal > 0 else vdtype_log_max
 
-    def __init__(self):
-        self.training_bar = None
-        self.prediction_bar = None
 
-        self.training_task_id = None
-        self.prediction_task_id = None
-
-        self.rich_group = None
-        self.rich_console = None
-
-        self.training_status = None
-        self.current_step = None
-
-    def on_train_begin(self, args, state, control, **kwargs):
-        if state.is_world_process_zero:
-            self.training_bar = Progress()
-            self.prediction_bar = Progress()
-
-            self.rich_console = Console()
-
-            self.training_status = self.rich_console.status("Nothing to log yet ...")
-
-            self.rich_group = Live(Panel(Group(self.training_bar, self.prediction_bar, self.training_status)))
-            self.rich_group.start()
-
-            self.training_task_id = self.training_bar.add_task("[blue]Training the model", total=state.max_steps)
-            self.current_step = 0
-
-    def on_step_end(self, args, state, control, **kwargs):
-        if state.is_world_process_zero:
-            self.training_bar.update(self.training_task_id, advance=state.global_step - self.current_step, update=True)
-            self.current_step = state.global_step
-
-    def on_prediction_step(self, args, state, control, eval_dataloader=None, **kwargs):
-        if state.is_world_process_zero and has_length(eval_dataloader):
-            if self.prediction_task_id is None:
-                self.prediction_task_id = self.prediction_bar.add_task(
-                    "[blue]Predicting on the evaluation dataset", total=len(eval_dataloader)
-                )
-            self.prediction_bar.update(self.prediction_task_id, advance=1, update=True)
-
-    def on_evaluate(self, args, state, control, **kwargs):
-        if state.is_world_process_zero:
-            if self.prediction_task_id is not None:
-                self.prediction_bar.remove_task(self.prediction_task_id)
-                self.prediction_task_id = None
-
-    def on_predict(self, args, state, control, **kwargs):
-        if state.is_world_process_zero:
-            if self.prediction_task_id is not None:
-                self.prediction_bar.remove_task(self.prediction_task_id)
-                self.prediction_task_id = None
-
-    def on_log(self, args, state, control, logs=None, **kwargs):
-        if state.is_world_process_zero and self.training_bar is not None:
-            _ = logs.pop("total_flos", None)
-            self.training_status.update(f"[bold green]Status = {str(logs)}")
-
-    def on_train_end(self, args, state, control, **kwargs):
-        if state.is_world_process_zero:
-            self.rich_group.stop()
-
-            self.training_bar = None
-            self.prediction_bar = None
-            self.training_task_id = None
-            self.prediction_task_id = None
-            self.rich_group = None
-            self.rich_console = None
-            self.training_status = None
-            self.current_step = None
+def cap_exp(value, cap=-1):
+    # Cap the exponent value below the upper-bound to avoid overflow, before calling torch.exp
+    cap = get_exp_cap(value) if cap < 0 else cap
+    return torch.exp(torch.clamp(value, max=cap))
 
 
 def print_rich_table(df: pd.DataFrame) -> Table:
@@ -878,12 +869,49 @@ SIMPLE_QUERY_CHAT_TEMPLATE = "{% for message in messages %}{{' ' + message['cont
 
 
 @dataclass
-class OnpolicyRuntimeConfig:
+class OnlineTrainerState(TrainerState):
+    episode: int = 0
+
+
+@dataclass
+class OnPolicyConfig(TrainingArguments):
+    # common config
+    run_name: Optional[str] = None
+    """a unique name of this run"""
+    sanity_check: bool = False
+    """wether to run in debug mode"""
+
+    # batch size related config
+    num_mini_batches: int = 1
+    """Number of minibatches to split a batch into"""
+    total_episodes: Optional[int] = None
+    """The total number of episodes in the dataset"""
+    local_rollout_forward_batch_size: int = 64
+    """per rank no grad forward pass in the rollout phase"""
+    num_sample_generations: int = 10
+    """the number of debugging samples generations (i.e., `generate_completions` calls) throughout training"""
+
+    # other config
+    response_length: int = 53
+    """the length of the response"""
+    stop_token: Optional[Literal["eos"]] = None
+    """the stop token"""
+    stop_token_id: Optional[int] = None
+    """the truncation token id"""
+    temperature: float = 0.7
+    """the sampling temperature"""
+    penalty_reward_value: int = -1
+    """the reward value for responses that do not contain `stop_token_id`"""
+    non_eos_penalty: bool = False
+    """whether to penalize responses that do not contain `stop_token_id`"""
+    sft_model_path: str = "EleutherAI/pythia-160m"
+    """the path to the sft model"""
+
     # various batch sizes
     world_size: Optional[int] = None
     """The number of processes (GPUs) to use"""
-    num_updates: Optional[int] = None
-    """The number of updates to train"""
+    num_total_batches: Optional[int] = None
+    """The number of total batches to train"""
     micro_batch_size: Optional[int] = None
     """The micro batch size across devices (HF's `per_device_train_batch_size` * `world_size`)"""
     local_batch_size: Optional[int] = None
@@ -1001,7 +1029,9 @@ def forward(
     )
 
 
-def prepare_deepspeed(model: torch.nn.Module, per_device_train_batch_size: int):
+def prepare_deepspeed(
+    model: torch.nn.Module, per_device_train_batch_size: int, fp16: bool = False, bf16: bool = False
+):
     """
     Prepares the model for training with DeepSpeed (both for stage 2 and 3), configuring the appropriate settings based on the model and
     batch size.
@@ -1024,10 +1054,13 @@ def prepare_deepspeed(model: torch.nn.Module, per_device_train_batch_size: int):
         config_kwargs["train_micro_batch_size_per_gpu"] = per_device_train_batch_size
         config_kwargs = {
             "train_micro_batch_size_per_gpu": config_kwargs["train_micro_batch_size_per_gpu"],
-            "bf16": {"enabled": True},
             "prescale_gradients": False,
             "wall_clock_breakdown": False,
         }
+        if bf16:
+            config_kwargs["bf16"] = {"enabled": True}
+        elif fp16:
+            config_kwargs["fp16"] = {"enabled": True}
     else:
         if hasattr(model, "config"):
             hidden_size = (
@@ -1110,3 +1143,60 @@ def generate(
     )
     logits = torch.stack(output.scores, 1)
     return torch.cat((queries, output.sequences[:, context_length:]), dim=1), logits
+
+
+@torch.no_grad()
+def batch_generation(
+    model: torch.nn.Module,
+    queries: torch.Tensor,
+    local_rollout_forward_batch_size: int,
+    pad_token_id: int,
+    generation_config: dict,
+):
+    query_responses = []
+    logitss = []
+    for i in range(0, queries.shape[0], local_rollout_forward_batch_size):
+        query = queries[i : i + local_rollout_forward_batch_size]
+        query_response, logits = generate(
+            model,
+            query,
+            pad_token_id,
+            generation_config,
+        )
+        query_responses.append(query_response)
+        logitss.append(logits)
+    return torch.cat(query_responses, 0), torch.cat(logitss, 0)
+
+
+def add_bos_token_if_needed(
+    bos_token_id: Optional[int],
+    prompt_len_input_ids: int,
+    prompt_tokens: Dict[str, List[int]],
+    chosen_prompt_len_input_ids: int,
+    chosen_tokens: Dict[str, List[int]],
+    rejected_prompt_len_input_ids: int,
+    rejected_tokens: Dict[str, List[int]],
+):
+    if bos_token_id is not None:
+        if prompt_len_input_ids == 0 or bos_token_id != prompt_tokens["prompt_input_ids"][0]:
+            prompt_tokens["prompt_input_ids"] = [bos_token_id] + prompt_tokens["prompt_input_ids"]
+            prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens["prompt_attention_mask"]
+        if chosen_prompt_len_input_ids == 0 or bos_token_id != chosen_tokens["prompt_input_ids"][0]:
+            chosen_tokens["prompt_input_ids"] = [bos_token_id] + chosen_tokens["prompt_input_ids"]
+            chosen_tokens["prompt_attention_mask"] = [1] + chosen_tokens["prompt_attention_mask"]
+        if rejected_prompt_len_input_ids == 0 or bos_token_id != rejected_tokens["prompt_input_ids"][0]:
+            rejected_tokens["prompt_input_ids"] = [bos_token_id] + rejected_tokens["prompt_input_ids"]
+            rejected_tokens["prompt_attention_mask"] = [1] + rejected_tokens["prompt_attention_mask"]
+    return prompt_tokens, chosen_tokens, rejected_tokens
+
+
+def add_eos_token_if_needed(
+    eos_token_id: int, chosen_tokens: Dict[str, List[int]], rejected_tokens: Dict[str, List[int]]
+):
+    if len(chosen_tokens["input_ids"]) == 0 or eos_token_id != chosen_tokens["input_ids"][-1]:
+        chosen_tokens["input_ids"].append(eos_token_id)
+        chosen_tokens["attention_mask"].append(1)
+    if len(rejected_tokens["input_ids"]) == 0 or eos_token_id != rejected_tokens["input_ids"][-1]:
+        rejected_tokens["input_ids"].append(eos_token_id)
+        rejected_tokens["attention_mask"].append(1)
+    return chosen_tokens, rejected_tokens
