@@ -15,9 +15,9 @@ class OnlineDPOConfig(OnPolicyConfig):
     num_epochs: int = 4
     """the number of epochs to train"""
 
-    # DPO stuff w/o max_length which is included in RLOOConfig
-    num_generation_per_prompt: int = 2
-    """the number of generations per prompt (currently only support 2)"""
     beta: float = 0.05
+    """the entropy regularization coefficient of DPO"""
     loss_type: Literal["sigmoid", "ipo"] = "sigmoid"
+    """the type of loss to use for online DPO"""
     disable_dropout: bool = True
+    """whether to disable dropout of the model during training"""
