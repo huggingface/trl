@@ -71,7 +71,7 @@ REQUIRED_PKGS = [
 EXTRAS = {
     "test": [
         "parameterized",
-        "peft>=0.8.0"
+        "peft>=0.8.0",
         "pytest",
         "pytest-xdist",
         "pytest-cov",
