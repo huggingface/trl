@@ -68,18 +68,14 @@ class TestPad(unittest.TestCase):
 @require_peft
 class TestGetPEFTConfig(unittest.TestCase):
     def test_create_peft_config_use_peft_false(self):
-        r"""
-        Test that when use_peft is False, the function returns None.
-        """
+        """Test that when use_peft is False, the function returns None."""
         model_config = ModelConfig(use_peft=False)
         peft_config = get_peft_config(model_config)
-        self.assertEqual(peft_config, None)
+        self.assertIsNone(peft_config)
 
     def test_create_peft_config_use_peft_true(self):
-        r"""
-        Test that when use_peft is True, the function returns a LoraConfig object.
-        """
-        # Provide a least one non-default value to the model config for testing
+        """Test that when use_peft is True, the function returns a LoraConfig object."""
+        # Provide non-default values to the model config for testing
         peft_kwargs = {
             "lora_r": 8,
             "lora_alpha": 16,
