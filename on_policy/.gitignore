@@ -1,0 +1,15 @@
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# Model directories
+fine_tuned_model/
+model/
+logs/
+results/
+
+pycache/
+
+
+.netrc
+.DS_Store
+Thumbs.db

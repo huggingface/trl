@@ -1,0 +1,10 @@
+pandas
+pyarrow
+huggingface_hub
+datasets
+transformers
+torch
+torchvision
+trl
+accelerate
+tensorboard
