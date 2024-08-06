@@ -76,10 +76,16 @@ if __name__ == "__main__":
     script_args, kto_args, model_args = parser.parse_args_into_dataclasses()
 
     # Load a pretrained model
-    model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path)
-    model_ref = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
+    )
+    ref_model = AutoModelForCausalLM.from_pretrained(
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
+    )
 
-    tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
+    )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -101,7 +107,7 @@ if __name__ == "__main__":
     # Initialize the KTO trainer
     kto_trainer = KTOTrainer(
         model,
-        model_ref,
+        ref_model,
         args=kto_args,
         train_dataset=formatted_dataset["train"],
         eval_dataset=formatted_dataset["test"],

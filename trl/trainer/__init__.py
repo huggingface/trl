@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 from ..import_utils import _LazyModule, is_diffusers_available, OptionalDependencyNotAvailable
 
 _import_structure = {
+    "callbacks": ["RichProgressCallback", "SyncRefModelCallback"],
     "utils": [
         "AdaptiveKLController",
         "FixedKLController",
@@ -27,16 +28,21 @@ _import_structure = {
         "RunningMoments",
         "disable_dropout_in_model",
         "peft_module_casting_to_bf16",
-        "RichProgressCallback",
     ],
-    "dpo_config": ["DPOConfig"],
+    "dpo_config": ["DPOConfig", "FDivergenceConstants", "FDivergenceType"],
     "dpo_trainer": ["DPOTrainer"],
     "cpo_config": ["CPOConfig"],
     "cpo_trainer": ["CPOTrainer"],
+    "alignprop_config": ["AlignPropConfig"],
+    "alignprop_trainer": ["AlignPropTrainer"],
     "iterative_sft_trainer": ["IterativeSFTTrainer"],
     "kto_config": ["KTOConfig"],
     "kto_trainer": ["KTOTrainer"],
+    "bco_config": ["BCOConfig"],
+    "bco_trainer": ["BCOTrainer"],
     "model_config": ["ModelConfig"],
+    "online_dpo_config": ["OnlineDPOConfig"],
+    "online_dpo_trainer": ["OnlineDPOTrainer"],
     "orpo_config": ["ORPOConfig"],
     "orpo_trainer": ["ORPOTrainer"],
     "ppo_config": ["PPOConfig"],
@@ -49,6 +55,16 @@ _import_structure = {
     "sft_trainer": ["SFTTrainer"],
     "base": ["BaseTrainer"],
     "ddpo_config": ["DDPOConfig"],
+    "callbacks": ["RichProgressCallback", "SyncRefModelCallback", "WinRateCallback"],
+    "judges": [
+        "BaseJudge",
+        "BaseRankJudge",
+        "BasePairwiseJudge",
+        "RandomRankJudge",
+        "RandomPairwiseJudge",
+        "HfPairwiseJudge",
+        "OpenAIPairwiseJudge",
+    ],
 }
 
 try:
@@ -62,6 +78,7 @@ else:
 
 if TYPE_CHECKING:
     # isort: off
+    from .callbacks import RichProgressCallback, SyncRefModelCallback
     from .utils import (
         AdaptiveKLController,
         FixedKLController,
@@ -70,7 +87,6 @@ if TYPE_CHECKING:
         RunningMoments,
         disable_dropout_in_model,
         peft_module_casting_to_bf16,
-        RichProgressCallback,
     )
 
     # isort: on
@@ -78,14 +94,19 @@ if TYPE_CHECKING:
     from .base import BaseTrainer
     from .ddpo_config import DDPOConfig
 
-    from .dpo_config import DPOConfig
+    from .dpo_config import DPOConfig, FDivergenceConstants, FDivergenceType
     from .dpo_trainer import DPOTrainer
     from .iterative_sft_trainer import IterativeSFTTrainer
     from .cpo_config import CPOConfig
     from .cpo_trainer import CPOTrainer
+    from .alignprop_config import AlignPropConfig
     from .kto_config import KTOConfig
     from .kto_trainer import KTOTrainer
+    from .bco_config import BCOConfig
+    from .bco_trainer import BCOTrainer
     from .model_config import ModelConfig
+    from .online_dpo_config import OnlineDPOConfig
+    from .online_dpo_trainer import OnlineDPOTrainer
     from .orpo_config import ORPOConfig
     from .orpo_trainer import ORPOTrainer
     from .ppo_config import PPOConfig
@@ -94,6 +115,16 @@ if TYPE_CHECKING:
     from .reward_trainer import RewardTrainer, compute_accuracy
     from .sft_config import SFTConfig
     from .sft_trainer import SFTTrainer
+    from .callbacks import RichProgressCallback, SyncRefModelCallback, WinRateCallback
+    from .judges import (
+        BaseJudge,
+        BaseRankJudge,
+        BasePairwiseJudge,
+        RandomRankJudge,
+        RandomPairwiseJudge,
+        HfPairwiseJudge,
+        OpenAIPairwiseJudge,
+    )
 
     try:
         if not is_diffusers_available():

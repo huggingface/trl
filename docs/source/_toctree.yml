@@ -31,22 +31,32 @@
     title: PPOv2 Trainer
   - local: rloo_trainer
     title: RLOO Trainer
+  - local: online_dpo_trainer
+    title: Online DPO Trainer
   - local: best_of_n
     title: Best of N Sampling
   - local: dpo_trainer
     title: DPO Trainer
   - local: kto_trainer
     title: KTO Trainer
+  - local: bco_trainer
+    title: BCO Trainer
   - local: cpo_trainer
     title: CPO Trainer
   - local: ddpo_trainer
     title: Denoising Diffusion Policy Optimization
+  - local: alignprop_trainer
+    title: AlignProp Trainer
   - local: orpo_trainer
     title: ORPO Trainer
   - local: simpo_trainer
     title: SimPO Trainer
   - local: iterative_sft_trainer
     title: Iterative Supervised Fine-Tuning
+  - local: callbacks
+    title: Callback Classes
+  - local: judges
+    title: Judge Classes
   - local: text_environments
     title: Text Environments
   title: API
