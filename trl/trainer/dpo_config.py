@@ -89,7 +89,7 @@ class DPOConfig(TrainingArguments):
         ref_model_sync_steps ('int', defaults to 2):
             The tau parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper.
         rpo_alpha ('float', defaults to `None`):
-            The alpha parameter from the [RPO](https://huggingface.co/papers/2404.19733) paper. If None, no weighting is applied and the loss is the same as the DPO loss.
+            The alpha parameter from the [RPO](https://huggingface.co/papers/2404.19733) paper V3. If None, no weighting is applied and the loss is the same as the DPO loss. The paper recommends `rpo_alpha=1.0`.
     """
 
     beta: float = 0.1

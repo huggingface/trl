@@ -76,6 +76,7 @@ class OnlineDPOTrainer(Trainer):
         self.data_collator = data_collator
         self.eval_dataset = eval_dataset
         self.optimizer, self.lr_scheduler = optimizers
+        self.num_generation_per_prompt = 2
 
         #########
         # calculate various batch sizes
@@ -107,7 +108,7 @@ class OnlineDPOTrainer(Trainer):
             self.sample_generations_freq = max(1, args.num_total_batches // args.num_sample_generations)
         self.local_dataloader_batch_size = exact_div(
             args.local_batch_size,
-            args.num_generation_per_prompt,
+            self.num_generation_per_prompt,
             "`local_batch_size` must be a multiple of `num_generation_per_prompt`",
         )  # DPO logic: repeats the same prompt args.rloo_k times
 
@@ -260,7 +261,7 @@ class OnlineDPOTrainer(Trainer):
             data = next(iter_dataloader)
             with torch.no_grad():
                 queries = data["input_ids"].to(device)
-                queries = queries.repeat(args.num_generation_per_prompt, 1)
+                queries = queries.repeat(self.num_generation_per_prompt, 1)
                 context_length = queries.shape[1]
                 responses = []
                 postprocessed_responses = []
@@ -287,14 +288,13 @@ class OnlineDPOTrainer(Trainer):
                     del logits, all_logprob
                     torch.cuda.empty_cache()
 
-                    with torch.no_grad():
-                        ref_output = forward(ref_model, query_response, tokenizer.pad_token_id)
-                        ref_logits = ref_output.logits[:, context_length - 1 : -1]
-                        ref_logits /= args.temperature + 1e-7
-                        ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
-                        ref_logprob = torch.gather(ref_all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
-                        del ref_output, ref_logits, ref_all_logprob
-                        torch.cuda.empty_cache()
+                    ref_output = forward(ref_model, query_response, tokenizer.pad_token_id)
+                    ref_logits = ref_output.logits[:, context_length - 1 : -1]
+                    ref_logits /= args.temperature + 1e-7
+                    ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
+                    ref_logprob = torch.gather(ref_all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
+                    del ref_output, ref_logits, ref_all_logprob
+                    torch.cuda.empty_cache()
 
                     # Response Processing 1. truncate response after the first occurrence of `stop_token_id`
                     postprocessed_response = response
@@ -304,12 +304,11 @@ class OnlineDPOTrainer(Trainer):
                         )
 
                     # Response Processing 2. run reward model on the truncated responses
-                    with torch.no_grad():
-                        postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
-                        sequence_length = first_true_indices(postprocessed_response == tokenizer.pad_token_id) - 1
-                        _, score, _ = get_reward(
-                            reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
-                        )
+                    postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
+                    sequence_length = first_true_indices(postprocessed_response == tokenizer.pad_token_id) - 1
+                    _, score, _ = get_reward(
+                        reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
+                    )
 
                     responses.append(response)
                     postprocessed_responses.append(postprocessed_response)
@@ -317,6 +316,8 @@ class OnlineDPOTrainer(Trainer):
                     ref_logprobs.append(ref_logprob)
                     sequence_lengths.append(sequence_length)
                     scores.append(score)
+
+                # stack all the tensors
                 responses = torch.cat(responses, 0)
                 postprocessed_responses = torch.cat(postprocessed_responses, 0)
                 logprobs = torch.cat(logprobs, 0)
@@ -332,7 +333,7 @@ class OnlineDPOTrainer(Trainer):
                 # only query humans on responses that pass that filter
                 contain_eos_token = torch.any(postprocessed_responses == tokenizer.eos_token_id, dim=-1)
                 if args.non_eos_penalty:
-                    scores = torch.where(contain_eos_token, scores, torch.full_like(scores, args.penalty_reward_value))
+                    scores = torch.where(contain_eos_token, scores, args.penalty_reward_value)
                 # accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
 
                 # be very careful with `padding_mask_p1`; see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
@@ -365,19 +366,19 @@ class OnlineDPOTrainer(Trainer):
 
             # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
             for epoch_idx in range(args.num_epochs):
-                b_inds = np.random.permutation(args.local_batch_size // args.num_generation_per_prompt)
+                b_inds = np.random.permutation(args.local_batch_size // self.num_generation_per_prompt)
                 minibatch_idx = 0
                 for mini_batch_start in range(
                     0,
-                    args.local_batch_size // args.num_generation_per_prompt,
-                    args.local_mini_batch_size // args.num_generation_per_prompt,
+                    args.local_batch_size // self.num_generation_per_prompt,
+                    args.local_mini_batch_size // self.num_generation_per_prompt,
                 ):
-                    mini_batch_end = mini_batch_start + args.local_mini_batch_size // args.num_generation_per_prompt
+                    mini_batch_end = mini_batch_start + args.local_mini_batch_size // self.num_generation_per_prompt
                     mini_batch_inds = b_inds[mini_batch_start:mini_batch_end]
                     gradient_accumulation_idx = 0
                     for micro_batch_start in range(
                         0,
-                        args.local_mini_batch_size // args.num_generation_per_prompt,
+                        args.local_mini_batch_size // self.num_generation_per_prompt,
                         args.per_device_train_batch_size,
                     ):
                         with accelerator.accumulate(model):
