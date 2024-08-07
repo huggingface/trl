@@ -51,7 +51,7 @@ where the `prompt` contains the context inputs, `chosen` contains the correspond
 The SimPO trainer expects a model of `AutoModelForCausalLM`, compared to PPO that expects `AutoModelForCausalLMWithValueHead` for the value function.
 
 ## Using the `SimPOTrainer`
-For a detailed example have a look at the `examples/scripts/simpo.py` script. At a high level we need to initialize the `SimPOTrainer` with a `model` we wish to train. **Note that SimPOTrainer eliminates the need to use the reference model, simplifying the optimization process.** The `beta` refers to the hyperparameter `lambda` in eq. (6) of the paper and refers to the weighting of the relative odd ratio loss in the standard cross-entropy loss used for SFT.
+For a detailed example have a look at the `examples/scripts/simpo.py` script. At a high level we need to initialize the `SimPOTrainer` with a `model` we wish to train. **Note that SimPOTrainer eliminates the need to use the reference model, simplifying the optimization process.**
 
 ```py
 simpo_config = SimPOConfig(
