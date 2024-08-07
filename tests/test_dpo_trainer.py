@@ -34,25 +34,24 @@ from .testing_utils import require_bitsandbytes, require_no_wandb, require_peft
 
 
 class DPOTrainerTester(unittest.TestCase):
-    @classmethod
-    def setUp(cls):
-        cls.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
-        cls.model = AutoModelForCausalLM.from_pretrained(cls.model_id)
-        cls.ref_model = AutoModelForCausalLM.from_pretrained(cls.model_id)
-        cls.tokenizer = AutoTokenizer.from_pretrained(cls.model_id)
-        cls.tokenizer.pad_token = cls.tokenizer.eos_token
+    def setUp(self):
+        self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        self.tokenizer.pad_token = self.tokenizer.eos_token
 
         # get t5 as seq2seq example:
         model_id = "trl-internal-testing/T5ForConditionalGeneration-correct-vocab-calibrated"
-        cls.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
-        cls.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
-        cls.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
+        self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+        self.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+        self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         # get idefics2 model
         model_id = "trl-internal-testing/tiny-random-idefics2"
-        cls.idefics2_model = AutoModelForVision2Seq.from_pretrained(model_id)
-        cls.idefics2_ref_model = AutoModelForVision2Seq.from_pretrained(model_id)
-        cls.idefics2_processor = AutoProcessor.from_pretrained(model_id)
+        self.idefics2_model = AutoModelForVision2Seq.from_pretrained(model_id)
+        self.idefics2_ref_model = AutoModelForVision2Seq.from_pretrained(model_id)
+        self.idefics2_processor = AutoProcessor.from_pretrained(model_id)
 
     def _init_dummy_dataset(self):
         # fmt: off

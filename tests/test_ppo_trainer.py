@@ -102,31 +102,33 @@ class PPOTrainerTester(unittest.TestCase):
     """
 
     @classmethod
-    def setUp(cls):
-        set_seed(42)
+    def setUpClass(cls):
         cls._api = HfApi(endpoint=CI_HUB_ENDPOINT)
 
+    def setUp(self):
+        set_seed(42)
+
         # model_id
-        cls.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
 
         # get models and tokenizer
-        cls.gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(cls.model_id)
-        cls.gpt2_ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(cls.model_id)
-        cls.gpt2_tokenizer = AutoTokenizer.from_pretrained(cls.model_id)
+        self.gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(self.model_id)
+        self.gpt2_ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(self.model_id)
+        self.gpt2_tokenizer = AutoTokenizer.from_pretrained(self.model_id)
 
-        cls.gpt2_tokenizer.pad_token = cls.gpt2_tokenizer.eos_token
+        self.gpt2_tokenizer.pad_token = self.gpt2_tokenizer.eos_token
 
         # get bloom as right padding examples:
         model_id = "trl-internal-testing/tiny-BloomForCausalLM-correct-vocab"
-        cls.bloom_model = AutoModelForCausalLMWithValueHead.from_pretrained(model_id)
-        cls.bloom_tokenizer = AutoTokenizer.from_pretrained(model_id)
+        self.bloom_model = AutoModelForCausalLMWithValueHead.from_pretrained(model_id)
+        self.bloom_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration-correct-vocab"
-        cls.t5_model = AutoModelForSeq2SeqLMWithValueHead.from_pretrained(model_id)
-        cls.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
+        self.t5_model = AutoModelForSeq2SeqLMWithValueHead.from_pretrained(model_id)
+        self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         # initialize trainer
-        cls.ppo_config = PPOConfig(batch_size=2, mini_batch_size=1, log_with=None)
+        self.ppo_config = PPOConfig(batch_size=2, mini_batch_size=1, log_with=None)
 
     @classmethod
     def tearDownClass(cls):
