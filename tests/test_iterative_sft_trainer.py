@@ -107,7 +107,11 @@ class IterativeTrainerTester(unittest.TestCase):
                 tokenizer = self.t5_tokenizer
 
             args = TrainingArguments(
-                output_dir=tmp_dir, per_device_train_batch_size=2, max_steps=2, learning_rate=1e-3
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=2,
+                learning_rate=1e-3,
+                report_to="none",
             )
             iterative_trainer = IterativeSFTTrainer(model=model, args=args, tokenizer=tokenizer)
             iterative_trainer.optimizer.zero_grad = partial(iterative_trainer.optimizer.zero_grad, set_to_none=False)

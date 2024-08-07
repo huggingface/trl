@@ -97,6 +97,7 @@ class KTOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 beta=0.1,
                 precompute_ref_log_probs=pre_compute,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -143,6 +144,7 @@ class KTOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -224,6 +226,7 @@ class KTOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -273,6 +276,7 @@ class KTOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -314,6 +318,7 @@ class KTOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 beta=0.1,
                 generate_during_eval=True,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -359,6 +364,7 @@ class KTOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()

@@ -180,6 +180,7 @@ class DPOTrainerTester(unittest.TestCase):
                 beta=0.1,
                 loss_type=loss_type,
                 precompute_ref_log_probs=pre_compute,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -236,6 +237,7 @@ class DPOTrainerTester(unittest.TestCase):
                 beta=0.1,
                 loss_type=loss_type,
                 precompute_ref_log_probs=pre_compute,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_image_dataset()
@@ -279,6 +281,7 @@ class DPOTrainerTester(unittest.TestCase):
                 beta=0.1,
                 precompute_ref_log_probs=True,
                 rpo_alpha=0.5,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -329,6 +332,7 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 beta=0.1,
                 precompute_ref_log_probs=True,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -368,6 +372,7 @@ class DPOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -404,6 +409,7 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 beta=0.1,
                 dataset_num_proc=5,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -442,6 +448,7 @@ class DPOTrainerTester(unittest.TestCase):
                 sync_ref_model=True,
                 ref_model_mixup_alpha=0.5,
                 ref_model_sync_steps=1,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -483,6 +490,7 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 beta=0.1,
                 generate_during_eval=True,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -529,6 +537,7 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 beta=0.1,
                 precompute_ref_log_probs=True,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -589,6 +598,7 @@ class DPOTrainerTester(unittest.TestCase):
                 bf16=True,
                 beta=0.1,
                 generate_during_eval=True,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -671,6 +681,7 @@ class DPOTrainerTester(unittest.TestCase):
                 generate_during_eval=gen_during_eval,
                 loss_type=loss_type,
                 precompute_ref_log_probs=pre_compute,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -720,6 +731,7 @@ class DPOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -755,6 +767,7 @@ class DPOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -800,6 +813,7 @@ class DPOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -827,6 +841,7 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 beta=0.1,
                 force_use_ref_model=True,
+                report_to="none",
             )
 
             trainer = DPOTrainer(
@@ -852,6 +867,7 @@ class DPOTrainerTester(unittest.TestCase):
                 max_steps=1,
                 model_init_kwargs={"torch_dtype": "float16"},
                 ref_model_init_kwargs={"torch_dtype": "float16"},
+                report_to="none",
             )
 
             trainer = DPOTrainer(
@@ -871,6 +887,7 @@ class DPOTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 max_steps=1,
                 model_init_kwargs={"torch_dtype": -1},
+                report_to="none",
             )
 
             with pytest.raises(
@@ -890,6 +907,7 @@ class DPOTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 max_steps=1,
                 ref_model_init_kwargs={"torch_dtype": -1},
+                report_to="none",
             )
 
             with pytest.raises(
@@ -922,6 +940,7 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 f_divergence_type=FDivergenceType.ALPHA_DIVERGENCE.value,
                 f_alpha_divergence_coef=0.5,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -964,6 +983,7 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 f_divergence_type=FDivergenceType.JS_DIVERGENCE.value,
                 f_alpha_divergence_coef=0.5,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()

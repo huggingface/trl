@@ -61,7 +61,6 @@ class SFTTrainerTester(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
-        cls.model = AutoModelForCausalLM.from_pretrained(cls.model_id)
         cls.tokenizer = AutoTokenizer.from_pretrained(cls.model_id)
         cls.tokenizer.pad_token = cls.tokenizer.eos_token
         cls.dummy_dataset = Dataset.from_dict(
@@ -224,6 +223,7 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=2,
                 per_device_train_batch_size=2,
                 hub_token="not_a_real_token",
+                report_to="none",
             )
 
             trainer = SFTTrainer(
@@ -253,6 +253,7 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=2,
                 per_device_train_batch_size=2,
                 packing=True,
+                report_to="none",
             )
 
             trainer = SFTTrainer(
@@ -280,11 +281,13 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=1,
                 per_device_train_batch_size=2,
                 packing=True,
+                report_to="none",
             )
 
+            model = AutoModelForCausalLM.from_pretrained(self.model_id)
             with pytest.raises(ValueError):
                 _ = SFTTrainer(
-                    model=self.model,
+                    model=model,
                     args=training_args,
                     train_dataset=self.dummy_dataset,
                 )
@@ -300,9 +303,11 @@ class SFTTrainerTester(unittest.TestCase):
                 max_seq_length=32,  # make sure there is at least 1 packed sequence
                 num_of_sequences=32,
                 packing=True,
+                report_to="none",
             )
+            model = AutoModelForCausalLM.from_pretrained(self.model_id)
             _ = SFTTrainer(
-                model=self.model,
+                model=model,
                 args=training_args,
                 train_dataset=self.dummy_chatml_dataset,
             )
@@ -316,9 +321,11 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=1,
                 per_device_train_batch_size=2,
                 packing=False,
+                report_to="none",
             )
+            model = AutoModelForCausalLM.from_pretrained(self.model_id)
             _ = SFTTrainer(
-                model=self.model,
+                model=model,
                 args=training_args,
                 train_dataset=self.dummy_chatml_dataset,
             )
@@ -334,9 +341,11 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 max_seq_length=16,  # make sure there is at least 1 packed sequence
                 packing=True,
+                report_to="none",
             )
+            model = AutoModelForCausalLM.from_pretrained(self.model_id)
             _ = SFTTrainer(
-                model=self.model,
+                model=model,
                 args=training_args,
                 train_dataset=self.dummy_instruction_dataset,
             )
@@ -350,9 +359,11 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=1,
                 per_device_train_batch_size=2,
                 packing=False,
+                report_to="none",
             )
+            model = AutoModelForCausalLM.from_pretrained(self.model_id)
             _ = SFTTrainer(
-                model=self.model,
+                model=model,
                 args=training_args,
                 train_dataset=self.dummy_instruction_dataset,
             )
@@ -367,10 +378,12 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 max_seq_length=32,  # make sure there is at least 1 packed sequence
                 packing=True,
+                report_to="none",
             )
             # This should work
+            model = AutoModelForCausalLM.from_pretrained(self.model_id)
             _ = SFTTrainer(
-                model=self.model,
+                model=model,
                 args=training_args,
                 train_dataset=self.dummy_dataset,
                 formatting_func=formatting_prompts_func,
@@ -388,9 +401,11 @@ class SFTTrainerTester(unittest.TestCase):
                     per_device_train_batch_size=2,
                     max_seq_length=1024,  # make sure there is NOT at least 1 packed sequence
                     packing=True,
+                    report_to="none",
                 )
+                model = AutoModelForCausalLM.from_pretrained(self.model_id)
                 _ = SFTTrainer(
-                    model=self.model,
+                    model=model,
                     args=training_args,
                     train_dataset=self.dummy_dataset,
                     formatting_func=formatting_prompts_func,
@@ -407,9 +422,11 @@ class SFTTrainerTester(unittest.TestCase):
                     save_steps=1,
                     per_device_train_batch_size=2,
                     packing=False,
+                    report_to="none",
                 )
+                model = AutoModelForCausalLM.from_pretrained(self.model_id)
                 _ = SFTTrainer(
-                    model=self.model,
+                    model=model,
                     args=training_args,
                     train_dataset=self.dummy_dataset,
                     formatting_func=formatting_prompts_func,
@@ -425,9 +442,11 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=1,
                 per_device_train_batch_size=2,
                 packing=False,
+                report_to="none",
             )
+            model = AutoModelForCausalLM.from_pretrained(self.model_id)
             _ = SFTTrainer(
-                model=self.model,
+                model=model,
                 args=training_args,
                 train_dataset=self.dummy_dataset,
                 formatting_func=formatting_prompts_func_batched,
@@ -445,10 +464,11 @@ class SFTTrainerTester(unittest.TestCase):
                 num_train_epochs=2,
                 per_device_train_batch_size=2,
                 packing=True,
+                report_to="none",
             )
-
+            model = AutoModelForCausalLM.from_pretrained(self.model_id)
             trainer = SFTTrainer(
-                model=self.model,
+                model=model,
                 args=training_args,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
@@ -474,10 +494,11 @@ class SFTTrainerTester(unittest.TestCase):
                 max_seq_length=16,
                 num_of_sequences=16,
                 packing=True,
+                report_to="none",
             )
-
+            model = AutoModelForCausalLM.from_pretrained(self.model_id)
             trainer = SFTTrainer(
-                model=self.model,
+                model=model,
                 args=training_args,
                 train_dataset=self.dummy_dataset,
             )
@@ -499,10 +520,11 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 dataset_text_field="text",
                 max_seq_length=16,
+                report_to="none",
             )
-
+            model = AutoModelForCausalLM.from_pretrained(self.model_id)
             trainer = SFTTrainer(
-                model=self.model,
+                model=model,
                 args=training_args,
                 train_dataset=self.dummy_dataset,
             )
@@ -524,10 +546,11 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=1,
                 per_device_train_batch_size=2,
                 packing=True,
+                report_to="none",
             )
-
+            model = AutoModelForCausalLM.from_pretrained(self.model_id)
             trainer = SFTTrainer(
-                model=self.model,
+                model=model,
                 args=training_args,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
@@ -552,10 +575,11 @@ class SFTTrainerTester(unittest.TestCase):
                 max_seq_length=16,
                 num_of_sequences=16,
                 packing=True,
+                report_to="none",
             )
-
+            model = AutoModelForCausalLM.from_pretrained(self.model_id)
             trainer = SFTTrainer(
-                model=self.model,
+                model=model,
                 args=training_args,
                 train_dataset=self.dummy_dataset,
             )
@@ -578,10 +602,11 @@ class SFTTrainerTester(unittest.TestCase):
                 max_seq_length=16,
                 num_of_sequences=16,
                 packing=True,
+                report_to="none",
             )
-
+            model = AutoModelForCausalLM.from_pretrained(self.model_id)
             trainer = SFTTrainer(
-                model=self.model,
+                model=model,
                 args=training_args,
                 train_dataset=self.dummy_dataset,
                 formatting_func=formatting_prompts_func,
@@ -603,10 +628,11 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=1,
                 per_device_train_batch_size=2,
                 max_seq_length=16,
+                report_to="none",
             )
-
+            model = AutoModelForCausalLM.from_pretrained(self.model_id)
             trainer = SFTTrainer(
-                model=self.model,
+                model=model,
                 args=training_args,
                 train_dataset=self.dummy_dataset,
                 formatting_func=formatting_prompts_func_batched,
@@ -628,10 +654,11 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 dataset_text_field="text",
                 max_seq_length=16,
+                report_to="none",
             )
-
+            model = AutoModelForCausalLM.from_pretrained(self.model_id)
             trainer = SFTTrainer(
-                model=self.model,
+                model=model,
                 args=training_args,
                 train_dataset=self.dummy_dataset,
             )
@@ -653,6 +680,7 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=1,
                 per_device_train_batch_size=2,
                 packing=True,
+                report_to="none",
             )
 
             trainer = SFTTrainer(
@@ -776,10 +804,11 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 packing=True,
                 max_seq_length=500,
+                report_to="none",
             )
-
+            model = AutoModelForCausalLM.from_pretrained(self.model_id)
             trainer = SFTTrainer(
-                model=self.model,
+                model=model,
                 args=training_args,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
@@ -805,10 +834,11 @@ class SFTTrainerTester(unittest.TestCase):
                 save_strategy="epoch",
                 packing=True,
                 max_seq_length=500,
+                report_to="none",
             )
-
+            model = AutoModelForCausalLM.from_pretrained(self.model_id)
             trainer = SFTTrainer(
-                model=self.model,
+                model=model,
                 args=training_args,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
@@ -835,10 +865,11 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 neftune_noise_alpha=5,
                 packing=True,
+                report_to="none",
             )
-
+            model = AutoModelForCausalLM.from_pretrained(self.model_id)
             trainer = SFTTrainer(
-                model=self.model,
+                model=model,
                 args=training_args,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
@@ -877,7 +908,7 @@ class SFTTrainerTester(unittest.TestCase):
                 task_type="CAUSAL_LM",
             )
 
-            training_args = SFTConfig(packing=True, output_dir=tmp_dir)
+            training_args = SFTConfig(packing=True, output_dir=tmp_dir, report_to="none")
 
             _ = SFTTrainer(
                 model=self.model_id,
@@ -899,6 +930,7 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=2,
                 per_device_train_batch_size=2,
                 packing=True,
+                report_to="none",
             )
 
             peft_config = LoraConfig(
@@ -941,6 +973,7 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 gradient_checkpointing=True,
                 packing=True,
+                report_to="none",
             )
 
             peft_config = LoraConfig(
@@ -983,6 +1016,7 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 neftune_noise_alpha=5,
                 packing=True,
+                report_to="none",
             )
 
             peft_config = LoraConfig(
@@ -1045,6 +1079,7 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 gradient_checkpointing=True,
                 packing=True,
+                report_to="none",
             )
 
             peft_config = LoraConfig(
@@ -1078,6 +1113,7 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 gradient_checkpointing=True,
                 packing=True,
+                report_to="none",
             )
 
             trainer = SFTTrainer(
@@ -1103,6 +1139,7 @@ class SFTTrainerTester(unittest.TestCase):
                 packing=True,
                 max_seq_length=32,  # make sure there is at least 1 packed sequence
                 eval_packing=False,
+                report_to="none",
             )
 
             trainer = SFTTrainer(
@@ -1126,6 +1163,7 @@ class SFTTrainerTester(unittest.TestCase):
                 gradient_checkpointing=True,
                 max_seq_length=32,  # make sure there is at least 1 packed sequence
                 packing=True,
+                report_to="none",
             )
             trainer = SFTTrainer(
                 model=self.model_id,
@@ -1148,6 +1186,7 @@ class SFTTrainerTester(unittest.TestCase):
                 gradient_checkpointing=True,
                 max_seq_length=32,  # make sure there is at least 1 packed sequence
                 packing=False,
+                report_to="none",
             )
             trainer = SFTTrainer(
                 model=self.model_id,
@@ -1174,6 +1213,7 @@ class SFTTrainerTester(unittest.TestCase):
                 remove_unused_columns=False,
                 dataset_text_field="text",  # need a dummy field
                 dataset_kwargs={"skip_prepare_dataset": True},
+                report_to="none",
             )
 
             trainer = SFTTrainer(
@@ -1199,6 +1239,7 @@ class SFTTrainerTester(unittest.TestCase):
                 remove_unused_columns=False,
                 packing=False,
                 dataset_kwargs={"skip_prepare_dataset": True},
+                report_to="none",
             )
 
             trainer = SFTTrainer(
@@ -1223,6 +1264,7 @@ class SFTTrainerTester(unittest.TestCase):
                 remove_unused_columns=False,
                 dataset_text_field="text",  # need a dummy field
                 dataset_kwargs={"skip_prepare_dataset": True},
+                report_to="none",
             )
             tiny_llava = LlavaForConditionalGeneration.from_pretrained(
                 "trl-internal-testing/tiny-random-LlavaForConditionalGeneration"
@@ -1285,6 +1327,7 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=2,
                 per_device_train_batch_size=2,
                 model_init_kwargs={"torch_dtype": torch.float16},
+                report_to="none",
             )
             trainer = SFTTrainer(
                 model=self.model_id,
@@ -1304,6 +1347,7 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=2,
                 per_device_train_batch_size=2,
                 model_init_kwargs={"torch_dtype": -1},
+                report_to="none",
             )
             with pytest.raises(
                 ValueError,
