@@ -1,6 +1,6 @@
 # SimPO Trainer
 
-[Simple Preference Optimization](https://arxiv.org/abs/2405.14734) (SimPO) by Yu Meng, Mengzhou Xia, and Danqi Chen proposes a simpler and more effective preference optimization algorithm than DPO without using a reference model. The key designs in SimPO are (1) using length-normalized log likelihood as the implicit reward, and (2) incorporating a target reward margin in the Bradley-Terry ranking objective.
+[Simple Preference Optimization](https://huggingface.co/papers/2405.14734) (SimPO) by Yu Meng, Mengzhou Xia, and Danqi Chen proposes a simpler and more effective preference optimization algorithm than DPO without using a reference model. The key designs in SimPO are (1) using length-normalized log likelihood as the implicit reward, and (2) incorporating a target reward margin in the Bradley-Terry ranking objective.
 
 The official code can be found at [princeton-nlp/SimPO](https://github.com/princeton-nlp/SimPO).
 
@@ -48,14 +48,14 @@ simpo_dataset_dict = {
 where the `prompt` contains the context inputs, `chosen` contains the corresponding chosen responses and `rejected` contains the corresponding negative (rejected) responses. Note that a prompt can have multiple responses and this is reflected in the entries being repeated in the dictionary's value arrays.
 
 ## Expected model format
-The SimPO trainer expects a model of `AutoModelForCausalLM`, compared to PPO that expects `AutoModelForCausalLMWithValueHead` for the value function.
+The SimPO trainer expects a model of `AutoModelForCausalLM`.
 
 ## Using the `SimPOTrainer`
 For a detailed example have a look at the `examples/scripts/simpo.py` script. At a high level we need to initialize the `SimPOTrainer` with a `model` we wish to train. **Note that SimPOTrainer eliminates the need to use the reference model, simplifying the optimization process.**
 
 ```py
 simpo_config = SimPOConfig(
-    beta=2.5, # beta
+    beta=2.5,
     gamma_beta_ratio=0.25, # ratio between target reward margin (gamma) and beta
 )
 
