@@ -859,12 +859,12 @@ class SFTTrainerTester(unittest.TestCase):
             assert len(trainer.model.get_input_embeddings()._forward_hooks) > 0
 
             trainer.neftune_hook_handle.remove()
+            assert len(trainer.model.get_input_embeddings()._forward_hooks) == 0
 
             trainer.train()
 
             # Make sure forward pass works fine
             _ = trainer.model(torch.LongTensor([[1, 0, 1]]).to(device))
-            assert len(trainer.model.get_input_embeddings()._forward_hooks) == 0
 
     @require_peft
     def test_peft_sft_trainer_str(self):
@@ -1018,6 +1018,7 @@ class SFTTrainerTester(unittest.TestCase):
             assert len(trainer.model.get_input_embeddings()._forward_hooks) > 0
 
             trainer.neftune_hook_handle.remove()
+            assert len(trainer.model.get_input_embeddings()._forward_hooks) == 0
 
             trainer.train()
 
@@ -1030,7 +1031,6 @@ class SFTTrainerTester(unittest.TestCase):
 
             # Make sure forward pass works fine to check if embeddings forward is not broken.
             _ = trainer.model(torch.LongTensor([[1, 0, 1]]).to(device))
-            assert len(trainer.model.get_input_embeddings()._forward_hooks) == 0
 
     @require_peft
     def test_peft_sft_trainer_tag(self):
