@@ -36,7 +36,7 @@ from .testing_utils import require_bitsandbytes, require_no_wandb, require_peft
 
 class DPOTrainerTester(unittest.TestCase):
     @classmethod
-    def setUpClass(cls):
+    def setUp(cls):
         cls.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
         cls.model = AutoModelForCausalLM.from_pretrained(cls.model_id)
         cls.ref_model = AutoModelForCausalLM.from_pretrained(cls.model_id)
