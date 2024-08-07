@@ -29,7 +29,6 @@ from .testing_utils import require_bitsandbytes, require_peft
 
 
 @require_peft
-@mark.peft_test
 class PeftModelTester(unittest.TestCase):
     def setUp(self):
         self.causal_lm_model_id = "trl-internal-testing/tiny-random-GPTNeoXForCausalLM"

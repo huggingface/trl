@@ -309,7 +309,6 @@ class DPOTrainerTester(unittest.TestCase):
                     assert not torch.equal(param, new_param)
 
     @require_peft
-    @mark.peft_test
     def test_dpo_trainer_without_providing_ref_model_with_lora(self):
         from peft import LoraConfig
 
@@ -510,7 +509,6 @@ class DPOTrainerTester(unittest.TestCase):
                 )
 
     @require_peft
-    @mark.peft_test
     def test_dpo_lora_save(self):
         from peft import LoraConfig, get_peft_model
 
@@ -567,7 +565,6 @@ class DPOTrainerTester(unittest.TestCase):
 
     @require_peft
     @require_bitsandbytes
-    @mark.peft_test
     def test_dpo_lora_bf16_autocast_llama(self):
         # Note this test only works on compute capability > 7 GPU devices
         from peft import LoraConfig
@@ -650,7 +647,6 @@ class DPOTrainerTester(unittest.TestCase):
     )
     @require_bitsandbytes
     @require_peft
-    @mark.peft_test
     @unittest.skip("You need a GPU with bf16 support in order to run these tests")
     def test_dpo_lora_bf16_autocast(self, name, loss_type, pre_compute, gen_during_eval):
         # Note this test only works on compute capability > 7 GPU devices
@@ -785,7 +781,6 @@ class DPOTrainerTester(unittest.TestCase):
             assert trainer.model.model_tags == trainer._tag_names
 
     @require_peft
-    @mark.peft_test
     def test_dpo_lora_force_use_ref(self):
         from peft import LoraConfig, get_peft_model
 

@@ -125,7 +125,6 @@ class ORPOTrainerTester(unittest.TestCase):
                     assert not torch.equal(param, new_param)
 
     @require_peft
-    @mark.peft_test
     def test_orpo_trainer_with_lora(self):
         from peft import LoraConfig
 

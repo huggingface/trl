@@ -103,7 +103,7 @@ class PPOTrainerTester(unittest.TestCase):
     """
 
     @classmethod
-    def setUpClass(cls):
+    def setUp(cls):
         set_seed(42)
         cls._api = HfApi(endpoint=CI_HUB_ENDPOINT)
 
@@ -136,12 +136,6 @@ class PPOTrainerTester(unittest.TestCase):
                 cls._api.delete_repo(repo_id=model)
             except HTTPError:
                 pass
-
-    def setUp(self):
-        # initialize trainer
-        self.ppo_config = PPOConfig(batch_size=2, mini_batch_size=1, log_with=None)
-        self.gpt2_model.train()
-        return super().setUp()
 
     def tearDown(self):
         # free memory
@@ -853,7 +847,6 @@ class PPOTrainerTester(unittest.TestCase):
         assert torch.allclose(output, expected_output, atol=0.0001)
 
     @require_peft
-    @mark.peft_test
     def test_peft_model_ppo_trainer(self):
         from peft import LoraConfig, get_peft_model
         from transformers import AutoModelForCausalLM
@@ -913,7 +906,6 @@ class PPOTrainerTester(unittest.TestCase):
                 assert param.grad is None, f"Parameter {name} has a gradient"
 
     @require_peft
-    @mark.peft_test
     def test_peft_model_ppo_adapter_rm_trainer(self):
         from peft import LoraConfig, get_peft_model
         from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification
@@ -992,10 +984,11 @@ class PPOTrainerTester(unittest.TestCase):
                 ppo_trainer.model.gradient_checkpointing_enable()
                 _ = ppo_trainer.step(list(query_tensor), list(response_tensor), reward)
                 break
-
+            
+            dummy_inputs = dummy_inputs.to(ppo_trainer.accelerator.device)
             new_logits = ppo_trainer.model.compute_reward_score(dummy_inputs)
-            assert not torch.allclose(previous_rm_logits, new_logits[:, -1, :])
-            assert torch.allclose(original_rm_logits, new_logits[:, -1, :])
+            assert not torch.allclose(previous_rm_logits.to(ppo_trainer.accelerator.device), new_logits[:, -1, :])
+            assert torch.allclose(original_rm_logits.to(ppo_trainer.accelerator.device), new_logits[:, -1, :])
 
             # check gradients
             for name, param in model.named_parameters():
@@ -1045,7 +1038,6 @@ class PPOTrainerTester(unittest.TestCase):
 
     @require_peft
     @require_torch_multi_gpu
-    @mark.peft_test
     def test_peft_model_ppo_trainer_multi_gpu(self):
         from peft import LoraConfig, get_peft_model
         from transformers import AutoModelForCausalLM
@@ -1131,6 +1123,7 @@ class PPOTrainerTester(unittest.TestCase):
         tokenizer.pad_token = tokenizer.eos_token
 
         model_inputs = [tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts]
+        model_inputs = [input_ids.to(ppo_trainer.accelerator.device) for input_ids in model_inputs]
 
         generations_batched = ppo_trainer.generate(model_inputs, batch_size=2, **generation_kwargs)
         generations_batched = tokenizer.batch_decode(generations_batched)
@@ -1166,6 +1159,7 @@ class PPOTrainerTester(unittest.TestCase):
         tokenizer.pad_token = tokenizer.eos_token
 
         model_inputs = [tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts]
+        model_inputs = [input_ids.to(ppo_trainer.accelerator.device) for input_ids in model_inputs]
 
         generations_batched, ref_generations_batched = ppo_trainer.generate(
             model_inputs, batch_size=2, generate_ref_response=True, **generation_kwargs

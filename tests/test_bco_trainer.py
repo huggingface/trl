@@ -292,7 +292,6 @@ class BCOTrainerTester(unittest.TestCase):
                     self.assertFalse(torch.equal(param.cpu(), new_param.cpu()))
 
     @require_peft
-    @mark.peft_test
     def test_bco_trainer_without_providing_ref_model_with_lora(self):
         from peft import LoraConfig
 
@@ -376,7 +375,6 @@ class BCOTrainerTester(unittest.TestCase):
                 )
 
     @require_peft
-    @mark.peft_test
     def test_bco_lora_save(self):
         from peft import LoraConfig, get_peft_model
 

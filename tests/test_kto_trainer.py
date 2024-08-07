@@ -254,7 +254,6 @@ class KTOTrainerTester(unittest.TestCase):
                     self.assertFalse(torch.equal(param, new_param))
 
     @require_peft
-    @mark.peft_test
     def test_kto_trainer_without_providing_ref_model_with_lora(self):
         from peft import LoraConfig
 
@@ -338,7 +337,6 @@ class KTOTrainerTester(unittest.TestCase):
                 )
 
     @require_peft
-    @mark.peft_test
     def test_kto_lora_save(self):
         from peft import LoraConfig, get_peft_model
 
