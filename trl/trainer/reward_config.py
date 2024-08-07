@@ -36,3 +36,5 @@ class RewardConfig(TrainingArguments):
 
     max_length: Optional[int] = None
     """The maximum length of the sequences in the batch. This argument is required if you want to use the default data collator."""
+    concatenate_forward_flag: Optional[bool] = False
+    """The flag to indicate if concatenate chosen/rejected data in the batch to run model forward."""
