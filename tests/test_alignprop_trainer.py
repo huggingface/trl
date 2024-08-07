@@ -15,6 +15,7 @@ import gc
 import unittest
 
 import torch
+from parameterized import parameterized
 
 from trl import is_diffusers_available, is_peft_available
 
@@ -40,7 +41,7 @@ class AlignPropTrainerTester(unittest.TestCase):
     """
 
     def setUp(self):
-        self.alignprop_config = AlignPropConfig(
+        alignprop_config = AlignPropConfig(
             num_epochs=2,
             train_gradient_accumulation_steps=1,
             train_batch_size=2,
@@ -50,25 +51,33 @@ class AlignPropTrainerTester(unittest.TestCase):
         )
         pretrained_model = "hf-internal-testing/tiny-stable-diffusion-torch"
         pretrained_revision = "main"
-
-        pipeline = DefaultDDPOStableDiffusionPipeline(
+        pipeline_with_lora = DefaultDDPOStableDiffusionPipeline(
+            pretrained_model, pretrained_model_revision=pretrained_revision, use_lora=True
+        )
+        pipeline_without_lora = DefaultDDPOStableDiffusionPipeline(
             pretrained_model, pretrained_model_revision=pretrained_revision, use_lora=False
         )
-
-        self.trainer = AlignPropTrainer(self.alignprop_config, scorer_function, prompt_function, pipeline)
-
-        return super().setUp()
+        self.trainer_with_lora = AlignPropTrainer(
+            alignprop_config, scorer_function, prompt_function, pipeline_with_lora
+        )
+        self.trainer_without_lora = AlignPropTrainer(
+            alignprop_config, scorer_function, prompt_function, pipeline_without_lora
+        )
 
     def tearDown(self) -> None:
         gc.collect()
 
-    def test_generate_samples(self):
-        output_pairs = self.trainer._generate_samples(2, with_grad=True)
+    @parameterized.expand([True, False])
+    def test_generate_samples(self, use_lora):
+        trainer = self.trainer_with_lora if use_lora else self.trainer_without_lora
+        output_pairs = trainer._generate_samples(2, with_grad=True)
         assert len(output_pairs.keys()) == 3
         assert len(output_pairs["images"]) == 2
 
-    def test_calculate_loss(self):
-        sample = self.trainer._generate_samples(2)
+    @parameterized.expand([True, False])
+    def test_calculate_loss(self, use_lora):
+        trainer = self.trainer_with_lora if use_lora else self.trainer_without_lora
+        sample = trainer._generate_samples(2)
 
         images = sample["images"]
         prompts = sample["prompts"]
@@ -76,34 +85,7 @@ class AlignPropTrainerTester(unittest.TestCase):
         assert images.shape == (2, 3, 128, 128)
         assert len(prompts) == 2
 
-        rewards = self.trainer.compute_rewards(sample)
-        loss = self.trainer.calculate_loss(rewards)
+        rewards = trainer.compute_rewards(sample)
+        loss = trainer.calculate_loss(rewards)
 
         assert torch.isfinite(loss.cpu())
-
-
-@require_diffusers
-class AlignPropTrainerWithLoRATester(AlignPropTrainerTester):
-    """
-    Test the AlignPropTrainer class.
-    """
-
-    def setUp(self):
-        self.alignprop_config = AlignPropConfig(
-            num_epochs=2,
-            train_gradient_accumulation_steps=1,
-            mixed_precision=None,
-            truncated_backprop_rand=False,
-            save_freq=1000000,
-        )
-
-        pretrained_model = "hf-internal-testing/tiny-stable-diffusion-torch"
-        pretrained_revision = "main"
-
-        pipeline = DefaultDDPOStableDiffusionPipeline(
-            pretrained_model, pretrained_model_revision=pretrained_revision, use_lora=True
-        )
-
-        self.trainer = AlignPropTrainer(self.alignprop_config, scorer_function, prompt_function, pipeline)
-
-        return super().setUp()
