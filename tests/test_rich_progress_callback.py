@@ -20,7 +20,7 @@ class DummyModel(nn.Module):
 
 class TestRichProgressCallback(unittest.TestCase):
     @classmethod
-    def setUpClass(cls):
+    def setUp(cls):
         cls.dummy_model = DummyModel()
         cls.dummy_train_dataset = Dataset.from_list([{"x": 1.0, "y": 2.0}] * 5)
         cls.dummy_val_dataset = Dataset.from_list([{"x": 1.0, "y": 2.0}] * 101)
