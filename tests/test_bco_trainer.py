@@ -19,7 +19,6 @@ import torch
 from accelerate import Accelerator
 from datasets import Dataset
 from parameterized import parameterized
-from pytest import mark
 from transformers import AutoModel, AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
 from trl import BCOConfig, BCOTrainer

@@ -20,7 +20,6 @@ import torch
 from datasets import Dataset, features
 from parameterized import parameterized
 from PIL import Image
-from pytest import mark
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForSeq2SeqLM,

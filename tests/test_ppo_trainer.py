@@ -23,7 +23,6 @@ import pytest
 import torch
 from huggingface_hub import HfApi
 from parameterized import parameterized
-from pytest import mark
 from requests.exceptions import HTTPError
 from transformers import AutoTokenizer
 
@@ -984,7 +983,7 @@ class PPOTrainerTester(unittest.TestCase):
                 ppo_trainer.model.gradient_checkpointing_enable()
                 _ = ppo_trainer.step(list(query_tensor), list(response_tensor), reward)
                 break
-            
+
             dummy_inputs = dummy_inputs.to(ppo_trainer.accelerator.device)
             new_logits = ppo_trainer.model.compute_reward_score(dummy_inputs)
             assert not torch.allclose(previous_rm_logits.to(ppo_trainer.accelerator.device), new_logits[:, -1, :])

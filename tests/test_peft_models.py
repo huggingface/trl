@@ -16,7 +16,6 @@ import tempfile
 import unittest
 
 import torch
-from pytest import mark
 from transformers import AutoModelForCausalLM
 
 from trl import AutoModelForCausalLMWithValueHead, is_peft_available

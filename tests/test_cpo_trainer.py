@@ -17,7 +17,6 @@ import unittest
 import torch
 from datasets import Dataset
 from parameterized import parameterized
-from pytest import mark
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
 from trl import CPOConfig, CPOTrainer
