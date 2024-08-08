@@ -68,7 +68,6 @@ class IterativeTrainerTester(unittest.TestCase):
         dummy_dataset.set_format("torch")
         return dummy_dataset
 
-
     @parameterized.expand(
         [
             ["gpt2", "tensor"],
