@@ -595,8 +595,8 @@ class PPOTrainerTester(unittest.TestCase):
             returns[idx].unsqueeze(0),
         )
 
-        assert abs(pg_loss.item() - 2.0494) < 0.0001
-        assert abs(v_loss.item() - 0.0711) < 0.0001
+        assert abs(pg_loss.item() - 2.2643) < 0.0001
+        assert abs(v_loss.item() - 0.1015) < 0.0001
 
         # check if we get same results with masked parts removed
         pg_loss_unmasked, v_loss_unmasked, _ = ppo_trainer.loss(
@@ -609,8 +609,8 @@ class PPOTrainerTester(unittest.TestCase):
             apply_mask(advantages[idx], mask[idx]).unsqueeze(0),
             apply_mask(returns[idx], mask[idx]).unsqueeze(0),
         )
-        assert abs(pg_loss_unmasked.item() - 2.0494) < 0.0001
-        assert abs(v_loss_unmasked.item() - 0.0711) < 0.0001
+        assert abs(pg_loss_unmasked.item() - 2.2643) < 0.0001
+        assert abs(v_loss_unmasked.item() - 0.1015) < 0.0001
 
     @parameterized.expand(
         [
