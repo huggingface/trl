@@ -124,7 +124,7 @@ class OnlineDPOTrainer(Trainer):
         self.ref_model.eval()
         self.reward_model.eval()
 
-        if args. stop_token_id is None and args.stop_token and args.stop_token == "eos":
+        if args.stop_token_id is None and args.stop_token and args.stop_token == "eos":
             args.stop_token_id = tokenizer.eos_token_id
         self.model = model
         self.create_optimizer_and_scheduler(
