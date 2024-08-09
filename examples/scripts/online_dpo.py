@@ -19,12 +19,12 @@ from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
 python examples/scripts/online_dpo.py \
     --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
     --learning_rate 3e-6 \
-    --output_dir models/minimal/online_dpo \
-    --per_device_train_batch_size 1 \
-    --gradient_accumulation_steps 64 \
+    --output_dir online_dpo \
+    --per_device_train_batch_size 4 \
+    --gradient_accumulation_steps 16 \
     --total_episodes 30000 \
     --model_name_or_path EleutherAI/pythia-14m \
-    --reward_model_path EleutherAI/pythia-14m \
+    --judge hf_pairwise \
     --non_eos_penalty \
     --stop_token eos \
     --response_length 53 \
@@ -54,25 +54,6 @@ class ScriptArguments:
     dataset_train_split: str = "train"
     dataset_test_split: Optional[str] = "validation"
     max_length: int = 512
-
-
-def prepare_dataset(dataset, tokenizer, dataset_text_field):
-    """pre-tokenize the dataset before training; only collate during training"""
-
-    def tokenize(element):
-        outputs = tokenizer(
-            element[dataset_text_field],
-            padding=False,
-        )
-        return {"input_ids": outputs["input_ids"]}
-
-    return dataset.map(
-        tokenize,
-        remove_columns=dataset.column_names,
-        batched=True,
-        num_proc=4,  # multiprocessing.cpu_count(),
-        load_from_cache_file=False,
-    )
 
 
 if __name__ == "__main__":
@@ -107,18 +88,14 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    raw_datasets = load_dataset(args.dataset_name)
+    ds = load_dataset(args.dataset_name)
     if config.sanity_check:
-        for key in raw_datasets:
-            raw_datasets[key] = raw_datasets[key].select(range(1024))
-    train_dataset = raw_datasets[args.dataset_train_split]
-    train_dataset = prepare_dataset(train_dataset, tokenizer, args.dataset_text_field)
+        for key in ds:
+            ds[key] = ds[key].select(range(1024))
 
-    if args.dataset_test_split is not None:
-        eval_dataset = raw_datasets[args.dataset_test_split]
-        eval_dataset = prepare_dataset(eval_dataset, tokenizer, args.dataset_text_field)
-    else:
-        eval_dataset = None
+    train_dataset = ds[args.dataset_train_split]
+    eval_dataset = ds[args.dataset_test_split]
+
     ################
     # Training
     ################

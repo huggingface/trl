@@ -11,7 +11,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from accelerate import Accelerator
+from accelerate import Accelerator, PartialState
 from accelerate.utils import broadcast, gather_object
 from datasets import Dataset
 from torch.utils.data import DataLoader
@@ -27,6 +27,8 @@ from transformers import (
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, PrinterCallback
+
+from trl.trainer.utils import DPODataCollatorWithPadding
 
 from ..models.utils import unwrap_model_for_generation
 from ..trainer.utils import (
@@ -73,7 +75,6 @@ class OnlineDPOTrainer(Trainer):
         model.generation_config.pad_token_id = None
 
         self.ref_model = ref_model
-        
         self.reward_model = reward_model
         self.judge = judge
         if self.reward_model is not None and self.judge is not None:
@@ -81,13 +82,13 @@ class OnlineDPOTrainer(Trainer):
                 "Both `reward_model` and `judge` are provided. Please choose provide only one of them. "
                 "Ignoring `judge` and using `reward_model`."
             )
+        elif self.reward_model is None and self.judge is None:
+            raise ValueError("Either `reward_model` or `judge` must be provided.")
 
-        self.train_dataset = train_dataset
         self.train_dataset_len = len(train_dataset)
 
-        default_collator = default_data_collator if tokenizer is None else DataCollatorWithPadding(tokenizer)
+        default_collator = default_data_collator if tokenizer is None else DPODataCollatorWithPadding()
         self.data_collator = data_collator if data_collator is not None else default_collator
-        self.eval_dataset = eval_dataset
         self.optimizer, self.lr_scheduler = optimizers
         self.num_generation_per_prompt = 2
 
@@ -135,7 +136,8 @@ class OnlineDPOTrainer(Trainer):
         if args.disable_dropout:
             disable_dropout_in_model(model)
         self.ref_model.eval()
-        self.reward_model.eval()
+        if self.reward_model is not None:
+            self.reward_model.eval()
 
         if args.stop_token_id is None and args.stop_token and args.stop_token == "eos":
             args.stop_token_id = tokenizer.eos_token_id
@@ -174,11 +176,19 @@ class OnlineDPOTrainer(Trainer):
         #########
         ### setup dataloader
         #########
+
+        # Compute that only on the main process for faster data processing.
+        # see: https://github.com/huggingface/trl/pull/1255
+        with PartialState().local_main_process_first():
+            # tokenize the dataset, lower writer batch size to avoid OOM (frequent in vision models)
+            train_dataset = train_dataset.map(self.tokenize_row, num_proc=args.dataset_num_proc)
+            if eval_dataset is not None:
+                eval_dataset = eval_dataset.map(self.tokenize_row, num_proc=args.dataset_num_proc)
         self.dataloader = DataLoader(
-            self.train_dataset,
+            train_dataset,
             batch_size=self.local_dataloader_batch_size,
             shuffle=True,
-            collate_fn=DataCollatorWithPadding(tokenizer),
+            collate_fn=self.data_collator,
             drop_last=True,  # needed; otherwise the last batch will be of ragged shape
         )
         # sync random states for DataLoader(shuffle=True) before `accelerator.prepare`
@@ -188,15 +198,15 @@ class OnlineDPOTrainer(Trainer):
         torch.manual_seed(self.local_seed)  # reset the local seed again
 
         self.eval_dataloader = DataLoader(
-            self.eval_dataset,
+            eval_dataset,
             batch_size=args.per_device_eval_batch_size,
-            collate_fn=DataCollatorWithPadding(self.tokenizer),
+            collate_fn=self.data_collator,
             drop_last=True,
         )  # no need to shuffle eval dataset
         self.eval_dataloader = accelerator.prepare(self.eval_dataloader)
 
         if self.is_deepspeed_enabled:
-            if reward_model is not None:
+            if self.reward_model is not None:
                 self.reward_model = prepare_deepspeed(
                     self.reward_model, args.per_device_train_batch_size, args.fp16, args.bf16
                 )
@@ -204,8 +214,25 @@ class OnlineDPOTrainer(Trainer):
             self.deepspeed = self.model
         else:
             self.ref_model = self.ref_model.to(self.accelerator.device)
-            if reward_model is not None:
+            if self.reward_model is not None:
                 self.reward_model = self.reward_model.to(self.accelerator.device)
+
+    def tokenize_row(self, feature) -> Dict:
+        """Tokenize a single row from a DPO specific dataset."""
+        if not self.model.config.is_encoder_decoder:
+            batch = self.tokenizer(feature["prompt"], add_special_tokens=False)
+            # Add BOS token to head of prompt. Avoid adding if it's already there
+            prompt_len_input_ids = len(batch["input_ids"])
+            if self.tokenizer.bos_token_id is not None:
+                if prompt_len_input_ids == 0 or self.tokenizer.bos_token_id != batch["input_ids"][0]:
+                    batch["input_ids"] = [self.tokenizer.bos_token_id] + batch["input_ids"]
+                    batch["attention_mask"] = [1] + batch["attention_mask"]
+        else:
+            batch = self.tokenizer(
+                feature["prompt"], truncation=True, max_length=self.max_prompt_length, add_special_tokens=True
+            )
+        batch = {f"prompt_{key}": value for key, value in batch.items()}
+        return batch
 
     def get_train_dataloader(self) -> DataLoader:
         return self.dataloader
@@ -276,7 +303,7 @@ class OnlineDPOTrainer(Trainer):
             self.lr_scheduler.step()
             data = next(iter_dataloader)
             with torch.no_grad():
-                queries = data["input_ids"].to(device)
+                queries = data["prompt_input_ids"].to(device)
                 queries = queries.repeat(self.num_generation_per_prompt, 1)
                 context_length = queries.shape[1]
                 responses = []
@@ -326,13 +353,16 @@ class OnlineDPOTrainer(Trainer):
                         _, score, _ = get_reward(
                             reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
                         )
+                    else:
+                        score = None
 
                     responses.append(response)
                     postprocessed_responses.append(postprocessed_response)
                     logprobs.append(logprob)
                     ref_logprobs.append(ref_logprob)
                     sequence_lengths.append(sequence_length)
-                    scores.append(score)
+                    if score is not None:
+                        scores.append(score)
 
                 # stack all the tensors
                 responses = torch.cat(responses, 0)
@@ -340,24 +370,29 @@ class OnlineDPOTrainer(Trainer):
                 logprobs = torch.cat(logprobs, 0)
                 ref_logprobs = torch.cat(ref_logprobs, 0)
                 sequence_lengths = torch.cat(sequence_lengths, 0)
-                scores = torch.cat(scores, 0)
+                if score is not None:
+                    scores = torch.cat(scores, 0)
 
                 if self.judge is not None:
                     num_examples = postprocessed_responses.size(0) // 2
-                    df = pd.DataFrame(
-                        {
-                            "prompt": tokenizer.batch_decode(queries[:num_examples], skip_special_tokens=True),
-                            "response0": tokenizer.batch_decode(
-                                postprocessed_responses[:num_examples], skip_special_tokens=True
-                            ),
-                            "response1": tokenizer.batch_decode(
-                                postprocessed_responses[num_examples:], skip_special_tokens=True
-                            ),
-                        }
+                    candidates_0 = tokenizer.batch_decode(
+                        postprocessed_responses[:num_examples], skip_special_tokens=True
                     )
-                    judge_df = self.judge.judge(df)
-                    scores[:num_examples] = torch.tensor(judge_df["preferred"] == "response0", dtype=torch.float)
-                    scores[num_examples:] = torch.tensor(judge_df["preferred"] == "response1", dtype=torch.float)
+                    candidates_1 = tokenizer.batch_decode(
+                        postprocessed_responses[num_examples:], skip_special_tokens=True
+                    )
+                    completions = [[c0, c1] for c0, c1 in zip(candidates_0, candidates_1)]
+                    preferences = self.judge.judge(
+                        prompts=data["prompt"], completions=completions
+                    )  # preferences is a list of prefered indexes
+                    preferences = torch.tensor(preferences, dtype=torch.float32, device=device)
+                    # Get the number of invalid answers by counting the number of -1 in preferences
+                    invalid_rate = (preferences == -1).sum() / len(preferences)
+                    # Replace invalid preferences with random preferences
+                    preferences = torch.where(
+                        preferences == -1, torch.randint(0, 2, preferences.shape, device=device), preferences
+                    )
+                    scores = torch.cat((preferences, 1 - preferences))
 
                 del (logprob, ref_logprob, score)
                 torch.cuda.empty_cache()
@@ -535,6 +570,8 @@ class OnlineDPOTrainer(Trainer):
                 metrics["val/num_eos_tokens"] = (responses == tokenizer.eos_token_id).sum().item()
                 metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
                 metrics["episode"] = self.state.episode
+                if self.judge is not None:
+                    metrics["judge/invalid_rate"] = invalid_rate.item()
                 self.state.epoch = self.state.episode / self.train_dataset_len  # used by self.log
                 self.state.global_step += 1
                 self.log(metrics)
@@ -570,7 +607,7 @@ class OnlineDPOTrainer(Trainer):
         table = defaultdict(list)
         with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
             for batch in self.eval_dataloader:
-                query = batch["input_ids"]
+                query = batch["prompt_input_ids"]
                 with torch.no_grad():
                     context_length = query.shape[1]
                     query_response, _ = batch_generation(
@@ -586,8 +623,10 @@ class OnlineDPOTrainer(Trainer):
                         postprocessed_response = truncate_response(
                             args.stop_token_id, tokenizer.pad_token_id, response
                         )
-                    table["query"].extend(gather_object(tokenizer.batch_decode(query, skip_special_tokens=True)))
-                    table["model response"].extend(gather_object(tokenizer.batch_decode(postprocessed_response)))
+                    table["Query"].extend(gather_object(tokenizer.batch_decode(query, skip_special_tokens=True)))
+                    table["Model response"].extend(
+                        gather_object(tokenizer.batch_decode(postprocessed_response, skip_special_tokens=True))
+                    )
 
                     postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
                     if self.reward_model is not None:
