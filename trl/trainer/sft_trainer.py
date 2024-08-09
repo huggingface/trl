@@ -132,10 +132,10 @@ class SFTTrainer(Trainer):
         formatting_func: Optional[Callable] = None,
         max_seq_length: Optional[int] = None,
         infinite: Optional[bool] = None,
-        num_of_sequences: Optional[int] = 1024,
-        chars_per_token: Optional[float] = 3.6,
+        num_of_sequences: Optional[int] = None,
+        chars_per_token: Optional[float] = None,
         dataset_num_proc: Optional[int] = None,
-        dataset_batch_size: int = 1000,
+        dataset_batch_size: Optional[int] = None,
         neftune_noise_alpha: Optional[float] = None,
         model_init_kwargs: Optional[Dict] = None,
         dataset_kwargs: Optional[Dict] = None,
@@ -162,19 +162,16 @@ class SFTTrainer(Trainer):
             raise ValueError("You passed model_init_kwargs to the SFTConfig, but your model is already instantiated.")
         else:
             model_init_kwargs = args.model_init_kwargs
-
-            torch_dtype = model_init_kwargs["torch_dtype"]
+            torch_dtype = model_init_kwargs.get("torch_dtype")
             if torch_dtype is not None:
                 # Convert to `torch.dtype` if an str is passed
                 if isinstance(torch_dtype, str) and torch_dtype != "auto":
                     torch_dtype = getattr(torch, torch_dtype)
-
                 if torch_dtype != "auto" and not isinstance(torch_dtype, torch.dtype):
                     raise ValueError(
                         f"Invalid `torch_dtype` passed to the SFTConfig. Expected a string with either `torch.dtype` or 'auto', but got {torch_dtype}."
                     )
-
-            model_init_kwargs["torch_dtype"] = torch_dtype
+                model_init_kwargs["torch_dtype"] = torch_dtype
 
         if infinite is not None:
             warnings.warn(
@@ -284,10 +281,10 @@ class SFTTrainer(Trainer):
 
         if args.max_seq_length is None:
             # to overcome some issues with broken tokenizers
-            max_seq_length = min(tokenizer.model_max_length, 1024)
+            args.max_seq_length = min(tokenizer.model_max_length, 1024)
 
             warnings.warn(
-                f"You didn't pass a `max_seq_length` argument to the SFTTrainer, this will default to {max_seq_length}"
+                f"You didn't pass a `max_seq_length` argument to the SFTTrainer, this will default to {args.max_seq_length}"
             )
 
         if dataset_num_proc is not None:
@@ -297,7 +294,7 @@ class SFTTrainer(Trainer):
             args.dataset_num_proc = dataset_num_proc
         self.dataset_num_proc = args.dataset_num_proc
 
-        if dataset_batch_size != args.dataset_batch_size:
+        if dataset_batch_size is not None:
             warnings.warn(
                 "You passed a `dataset_batch_size` argument to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
             )
@@ -320,16 +317,21 @@ class SFTTrainer(Trainer):
             )
             args.dataset_text_field = dataset_text_field
 
+        if dataset_kwargs is not None:
+            warnings.warn(
+                "You passed a `dataset_kwargs` argument to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
+            )
+            args.dataset_kwargs = dataset_kwargs
+        if args.dataset_kwargs is None:
+            args.dataset_kwargs = {}
+
         if formatting_func is None and args.dataset_text_field is None:
             # check if dataset has ChatML format or instruction format and is supported
             # if not stays #None
             formatting_func = get_formatting_func_from_dataset(train_dataset, tokenizer)
             # if a template is detected, we don't need to add special tokens again
             if formatting_func is not None:
-                if dataset_kwargs is None:
-                    dataset_kwargs = {"add_special_tokens": False}
-                else:
-                    dataset_kwargs["add_special_tokens"] = False
+                args.dataset_kwargs["add_special_tokens"] = False
 
         if not args.packing:
             # If we aren't skipping data preparation, then a dataset_text_field
@@ -337,9 +339,7 @@ class SFTTrainer(Trainer):
             if (
                 args.dataset_text_field is None
                 and formatting_func is None
-                and dataset_kwargs is not None
-                and "skip_prepare_dataset" in dataset_kwargs
-                and dataset_kwargs["skip_prepare_dataset"]
+                and not args.dataset_kwargs.get("skip_prepare_dataset", False)
             ):
                 raise ValueError(
                     "You passed `packing=False` to the SFTTrainer/SFTConfig, but you didn't pass a `dataset_text_field` or `formatting_func` argument."
@@ -348,13 +348,13 @@ class SFTTrainer(Trainer):
             if data_collator is None:
                 data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
-        if num_of_sequences != args.num_of_sequences:
+        if num_of_sequences is not None:
             warnings.warn(
                 "You passed a `num_of_sequences` argument to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
             )
             args.num_of_sequences = num_of_sequences
 
-        if chars_per_token != args.chars_per_token:
+        if chars_per_token is not None:
             warnings.warn(
                 "You passed a `chars_per_token` argument to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
             )
@@ -362,13 +362,6 @@ class SFTTrainer(Trainer):
 
         # Pre-process the datasets only once per node. The remaining processes will use the cache.
         with PartialState().local_main_process_first():
-            if dataset_kwargs is not None:
-                warnings.warn(
-                    "You passed a `dataset_kwargs` argument to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
-                )
-                args.dataset_kwargs = dataset_kwargs
-            if args.dataset_kwargs is None:
-                args.dataset_kwargs = {}
             if train_dataset is not None:
                 train_dataset = self._prepare_dataset(
                     train_dataset,
