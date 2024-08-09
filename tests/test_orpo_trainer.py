@@ -17,7 +17,6 @@ import unittest
 import torch
 from datasets import Dataset
 from parameterized import parameterized
-from pytest import mark
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
 from trl import ORPOConfig, ORPOTrainer
@@ -26,17 +25,16 @@ from .testing_utils import require_peft
 
 
 class ORPOTrainerTester(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
-        cls.model = AutoModelForCausalLM.from_pretrained(cls.model_id)
-        cls.tokenizer = AutoTokenizer.from_pretrained(cls.model_id)
-        cls.tokenizer.pad_token = cls.tokenizer.eos_token
+    def setUp(self):
+        self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        self.tokenizer.pad_token = self.tokenizer.eos_token
 
         # get t5 as seq2seq example:
         model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration-correct-vocab"
-        cls.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
-        cls.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
+        self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+        self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
     def _init_dummy_dataset(self):
         # fmt: off
@@ -90,6 +88,7 @@ class ORPOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -124,7 +123,6 @@ class ORPOTrainerTester(unittest.TestCase):
                     assert not torch.equal(param, new_param)
 
     @require_peft
-    @mark.peft_test
     def test_orpo_trainer_with_lora(self):
         from peft import LoraConfig
 
@@ -146,6 +144,7 @@ class ORPOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()

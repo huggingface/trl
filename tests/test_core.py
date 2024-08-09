@@ -23,11 +23,10 @@ class CoreTester(unittest.TestCase):
     A wrapper class for testing core utils functions
     """
 
-    @classmethod
-    def setUpClass(cls):
-        cls.test_input = torch.Tensor([1, 2, 3, 4])
-        cls.test_mask = torch.Tensor([0, 1, 1, 0])
-        cls.test_input_unmasked = cls.test_input[1:3]
+    def setUp(self):
+        self.test_input = torch.Tensor([1, 2, 3, 4])
+        self.test_mask = torch.Tensor([0, 1, 1, 0])
+        self.test_input_unmasked = self.test_input[1:3]
 
     def test_masked_mean(self):
         assert torch.mean(self.test_input_unmasked) == masked_mean(self.test_input, self.test_mask)
