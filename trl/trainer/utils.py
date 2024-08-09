@@ -611,7 +611,9 @@ class RunningMoments:
 
 
 @torch.no_grad()
-def get_global_statistics(accelerator, xs: torch.Tensor, mask=None, device="cpu") -> Tuple[float, float, int]:
+def get_global_statistics(
+    accelerator, xs: torch.Tensor, mask=None, device="cpu"
+) -> Tuple[torch.Tensor, torch.Tensor, int]:
     """
     Computes element-wise mean and variance of the tensor across processes. Reference:
     https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/utils.py#L57C1-L73C75
@@ -626,7 +628,7 @@ def get_global_statistics(accelerator, xs: torch.Tensor, mask=None, device="cpu"
     sum_var = accelerator.reduce(sum_var)
     global_var = sum_var / count
 
-    return global_mean.to(device), global_var.to(device), count.to(device)
+    return global_mean.to(device), global_var.to(device), count.item()
 
 
 def compute_accuracy(eval_pred) -> Dict[str, float]:
@@ -809,12 +811,13 @@ def get_peft_config(model_config: ModelConfig) -> "Optional[PeftConfig]":
         )
 
     peft_config = LoraConfig(
+        task_type=model_config.lora_task_type,
         r=model_config.lora_r,
+        target_modules=model_config.lora_target_modules,
         lora_alpha=model_config.lora_alpha,
         lora_dropout=model_config.lora_dropout,
         bias="none",
-        task_type=model_config.lora_task_type,
-        target_modules=model_config.lora_target_modules,
+        use_rslora=model_config.use_rslora,
         modules_to_save=model_config.lora_modules_to_save,
     )
 
