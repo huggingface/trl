@@ -76,7 +76,7 @@ class GKDTrainer(SFTTrainer):
         self.temperature = args.temperature
 
     @staticmethod
-    def generalized_jsd_loss(student_logits, teacher_logits, beta=0.5, temperature=1.0, reduction="mean"):
+    def generalized_jsd_loss(student_logits, teacher_logits, beta=0.5, temperature=1.0, reduction="batchmean"):
         """
         Compute the Generalized Jensen-Shannon Divergence loss for knowledge distillation using F.kl_div.
 
@@ -132,6 +132,7 @@ class GKDTrainer(SFTTrainer):
                 input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], labels=inputs["labels"]
             )
 
+        # compute loss
         loss = 0
         batch_size = inputs["labels"].shape[0]
         for i in range(batch_size):
@@ -143,9 +144,10 @@ class GKDTrainer(SFTTrainer):
                 teacher_logits=teacher_logits,
                 beta=self.beta,
             )
+        loss /= batch_size
 
         # Return loss
-        return (loss / batch_size, outputs_student) if return_outputs else loss / batch_size
+        return (loss, outputs_student) if return_outputs else loss
 
     def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         """

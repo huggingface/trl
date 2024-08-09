@@ -46,14 +46,13 @@ if is_peft_available():
 class GKDTrainerTester(unittest.TestCase):
     r""" """
 
-    @classmethod
-    def setUpClass(cls):
-        cls.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
-        cls.model = AutoModelForCausalLM.from_pretrained(cls.model_id)
-        cls.teacher_model = AutoModelForCausalLM.from_pretrained(cls.model_id)
-        cls.tokenizer = AutoTokenizer.from_pretrained(cls.model_id)
-        cls.tokenizer.pad_token = cls.tokenizer.eos_token
-        cls.dummy_dataset = Dataset.from_dict(
+    def setUp(self):
+        self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.model = AutoModelForCausalLM.from_pretrained(cls.model_id)
+        self.teacher_model = AutoModelForCausalLM.from_pretrained(cls.model_id)
+        self.tokenizer = AutoTokenizer.from_pretrained(cls.model_id)
+        self.tokenizer.pad_token = cls.tokenizer.eos_token
+        self.dummy_dataset = Dataset.from_dict(
             {
                 "question": [
                     "Does llamas know how to code?",
@@ -84,7 +83,7 @@ class GKDTrainerTester(unittest.TestCase):
                 ],
             }
         )
-        cls.dummy_chatml_dataset = Dataset.from_dict(
+        self.dummy_chatml_dataset = Dataset.from_dict(
             {
                 "messages": [
                     [
@@ -104,7 +103,7 @@ class GKDTrainerTester(unittest.TestCase):
                 ]
             }
         )
-        cls.dummy_instruction_dataset = Dataset.from_list(
+        self.dummy_instruction_dataset = Dataset.from_list(
             [
                 {"prompt": "What is 2+2?", "completion": "4"},
                 {"prompt": "What is 3+3?", "completion": "6"},
@@ -121,18 +120,18 @@ class GKDTrainerTester(unittest.TestCase):
             ]
         )
 
-        cls.train_dataset = ConstantLengthDataset(
-            cls.tokenizer,
-            cls.dummy_dataset,
+        self.train_dataset = ConstantLengthDataset(
+            self.tokenizer,
+            self.dummy_dataset,
             dataset_text_field=None,
             formatting_func=formatting_prompts_func,
             seq_length=16,
             num_of_sequences=16,
         )
 
-        cls.eval_dataset = ConstantLengthDataset(
-            cls.tokenizer,
-            cls.dummy_dataset,
+        self.eval_dataset = ConstantLengthDataset(
+            self.tokenizer,
+            self.dummy_dataset,
             dataset_text_field=None,
             formatting_func=formatting_prompts_func,
             seq_length=16,
