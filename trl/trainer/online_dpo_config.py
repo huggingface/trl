@@ -22,3 +22,4 @@ class OnlineDPOConfig(OnPolicyConfig):
     """the type of loss to use for online DPO"""
     disable_dropout: bool = True
     """whether to disable dropout of the model during training"""
+    dataset_num_proc: Optional[int] = None
