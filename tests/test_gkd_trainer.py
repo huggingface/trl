@@ -48,10 +48,10 @@ class GKDTrainerTester(unittest.TestCase):
 
     def setUp(self):
         self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
-        self.model = AutoModelForCausalLM.from_pretrained(cls.model_id)
-        self.teacher_model = AutoModelForCausalLM.from_pretrained(cls.model_id)
-        self.tokenizer = AutoTokenizer.from_pretrained(cls.model_id)
-        self.tokenizer.pad_token = cls.tokenizer.eos_token
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.teacher_model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        self.tokenizer.pad_token = self.tokenizer.eos_token
         self.dummy_dataset = Dataset.from_dict(
             {
                 "question": [
