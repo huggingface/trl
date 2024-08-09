@@ -57,6 +57,8 @@
     title: Judge Classes
   - local: text_environments
     title: Text Environments
+  - local: gkd_trainer
+    title: Genralized Knowledge Distillation (GKD)
   title: API
 - sections:
   - local: example_overview
