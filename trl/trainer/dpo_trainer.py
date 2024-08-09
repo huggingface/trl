@@ -183,19 +183,16 @@ class DPOTrainer(Trainer):
             )
         else:
             model_init_kwargs = args.model_init_kwargs
-
-            torch_dtype = model_init_kwargs["torch_dtype"]
+            torch_dtype = model_init_kwargs.get("torch_dtype")
             if torch_dtype is not None:
                 # Convert to `torch.dtype` if an str is passed
                 if isinstance(torch_dtype, str) and torch_dtype != "auto":
                     torch_dtype = getattr(torch, torch_dtype)
-
                 if torch_dtype != "auto" and not isinstance(torch_dtype, torch.dtype):
                     raise ValueError(
                         f"Invalid `torch_dtype` passed to the DPOConfig. Expected a string with either `torch.dtype` or 'auto', but got {torch_dtype}."
                     )
-
-            model_init_kwargs["torch_dtype"] = torch_dtype
+                model_init_kwargs["torch_dtype"] = torch_dtype
 
         if ref_model_init_kwargs is not None:
             warnings.warn(
@@ -211,18 +208,16 @@ class DPOTrainer(Trainer):
             )
         else:
             ref_model_init_kwargs = args.ref_model_init_kwargs
-            torch_dtype = ref_model_init_kwargs["torch_dtype"]
+            torch_dtype = ref_model_init_kwargs.get("torch_dtype")
             if torch_dtype is not None:
                 # Convert to `torch.dtype` if an str is passed
                 if isinstance(torch_dtype, str) and torch_dtype != "auto":
                     torch_dtype = getattr(torch, torch_dtype)
-
                 if torch_dtype != "auto" and not isinstance(torch_dtype, torch.dtype):
                     raise ValueError(
                         f"Invalid `torch_dtype` passed to the DPOConfig. Expected a string with either `torch.dtype` or 'auto', but got {torch_dtype}."
                     )
-
-            ref_model_init_kwargs["torch_dtype"] = torch_dtype
+                ref_model_init_kwargs["torch_dtype"] = torch_dtype
 
         if isinstance(model, str):
             warnings.warn(
@@ -1389,7 +1384,8 @@ class DPOTrainer(Trainer):
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
         if self.args.rpo_alpha is not None:
-            losses = losses * self.args.rpo_alpha + policy_nll_loss
+            # RPO loss from V3 of the paper:
+            losses = losses + policy_nll_loss * self.args.rpo_alpha
 
         prefix = "eval_" if train_eval == "eval" else ""
         metrics[f"{prefix}rewards/chosen"] = chosen_rewards.mean().cpu()

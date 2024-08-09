@@ -34,17 +34,16 @@ if is_peft_available():
 
 @require_torch_gpu
 class DPOTrainerSlowTester(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.dataset = load_dataset("trl-internal-testing/mlabonne-chatml-dpo-pairs-copy", split="train[:10%]")
-        cls.peft_config = LoraConfig(
+    def setUp(self):
+        self.dataset = load_dataset("trl-internal-testing/mlabonne-chatml-dpo-pairs-copy", split="train[:10%]")
+        self.peft_config = LoraConfig(
             lora_alpha=16,
             lora_dropout=0.1,
             r=8,
             bias="none",
             task_type="CAUSAL_LM",
         )
-        cls.max_length = 128
+        self.max_length = 128
 
     def tearDown(self):
         gc.collect()

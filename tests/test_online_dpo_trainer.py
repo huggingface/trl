@@ -21,13 +21,12 @@ from trl import OnlineDPOConfig, OnlineDPOTrainer
 
 
 class TestOnlineDPOTrainer(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
-        cls.model = AutoModelForCausalLM.from_pretrained(cls.model_id)
-        cls.reward_model = AutoModelForSequenceClassification.from_pretrained("EleutherAI/pythia-14m", num_labels=1)
-        cls.tokenizer = AutoTokenizer.from_pretrained(cls.model_id)
-        cls.tokenizer.pad_token = cls.tokenizer.eos_token
+    def setUp(self):
+        self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.reward_model = AutoModelForSequenceClassification.from_pretrained("EleutherAI/pythia-14m", num_labels=1)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        self.tokenizer.pad_token = self.tokenizer.eos_token
 
     def _get_dummy_model_and_tokenizer(self):
         # Return dummy model and tokenizer. This is a placeholder.
@@ -101,6 +100,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
                 gradient_accumulation_steps=1,
                 learning_rate=9e-1,
                 eval_strategy="steps",
+                report_to="none",
             )
 
             trainer = OnlineDPOTrainer(

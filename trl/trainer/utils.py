@@ -811,12 +811,13 @@ def get_peft_config(model_config: ModelConfig) -> "Optional[PeftConfig]":
         )
 
     peft_config = LoraConfig(
+        task_type=model_config.lora_task_type,
         r=model_config.lora_r,
+        target_modules=model_config.lora_target_modules,
         lora_alpha=model_config.lora_alpha,
         lora_dropout=model_config.lora_dropout,
         bias="none",
-        task_type=model_config.lora_task_type,
-        target_modules=model_config.lora_target_modules,
+        use_rslora=model_config.use_rslora,
         modules_to_save=model_config.lora_modules_to_save,
     )
 
