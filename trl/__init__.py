@@ -3,7 +3,11 @@
 __version__ = "0.9.6.dev0"
 
 from typing import TYPE_CHECKING
-from .import_utils import _LazyModule, is_diffusers_available, OptionalDependencyNotAvailable
+from .import_utils import (
+    _LazyModule,
+    is_diffusers_available,
+    OptionalDependencyNotAvailable,
+)
 
 _import_structure = {
     "core": [
@@ -49,6 +53,8 @@ _import_structure = {
         "BCOConfig",
         "BCOTrainer",
         "ModelConfig",
+        "NashMDConfig",
+        "NashMDTrainer",
         "OnlineDPOConfig",
         "OnlineDPOTrainer",
         "ORPOConfig",
@@ -71,9 +77,22 @@ _import_structure = {
         "OpenAIPairwiseJudge",
     ],
     "commands": [],
-    "commands.cli_utils": ["init_zero_verbose", "SFTScriptArguments", "DPOScriptArguments", "TrlParser"],
-    "trainer.callbacks": ["RichProgressCallback", "SyncRefModelCallback"],
-    "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config"],
+    "commands.cli_utils": [
+        "init_zero_verbose",
+        "SFTScriptArguments",
+        "DPOScriptArguments",
+        "TrlParser",
+    ],
+    "trainer.callbacks": [
+        "RichProgressCallback",
+        "SyncRefModelCallback",
+        "WinRateCallback",
+    ],
+    "trainer.utils": [
+        "get_kbit_device_map",
+        "get_peft_config",
+        "get_quantization_config",
+    ],
     "multitask_prompt_tuning": [
         "MultitaskPromptEmbedding",
         "MultitaskPromptTuningConfig",
@@ -134,6 +153,8 @@ if TYPE_CHECKING:
         BCOConfig,
         BCOTrainer,
         ModelConfig,
+        NashMDConfig,
+        NashMDTrainer,
         OnlineDPOConfig,
         OnlineDPOTrainer,
         ORPOConfig,
@@ -155,9 +176,22 @@ if TYPE_CHECKING:
         HfPairwiseJudge,
         OpenAIPairwiseJudge,
     )
-    from .trainer.callbacks import RichProgressCallback, SyncRefModelCallback
-    from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config
-    from .commands.cli_utils import init_zero_verbose, SFTScriptArguments, DPOScriptArguments, TrlParser
+    from .trainer.callbacks import (
+        RichProgressCallback,
+        SyncRefModelCallback,
+        WinRateCallback,
+    )
+    from .trainer.utils import (
+        get_kbit_device_map,
+        get_peft_config,
+        get_quantization_config,
+    )
+    from .commands.cli_utils import (
+        init_zero_verbose,
+        SFTScriptArguments,
+        DPOScriptArguments,
+        TrlParser,
+    )
 
     try:
         if not is_diffusers_available():

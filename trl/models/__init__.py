@@ -20,7 +20,7 @@ from ..import_utils import _LazyModule, is_diffusers_available, OptionalDependen
 
 
 _import_structure = {
-    "modeling_base": ["PreTrainedModelWrapper", "create_reference_model"],
+    "modeling_base": ["PreTrainedModelWrapper", "create_reference_model", "GeometricMixtureWrapper"],
     "modeling_value_head": [
         "AutoModelForCausalLMWithValueHead",
         "AutoModelForSeq2SeqLMWithValueHead",
@@ -42,7 +42,7 @@ else:
     ]
 
 if TYPE_CHECKING:
-    from .modeling_base import PreTrainedModelWrapper, create_reference_model
+    from .modeling_base import PreTrainedModelWrapper, create_reference_model, GeometricMixtureWrapper
     from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
     from .utils import setup_chat_format, SUPPORTED_ARCHITECTURES
 

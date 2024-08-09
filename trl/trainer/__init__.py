@@ -16,10 +16,14 @@
 
 # There is a circular import in the PPOTrainer if we let isort sort these
 from typing import TYPE_CHECKING
-from ..import_utils import _LazyModule, is_diffusers_available, OptionalDependencyNotAvailable
+from ..import_utils import (
+    _LazyModule,
+    is_diffusers_available,
+    OptionalDependencyNotAvailable,
+)
 
 _import_structure = {
-    "callbacks": ["RichProgressCallback", "SyncRefModelCallback"],
+    "callbacks": ["RichProgressCallback", "SyncRefModelCallback", "WinRateCallback"],
     "utils": [
         "AdaptiveKLController",
         "FixedKLController",
@@ -41,6 +45,8 @@ _import_structure = {
     "bco_config": ["BCOConfig"],
     "bco_trainer": ["BCOTrainer"],
     "model_config": ["ModelConfig"],
+    "nash_md_config": ["NashMDConfig"],
+    "nash_md_trainer": ["NashMDTrainer"],
     "online_dpo_config": ["OnlineDPOConfig"],
     "online_dpo_trainer": ["OnlineDPOTrainer"],
     "orpo_config": ["ORPOConfig"],
@@ -76,7 +82,11 @@ else:
 
 if TYPE_CHECKING:
     # isort: off
-    from .callbacks import RichProgressCallback, SyncRefModelCallback
+    from .callbacks import (
+        RichProgressCallback,
+        SyncRefModelCallback,
+        WinRateCallback,
+    )
     from .utils import (
         AdaptiveKLController,
         FixedKLController,
@@ -86,7 +96,6 @@ if TYPE_CHECKING:
         disable_dropout_in_model,
         peft_module_casting_to_bf16,
     )
-
     # isort: on
 
     from .base import BaseTrainer
@@ -104,6 +113,8 @@ if TYPE_CHECKING:
     from .bco_config import BCOConfig
     from .bco_trainer import BCOTrainer
     from .model_config import ModelConfig
+    from .nash_md_config import NashMDConfig
+    from .nash_md_trainer import NashMDTrainer
     from .online_dpo_config import OnlineDPOConfig
     from .online_dpo_trainer import OnlineDPOTrainer
     from .orpo_config import ORPOConfig
