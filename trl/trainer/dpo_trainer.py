@@ -48,6 +48,8 @@ from .dpo_config import DPOConfig, FDivergenceConstants, FDivergenceType
 from .utils import (
     DPODataCollatorWithPadding,
     RunningMoments,
+    add_bos_token_if_needed,
+    add_eos_token_if_needed,
     cap_exp,
     disable_dropout_in_model,
     pad_to_length,
@@ -155,19 +157,19 @@ def _process_tokens(
     chosen_tokens = example["chosen_tokens"]
     rejected_tokens = example["rejected_tokens"]
 
-    # Add special tokens
-    bos_token_id = tokenizer.bos_token_id
-    eos_token_id = tokenizer.eos_token_id
+    # add BOS token to head of prompt. Avoid adding if it's already there
+    prompt_tokens, chosen_tokens, rejected_tokens = add_bos_token_if_needed(
+        tokenizer.bos_token_id,
+        len(prompt_tokens["input_ids"]),
+        prompt_tokens,
+        len(chosen_tokens["input_ids"]),
+        chosen_tokens,
+        len(rejected_tokens["input_ids"]),
+        rejected_tokens,
+    )
 
-    for tokens in [prompt_tokens, chosen_tokens, rejected_tokens]:
-        if bos_token_id is not None and tokens["input_ids"][0] != bos_token_id:
-            for k in tokens.keys():
-                tokens[k] = [bos_token_id] + tokens[k]
-
-    for tokens in [chosen_tokens, rejected_tokens]:
-        if eos_token_id is not None and tokens["input_ids"][-1] != eos_token_id:
-            for k in tokens.keys():
-                tokens[k] = tokens[k] + [eos_token_id]
+    # add EOS token to end of answer. Avoid adding if it's already there
+    chosen_tokens, rejected_tokens = add_eos_token_if_needed(tokenizer.eos_token_id, chosen_tokens, rejected_tokens)
 
     # Truncate if necessary
     if (
