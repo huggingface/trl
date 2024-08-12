@@ -75,6 +75,7 @@ def _tokenize(
 
     def tokenize_text(text: str, images: Union[List[str], torch.Tensor] = None) -> Dict[str, List[int]]:
         if is_vision_model:
+            processor = tokenizer
             if "add_special_tokens" in tokenizer.processor.tokenizer.__call__.__code__.co_varnames:
                 processor_kwargs = {"add_special_tokens": False}
             else:
