@@ -67,19 +67,19 @@ if is_deepspeed_available():
 
 
 def _tokenize(
-    example: Dict[str, Any],
+    batch: Dict[str, List[Any]],
     tokenizer: "PreTrainedTokenizerBase",
-    is_vision_model: bool,
+    processor: Optional[Callable] = None,
 ) -> Dict[str, Any]:
     """Tokenize a single example for DPO training."""
 
     def tokenize_text(text: str, images: Union[List[str], torch.Tensor] = None) -> Dict[str, List[int]]:
-        if is_vision_model:
-            if "add_special_tokens" in inspect.signature(tokenizer).parameters:
+        if processor is not None:
+            if "add_special_tokens" in inspect.signature(processor).parameters:
                 processor_kwargs = {"add_special_tokens": False}
             else:
                 processor_kwargs = {}
-            tokenized = tokenizer(text, images=images, **processor_kwargs)
+            tokenized = processor(text, images=images, **processor_kwargs)
             if not isinstance(tokenized["input_ids"], list):  # llava processor returns tensors
                 tokenized["input_ids"] = tokenized["input_ids"].tolist()
                 tokenized["attention_mask"] = tokenized["attention_mask"].tolist()
@@ -88,30 +88,41 @@ def _tokenize(
 
         return tokenized
 
-    prompt_tokens = tokenize_text(example["prompt"])
-    chosen_tokens = tokenize_text(example["prompt"] + example["chosen"], example.get("images"))
-    rejected_tokens = tokenize_text(example["prompt"] + example["rejected"], example.get("images"))
+    prompts = batch["prompt"]
+    chosen = [p + c for p, c in zip(prompts, batch["chosen"])]
+    rejected = [p + r for p, r in zip(prompts, batch["rejected"])]
+
+    prompt_tokens = tokenize_text(prompts, batch.get("images"))
+    chosen_tokens = tokenize_text(chosen)
+    rejected_tokens = tokenize_text(rejected)
 
     # Handle token merging at prompt-completion boundary
-    prompt_length = len(prompt_tokens["input_ids"])
-    for tokens in [chosen_tokens, rejected_tokens]:
-        if tokens["input_ids"][:prompt_length] != prompt_tokens["input_ids"]:
-            prompt_length -= 1
-
     result = {
-        "prompt_input_ids": prompt_tokens["input_ids"],
-        "prompt_attention_mask": prompt_tokens["attention_mask"],
-        "chosen_input_ids": chosen_tokens["input_ids"][prompt_length:],
-        "chosen_attention_mask": chosen_tokens["attention_mask"][prompt_length:],
-        "rejected_input_ids": rejected_tokens["input_ids"][prompt_length:],
-        "rejected_attention_mask": rejected_tokens["attention_mask"][prompt_length:],
+        "prompt_input_ids": [],
+        "prompt_attention_mask": [],
+        "chosen_input_ids": [],
+        "chosen_attention_mask": [],
+        "rejected_input_ids": [],
+        "rejected_attention_mask": [],
     }
 
-    if is_vision_model:
-        if "pixel_values" in chosen_tokens:
-            result["pixel_values"] = chosen_tokens["pixel_values"]
-        if "pixel_attention_mask" in chosen_tokens:
-            result["pixel_attention_mask"] = chosen_tokens["pixel_attention_mask"]
+    for i in range(len(prompts)):
+        prompt_length = len(prompt_tokens["input_ids"][i])
+        if chosen_tokens["input_ids"][i][:prompt_length] != prompt_tokens["input_ids"][i]:
+            prompt_length -= 1
+
+        result["prompt_input_ids"].append(prompt_tokens["input_ids"][i])
+        result["prompt_attention_mask"].append(prompt_tokens["attention_mask"][i])
+        result["chosen_input_ids"].append(chosen_tokens["input_ids"][i][prompt_length:])
+        result["chosen_attention_mask"].append(chosen_tokens["attention_mask"][i][prompt_length:])
+        result["rejected_input_ids"].append(rejected_tokens["input_ids"][i][prompt_length:])
+        result["rejected_attention_mask"].append(rejected_tokens["attention_mask"][i][prompt_length:])
+
+    if processor is not None:
+        if "pixel_values" in prompt_tokens:
+            result["prompt_pixel_values"] = prompt_tokens["pixel_values"]
+        if "pixel_attention_mask" in prompt_tokens:
+            result["prompt_pixel_attention_mask"] = prompt_tokens["pixel_attention_mask"]
 
     return result
 
@@ -648,13 +659,15 @@ class DPOTrainer(Trainer):
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
         with PartialState().local_main_process_first():
+            fn_kwargs = {
+                "tokenizer": self.tokenizer,
+                "processor": self.processor if self.is_vision_model else None,
+            }
+
             # Tokenize the datasets
             train_dataset = train_dataset.map(
                 _tokenize,
-                fn_kwargs={
-                    "tokenizer": self.processor if self.is_vision_model else self.tokenizer,
-                    "is_vision_model": self.is_vision_model,
-                },
+                fn_kwargs=fn_kwargs,
                 batched=True,
                 num_proc=self.dataset_num_proc,
                 remove_columns=train_dataset.column_names,
@@ -663,7 +676,7 @@ class DPOTrainer(Trainer):
             if eval_dataset is not None:
                 eval_dataset = eval_dataset.map(
                     _tokenize,
-                    fn_kwargs={"tokenizer": self.tokenizer, "is_vision_model": self.is_vision_model},
+                    fn_kwargs=fn_kwargs,
                     batched=True,
                     num_proc=self.dataset_num_proc,
                     remove_columns=eval_dataset.column_names,
