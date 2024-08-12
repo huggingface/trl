@@ -652,7 +652,7 @@ class DPOTrainer(Trainer):
             # Tokenize the datasets
             train_dataset = train_dataset.map(
                 _tokenize,
-                fn_kwargs={"tokenizer": self.tokenizer, "is_vision_model": self.is_vision_model},
+                fn_kwargs={"tokenizer": self.processor if self.is_vision_model else self.tokenizer, "is_vision_model": self.is_vision_model},
                 batched=True,
                 num_proc=self.dataset_num_proc,
                 remove_columns=train_dataset.column_names,
