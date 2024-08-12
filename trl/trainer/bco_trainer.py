@@ -841,7 +841,7 @@ class BCOTrainer(Trainer):
             if not os.path.isfile(running_file):
                 warnings.warn(f"Missing file {clf_file}. Will use a new UDM classifier for BCO loss calculation")
             else:
-                self.clf.set_params(torch.load(clf_file))
+                self.clf.set_params(**torch.load(clf_file, weights_only=True, map_location="cpu"))
 
     @contextmanager
     def null_ref_context(self):
