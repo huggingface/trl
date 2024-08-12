@@ -64,6 +64,15 @@ class ModelConfig:
     lora_task_type: str = field(
         default="CAUSAL_LM", metadata={"help": "The task_type to pass for LoRA (use SEQ_CLS for reward modeling)"}
     )
+    use_rslora: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "Use Rank-Stabilized LoRA (https://huggingface.co/papers/2312.03732), which sets the adapter "
+                "scaling factor to lora_alpha/√r, instead of the original default value of `lora_alpha/r`."
+            )
+        },
+    )
     load_in_8bit: bool = field(
         default=False, metadata={"help": "use 8 bit precision for the base model - works only with LoRA"}
     )
