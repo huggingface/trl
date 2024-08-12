@@ -24,12 +24,12 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, 
 
 import numpy as np
 import torch
+import torch.amp as amp
 import torch.nn as nn
 import torch.nn.functional as F
 from accelerate import PartialState
 from accelerate.utils import is_deepspeed_available, tqdm
-from datasets import Dataset, concatenate_datasets, interleave_datasets
-from torch.nn.utils.rnn import pad_sequence
+from datasets import Dataset, concatenate_datasets
 from torch.utils.data import DataLoader, SequentialSampler
 from transformers import (
     AutoModelForCausalLM,
@@ -42,12 +42,11 @@ from transformers import (
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput, has_length
 
-from ..import_utils import is_peft_available, is_sklearn_available, is_wandb_available
+from ..import_utils import is_peft_available, is_wandb_available
 from ..models import PreTrainedModelWrapper, create_reference_model
 from .kto_config import KTOConfig
 from .utils import (
     DPODataCollatorWithPadding,
-    RunningMoments,
     disable_dropout_in_model,
     pad_to_length,
     peft_module_casting_to_bf16,
@@ -62,14 +61,13 @@ if is_peft_available():
 if is_wandb_available():
     import wandb
 
-if is_sklearn_available():
-    from sklearn.linear_model import LogisticRegression
-
 if is_deepspeed_available():
     import deepspeed
 
 if TYPE_CHECKING:
     from transformers import PreTrainedModel, PreTrainedTokenizer
+
+RUNNING_NAME = "running.pt"
 
 
 def _get_kl_dataset(batch: Dict[str, List[Any]]) -> Dict[str, List[Any]]:
@@ -82,9 +80,8 @@ def _get_kl_dataset(batch: Dict[str, List[Any]]) -> Dict[str, List[Any]]:
 def _tokenize(
     batch: Dict[str, List[Any]],
     tokenizer: "PreTrainedTokenizer",
-    embedding_tokenizer: Optional["PreTrainedTokenizer"] = None,
 ) -> Dict[str, List[Any]]:
-    """Tokenize a batch from a KTO/BCO specific dataset."""
+    """Tokenize a batch from a KTO specific dataset."""
     prompt_tokenized = tokenizer(batch["prompt"], add_special_tokens=False)
     prompt_input_ids = prompt_tokenized["input_ids"]
     prompt_attention_mask = prompt_tokenized["attention_mask"]
@@ -132,16 +129,6 @@ def _tokenize(
         answer_input_ids=answer_input_ids,
         answer_attention_mask=answer_attention_mask,
     )
-
-    if embedding_tokenizer is not None:
-        embedding_tokenized = embedding_tokenizer(batch["prompt"], truncation=True, add_special_tokens=False)
-
-        output.update(
-            {
-                "embedding_input_ids": embedding_tokenized["input_ids"],
-                "embedding_attention_mask": embedding_tokenized["attention_mask"],
-            }
-        )
 
     return output
 
@@ -327,8 +314,6 @@ class KTOTrainer(Trainer):
         compute_metrics: Optional[Callable[[EvalLoopOutput], Dict]] = None,
         model_adapter_name: Optional[str] = None,
         ref_adapter_name: Optional[str] = None,
-        embedding_func: Optional[Callable] = None,
-        embedding_tokenizer: Optional[PreTrainedTokenizerBase] = None,
     ):
         if type(args) == TrainingArguments:
             raise ValueError("Please use `KTOConfig` instead TrainingArguments.")
@@ -339,11 +324,16 @@ class KTOTrainer(Trainer):
             raise ValueError("You passed model_kwargs to the KTOTrainer. But your model is already instantiated.")
         else:
             model_init_kwargs = args.model_init_kwargs
-            model_init_kwargs["torch_dtype"] = (
-                model_init_kwargs["torch_dtype"]
-                if model_init_kwargs["torch_dtype"] in ["auto", None]
-                else getattr(torch, model_init_kwargs["torch_dtype"])
-            )
+            torch_dtype = model_init_kwargs.get("torch_dtype")
+            if torch_dtype is not None:
+                # Convert to `torch.dtype` if an str is passed
+                if isinstance(torch_dtype, str) and torch_dtype != "auto":
+                    torch_dtype = getattr(torch, torch_dtype)
+                if torch_dtype != "auto" and not isinstance(torch_dtype, torch.dtype):
+                    raise ValueError(
+                        f"Invalid `torch_dtype` passed to the KTOConfig. Expected a string with either `torch.dtype` or 'auto', but got {torch_dtype}."
+                    )
+                model_init_kwargs["torch_dtype"] = torch_dtype
 
         if args.ref_model_init_kwargs is None:
             ref_model_init_kwargs = {}
@@ -353,11 +343,16 @@ class KTOTrainer(Trainer):
             )
         else:
             ref_model_init_kwargs = args.ref_model_init_kwargs
-            ref_model_init_kwargs["torch_dtype"] = (
-                ref_model_init_kwargs["torch_dtype"]
-                if ref_model_init_kwargs["torch_dtype"] in ["auto", None]
-                else getattr(torch, ref_model_init_kwargs["torch_dtype"])
-            )
+            torch_dtype = ref_model_init_kwargs.get("torch_dtype")
+            if torch_dtype is not None:
+                # Convert to `torch.dtype` if an str is passed
+                if isinstance(torch_dtype, str) and torch_dtype != "auto":
+                    torch_dtype = getattr(torch, torch_dtype)
+                if torch_dtype != "auto" and not isinstance(torch_dtype, torch.dtype):
+                    raise ValueError(
+                        f"Invalid `torch_dtype` passed to the KTOConfig. Expected a string with either `torch.dtype` or 'auto', but got {torch_dtype}."
+                    )
+                ref_model_init_kwargs["torch_dtype"] = torch_dtype
 
         if isinstance(model, str):
             warnings.warn(
@@ -538,12 +533,7 @@ class KTOTrainer(Trainer):
         self.beta = args.beta
         self.desirable_weight = args.desirable_weight
         self.undesirable_weight = args.undesirable_weight
-        self.loss_type = args.loss_type
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
-
-        # Underlying Distribution Matching argument
-        self.embedding_func = embedding_func
-        self.embedding_tokenizer = embedding_tokenizer
 
         with PartialState().local_main_process_first():
             # Shuffle the datasets
@@ -553,10 +543,11 @@ class KTOTrainer(Trainer):
             # Tokenize and prepare the training datasets
             train_dataset = train_dataset.map(
                 _tokenize,
-                fn_kwargs={"tokenizer": self.tokenizer, "embedding_tokenizer": self.embedding_tokenizer},
+                fn_kwargs={"tokenizer": self.tokenizer},
                 batched=True,
                 desc="Tokenizing train dataset",
             )
+
             # Get KL datasets
             total_batch_size = (
                 max(torch.cuda.device_count(), 1) * args.per_device_train_batch_size * args.gradient_accumulation_steps
@@ -570,6 +561,7 @@ class KTOTrainer(Trainer):
             train_kl_dataset = train_dataset.map(
                 _get_kl_dataset, batched=True, batch_size=total_batch_size, desc="Extracting KL train dataset"
             )
+
             # Prepare the datasets
             fn_kwargs = {
                 "prefix": "",
@@ -603,14 +595,16 @@ class KTOTrainer(Trainer):
                 # Tokenize
                 eval_dataset = eval_dataset.map(
                     _tokenize,
-                    fn_kwargs={"tokenizer": self.tokenizer, "embedding_tokenizer": self.embedding_tokenizer},
+                    fn_kwargs={"tokenizer": self.tokenizer},
                     batched=True,
                     desc="Tokenizing eval dataset",
                 )
+
                 # Get KL dataset
                 eval_kl_dataset = eval_dataset.map(
                     _get_kl_dataset, batched=True, batch_size=total_batch_size, desc="Extracting eval KL dataset"
                 )
+
                 # Process
                 fn_kwargs = {
                     "prefix": "",
@@ -628,6 +622,7 @@ class KTOTrainer(Trainer):
                     num_proc=args.dataset_num_proc,
                     desc="Processing tokenized eval dataset",
                 )
+
                 fn_kwargs["prefix"] = "KL_"
                 eval_kl_dataset = eval_kl_dataset.map(
                     _process_tokens,
@@ -644,7 +639,7 @@ class KTOTrainer(Trainer):
             num_undesirable = max(len(train_dataset["label"]) - num_desirable, 1)  # "label" is binary
 
             if num_desirable != num_undesirable:
-                # The lower and upper bounds come from Eq. (8) of https://arxiv.org/abs/2402.01306
+                # The lower and upper bounds come from Eq. (8) of https://huggingface.co/papers/2402.01306
                 des_weight_lower_bound = round((num_undesirable * self.undesirable_weight / num_desirable) * 1, 2)
                 des_weight_upper_bound = round((num_undesirable * self.undesirable_weight / num_desirable) * 1.33, 2)
                 und_weight_lower_bound = round((num_desirable * self.desirable_weight / num_undesirable) / 1.33, 2)
@@ -663,24 +658,6 @@ class KTOTrainer(Trainer):
                         See the documentation on how to optimally set these weights.""",
                         UserWarning,
                     )
-
-            if self.loss_type == "bco":
-                desirable = train_dataset.filter(
-                    lambda x: x["label"], num_proc=args.dataset_num_proc, desc="Filtering desirable examples"
-                )
-                undesirable = train_dataset.filter(
-                    lambda x: not x["label"], num_proc=args.dataset_num_proc, desc="Filtering undesirable examples"
-                )
-
-                desirable = desirable.shuffle(seed=args.data_seed)
-                undesirable = undesirable.shuffle(seed=args.data_seed)
-
-                # split the dataset and interleave them together with equal probability of choosing chosen or rejected
-                interleaved_train_dataset = interleave_datasets(
-                    [desirable, undesirable],
-                    stopping_strategy="all_exhausted",
-                )
-                train_dataset = interleaved_train_dataset
 
         super().__init__(
             model=model,
@@ -722,119 +699,6 @@ class KTOTrainer(Trainer):
                 self.ref_model = self._prepare_deepspeed(self.ref_model)
             else:
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
-
-        if self.loss_type == "bco":
-            self.running = RunningMoments(self.accelerator)
-
-            if self.embedding_func is None:
-                return
-
-            chosen_embeddings = self._get_sample_prompt_embeddings(desirable, sample_size=self.args.prompt_sample_size)
-            rejected_embeddings = self._get_sample_prompt_embeddings(
-                undesirable, sample_size=self.args.prompt_sample_size
-            )
-
-            embeddings = torch.cat((chosen_embeddings, rejected_embeddings), dim=0)
-            labels = torch.cat(
-                (torch.ones_like(chosen_embeddings[:, 0]), torch.zeros_like(rejected_embeddings[:, 0])), dim=0
-            )
-
-            self.clf = LogisticRegression(class_weight="balanced").fit(embeddings.cpu().numpy(), labels.cpu().numpy())
-
-    @property
-    def match_underlying_distribution(self):
-        return self.embedding_func is not None and self.embedding_tokenizer is not None
-
-    def _get_chosen_prob(self, prompt_embeddings: torch.FloatTensor) -> torch.FloatTensor:
-        """
-        Calculates the probability if the given prompt embedding is from desirable dataset.
-        This function calculates the probability in the process and ensemble across processes.
-        """
-        dtype = prompt_embeddings.dtype
-        device = prompt_embeddings.device
-        sample_size = prompt_embeddings.shape[0]
-
-        padded_prompt_embeddings = self.accelerator.pad_across_processes(prompt_embeddings)
-        nonzero = padded_prompt_embeddings.sum(dim=1) != 0
-        prompt_embeddings = self.accelerator.gather(padded_prompt_embeddings)
-
-        prob = self.clf.predict_proba(prompt_embeddings.cpu().numpy())[:, 1]
-        prob = torch.as_tensor(prob, dtype=dtype, device=device)
-        prob = self.accelerator.reduce(prob, reduction="mean")
-
-        rank = self.accelerator.process_index
-        prob = prob[sample_size * rank : sample_size * (rank + 1)]
-        prob = prob[nonzero]
-
-        return prob
-
-    def _vectorize_prompt(self, input_ids: torch.LongTensor, attention_mask: torch.LongTensor) -> torch.FloatTensor:
-        """
-        Replaces tokenizer.pad_token_id to embedding_tokenizer.pad_token_id
-        and applies self.embedding_func
-        """
-        input_ids = torch.where(
-            input_ids == self.tokenizer.pad_token_id,
-            self.embedding_tokenizer.pad_token_id,
-            input_ids,
-        )
-
-        with torch.no_grad():
-            embeddings = self.embedding_func(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-            )
-
-        return embeddings
-
-    def _get_prompt_embeddings(
-        self, batch: Dict[str, Union[List, torch.LongTensor]]
-    ) -> Tuple[torch.FloatTensor, torch.FloatTensor]:
-        """Extract embeddings from frozen embedding model"""
-
-        if not self.match_underlying_distribution:
-            return None, None
-
-        embeddings = self._vectorize_prompt(
-            input_ids=batch["embedding_input_ids"],
-            attention_mask=batch["embedding_attention_mask"],
-        )
-
-        chosen_idx = [i for i in range(len(batch["label"])) if batch["label"][i] is True]
-        rejected_idx = [i for i in range(len(batch["label"])) if batch["label"][i] is False]
-
-        chosen_embeddings = embeddings[chosen_idx, ...]
-        rejected_embeddings = embeddings[rejected_idx, ...]
-
-        return (chosen_embeddings, rejected_embeddings)
-
-    def _get_sample_prompt_embeddings(self, dataset: Dataset, sample_size: int = 512) -> torch.FloatTensor:
-        """
-        Sample instances from dataset and get prompt embeddings.
-        Used for density ratio classifier training.
-        """
-        n_samples = min(len(dataset), sample_size)
-        rand_indices = np.random.choice(len(dataset), size=(n_samples,))
-
-        batch = dataset.select(rand_indices)
-        input_ids = pad_sequence(
-            [torch.as_tensor(ids) for ids in batch["embedding_input_ids"]],
-            batch_first=True,
-            padding_value=self.embedding_tokenizer.pad_token_id,
-        ).to(self.accelerator.device)
-        attention_mask = pad_sequence(
-            [torch.as_tensor(ids) for ids in batch["embedding_attention_mask"]],
-            batch_first=True,
-            padding_value=0,
-        ).to(self.accelerator.device)
-
-        with torch.no_grad():
-            embeddings = self.embedding_func(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-            )
-
-        return embeddings
 
     def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
         # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
@@ -1088,6 +952,7 @@ class KTOTrainer(Trainer):
     def forward(
         self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+        KL_logps = None
         KL_model_kwargs = (
             {
                 "input_ids": batch["KL_prompt_input_ids"],
@@ -1101,6 +966,19 @@ class KTOTrainer(Trainer):
                 "attention_mask": batch["KL_completion_attention_mask"],
             }
         )
+        with torch.no_grad():
+            KL_logits = model(
+                **KL_model_kwargs,
+            ).logits
+
+        KL_logps = self.get_batch_logps(
+            KL_logits,
+            batch["KL_completion_labels"],
+            average_log_prob=False,
+            is_encoder_decoder=self.is_encoder_decoder,
+            label_pad_token_id=self.label_pad_token_id,
+        )
+
         model_kwargs = (
             {
                 "labels": batch["completion_labels"],
@@ -1112,11 +990,6 @@ class KTOTrainer(Trainer):
         if self.aux_loss_enabled:
             model_kwargs["output_router_logits"] = True
 
-        with torch.no_grad():
-            KL_logits = model(
-                **KL_model_kwargs,
-            ).logits
-
         outputs = model(
             batch["completion_input_ids"],
             attention_mask=batch["completion_attention_mask"],
@@ -1127,14 +1000,6 @@ class KTOTrainer(Trainer):
         completion_logps = self.get_batch_logps(
             completion_logits,
             batch["completion_labels"],
-            average_log_prob=False,
-            is_encoder_decoder=self.is_encoder_decoder,
-            label_pad_token_id=self.label_pad_token_id,
-        )
-
-        KL_logps = self.get_batch_logps(
-            KL_logits,
-            batch["KL_completion_labels"],
             average_log_prob=False,
             is_encoder_decoder=self.is_encoder_decoder,
             label_pad_token_id=self.label_pad_token_id,
@@ -1213,65 +1078,6 @@ class KTOTrainer(Trainer):
 
         return losses, chosen_rewards, rejected_rewards, kl
 
-    def _get_udm_weight(self, rejected_embeddings: torch.FloatTensor) -> torch.FloatTensor:
-        prob_desirable = self._get_chosen_prob(rejected_embeddings)
-        min_ratio = self.args.min_density_ratio
-        max_ratio = self.args.max_density_ratio
-
-        weight = (prob_desirable / (1 - prob_desirable + 1e-8)).clamp(min=min_ratio, max=max_ratio)
-
-        return weight
-
-    def bco_loss(
-        self,
-        policy_chosen_logps: torch.FloatTensor,
-        policy_rejected_logps: torch.FloatTensor,
-        reference_chosen_logps: torch.FloatTensor,
-        reference_rejected_logps: torch.FloatTensor,
-        chosen_embeddings: Optional[torch.FloatTensor],
-        rejected_embeddings: Optional[torch.FloatTensor],
-    ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
-        """Compute the BCO loss for a batch of policy and reference model log probabilities.
-
-        Args:
-            policy_chosen_logps: Log probabilities of the policy model for the chosen responses. Shape: (num(chosen) in batch_size,)
-            policy_rejected_logps: Log probabilities of the policy model for the rejected responses. Shape: (num(rejected) in batch_size,)
-            reference_chosen_logps: Log probabilities of the reference model for the chosen responses. Shape: (num(chosen) in batch_size,)
-            reference_rejected_logps: Log probabilities of the reference model for the rejected responses. Shape: (num(rejected) in batch_size,)
-            chosen_embeddings: embeddings of desirable prompts
-            rejected_embeddings: embeddings of undesirable prompts
-
-        Returns:
-            A tuple of four tensors: (losses, chosen_rewards, rejected_rewards, KL).
-            The losses tensor contains the KTO loss for each example in the batch.
-            The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
-            The delta value contains the moving average of all implicit rewards.
-        """
-        assert policy_chosen_logps.shape[0] > 0, f"no chosen data at {self.accelerator.local_process_index}"
-        assert policy_rejected_logps.shape[0] > 0, f"no rejected data at {self.accelerator.local_process_index}"
-        chosen_logratios = policy_chosen_logps - reference_chosen_logps
-        rejected_logratios = policy_rejected_logps - reference_rejected_logps
-
-        chosen_rewards = self.beta * chosen_logratios
-        rejected_rewards = self.beta * rejected_logratios
-
-        rewards = torch.cat((chosen_rewards, rejected_rewards), 0).mean().detach()
-        self.running.update(rewards)
-        rewards_mean = self.running.mean
-
-        chosen_losses = -F.logsigmoid(chosen_rewards - rewards_mean)
-        rejected_losses = -F.logsigmoid(-(rejected_rewards - rewards_mean))
-
-        if self.match_underlying_distribution:
-            chosen_weight = torch.ones_like(chosen_losses)
-            rejected_weight = self._get_udm_weight(rejected_embeddings)
-
-            losses = torch.cat((chosen_weight * chosen_losses, rejected_weight * rejected_losses), dim=0)
-        else:
-            losses = torch.cat((chosen_losses, rejected_losses), dim=0)
-
-        return losses, chosen_rewards, rejected_rewards, torch.as_tensor(rewards_mean)
-
     def get_batch_loss_metrics(
         self,
         model,
@@ -1320,26 +1126,15 @@ class KTOTrainer(Trainer):
                         reference_KL_logps,
                     ) = self.forward(self.ref_model, batch)[:5]
 
-        if self.loss_type == "kto":
-            losses, chosen_rewards, rejected_rewards, kl = self.kto_loss(
-                policy_chosen_logps,
-                policy_rejected_logps,
-                policy_KL_logps,
-                reference_chosen_logps,
-                reference_rejected_logps,
-                reference_KL_logps,
-            )
-        elif self.loss_type == "bco":
-            chosen_embeddings, rejected_embeddings = self._get_prompt_embeddings(batch)
-
-            losses, chosen_rewards, rejected_rewards, kl = self.bco_loss(
-                policy_chosen_logps,
-                policy_rejected_logps,
-                reference_chosen_logps,
-                reference_rejected_logps,
-                chosen_embeddings,
-                rejected_embeddings,
-            )
+        losses, chosen_rewards, rejected_rewards, kl = self.kto_loss(
+            policy_chosen_logps,
+            policy_rejected_logps,
+            policy_KL_logps,
+            reference_chosen_logps,
+            reference_rejected_logps,
+            reference_KL_logps,
+        )
+        metrics["kl"] = kl.item()
 
         num_chosen = torch.Tensor([len(chosen_rewards)]).to(self.accelerator.device)
         num_rejected = torch.Tensor([len(rejected_rewards)]).to(self.accelerator.device)
@@ -1350,14 +1145,14 @@ class KTOTrainer(Trainer):
         if all_num_chosen > 0:
             metrics["rewards/chosen_sum"] = self.accelerator.gather(chosen_rewards.nansum()).nansum().item()
             metrics["logps/chosen_sum"] = self.accelerator.gather(policy_chosen_logps.nansum()).nansum().item()
+            metrics["logits/chosen"] = self.accelerator.gather(policy_chosen_logits.nansum()).nanmean().item()
             metrics["count/chosen"] = all_num_chosen
 
         if all_num_rejected > 0:
             metrics["rewards/rejected_sum"] = self.accelerator.gather(rejected_rewards.nansum()).nansum().item()
             metrics["logps/rejected_sum"] = self.accelerator.gather(policy_rejected_logps.nansum()).nansum().item()
+            metrics["logits/rejected"] = self.accelerator.gather(policy_rejected_logits.nansum()).nanmean().item()
             metrics["count/rejected"] = all_num_rejected
-
-        metrics["kl"] = kl.item()
 
         loss = losses.nanmean()
         if self.aux_loss_enabled:
@@ -1376,9 +1171,9 @@ class KTOTrainer(Trainer):
                 "compute_loss is only implemented for DPODataCollatorWithPadding, and you passed a datacollator that is different than "
                 "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
             )
-        compute_loss_context_manager = torch.cuda.amp.autocast if self._peft_has_been_casted_to_bf16 else nullcontext
+        compute_loss_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
 
-        with compute_loss_context_manager():
+        with compute_loss_context_manager:
             loss, metrics = self.get_batch_loss_metrics(model, inputs)
 
         # Make sure to move the loss to the device the original accumulating loss is at back in the `Trainer` class:
@@ -1405,9 +1200,9 @@ class KTOTrainer(Trainer):
 
         # If one uses `generate_during_eval` with peft + bf16, we need to explicitly call generate with
         # the torch cuda amp context manager as some hidden states are silently casted to full precision.
-        generate_context_manager = nullcontext if not self._peft_has_been_casted_to_bf16 else torch.cuda.amp.autocast
+        generate_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
 
-        with generate_context_manager():
+        with generate_context_manager:
             policy_output = model.generate(
                 input_ids=batch["prompt_input_ids"],
                 attention_mask=batch["prompt_attention_mask"],
@@ -1464,8 +1259,8 @@ class KTOTrainer(Trainer):
             else:
                 ignore_keys = []
 
-        prediction_context_manager = torch.cuda.amp.autocast if self._peft_has_been_casted_to_bf16 else nullcontext
-        with torch.no_grad(), prediction_context_manager():
+        prediction_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
+        with torch.no_grad(), prediction_context_manager:
             loss, metrics = self.get_batch_loss_metrics(model, inputs)
 
         # force log the metrics
@@ -1512,10 +1307,10 @@ class KTOTrainer(Trainer):
             random_batch = self.data_collator(random_batch_dataset)
             random_batch = self._prepare_inputs(random_batch)
 
-            target_indicies = [i for i in range(len(random_batch["kl"])) if random_batch["kl"][i] is False]
+            target_indicies = [i for i in range(len(random_batch["label"])) if random_batch["label"][i] is False]
             target_batch = {
-                "prompt_input_ids": itemgetter(*target_indicies)(random_batch["prompt_input_ids"]),
-                "prompt_attention_mask": itemgetter(*target_indicies)(random_batch["prompt_attention_mask"]),
+                "prompt_input_ids": random_batch["prompt_input_ids"][target_indicies],
+                "prompt_attention_mask": random_batch["prompt_attention_mask"][target_indicies],
                 "prompt": itemgetter(*target_indicies)(random_batch["prompt"]),
             }
             policy_output_decoded, ref_output_decoded = self.get_batch_samples(self.model, target_batch)

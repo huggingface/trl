@@ -55,9 +55,10 @@ import multiprocessing
 import os
 from contextlib import nullcontext
 
-TRL_USE_RICH = os.environ.get("TRL_USE_RICH", False)
-
 from trl.commands.cli_utils import DPOScriptArguments, init_zero_verbose, TrlParser
+from trl.env_utils import strtobool
+
+TRL_USE_RICH = strtobool(os.getenv("TRL_USE_RICH", "0"))
 
 if TRL_USE_RICH:
     init_zero_verbose()
@@ -105,20 +106,25 @@ if __name__ == "__main__":
     quantization_config = get_quantization_config(model_config)
     model_kwargs = dict(
         revision=model_config.model_revision,
-        trust_remote_code=model_config.trust_remote_code,
         attn_implementation=model_config.attn_implementation,
         torch_dtype=torch_dtype,
         use_cache=False if training_args.gradient_checkpointing else True,
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
-    model = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, **model_kwargs)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, **model_kwargs
+    )
     peft_config = get_peft_config(model_config)
     if peft_config is None:
-        model_ref = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, **model_kwargs)
+        ref_model = AutoModelForCausalLM.from_pretrained(
+            model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, **model_kwargs
+        )
     else:
-        model_ref = None
-    tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path)
+        ref_model = None
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code
+    )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     if tokenizer.chat_template is None:
@@ -167,12 +173,12 @@ if __name__ == "__main__":
     with init_context:
         trainer = DPOTrainer(
             model,
-            model_ref,
+            ref_model,
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             tokenizer=tokenizer,
-            peft_config=get_peft_config(model_config),
+            peft_config=peft_config,
             callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
         )
 

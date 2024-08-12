@@ -2,7 +2,15 @@ import unittest
 
 import torch
 
-from trl.trainer.utils import pad
+from trl import is_peft_available
+from trl.trainer.model_config import ModelConfig
+from trl.trainer.utils import get_peft_config, pad
+
+
+if is_peft_available():
+    from peft import LoraConfig
+
+from .testing_utils import require_peft
 
 
 class TestPad(unittest.TestCase):
@@ -55,3 +63,37 @@ class TestPad(unittest.TestCase):
             ]
         )
         self.assertTrue(torch.equal(output, expected))
+
+
+@require_peft
+class TestGetPEFTConfig(unittest.TestCase):
+    def test_create_peft_config_use_peft_false(self):
+        """Test that when use_peft is False, the function returns None."""
+        model_config = ModelConfig(use_peft=False)
+        peft_config = get_peft_config(model_config)
+        self.assertIsNone(peft_config)
+
+    def test_create_peft_config_use_peft_true(self):
+        """Test that when use_peft is True, the function returns a LoraConfig object."""
+        # Provide non-default values to the model config for testing
+        peft_kwargs = {
+            "lora_r": 8,
+            "lora_alpha": 16,
+            "lora_dropout": 0.1,
+            "lora_task_type": "SEQ_CLS",
+            "use_rslora": True,
+            "lora_target_modules": ["up_proj", "down_proj"],
+            "lora_modules_to_save": ["up_proj"],
+        }
+        model_config = ModelConfig(use_peft=True, **peft_kwargs)
+        peft_config = get_peft_config(model_config)
+        self.assertTrue(isinstance(peft_config, LoraConfig))
+        for arg, value in peft_kwargs.items():
+            # Test that lists of modules are converted to sets
+            if arg == "lora_target_modules":
+                value = set(value)
+            # Rename the argument to match the LoraConfig attribute name
+            if arg in ["lora_r", "lora_task_type", "lora_target_modules", "lora_modules_to_save"]:
+                arg = arg[len("lora_") :] if arg.startswith("lora_") else arg
+
+            self.assertEqual(getattr(peft_config, arg), value)

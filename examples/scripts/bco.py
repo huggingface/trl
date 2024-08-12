@@ -21,7 +21,6 @@ python examples/scripts/bco.py \
     --no_remove_unused_columns \
     --warmup_ratio 0.1 \
     --bf16 \
-    --loss_type bco \
     --report_to wandb
 
 # QLoRA:
@@ -46,7 +45,6 @@ python examples/scripts/bco.py \
     --no_remove_unused_columns \
     --warmup_ratio 0.1 \
     --bf16 \
-    --loss_type bco \
     --use_peft \
     --load_in_4bit \
     --lora_target_modules=all-linear \
@@ -65,14 +63,14 @@ from accelerate import Accelerator, PartialState
 from datasets import Dataset, load_dataset
 from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, PreTrainedModel
 
-from trl import KTOConfig, KTOTrainer, ModelConfig, get_peft_config, setup_chat_format
+from trl import BCOConfig, BCOTrainer, ModelConfig, get_peft_config, setup_chat_format
 
 
 # Define and parse arguments.
 @dataclass
 class ScriptArguments:
     """
-    The arguments for the KTO training script.
+    The arguments for the BCO training script.
     """
 
     llm_name: Literal["gpt-3.5-turbo", "llama-2-7b-chat", "llama-2-70b-chat"] = "gpt-3.5-turbo"
@@ -160,16 +158,22 @@ def embed_prompt(input_ids: torch.LongTensor, attention_mask: torch.LongTensor, 
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser((ScriptArguments, KTOConfig, ModelConfig))
-    script_args, kto_args, model_args = parser.parse_args_into_dataclasses()
+    parser = HfArgumentParser((ScriptArguments, BCOConfig, ModelConfig))
+    script_args, bco_args, model_args = parser.parse_args_into_dataclasses()
 
-    kto_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
+    bco_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
     # Load a pretrained model
-    model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path)
-    model_ref = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
+    )
+    ref_model = AutoModelForCausalLM.from_pretrained(
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
+    )
 
-    tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
+    )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -193,23 +197,25 @@ if __name__ == "__main__":
     accelerator = Accelerator()
     embedding_model = AutoModel.from_pretrained(
         "nomic-ai/nomic-embed-text-v1.5",
-        trust_remote_code=True,
+        trust_remote_code=model_args.trust_remote_code,
         safe_serialization=True,
         torch_dtype=torch.bfloat16,
         device_map="auto",
     )
     embedding_model = accelerator.prepare_model(embedding_model)
-    embedding_tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+    embedding_tokenizer = AutoTokenizer.from_pretrained(
+        "bert-base-uncased", trust_remote_code=model_args.trust_remote_code
+    )
     embedding_func = partial(
         embed_prompt,
         model=embedding_model,
     )
 
-    # Initialize the KTO trainer
-    kto_trainer = KTOTrainer(
+    # Initialize the BCO trainer
+    bco_trainer = BCOTrainer(
         model,
-        model_ref,
-        args=kto_args,
+        ref_model,
+        args=bco_args,
         train_dataset=formatted_dataset["train"],
         eval_dataset=formatted_dataset["test"],
         tokenizer=tokenizer,
@@ -219,5 +225,5 @@ if __name__ == "__main__":
     )
 
     # Train and push the model to the Hub
-    kto_trainer.train()
-    kto_trainer.save_model(kto_args.output_dir)
+    bco_trainer.train()
+    bco_trainer.save_model(bco_args.output_dir)

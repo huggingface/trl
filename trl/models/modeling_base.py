@@ -215,7 +215,7 @@ class PreTrainedModelWrapper(nn.Module):
 
                 # Wrap the pretrained model with the trained peft adapter
                 pretrained_model = PeftModel.from_pretrained(
-                    pretrained_model, pretrained_model_name_or_path, is_trainable=is_trainable
+                    pretrained_model, pretrained_model_name_or_path, is_trainable=is_trainable, token=token
                 )
                 logging.info("Trained peft adapter loaded")
             else:
