@@ -12,11 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from dataclasses import dataclass
-from typing import Dict, Literal, Optional
+from typing import Dict, Optional
 
 from transformers import TrainingArguments
-
-from ..import_utils import is_sklearn_available
 
 
 @dataclass
@@ -92,19 +90,3 @@ class KTOConfig(TrainingArguments):
     model_init_kwargs: Optional[Dict] = None
     ref_model_init_kwargs: Optional[Dict] = None
     dataset_num_proc: Optional[int] = None
-
-    loss_type: Literal["kto", "bco"] = "kto"
-
-    # BCO config
-    prompt_sample_size: int = 1024
-    min_density_ratio: float = 0.5
-    max_density_ratio: float = 10.0
-
-    def __post_init__(self):
-        super().__post_init__()
-
-        if self.loss_type == "bco" and not is_sklearn_available():
-            raise ImportError(
-                "You need to install scikit-learn to use loss_type='bco' "
-                "You can install it with `pip install scikit-learn`."
-            )
