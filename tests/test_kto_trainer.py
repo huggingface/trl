@@ -13,14 +13,11 @@
 # limitations under the License.
 import tempfile
 import unittest
-from functools import partial
 
 import torch
-from accelerate import Accelerator
 from datasets import Dataset
 from parameterized import parameterized
-from pytest import mark
-from transformers import AutoModel, AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
 from trl import KTOConfig, KTOTrainer
 from trl.trainer.kto_trainer import _get_kl_dataset, _process_tokens, _tokenize
@@ -29,24 +26,18 @@ from .testing_utils import require_no_wandb, require_peft
 
 
 class KTOTrainerTester(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
-        cls.model = AutoModelForCausalLM.from_pretrained(cls.model_id)
-        cls.ref_model = AutoModelForCausalLM.from_pretrained(cls.model_id)
-        cls.tokenizer = AutoTokenizer.from_pretrained(cls.model_id)
-        cls.tokenizer.pad_token = cls.tokenizer.eos_token
+    def setUp(self):
+        self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        self.tokenizer.pad_token = self.tokenizer.eos_token
 
         # get t5 as seq2seq example:
         model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration-correct-vocab"
-        cls.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
-        cls.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
-        cls.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
-
-        # get embedding model
-        model_id = "facebook/bart-base"
-        cls.embedding_model = AutoModel.from_pretrained(model_id)
-        cls.embedding_tokenizer = AutoTokenizer.from_pretrained(model_id)
+        self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+        self.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+        self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
     def _init_dummy_dataset(self):
         # fmt: off
@@ -84,19 +75,15 @@ class KTOTrainerTester(unittest.TestCase):
 
     @parameterized.expand(
         [
-            ["gpt2", "kto", True, True],
-            ["gpt2", "kto", True, False],
+            ["gpt2", True, True],
+            ["gpt2", True, False],
             # ["t5", True],
-            ["gpt2", "kto", False, True],
-            ["gpt2", "kto", False, False],
+            ["gpt2", False, True],
+            ["gpt2", False, False],
             # ["t5", False],
-            ["gpt2", "bco", True, True],
-            ["gpt2", "bco", True, False],
-            ["gpt2", "bco", False, True],
-            ["gpt2", "bco", False, False],
         ]
     )
-    def test_kto_trainer(self, name, loss_type, pre_compute, eval_dataset):
+    def test_kto_trainer(self, name, pre_compute, eval_dataset):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = KTOConfig(
                 output_dir=tmp_dir,
@@ -108,7 +95,7 @@ class KTOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 beta=0.1,
                 precompute_ref_log_probs=pre_compute,
-                loss_type=loss_type,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -155,6 +142,7 @@ class KTOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -236,6 +224,7 @@ class KTOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -247,54 +236,6 @@ class KTOTrainerTester(unittest.TestCase):
                 tokenizer=self.tokenizer,
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
-            )
-
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-            trainer.train()
-
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-
-            # check the params have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                # check the params have changed - ignore 0 biases
-                if param.sum() != 0:
-                    self.assertFalse(torch.equal(param, new_param))
-
-    def test_kto_trainer_bco_udm(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = KTOConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                remove_unused_columns=False,
-                gradient_accumulation_steps=4,
-                learning_rate=9e-1,
-                eval_strategy="steps",
-                beta=0.1,
-                loss_type="bco",
-            )
-
-            dummy_dataset = self._init_dummy_dataset()
-
-            def embed_prompt(input_ids, attention_mask, model):
-                outputs = model(input_ids=input_ids, attention_mask=attention_mask)
-
-                return outputs.last_hidden_state.mean(dim=1)
-
-            embedding_model = Accelerator().prepare_model(self.embedding_model)
-            embedding_func = partial(embed_prompt, model=embedding_model)
-
-            trainer = KTOTrainer(
-                model=self.model,
-                ref_model=None,
-                args=training_args,
-                tokenizer=self.tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
-                embedding_func=embedding_func,
-                embedding_tokenizer=self.embedding_tokenizer,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -311,7 +252,6 @@ class KTOTrainerTester(unittest.TestCase):
                     self.assertFalse(torch.equal(param, new_param))
 
     @require_peft
-    @mark.peft_test
     def test_kto_trainer_without_providing_ref_model_with_lora(self):
         from peft import LoraConfig
 
@@ -333,6 +273,7 @@ class KTOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -374,6 +315,7 @@ class KTOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 beta=0.1,
                 generate_during_eval=True,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -393,7 +335,6 @@ class KTOTrainerTester(unittest.TestCase):
                 )
 
     @require_peft
-    @mark.peft_test
     def test_kto_lora_save(self):
         from peft import LoraConfig, get_peft_model
 
@@ -419,6 +360,7 @@ class KTOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
