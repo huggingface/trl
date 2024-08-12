@@ -80,7 +80,6 @@ def _tokenize(
             else:
                 processor_kwargs = {}
             tokenized = tokenizer(text, images=images, **processor_kwargs)
-            tokenized = {k: v[0] for k, v in tokenized.items()}  # Unbatch
             if not isinstance(tokenized["input_ids"], list):  # llava processor returns tensors
                 tokenized["input_ids"] = tokenized["input_ids"].tolist()
                 tokenized["attention_mask"] = tokenized["attention_mask"].tolist()
