@@ -75,12 +75,11 @@ def _tokenize(
 
     def tokenize_text(text: str, images: Union[List[str], torch.Tensor] = None) -> Dict[str, List[int]]:
         if is_vision_model:
-            processor = tokenizer
-            if "add_special_tokens" in tokenizer.processor.tokenizer.__call__.__code__.co_varnames:
+            if "add_special_tokens" in inspect.signature(tokenizer).parameters:
                 processor_kwargs = {"add_special_tokens": False}
             else:
                 processor_kwargs = {}
-            tokenized = tokenizer.processor(text, images=images, **processor_kwargs)
+            tokenized = tokenizer(text, images=images, **processor_kwargs)
             tokenized = {k: v[0] for k, v in tokenized.items()}  # Unbatch
             if not isinstance(tokenized["input_ids"], list):  # llava processor returns tensors
                 tokenized["input_ids"] = tokenized["input_ids"].tolist()
@@ -653,7 +652,10 @@ class DPOTrainer(Trainer):
             # Tokenize the datasets
             train_dataset = train_dataset.map(
                 _tokenize,
-                fn_kwargs={"tokenizer": self.processor if self.is_vision_model else self.tokenizer, "is_vision_model": self.is_vision_model},
+                fn_kwargs={
+                    "tokenizer": self.processor if self.is_vision_model else self.tokenizer,
+                    "is_vision_model": self.is_vision_model,
+                },
                 batched=True,
                 num_proc=self.dataset_num_proc,
                 remove_columns=train_dataset.column_names,
@@ -872,77 +874,6 @@ class DPOTrainer(Trainer):
             self._precomputed_eval_ref_log_probs = True
 
         return super().get_eval_dataloader(eval_dataset=eval_dataset)
-
-    # def build_tokenized_answer(self, prompt, answer, images=None):
-    #     """
-    #     Llama tokenizer does satisfy `enc(a + b) = enc(a) + enc(b)`.
-    #     It does ensure `enc(a + b) = enc(a) + enc(a + b)[len(enc(a)):]`.
-    #     Reference:
-    #         https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
-    #     """
-    #     if self.is_vision_model:
-    #         if answer.count("<image>") > 0:
-    #             raise NotImplementedError("Answer contains <image> token, which is not supported yet.")
-    #         if "add_special_tokens" in inspect.signature(self.processor).parameters:
-    #             processor_kwargs = {"add_special_tokens": False}
-    #         else:
-    #             processor_kwargs = {}
-    #         full_tokenized = self.processor(prompt + answer, images=images, **processor_kwargs)
-    #         full_tokenized = {k: v[0] for k, v in full_tokenized.items()}  # Unbatch, not done when using idefics
-    #         if not isinstance(full_tokenized["input_ids"], list):  # llava processor returns tensors
-    #             full_tokenized["input_ids"] = full_tokenized["input_ids"].tolist()
-    #             full_tokenized["attention_mask"] = full_tokenized["attention_mask"].tolist()
-    #         prompt_input_ids = self.processor(prompt, images=images, **processor_kwargs)["input_ids"][0]
-    #         if not isinstance(prompt_input_ids, list):  # llava processor returns tensors
-    #             prompt_input_ids = prompt_input_ids.tolist()
-    #     else:
-    #         full_tokenized = self.tokenizer(prompt + answer, add_special_tokens=False)
-    #         prompt_input_ids = self.tokenizer(prompt, add_special_tokens=False)["input_ids"]
-
-    #     answer_input_ids = full_tokenized["input_ids"][len(prompt_input_ids) :]
-    #     answer_attention_mask = full_tokenized["attention_mask"][len(prompt_input_ids) :]
-
-    #     # Concat tokens to form `enc(a) + enc(a + b)[len(enc(a)):]`
-    #     full_concat_input_ids = np.concatenate([prompt_input_ids, answer_input_ids])
-
-    #     # Prepare input tokens for token by token comparison
-    #     full_input_ids = np.array(full_tokenized["input_ids"])
-
-    #     if len(full_input_ids) != len(full_concat_input_ids):
-    #         raise ValueError("Prompt input ids and answer input ids should have the same length.")
-
-    #     # On some tokenizers, like Llama-2 tokenizer, there are occasions where tokens
-    #     # can be merged together when tokenizing prompt+answer. This could result
-    #     # on the last token from the prompt being different when tokenized on its own
-    #     # vs when done as prompt+answer.
-    #     response_token_ids_start_idx = len(prompt_input_ids)
-
-    #     # If tokenized prompt is different than both prompt+answer, then it means the
-    #     # last token has changed due to merging.
-    #     if prompt_input_ids != full_tokenized["input_ids"][:response_token_ids_start_idx]:
-    #         response_token_ids_start_idx -= 1
-
-    #     prompt_input_ids = full_tokenized["input_ids"][:response_token_ids_start_idx]
-    #     prompt_attention_mask = full_tokenized["attention_mask"][:response_token_ids_start_idx]
-
-    #     if len(prompt_input_ids) != len(prompt_attention_mask):
-    #         raise ValueError("Prompt input ids and attention mask should have the same length.")
-
-    #     answer_input_ids = full_tokenized["input_ids"][response_token_ids_start_idx:]
-    #     answer_attention_mask = full_tokenized["attention_mask"][response_token_ids_start_idx:]
-
-    #     return_dict = dict(
-    #         prompt_input_ids=prompt_input_ids,
-    #         prompt_attention_mask=prompt_attention_mask,
-    #         input_ids=answer_input_ids,
-    #         attention_mask=answer_attention_mask,
-    #     )
-    #     if "pixel_values" in full_tokenized:
-    #         return_dict["prompt_pixel_values"] = full_tokenized["pixel_values"]
-    #     if "pixel_attention_mask" in full_tokenized:
-    #         return_dict["prompt_pixel_attention_mask"] = full_tokenized["pixel_attention_mask"]
-
-    #     return return_dict
 
     @contextmanager
     def null_ref_context(self):
