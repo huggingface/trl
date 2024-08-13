@@ -180,10 +180,14 @@ class OnlineDPOTrainer(Trainer):
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
         with PartialState().local_main_process_first():
-            # tokenize the dataset, lower writer batch size to avoid OOM (frequent in vision models)
-            train_dataset = train_dataset.map(self.tokenize_row, num_proc=args.dataset_num_proc)
+            # tokenize the dataset
+            fn_kwargs = {
+                "is_encoder_decoder": self.model.config.is_encoder_decoder,
+                "tokenizer": tokenizer,
+            }
+            train_dataset = train_dataset.map(self.tokenize_row, fn_kwargs=fn_kwargs, num_proc=args.dataset_num_proc)
             if eval_dataset is not None:
-                eval_dataset = eval_dataset.map(self.tokenize_row, num_proc=args.dataset_num_proc)
+                eval_dataset = eval_dataset.map(self.tokenize_row, fn_kwargs=fn_kwargs, num_proc=args.dataset_num_proc)
         self.dataloader = DataLoader(
             train_dataset,
             batch_size=self.local_dataloader_batch_size,
@@ -217,20 +221,19 @@ class OnlineDPOTrainer(Trainer):
             if self.reward_model is not None:
                 self.reward_model = self.reward_model.to(self.accelerator.device)
 
-    def tokenize_row(self, feature) -> Dict:
+    @staticmethod
+    def tokenize_row(feature, is_encoder_decoder, tokenizer) -> Dict:
         """Tokenize a single row from a DPO specific dataset."""
-        if not self.model.config.is_encoder_decoder:
-            batch = self.tokenizer(feature["prompt"], add_special_tokens=False)
+        if not is_encoder_decoder:
+            batch = tokenizer(feature["prompt"], add_special_tokens=False)
             # Add BOS token to head of prompt. Avoid adding if it's already there
             prompt_len_input_ids = len(batch["input_ids"])
-            if self.tokenizer.bos_token_id is not None:
-                if prompt_len_input_ids == 0 or self.tokenizer.bos_token_id != batch["input_ids"][0]:
-                    batch["input_ids"] = [self.tokenizer.bos_token_id] + batch["input_ids"]
+            if tokenizer.bos_token_id is not None:
+                if prompt_len_input_ids == 0 or tokenizer.bos_token_id != batch["input_ids"][0]:
+                    batch["input_ids"] = [tokenizer.bos_token_id] + batch["input_ids"]
                     batch["attention_mask"] = [1] + batch["attention_mask"]
         else:
-            batch = self.tokenizer(
-                feature["prompt"], truncation=True, max_length=self.max_prompt_length, add_special_tokens=True
-            )
+            batch = tokenizer(feature["prompt"], add_special_tokens=True)
         batch = {f"prompt_{key}": value for key, value in batch.items()}
         return batch
 
@@ -566,6 +569,7 @@ class OnlineDPOTrainer(Trainer):
                 metrics["loss/policy_avg"] = self.accelerator.gather(loss_stats).mean().item()
                 metrics["logps/chosen"] = self.accelerator.gather(chosen_logprobs_stats).mean().item()
                 metrics["logps/rejected"] = self.accelerator.gather(rejected_logprobs_stats).mean().item()
+                print(responses.tolist())
                 metrics["val/num_eos_tokens"] = (responses == tokenizer.eos_token_id).sum().item()
                 metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
                 metrics["episode"] = self.state.episode
