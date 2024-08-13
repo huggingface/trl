@@ -1,5 +1,6 @@
 import shutil
 
+from accelerate import PartialState
 from datasets import load_dataset
 from transformers import (
     AutoModelForCausalLM,
@@ -97,6 +98,12 @@ if __name__ == "__main__":
             num_proc=config.dataset_num_proc,
         )
 
+    # Compute that only on the main process for faster data processing.
+    # see: https://github.com/huggingface/trl/pull/1255
+    with PartialState().local_main_process_first():
+        train_dataset = prepare_dataset(train_dataset, tokenizer)
+        eval_dataset = prepare_dataset(eval_dataset, tokenizer)
+
     ################
     # Training
     ################
@@ -107,8 +114,8 @@ if __name__ == "__main__":
         ref_policy=ref_policy,
         reward_model=reward_model,
         value_model=value_model,
-        train_dataset=prepare_dataset(train_dataset, tokenizer),
-        eval_dataset=prepare_dataset(eval_dataset, tokenizer),
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
     )
     trainer.train()
     trainer.save_model(config.output_dir)
