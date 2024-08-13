@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-# regular:
+# Full training:
 python examples/scripts/gkd.py \
     --model_name_or_path="facebook/opt-125m" \
     --teacher_model_name_or_path="facebook/opt-350m" \
