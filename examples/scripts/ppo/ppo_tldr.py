@@ -1,4 +1,3 @@
-import multiprocessing
 import shutil
 
 from datasets import load_dataset
@@ -98,15 +97,15 @@ if __name__ == "__main__":
         return dataset.map(
             tokenize,
             remove_columns=dataset.column_names,
-            num_proc=1 if config.sanity_check else multiprocessing.cpu_count(),
             load_from_cache_file=not config.sanity_check,
+            num_proc=config.dataset_num_proc,
         )
 
     train_dataset = prepare_dataset(train_dataset, tokenizer)
     eval_dataset = prepare_dataset(eval_dataset, tokenizer)
     # filtering
-    train_dataset = train_dataset.filter(lambda x: x["lengths"] <= 512)
-    eval_dataset = eval_dataset.filter(lambda x: x["lengths"] <= 512)
+    train_dataset = train_dataset.filter(lambda x: x["lengths"] <= 512, num_proc=config.dataset_num_proc)
+    eval_dataset = eval_dataset.filter(lambda x: x["lengths"] <= 512, num_proc=config.dataset_num_proc)
     assert train_dataset[0]["input_ids"][-1] != tokenizer.eos_token_id, "The last token should not be an EOS token"
     ################
     # Training
