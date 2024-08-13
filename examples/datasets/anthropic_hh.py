@@ -32,7 +32,7 @@ class ScriptArguments:
     )
     push_to_hub: Optional[bool] = field(default=False, metadata={"help": "Push the dataset to the Hugging Face Hub"})
     dataset_num_proc: Optional[int] = field(
-        default=None, metadata={"help": "The number of workers to use to tokenize the data"}
+        default=None, metadata={"help": "The number of workers to use for dataset processing"}
     )
 
 
