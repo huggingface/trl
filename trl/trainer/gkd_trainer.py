@@ -71,7 +71,7 @@ class GKDTrainer(SFTTrainer):
         else:
             self.teacher_model = self.accelerator.prepare_model(self.teacher_model, evaluation_mode=True)
 
-        self.lmbda = args.lmbda
+        self.lambda = args.lambda
         self.beta = args.beta
         self.temperature = args.temperature
 
