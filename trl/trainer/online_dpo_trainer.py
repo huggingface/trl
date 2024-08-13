@@ -195,6 +195,7 @@ class OnlineDPOTrainer(Trainer):
             train_dataset = train_dataset.map(self.tokenize_row, fn_kwargs=fn_kwargs, num_proc=args.dataset_num_proc)
             if eval_dataset is not None:
                 eval_dataset = eval_dataset.map(self.tokenize_row, fn_kwargs=fn_kwargs, num_proc=args.dataset_num_proc)
+
         self.dataloader = DataLoader(
             train_dataset,
             batch_size=self.local_dataloader_batch_size,
