@@ -67,144 +67,139 @@ if is_deepspeed_available():
     import deepspeed
 
 
-def _tokenize(
-    batch: Dict[str, List[Any]],
-    tokenizer: "PreTrainedTokenizerBase",
-    processor: Optional[Callable] = None,
-) -> Dict[str, Any]:
-    """Tokenize a single example for DPO training."""
-
-    def tokenize_text(text: str, images: Union[List[str], torch.Tensor] = None) -> Dict[str, List[int]]:
-        if processor is not None:
-            if "add_special_tokens" in inspect.signature(processor).parameters:
-                processor_kwargs = {"add_special_tokens": False}
-            else:
-                processor_kwargs = {}
-            tokenized = processor(text, images=images, **processor_kwargs)
-            if not isinstance(tokenized["input_ids"], list):  # llava processor returns tensors
-                tokenized["input_ids"] = tokenized["input_ids"].tolist()
-                tokenized["attention_mask"] = tokenized["attention_mask"].tolist()
-        else:
-            tokenized = tokenizer(text, add_special_tokens=False)
-
-        return tokenized
-
-    prompts = batch["prompt"]
-    chosen = [p + c for p, c in zip(prompts, batch["chosen"])]
-    rejected = [p + r for p, r in zip(prompts, batch["rejected"])]
-
-    prompt_tokens = tokenize_text(prompts, batch.get("images"))
-    chosen_tokens = tokenize_text(chosen)
-    rejected_tokens = tokenize_text(rejected)
-
-    # Handle token merging at prompt-completion boundary
-    result = {
+def _tokenize(feature_batch: Dict[str, List[Any]], tokenizer, processor=None, args=None) -> Dict[str, List[Any]]:
+    """Tokenize a batch of features from a DPO specific dataset."""
+    batch_size = len(feature_batch["prompt"])
+    tokenized_batch = {
         "prompt_input_ids": [],
         "prompt_attention_mask": [],
         "chosen_input_ids": [],
         "chosen_attention_mask": [],
         "rejected_input_ids": [],
         "rejected_attention_mask": [],
+        "chosen_labels": [],
+        "rejected_labels": [],
     }
+    if processor is not None:
+        tokenized_batch["prompt_pixel_values"] = []
 
-    for i in range(len(prompts)):
-        prompt_length = len(prompt_tokens["input_ids"][i])
-        if chosen_tokens["input_ids"][i][:prompt_length] != prompt_tokens["input_ids"][i]:
-            prompt_length -= 1
+    for i in range(batch_size):
+        feature = {k: v[i] for k, v in feature_batch.items()}
+        tokenized = _tokenize_feature(feature, tokenizer, processor, args)
+        for key in tokenized_batch:
+            if key in tokenized:
+                tokenized_batch[key].append(tokenized[key])
 
-        result["prompt_input_ids"].append(prompt_tokens["input_ids"][i])
-        result["prompt_attention_mask"].append(prompt_tokens["attention_mask"][i])
-        result["chosen_input_ids"].append(chosen_tokens["input_ids"][i][prompt_length:])
-        result["chosen_attention_mask"].append(chosen_tokens["attention_mask"][i][prompt_length:])
-        result["rejected_input_ids"].append(rejected_tokens["input_ids"][i][prompt_length:])
-        result["rejected_attention_mask"].append(rejected_tokens["attention_mask"][i][prompt_length:])
+    return tokenized_batch
+
+
+def _tokenize_feature(feature: Dict[str, Any], tokenizer, processor=None, args=None) -> Dict[str, Any]:
+    prompt = feature["prompt"]
+    chosen = feature["chosen"]
+    rejected = feature["rejected"]
+    images = feature.get("images")
 
     if processor is not None:
-        if "pixel_values" in prompt_tokens:
-            result["prompt_pixel_values"] = prompt_tokens["pixel_values"]
-        if "pixel_attention_mask" in prompt_tokens:
-            result["prompt_pixel_attention_mask"] = prompt_tokens["pixel_attention_mask"]
+        prompt_tokens = _build_tokenized_answer(prompt, "", images, processor=processor)
+        chosen_tokens = _build_tokenized_answer(prompt, chosen, None, processor=processor)  # No images for chosen
+        rejected_tokens = _build_tokenized_answer(
+            prompt, rejected, None, processor=processor
+        )  # No images for rejected
 
-    return result
+        return {
+            "prompt_input_ids": prompt_tokens["input_ids"],
+            "prompt_attention_mask": prompt_tokens["attention_mask"],
+            "chosen_input_ids": chosen_tokens["input_ids"],
+            "chosen_attention_mask": chosen_tokens["attention_mask"],
+            "rejected_input_ids": rejected_tokens["input_ids"],
+            "rejected_attention_mask": rejected_tokens["attention_mask"],
+            "chosen_labels": chosen_tokens["input_ids"],
+            "rejected_labels": rejected_tokens["input_ids"],
+            "prompt_pixel_values": prompt_tokens["pixel_values"],
+        }
 
+    elif not args.is_encoder_decoder:
+        prompt_tokens = _build_tokenized_answer(prompt, "", images, tokenizer=tokenizer)
+        chosen_tokens = _build_tokenized_answer(prompt, chosen, images, tokenizer=tokenizer)
+        rejected_tokens = _build_tokenized_answer(prompt, rejected, images, tokenizer=tokenizer)
 
-def _process_tokens(
-    tokenized_example: Dict[str, Any],
-    tokenizer: "PreTrainedTokenizerBase",
-    max_length: int,
-    max_prompt_length: int,
-    label_pad_token_id: int,
-    truncation_mode: str,
-    is_encoder_decoder: bool,
-) -> Dict[str, Any]:
-    """Process tokenized example for DPO training."""
-    batch = {}
+        # Truncation logic
+        for tokens in [prompt_tokens, chosen_tokens, rejected_tokens]:
+            if len(tokens["input_ids"]) > args.max_length:
+                if args.truncation_mode == "keep_start":
+                    for k in ["input_ids", "attention_mask"]:
+                        tokens[k] = tokens[k][: args.max_prompt_length]
+                elif args.truncation_mode == "keep_end":
+                    for k in ["input_ids", "attention_mask"]:
+                        tokens[k] = tokens[k][-args.max_prompt_length :]
+                else:
+                    raise ValueError(f"Unknown truncation mode: {args.truncation_mode}")
 
-    if not is_encoder_decoder:
-        # Add BOS token if needed
-        if tokenizer.bos_token_id is not None:
-            if tokenized_example["prompt_input_ids"][0] != tokenizer.bos_token_id:
-                for key in ["prompt_input_ids", "prompt_attention_mask"]:
-                    tokenized_example[key] = (
-                        [tokenizer.bos_token_id] if key.endswith("input_ids") else [1]
-                    ) + tokenized_example[key]
+        # Create labels
+        chosen_labels = chosen_tokens["input_ids"][:]
+        chosen_labels[: len(prompt_tokens["input_ids"])] = [args.label_pad_token_id] * len(prompt_tokens["input_ids"])
+        rejected_labels = rejected_tokens["input_ids"][:]
+        rejected_labels[: len(prompt_tokens["input_ids"])] = [args.label_pad_token_id] * len(
+            prompt_tokens["input_ids"]
+        )
 
-        # Truncate prompt if necessary
-        if len(tokenized_example["prompt_input_ids"]) > max_prompt_length:
-            for key in ["prompt_input_ids", "prompt_attention_mask"]:
-                tokenized_example[key] = (
-                    tokenized_example[key][:max_prompt_length]
-                    if truncation_mode == "keep_start"
-                    else tokenized_example[key][-max_prompt_length:]
-                )
-
-        # Process chosen and rejected completions
-        for key in ["chosen", "rejected"]:
-            input_ids = tokenized_example[f"{key}_input_ids"]
-            attention_mask = tokenized_example[f"{key}_attention_mask"]
-
-            # Add EOS token if needed
-            if tokenizer.eos_token_id is not None:
-                if input_ids[-1] != tokenizer.eos_token_id:
-                    input_ids.append(tokenizer.eos_token_id)
-                    attention_mask.append(1)
-
-            # Truncate if necessary
-            remaining_length = max_length - len(tokenized_example["prompt_input_ids"])
-            if len(input_ids) > remaining_length:
-                input_ids = input_ids[:remaining_length]
-                attention_mask = attention_mask[:remaining_length]
-
-            # Combine prompt and completion
-            batch[f"{key}_input_ids"] = tokenized_example["prompt_input_ids"] + input_ids
-            batch[f"{key}_attention_mask"] = tokenized_example["prompt_attention_mask"] + attention_mask
-
-            # Create labels
-            batch[f"{key}_labels"] = ([label_pad_token_id] * len(tokenized_example["prompt_input_ids"])) + input_ids
-
+        return {
+            "prompt_input_ids": prompt_tokens["input_ids"],
+            "prompt_attention_mask": prompt_tokens["attention_mask"],
+            "chosen_input_ids": chosen_tokens["input_ids"],
+            "chosen_attention_mask": chosen_tokens["attention_mask"],
+            "rejected_input_ids": rejected_tokens["input_ids"],
+            "rejected_attention_mask": rejected_tokens["attention_mask"],
+            "chosen_labels": chosen_labels,
+            "rejected_labels": rejected_labels,
+        }
     else:
-        # For encoder-decoder models
-        batch["prompt_input_ids"] = tokenized_example["prompt_input_ids"]
-        batch["prompt_attention_mask"] = tokenized_example["prompt_attention_mask"]
+        chosen_tokens = tokenizer(chosen, truncation=True, max_length=args.max_target_length, add_special_tokens=True)
+        rejected_tokens = tokenizer(
+            rejected, truncation=True, max_length=args.max_target_length, add_special_tokens=True
+        )
+        prompt_tokens = tokenizer(prompt, truncation=True, max_length=args.max_prompt_length, add_special_tokens=True)
 
-        for key in ["chosen", "rejected"]:
-            batch[f"{key}_labels"] = tokenized_example[f"{key}_input_ids"]
+        return {
+            "prompt_input_ids": prompt_tokens["input_ids"],
+            "prompt_attention_mask": prompt_tokens["attention_mask"],
+            "chosen_input_ids": chosen_tokens["input_ids"],
+            "chosen_attention_mask": chosen_tokens["attention_mask"],
+            "rejected_input_ids": rejected_tokens["input_ids"],
+            "rejected_attention_mask": rejected_tokens["attention_mask"],
+            "chosen_labels": chosen_tokens["input_ids"],
+            "rejected_labels": rejected_tokens["input_ids"],
+        }
 
-            if tokenizer.eos_token_id is not None:
-                if batch[f"{key}_labels"][-1] != tokenizer.eos_token_id:
-                    batch[f"{key}_labels"].append(tokenizer.eos_token_id)
 
-            # Truncate if necessary
-            if len(batch[f"{key}_labels"]) > max_length:
-                batch[f"{key}_labels"] = batch[f"{key}_labels"][:max_length]
+def _build_tokenized_answer(
+    prompt: str, answer: str, images: Optional[List[Any]] = None, processor=None, tokenizer=None
+) -> Dict[str, Any]:
+    """Build tokenized answer, handling vision models and different tokenizers."""
+    if processor is not None:
+        if answer.count("<image>") > 0:
+            raise NotImplementedError("Answer contains <image> token, which is not supported yet.")
+        processor_kwargs = (
+            {"add_special_tokens": False} if "add_special_tokens" in inspect.signature(processor).parameters else {}
+        )
+        full_tokenized = processor(text=prompt + answer, images=images, return_tensors="pt", **processor_kwargs)
+        full_tokenized = {
+            k: v[0].cpu().tolist() if isinstance(v, torch.Tensor) else v[0] for k, v in full_tokenized.items()
+        }
 
-    # Handle vision model specifics
-    if "pixel_values" in tokenized_example:
-        batch["pixel_values"] = tokenized_example["pixel_values"]
-    if "pixel_attention_mask" in tokenized_example:
-        batch["pixel_attention_mask"] = tokenized_example["pixel_attention_mask"]
-
-    return batch
+        result = {
+            "input_ids": full_tokenized["input_ids"],
+            "attention_mask": full_tokenized["attention_mask"],
+        }
+        if images is not None:
+            result["pixel_values"] = full_tokenized["pixel_values"]
+        return result
+    else:
+        full_tokenized = tokenizer(prompt + answer, add_special_tokens=False)
+        return {
+            "input_ids": full_tokenized["input_ids"],
+            "attention_mask": full_tokenized["attention_mask"],
+        }
 
 
 class DPOTrainer(Trainer):
@@ -660,18 +655,18 @@ class DPOTrainer(Trainer):
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
         with PartialState().local_main_process_first():
+            # tokenize the dataset, lower writer batch size to avoid OOM (frequent in vision models)
             fn_kwargs = {
                 "tokenizer": self.tokenizer,
                 "processor": self.processor if self.is_vision_model else None,
+                "args": args,
             }
-
-            # Tokenize the datasets
             train_dataset = train_dataset.map(
                 _tokenize,
                 fn_kwargs=fn_kwargs,
                 batched=True,
                 num_proc=self.dataset_num_proc,
-                remove_columns=train_dataset.column_names,
+                writer_batch_size=10,
                 desc="Tokenizing train dataset",
             )
             if eval_dataset is not None:
@@ -680,32 +675,9 @@ class DPOTrainer(Trainer):
                     fn_kwargs=fn_kwargs,
                     batched=True,
                     num_proc=self.dataset_num_proc,
-                    remove_columns=eval_dataset.column_names,
+                    writer_batch_size=10,
                     desc="Tokenizing eval dataset",
                 )
-
-        # Process the tokenized datasets
-        fn_kwargs = {
-            "tokenizer": self.tokenizer,
-            "max_length": self.max_length,
-            "max_prompt_length": self.max_prompt_length,
-            "label_pad_token_id": self.label_pad_token_id,
-            "truncation_mode": self.truncation_mode,
-            "is_encoder_decoder": self.is_encoder_decoder,
-        }
-        train_dataset = train_dataset.map(
-            _process_tokens,
-            fn_kwargs=fn_kwargs,
-            num_proc=self.dataset_num_proc,
-            desc="Processing tokenized train dataset",
-        )
-        if eval_dataset is not None:
-            eval_dataset = eval_dataset.map(
-                _process_tokens,
-                fn_kwargs=fn_kwargs,
-                num_proc=self.dataset_num_proc,
-                desc="Processing tokenized eval dataset",
-            )
 
         super().__init__(
             model=model,
