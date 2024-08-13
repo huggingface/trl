@@ -1,4 +1,3 @@
-import multiprocessing
 import sys
 from dataclasses import dataclass, field
 from typing import Optional
@@ -35,6 +34,9 @@ class ScriptArguments:
         default=True, metadata={"help": "Update the main revision of the repository"}
     )
     push_to_hub: Optional[bool] = field(default=False, metadata={"help": "Push the dataset to the Hugging Face Hub"})
+    dataset_num_proc: Optional[int] = field(
+        default=None, metadata={"help": "The number of workers to use to tokenize the data"}
+    )
 
 
 if __name__ == "__main__":
@@ -53,8 +55,12 @@ if __name__ == "__main__":
             ds[key] = ds[key].select(range(50))
     cnndm_batches = ["batch0_cnndm", "cnndm0", "cnndm2"]
     if not args.debug:
-        ds["validation_cnndm"] = ds["validation"].filter(lambda x: x["batch"] in cnndm_batches)
-    ds["validation"] = ds["validation"].filter(lambda x: x["batch"] not in cnndm_batches)
+        ds["validation_cnndm"] = ds["validation"].filter(
+            lambda x: x["batch"] in cnndm_batches, num_proc=args.dataset_num_proc
+        )
+    ds["validation"] = ds["validation"].filter(
+        lambda x: x["batch"] not in cnndm_batches, num_proc=args.dataset_num_proc
+    )
 
     tldr_format_str = "SUBREDDIT: r/{subreddit}\n\nTITLE: {title}\n\nPOST: {post}\n\nTL;DR:"
     cnndm_format_str = "Article:\n{article}\n\nTL;DR:"
@@ -72,8 +78,8 @@ if __name__ == "__main__":
 
     ds = ds.map(
         process,
-        num_proc=1 if args.debug else multiprocessing.cpu_count(),
         load_from_cache_file=False,
+        num_proc=args.dataset_num_proc,
     )
     for key in ds:  # reorder columns
         ds[key] = ds[key].select_columns(
@@ -141,8 +147,8 @@ We take the dataset from https://huggingface.co/datasets/openai/summarize_from_f
 
     sft_ds = sft_ds.map(
         sft_process,
-        num_proc=1 if args.debug else multiprocessing.cpu_count(),
         load_from_cache_file=False,
+        num_proc=args.dataset_num_proc,
     )
     for key in sft_ds:  # reorder columns
         sft_ds[key] = sft_ds[key].select_columns(["prompt", "messages", "id", "subreddit", "title", "post", "summary"])

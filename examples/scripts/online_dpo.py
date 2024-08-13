@@ -92,9 +92,11 @@ if __name__ == "__main__":
     if config.sanity_check:
         for key in ds:
             ds[key] = ds[key].select(range(1024))
-
     train_dataset = ds[args.dataset_train_split]
-    eval_dataset = ds[args.dataset_test_split]
+    if args.dataset_test_split is not None:
+        eval_dataset = ds[args.dataset_test_split]
+    else:
+        eval_dataset = None
 
     ################
     # Training

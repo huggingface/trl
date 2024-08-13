@@ -300,7 +300,6 @@ class PPOv2Trainer(Trainer):
 
         for update in range(1, args.num_total_batches + 1):
             self.state.episode += 1 * args.batch_size
-            self.lr_scheduler.step()
             data = next(iter_dataloader)
             with torch.no_grad():
                 queries = data["input_ids"].to(device)
@@ -530,6 +529,7 @@ class PPOv2Trainer(Trainer):
                 self.state.global_step += 1
                 self.log(metrics)
 
+            self.lr_scheduler.step()
             self.control = self.callback_handler.on_step_end(args, self.state, self.control)
             if self.control.should_save:
                 self._save_checkpoint(model, trial=None, metrics=metrics)

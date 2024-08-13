@@ -52,7 +52,6 @@ python examples/scripts/orpo.py \
     --lora_alpha=16
 """
 
-import multiprocessing
 from dataclasses import dataclass, field
 
 from datasets import load_dataset
@@ -103,8 +102,8 @@ if __name__ == "__main__":
 
     ds = ds.map(
         process,
-        num_proc=1 if orpo_args.debug else multiprocessing.cpu_count(),
         load_from_cache_file=False,
+        num_prc=orpo_args.dataset_num_proc,
     )
     train_dataset = ds["train"]
     eval_dataset = ds["test"]

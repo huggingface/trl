@@ -67,6 +67,7 @@ if is_deepspeed_available():
 
 MODEL_CARD_TEMPLATE = """---
 license: apache-2.0
+library_name: transformers
 tags:
 - trl
 - ppo
