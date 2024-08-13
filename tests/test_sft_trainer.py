@@ -58,13 +58,12 @@ if is_pil_available():
 class SFTTrainerTester(unittest.TestCase):
     r""" """
 
-    @classmethod
-    def setUpClass(cls):
-        cls.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
-        cls.model = AutoModelForCausalLM.from_pretrained(cls.model_id)
-        cls.tokenizer = AutoTokenizer.from_pretrained(cls.model_id)
-        cls.tokenizer.pad_token = cls.tokenizer.eos_token
-        cls.dummy_dataset = Dataset.from_dict(
+    def setUp(self):
+        self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        self.tokenizer.pad_token = self.tokenizer.eos_token
+        self.dummy_dataset = Dataset.from_dict(
             {
                 "question": [
                     "Does llamas know how to code?",
@@ -95,7 +94,7 @@ class SFTTrainerTester(unittest.TestCase):
                 ],
             }
         )
-        cls.dummy_chatml_dataset = Dataset.from_dict(
+        self.dummy_chatml_dataset = Dataset.from_dict(
             {
                 "messages": [
                     [
@@ -115,7 +114,7 @@ class SFTTrainerTester(unittest.TestCase):
                 ]
             }
         )
-        cls.dummy_instruction_dataset = Dataset.from_list(
+        self.dummy_instruction_dataset = Dataset.from_list(
             [
                 {"prompt": "What is 2+2?", "completion": "4"},
                 {"prompt": "What is 3+3?", "completion": "6"},
@@ -133,7 +132,7 @@ class SFTTrainerTester(unittest.TestCase):
         )
 
         if is_pil_available():
-            cls.dummy_vsft_instruction_dataset = Dataset.from_dict(
+            self.dummy_vsft_instruction_dataset = Dataset.from_dict(
                 {
                     "messages": [
                         [
@@ -171,22 +170,23 @@ class SFTTrainerTester(unittest.TestCase):
                     ],
                 }
             )
-            cls.dummy_vsft_instruction_dataset = cls.dummy_vsft_instruction_dataset.cast_column(
+            self.dummy_vsft_instruction_dataset.cast_column("images", Sequence(Image()))
+            self.dummy_vsft_instruction_dataset = self.dummy_vsft_instruction_dataset.cast_column(
                 "images", Sequence(Image())
             )
 
-        cls.train_dataset = ConstantLengthDataset(
-            cls.tokenizer,
-            cls.dummy_dataset,
+        self.train_dataset = ConstantLengthDataset(
+            self.tokenizer,
+            self.dummy_dataset,
             dataset_text_field=None,
             formatting_func=formatting_prompts_func,
             seq_length=16,
             num_of_sequences=16,
         )
 
-        cls.eval_dataset = ConstantLengthDataset(
-            cls.tokenizer,
-            cls.dummy_dataset,
+        self.eval_dataset = ConstantLengthDataset(
+            self.tokenizer,
+            self.dummy_dataset,
             dataset_text_field=None,
             formatting_func=formatting_prompts_func,
             seq_length=16,
@@ -224,6 +224,7 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=2,
                 per_device_train_batch_size=2,
                 hub_token="not_a_real_token",
+                report_to="none",
             )
 
             trainer = SFTTrainer(
@@ -231,6 +232,7 @@ class SFTTrainerTester(unittest.TestCase):
                 args=training_args,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
+                formatting_func=formatting_prompts_func,
             )
 
             assert trainer.args.hub_token == training_args.hub_token
@@ -253,6 +255,7 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=2,
                 per_device_train_batch_size=2,
                 packing=True,
+                report_to="none",
             )
 
             trainer = SFTTrainer(
@@ -280,6 +283,7 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=1,
                 per_device_train_batch_size=2,
                 packing=True,
+                report_to="none",
             )
 
             with pytest.raises(ValueError):
@@ -300,6 +304,7 @@ class SFTTrainerTester(unittest.TestCase):
                 max_seq_length=32,  # make sure there is at least 1 packed sequence
                 num_of_sequences=32,
                 packing=True,
+                report_to="none",
             )
             _ = SFTTrainer(
                 model=self.model,
@@ -316,6 +321,7 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=1,
                 per_device_train_batch_size=2,
                 packing=False,
+                report_to="none",
             )
             _ = SFTTrainer(
                 model=self.model,
@@ -334,6 +340,7 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 max_seq_length=16,  # make sure there is at least 1 packed sequence
                 packing=True,
+                report_to="none",
             )
             _ = SFTTrainer(
                 model=self.model,
@@ -350,6 +357,7 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=1,
                 per_device_train_batch_size=2,
                 packing=False,
+                report_to="none",
             )
             _ = SFTTrainer(
                 model=self.model,
@@ -367,6 +375,7 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 max_seq_length=32,  # make sure there is at least 1 packed sequence
                 packing=True,
+                report_to="none",
             )
             # This should work
             _ = SFTTrainer(
@@ -388,6 +397,7 @@ class SFTTrainerTester(unittest.TestCase):
                     per_device_train_batch_size=2,
                     max_seq_length=1024,  # make sure there is NOT at least 1 packed sequence
                     packing=True,
+                    report_to="none",
                 )
                 _ = SFTTrainer(
                     model=self.model,
@@ -407,6 +417,7 @@ class SFTTrainerTester(unittest.TestCase):
                     save_steps=1,
                     per_device_train_batch_size=2,
                     packing=False,
+                    report_to="none",
                 )
                 _ = SFTTrainer(
                     model=self.model,
@@ -425,6 +436,7 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=1,
                 per_device_train_batch_size=2,
                 packing=False,
+                report_to="none",
             )
             _ = SFTTrainer(
                 model=self.model,
@@ -445,8 +457,8 @@ class SFTTrainerTester(unittest.TestCase):
                 num_train_epochs=2,
                 per_device_train_batch_size=2,
                 packing=True,
+                report_to="none",
             )
-
             trainer = SFTTrainer(
                 model=self.model,
                 args=training_args,
@@ -474,8 +486,8 @@ class SFTTrainerTester(unittest.TestCase):
                 max_seq_length=16,
                 num_of_sequences=16,
                 packing=True,
+                report_to="none",
             )
-
             trainer = SFTTrainer(
                 model=self.model,
                 args=training_args,
@@ -499,8 +511,8 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 dataset_text_field="text",
                 max_seq_length=16,
+                report_to="none",
             )
-
             trainer = SFTTrainer(
                 model=self.model,
                 args=training_args,
@@ -524,8 +536,8 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=1,
                 per_device_train_batch_size=2,
                 packing=True,
+                report_to="none",
             )
-
             trainer = SFTTrainer(
                 model=self.model,
                 args=training_args,
@@ -552,8 +564,8 @@ class SFTTrainerTester(unittest.TestCase):
                 max_seq_length=16,
                 num_of_sequences=16,
                 packing=True,
+                report_to="none",
             )
-
             trainer = SFTTrainer(
                 model=self.model,
                 args=training_args,
@@ -578,8 +590,8 @@ class SFTTrainerTester(unittest.TestCase):
                 max_seq_length=16,
                 num_of_sequences=16,
                 packing=True,
+                report_to="none",
             )
-
             trainer = SFTTrainer(
                 model=self.model,
                 args=training_args,
@@ -603,8 +615,8 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=1,
                 per_device_train_batch_size=2,
                 max_seq_length=16,
+                report_to="none",
             )
-
             trainer = SFTTrainer(
                 model=self.model,
                 args=training_args,
@@ -628,8 +640,8 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 dataset_text_field="text",
                 max_seq_length=16,
+                report_to="none",
             )
-
             trainer = SFTTrainer(
                 model=self.model,
                 args=training_args,
@@ -653,6 +665,7 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=1,
                 per_device_train_batch_size=2,
                 packing=True,
+                report_to="none",
             )
 
             trainer = SFTTrainer(
@@ -776,8 +789,8 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 packing=True,
                 max_seq_length=500,
+                report_to="none",
             )
-
             trainer = SFTTrainer(
                 model=self.model,
                 args=training_args,
@@ -805,8 +818,8 @@ class SFTTrainerTester(unittest.TestCase):
                 save_strategy="epoch",
                 packing=True,
                 max_seq_length=500,
+                report_to="none",
             )
-
             trainer = SFTTrainer(
                 model=self.model,
                 args=training_args,
@@ -835,8 +848,8 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 neftune_noise_alpha=5,
                 packing=True,
+                report_to="none",
             )
-
             trainer = SFTTrainer(
                 model=self.model,
                 args=training_args,
@@ -877,7 +890,11 @@ class SFTTrainerTester(unittest.TestCase):
                 task_type="CAUSAL_LM",
             )
 
-            training_args = SFTConfig(packing=True, output_dir=tmp_dir)
+            training_args = SFTConfig(
+                packing=True,
+                output_dir=tmp_dir,
+                report_to="none",
+            )
 
             _ = SFTTrainer(
                 model=self.model_id,
@@ -899,6 +916,7 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=2,
                 per_device_train_batch_size=2,
                 packing=True,
+                report_to="none",
             )
 
             peft_config = LoraConfig(
@@ -941,6 +959,7 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 gradient_checkpointing=True,
                 packing=True,
+                report_to="none",
             )
 
             peft_config = LoraConfig(
@@ -983,6 +1002,7 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 neftune_noise_alpha=5,
                 packing=True,
+                report_to="none",
             )
 
             peft_config = LoraConfig(
@@ -1045,6 +1065,7 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 gradient_checkpointing=True,
                 packing=True,
+                report_to="none",
             )
 
             peft_config = LoraConfig(
@@ -1078,6 +1099,7 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 gradient_checkpointing=True,
                 packing=True,
+                report_to="none",
             )
 
             trainer = SFTTrainer(
@@ -1103,6 +1125,7 @@ class SFTTrainerTester(unittest.TestCase):
                 packing=True,
                 max_seq_length=32,  # make sure there is at least 1 packed sequence
                 eval_packing=False,
+                report_to="none",
             )
 
             trainer = SFTTrainer(
@@ -1126,6 +1149,7 @@ class SFTTrainerTester(unittest.TestCase):
                 gradient_checkpointing=True,
                 max_seq_length=32,  # make sure there is at least 1 packed sequence
                 packing=True,
+                report_to="none",
             )
             trainer = SFTTrainer(
                 model=self.model_id,
@@ -1148,6 +1172,7 @@ class SFTTrainerTester(unittest.TestCase):
                 gradient_checkpointing=True,
                 max_seq_length=32,  # make sure there is at least 1 packed sequence
                 packing=False,
+                report_to="none",
             )
             trainer = SFTTrainer(
                 model=self.model_id,
@@ -1174,6 +1199,7 @@ class SFTTrainerTester(unittest.TestCase):
                 remove_unused_columns=False,
                 dataset_text_field="text",  # need a dummy field
                 dataset_kwargs={"skip_prepare_dataset": True},
+                report_to="none",
             )
 
             trainer = SFTTrainer(
@@ -1199,6 +1225,7 @@ class SFTTrainerTester(unittest.TestCase):
                 remove_unused_columns=False,
                 packing=False,
                 dataset_kwargs={"skip_prepare_dataset": True},
+                report_to="none",
             )
 
             trainer = SFTTrainer(
@@ -1221,50 +1248,38 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 per_device_eval_batch_size=2,
                 remove_unused_columns=False,
-                dataset_text_field="text",  # need a dummy field
+                dataset_text_field="",  # need a dummy field
                 dataset_kwargs={"skip_prepare_dataset": True},
+                report_to="none",
             )
             tiny_llava = LlavaForConditionalGeneration.from_pretrained(
                 "trl-internal-testing/tiny-random-LlavaForConditionalGeneration"
             )
             processor = AutoProcessor.from_pretrained("trl-internal-testing/tiny-random-LlavaForConditionalGeneration")
 
-            processor.tokenizer.chat_template = """{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. {% for message in messages %}{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}{% if add_generation_prompt %}ASSISTANT: {% endif %}"""
+            processor.chat_template = """{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. {% for message in messages %}{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}{% if add_generation_prompt %}ASSISTANT: {% endif %}"""
 
-            class LLavaDataCollator:
-                def __init__(self, processor):
-                    self.processor = processor
+            def collate_fn(examples):
+                # Get the texts and images, and apply the chat template
+                texts = [processor.apply_chat_template(example["messages"], tokenize=False) for example in examples]
+                images = [example["images"][0] for example in examples]
 
-                def __call__(self, examples):
-                    texts = []
-                    images = []
-                    for example in examples:
-                        if len(example["images"]) > 1:
-                            raise ValueError("This collator only supports one image per example")
-                        messages = example["messages"]
-                        text = self.processor.tokenizer.apply_chat_template(
-                            messages, tokenize=False, add_generation_prompt=False
-                        )
-                        texts.append(text)
-                        images.append(example["images"][0])
+                # Tokenize the texts and process the images
+                batch = processor(texts, images, return_tensors="pt", padding=True)
 
-                    batch = self.processor(texts, images, return_tensors="pt", padding=True)
+                # The labels are the input_ids, and we mask the padding tokens in the loss computation
+                labels = batch["input_ids"].clone()
+                labels[labels == processor.tokenizer.pad_token_id] = -100
+                batch["labels"] = labels
 
-                    labels = batch["input_ids"].clone()
-                    if self.processor.tokenizer.pad_token_id is not None:
-                        labels[labels == self.processor.tokenizer.pad_token_id] = -100
-                    batch["labels"] = labels
-
-                    return batch
-
-            data_collator = LLavaDataCollator(processor)
+                return batch
 
             trainer = SFTTrainer(
                 model=tiny_llava,
                 args=training_args,
+                data_collator=collate_fn,
                 train_dataset=self.dummy_vsft_instruction_dataset,
                 eval_dataset=self.dummy_vsft_instruction_dataset,
-                data_collator=data_collator,
             )
 
             trainer.train()
@@ -1285,12 +1300,14 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=2,
                 per_device_train_batch_size=2,
                 model_init_kwargs={"torch_dtype": torch.float16},
+                report_to="none",
             )
             trainer = SFTTrainer(
                 model=self.model_id,
                 args=training_args,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
+                formatting_func=formatting_prompts_func,
             )
             assert trainer.model.config.torch_dtype == torch.float16
 
@@ -1304,6 +1321,7 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=2,
                 per_device_train_batch_size=2,
                 model_init_kwargs={"torch_dtype": -1},
+                report_to="none",
             )
             with pytest.raises(
                 ValueError,
