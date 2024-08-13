@@ -174,6 +174,7 @@ class GKDTrainer(SFTTrainer):
                     max_new_tokens=self.args.max_new_tokens_response,
                     temperature=self.temperature,
                     do_sample=True,
+                    top_k=0,
                 )
                 attention_mask = inputs["prompts"] != self.tokenizer.pad_token_id
 
