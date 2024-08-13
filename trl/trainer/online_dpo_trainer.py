@@ -623,10 +623,12 @@ class OnlineDPOTrainer(Trainer):
                         postprocessed_response = truncate_response(
                             args.stop_token_id, tokenizer.pad_token_id, response
                         )
-                    table["Query"].extend(gather_object(tokenizer.batch_decode(query, skip_special_tokens=True)))
-                    table["Model response"].extend(
-                        gather_object(tokenizer.batch_decode(postprocessed_response, skip_special_tokens=True))
+                    query_text = tokenizer.batch_decode(query, skip_special_tokens=True)
+                    postprocessed_response_text = tokenizer.batch_decode(
+                        postprocessed_response, skip_special_tokens=True
                     )
+                    table["Query"].extend(gather_object(query_text))
+                    table["Model response"].extend(gather_object(postprocessed_response_text))
 
                     postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
                     if self.reward_model is not None:
