@@ -19,7 +19,7 @@ python examples/scripts/gkd.py \
     --teacher_model_name_or_path="Qwen/Qwen2-1.5B-Instruct" \
     --dataset_text_field="text" \
     --report_to="wandb" \
-    --learning_rate=1.41e-5 \
+    --learning_rate=2e-5 \
     --per_device_train_batch_size=64 \
     --gradient_accumulation_steps=16 \
     --output_dir="gkd_openassistant-guanaco" \
