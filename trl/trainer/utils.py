@@ -880,6 +880,7 @@ class OnPolicyConfig(TrainingArguments):
     """a unique name of this run"""
     sanity_check: bool = False
     """wether to run in debug mode"""
+    dataset_num_proc: Optional[int] = None
 
     # batch size related config
     num_mini_batches: int = 1

@@ -55,7 +55,7 @@ python examples/scripts/bco.py \
 import logging
 from dataclasses import dataclass
 from functools import partial
-from typing import Literal
+from typing import Literal, Optional
 
 import torch
 import torch.nn.functional as F
@@ -76,7 +76,7 @@ class ScriptArguments:
     llm_name: Literal["gpt-3.5-turbo", "llama-2-7b-chat", "llama-2-70b-chat"] = "gpt-3.5-turbo"
 
 
-def build_helpfulness_dataset(llm_name: str) -> Dataset:
+def build_helpfulness_dataset(llm_name: str, num_proc: Optional[int] = None) -> Dataset:
     """
     Filter `llm_name` completions and binarize given their helpfulness score.
     If helpfulness score is 5, it is desirable. Otherwise, it is undesirable.
@@ -100,34 +100,36 @@ def build_helpfulness_dataset(llm_name: str) -> Dataset:
 
     dataset = load_dataset("openbmb/UltraFeedback")["train"]
 
-    ds = dataset.filter(lambda example: llm_name in example["models"], batched=False, num_proc=8)
-    ds = ds.filter(lambda example: len(example["models"]) == len(example["completions"]), batched=False, num_proc=8)
+    ds = dataset.filter(lambda example: llm_name in example["models"], batched=False, num_proc=num_proc)
+    ds = ds.filter(
+        lambda example: len(example["models"]) == len(example["completions"]), batched=False, num_proc=num_proc
+    )
 
     METRIC = "helpfulness"
 
     ds = ds.map(
         get_model_rating,
         batched=False,
-        num_proc=8,
         fn_kwargs={"metric": METRIC, "llm_name": llm_name},
+        num_proc=num_proc,
     )
 
     ds = ds.map(
         get_model_response,
         batched=False,
-        num_proc=8,
         fn_kwargs={"llm_name": llm_name},
+        num_proc=num_proc,
     )
 
     ds = ds.select_columns(["source", "instruction", "response", "helpfulness"])
 
     ds = ds.rename_columns({"instruction": "prompt", "response": "completion"})
-    ds = ds.map(lambda example: {"label": example["helpfulness"] >= 5}, batched=False, num_proc=8)
+    ds = ds.map(lambda example: {"label": example["helpfulness"] >= 5}, batched=False, num_proc=num_proc)
 
     ds = ds.map(
         lambda example: {"prompt": [{"role": "user", "content": example["prompt"]}]},
         batched=False,
-        num_proc=8,
+        num_proc=num_proc,
     )
     dataset = ds.train_test_split(test_size=0.05, seed=42)
 
@@ -182,7 +184,7 @@ if __name__ == "__main__":
         model, tokenizer = setup_chat_format(model, tokenizer)
 
     # Load the dataset
-    dataset = build_helpfulness_dataset(script_args.llm_name)
+    dataset = build_helpfulness_dataset(script_args.llm_name, num_proc=bco_args.dataset_num_proc)
 
     # Apply chat template
     def format_dataset(example):
@@ -192,7 +194,7 @@ if __name__ == "__main__":
         return example
 
     with PartialState().local_main_process_first():
-        formatted_dataset = dataset.map(format_dataset, batched=False, num_proc=8)
+        formatted_dataset = dataset.map(format_dataset, batched=False, num_proc=bco_args.dataset_num_proc)
 
     accelerator = Accelerator()
     embedding_model = AutoModel.from_pretrained(
