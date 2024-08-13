@@ -557,8 +557,9 @@ class BCOTrainer(Trainer):
             # Tokenize and prepare the training datasets
             train_dataset = train_dataset.map(
                 _tokenize,
-                fn_kwargs={"tokenizer": self.tokenizer, "embedding_tokenizer": self.embedding_tokenizer},
                 batched=True,
+                fn_kwargs={"tokenizer": self.tokenizer, "embedding_tokenizer": self.embedding_tokenizer},
+                num_proc=args.dataset_num_proc,
                 desc="Tokenizing train dataset",
             )
 
@@ -586,6 +587,7 @@ class BCOTrainer(Trainer):
                     _tokenize,
                     fn_kwargs={"tokenizer": self.tokenizer, "embedding_tokenizer": self.embedding_tokenizer},
                     batched=True,
+                    num_proc=args.dataset_num_proc,
                     desc="Tokenizing eval dataset",
                 )
 

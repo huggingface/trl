@@ -59,7 +59,7 @@ class ScriptArguments:
     max_length: int = 512
 
 
-def prepare_dataset(dataset, tokenizer, dataset_text_field):
+def prepare_dataset(dataset, tokenizer, dataset_text_field, num_proc):
     """pre-tokenize the dataset before training; only collate during training"""
 
     def tokenize(element):
@@ -73,7 +73,7 @@ def prepare_dataset(dataset, tokenizer, dataset_text_field):
         tokenize,
         remove_columns=dataset.column_names,
         batched=True,
-        num_proc=4,  # multiprocessing.cpu_count(),
+        num_proc=num_proc,
         load_from_cache_file=False,
     )
 
@@ -105,11 +105,11 @@ if __name__ == "__main__":
         for key in raw_datasets:
             raw_datasets[key] = raw_datasets[key].select(range(1024))
     train_dataset = raw_datasets[args.dataset_train_split]
-    train_dataset = prepare_dataset(train_dataset, tokenizer, args.dataset_text_field)
+    train_dataset = prepare_dataset(train_dataset, tokenizer, args.dataset_text_field, config.dataset_num_proc)
 
     if args.dataset_test_split is not None:
         eval_dataset = raw_datasets[args.dataset_test_split]
-        eval_dataset = prepare_dataset(eval_dataset, tokenizer, args.dataset_text_field)
+        eval_dataset = prepare_dataset(eval_dataset, tokenizer, args.dataset_text_field, config.dataset_num_proc)
     else:
         eval_dataset = None
     ################
