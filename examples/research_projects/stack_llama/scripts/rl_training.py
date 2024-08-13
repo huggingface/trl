@@ -154,7 +154,7 @@ def build_dataset(
         num_proc=num_proc,
         remove_columns=original_columns,
     )
-    ds = ds.filter(lambda x: len(x["input_ids"]) < 512, batched=False)
+    ds = ds.filter(lambda x: len(x["input_ids"]) < 512, batched=False, num_proc=num_proc)
 
     ds.set_format(type="torch")
     return ds

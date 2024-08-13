@@ -36,3 +36,4 @@ class RewardConfig(TrainingArguments):
 
     max_length: Optional[int] = None
     """The maximum length of the sequences in the batch. This argument is required if you want to use the default data collator."""
+    dataset_num_proc: Optional[int] = None

@@ -161,8 +161,8 @@ if __name__ == "__main__":
 
     ds = ds.map(
         process,
-        num_proc=multiprocessing.cpu_count(),
         load_from_cache_file=False,
+        num_proc=training_args.dataset_num_proc,
     )
     train_dataset = ds[args.dataset_train_split]
     eval_dataset = ds[args.dataset_test_split]
