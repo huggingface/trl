@@ -171,7 +171,7 @@ class GKDTrainer(SFTTrainer):
             # On-policy: Generate outputs from the student model with temperature self.temperature
             with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
                 generation_config = GenerationConfig(
-                    max_new_tokens=self.args.max_new_tokens_response,
+                    max_new_tokens=self.args.max_new_tokens,
                     temperature=self.temperature,
                     do_sample=True,
                     top_k=0,
