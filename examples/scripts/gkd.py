@@ -38,7 +38,7 @@ python examples/scripts/gkd.py \
     --learning_rate=2e-4 \
     --per_device_train_batch_size=64 \
     --gradient_accumulation_steps=16 \
-    --output_dir="sft_openassistant-guanaco" \
+    --output_dir="gkd-model" \
     --logging_steps=1 \
     --num_train_epochs=3 \
     --max_steps=-1 \
