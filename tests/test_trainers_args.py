@@ -197,10 +197,6 @@ class TrainerArgTester(unittest.TestCase):
                 model_init_kwargs={"trust_remote_code": True},
                 ref_model_init_kwargs={"trust_remote_code": True},
                 dataset_num_proc=4,
-                loss_type="bco",
-                prompt_sample_size=512,
-                min_density_ratio=0.2,
-                max_density_ratio=20.0,
             )
             trainer = KTOTrainer(model="gpt2", ref_model="gpt2", args=args, train_dataset=dataset, tokenizer=tokenizer)
             self.assertEqual(trainer.args.max_length, 256)
