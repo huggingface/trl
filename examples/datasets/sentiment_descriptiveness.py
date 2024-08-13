@@ -109,7 +109,7 @@ if __name__ == "__main__":
             return True
 
     print("=== Before filtering ===", ds)
-    ds = ds.filter(filter, load_from_cache_file=False)
+    ds = ds.filter(filter, load_from_cache_file=False, num_proc=args.dataset_num_proc)
     print("=== After filtering ===", ds)
 
     # here we simply take the preferred sample as the chosen one and the first non-preferred sample as the rejected one

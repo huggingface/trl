@@ -55,8 +55,12 @@ if __name__ == "__main__":
             ds[key] = ds[key].select(range(50))
     cnndm_batches = ["batch0_cnndm", "cnndm0", "cnndm2"]
     if not args.debug:
-        ds["validation_cnndm"] = ds["validation"].filter(lambda x: x["batch"] in cnndm_batches)
-    ds["validation"] = ds["validation"].filter(lambda x: x["batch"] not in cnndm_batches)
+        ds["validation_cnndm"] = ds["validation"].filter(
+            lambda x: x["batch"] in cnndm_batches, num_proc=args.dataset_num_proc
+        )
+    ds["validation"] = ds["validation"].filter(
+        lambda x: x["batch"] not in cnndm_batches, num_proc=args.dataset_num_proc
+    )
 
     tldr_format_str = "SUBREDDIT: r/{subreddit}\n\nTITLE: {title}\n\nPOST: {post}\n\nTL;DR:"
     cnndm_format_str = "Article:\n{article}\n\nTL;DR:"
