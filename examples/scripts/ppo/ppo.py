@@ -91,10 +91,10 @@ if __name__ == "__main__":
 
         return dataset.map(
             tokenize,
-            remove_columns=dataset.column_names,
             batched=True,
-            num_proc=4,  # multiprocessing.cpu_count(),
+            remove_columns=dataset.column_names,
             load_from_cache_file=False,
+            num_proc=config.dataset_num_proc,
         )
 
     ################

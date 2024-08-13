@@ -41,6 +41,9 @@ class ScriptArguments:
     )
     push_to_hub: Optional[bool] = field(default=False, metadata={"help": "Push the dataset to the Hugging Face Hub"})
     task: str = field(default="sentiment", metadata={"help": "The task of the dataset"})
+    dataset_num_proc: Optional[int] = field(
+        default=None, metadata={"help": "The number of workers to use to tokenize the data"}
+    )
 
 
 task_to_filename = {
@@ -147,6 +150,7 @@ if __name__ == "__main__":
         process,
         batched=True,
         load_from_cache_file=False,
+        num_proc=args.dataset_num_proc,
     )
     for key in ds:  # reorder columns
         ds[key] = ds[key].select_columns(["prompt", "chosen", "rejected"])

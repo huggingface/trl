@@ -84,7 +84,7 @@ def build_dataset(config, query_dataset, input_min_text_length=2, input_max_text
         sample["query"] = tokenizer.decode(sample["input_ids"])
         return sample
 
-    ds = ds.map(tokenize, batched=False)
+    ds = ds.map(tokenize, batched=False, num_proc=args.dataset_num_proc)
     ds.set_format(type="torch")
     return ds
 

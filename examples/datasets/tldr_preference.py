@@ -1,4 +1,3 @@
-import multiprocessing
 import sys
 from dataclasses import dataclass, field
 from typing import Optional
@@ -35,6 +34,9 @@ class ScriptArguments:
         default=True, metadata={"help": "Update the main revision of the repository"}
     )
     push_to_hub: Optional[bool] = field(default=False, metadata={"help": "Push the dataset to the Hugging Face Hub"})
+    dataset_num_proc: Optional[int] = field(
+        default=None, metadata={"help": "The number of workers to use to tokenize the data"}
+    )
 
 
 if __name__ == "__main__":
@@ -72,8 +74,8 @@ if __name__ == "__main__":
 
     ds = ds.map(
         process,
-        num_proc=1 if args.debug else multiprocessing.cpu_count(),
         load_from_cache_file=False,
+        num_proc=args.dataset_num_proc,
     )
     for key in ds:  # reorder columns
         ds[key] = ds[key].select_columns(
@@ -141,8 +143,8 @@ We take the dataset from https://huggingface.co/datasets/openai/summarize_from_f
 
     sft_ds = sft_ds.map(
         sft_process,
-        num_proc=1 if args.debug else multiprocessing.cpu_count(),
         load_from_cache_file=False,
+        num_proc=args.dataset_num_proc,
     )
     for key in sft_ds:  # reorder columns
         sft_ds[key] = sft_ds[key].select_columns(["prompt", "messages", "id", "subreddit", "title", "post", "summary"])

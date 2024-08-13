@@ -1,4 +1,3 @@
-import multiprocessing
 import shutil
 
 from datasets import load_dataset
@@ -98,8 +97,8 @@ if __name__ == "__main__":
         return dataset.map(
             tokenize,
             remove_columns=dataset.column_names,
-            num_proc=1 if config.sanity_check else multiprocessing.cpu_count(),
             load_from_cache_file=not config.sanity_check,
+            num_proc=config.dataset_num_proc,
         )
 
     train_dataset = prepare_dataset(train_dataset, tokenizer)
