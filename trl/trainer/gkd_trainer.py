@@ -107,7 +107,7 @@ class GKDTrainer(SFTTrainer):
         kl_student = F.kl_div(interpolated_log_probs, student_log_probs, reduction="none", log_target=True)
 
         # Compute the Generalized Jensen-Shannon Divergence
-        jsd = beta * kl_student + (1 - beta) * kl_teacher
+        jsd = beta * kl_teacher + (1 - beta) * kl_student
 
         # Apply reduction
         if reduction == "batchmean":
