@@ -102,7 +102,7 @@ if __name__ == "__main__":
         example["completion"] = tokenizer.apply_chat_template(example["completion"], tokenize=False)
         return example
 
-    formatted_dataset = dataset.map(format_dataset)
+    formatted_dataset = dataset.map(format_dataset, num_proc=kto_args.dataset_num_proc)
 
     # Initialize the KTO trainer
     kto_trainer = KTOTrainer(

@@ -87,7 +87,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
             tokenize,
             remove_columns=dummy_dataset.column_names,
             batched=True,
-            num_proc=4,  # multiprocessing.cpu_count(),
+            num_proc=4,
             load_from_cache_file=False,
         )
 
