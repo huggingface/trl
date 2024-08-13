@@ -16,7 +16,7 @@
 # Full training:
 python examples/scripts/gkd.py \
     --model_name_or_path="Qwen/Qwen2-0.5B-Instruct" \
-    --teacher_model_name_or_path="facebook/opt-350m" \
+    --teacher_model_name_or_path="Qwen/Qwen2-1.5B-Instruct" \
     --dataset_text_field="text" \
     --report_to="wandb" \
     --learning_rate=1.41e-5 \
