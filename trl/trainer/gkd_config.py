@@ -29,7 +29,7 @@ class GKDConfig(SFTConfig):
             The parameter that controls the student data fraction (i.e., the proportion of on-policy student-generated outputs).
         beta (:obj:`float`, `optional`, defaults to 0.5):
             Interpolation coefficient between 0 and 1 of the Generalized Jensen-Shannon Divergence loss. When beta is 0, the loss is the KL divergence. When beta is 1, the loss is the Inverse KL Divergence.
-        max_new_tokens_response (:obj:`int`, `optional`, defaults to 128):
+        max_new_tokens (:obj:`int`, `optional`, defaults to 128):
             The maximum number of tokens to generate in the response.
         teacher_model_name_or_path (:obj:`str`, `optional`, defaults to `None`):
             The model name or path of the teacher model. If `None`, the teacher model will be the same as the model
