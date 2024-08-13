@@ -87,8 +87,15 @@ class OnlineDPOTrainer(Trainer):
 
         self.train_dataset_len = len(train_dataset)
 
-        default_collator = default_data_collator if tokenizer is None else DPODataCollatorWithPadding()
-        self.data_collator = data_collator if data_collator is not None else default_collator
+        # Define the collator
+        if data_collator is None:
+            if tokenizer is not None:
+                self.data_collator = DPODataCollatorWithPadding(pad_token_id=tokenizer.pad_token_id)
+            else:  # tokenizer is None
+                self.data_collator = default_data_collator
+        else:
+            self.data_collator = data_collator
+
         self.optimizer, self.lr_scheduler = optimizers
         self.num_generation_per_prompt = 2
 
@@ -569,7 +576,6 @@ class OnlineDPOTrainer(Trainer):
                 metrics["loss/policy_avg"] = self.accelerator.gather(loss_stats).mean().item()
                 metrics["logps/chosen"] = self.accelerator.gather(chosen_logprobs_stats).mean().item()
                 metrics["logps/rejected"] = self.accelerator.gather(rejected_logprobs_stats).mean().item()
-                print(responses.tolist())
                 metrics["val/num_eos_tokens"] = (responses == tokenizer.eos_token_id).sum().item()
                 metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
                 metrics["episode"] = self.state.episode
