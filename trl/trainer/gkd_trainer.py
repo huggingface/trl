@@ -138,7 +138,7 @@ class GKDTrainer(SFTTrainer):
         for i in range(batch_size):
             index = (inputs["labels"] != -100)[i]
             student_logits = outputs_student.logits[i, index, :][-self.args.max_new_tokens_response :, :]
-            teacher_logits = outputs_teacher.logits[i, index, :][-self.args.max_new_tokens_response :, :]
+            teacher_logits = outputs_teacher.logits[i, index, :][-self.args.max_new_tokens :, :]
             loss += self.generalized_jsd_loss(
                 student_logits=student_logits,
                 teacher_logits=teacher_logits,
