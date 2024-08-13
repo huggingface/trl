@@ -93,7 +93,6 @@ if __name__ == "__main__":
             tokenize,
             batched=True,
             remove_columns=dataset.column_names,
-            load_from_cache_file=False,
             num_proc=config.dataset_num_proc,
         )
 

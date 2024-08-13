@@ -75,7 +75,6 @@ def prepare_dataset(dataset, tokenizer, dataset_text_field, num_proc):
         remove_columns=dataset.column_names,
         batched=True,
         num_proc=num_proc,
-        load_from_cache_file=False,
     )
 
 

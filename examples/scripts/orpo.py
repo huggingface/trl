@@ -104,11 +104,7 @@ if __name__ == "__main__":
     # Compute that only on the main process for faster data processing.
     # see: https://github.com/huggingface/trl/pull/1255
     with PartialState().local_main_process_first():
-        ds = ds.map(
-            process,
-            load_from_cache_file=False,
-            num_prc=orpo_args.dataset_num_proc,
-        )
+        ds = ds.map(process, num_prc=orpo_args.dataset_num_proc)
 
     train_dataset = ds["train"]
     eval_dataset = ds["test"]
