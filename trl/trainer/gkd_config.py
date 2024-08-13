@@ -25,8 +25,8 @@ class GKDConfig(SFTConfig):
     Args:
         temperature (:obj:`float`, `optional`, defaults to 1.0):
             The temperature to use in the generation when sampling from the model.
-        lambda (:obj:`float`, `optional`, defaults to 0.5):
-            The parameter that controls the student data fraction (i.e., the proportion of on-policy student-generated outputs).
+        lmbda (:obj:`float`, `optional`, defaults to 0.5):
+            The lambda parameter that controls the student data fraction (i.e., the proportion of on-policy student-generated outputs).
         beta (:obj:`float`, `optional`, defaults to 0.5):
             Interpolation coefficient between 0 and 1 of the Generalized Jensen-Shannon Divergence loss. When beta is 0, the loss is the KL divergence. When beta is 1, the loss is the Inverse KL Divergence.
         max_new_tokens (:obj:`int`, `optional`, defaults to 128):
@@ -42,7 +42,7 @@ class GKDConfig(SFTConfig):
     """
 
     temperature: float = 1.0
-    lambda: float = 0.5
+    lmbda: float = 0.5
     beta: float = 0.5
     max_new_tokens_response: int = 128
     teacher_model_name_or_path: Optional[str] = None
@@ -52,7 +52,7 @@ class GKDConfig(SFTConfig):
     def __post_init__(self):
         super().__post_init__()
         # check lambda and beta are in the range [0, 1]
-        if self.lambda < 0 or self.lambda > 1:
-            raise ValueError("Lambda must be in the range [0, 1].")
+        if self.lmbda < 0 or self.lmbda > 1:
+            raise ValueError("lmbda must be in the range [0, 1].")
         if self.beta < 0 or self.beta > 1:
-            raise ValueError("Beta must be in the range [0, 1].")
+            raise ValueError("beta must be in the range [0, 1].")
