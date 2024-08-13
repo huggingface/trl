@@ -42,9 +42,17 @@ class GKDConfig(SFTConfig):
     """
 
     temperature: float = 1.0
-    lmbda: float = 0.5
+    lambda: float = 0.5
     beta: float = 0.5
     max_new_tokens_response: int = 128
     teacher_model_name_or_path: Optional[str] = None
     teacher_model_init_kwargs: Optional[Dict] = None
     disable_dropout: bool = True
+
+    def __post_init__(self):
+        super().__post_init__()
+        # check lambda and beta are in the range [0, 1]
+        if self.lambda < 0 or self.lambda > 1:
+            raise ValueError("Lambda must be in the range [0, 1].")
+        if self.beta < 0 or self.beta > 1:
+            raise ValueError("Beta must be in the range [0, 1].")

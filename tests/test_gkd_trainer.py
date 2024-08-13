@@ -44,7 +44,6 @@ if is_peft_available():
 
 
 class GKDTrainerTester(unittest.TestCase):
-
     def setUp(self):
         self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)

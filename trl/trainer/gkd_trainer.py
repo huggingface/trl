@@ -100,7 +100,7 @@ class GKDTrainer(SFTTrainer):
         teacher_log_probs = F.log_softmax(teacher_logits, dim=-1)
 
         # Compute the interpolated log probabilities
-        interpolated_log_probs = beta * teacher_log_probs + (1 - beta) * student_log_probs
+        interpolated_log_probs = beta * student_log_probs + (1 - beta) * teacher_log_probs
 
         # Compute KL divergences using F.kl_div
         kl_teacher = F.kl_div(interpolated_log_probs, teacher_log_probs, reduction="none", log_target=True)
