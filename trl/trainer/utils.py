@@ -31,6 +31,7 @@ from torch.utils.data import IterableDataset
 from transformers import (
     BitsAndBytesConfig,
     DataCollatorForLanguageModeling,
+    GenerationConfig,
     PreTrainedTokenizerBase,
     TrainerState,
     TrainingArguments,
@@ -1108,7 +1109,7 @@ def truncate_response(stop_token_id: int, pad_token_id: int, responses: torch.Te
 
 
 def generate(
-    lm_backbone: torch.nn.Module, queries: torch.Tensor, pad_token_id: int, generation_config: dict
+    lm_backbone: torch.nn.Module, queries: torch.Tensor, pad_token_id: int, generation_config: GenerationConfig
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Generates sequences from the language model backbone in a way that does not affect padding tokens.
@@ -1120,8 +1121,8 @@ def generate(
             The tensor containing the input queries.
         pad_token_id (`int`):
             The token ID representing the pad token.
-        generation_config (`dict`):
-            The configuration dictionary for generation settings.
+        generation_config (`GenerationConfig`):
+            The configuration for the generation process.
 
     Returns:
         tuple:
@@ -1152,7 +1153,7 @@ def batch_generation(
     queries: torch.Tensor,
     local_rollout_forward_batch_size: int,
     pad_token_id: int,
-    generation_config: dict,
+    generation_config: GenerationConfig,
 ):
     query_responses = []
     logitss = []
