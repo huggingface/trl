@@ -9,7 +9,7 @@ The GKD Trainer is a wrapper around the `SFTTrainer` class that takes in a teach
 * `lambda`:  controls the student data fraction, i.e., the proportion of on-policy student-generated outputs. When `lambda=0`, the loss reduces to supervised KD where the student is trained with the token-level probabilities of the teacher. When `lambda=1`, the loss reduces to on-policy KD, where the student generates output sequences and token-specific feedback on these sequences from the teacher. For values in between [0,1] it interpolates between the two;
 * `beta`: controls the interpolation in the generalized Jensen-Shannon Divergence.  When `beta=0` the loss approximates forward KL divergence, while for `beta=1` the loss approximates reverse KL divergence. For values in between [0,1] it interpolates between the two.
 
-The authors find that on-policy data (high `lmbda`) performs better and the optimal `beta` varied depending on the task and evaluation method.
+The authors find that on-policy data (high `lambda`) performs better and the optimal `beta` varied depending on the task and evaluation method.
 
 ## GKDTrainer
 
