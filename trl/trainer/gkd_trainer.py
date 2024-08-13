@@ -153,7 +153,6 @@ class GKDTrainer(SFTTrainer):
         """
         Perform a training step on a batch of inputs.
 
-        Subclass and override to inject custom behavior.
 
         Args:
             model (`nn.Module`):
