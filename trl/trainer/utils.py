@@ -552,7 +552,6 @@ class ConstantLengthDataset(IterableDataset):
 
 @dataclass
 class RunningMoments:
-
     """
     Calculates the running mean and standard deviation of a data stream. Reference:
     https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/utils.py#L75
@@ -1176,17 +1175,18 @@ def add_bos_token_if_needed(
     chosen_tokens: Dict[str, List[int]],
     rejected_prompt_len_input_ids: int,
     rejected_tokens: Dict[str, List[int]],
+    prefix: str = "prompt_",
 ):
     if bos_token_id is not None:
-        if prompt_len_input_ids == 0 or bos_token_id != prompt_tokens["prompt_input_ids"][0]:
-            prompt_tokens["prompt_input_ids"] = [bos_token_id] + prompt_tokens["prompt_input_ids"]
-            prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens["prompt_attention_mask"]
-        if chosen_prompt_len_input_ids == 0 or bos_token_id != chosen_tokens["prompt_input_ids"][0]:
-            chosen_tokens["prompt_input_ids"] = [bos_token_id] + chosen_tokens["prompt_input_ids"]
-            chosen_tokens["prompt_attention_mask"] = [1] + chosen_tokens["prompt_attention_mask"]
-        if rejected_prompt_len_input_ids == 0 or bos_token_id != rejected_tokens["prompt_input_ids"][0]:
-            rejected_tokens["prompt_input_ids"] = [bos_token_id] + rejected_tokens["prompt_input_ids"]
-            rejected_tokens["prompt_attention_mask"] = [1] + rejected_tokens["prompt_attention_mask"]
+        if prompt_len_input_ids == 0 or bos_token_id != prompt_tokens[f"{prefix}input_ids"][0]:
+            prompt_tokens[f"{prefix}input_ids"] = [bos_token_id] + prompt_tokens[f"{prefix}input_ids"]
+            prompt_tokens[f"{prefix}attention_mask"] = [1] + prompt_tokens[f"{prefix}attention_mask"]
+        if chosen_prompt_len_input_ids == 0 or bos_token_id != chosen_tokens[f"{prefix}input_ids"][0]:
+            chosen_tokens[f"{prefix}input_ids"] = [bos_token_id] + chosen_tokens[f"{prefix}input_ids"]
+            chosen_tokens[f"{prefix}attention_mask"] = [1] + chosen_tokens[f"{prefix}attention_mask"]
+        if rejected_prompt_len_input_ids == 0 or bos_token_id != rejected_tokens[f"{prefix}input_ids"][0]:
+            rejected_tokens[f"{prefix}input_ids"] = [bos_token_id] + rejected_tokens[f"{prefix}input_ids"]
+            rejected_tokens[f"{prefix}attention_mask"] = [1] + rejected_tokens[f"{prefix}attention_mask"]
     return prompt_tokens, chosen_tokens, rejected_tokens
 
 

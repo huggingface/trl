@@ -48,6 +48,8 @@ from .dpo_config import DPOConfig, FDivergenceConstants, FDivergenceType
 from .utils import (
     DPODataCollatorWithPadding,
     RunningMoments,
+    add_bos_token_if_needed,
+    add_eos_token_if_needed,
     cap_exp,
     disable_dropout_in_model,
     pad_to_length,
@@ -101,10 +103,22 @@ def _tokenize_feature(feature: Dict[str, Any], tokenizer, processor=None, args=N
 
     if processor is not None:
         prompt_tokens = _build_tokenized_answer(prompt, "", images, processor=processor)
-        chosen_tokens = _build_tokenized_answer(prompt, chosen, None, processor=processor)  # No images for chosen
-        rejected_tokens = _build_tokenized_answer(
-            prompt, rejected, None, processor=processor
-        )  # No images for rejected
+        chosen_tokens = _build_tokenized_answer(prompt, chosen, None, processor=processor)
+        rejected_tokens = _build_tokenized_answer(prompt, rejected, None, processor=processor)
+        prompt_tokens, chosen_tokens, rejected_tokens = add_bos_token_if_needed(
+            tokenizer.bos_token_id,
+            len(prompt_tokens["input_ids"]),
+            prompt_tokens,
+            len(chosen_tokens["input_ids"]),
+            chosen_tokens,
+            len(rejected_tokens["input_ids"]),
+            rejected_tokens,
+            prefix="",
+        )
+
+        chosen_tokens, rejected_tokens = add_eos_token_if_needed(
+            tokenizer.eos_token_id, chosen_tokens, rejected_tokens
+        )
 
         return {
             "prompt_input_ids": prompt_tokens["input_ids"],
@@ -122,6 +136,21 @@ def _tokenize_feature(feature: Dict[str, Any], tokenizer, processor=None, args=N
         prompt_tokens = _build_tokenized_answer(prompt, "", images, tokenizer=tokenizer)
         chosen_tokens = _build_tokenized_answer(prompt, chosen, images, tokenizer=tokenizer)
         rejected_tokens = _build_tokenized_answer(prompt, rejected, images, tokenizer=tokenizer)
+
+        prompt_tokens, chosen_tokens, rejected_tokens = add_bos_token_if_needed(
+            tokenizer.bos_token_id,
+            len(prompt_tokens["input_ids"]),
+            prompt_tokens,
+            len(chosen_tokens["input_ids"]),
+            chosen_tokens,
+            len(rejected_tokens["input_ids"]),
+            rejected_tokens,
+            prefix="",
+        )
+
+        chosen_tokens, rejected_tokens = add_eos_token_if_needed(
+            tokenizer.eos_token_id, chosen_tokens, rejected_tokens
+        )
 
         # Truncation logic
         for tokens in [prompt_tokens, chosen_tokens, rejected_tokens]:
