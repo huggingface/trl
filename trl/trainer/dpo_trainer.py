@@ -1195,26 +1195,21 @@ class DPOTrainer(Trainer):
             # Eqn (7) of the APO paper (https://huggingface.co/papers/2408.06266)
             # Use this loss when you believe the chosen outputs are better than your model's default output
 
-            losses_chosen = 1 - F.sigmoid(self.beta * chosen_logratios) # Increase chosen likelihood
-            losses_rejected = F.sigmoid(self.beta * rejected_logratios) # Decrease rejected likelihood
+            losses_chosen = 1 - F.sigmoid(self.beta * chosen_logratios)  # Increase chosen likelihood
+            losses_rejected = F.sigmoid(self.beta * rejected_logratios)  # Decrease rejected likelihood
 
-            losses = (
-                losses_chosen +
-                losses_rejected
-            )
+            losses = losses_chosen + losses_rejected
 
         elif self.loss_type == "apo_down":
             # Eqn (8) of the APO paper (https://huggingface.co/papers/2408.06266)
             # Use this loss when you believe the chosen outputs are worse than your model's default output
 
-            losses_chosen = F.sigmoid(self.beta * chosen_logratios) # Decrease chosen likelihood
-            losses_rejected = 1 - F.sigmoid(self.beta * (chosen_logratios - rejected_logratios)) # Decrease rejected likelihood more
+            losses_chosen = F.sigmoid(self.beta * chosen_logratios)  # Decrease chosen likelihood
+            losses_rejected = 1 - F.sigmoid(
+                self.beta * (chosen_logratios - rejected_logratios)
+            )  # Decrease rejected likelihood more
 
-            losses = (
-                losses_chosen +
-                losses_rejected
-            )
-
+            losses = losses_chosen + losses_rejected
 
         else:
             raise ValueError(
