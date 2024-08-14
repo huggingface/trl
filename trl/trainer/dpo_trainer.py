@@ -1231,7 +1231,7 @@ class DPOTrainer(Trainer):
 
         if self.is_encoder_decoder:
             model_kwargs["labels"] = concatenated_batch["concatenated_labels"]
-            model_kwargs["decoder_input_ids"] = concatenated_batch.pop("concatenated_decoder_input_ids", None)
+            model_kwargs["decoder_input_ids"] = concatenated_batch.get("concatenated_decoder_input_ids")
 
         if self.is_vision_model:
             model_kwargs["pixel_values"] = concatenated_batch["pixel_values"]
@@ -1382,8 +1382,13 @@ class DPOTrainer(Trainer):
                 "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
             )
 
-        compute_loss_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
+        if self.is_encoder_decoder:
+            # For encoder-decoder models, we need to use the prepared decoder_input_ids
+            inputs["decoder_input_ids"] = torch.cat(
+                [inputs["chosen_decoder_input_ids"], inputs["rejected_decoder_input_ids"]], dim=0
+            )
 
+        compute_loss_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
         with compute_loss_context_manager:
             loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="train")
 
