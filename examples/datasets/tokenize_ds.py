@@ -38,9 +38,5 @@ if __name__ == "__main__":
         row["rejected"] = tokenizer.apply_chat_template(row["rejected"], tokenize=False)
         return row
 
-    ds = ds.map(
-        process,
-        load_from_cache_file=False,
-        num_proc=args.dataset_num_proc,
-    )
+    ds = ds.map(process, num_proc=args.dataset_num_proc)
     print(ds["train"][0]["chosen"])
