@@ -96,48 +96,18 @@ def _tokenize(feature_batch: Dict[str, List[Any]], tokenizer, processor=None, ar
     return tokenized_batch
 
 
-def _tokenize_feature(feature: Dict[str, Any], tokenizer, processor=None, args=None) -> Dict[str, Any]:
+def _tokenize_feature(
+    feature: Dict[str, Any], tokenizer: PreTrainedTokenizerBase, processor=None, args=None
+) -> Dict[str, Any]:
     prompt = feature["prompt"]
     chosen = feature["chosen"]
     rejected = feature["rejected"]
     images = feature.get("images")
 
-    if processor is not None:
-        prompt_tokens = _build_tokenized_answer(prompt, "", images, processor=processor)
-        chosen_tokens = _build_tokenized_answer(prompt, chosen, None, processor=processor)
-        rejected_tokens = _build_tokenized_answer(prompt, rejected, None, processor=processor)
-        prompt_tokens, chosen_tokens, rejected_tokens = add_bos_token_if_needed(
-            tokenizer.bos_token_id,
-            len(prompt_tokens["input_ids"]),
-            prompt_tokens,
-            len(chosen_tokens["input_ids"]),
-            chosen_tokens,
-            len(rejected_tokens["input_ids"]),
-            rejected_tokens,
-            prefix="",
-        )
-
-        chosen_tokens, rejected_tokens = add_eos_token_if_needed(
-            tokenizer.eos_token_id, chosen_tokens, rejected_tokens
-        )
-
-        return {
-            "prompt_input_ids": prompt_tokens["input_ids"],
-            "prompt_attention_mask": prompt_tokens["attention_mask"],
-            "chosen_input_ids": chosen_tokens["input_ids"],
-            "chosen_attention_mask": chosen_tokens["attention_mask"],
-            "rejected_input_ids": rejected_tokens["input_ids"],
-            "rejected_attention_mask": rejected_tokens["attention_mask"],
-            "chosen_labels": chosen_tokens["input_ids"],
-            "rejected_labels": rejected_tokens["input_ids"],
-            "prompt_pixel_values": prompt_tokens["pixel_values"],
-            "prompt_pixel_attention_mask": prompt_tokens["pixel_attention_mask"],
-        }
-
-    elif not args.is_encoder_decoder:
-        prompt_tokens = _build_tokenized_answer(prompt, "", images, tokenizer=tokenizer)
-        chosen_tokens = _build_tokenized_answer(prompt, chosen, images, tokenizer=tokenizer)
-        rejected_tokens = _build_tokenized_answer(prompt, rejected, images, tokenizer=tokenizer)
+    if not args.is_encoder_decoder:
+        prompt_tokens = _build_tokenized_answer(prompt, "", images, processor=processor, tokenizer=tokenizer)
+        chosen_tokens = _build_tokenized_answer(prompt, chosen, images=None, processor=processor, tokenizer=tokenizer)
+        rejected_tokens = _build_tokenized_answer(prompt, rejected, images=None, processor=processor, tokenizer=tokenizer)
 
         prompt_tokens, chosen_tokens, rejected_tokens = add_bos_token_if_needed(
             tokenizer.bos_token_id,
@@ -159,10 +129,10 @@ def _tokenize_feature(feature: Dict[str, Any], tokenizer, processor=None, args=N
             if len(tokens["input_ids"]) > args.max_length:
                 if args.truncation_mode == "keep_start":
                     for k in ["input_ids", "attention_mask"]:
-                        tokens[k] = tokens[k][: args.max_prompt_length]
+                        tokens[k] = tokens[k][: args.max_length]
                 elif args.truncation_mode == "keep_end":
                     for k in ["input_ids", "attention_mask"]:
-                        tokens[k] = tokens[k][-args.max_prompt_length :]
+                        tokens[k] = tokens[k][-args.max_length :]
                 else:
                     raise ValueError(f"Unknown truncation mode: {args.truncation_mode}")
 
@@ -174,7 +144,7 @@ def _tokenize_feature(feature: Dict[str, Any], tokenizer, processor=None, args=N
             prompt_tokens["input_ids"]
         )
 
-        return {
+        result = {
             "prompt_input_ids": prompt_tokens["input_ids"],
             "prompt_attention_mask": prompt_tokens["attention_mask"],
             "chosen_input_ids": chosen_tokens["input_ids"],
@@ -184,6 +154,11 @@ def _tokenize_feature(feature: Dict[str, Any], tokenizer, processor=None, args=N
             "chosen_labels": chosen_labels,
             "rejected_labels": rejected_labels,
         }
+        if processor is not None:
+            result["prompt_pixel_values"] = prompt_tokens["pixel_values"]
+            if "pixel_attention_mask" in prompt_tokens:
+                result["prompt_pixel_attention_mask"] = prompt_tokens["pixel_attention_mask"]
+        return result
     else:
         chosen_tokens = tokenizer(chosen, truncation=True, max_length=args.max_target_length, add_special_tokens=True)
         rejected_tokens = tokenizer(
@@ -194,10 +169,6 @@ def _tokenize_feature(feature: Dict[str, Any], tokenizer, processor=None, args=N
         return {
             "prompt_input_ids": prompt_tokens["input_ids"],
             "prompt_attention_mask": prompt_tokens["attention_mask"],
-            "chosen_input_ids": chosen_tokens["input_ids"],
-            "chosen_attention_mask": chosen_tokens["attention_mask"],
-            "rejected_input_ids": rejected_tokens["input_ids"],
-            "rejected_attention_mask": rejected_tokens["attention_mask"],
             "chosen_labels": chosen_tokens["input_ids"],
             "rejected_labels": rejected_tokens["input_ids"],
         }
@@ -1205,7 +1176,9 @@ class DPOTrainer(Trainer):
             A Tuple of two tensor of shape ((batch_size,), (batch_size,)) containing the sum of log probabilities of the given labels under the given logits in the first tensor and the number of non-masked tokens in the second tensor.
         """
         if logits.shape[:-1] != labels.shape:
-            raise ValueError("Logits (batch and sequence length dim) and labels must have the same shape.")
+            raise ValueError(
+                f"Logits (batch and sequence length dim) {logits.shape[:-1]} and labels must have the same shape {labels.shape}."
+            )
 
         if not is_encoder_decoder:
             labels = labels[:, 1:].clone()
