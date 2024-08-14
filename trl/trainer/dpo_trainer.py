@@ -224,6 +224,7 @@ def _build_tokenized_answer(
         }
         if images is not None:
             result["pixel_values"] = full_tokenized["pixel_values"]
+        if "pixel_attention_mask" in full_tokenized:
             result["pixel_attention_mask"] = full_tokenized["pixel_attention_mask"]
         return result
     else:
