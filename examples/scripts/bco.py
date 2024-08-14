@@ -183,9 +183,6 @@ if __name__ == "__main__":
     if tokenizer.chat_template is None:
         model, tokenizer = setup_chat_format(model, tokenizer)
 
-    # Load the dataset
-    dataset = build_helpfulness_dataset(script_args.llm_name, num_proc=bco_args.dataset_num_proc)
-
     # Apply chat template
     def format_dataset(example):
         example["prompt"] = tokenizer.apply_chat_template(
@@ -193,7 +190,11 @@ if __name__ == "__main__":
         )
         return example
 
+    # Compute that only on the main process for faster data processing.
+    # see: https://github.com/huggingface/trl/pull/1255
     with PartialState().local_main_process_first():
+        # Load the dataset
+        dataset = build_helpfulness_dataset(script_args.llm_name, num_proc=bco_args.dataset_num_proc)
         formatted_dataset = dataset.map(format_dataset, batched=False, num_proc=bco_args.dataset_num_proc)
 
     accelerator = Accelerator()
