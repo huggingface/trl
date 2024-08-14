@@ -69,7 +69,9 @@ if is_deepspeed_available():
     import deepspeed
 
 
-def _tokenize(feature_batch: Dict[str, List[Any]], tokenizer, processor=None, args=None) -> Dict[str, List[Any]]:
+def _tokenize(
+    feature_batch: Dict[str, List[Any]], tokenizer, processor=None, model=None, args=None
+) -> Dict[str, List[Any]]:
     """Tokenize a batch of features from a DPO specific dataset."""
     batch_size = len(feature_batch["prompt"])
     tokenized_batch = {
@@ -88,7 +90,7 @@ def _tokenize(feature_batch: Dict[str, List[Any]], tokenizer, processor=None, ar
 
     for i in range(batch_size):
         feature = {k: v[i] for k, v in feature_batch.items()}
-        tokenized = _tokenize_feature(feature, tokenizer, processor, args)
+        tokenized = _tokenize_feature(feature, tokenizer, processor, model, args)
         for key in tokenized_batch:
             if key in tokenized:
                 tokenized_batch[key].append(tokenized[key])
@@ -97,7 +99,7 @@ def _tokenize(feature_batch: Dict[str, List[Any]], tokenizer, processor=None, ar
 
 
 def _tokenize_feature(
-    feature: Dict[str, Any], tokenizer: PreTrainedTokenizerBase, processor=None, args=None
+    feature: Dict[str, Any], tokenizer: PreTrainedTokenizerBase, processor=None, model=None, args=None
 ) -> Dict[str, Any]:
     prompt = feature["prompt"]
     chosen = feature["chosen"]
@@ -156,11 +158,6 @@ def _tokenize_feature(
             "chosen_labels": chosen_labels,
             "rejected_labels": rejected_labels,
         }
-        if processor is not None:
-            result["prompt_pixel_values"] = prompt_tokens["pixel_values"]
-            if "pixel_attention_mask" in prompt_tokens:
-                result["prompt_pixel_attention_mask"] = prompt_tokens["pixel_attention_mask"]
-        return result
     else:
         chosen_tokens = tokenizer(chosen, truncation=True, max_length=args.max_target_length, add_special_tokens=True)
         rejected_tokens = tokenizer(
@@ -168,12 +165,30 @@ def _tokenize_feature(
         )
         prompt_tokens = tokenizer(prompt, truncation=True, max_length=args.max_prompt_length, add_special_tokens=True)
 
-        return {
+        result = {
             "prompt_input_ids": prompt_tokens["input_ids"],
             "prompt_attention_mask": prompt_tokens["attention_mask"],
+            "chosen_input_ids": chosen_tokens["input_ids"],
+            "chosen_attention_mask": chosen_tokens["attention_mask"],
+            "rejected_input_ids": rejected_tokens["input_ids"],
+            "rejected_attention_mask": rejected_tokens["attention_mask"],
             "chosen_labels": chosen_tokens["input_ids"],
             "rejected_labels": rejected_tokens["input_ids"],
         }
+
+        if model is not None and hasattr(model, "prepare_decoder_input_ids_from_labels"):
+            result["chosen_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
+                torch.tensor(chosen_tokens["input_ids"])
+            )
+            result["rejected_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
+                torch.tensor(rejected_tokens["input_ids"])
+            )
+
+    if processor is not None:
+        result["prompt_pixel_values"] = prompt_tokens["pixel_values"]
+        if "pixel_attention_mask" in prompt_tokens:
+            result["prompt_pixel_attention_mask"] = prompt_tokens["pixel_attention_mask"]
+    return result
 
 
 def _build_tokenized_answer(
@@ -668,6 +683,7 @@ class DPOTrainer(Trainer):
             fn_kwargs = {
                 "tokenizer": self.tokenizer,
                 "processor": self.processor if self.is_vision_model else None,
+                "model": model if self.is_encoder_decoder else None,
                 "args": args,
             }
             train_dataset = train_dataset.map(
