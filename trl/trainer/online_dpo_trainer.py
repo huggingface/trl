@@ -256,6 +256,7 @@ class OnlineDPOTrainer(Trainer):
         accelerator = self.accelerator
         optimizer = self.optimizer
         model = self.model
+        self.model_wrapped = self.model
         ref_model = self.ref_model
         reward_model = self.reward_model
         tokenizer = self.tokenizer
