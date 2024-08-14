@@ -491,7 +491,10 @@ class DPOTrainer(Trainer):
                 "You passed `label_smoothing` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
             args.label_smoothing = label_smoothing
-        if args.loss_type in ["hinge", "ipo", "bco_pair", "apo_zero", "apo_down"] and args.label_smoothing > 0:
+        if (
+            args.loss_type in ["hinge", "ipo", "bco_pair", "sppo_hard", "nca_pair", "apo_zero", "apo_down"]
+            and args.label_smoothing > 0
+        ):
             warnings.warn(
                 "You are using a loss type that does not support label smoothing. Ignoring label_smoothing parameter."
             )
