@@ -52,6 +52,8 @@ class DPOConfig(TrainingArguments):
                 - `"sppo_hard"`: SPPO loss with hard label from the [SPPO](https://huggingface.co/papers/2405.00675) paper.
                 - `"aot"`: AOT loss for paired datasets from the [AOT](https://huggingface.co/papers/2406.05882) paper.
                 - `"aot_pair"`: AOT loss for unpaired datasets from the [AOT](https://huggingface.co/papers/2406.05882) paper.
+                - `"apo_zero"`: APO-zero loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
+                - `"apo_down"`: APO-down loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
 
         label_pad_token_id (`int`, *optional*, defaults to `-100`):
             The label pad token id. This argument is required if you want to use the default data collator.
@@ -105,7 +107,18 @@ class DPOConfig(TrainingArguments):
     beta: float = 0.1
     label_smoothing: float = 0
     loss_type: Literal[
-        "sigmoid", "hinge", "ipo", "exo_pair", "nca_pair", "robust", "bco_pair", "sppo_hard", "aot", "aot_pair"
+        "sigmoid",
+        "hinge",
+        "ipo",
+        "exo_pair",
+        "nca_pair",
+        "robust",
+        "bco_pair",
+        "sppo_hard",
+        "aot",
+        "aot_pair",
+        "apo_zero",
+        "apo_down",
     ] = "sigmoid"
     label_pad_token_id: int = -100
     padding_value: Optional[int] = None
