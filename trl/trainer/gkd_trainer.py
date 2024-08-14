@@ -103,6 +103,7 @@ class GKDTrainer(SFTTrainer):
         interpolated_log_probs = beta * student_log_probs + (1 - beta) * teacher_log_probs
 
         # Compute KL divergences using F.kl_div
+        # PyTorch differs from the standard mathematical definition, so the order of the probability distributions is swapped compared to that defined in the paper.
         kl_teacher = F.kl_div(interpolated_log_probs, teacher_log_probs, reduction="none", log_target=True)
         kl_student = F.kl_div(interpolated_log_probs, student_log_probs, reduction="none", log_target=True)
 
