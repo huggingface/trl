@@ -24,6 +24,7 @@ from transformers import (
 from trl import GKDConfig, GKDTrainer
 from trl.import_utils import is_peft_available
 from trl.trainer import ConstantLengthDataset
+from trl.trainer.utils import DataCollatorForLastCompletionLM
 
 
 def formatting_prompts_func(example):
@@ -117,6 +118,7 @@ class GKDTrainerTester(unittest.TestCase):
                 {"prompt": "What is 4+4?", "completion": "8"},
             ]
         )
+        self.collator = DataCollatorForLastCompletionLM(response_template="### Assistant:", tokenizer=self.tokenizer)
 
         self.train_dataset = ConstantLengthDataset(
             self.tokenizer,
@@ -155,6 +157,7 @@ class GKDTrainerTester(unittest.TestCase):
                 args=training_args,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
+                data_collator=self.collator,
             )
 
             trainer.train()

@@ -190,9 +190,9 @@ class GKDTrainer(SFTTrainer):
                     generated_outputs.sequences != -100, generated_outputs.sequences, self.tokenizer.pad_token_id
                 )
                 inputs["attention_mask"] = torch.where(generated_outputs.sequences != -100, 1, 0)
-                # set all but the last self.args.max_new_tokens_response to -100  in labels
+                # set all but the last self.args.max_new_tokens labels to -100
                 labels = generated_outputs.sequences
-                labels[:, : -self.args.max_new_tokens_response] = -100
+                labels[:, : -self.args.max_new_tokens] = -100
                 inputs["labels"] = labels
 
         inputs = self._prepare_inputs(inputs)
