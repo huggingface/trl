@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Optional
 
+from accelerate import PartialState
 from datasets import load_dataset
 from transformers import (
     AutoModelForCausalLM,
@@ -74,7 +75,6 @@ def prepare_dataset(dataset, tokenizer, dataset_text_field, num_proc):
         remove_columns=dataset.column_names,
         batched=True,
         num_proc=num_proc,
-        load_from_cache_file=False,
     )
 
 
@@ -105,13 +105,18 @@ if __name__ == "__main__":
         for key in raw_datasets:
             raw_datasets[key] = raw_datasets[key].select(range(1024))
     train_dataset = raw_datasets[args.dataset_train_split]
-    train_dataset = prepare_dataset(train_dataset, tokenizer, args.dataset_text_field, config.dataset_num_proc)
 
-    if args.dataset_test_split is not None:
-        eval_dataset = raw_datasets[args.dataset_test_split]
-        eval_dataset = prepare_dataset(eval_dataset, tokenizer, args.dataset_text_field, config.dataset_num_proc)
-    else:
-        eval_dataset = None
+    # Compute that only on the main process for faster data processing.
+    # see: https://github.com/huggingface/trl/pull/1255
+    with PartialState().local_main_process_first():
+        train_dataset = prepare_dataset(train_dataset, tokenizer, args.dataset_text_field, config.dataset_num_proc)
+
+        if args.dataset_test_split is not None:
+            eval_dataset = raw_datasets[args.dataset_test_split]
+            eval_dataset = prepare_dataset(eval_dataset, tokenizer, args.dataset_text_field, config.dataset_num_proc)
+        else:
+            eval_dataset = None
+
     ################
     # Training
     ################

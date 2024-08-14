@@ -79,11 +79,7 @@ if __name__ == "__main__":
         row["prompt"] = row["chosen"][0]["content"]
         return row
 
-    ds = ds.map(
-        process,
-        load_from_cache_file=False,
-        num_proc=args.dataset_num_proc,
-    )
+    ds = ds.map(process, num_proc=args.dataset_num_proc)
     if args.push_to_hub:
         revisions = ["main"] if args.update_main_revision else []
         revisions.append(args.revision)

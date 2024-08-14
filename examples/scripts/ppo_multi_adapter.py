@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import torch
+from accelerate import PartialState
 from datasets import load_dataset
 from peft import LoraConfig
 from tqdm import tqdm
@@ -95,7 +96,10 @@ tokenizer = AutoTokenizer.from_pretrained(script_args.model_name)
 
 tokenizer.pad_token = tokenizer.eos_token
 
-dataset = create_and_prepare_dataset(tokenizer, script_args.dataset_num_proc)
+# Compute that only on the main process for faster data processing.
+# see: https://github.com/huggingface/trl/pull/1255
+with PartialState().local_main_process_first():
+    dataset = create_and_prepare_dataset(tokenizer, script_args.dataset_num_proc)
 
 
 def collator(data):
