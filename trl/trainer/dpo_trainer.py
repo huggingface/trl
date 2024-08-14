@@ -107,7 +107,9 @@ def _tokenize_feature(
     if not args.is_encoder_decoder:
         prompt_tokens = _build_tokenized_answer(prompt, "", images, processor=processor, tokenizer=tokenizer)
         chosen_tokens = _build_tokenized_answer(prompt, chosen, images=None, processor=processor, tokenizer=tokenizer)
-        rejected_tokens = _build_tokenized_answer(prompt, rejected, images=None, processor=processor, tokenizer=tokenizer)
+        rejected_tokens = _build_tokenized_answer(
+            prompt, rejected, images=None, processor=processor, tokenizer=tokenizer
+        )
 
         prompt_tokens, chosen_tokens, rejected_tokens = add_bos_token_if_needed(
             tokenizer.bos_token_id,
