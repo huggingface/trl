@@ -272,6 +272,7 @@ class DataCollatorForLastCompletionLM(DataCollatorForLanguageModeling):
 
         return batch
 
+
 @dataclass
 class RewardDataCollatorWithPadding:
     r"""
