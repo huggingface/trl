@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, 
 
 import numpy as np
 import torch
+import torch.amp as amp
 import torch.nn as nn
 import torch.nn.functional as F
 from accelerate import PartialState
@@ -71,7 +72,8 @@ if is_deepspeed_available():
 if TYPE_CHECKING:
     from transformers import PreTrainedModel, PreTrainedTokenizer
 
-RUNNING_NAME = "running.pt"
+RUNNING_NAME = "running.json"
+CLF_NAME = "clf.pt"
 
 
 def _tokenize(
@@ -334,11 +336,16 @@ class BCOTrainer(Trainer):
             raise ValueError("You passed model_kwargs to the BCOTrainer. But your model is already instantiated.")
         else:
             model_init_kwargs = args.model_init_kwargs
-            model_init_kwargs["torch_dtype"] = (
-                model_init_kwargs["torch_dtype"]
-                if model_init_kwargs["torch_dtype"] in ["auto", None]
-                else getattr(torch, model_init_kwargs["torch_dtype"])
-            )
+            torch_dtype = model_init_kwargs.get("torch_dtype")
+            if torch_dtype is not None:
+                # Convert to `torch.dtype` if an str is passed
+                if isinstance(torch_dtype, str) and torch_dtype != "auto":
+                    torch_dtype = getattr(torch, torch_dtype)
+                if torch_dtype != "auto" and not isinstance(torch_dtype, torch.dtype):
+                    raise ValueError(
+                        f"Invalid `torch_dtype` passed to the BCOConfig. Expected a string with either `torch.dtype` or 'auto', but got {torch_dtype}."
+                    )
+                model_init_kwargs["torch_dtype"] = torch_dtype
 
         if args.ref_model_init_kwargs is None:
             ref_model_init_kwargs = {}
@@ -348,11 +355,16 @@ class BCOTrainer(Trainer):
             )
         else:
             ref_model_init_kwargs = args.ref_model_init_kwargs
-            ref_model_init_kwargs["torch_dtype"] = (
-                ref_model_init_kwargs["torch_dtype"]
-                if ref_model_init_kwargs["torch_dtype"] in ["auto", None]
-                else getattr(torch, ref_model_init_kwargs["torch_dtype"])
-            )
+            torch_dtype = ref_model_init_kwargs.get("torch_dtype")
+            if torch_dtype is not None:
+                # Convert to `torch.dtype` if an str is passed
+                if isinstance(torch_dtype, str) and torch_dtype != "auto":
+                    torch_dtype = getattr(torch, torch_dtype)
+                if torch_dtype != "auto" and not isinstance(torch_dtype, torch.dtype):
+                    raise ValueError(
+                        f"Invalid `torch_dtype` passed to the BCOConfig. Expected a string with either `torch.dtype` or 'auto', but got {torch_dtype}."
+                    )
+                ref_model_init_kwargs["torch_dtype"] = torch_dtype
 
         if isinstance(model, str):
             warnings.warn(
@@ -457,8 +469,8 @@ class BCOTrainer(Trainer):
             )
         if args.max_length is None:
             warnings.warn(
-                "When using DPODataCollatorWithPadding, you should set `max_length` in the BCOTrainer's init"
-                " it will be set to `512` by default, but you should do it yourself in the future.",
+                "When using DPODataCollatorWithPadding, you should set `max_length` in the `BCOConfig`. "
+                "It will be set to `512` by default, but you should do it yourself in the future.",
                 UserWarning,
             )
             max_length = 512
@@ -467,8 +479,8 @@ class BCOTrainer(Trainer):
 
         if args.max_prompt_length is None:
             warnings.warn(
-                "When using DPODataCollatorWithPadding, you should set `max_prompt_length` in the BCOTrainer's init"
-                " it will be set to `128` by default, but you should do it yourself in the future.",
+                "When using DPODataCollatorWithPadding, you should set `max_prompt_length` in the `BCOConfig`. "
+                "It will be set to `128` by default, but you should do it yourself in the future.",
                 UserWarning,
             )
             max_prompt_length = 128
@@ -545,8 +557,9 @@ class BCOTrainer(Trainer):
             # Tokenize and prepare the training datasets
             train_dataset = train_dataset.map(
                 _tokenize,
-                fn_kwargs={"tokenizer": self.tokenizer, "embedding_tokenizer": self.embedding_tokenizer},
                 batched=True,
+                fn_kwargs={"tokenizer": self.tokenizer, "embedding_tokenizer": self.embedding_tokenizer},
+                num_proc=args.dataset_num_proc,
                 desc="Tokenizing train dataset",
             )
 
@@ -574,6 +587,7 @@ class BCOTrainer(Trainer):
                     _tokenize,
                     fn_kwargs={"tokenizer": self.tokenizer, "embedding_tokenizer": self.embedding_tokenizer},
                     batched=True,
+                    num_proc=args.dataset_num_proc,
                     desc="Tokenizing eval dataset",
                 )
 
@@ -809,6 +823,9 @@ class BCOTrainer(Trainer):
 
         self.running.save_to_json(os.path.join(output_dir, RUNNING_NAME))
 
+        if self.match_underlying_distribution:
+            torch.save(self.clf.get_params(), os.path.join(output_dir, CLF_NAME))
+
     def _load_optimizer_and_scheduler(self, checkpoint):
         super()._load_optimizer_and_scheduler(checkpoint)
 
@@ -818,7 +835,15 @@ class BCOTrainer(Trainer):
         running_file = os.path.join(checkpoint, RUNNING_NAME)
         if not os.path.isfile(running_file):
             warnings.warn(f"Missing file {running_file}. Will use a new running delta value for BCO loss calculation")
-        self.running = RunningMoments.load_from_json(self.accelerator, running_file)
+        else:
+            self.running = RunningMoments.load_from_json(self.accelerator, running_file)
+
+        if self.match_underlying_distribution:
+            clf_file = os.path.join(checkpoint, CLF_NAME)
+            if not os.path.isfile(running_file):
+                warnings.warn(f"Missing file {clf_file}. Will use a new UDM classifier for BCO loss calculation")
+            else:
+                self.clf.set_params(**torch.load(clf_file, weights_only=True, map_location="cpu"))
 
     @contextmanager
     def null_ref_context(self):
@@ -1204,9 +1229,9 @@ class BCOTrainer(Trainer):
                 "compute_loss is only implemented for DPODataCollatorWithPadding, and you passed a datacollator that is different than "
                 "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
             )
-        compute_loss_context_manager = torch.cuda.amp.autocast if self._peft_has_been_casted_to_bf16 else nullcontext
+        compute_loss_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
 
-        with compute_loss_context_manager():
+        with compute_loss_context_manager:
             loss, metrics = self.get_batch_loss_metrics(model, inputs)
 
         # Make sure to move the loss to the device the original accumulating loss is at back in the `Trainer` class:
@@ -1233,9 +1258,8 @@ class BCOTrainer(Trainer):
 
         # If one uses `generate_during_eval` with peft + bf16, we need to explicitly call generate with
         # the torch cuda amp context manager as some hidden states are silently casted to full precision.
-        generate_context_manager = nullcontext if not self._peft_has_been_casted_to_bf16 else torch.cuda.amp.autocast
-
-        with generate_context_manager():
+        generate_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
+        with generate_context_manager:
             policy_output = model.generate(
                 input_ids=batch["prompt_input_ids"],
                 attention_mask=batch["prompt_attention_mask"],
@@ -1292,8 +1316,8 @@ class BCOTrainer(Trainer):
             else:
                 ignore_keys = []
 
-        prediction_context_manager = torch.cuda.amp.autocast if self._peft_has_been_casted_to_bf16 else nullcontext
-        with torch.no_grad(), prediction_context_manager():
+        prediction_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
+        with torch.no_grad(), prediction_context_manager:
             loss, metrics = self.get_batch_loss_metrics(model, inputs)
 
         # force log the metrics

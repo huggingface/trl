@@ -94,15 +94,14 @@ class TextHistoryTest(unittest.TestCase):
 
 
 class TextEnvironmentTester(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
+    def setUp(self):
         # model_id
-        cls.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
 
         # get models and tokenizer
-        cls.gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(cls.model_id)
-        cls.gpt2_tokenizer = AutoTokenizer.from_pretrained(cls.model_id)
-        cls.gpt2_tokenizer.pad_token = cls.gpt2_tokenizer.eos_token
+        self.gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(self.model_id)
+        self.gpt2_tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        self.gpt2_tokenizer.pad_token = self.gpt2_tokenizer.eos_token
 
     def test_text_environment_setup(self):
         env = TextEnvironment(
