@@ -206,7 +206,7 @@ class HfPairwiseJudge(BasePairwiseJudge):
             if response in ["0", "1"]:
                 return int(response)
             else:
-                logging.debug(f"Invalid response from the judge model: '{response}'. Using random choice instead.")
+                logging.debug(f"Invalid response from the judge model: '{response}'. Returning -1.")
                 return -1
 
         # Call the completions concurrently
@@ -252,11 +252,11 @@ class OpenAIPairwiseJudge(BasePairwiseJudge):
         if self.max_requests is not None and self.num_requests >= self.max_requests:
             if not self._warned:  # Print the warning only once
                 logging.warning(
-                    f"Reached the maximum number of requests ({self.max_requests}). From now on, using random choice instead. "
+                    f"Reached the maximum number of requests ({self.max_requests}). From now on, returning -1 instead. "
                     " To increase the limit, set `max_requests` to a higher value, or to `None` for no limit."
                 )
                 self._warned = True
-            return [random.choice([0, 1]) for _ in prompts]
+            return [-1] * len(prompts)
 
         # Shuffle the order of the completions to avoid positional bias
         if shuffle_order:
@@ -272,7 +272,7 @@ class OpenAIPairwiseJudge(BasePairwiseJudge):
             if response in ["0", "1"]:
                 return int(response)
             else:
-                logging.debug(f"Invalid response from the judge model: '{response}'. Using random choice instead.")
+                logging.debug(f"Invalid response from the judge model: '{response}'. Returning -1.")
                 return -1
 
         # Call the completions concurrently
