@@ -84,6 +84,7 @@ def _tokenize(feature_batch: Dict[str, List[Any]], tokenizer, processor=None, ar
     }
     if processor is not None:
         tokenized_batch["prompt_pixel_values"] = []
+        tokenized_batch["prompt_pixel_attention_mask"] = []
 
     for i in range(batch_size):
         feature = {k: v[i] for k, v in feature_batch.items()}
@@ -130,6 +131,7 @@ def _tokenize_feature(feature: Dict[str, Any], tokenizer, processor=None, args=N
             "chosen_labels": chosen_tokens["input_ids"],
             "rejected_labels": rejected_tokens["input_ids"],
             "prompt_pixel_values": prompt_tokens["pixel_values"],
+            "prompt_pixel_attention_mask": prompt_tokens["pixel_attention_mask"],
         }
 
     elif not args.is_encoder_decoder:
@@ -222,6 +224,7 @@ def _build_tokenized_answer(
         }
         if images is not None:
             result["pixel_values"] = full_tokenized["pixel_values"]
+            result["pixel_attention_mask"] = full_tokenized["pixel_attention_mask"]
         return result
     else:
         full_tokenized = tokenizer(prompt + answer, add_special_tokens=False)
