@@ -396,13 +396,18 @@ class OnlineDPOTrainer(Trainer):
                         prompts=data["prompt"], completions=completions
                     )  # preferences is a list of prefered indexes
                     preferences = torch.tensor(preferences, dtype=torch.float32, device=device)
-                    # Get the number of invalid answers by counting the number of -1 in preferences
+                    # Get the number of invalid answers by counting the number of -1 in preferences (just for logging)
                     invalid_rate = (preferences == -1).sum() / len(preferences)
                     # Replace invalid preferences with random preferences
                     preferences = torch.where(
                         preferences == -1, torch.randint(0, 2, preferences.shape, device=device), preferences
                     )
-                    scores = torch.cat((preferences, 1 - preferences))
+                    # Convert preferences to scores
+                    # The first half of the scores is the score of the first candidate. It's 1 when the first
+                    # candidate is preferred, 0 otherwise. Since `preferences` is the index of the preferred candidate,
+                    # the score of the first candidate is 1 - preferences. The score of the second candidate is the
+                    # opposite of the score of the first candidate.
+                    scores = torch.cat((1 - preferences, preferences))
 
                 del (logprob, ref_logprob, score)
                 torch.cuda.empty_cache()
