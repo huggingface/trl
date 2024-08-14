@@ -140,7 +140,7 @@ class DPOTrainer(Trainer):
         ref_model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
         beta: float = 0.1,
         label_smoothing: float = 0,
-        loss_type: Literal["sigmoid", "hinge", "ipo", "bco_pair", "robust", "aot", "aot_pair", "apo_zero", "apo_down"] = "sigmoid",
+        loss_type: Optional[str] = None,
         args: Optional[DPOConfig] = None,
         data_collator: Optional[DataCollator] = None,
         label_pad_token_id: int = -100,
@@ -481,7 +481,7 @@ class DPOTrainer(Trainer):
         self._precomputed_train_ref_log_probs = False
         self._precomputed_eval_ref_log_probs = False
 
-        if loss_type != "sigmoid":
+        if loss_type is not None:
             warnings.warn(
                 "You passed `loss_type` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
@@ -1195,26 +1195,21 @@ class DPOTrainer(Trainer):
             # Eqn (7) of the APO paper (https://huggingface.co/papers/2408.06266)
             # Use this loss when you believe the chosen outputs are better than your model's default output
 
-            losses_chosen = 1 - F.sigmoid(self.beta * chosen_logratios) # Increase chosen likelihood
-            losses_rejected = F.sigmoid(self.beta * rejected_logratios) # Decrease rejected likelihood
+            losses_chosen = 1 - F.sigmoid(self.beta * chosen_logratios)  # Increase chosen likelihood
+            losses_rejected = F.sigmoid(self.beta * rejected_logratios)  # Decrease rejected likelihood
 
-            losses = (
-                losses_chosen +
-                losses_rejected
-            )
+            losses = losses_chosen + losses_rejected
 
         elif self.loss_type == "apo_down":
             # Eqn (8) of the APO paper (https://huggingface.co/papers/2408.06266)
             # Use this loss when you believe the chosen outputs are worse than your model's default output
 
-            losses_chosen = F.sigmoid(self.beta * chosen_logratios) # Decrease chosen likelihood
-            losses_rejected = 1 - F.sigmoid(self.beta * (chosen_logratios - rejected_logratios)) # Decrease rejected likelihood more
+            losses_chosen = F.sigmoid(self.beta * chosen_logratios)  # Decrease chosen likelihood
+            losses_rejected = 1 - F.sigmoid(
+                self.beta * (chosen_logratios - rejected_logratios)
+            )  # Decrease rejected likelihood more
 
-            losses = (
-                losses_chosen +
-                losses_rejected
-            )
-
+            losses = losses_chosen + losses_rejected
 
         else:
             raise ValueError(
