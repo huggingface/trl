@@ -244,6 +244,9 @@ class RewardTrainer(Trainer):
         else:
             loss = -nn.functional.logsigmoid(rewards_chosen - rewards_rejected).mean()
 
+        if args.center_rewards_coefficient is not None:
+            loss += args.center_rewards_coefficient * nn.functional.mse_loss(rewards_chosen, rewards_rejected)
+
         if return_outputs:
             return loss, {
                 "rewards_chosen": rewards_chosen,
