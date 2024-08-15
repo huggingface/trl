@@ -16,7 +16,6 @@ import tempfile
 import unittest
 
 import torch
-from pytest import mark
 from transformers import AutoModelForCausalLM
 
 from trl import AutoModelForCausalLMWithValueHead, is_peft_available
@@ -29,7 +28,6 @@ from .testing_utils import require_bitsandbytes, require_peft
 
 
 @require_peft
-@mark.peft_test
 class PeftModelTester(unittest.TestCase):
     def setUp(self):
         self.causal_lm_model_id = "trl-internal-testing/tiny-random-GPTNeoXForCausalLM"

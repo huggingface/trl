@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import torch
-from accelerate import Accelerator
+from accelerate import Accelerator, PartialState
 from datasets import load_dataset
 from peft import LoraConfig
 from tqdm import tqdm
@@ -53,11 +53,14 @@ sent_kwargs = {"return_all_scores": True, "function_to_apply": "none", "batch_si
 
 trl_model_class = AutoModelForCausalLMWithValueHead if not args.use_seq2seq else AutoModelForSeq2SeqLMWithValueHead
 
+tokenizer = AutoTokenizer.from_pretrained(ppo_config.model_name)
+tokenizer.pad_token = tokenizer.eos_token
+
 
 # Below is an example function to build the dataset. In our case, we use the IMDB dataset
 # from the `datasets` library. One should customize this function to train the model on
 # its own dataset.
-def build_dataset(config, query_dataset, input_min_text_length=2, input_max_text_length=8):
+def build_dataset(query_dataset, input_min_text_length=2, input_max_text_length=8):
     """
     Build dataset for training. This builds the dataset from `load_dataset`, one should
     customize this function to train the model on its own dataset.
@@ -70,12 +73,10 @@ def build_dataset(config, query_dataset, input_min_text_length=2, input_max_text
         dataloader (`torch.utils.data.DataLoader`):
             The dataloader for the dataset.
     """
-    tokenizer = AutoTokenizer.from_pretrained(config.model_name)
-    tokenizer.pad_token = tokenizer.eos_token
     # load imdb with datasets
     ds = load_dataset(query_dataset, split="train")
     ds = ds.rename_columns({"text": "review"})
-    ds = ds.filter(lambda x: len(x["review"]) > 200, batched=False)
+    ds = ds.filter(lambda x: len(x["review"]) > 200, num_proc=args.dataset_num_proc)
 
     input_size = LengthSampler(input_min_text_length, input_max_text_length)
 
@@ -84,13 +85,16 @@ def build_dataset(config, query_dataset, input_min_text_length=2, input_max_text
         sample["query"] = tokenizer.decode(sample["input_ids"])
         return sample
 
-    ds = ds.map(tokenize, batched=False)
+    ds = ds.map(tokenize, num_proc=args.dataset_num_proc)
     ds.set_format(type="torch")
     return ds
 
 
 # We retrieve the dataloader by calling the `build_dataset` function.
-dataset = build_dataset(ppo_config, ppo_config.query_dataset)
+# Compute that only on the main process for faster data processing.
+# see: https://github.com/huggingface/trl/pull/1255
+with PartialState().local_main_process_first():
+    dataset = build_dataset(ppo_config, ppo_config.query_dataset)
 
 
 def collator(data):

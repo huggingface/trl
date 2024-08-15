@@ -20,7 +20,6 @@ import torch
 from datasets import Dataset, features
 from parameterized import parameterized
 from PIL import Image
-from pytest import mark
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForSeq2SeqLM,
@@ -35,25 +34,24 @@ from .testing_utils import require_bitsandbytes, require_no_wandb, require_peft
 
 
 class DPOTrainerTester(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
-        cls.model = AutoModelForCausalLM.from_pretrained(cls.model_id)
-        cls.ref_model = AutoModelForCausalLM.from_pretrained(cls.model_id)
-        cls.tokenizer = AutoTokenizer.from_pretrained(cls.model_id)
-        cls.tokenizer.pad_token = cls.tokenizer.eos_token
+    def setUp(self):
+        self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        self.tokenizer.pad_token = self.tokenizer.eos_token
 
         # get t5 as seq2seq example:
         model_id = "trl-internal-testing/T5ForConditionalGeneration-correct-vocab-calibrated"
-        cls.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
-        cls.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
-        cls.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
+        self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+        self.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+        self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         # get idefics2 model
         model_id = "trl-internal-testing/tiny-random-idefics2"
-        cls.idefics2_model = AutoModelForVision2Seq.from_pretrained(model_id)
-        cls.idefics2_ref_model = AutoModelForVision2Seq.from_pretrained(model_id)
-        cls.idefics2_processor = AutoProcessor.from_pretrained(model_id)
+        self.idefics2_model = AutoModelForVision2Seq.from_pretrained(model_id)
+        self.idefics2_ref_model = AutoModelForVision2Seq.from_pretrained(model_id)
+        self.idefics2_processor = AutoProcessor.from_pretrained(model_id)
 
     def _init_dummy_dataset(self):
         # fmt: off
@@ -165,6 +163,8 @@ class DPOTrainerTester(unittest.TestCase):
             ["gpt2", "robust", True],
             ["gpt2", "exo_pair", False],
             ["t5", "exo_pair", True],
+            ["gpt2", "apo_zero", True],
+            ["t5", "apo_down", False],
         ]
     )
     def test_dpo_trainer(self, name, loss_type, pre_compute):
@@ -180,6 +180,7 @@ class DPOTrainerTester(unittest.TestCase):
                 beta=0.1,
                 loss_type=loss_type,
                 precompute_ref_log_probs=pre_compute,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -236,6 +237,7 @@ class DPOTrainerTester(unittest.TestCase):
                 beta=0.1,
                 loss_type=loss_type,
                 precompute_ref_log_probs=pre_compute,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_image_dataset()
@@ -279,6 +281,7 @@ class DPOTrainerTester(unittest.TestCase):
                 beta=0.1,
                 precompute_ref_log_probs=True,
                 rpo_alpha=0.5,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -306,7 +309,6 @@ class DPOTrainerTester(unittest.TestCase):
                     assert not torch.equal(param, new_param)
 
     @require_peft
-    @mark.peft_test
     def test_dpo_trainer_without_providing_ref_model_with_lora(self):
         from peft import LoraConfig
 
@@ -329,6 +331,7 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 beta=0.1,
                 precompute_ref_log_probs=True,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -368,6 +371,7 @@ class DPOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -404,6 +408,7 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 beta=0.1,
                 dataset_num_proc=5,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -442,6 +447,7 @@ class DPOTrainerTester(unittest.TestCase):
                 sync_ref_model=True,
                 ref_model_mixup_alpha=0.5,
                 ref_model_sync_steps=1,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -483,6 +489,7 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 beta=0.1,
                 generate_during_eval=True,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -502,7 +509,6 @@ class DPOTrainerTester(unittest.TestCase):
                 )
 
     @require_peft
-    @mark.peft_test
     def test_dpo_lora_save(self):
         from peft import LoraConfig, get_peft_model
 
@@ -529,6 +535,7 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 beta=0.1,
                 precompute_ref_log_probs=True,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -558,7 +565,6 @@ class DPOTrainerTester(unittest.TestCase):
 
     @require_peft
     @require_bitsandbytes
-    @mark.peft_test
     def test_dpo_lora_bf16_autocast_llama(self):
         # Note this test only works on compute capability > 7 GPU devices
         from peft import LoraConfig
@@ -589,6 +595,7 @@ class DPOTrainerTester(unittest.TestCase):
                 bf16=True,
                 beta=0.1,
                 generate_during_eval=True,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -640,7 +647,6 @@ class DPOTrainerTester(unittest.TestCase):
     )
     @require_bitsandbytes
     @require_peft
-    @mark.peft_test
     @unittest.skip("You need a GPU with bf16 support in order to run these tests")
     def test_dpo_lora_bf16_autocast(self, name, loss_type, pre_compute, gen_during_eval):
         # Note this test only works on compute capability > 7 GPU devices
@@ -671,6 +677,7 @@ class DPOTrainerTester(unittest.TestCase):
                 generate_during_eval=gen_during_eval,
                 loss_type=loss_type,
                 precompute_ref_log_probs=pre_compute,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -720,6 +727,7 @@ class DPOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -755,6 +763,7 @@ class DPOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -772,7 +781,6 @@ class DPOTrainerTester(unittest.TestCase):
             assert trainer.model.model_tags == trainer._tag_names
 
     @require_peft
-    @mark.peft_test
     def test_dpo_lora_force_use_ref(self):
         from peft import LoraConfig, get_peft_model
 
@@ -800,6 +808,7 @@ class DPOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -827,6 +836,7 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 beta=0.1,
                 force_use_ref_model=True,
+                report_to="none",
             )
 
             trainer = DPOTrainer(
@@ -852,6 +862,7 @@ class DPOTrainerTester(unittest.TestCase):
                 max_steps=1,
                 model_init_kwargs={"torch_dtype": "float16"},
                 ref_model_init_kwargs={"torch_dtype": "float16"},
+                report_to="none",
             )
 
             trainer = DPOTrainer(
@@ -871,6 +882,7 @@ class DPOTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 max_steps=1,
                 model_init_kwargs={"torch_dtype": -1},
+                report_to="none",
             )
 
             with pytest.raises(
@@ -890,6 +902,7 @@ class DPOTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 max_steps=1,
                 ref_model_init_kwargs={"torch_dtype": -1},
+                report_to="none",
             )
 
             with pytest.raises(
@@ -922,6 +935,7 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 f_divergence_type=FDivergenceType.ALPHA_DIVERGENCE.value,
                 f_alpha_divergence_coef=0.5,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
@@ -964,6 +978,7 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 f_divergence_type=FDivergenceType.JS_DIVERGENCE.value,
                 f_alpha_divergence_coef=0.5,
+                report_to="none",
             )
 
             dummy_dataset = self._init_dummy_dataset()
