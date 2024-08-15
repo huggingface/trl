@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Optional
 
+from accelerate import PartialState
 from datasets import load_dataset
 from transformers import (
     AutoModelForCausalLM,

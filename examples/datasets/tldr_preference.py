@@ -76,11 +76,7 @@ if __name__ == "__main__":
         row["rejected"] = [{"role": "user", "content": row["prompt"]}, {"role": "assistant", "content": rejected}]
         return row
 
-    ds = ds.map(
-        process,
-        load_from_cache_file=False,
-        num_proc=args.dataset_num_proc,
-    )
+    ds = ds.map(process, num_proc=args.dataset_num_proc)
     for key in ds:  # reorder columns
         ds[key] = ds[key].select_columns(
             ["prompt", "chosen", "rejected", "info", "summaries", "choice", "worker", "batch", "split", "extra"]
@@ -145,11 +141,7 @@ We take the dataset from https://huggingface.co/datasets/openai/summarize_from_f
         ]
         return row
 
-    sft_ds = sft_ds.map(
-        sft_process,
-        load_from_cache_file=False,
-        num_proc=args.dataset_num_proc,
-    )
+    sft_ds = sft_ds.map(sft_process, num_proc=args.dataset_num_proc)
     for key in sft_ds:  # reorder columns
         sft_ds[key] = sft_ds[key].select_columns(["prompt", "messages", "id", "subreddit", "title", "post", "summary"])
     if args.push_to_hub:
