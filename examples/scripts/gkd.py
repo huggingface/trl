@@ -17,6 +17,7 @@
 python examples/scripts/gkd.py \
     --model_name_or_path="Qwen/Qwen2-0.5B-Instruct" \
     --teacher_model_name_or_path="Qwen/Qwen2-1.5B-Instruct" \
+    --dataset_name="timdettmers/openassistant-guanaco" \
     --dataset_text_field="text" \
     --report_to="wandb" \
     --learning_rate=2e-5 \
@@ -33,6 +34,7 @@ python examples/scripts/gkd.py \
 python examples/scripts/gkd.py \
     --model_name_or_path="Qwen/Qwen2-0.5B-Instruct" \
     --teacher_model_name_or_path="Qwen/Qwen2-1.5B-Instruct" \
+    --dataset_name="timdettmers/openassistant-guanaco" \
     --dataset_text_field="text" \
     --report_to="wandb" \
     --learning_rate=2e-4 \

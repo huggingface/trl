@@ -51,7 +51,7 @@ class GKDConfig(SFTConfig):
 
     def __post_init__(self):
         super().__post_init__()
-        # check lambda and beta are in the range [0, 1]
+        # check lmbda and beta are in the range [0, 1]
         if self.lmbda < 0 or self.lmbda > 1:
             raise ValueError("lmbda must be in the range [0, 1].")
         if self.beta < 0 or self.beta > 1:

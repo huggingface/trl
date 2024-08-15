@@ -167,7 +167,7 @@ class GKDTrainer(SFTTrainer):
         Return:
             `torch.Tensor`: The tensor with training loss on this batch.
         """
-        if random.random() >= self.lmbda:
+        if random.random() <= self.lmbda:
             # On-policy: Generate outputs from the student model with temperature self.temperature
             with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
                 generation_config = GenerationConfig(
