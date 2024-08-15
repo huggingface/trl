@@ -54,6 +54,7 @@ import logging
 import multiprocessing
 import os
 from contextlib import nullcontext
+import copy
 
 from trl.commands.cli_utils import DPOScriptArguments, init_zero_verbose, TrlParser
 from trl.env_utils import strtobool
@@ -154,9 +155,31 @@ if __name__ == "__main__":
             ds[key] = ds[key].select(range(50))
 
     def process(row):
-        row["prompt"] = tokenizer.apply_chat_template(row["chosen"][:-1], tokenize=False)
-        row["chosen"] = tokenizer.apply_chat_template([row["chosen"][-1]], tokenize=False)
-        row["rejected"] = tokenizer.apply_chat_template([row["rejected"][-1]], tokenize=False)
+        # judge chat template
+        prompt = row["chosen"][:-1]
+        chosen = [row["chosen"][-1]]
+        test_prompt = tokenizer.apply_chat_template(prompt, tokenize=False)
+        test_chosen = tokenizer.apply_chat_template(chosen, tokenize=False)
+        conversation = copy.deepcopy(prompt)
+        conversation.append(row["chosen"][-1])
+        if tokenizer.apply_chat_template(conversation) == test_prompt + test_chosen:
+            row["prompt"] = tokenizer.apply_chat_template(row["chosen"][:-1], tokenize=False)
+            row["chosen"] = tokenizer.apply_chat_template([row["chosen"][-1]], tokenize=False)
+            row["rejected"] = tokenizer.apply_chat_template([row["rejected"][-1]], tokenize=False)
+        else:
+            # fix the template
+            conversation_chosen = copy.deepcopy(prompt)
+            conversation_rejected = copy.deepcopy(prompt)
+            conversation_chosen.append(row["chosen"][-1])
+            conversation_rejected.append(row["rejected"][-1])
+            conversation_chosen = tokenizer.apply_chat_template(conversation_chosen, tokenize=False)
+            conversation_rejected = tokenizer.apply_chat_template(conversation_rejected, tokenize=False)
+            # find position
+            start_position = conversation_chosen.find(row['chosen'][-1]['content'])
+            # The following is right
+            row["prompt"] = conversation_chosen[:start_position]
+            row["chosen"] = conversation_chosen[start_position:]
+            row["rejected"] = conversation_rejected[start_position:]
         return row
 
     # Compute that only on the main process for faster data processing.
