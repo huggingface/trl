@@ -95,6 +95,10 @@ def _tokenize(
             if key in tokenized:
                 tokenized_batch[key].append(tokenized[key])
 
+    # if prompt_pixel_attention_mask is empty remove it from the tokenized_batch
+    if "prompt_pixel_attention_mask" in tokenized_batch and not tokenized_batch["prompt_pixel_attention_mask"]:
+        tokenized_batch.pop("prompt_pixel_attention_mask")
+
     return tokenized_batch
 
 
@@ -108,9 +112,11 @@ def _tokenize_feature(
 
     if not args.is_encoder_decoder:
         prompt_tokens = _build_tokenized_answer(prompt, "", images, processor=processor, tokenizer=tokenizer)
-        chosen_tokens = _build_tokenized_answer(prompt, chosen, images=None, processor=processor, tokenizer=tokenizer)
+        chosen_tokens = _build_tokenized_answer(
+            prompt, chosen, images=images, processor=processor, tokenizer=tokenizer
+        )
         rejected_tokens = _build_tokenized_answer(
-            prompt, rejected, images=None, processor=processor, tokenizer=tokenizer
+            prompt, rejected, images=images, processor=processor, tokenizer=tokenizer
         )
 
         prompt_tokens, chosen_tokens, rejected_tokens = add_bos_token_if_needed(
@@ -158,6 +164,11 @@ def _tokenize_feature(
             "chosen_labels": chosen_labels,
             "rejected_labels": rejected_labels,
         }
+
+        if processor is not None:
+            result["prompt_pixel_values"] = prompt_tokens["pixel_values"]
+            if "pixel_attention_mask" in prompt_tokens:
+                result["prompt_pixel_attention_mask"] = prompt_tokens["pixel_attention_mask"]
     else:
         chosen_tokens = tokenizer(chosen, truncation=True, max_length=args.max_target_length, add_special_tokens=True)
         rejected_tokens = tokenizer(
@@ -184,10 +195,6 @@ def _tokenize_feature(
                 torch.tensor(rejected_tokens["input_ids"])
             )
 
-    if processor is not None:
-        result["prompt_pixel_values"] = prompt_tokens["pixel_values"]
-        if "pixel_attention_mask" in prompt_tokens:
-            result["prompt_pixel_attention_mask"] = prompt_tokens["pixel_attention_mask"]
     return result
 
 
