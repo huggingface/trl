@@ -121,7 +121,6 @@ class DPOTrainerTester(unittest.TestCase):
                 self.assertEqual(result["chosen_input_ids"][-1], dummy_tokenizer.eos_token_id)
                 self.assertEqual(result["rejected_input_ids"][-1], dummy_tokenizer.eos_token_id)
 
-
     def test_build_tokenized_answer_text_only(self):
         dummy_tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         prompt = "Translate to French:"
