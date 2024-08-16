@@ -30,6 +30,7 @@ from transformers import (
 )
 
 from trl import DPOConfig, DPOTrainer, FDivergenceType
+from trl.trainer.dpo_trainer import _build_tokenized_answer, _tokenize_feature
 
 from .testing_utils import require_bitsandbytes, require_no_wandb, require_peft
 
@@ -87,6 +88,47 @@ class DPOTrainerTester(unittest.TestCase):
         }
         # fmt: on
         return Dataset.from_dict(dummy_dataset_dict)
+
+    def test_tokenize_feature(self):
+        dummy_dataset = self._init_dummy_dataset()
+        dummy_tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir, max_length=dummy_tokenizer.model_max_length, report_to="none"
+            )
+
+            for example in dummy_dataset:
+                result = _tokenize_feature(example, dummy_tokenizer, args=training_args)
+
+                assert len(result["prompt_input_ids"]) <= training_args.max_length
+                assert len(result["chosen_input_ids"]) <= training_args.max_length
+                assert len(result["rejected_input_ids"]) <= training_args.max_length
+
+                # Check if labels are correctly masked
+                assert result["chosen_labels"][: len(result["prompt_input_ids"])] == [
+                    training_args.label_pad_token_id
+                ] * len(result["prompt_input_ids"])
+                assert result["rejected_labels"][: len(result["prompt_input_ids"])] == [
+                    training_args.label_pad_token_id
+                ] * len(result["prompt_input_ids"])
+
+    def test_build_tokenized_answer_text_only(self):
+        dummy_tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        prompt = "Translate to French:"
+        answer = "Hello, world!"
+
+        result = _build_tokenized_answer(prompt, answer, tokenizer=dummy_tokenizer)
+
+        assert "input_ids" in result
+        assert "attention_mask" in result
+        assert isinstance(result["input_ids"], list)
+        assert isinstance(result["attention_mask"], list)
+        assert len(result["input_ids"]) == len(result["attention_mask"])
+
+        # Check if the tokenized output contains both prompt and answer
+        full_text = dummy_tokenizer.decode(result["input_ids"])
+        assert prompt in full_text
+        assert answer in full_text
 
     @parameterized.expand(
         [
