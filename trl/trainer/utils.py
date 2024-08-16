@@ -226,7 +226,7 @@ class DataCollatorForChatML(DataCollatorForLanguageModeling):
         self.ignore_index = ignore_index
         self.max_length = max_length or self.tokenizer.model_max_length
 
-    def __call__(self, examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
+    def torch_call(self, examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
         # Apply chat template to each conversation
         formatted_chats = [
             self.tokenizer.apply_chat_template(example["messages"], tokenize=False) for example in examples
