@@ -23,8 +23,7 @@ from transformers import (
 
 from trl import GKDConfig, GKDTrainer
 from trl.import_utils import is_peft_available
-from trl.trainer import ConstantLengthDataset
-from trl.trainer.utils import DataCollatorForLastCompletionLM
+from trl.trainer.utils import DataCollatorForChatML
 
 
 def formatting_prompts_func(example):
@@ -51,6 +50,11 @@ class GKDTrainerTester(unittest.TestCase):
         self.teacher_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        # Ensure the tokenizer has a chat template
+        if not hasattr(self.tokenizer, "chat_template") or self.tokenizer.chat_template is None:
+            self.tokenizer.chat_template = "{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}"
+
         self.dummy_dataset = Dataset.from_dict(
             {
                 "question": [
@@ -118,25 +122,7 @@ class GKDTrainerTester(unittest.TestCase):
                 {"prompt": "What is 4+4?", "completion": "8"},
             ]
         )
-        self.collator = DataCollatorForLastCompletionLM(response_template="### Assistant:", tokenizer=self.tokenizer)
-
-        self.train_dataset = ConstantLengthDataset(
-            self.tokenizer,
-            self.dummy_dataset,
-            dataset_text_field=None,
-            formatting_func=formatting_prompts_func,
-            seq_length=16,
-            num_of_sequences=16,
-        )
-
-        self.eval_dataset = ConstantLengthDataset(
-            self.tokenizer,
-            self.dummy_dataset,
-            dataset_text_field=None,
-            formatting_func=formatting_prompts_func,
-            seq_length=16,
-            num_of_sequences=16,
-        )
+        self.collator = DataCollatorForChatML(tokenizer=self.tokenizer)
 
     def test_gkd_trainer(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -148,15 +134,15 @@ class GKDTrainerTester(unittest.TestCase):
                 eval_steps=2,
                 save_steps=2,
                 per_device_train_batch_size=2,
-                packing=True,
+                remove_unused_columns=False,
             )
 
             trainer = GKDTrainer(
                 model=self.model_id,
                 teacher_model=self.model_id,
                 args=training_args,
-                train_dataset=self.train_dataset,
-                eval_dataset=self.eval_dataset,
+                train_dataset=self.dummy_chatml_dataset,
+                eval_dataset=self.dummy_chatml_dataset,
                 data_collator=self.collator,
             )
 

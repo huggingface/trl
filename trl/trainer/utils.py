@@ -214,59 +214,61 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
         return batch
 
 
-class DataCollatorForLastCompletionLM(DataCollatorForLanguageModeling):
+class DataCollatorForChatML(DataCollatorForLanguageModeling):
     """
-    Data collator for language modeling that ignores all tokens except the last completion.
-    It also separates prompts and completions for easy access.
-
-    Args:
-        tokenizer: The tokenizer to use for encoding the data.
-        mlm (bool): Whether to use masked language modeling. Default is False.
-        response_template (str): The template that marks the start of a response.
-        ignore_index (int): The index to use for ignoring tokens in loss calculation.
+    Data collator for ChatML format datasets.
     """
 
     def __init__(
-        self, tokenizer, mlm: bool = False, response_template: str = "### Response:\n", ignore_index: int = -100
+        self, tokenizer: PreTrainedTokenizerBase, mlm: bool = False, ignore_index: int = -100, max_length: int = None
     ):
         super().__init__(tokenizer=tokenizer, mlm=mlm)
-        self.response_template = self.tokenizer.encode(response_template, add_special_tokens=False)
         self.ignore_index = ignore_index
+        self.max_length = max_length or self.tokenizer.model_max_length
 
-    def torch_call(self, examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
-        batch = super().torch_call(examples)
+    def __call__(self, examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
+        # Apply chat template to each example
+        formatted_chats = [
+            self.tokenizer.apply_chat_template(example["messages"], tokenize=False) for example in examples
+        ]
 
+        # Tokenize the formatted chats
+        batch = self.tokenizer(
+            formatted_chats, padding=True, truncation=True, max_length=self.max_length, return_tensors="pt"
+        )
+
+        # Prepare labels, prompts, and completions
+        labels = batch["input_ids"].clone()
         prompts = []
         completions = []
 
         for i in range(len(examples)):
-            input_ids = batch["input_ids"][i]
-            labels = batch["labels"][i]
+            # Find the start of the last assistant message
+            last_assistant_start = formatted_chats[i].rfind(
+                self.tokenizer.apply_chat_template([{"role": "assistant", "content": ""}], tokenize=False)
+            )
 
-            # Find all occurrences of the response template
-            response_starts = [
-                j
-                for j in range(len(input_ids) - len(self.response_template) + 1)
-                if input_ids[j : j + len(self.response_template)].tolist() == self.response_template
-            ]
+            if last_assistant_start == -1:
+                raise ValueError(f"No assistant message found in example {i}")
 
-            if not response_starts:
-                # If no response template is found, treat the whole input as a prompt
-                prompts.append(input_ids)
-                completions.append(torch.tensor([]))
-                labels[:] = self.ignore_index
-            else:
-                # Get the start of the last response
-                last_response_start = response_starts[-1]
+            # Tokenize up to the last assistant message to get the prompt length
+            prompt_length = len(self.tokenizer.encode(formatted_chats[i][:last_assistant_start]))
 
-                # Separate prompt and completion
-                prompts.append(input_ids[:last_response_start])
-                completions.append(input_ids[last_response_start:])
+            # Set prompt and ignore labels for it
+            prompts.append(batch["input_ids"][i, :prompt_length])
+            labels[i, :prompt_length] = self.ignore_index
 
-                # Set labels for all tokens before the last response to ignore_index
-                labels[:last_response_start] = self.ignore_index
+            # Set completion
+            completion_length = batch["input_ids"][i].size(0) - prompt_length
+            completions.append(batch["input_ids"][i, prompt_length:])
 
-        # Add prompts and completions to the batch
+            # Remove padding from labels
+            pad_start = (batch["input_ids"][i] == self.tokenizer.pad_token_id).nonzero()
+            if len(pad_start) > 0:
+                labels[i, pad_start[0] :] = self.ignore_index
+
+        # Pad prompts and completions
+        batch["labels"] = labels
         batch["prompts"] = pad(prompts, padding_value=self.tokenizer.pad_token_id, padding_side="left")
         batch["completions"] = pad(completions, padding_value=self.tokenizer.pad_token_id, padding_side="right")
 

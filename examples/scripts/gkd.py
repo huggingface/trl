@@ -17,8 +17,7 @@
 python examples/scripts/gkd.py \
     --model_name_or_path="Qwen/Qwen2-0.5B-Instruct" \
     --teacher_model_name_or_path="Qwen/Qwen2-1.5B-Instruct" \
-    --dataset_name="timdettmers/openassistant-guanaco" \
-    --dataset_text_field="text" \
+    --dataset_name="andito/chatbot_arena_completions" \
     --report_to="wandb" \
     --learning_rate=2e-5 \
     --per_device_train_batch_size=64 \
@@ -34,8 +33,7 @@ python examples/scripts/gkd.py \
 python examples/scripts/gkd.py \
     --model_name_or_path="Qwen/Qwen2-0.5B-Instruct" \
     --teacher_model_name_or_path="Qwen/Qwen2-1.5B-Instruct" \
-    --dataset_name="timdettmers/openassistant-guanaco" \
-    --dataset_text_field="text" \
+    --dataset_name="andito/chatbot_arena_completions" \
     --report_to="wandb" \
     --learning_rate=2e-4 \
     --per_device_train_batch_size=64 \
@@ -54,10 +52,10 @@ python examples/scripts/gkd.py \
 import logging
 import os
 from contextlib import nullcontext
+from typing import Any, Dict, List, Union
 
 from trl.commands.cli_utils import SFTScriptArguments, TrlParser, init_zero_verbose
 from trl.env_utils import strtobool
-
 
 TRL_USE_RICH = strtobool(os.getenv("TRL_USE_RICH", "0"))
 
@@ -68,10 +66,10 @@ if TRL_USE_RICH:
     from rich.console import Console
     from rich.logging import RichHandler
 
+from accelerate import PartialState
 from datasets import load_dataset
 from tqdm.rich import tqdm
 from transformers import AutoTokenizer
-
 from trl import (
     GKDConfig,
     GKDTrainer,
@@ -80,16 +78,14 @@ from trl import (
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
+    setup_chat_format,
 )
-from trl.trainer.utils import DataCollatorForLastCompletionLM
+from trl.trainer.utils import DataCollatorForChatML
 
 tqdm.pandas()
 
 if TRL_USE_RICH:
     logging.basicConfig(format=FORMAT, datefmt="[%X]", handlers=[RichHandler()], level=logging.INFO)
-
-import torch
-from typing import List, Dict, Any, Union
 
 
 if __name__ == "__main__":
@@ -115,16 +111,14 @@ if __name__ == "__main__":
         quantization_config=quantization_config,
     )
     training_args.model_init_kwargs = model_kwargs
+
     tokenizer = AutoTokenizer.from_pretrained(
         model_config.model_name_or_path,
         trust_remote_code=model_config.trust_remote_code,
         use_fast=True,
     )
-    tokenizer.pad_token = tokenizer.eos_token
-    tokenizer.model_max_length = 1024
-
-    response_template = "### Assistant:"
-    collator = DataCollatorForLastCompletionLM(response_template=response_template, tokenizer=tokenizer)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
 
     ################
     # Dataset
@@ -132,6 +126,7 @@ if __name__ == "__main__":
     raw_datasets = load_dataset(args.dataset_name)
     train_dataset = raw_datasets[args.dataset_train_split]
     eval_dataset = raw_datasets[args.dataset_test_split]
+    data_collator = DataCollatorForChatML(tokenizer=tokenizer)
 
     ################
     # Optional rich context managers
@@ -156,7 +151,7 @@ if __name__ == "__main__":
             tokenizer=tokenizer,
             peft_config=get_peft_config(model_config),
             callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
-            data_collator=collator,
+            data_collator=data_collator,
         )
 
     trainer.train()

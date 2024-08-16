@@ -37,6 +37,9 @@ class GKDTrainer(SFTTrainer):
         *sft_args,
         **kwargs,
     ):
+        # add remove_unused_columns=False to the the dataclass args
+        args.remove_unused_columns = False
+
         super().__init__(*sft_args, args=args, **kwargs)
 
         if args.teacher_model_init_kwargs is None:
