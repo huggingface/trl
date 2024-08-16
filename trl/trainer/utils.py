@@ -227,7 +227,7 @@ class DataCollatorForChatML(DataCollatorForLanguageModeling):
         self.max_length = max_length or self.tokenizer.model_max_length
 
     def __call__(self, examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
-        # Apply chat template to each example
+        # Apply chat template to each conversation
         formatted_chats = [
             self.tokenizer.apply_chat_template(example["messages"], tokenize=False) for example in examples
         ]
@@ -238,39 +238,37 @@ class DataCollatorForChatML(DataCollatorForLanguageModeling):
         )
 
         # Prepare labels, prompts, and completions
-        labels = batch["input_ids"].clone()
+        labels = torch.full_like(batch["input_ids"], self.ignore_index)
         prompts = []
         completions = []
 
-        for i in range(len(examples)):
-            # Find the start of the last assistant message
-            last_assistant_start = formatted_chats[i].rfind(
-                self.tokenizer.apply_chat_template([{"role": "assistant", "content": ""}], tokenize=False)
-            )
+        for i, (input_ids, example) in enumerate(zip(batch["input_ids"], examples)):
+            messages = example["messages"]
+            # Tokenize all messages except the last one for the prompt
+            prompt_text = self.tokenizer.apply_chat_template(messages[:-1], tokenize=False)
+            prompt_ids = self.tokenizer.encode(prompt_text, add_special_tokens=False)
+            prompt_length = len(prompt_ids)
 
-            if last_assistant_start == -1:
-                raise ValueError(f"No assistant message found in example {i}")
+            # Tokenize the last message for the completion
+            completion_text = messages[-1]["content"]
+            completion_ids = self.tokenizer.encode(completion_text, add_special_tokens=False)
+            completion_length = len(completion_ids)
 
-            # Tokenize up to the last assistant message to get the prompt length
-            prompt_length = len(self.tokenizer.encode(formatted_chats[i][:last_assistant_start]))
+            # Set labels for the completion part
+            labels[i, prompt_length : prompt_length + completion_length] = input_ids[
+                prompt_length : prompt_length + completion_length
+            ]
 
-            # Set prompt and ignore labels for it
-            prompts.append(batch["input_ids"][i, :prompt_length])
-            labels[i, :prompt_length] = self.ignore_index
+            # Store prompts and completions
+            prompts.append(input_ids[:prompt_length])
+            completions.append(input_ids[prompt_length : prompt_length + completion_length])
 
-            # Set completion
-            completion_length = batch["input_ids"][i].size(0) - prompt_length
-            completions.append(batch["input_ids"][i, prompt_length:])
+        prompts = pad(prompts, padding_value=self.tokenizer.pad_token_id, padding_side="left")
+        completions = pad(completions, padding_value=self.tokenizer.pad_token_id, padding_side="right")
 
-            # Remove padding from labels
-            pad_start = (batch["input_ids"][i] == self.tokenizer.pad_token_id).nonzero()
-            if len(pad_start) > 0:
-                labels[i, pad_start[0] :] = self.ignore_index
-
-        # Pad prompts and completions
         batch["labels"] = labels
-        batch["prompts"] = pad(prompts, padding_value=self.tokenizer.pad_token_id, padding_side="left")
-        batch["completions"] = pad(completions, padding_value=self.tokenizer.pad_token_id, padding_side="right")
+        batch["prompts"] = prompts
+        batch["completions"] = completions
 
         return batch
 
