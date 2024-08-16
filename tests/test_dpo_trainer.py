@@ -112,6 +112,16 @@ class DPOTrainerTester(unittest.TestCase):
                     training_args.label_pad_token_id
                 ] * len(result["prompt_input_ids"])
 
+                # Check if BOS token is added
+                self.assertEqual(result["prompt_input_ids"][0], dummy_tokenizer.bos_token_id)
+                self.assertEqual(result["chosen_input_ids"][0], dummy_tokenizer.bos_token_id)
+                self.assertEqual(result["rejected_input_ids"][0], dummy_tokenizer.bos_token_id)
+
+                # Check if EOS token is added
+                self.assertEqual(result["chosen_input_ids"][-1], dummy_tokenizer.eos_token_id)
+                self.assertEqual(result["rejected_input_ids"][-1], dummy_tokenizer.eos_token_id)
+
+
     def test_build_tokenized_answer_text_only(self):
         dummy_tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         prompt = "Translate to French:"
