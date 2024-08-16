@@ -155,14 +155,20 @@ if __name__ == "__main__":
             ds[key] = ds[key].select(range(50))
 
     def process(row):
+        # judge the third issue.
+        chat_right = True
         # judge chat template
         prompt = row["chosen"][:-1]
         chosen = [row["chosen"][-1]]
         test_prompt = tokenizer.apply_chat_template(prompt, tokenize=False)
-        test_chosen = tokenizer.apply_chat_template(chosen, tokenize=False)
+        try:
+            test_chosen = tokenizer.apply_chat_template(chosen, tokenize=False)
+        except Exception as e:
+            chat_right = False
         conversation = copy.deepcopy(prompt)
         conversation.append(row["chosen"][-1])
-        if tokenizer.apply_chat_template(conversation) == test_prompt + test_chosen:
+        # the chat_right is for the third issue, the subsequent checks is for the first and second issues.
+        if chat_right and tokenizer.apply_chat_template(conversation) == test_prompt + test_chosen:
             row["prompt"] = tokenizer.apply_chat_template(row["chosen"][:-1], tokenize=False)
             row["chosen"] = tokenizer.apply_chat_template([row["chosen"][-1]], tokenize=False)
             row["rejected"] = tokenizer.apply_chat_template([row["rejected"][-1]], tokenize=False)
