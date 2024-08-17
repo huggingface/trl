@@ -31,6 +31,7 @@ python examples/scripts/reward_modeling.py \
 import warnings
 
 import torch
+from accelerate import PartialState
 from datasets import load_dataset
 from tqdm import tqdm
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, HfArgumentParser
@@ -57,13 +58,14 @@ if __name__ == "__main__":
     quantization_config = get_quantization_config(model_config)
     model_kwargs = dict(
         revision=model_config.model_revision,
-        trust_remote_code=model_config.trust_remote_code,
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
-    tokenizer = AutoTokenizer.from_pretrained(model_config.model_name_or_path, use_fast=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, use_fast=True
+    )
     model = AutoModelForSequenceClassification.from_pretrained(
-        model_config.model_name_or_path, num_labels=1, **model_kwargs
+        model_config.model_name_or_path, num_labels=1, trust_remote_code=model_config.trust_remote_code, **model_kwargs
     )
 
     if model_config.lora_task_type != "SEQ_CLS":
@@ -98,14 +100,20 @@ if __name__ == "__main__":
         return new_examples
 
     # Preprocess the dataset and filter out examples that are longer than args.max_length
-    raw_datasets = raw_datasets.map(
-        preprocess_function,
-        batched=True,
-        num_proc=4,
-    )
-    raw_datasets = raw_datasets.filter(
-        lambda x: len(x["input_ids_chosen"]) <= config.max_length and len(x["input_ids_rejected"]) <= config.max_length
-    )
+    # Compute that only on the main process for faster data processing.
+    # see: https://github.com/huggingface/trl/pull/1255
+    with PartialState().local_main_process_first():
+        raw_datasets = raw_datasets.map(
+            preprocess_function,
+            batched=True,
+            num_proc=config.dataset_num_proc,
+        )
+        raw_datasets = raw_datasets.filter(
+            lambda x: len(x["input_ids_chosen"]) <= config.max_length
+            and len(x["input_ids_rejected"]) <= config.max_length,
+            num_proc=config.dataset_num_proc,
+        )
+
     train_dataset = raw_datasets["train"]
     eval_dataset = raw_datasets["test"]
 

@@ -21,16 +21,15 @@ from functools import partial
 
 import pytest
 import torch
-from huggingface_hub import HfApi, HfFolder, delete_repo
+from huggingface_hub import HfApi
 from parameterized import parameterized
-from pytest import mark
 from requests.exceptions import HTTPError
 from transformers import AutoTokenizer
 
 from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead, PPOConfig, PPOTrainer, set_seed
 from trl.core import respond_to_batch
 
-from .testing_constants import CI_HUB_ENDPOINT, CI_HUB_USER, CI_HUB_USER_TOKEN
+from .testing_constants import CI_HUB_ENDPOINT, CI_HUB_USER
 from .testing_utils import require_peft, require_torch_multi_gpu
 
 
@@ -104,46 +103,40 @@ class PPOTrainerTester(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        set_seed(42)
-        cls._token = CI_HUB_USER_TOKEN
         cls._api = HfApi(endpoint=CI_HUB_ENDPOINT)
-        HfFolder.save_token(CI_HUB_USER_TOKEN)
+
+    def setUp(self):
+        set_seed(42)
 
         # model_id
-        cls.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
 
         # get models and tokenizer
-        cls.gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(cls.model_id)
-        cls.gpt2_model_ref = AutoModelForCausalLMWithValueHead.from_pretrained(cls.model_id)
-        cls.gpt2_tokenizer = AutoTokenizer.from_pretrained(cls.model_id)
+        self.gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(self.model_id)
+        self.gpt2_ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(self.model_id)
+        self.gpt2_tokenizer = AutoTokenizer.from_pretrained(self.model_id)
 
-        cls.gpt2_tokenizer.pad_token = cls.gpt2_tokenizer.eos_token
+        self.gpt2_tokenizer.pad_token = self.gpt2_tokenizer.eos_token
 
         # get bloom as right padding examples:
         model_id = "trl-internal-testing/tiny-BloomForCausalLM-correct-vocab"
-        cls.bloom_model = AutoModelForCausalLMWithValueHead.from_pretrained(model_id)
-        cls.bloom_tokenizer = AutoTokenizer.from_pretrained(model_id)
+        self.bloom_model = AutoModelForCausalLMWithValueHead.from_pretrained(model_id)
+        self.bloom_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration-correct-vocab"
-        cls.t5_model = AutoModelForSeq2SeqLMWithValueHead.from_pretrained(model_id)
-        cls.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
+        self.t5_model = AutoModelForSeq2SeqLMWithValueHead.from_pretrained(model_id)
+        self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         # initialize trainer
-        cls.ppo_config = PPOConfig(batch_size=2, mini_batch_size=1, log_with=None)
+        self.ppo_config = PPOConfig(batch_size=2, mini_batch_size=1, log_with=None)
 
     @classmethod
     def tearDownClass(cls):
         for model in [f"{CI_HUB_USER}/test-ppo-trainer"]:
             try:
-                delete_repo(token=cls._token, repo_id=model)
+                cls._api.delete_repo(repo_id=model)
             except HTTPError:
                 pass
-
-    def setUp(self):
-        # initialize trainer
-        self.ppo_config = PPOConfig(batch_size=2, mini_batch_size=1, log_with=None)
-        self.gpt2_model.train()
-        return super().setUp()
 
     def tearDown(self):
         # free memory
@@ -175,7 +168,7 @@ class PPOTrainerTester(unittest.TestCase):
         ppo_trainer = PPOTrainer(
             config=self.ppo_config,
             model=self.gpt2_model,
-            ref_model=self.gpt2_model_ref,
+            ref_model=self.gpt2_ref_model,
             tokenizer=self.gpt2_tokenizer,
             dataset=dummy_dataset,
         )
@@ -190,7 +183,7 @@ class PPOTrainerTester(unittest.TestCase):
         ppo_trainer = PPOTrainer(
             config=self.ppo_config,
             model=self.gpt2_model,
-            ref_model=self.gpt2_model_ref,
+            ref_model=self.gpt2_ref_model,
             tokenizer=self.gpt2_tokenizer,
             dataset=dummy_dataset,
         )
@@ -218,7 +211,7 @@ class PPOTrainerTester(unittest.TestCase):
         ppo_trainer = PPOTrainer(
             config=self.ppo_config,
             model=self.gpt2_model,
-            ref_model=self.gpt2_model_ref,
+            ref_model=self.gpt2_ref_model,
             tokenizer=self.gpt2_tokenizer,
             dataset=dummy_dataset,
         )
@@ -434,7 +427,7 @@ class PPOTrainerTester(unittest.TestCase):
             _ = PPOTrainer(
                 config=self.ppo_config,
                 model=self.gpt2_model,
-                ref_model=self.gpt2_model_ref,
+                ref_model=self.gpt2_ref_model,
                 tokenizer=self.gpt2_tokenizer,
                 dataset=dummy_dataset,
                 num_shared_layers=num_shared_layers,
@@ -532,7 +525,7 @@ class PPOTrainerTester(unittest.TestCase):
             ppo_trainer = PPOTrainer(
                 config=self.ppo_config,
                 model=self.gpt2_model,
-                ref_model=self.gpt2_model_ref,
+                ref_model=self.gpt2_ref_model,
                 tokenizer=self.gpt2_tokenizer,
             )
         ppo_trainer.optimizer.zero_grad = partial(ppo_trainer.optimizer.zero_grad, set_to_none=False)
@@ -602,8 +595,8 @@ class PPOTrainerTester(unittest.TestCase):
             returns[idx].unsqueeze(0),
         )
 
-        assert abs(pg_loss.item() - 2.0494) < 0.0001
-        assert abs(v_loss.item() - 0.0711) < 0.0001
+        assert abs(pg_loss.item() - 1.8226) < 0.0001
+        assert abs(v_loss.item() - 0.1260) < 0.0001
 
         # check if we get same results with masked parts removed
         pg_loss_unmasked, v_loss_unmasked, _ = ppo_trainer.loss(
@@ -616,8 +609,8 @@ class PPOTrainerTester(unittest.TestCase):
             apply_mask(advantages[idx], mask[idx]).unsqueeze(0),
             apply_mask(returns[idx], mask[idx]).unsqueeze(0),
         )
-        assert abs(pg_loss_unmasked.item() - 2.0494) < 0.0001
-        assert abs(v_loss_unmasked.item() - 0.0711) < 0.0001
+        assert abs(pg_loss_unmasked.item() - 1.8226) < 0.0001
+        assert abs(v_loss_unmasked.item() - 0.1260) < 0.0001
 
     @parameterized.expand(
         [
@@ -855,7 +848,6 @@ class PPOTrainerTester(unittest.TestCase):
         assert torch.allclose(output, expected_output, atol=0.0001)
 
     @require_peft
-    @mark.peft_test
     def test_peft_model_ppo_trainer(self):
         from peft import LoraConfig, get_peft_model
         from transformers import AutoModelForCausalLM
@@ -915,7 +907,6 @@ class PPOTrainerTester(unittest.TestCase):
                 assert param.grad is None, f"Parameter {name} has a gradient"
 
     @require_peft
-    @mark.peft_test
     def test_peft_model_ppo_adapter_rm_trainer(self):
         from peft import LoraConfig, get_peft_model
         from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification
@@ -995,9 +986,10 @@ class PPOTrainerTester(unittest.TestCase):
                 _ = ppo_trainer.step(list(query_tensor), list(response_tensor), reward)
                 break
 
+            dummy_inputs = dummy_inputs.to(ppo_trainer.accelerator.device)
             new_logits = ppo_trainer.model.compute_reward_score(dummy_inputs)
-            assert not torch.allclose(previous_rm_logits, new_logits[:, -1, :])
-            assert torch.allclose(original_rm_logits, new_logits[:, -1, :])
+            assert not torch.allclose(previous_rm_logits.to(ppo_trainer.accelerator.device), new_logits[:, -1, :])
+            assert torch.allclose(original_rm_logits.to(ppo_trainer.accelerator.device), new_logits[:, -1, :])
 
             # check gradients
             for name, param in model.named_parameters():
@@ -1047,7 +1039,6 @@ class PPOTrainerTester(unittest.TestCase):
 
     @require_peft
     @require_torch_multi_gpu
-    @mark.peft_test
     def test_peft_model_ppo_trainer_multi_gpu(self):
         from peft import LoraConfig, get_peft_model
         from transformers import AutoModelForCausalLM
@@ -1133,6 +1124,7 @@ class PPOTrainerTester(unittest.TestCase):
         tokenizer.pad_token = tokenizer.eos_token
 
         model_inputs = [tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts]
+        model_inputs = [input_ids.to(ppo_trainer.accelerator.device) for input_ids in model_inputs]
 
         generations_batched = ppo_trainer.generate(model_inputs, batch_size=2, **generation_kwargs)
         generations_batched = tokenizer.batch_decode(generations_batched)
@@ -1168,6 +1160,7 @@ class PPOTrainerTester(unittest.TestCase):
         tokenizer.pad_token = tokenizer.eos_token
 
         model_inputs = [tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts]
+        model_inputs = [input_ids.to(ppo_trainer.accelerator.device) for input_ids in model_inputs]
 
         generations_batched, ref_generations_batched = ppo_trainer.generate(
             model_inputs, batch_size=2, generate_ref_response=True, **generation_kwargs
@@ -1267,7 +1260,7 @@ class PPOTrainerTester(unittest.TestCase):
         ppo_trainer = PPOTrainer(
             config=ppo_config,
             model=self.gpt2_model,
-            ref_model=self.gpt2_model_ref,
+            ref_model=self.gpt2_ref_model,
             tokenizer=self.gpt2_tokenizer,
             dataset=dummy_dataset,
         )

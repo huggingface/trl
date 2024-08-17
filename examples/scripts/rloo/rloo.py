@@ -1,5 +1,6 @@
 import shutil
 
+from accelerate import PartialState
 from datasets import load_dataset
 from transformers import (
     AutoModelForCausalLM,
@@ -55,14 +56,20 @@ if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained(
         model_config.model_name_or_path,
         padding_side="left",
-        trust_remote_code=True,
+        trust_remote_code=model_config.trust_remote_code,
     )
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_QUERY_CHAT_TEMPLATE
-    reward_model = AutoModelForSequenceClassification.from_pretrained(config.reward_model_path, num_labels=1)
-    ref_policy = AutoModelForCausalLM.from_pretrained(config.sft_model_path)
-    policy = AutoModelForCausalLM.from_pretrained(config.sft_model_path)
+    reward_model = AutoModelForSequenceClassification.from_pretrained(
+        config.reward_model_path, trust_remote_code=model_config.trust_remote_code, num_labels=1
+    )
+    ref_policy = AutoModelForCausalLM.from_pretrained(
+        config.sft_model_path, trust_remote_code=model_config.trust_remote_code
+    )
+    policy = AutoModelForCausalLM.from_pretrained(
+        config.sft_model_path, trust_remote_code=model_config.trust_remote_code
+    )
     ################
     # Dataset
     ################
@@ -84,11 +91,16 @@ if __name__ == "__main__":
 
         return dataset.map(
             tokenize,
-            remove_columns=dataset.column_names,
             batched=True,
-            num_proc=4,  # multiprocessing.cpu_count(),
-            load_from_cache_file=False,
+            remove_columns=dataset.column_names,
+            num_proc=config.dataset_num_proc,
         )
+
+    # Compute that only on the main process for faster data processing.
+    # see: https://github.com/huggingface/trl/pull/1255
+    with PartialState().local_main_process_first():
+        train_dataset = prepare_dataset(train_dataset, tokenizer)
+        eval_dataset = prepare_dataset(eval_dataset, tokenizer)
 
     ################
     # Training
@@ -99,8 +111,8 @@ if __name__ == "__main__":
         policy=policy,
         ref_policy=ref_policy,
         reward_model=reward_model,
-        train_dataset=prepare_dataset(train_dataset, tokenizer),
-        eval_dataset=prepare_dataset(eval_dataset, tokenizer),
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
     )
     trainer.train()
     trainer.save_model(config.output_dir)

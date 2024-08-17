@@ -21,7 +21,6 @@ python examples/scripts/bco.py \
     --no_remove_unused_columns \
     --warmup_ratio 0.1 \
     --bf16 \
-    --loss_type bco \
     --report_to wandb
 
 # QLoRA:
@@ -46,7 +45,6 @@ python examples/scripts/bco.py \
     --no_remove_unused_columns \
     --warmup_ratio 0.1 \
     --bf16 \
-    --loss_type bco \
     --use_peft \
     --load_in_4bit \
     --lora_target_modules=all-linear \
@@ -57,7 +55,7 @@ python examples/scripts/bco.py \
 import logging
 from dataclasses import dataclass
 from functools import partial
-from typing import Literal
+from typing import Literal, Optional
 
 import torch
 import torch.nn.functional as F
@@ -65,20 +63,20 @@ from accelerate import Accelerator, PartialState
 from datasets import Dataset, load_dataset
 from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, PreTrainedModel
 
-from trl import KTOConfig, KTOTrainer, ModelConfig, get_peft_config, setup_chat_format
+from trl import BCOConfig, BCOTrainer, ModelConfig, get_peft_config, setup_chat_format
 
 
 # Define and parse arguments.
 @dataclass
 class ScriptArguments:
     """
-    The arguments for the KTO training script.
+    The arguments for the BCO training script.
     """
 
     llm_name: Literal["gpt-3.5-turbo", "llama-2-7b-chat", "llama-2-70b-chat"] = "gpt-3.5-turbo"
 
 
-def build_helpfulness_dataset(llm_name: str) -> Dataset:
+def build_helpfulness_dataset(llm_name: str, num_proc: Optional[int] = None) -> Dataset:
     """
     Filter `llm_name` completions and binarize given their helpfulness score.
     If helpfulness score is 5, it is desirable. Otherwise, it is undesirable.
@@ -102,34 +100,36 @@ def build_helpfulness_dataset(llm_name: str) -> Dataset:
 
     dataset = load_dataset("openbmb/UltraFeedback")["train"]
 
-    ds = dataset.filter(lambda example: llm_name in example["models"], batched=False, num_proc=8)
-    ds = ds.filter(lambda example: len(example["models"]) == len(example["completions"]), batched=False, num_proc=8)
+    ds = dataset.filter(lambda example: llm_name in example["models"], batched=False, num_proc=num_proc)
+    ds = ds.filter(
+        lambda example: len(example["models"]) == len(example["completions"]), batched=False, num_proc=num_proc
+    )
 
     METRIC = "helpfulness"
 
     ds = ds.map(
         get_model_rating,
         batched=False,
-        num_proc=8,
         fn_kwargs={"metric": METRIC, "llm_name": llm_name},
+        num_proc=num_proc,
     )
 
     ds = ds.map(
         get_model_response,
         batched=False,
-        num_proc=8,
         fn_kwargs={"llm_name": llm_name},
+        num_proc=num_proc,
     )
 
     ds = ds.select_columns(["source", "instruction", "response", "helpfulness"])
 
     ds = ds.rename_columns({"instruction": "prompt", "response": "completion"})
-    ds = ds.map(lambda example: {"label": example["helpfulness"] >= 5}, batched=False, num_proc=8)
+    ds = ds.map(lambda example: {"label": example["helpfulness"] >= 5}, batched=False, num_proc=num_proc)
 
     ds = ds.map(
         lambda example: {"prompt": [{"role": "user", "content": example["prompt"]}]},
         batched=False,
-        num_proc=8,
+        num_proc=num_proc,
     )
     dataset = ds.train_test_split(test_size=0.05, seed=42)
 
@@ -160,25 +160,28 @@ def embed_prompt(input_ids: torch.LongTensor, attention_mask: torch.LongTensor, 
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser((ScriptArguments, KTOConfig, ModelConfig))
-    script_args, kto_args, model_args = parser.parse_args_into_dataclasses()
+    parser = HfArgumentParser((ScriptArguments, BCOConfig, ModelConfig))
+    script_args, bco_args, model_args = parser.parse_args_into_dataclasses()
 
-    kto_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
+    bco_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
     # Load a pretrained model
-    model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path)
-    model_ref = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
+    )
+    ref_model = AutoModelForCausalLM.from_pretrained(
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
+    )
 
-    tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
+    )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
     # If we are aligning a base model, we use ChatML as the default template
     if tokenizer.chat_template is None:
         model, tokenizer = setup_chat_format(model, tokenizer)
-
-    # Load the dataset
-    dataset = build_helpfulness_dataset(script_args.llm_name)
 
     # Apply chat template
     def format_dataset(example):
@@ -187,29 +190,35 @@ if __name__ == "__main__":
         )
         return example
 
+    # Compute that only on the main process for faster data processing.
+    # see: https://github.com/huggingface/trl/pull/1255
     with PartialState().local_main_process_first():
-        formatted_dataset = dataset.map(format_dataset, batched=False, num_proc=8)
+        # Load the dataset
+        dataset = build_helpfulness_dataset(script_args.llm_name, num_proc=bco_args.dataset_num_proc)
+        formatted_dataset = dataset.map(format_dataset, batched=False, num_proc=bco_args.dataset_num_proc)
 
     accelerator = Accelerator()
     embedding_model = AutoModel.from_pretrained(
         "nomic-ai/nomic-embed-text-v1.5",
-        trust_remote_code=True,
+        trust_remote_code=model_args.trust_remote_code,
         safe_serialization=True,
         torch_dtype=torch.bfloat16,
         device_map="auto",
     )
     embedding_model = accelerator.prepare_model(embedding_model)
-    embedding_tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+    embedding_tokenizer = AutoTokenizer.from_pretrained(
+        "bert-base-uncased", trust_remote_code=model_args.trust_remote_code
+    )
     embedding_func = partial(
         embed_prompt,
         model=embedding_model,
     )
 
-    # Initialize the KTO trainer
-    kto_trainer = KTOTrainer(
+    # Initialize the BCO trainer
+    bco_trainer = BCOTrainer(
         model,
-        model_ref,
-        args=kto_args,
+        ref_model,
+        args=bco_args,
         train_dataset=formatted_dataset["train"],
         eval_dataset=formatted_dataset["test"],
         tokenizer=tokenizer,
@@ -219,5 +228,5 @@ if __name__ == "__main__":
     )
 
     # Train and push the model to the Hub
-    kto_trainer.train()
-    kto_trainer.save_model(kto_args.output_dir)
+    bco_trainer.train()
+    bco_trainer.save_model(bco_args.output_dir)

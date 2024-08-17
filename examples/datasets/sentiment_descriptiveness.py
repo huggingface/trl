@@ -41,6 +41,9 @@ class ScriptArguments:
     )
     push_to_hub: Optional[bool] = field(default=False, metadata={"help": "Push the dataset to the Hugging Face Hub"})
     task: str = field(default="sentiment", metadata={"help": "The task of the dataset"})
+    dataset_num_proc: Optional[int] = field(
+        default=None, metadata={"help": "The number of workers to use to tokenize the data"}
+    )
 
 
 task_to_filename = {
@@ -106,7 +109,7 @@ if __name__ == "__main__":
             return True
 
     print("=== Before filtering ===", ds)
-    ds = ds.filter(filter, load_from_cache_file=False)
+    ds = ds.filter(filter, num_proc=args.dataset_num_proc)
     print("=== After filtering ===", ds)
 
     # here we simply take the preferred sample as the chosen one and the first non-preferred sample as the rejected one
@@ -143,11 +146,7 @@ if __name__ == "__main__":
             assert chosen_sample != rejected_sample
         return row
 
-    ds = ds.map(
-        process,
-        batched=True,
-        load_from_cache_file=False,
-    )
+    ds = ds.map(process, batched=True, num_proc=args.dataset_num_proc)
     for key in ds:  # reorder columns
         ds[key] = ds[key].select_columns(["prompt", "chosen", "rejected"])
     if args.push_to_hub:
@@ -177,7 +176,7 @@ if __name__ == "__main__":
         )
         sft_card.text = f"""\
 # TRL's Preference Dataset: {args.task}
-The dataset comes from https://arxiv.org/abs/1909.08593, one of the earliest RLHF work from OpenAI.
+The dataset comes from https://huggingface.co/papers/1909.08593, one of the earliest RLHF work from OpenAI.
 We preprocess the dataset using our standard `prompt, chosen, rejected` format.
 ## Reproduce this dataset
 1. Download the `{file_name}` from the {repo_full_url}.

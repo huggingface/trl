@@ -55,6 +55,7 @@ python examples/scripts/kto.py \
 
 from dataclasses import dataclass
 
+from accelerate import PartialState
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
@@ -76,10 +77,16 @@ if __name__ == "__main__":
     script_args, kto_args, model_args = parser.parse_args_into_dataclasses()
 
     # Load a pretrained model
-    model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path)
-    model_ref = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
+    )
+    ref_model = AutoModelForCausalLM.from_pretrained(
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
+    )
 
-    tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
+    )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -96,12 +103,15 @@ if __name__ == "__main__":
         example["completion"] = tokenizer.apply_chat_template(example["completion"], tokenize=False)
         return example
 
-    formatted_dataset = dataset.map(format_dataset)
+    # Compute that only on the main process for faster data processing.
+    # see: https://github.com/huggingface/trl/pull/1255
+    with PartialState().local_main_process_first():
+        formatted_dataset = dataset.map(format_dataset, num_proc=kto_args.dataset_num_proc)
 
     # Initialize the KTO trainer
     kto_trainer = KTOTrainer(
         model,
-        model_ref,
+        ref_model,
         args=kto_args,
         train_dataset=formatted_dataset["train"],
         eval_dataset=formatted_dataset["test"],
