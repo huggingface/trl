@@ -246,7 +246,7 @@ class RewardTrainer(Trainer):
 
         if self.args.center_rewards_coefficient is not None:
             loss += self.args.center_rewards_coefficient * torch.mean(
-                torch.square(torch.add(rewards_chosen, rewards_rejected))
+                (rewards_chosen + rewards_rejected) ** 2
             )
 
         if return_outputs:
