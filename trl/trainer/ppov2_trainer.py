@@ -142,6 +142,7 @@ class PPOv2Trainer(Trainer):
         if args.stop_token and args.stop_token == "eos":
             args.stop_token_id = tokenizer.eos_token_id
         self.model = PolicyAndValueWrapper(policy, value_model)
+        self.model.config = policy.config  # needed for pushing to hub
         self.create_optimizer_and_scheduler(
             num_training_steps=args.num_total_batches
         )  # note that we are calling `self.lr_scheduler.step()` manually only at the batch level
@@ -213,7 +214,6 @@ class PPOv2Trainer(Trainer):
         return self.eval_dataloader
 
     def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
-        """Modified from `Trainer.save_model` to only save the policy and not the value network."""
         backup_model = self.model
         self.model = self.model.policy  # save only the policy
 
@@ -221,7 +221,7 @@ class PPOv2Trainer(Trainer):
             backup_deepspeed = self.deepspeed
             self.deepspeed = self.model
 
-        super().save_model(self, output_dir, _internal_call)
+        super().save_model(output_dir, _internal_call)
 
         self.model = backup_model
 
