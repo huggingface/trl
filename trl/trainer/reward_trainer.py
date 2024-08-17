@@ -244,6 +244,9 @@ class RewardTrainer(Trainer):
         else:
             loss = -nn.functional.logsigmoid(rewards_chosen - rewards_rejected).mean()
 
+        if self.args.center_rewards_coefficient is not None:
+            loss += self.args.center_rewards_coefficient * torch.mean((rewards_chosen + rewards_rejected) ** 2)
+
         if return_outputs:
             return loss, {
                 "rewards_chosen": rewards_chosen,
