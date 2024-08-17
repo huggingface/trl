@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import warnings
+from functools import wraps
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import torch
@@ -30,6 +31,7 @@ from transformers.trainer_utils import EvalLoopOutput
 
 from ..core import PPODecorators
 from ..import_utils import is_peft_available
+from .utils import trl_sanitze_kwargs_for_tagging
 
 
 if is_peft_available():
@@ -57,6 +59,8 @@ class IterativeSFTTrainer(Trainer):
         **compute_metrics** (`Callable[[EvalPrediction], Dict]`, *optional*): -- The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to metric values.
         **optimize_device_cache ** (`bool`, *optional*, defaults to `False`) -- Optimize CUDA cache for slightly more memory-efficient training.
     """
+
+    _tag_names = ["trl", "iterative-sft"]
 
     def __init__(
         self,
@@ -365,3 +369,18 @@ class IterativeSFTTrainer(Trainer):
                 self._globalstep_last_logged = self.state.global_step
 
                 self.log(logs)
+
+    @wraps(Trainer.push_to_hub)
+    def push_to_hub(
+        self,
+        commit_message: Optional[str] = "End of training",
+        blocking: bool = True,
+        token: Optional[str] = None,
+        **kwargs,
+    ) -> str:
+        """
+        Overwrite the `push_to_hub` method in order to force-add the tag "dpo" when pushing the
+        model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
+        """
+        kwargs = trl_sanitze_kwargs_for_tagging(model=self.model, tag_names=self._tag_names, kwargs=kwargs)
+        return super().push_to_hub(commit_message=commit_message, blocking=blocking, token=token, **kwargs)

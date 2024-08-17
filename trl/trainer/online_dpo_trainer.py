@@ -3,6 +3,7 @@ import math
 import os
 import time
 from collections import defaultdict
+from functools import wraps
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -40,12 +41,15 @@ from ..trainer.utils import (
     truncate_response,
 )
 from .online_dpo_config import OnlineDPOConfig
+from .utils import trl_sanitze_kwargs_for_tagging
 
 
 INVALID_LOGPROB = 1.0
 
 
 class OnlineDPOTrainer(Trainer):
+    _tag_names = ["trl", "online-dpo"]
+
     def __init__(
         self,
         config: OnlineDPOConfig,
@@ -570,3 +574,18 @@ class OnlineDPOTrainer(Trainer):
 
             if wandb.run is not None:
                 wandb.log({"completions": wandb.Table(dataframe=df)})
+
+    @wraps(Trainer.push_to_hub)
+    def push_to_hub(
+        self,
+        commit_message: Optional[str] = "End of training",
+        blocking: bool = True,
+        token: Optional[str] = None,
+        **kwargs,
+    ) -> str:
+        """
+        Overwrite the `push_to_hub` method in order to force-add the tag "online-dpo" when pushing the
+        model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
+        """
+        kwargs = trl_sanitze_kwargs_for_tagging(model=self.model, tag_names=self._tag_names, kwargs=kwargs)
+        return super().push_to_hub(commit_message=commit_message, blocking=blocking, token=token, **kwargs)
