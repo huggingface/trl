@@ -204,7 +204,6 @@ class SimPOTrainer(Trainer):
             self.is_encoder_decoder = args.is_encoder_decoder
 
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
-        self.model_adapter_name = args.model_adapter_name
 
         if tokenizer is None:
             raise ValueError("tokenizer must be specified to tokenize a SimPO dataset.")
