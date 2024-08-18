@@ -15,6 +15,7 @@ import inspect
 import warnings
 from collections import defaultdict
 from dataclasses import FrozenInstanceError, replace
+from functools import wraps
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
@@ -29,7 +30,7 @@ from transformers.trainer_utils import EvalPrediction
 
 from ..import_utils import is_peft_available
 from .reward_config import RewardConfig
-from .utils import RewardDataCollatorWithPadding, compute_accuracy, print_rich_table
+from .utils import RewardDataCollatorWithPadding, compute_accuracy, print_rich_table, trl_sanitze_kwargs_for_tagging
 
 
 if is_peft_available():
@@ -320,3 +321,18 @@ class RewardTrainer(Trainer):
 
                 if wandb.run is not None:
                     wandb.log({"completions": wandb.Table(dataframe=df)})
+
+    @wraps(Trainer.push_to_hub)
+    def push_to_hub(
+        self,
+        commit_message: Optional[str] = "End of training",
+        blocking: bool = True,
+        token: Optional[str] = None,
+        **kwargs,
+    ) -> str:
+        """
+        Overwrite the `push_to_hub` method in order to force-add the tag "reward-trainer" when pushing the
+        model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
+        """
+        kwargs = trl_sanitze_kwargs_for_tagging(model=self.model, tag_names=self._tag_names, kwargs=kwargs)
+        return super().push_to_hub(commit_message=commit_message, blocking=blocking, token=token, **kwargs)
