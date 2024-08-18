@@ -58,7 +58,7 @@ from dataclasses import dataclass, field
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
-from trl import SimPOConfig, SimPOTrainer, ModelConfig, get_peft_config
+from trl import ModelConfig, SimPOConfig, SimPOTrainer, get_peft_config
 
 
 @dataclass
