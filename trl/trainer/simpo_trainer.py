@@ -643,7 +643,7 @@ class SimPOTrainer(Trainer):
         )
         all_logits = outputs.logits
 
-        all_logps, _ = self.get_batch_logps(
+        all_logps = self.get_batch_logps(
             all_logits,
             concatenated_batch["concatenated_labels"],
             # average_log_prob=self.loss_type == "ipo",
@@ -705,7 +705,7 @@ class SimPOTrainer(Trainer):
             is_encoder_decoder: Whether the model is an encoder-decoder model.
 
         Returns:
-            A Tuple of two tensor of shape ((batch_size,), (batch_size,)) containing the sum of log probabilities of the given labels under the given logits in the first tensor and the number of non-masked tokens in the second tensor.
+            A tensor of shape ((batch_size,), (batch_size,)) containing the sum of log probabilities of the given labels under the given logits.
         """
         if logits.shape[:-1] != labels.shape:
             raise ValueError("Logits (batch and sequence length dim) and labels must have the same shape.")
@@ -720,7 +720,7 @@ class SimPOTrainer(Trainer):
 
         per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
 
-        return (per_token_logps * loss_mask).sum(-1), loss_mask.sum(-1)
+        return (per_token_logps * loss_mask).sum(-1)
 
     def get_batch_loss_metrics(
         self,
