@@ -60,7 +60,7 @@ class SimPOConfig(TrainingArguments):
         dataset_num_proc (`Optional[int]`, *optional*):
             The number of workers to use to tokenize the data. Defaults to None.
     """
-    
+
     max_length: Optional[int] = None
     max_prompt_length: Optional[int] = None
     max_completion_length: Optional[int] = None
@@ -82,4 +82,3 @@ class SimPOConfig(TrainingArguments):
     model_init_kwargs: Optional[Dict] = None
 
     dataset_num_proc: Optional[int] = None
-    

@@ -32,7 +32,6 @@ from torch.utils.data import DataLoader
 from transformers import AutoModelForCausalLM, DataCollator, PreTrainedModel, PreTrainedTokenizerBase, Trainer
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
-from transformers.utils import is_torch_fx_proxy
 
 from ..import_utils import is_peft_available, is_wandb_available
 from .simpo_config import SimPOConfig
@@ -45,6 +44,7 @@ from .utils import (
     peft_module_casting_to_bf16,
     trl_sanitze_kwargs_for_tagging,
 )
+
 
 if is_peft_available():
     from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
@@ -590,9 +590,7 @@ class SimPOTrainer(Trainer):
         elif self.loss_type == "hinge":
             losses = torch.relu(1 - self.beta * logits)
         else:
-            raise ValueError(
-                f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge']"
-            )
+            raise ValueError(f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge']")
 
         chosen_rewards = self.beta * policy_chosen_logps.to(self.accelerator.device).detach()
         rejected_rewards = self.beta * policy_rejected_logps.to(self.accelerator.device).detach()
@@ -720,7 +718,7 @@ class SimPOTrainer(Trainer):
             sft_loss = loss_func(policy_chosen_logits.view(-1, policy_chosen_logits.shape[-1]), chosen_labels.view(-1))
             loss = self.sft_weight * sft_loss + loss
             metrics[f"{prefix}sft_loss"] = sft_loss.detach().cpu()
-        
+
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
         metrics[f"{prefix}rewards/chosen"] = chosen_rewards.mean().cpu()
