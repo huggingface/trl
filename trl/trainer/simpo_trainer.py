@@ -24,6 +24,7 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import torch
+import torch.amp as amp
 import torch.nn as nn
 import torch.nn.functional as F
 from accelerate import PartialState
@@ -106,14 +107,21 @@ class SimPOTrainer(Trainer):
         if args.model_init_kwargs is None:
             model_init_kwargs = {}
         elif not isinstance(model, str):
-            raise ValueError("You passed model_kwargs to the SimPOTrainer. But your model is already instantiated.")
+            raise ValueError(
+                "You passed model_init_kwargs to the SimPOConfig, but your model is already instantiated."
+            )
         else:
             model_init_kwargs = args.model_init_kwargs
-            model_init_kwargs["torch_dtype"] = (
-                model_init_kwargs["torch_dtype"]
-                if model_init_kwargs["torch_dtype"] in ["auto", None]
-                else getattr(torch, model_init_kwargs["torch_dtype"])
-            )
+            torch_dtype = model_init_kwargs.get("torch_dtype")
+            if torch_dtype is not None:
+                # Convert to `torch.dtype` if an str is passed
+                if isinstance(torch_dtype, str) and torch_dtype != "auto":
+                    torch_dtype = getattr(torch, torch_dtype)
+                if torch_dtype != "auto" and not isinstance(torch_dtype, torch.dtype):
+                    raise ValueError(
+                        f"Invalid `torch_dtype` passed to the SimPOConfig. Expected a string with either `torch.dtype` or 'auto', but got {torch_dtype}."
+                    )
+                model_init_kwargs["torch_dtype"] = torch_dtype
 
         if isinstance(model, str):
             warnings.warn(
@@ -189,34 +197,39 @@ class SimPOTrainer(Trainer):
         if model is not None:
             self.is_encoder_decoder = model.config.is_encoder_decoder
         elif args.is_encoder_decoder is None:
-            raise ValueError("When no model is provided, you need to pass the parameter is_encoder_decoder.")
+            raise ValueError(
+                "When no model is provided, you need to pass the parameter is_encoder_decoder to the SimPOConfig."
+            )
         else:
             self.is_encoder_decoder = args.is_encoder_decoder
 
-        if self.is_encoder_decoder:
-            self.decoder_start_token_id = model.config.decoder_start_token_id
-            self.pad_token_id = model.config.pad_token_id
+        self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
+        self.model_adapter_name = args.model_adapter_name
 
         if tokenizer is None:
             raise ValueError("tokenizer must be specified to tokenize a SimPO dataset.")
+        else:
+            self.tokenizer = tokenizer
+
         if args.max_length is None:
             warnings.warn(
                 "`max_length` is not set in the SimPOConfig's init"
                 " it will default to `512` by default, but you should do it yourself in the future.",
                 UserWarning,
             )
-            max_length = 512
+            self.max_length = 512
         else:
-            max_length = args.max_length
+            self.max_length = args.max_length
+
         if args.max_prompt_length is None:
             warnings.warn(
                 "`max_prompt_length` is not set in the SimPOConfig's init"
                 " it will default to `128` by default, but you should do it yourself in the future.",
                 UserWarning,
             )
-            max_prompt_length = 128
+            self.max_prompt_length = 128
         else:
-            max_prompt_length = args.max_prompt_length
+            self.max_prompt_length = args.max_prompt_length
 
         if args.max_target_length is None and self.is_encoder_decoder:
             warnings.warn(
@@ -224,13 +237,13 @@ class SimPOTrainer(Trainer):
                 " it will default to `128` by default, but you should do it yourself in the future.",
                 UserWarning,
             )
-            max_target_length = 128
+            self.max_target_length = 128
         else:
-            max_target_length = args.max_target_length
+            self.max_target_length = args.max_target_length
 
         if data_collator is None:
             data_collator = DPODataCollatorWithPadding(
-                pad_token_id=tokenizer.pad_token_id,
+                pad_token_id=self.tokenizer.pad_token_id,
                 label_pad_token_id=args.label_pad_token_id,
                 is_encoder_decoder=self.is_encoder_decoder,
             )
@@ -251,14 +264,10 @@ class SimPOTrainer(Trainer):
         if args.disable_dropout:
             disable_dropout_in_model(model)
 
-        self.max_length = max_length
         self.generate_during_eval = args.generate_during_eval
         self.label_pad_token_id = args.label_pad_token_id
-        self.padding_value = args.padding_value if args.padding_value is not None else tokenizer.pad_token_id
-        self.max_prompt_length = max_prompt_length
+        self.padding_value = args.padding_value if args.padding_value is not None else self.tokenizer.pad_token_id
         self.truncation_mode = args.truncation_mode
-        self.max_target_length = max_target_length
-        self.tokenizer = tokenizer
 
         if args.loss_type in ["hinge"] and args.label_smoothing > 0:
             warnings.warn(
@@ -266,6 +275,7 @@ class SimPOTrainer(Trainer):
             )
 
         self.beta = args.beta
+        self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
         self.gamma_beta_ratio = args.gamma_beta_ratio
         self.sft_weight = args.sft_weight
         self.label_smoothing = args.label_smoothing
@@ -582,6 +592,9 @@ class SimPOTrainer(Trainer):
         pi_logratios = pi_logratios.to(self.accelerator.device)
         logits = pi_logratios - self.gamma_beta_ratio
 
+        # The beta is a temperature parameter for the SimPO loss, typically something in the range of 0.1 to 0.5.
+        # The label_smoothing parameter encodes our uncertainty about the labels and
+        # calculates a conservative SimPO loss.
         if self.loss_type == "sigmoid":
             losses = (
                 -F.logsigmoid(self.beta * logits) * (1 - self.label_smoothing)
@@ -599,7 +612,7 @@ class SimPOTrainer(Trainer):
 
     def concatenated_forward(
         self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]
-    ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+    ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         """Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
 
         We do this to avoid doing two forward passes, because it's faster for FSDP.
@@ -613,29 +626,47 @@ class SimPOTrainer(Trainer):
         )
         len_chosen = batch["chosen_labels"].shape[0]
 
-        model_kwargs = (
-            {
-                "labels": concatenated_batch["concatenated_labels"],
-                "decoder_input_ids": concatenated_batch.pop("concatenated_decoder_input_ids", None),
-            }
-            if self.is_encoder_decoder
-            else {}
-        )
+        model_kwargs = {}
 
-        all_logits = model(
+        if self.is_encoder_decoder:
+            model_kwargs["labels"] = concatenated_batch["concatenated_labels"]
+            model_kwargs["decoder_input_ids"] = concatenated_batch.pop("concatenated_decoder_input_ids", None)
+
+        if self.aux_loss_enabled:
+            model_kwargs["output_router_logits"] = True
+
+        outputs = model(
             concatenated_batch["concatenated_input_ids"],
             attention_mask=concatenated_batch["concatenated_attention_mask"],
             use_cache=False,
             **model_kwargs,
-        ).logits
+        )
+        all_logits = outputs.logits
 
-        all_logps = self.get_batch_logps(
+        all_logps, _ = self.get_batch_logps(
             all_logits,
             concatenated_batch["concatenated_labels"],
-            average_log_prob=True,
+            # average_log_prob=self.loss_type == "ipo",
             is_encoder_decoder=self.is_encoder_decoder,
             label_pad_token_id=self.label_pad_token_id,
         )
+
+        def cross_entropy_loss(logits, labels):
+            if not self.is_encoder_decoder:
+                # Shift so that tokens < n predict n
+                logits = logits[..., :-1, :].contiguous()
+                labels = labels[..., 1:].contiguous()
+            # Flatten the tokens
+            loss_fct = nn.CrossEntropyLoss()
+            logits = logits.view(-1, logits.shape[-1])
+            labels = labels.view(-1)
+            # Enable model parallelism
+            labels = labels.to(logits.device)
+            loss = loss_fct(logits, labels)
+            return loss
+
+        labels = concatenated_batch["concatenated_labels"].clone()
+        nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
 
         chosen_logps = all_logps[:len_chosen]
         rejected_logps = all_logps[len_chosen:]
@@ -645,27 +676,36 @@ class SimPOTrainer(Trainer):
 
         chosen_labels = concatenated_batch["concatenated_labels"][:len_chosen]
 
-        return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, chosen_labels)
+        if self.aux_loss_enabled:
+            return (
+                chosen_logps,
+                rejected_logps,
+                chosen_logits,
+                rejected_logits,
+                chosen_labels,
+                nll_loss,
+                outputs.aux_loss,
+            )
+
+        return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, chosen_labels, nll_loss)
 
     @staticmethod
     def get_batch_logps(
         logits: torch.FloatTensor,
         labels: torch.LongTensor,
-        average_log_prob: bool = True,
         label_pad_token_id: int = -100,
         is_encoder_decoder: bool = False,
-    ) -> torch.FloatTensor:
+    ) -> Tuple[torch.FloatTensor, torch.LongTensor]:
         """Compute the log probabilities of the given labels under the given logits.
 
         Args:
             logits: Logits of the model (unnormalized). Shape: (batch_size, sequence_length, vocab_size)
             labels: Labels for which to compute the log probabilities. Label tokens with a value of label_pad_token_id are ignored. Shape: (batch_size, sequence_length)
-            average_log_prob: If True, return the average log probability per (non-masked) token. Otherwise, return the sum of the log probabilities of the (non-masked) tokens.
             label_pad_token_id: The label pad token id.
             is_encoder_decoder: Whether the model is an encoder-decoder model.
 
         Returns:
-            A tensor of shape (batch_size,) containing the average/sum log probabilities of the given labels under the given logits.
+            A Tuple of two tensor of shape ((batch_size,), (batch_size,)) containing the sum of log probabilities of the given labels under the given logits in the first tensor and the number of non-masked tokens in the second tensor.
         """
         if logits.shape[:-1] != labels.shape:
             raise ValueError("Logits (batch and sequence length dim) and labels must have the same shape.")
@@ -680,10 +720,7 @@ class SimPOTrainer(Trainer):
 
         per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
 
-        if average_log_prob:
-            return (per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)
-        else:
-            return (per_token_logps * loss_mask).sum(-1)
+        return (per_token_logps * loss_mask).sum(-1), loss_mask.sum(-1)
 
     def get_batch_loss_metrics(
         self,
@@ -695,13 +732,16 @@ class SimPOTrainer(Trainer):
         metrics = {}
         prefix = "eval_" if train_eval == "eval" else ""
 
+        forward_output = self.concatenated_forward(model, batch)
         (
             policy_chosen_logps,
             policy_rejected_logps,
             policy_chosen_logits,
             policy_rejected_logits,
             chosen_labels,
-        ) = self.concatenated_forward(model, batch)
+        ) = forward_output[:5]
+        if self.aux_loss_enabled:
+            aux_loss = forward_output[6]
 
         losses, chosen_rewards, rejected_rewards = self.simpo_loss(
             policy_chosen_logps,
@@ -730,6 +770,9 @@ class SimPOTrainer(Trainer):
         metrics[f"{prefix}logits/rejected"] = policy_rejected_logits.detach().mean().cpu()
         metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.detach().mean().cpu()
 
+        if self.aux_loss_enabled:
+            return loss + getattr(model.config, "router_aux_loss_coef", 0.0) * aux_loss, metrics
+
         return loss, metrics
 
     def compute_loss(
@@ -744,11 +787,13 @@ class SimPOTrainer(Trainer):
                 "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
             )
 
-        compute_loss_context_manager = torch.cuda.amp.autocast if self._peft_has_been_casted_to_bf16 else nullcontext
+        compute_loss_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
 
-        with compute_loss_context_manager():
+        with compute_loss_context_manager:
             loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="train")
 
+        # Make sure to move the loss to the device the original accumulating loss is at back in the `Trainer` class:
+        loss = loss.to(self.args.device)
         # force log the metrics
         self.store_metrics(metrics, train_eval="train")
 
@@ -761,9 +806,9 @@ class SimPOTrainer(Trainer):
 
         # If one uses `generate_during_eval` with peft + bf16, we need to explicitly call generate with
         # the torch cuda amp context manager as some hidden states are silently casted to full precision.
-        generate_context_manager = nullcontext if not self._peft_has_been_casted_to_bf16 else torch.cuda.amp.autocast
+        generate_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
 
-        with generate_context_manager():
+        with generate_context_manager:
             policy_output = model.generate(
                 input_ids=batch["prompt_input_ids"],
                 attention_mask=batch["prompt_attention_mask"],
@@ -795,9 +840,9 @@ class SimPOTrainer(Trainer):
             else:
                 ignore_keys = []
 
-        prediction_context_manager = torch.cuda.amp.autocast if self._peft_has_been_casted_to_bf16 else nullcontext
+        prediction_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
 
-        with torch.no_grad(), prediction_context_manager():
+        with torch.no_grad(), prediction_context_manager:
             loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="eval")
 
         # force log the metrics
@@ -886,11 +931,16 @@ class SimPOTrainer(Trainer):
         return super().log(logs)
 
     @wraps(Trainer.push_to_hub)
-    def push_to_hub(self, commit_message: Optional[str] = "End of training", blocking: bool = True, **kwargs) -> str:
+    def push_to_hub(
+        self,
+        commit_message: Optional[str] = "End of training",
+        blocking: bool = True,
+        token: Optional[str] = None,
+        **kwargs,
+    ) -> str:
         """
         Overwrite the `push_to_hub` method in order to force-add the tag "simpo" when pushing the
         model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
         """
         kwargs = trl_sanitze_kwargs_for_tagging(model=self.model, tag_names=self._tag_names, kwargs=kwargs)
-
-        return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)
+        return super().push_to_hub(commit_message=commit_message, blocking=blocking, token=token, **kwargs)
