@@ -72,7 +72,8 @@ if is_deepspeed_available():
 if TYPE_CHECKING:
     from transformers import PreTrainedModel, PreTrainedTokenizer
 
-RUNNING_NAME = "running.pt"
+RUNNING_NAME = "running.json"
+CLF_NAME = "clf.pt"
 
 
 def _tokenize(
@@ -556,8 +557,9 @@ class BCOTrainer(Trainer):
             # Tokenize and prepare the training datasets
             train_dataset = train_dataset.map(
                 _tokenize,
-                fn_kwargs={"tokenizer": self.tokenizer, "embedding_tokenizer": self.embedding_tokenizer},
                 batched=True,
+                fn_kwargs={"tokenizer": self.tokenizer, "embedding_tokenizer": self.embedding_tokenizer},
+                num_proc=args.dataset_num_proc,
                 desc="Tokenizing train dataset",
             )
 
@@ -585,6 +587,7 @@ class BCOTrainer(Trainer):
                     _tokenize,
                     fn_kwargs={"tokenizer": self.tokenizer, "embedding_tokenizer": self.embedding_tokenizer},
                     batched=True,
+                    num_proc=args.dataset_num_proc,
                     desc="Tokenizing eval dataset",
                 )
 
@@ -820,6 +823,9 @@ class BCOTrainer(Trainer):
 
         self.running.save_to_json(os.path.join(output_dir, RUNNING_NAME))
 
+        if self.match_underlying_distribution:
+            torch.save(self.clf.get_params(), os.path.join(output_dir, CLF_NAME))
+
     def _load_optimizer_and_scheduler(self, checkpoint):
         super()._load_optimizer_and_scheduler(checkpoint)
 
@@ -829,7 +835,15 @@ class BCOTrainer(Trainer):
         running_file = os.path.join(checkpoint, RUNNING_NAME)
         if not os.path.isfile(running_file):
             warnings.warn(f"Missing file {running_file}. Will use a new running delta value for BCO loss calculation")
-        self.running = RunningMoments.load_from_json(self.accelerator, running_file)
+        else:
+            self.running = RunningMoments.load_from_json(self.accelerator, running_file)
+
+        if self.match_underlying_distribution:
+            clf_file = os.path.join(checkpoint, CLF_NAME)
+            if not os.path.isfile(running_file):
+                warnings.warn(f"Missing file {clf_file}. Will use a new UDM classifier for BCO loss calculation")
+            else:
+                self.clf.set_params(**torch.load(clf_file, weights_only=True, map_location="cpu"))
 
     @contextmanager
     def null_ref_context(self):
@@ -1414,11 +1428,16 @@ class BCOTrainer(Trainer):
         return super().log(logs)
 
     @wraps(Trainer.push_to_hub)
-    def push_to_hub(self, commit_message: Optional[str] = "End of training", blocking: bool = True, **kwargs) -> str:
+    def push_to_hub(
+        self,
+        commit_message: Optional[str] = "End of training",
+        blocking: bool = True,
+        token: Optional[str] = None,
+        **kwargs,
+    ) -> str:
         """
         Overwrite the `push_to_hub` method in order to force-add the tag "bco" when pushing the
         model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
         """
         kwargs = trl_sanitze_kwargs_for_tagging(model=self.model, tag_names=self._tag_names, kwargs=kwargs)
-
-        return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)
+        return super().push_to_hub(commit_message=commit_message, blocking=blocking, token=token, **kwargs)
