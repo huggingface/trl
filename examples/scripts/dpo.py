@@ -56,7 +56,8 @@ import os
 from contextlib import nullcontext
 import copy
 
-from trl.commands.cli_utils import DPOScriptArguments, init_zero_verbose, TrlParser
+from trl.commands.cli_utils import DPOScriptArguments, init_zero_verbose, TrlParser, fix_chat_template_if_needed, \
+    is_right_apply_chat
 from trl.env_utils import strtobool
 
 TRL_USE_RICH = strtobool(os.getenv("TRL_USE_RICH", "0"))
@@ -82,10 +83,8 @@ from trl import (
     get_quantization_config,
 )
 
-
 if TRL_USE_RICH:
     logging.basicConfig(format=FORMAT, datefmt="[%X]", handlers=[RichHandler()], level=logging.INFO)
-
 
 if __name__ == "__main__":
     parser = TrlParser((DPOScriptArguments, DPOConfig, ModelConfig))
@@ -154,38 +153,25 @@ if __name__ == "__main__":
         for key in ds:
             ds[key] = ds[key].select(range(50))
 
+    # whether "apply chat template" is correct
+    is_right_chat = is_right_apply_chat(tokenizer, ds[args.dataset_train_split]["chosen"][0][:-1],
+                                        [ds[args.dataset_train_split]["chosen"][0][-1]])
+
+
     def process(row):
-        # judge the third issue.
-        chat_right = True
-        # judge chat template
         prompt = row["chosen"][:-1]
         chosen = [row["chosen"][-1]]
-        test_prompt = tokenizer.apply_chat_template(prompt, tokenize=False)
-        try:
-            test_chosen = tokenizer.apply_chat_template(chosen, tokenize=False)
-        except Exception as e:
-            chat_right = False
-        conversation = copy.deepcopy(prompt)
-        conversation.append(row["chosen"][-1])
-        # the chat_right is for the third issue, the subsequent checks is for the first and second issues.
-        if chat_right and tokenizer.apply_chat_template(conversation) == test_prompt + test_chosen:
-            row["prompt"] = tokenizer.apply_chat_template(row["chosen"][:-1], tokenize=False)
-            row["chosen"] = tokenizer.apply_chat_template([row["chosen"][-1]], tokenize=False)
-            row["rejected"] = tokenizer.apply_chat_template([row["rejected"][-1]], tokenize=False)
+        rejected = [row["rejected"][-1]]
+        if is_right_chat:
+            row["prompt"] = tokenizer.apply_chat_template(prompt, tokenize=False)
+            row["chosen"] = tokenizer.apply_chat_template(chosen, tokenize=False)
+            row["rejected"] = tokenizer.apply_chat_template(rejected, tokenize=False)
         else:
-            # fix the template
-            conversation_chosen = copy.deepcopy(prompt)
-            conversation_rejected = copy.deepcopy(prompt)
-            conversation_chosen.append(row["chosen"][-1])
-            conversation_rejected.append(row["rejected"][-1])
-            conversation_chosen = tokenizer.apply_chat_template(conversation_chosen, tokenize=False)
-            conversation_rejected = tokenizer.apply_chat_template(conversation_rejected, tokenize=False)
-            # find position
-            start_position = conversation_chosen.find(row['chosen'][-1]['content'])
-            # The following is right
-            row["prompt"] = conversation_chosen[:start_position]
-            row["chosen"] = conversation_chosen[start_position:]
-            row["rejected"] = conversation_rejected[start_position:]
+            # fix if needed
+            fixed_prompt, fixed_chosen, fixed_rejected = fix_chat_template_if_needed(tokenizer, prompt, chosen, rejected)
+            row["prompt"] = fixed_prompt
+            row["chosen"] = fixed_chosen
+            row["rejected"] = fixed_rejected
         return row
 
     # Compute that only on the main process for faster data processing.
