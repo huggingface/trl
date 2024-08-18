@@ -27,19 +27,19 @@ class BCOConfig(TrainingArguments):
     command line.
 
     Parameters:
-        max_length (`int`, *optional*, defaults to `None`):
+        max_length (`Optional[int]`, *optional*, defaults to `None`):
             Maximum length of the sequences in the batch. This argument is required if you want to use the default
             data collator.
-        max_prompt_length (`int`, *optional*, defaults to `None`):
+        max_prompt_length (`Optional[int]`, *optional*, defaults to `None`):
             Maximum length of the prompt. This argument is required if you want to use the default data collator.
-        max_completion_length (`int`, *optional*, defaults to `None`):
+        max_completion_length (`Optional[int]`, *optional*, defaults to `None`):
             Maximum length of the target. This argument is required if you want to use the default data collator
             and your model is an encoder-decoder.
         beta (`float`, *optional*, defaults to `0.1`):
             Beta factor in BCO loss. Higher beta means less divergence from the initial policy.
         label_pad_token_id (`int`,  *optional*, defaults to `-100`):
             Label pad token id. This argument is required if you want to use the default data collator.
-        padding_value (`int`, *optional*, defaults to `None`):
+        padding_value (`Optional[int]`, *optional*, defaults to `None`):
             Padding value if it is different to the tokenizer's pad_token_id.
         truncation_mode (`str`, *optional*, defaults to `"keep_end"`):
             Truncation mode to use, either `keep_end` or `keep_start`. This argument is required if you want to use
