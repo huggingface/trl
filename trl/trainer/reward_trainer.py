@@ -327,7 +327,7 @@ class RewardTrainer(Trainer):
         self,
         commit_message: Optional[str] = "End of training",
         blocking: bool = True,
-        token: Optional[str] = None,
+        # token: Optional[str] = None,  # Unlike the parent class, skip the token to mitigate security risks.
         **kwargs,
     ) -> str:
         """
@@ -335,4 +335,4 @@ class RewardTrainer(Trainer):
         model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
         """
         kwargs = trl_sanitze_kwargs_for_tagging(model=self.model, tag_names=self._tag_names, kwargs=kwargs)
-        return super().push_to_hub(commit_message=commit_message, blocking=blocking, token=token, **kwargs)
+        return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)
