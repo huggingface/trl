@@ -12,7 +12,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from accelerate import Accelerator, PartialState
-from accelerate.utils import broadcast, gather_object
+from accelerate.utils import gather_object
 from datasets import Dataset
 from torch.utils.data import DataLoader
 from transformers import (
@@ -121,9 +121,6 @@ class OnlineDPOTrainer(Trainer):
         args.num_total_batches = math.ceil(
             args.total_episodes / args.batch_size
         )  # we may train for more than `total_episodes`
-        time_tensor = torch.tensor(int(time.time()), device=accelerator.device)
-        time_int = broadcast(time_tensor, 0).item()  # avoid different timestamps across processes
-        args.run_name = f"{args.exp_name}__{args.seed}__{time_int}" if args.run_name is None else args.run_name
         self.local_seed = args.seed + accelerator.process_index * 100003  # Prime
         if args.num_sample_generations > 0:
             self.sample_generations_freq = max(1, args.num_total_batches // args.num_sample_generations)
@@ -279,7 +276,7 @@ class OnlineDPOTrainer(Trainer):
 
         accelerator.print("===training policy===")
         start_time = time.time()
-        stats_shape = (args.num_steps_in_epoch, args.num_mini_batches, args.gradient_accumulation_steps)
+        stats_shape = (args.num_ppo_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
         loss_stats = torch.zeros(stats_shape, device=device)
         chosen_rewards_stats = torch.zeros(stats_shape, device=device)
         rejected_rewards_stats = torch.zeros(stats_shape, device=device)
@@ -310,7 +307,7 @@ class OnlineDPOTrainer(Trainer):
                 self.state.save_steps = args.save_steps
         self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
 
-        for epoch in range(args.num_total_batches):
+        for step in range(args.num_total_batches):
             self.state.episode += 1 * args.batch_size
             data = next(iter_dataloader)
             with torch.no_grad():
@@ -451,7 +448,7 @@ class OnlineDPOTrainer(Trainer):
                 torch.cuda.empty_cache()
 
             # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
-            for epoch_idx in range(args.num_steps_in_epoch):
+            for epoch_idx in range(args.num_ppo_epochs):
                 b_inds = np.random.permutation(args.local_batch_size // self.num_generation_per_prompt)
                 minibatch_idx = 0
                 for mini_batch_start in range(
@@ -601,7 +598,7 @@ class OnlineDPOTrainer(Trainer):
             torch.cuda.empty_cache()
             gc.collect()
 
-            if args.num_sample_generations > 0 and epoch % self.sample_generations_freq == 0:
+            if args.num_sample_generations > 0 and step % self.sample_generations_freq == 0:
                 self.generate_completions(sampling=True)
 
         # HF trainer specifics
