@@ -1,0 +1,31 @@
+# XPO Trainer
+
+TRL supports the Exploratory Preference Optimization (XPO) ([Xie et al. 2024](https://huggingface.co/papers/2405.21046)) which is a simple online preference tuning method based on the DPO loss together with a reward model (RM).
+
+XPO augments the DPO objective with an exploration bonus allowing the method to explore outside the support of the intitial model and human feedback data.
+
+## Get started
+
+To just run the XPO script to make sure this trainer can run, you can run the following command to train an XPO model with a dummy reward model.
+
+
+```bash
+python examples/scripts/xpo.py \
+    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
+    --learning_rate 3e-6 \
+    --output_dir models/minimal/xpo \
+    --per_device_train_batch_size 1 \
+    --gradient_accumulation_steps 64 \
+    --total_episodes 30000 \
+    --model_name_or_path EleutherAI/pythia-14m \
+    --sft_model_path EleutherAI/pythia-14m \
+    --reward_model_path EleutherAI/pythia-14m \
+    --non_eos_penalty \
+    --stop_token eos \
+    --response_length 53 \
+    --sanity_check
+```
+
+## Explanation of the logged metrics
+
+The logged metrics are as follows. Here is an example [tracked run at Weights and Biases]()

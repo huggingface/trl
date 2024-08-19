@@ -33,6 +33,8 @@
     title: RLOO Trainer
   - local: online_dpo_trainer
     title: Online DPO Trainer
+  - local: xpo_trainer
+    title: XPO Trainer
   - local: best_of_n
     title: Best of N Sampling
   - local: dpo_trainer
