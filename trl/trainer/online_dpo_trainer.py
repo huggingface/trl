@@ -211,6 +211,7 @@ class OnlineDPOTrainer(Trainer):
         tokenizer = self.tokenizer
         dataloader = self.dataloader
         device = accelerator.device
+        self.model_wrapped = self.model
 
         def repeat_generator():
             while True:
