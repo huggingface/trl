@@ -21,7 +21,7 @@ python examples/scripts/gkd.py \
     --report_to="wandb" \
     --learning_rate=2e-5 \
     --per_device_train_batch_size=64 \
-    --gradient_accumulation_steps=16 \
+    --gradient_accumulation_steps=2 \
     --output_dir="gkd-model" \
     --logging_steps=1 \
     --num_train_epochs=3 \
