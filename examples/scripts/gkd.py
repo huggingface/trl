@@ -25,7 +25,6 @@ python examples/scripts/gkd.py \
     --output_dir="gkd-model" \
     --logging_steps=1 \
     --num_train_epochs=3 \
-    --max_steps=-1 \
     --push_to_hub \
     --gradient_checkpointing
 
