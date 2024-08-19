@@ -52,7 +52,7 @@ class OnlineDPOConfig(TrainingArguments):
     """the path to the reward model"""
     judge: Optional[str] = None
 
-    num_steps_in_epoch: int = 4
+    num_ppo_epochs: int = 4
     """the number of epochs to train"""
 
     beta: float = 0.05
