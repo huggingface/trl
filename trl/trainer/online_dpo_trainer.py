@@ -310,7 +310,7 @@ class OnlineDPOTrainer(Trainer):
                 self.state.save_steps = args.save_steps
         self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
 
-        for update in range(1, args.num_total_batches + 1):
+        for epoch in range(args.num_total_batches):
             self.state.episode += 1 * args.batch_size
             data = next(iter_dataloader)
             with torch.no_grad():
@@ -601,7 +601,7 @@ class OnlineDPOTrainer(Trainer):
             torch.cuda.empty_cache()
             gc.collect()
 
-            if args.num_sample_generations > 0 and (update - 1) % self.sample_generations_freq == 0:
+            if args.num_sample_generations > 0 and epoch % self.sample_generations_freq == 0:
                 self.generate_completions(sampling=True)
 
         # HF trainer specifics
