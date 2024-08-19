@@ -28,4 +28,21 @@ python examples/scripts/xpo.py \
 
 ## Explanation of the logged metrics
 
-The logged metrics are as follows. Here is an example [tracked run at Weights and Biases]()
+The logged metrics are as follows:
+
+* `eps`: Tracks the number of episodes per second.
+* `objective/kl`: The mean Kullback-Leibler (KL) divergence between the current model and reference model.
+* `objective/entropy`: The mean entropy of the model, indicating the randomness of the actions chosen by the model.
+* `objective/non_score_reward`: The mean reward from non-score-related sources, basically `beta * kl.sum(1)`, where `beta` is the KL penalty coefficient and `kl` is the per-token KL divergence.
+* `objective/rlhf_reward`: The mean RLHF reward, which is `score - non_score_reward`.
+* `objective/scores`: The mean scores returned by the reward model / environment.
+* `objective/scores_margin`: The mean score margin (according to the external reward model) between the chosen and rejected completions.
+* `rewards/accuracies`: The accuracies of the online DPO's implicit reward model.
+* `rewards/chosen`: The mean reward (according to online DPO's implicit reward model)of the chosen completions.
+* `rewards/rejected`: The mean reward (according to online DPO's implicit reward model) of the rejected completions.
+* `rewards/margins`: The mean reward margin (according to online DPO's implicit reward model) between the chosen and rejected completions.
+* `logps/chosen`: The mean log probabilities of the chosen completions.
+* `logps/rejected`: The mean log probabilities of the rejected completions.
+* `val/num_eos_tokens`: The number of end-of-sequence (EOS) tokens generated, which can indicate the number of complete responses.
+* `lr`: lr: The current learning rate used by the optimizer.
+* `episode`: episode: The current global step or episode count in the training process.
