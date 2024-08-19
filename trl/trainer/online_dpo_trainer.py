@@ -16,9 +16,10 @@ from accelerate.utils import gather_object
 from datasets import Dataset
 from torch.utils.data import DataLoader
 from transformers import (
-    DataCollatorWithPadding,
+    DataCollator,
     GenerationConfig,
-    PreTrainedTokenizer,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
     Trainer,
     TrainerCallback,
     TrainerControl,
@@ -28,10 +29,11 @@ from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, PrinterCallback
 
-from trl.trainer.utils import DPODataCollatorWithPadding
-
 from ..models.utils import unwrap_model_for_generation
-from ..trainer.utils import (
+from .judges import BasePairwiseJudge
+from .online_dpo_config import OnlineDPOConfig
+from .utils import (
+    DPODataCollatorWithPadding,
     OnlineTrainerState,
     batch_generation,
     disable_dropout_in_model,
@@ -43,8 +45,6 @@ from ..trainer.utils import (
     print_rich_table,
     truncate_response,
 )
-from .judges import BasePairwiseJudge
-from .online_dpo_config import OnlineDPOConfig
 
 
 INVALID_LOGPROB = 1.0
@@ -53,20 +53,19 @@ INVALID_LOGPROB = 1.0
 class OnlineDPOTrainer(Trainer):
     def __init__(
         self,
-        model: nn.Module,
-        config: OnlineDPOConfig,
-        ref_model: nn.Module,
+        model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
+        ref_model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
         reward_model: Optional[nn.Module] = None,
         judge: Optional[BasePairwiseJudge] = None,
-        data_collator: Optional[DataCollatorWithPadding] = None,
+        args: Optional[OnlineDPOConfig] = None,
+        data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
-        tokenizer: Optional[PreTrainedTokenizer] = None,
+        tokenizer: Optional[PreTrainedTokenizerBase] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
     ) -> None:
-        self.args = config
-        args = config
+        self.args = args
         self.tokenizer = tokenizer
 
         # disable `pad_token_id` and `eos_token_id` because we just want to
@@ -131,8 +130,8 @@ class OnlineDPOTrainer(Trainer):
         )  # DPO logic: repeats the same prompt args.rloo_k times
 
         ### DPO stuff
-        self.beta = config.beta
-        self.loss_type = config.loss_type
+        self.beta = args.beta
+        self.loss_type = args.loss_type
 
         #########
         # setup model, optimizer, and others
@@ -558,6 +557,8 @@ class OnlineDPOTrainer(Trainer):
                     )
                     # fmt: on
                     torch.cuda.empty_cache()
+
+            # Log metrics
             with torch.no_grad():
                 mean_kl = kl.sum(1).mean()
                 mean_entropy = (-logprobs).sum(1).mean()
