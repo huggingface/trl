@@ -379,7 +379,7 @@ class IterativeSFTTrainer(Trainer):
         **kwargs,
     ) -> str:
         """
-        Overwrite the `push_to_hub` method in order to force-add the tag "dpo" when pushing the
+        Overwrite the `push_to_hub` method in order to force-add the tag "iterative-sft" when pushing the
         model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
         """
         kwargs = trl_sanitze_kwargs_for_tagging(model=self.model, tag_names=self._tag_names, kwargs=kwargs)
