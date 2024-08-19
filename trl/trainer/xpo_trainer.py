@@ -1,3 +1,6 @@
+import math
+import time
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -28,6 +31,7 @@ class XPOTrainer(OnlineDPOTrainer):
         ref_model = self.ref_model
         reward_model = self.reward_model
         tokenizer = self.tokenizer
+        device = accelerator.device
 
         def repeat_generator():
             while True:
@@ -43,6 +47,36 @@ class XPOTrainer(OnlineDPOTrainer):
             top_p=1.0,
             do_sample=True,
         )
+
+        start_time = time.time()
+        stats_shape = (args.num_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
+        loss_stats = torch.zeros(stats_shape, device=device)
+        chosen_rewards_stats = torch.zeros(stats_shape, device=device)
+        rejected_rewards_stats = torch.zeros(stats_shape, device=device)
+        chosen_logprobs_stats = torch.zeros(stats_shape, device=device)
+        rejected_logprobs_stats = torch.zeros(stats_shape, device=device)
+        # trainer state initialization
+        self.state.global_step = 0
+        self.state.episode = 0
+        self.state.max_steps = args.num_total_batches * args.num_mini_batches
+        self.state.num_train_epochs = args.total_episodes / self.train_dataset_len
+        # Compute absolute values for logging, eval, and save if given as ratio
+        if args.logging_steps is not None:
+            if args.logging_steps < 1:
+                self.state.logging_steps = math.ceil(self.state.max_steps * args.logging_steps)
+            else:
+                self.state.logging_steps = args.logging_steps
+        if args.eval_steps is not None:
+            if args.eval_steps < 1:
+                self.state.eval_steps = math.ceil(self.state.max_steps * args.eval_steps)
+            else:
+                self.state.eval_steps = args.eval_steps
+        if args.save_steps is not None:
+            if args.save_steps < 1:
+                self.state.save_steps = math.ceil(self.state.max_steps * args.save_steps)
+            else:
+                self.state.save_steps = args.save_steps
+        self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
 
         for update in range(1, args.num_total_batches + 1):
             self.state.episode += 1 * args.batch_size
@@ -141,7 +175,8 @@ class XPOTrainer(OnlineDPOTrainer):
             # logging kl between the model and ref model responses
             logprobs_model = logits_to_logprobs(model_logits, model_responses[:, context_length:], args.temperature)
             logprobs_ref = logits_to_logprobs(ref_logits, ref_responses[:, context_length:], args.temperature)
-            kl = -args.beta * (logprobs_model - logprobs_ref).sum(1).mean()
+            kl = logprobs_model - logprobs_ref
+            dpo_score = -args.beta * (kl).sum(1).mean()
             scores_margin = all_reward_margins.mean()
 
             # Do multiple epochs of XPO training, with a fresh random shuffle in each epoch
@@ -211,15 +246,73 @@ class XPOTrainer(OnlineDPOTrainer):
 
                             # total loss
                             loss = (dpo_losses + xpo_losses).mean()
+
                             accelerator.backward(loss)
                             optimizer.step()
                             optimizer.zero_grad()
-
+                            with torch.no_grad():
+                                chosen_rewards = self.beta * chosen_log_ratios.detach()
+                                rejected_rewards = self.beta * rejected_log_ratios.detach()
+                                xpo_loss = xpo_losses.detach()
+                                loss_stats[epoch_idx, minibatch_idx, gradient_accumulation_idx] = loss.detach()
+                                chosen_rewards_stats[
+                                    epoch_idx, minibatch_idx, gradient_accumulation_idx
+                                ] = chosen_rewards.mean()
+                                rejected_rewards_stats[
+                                    epoch_idx, minibatch_idx, gradient_accumulation_idx
+                                ] = rejected_rewards.mean()
+                                chosen_logprobs_stats[
+                                    epoch_idx, minibatch_idx, gradient_accumulation_idx
+                                ] = chosen_log_ratios.mean()
+                                rejected_logprobs_stats[
+                                    epoch_idx, minibatch_idx, gradient_accumulation_idx
+                                ] = rejected_log_ratios.mean()
                         gradient_accumulation_idx += 1
                     minibatch_idx += 1
                     self.state.global_step += 1
 
-                    self.lr_scheduler.step()
+            with torch.no_grad():
+                mean_kl = kl.sum(1).mean()
+                mean_entropy = -logprobs_model.mean()
+                mean_dpo_score = dpo_score.item()
+                eps = int(self.state.episode / (time.time() - start_time))
+                g_chosen_reward = self.accelerator.gather(chosen_rewards_stats)
+                g_rejected_reward = self.accelerator.gather(rejected_rewards_stats)
+                metrics = {}
+                metrics["eps"] = eps
+                metrics["objective/kl"] = self.accelerator.gather(mean_kl).mean().item()
+                metrics["objective/entropy"] = self.accelerator.gather(mean_entropy).mean().item()
+                metrics["objective/mean_dpo_score"] = self.accelerator.gather(mean_dpo_score)
+                metrics["objective/xpo_loss"] = self.accelerator.gather(xpo_loss).mean().item()
+                metrics["objective/scores_margin"] = self.accelerator.gather(scores_margin.mean()).mean().item()
+                metrics["rewards/chosen"] = g_chosen_reward.mean().item()
+                metrics["rewards/rejected"] = g_rejected_reward.mean().item()
+                metrics["rewards/accuracies"] = (g_chosen_reward > g_rejected_reward).float().mean().item()
+                metrics["rewards/margins"] = (g_chosen_reward - g_rejected_reward).mean().item()
+                metrics["loss/policy_avg"] = self.accelerator.gather(loss_stats).mean().item()
+                metrics["logps/chosen"] = self.accelerator.gather(chosen_logprobs_stats).mean().item()
+                metrics["logps/rejected"] = self.accelerator.gather(rejected_logprobs_stats).mean().item()
+                metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
+                metrics["episode"] = self.state.episode
+                self.state.epoch = self.state.episode / self.train_dataset_len  # used by self.log
+                self.state.global_step += 1
+                self.log(metrics)
+
+            self.lr_scheduler.step()
+            self.control = self.callback_handler.on_step_end(args, self.state, self.control)
+            if self.control.should_save:
+                self._save_checkpoint(model, trial=None, metrics=metrics)
+                self.control = self.callback_handler.on_save(self.args, self.state, self.control)
+            torch.cuda.empty_cache()
+
+            if args.num_sample_generations > 0 and (update - 1) % self.sample_generations_freq == 0:
+                self.generate_completions(sampling=True)
+
+        # HF trainer specifics
+        self.control = self.callback_handler.on_train_end(args, self.state, self.control)
+        if self.control.should_save:
+            self._save_checkpoint(model, trial=None, metrics=None)
+            self.control = self.callback_handler.on_save(self.args, self.state, self.control)
 
     def compute_logprobs(self, model, responses, context_length):
         output = forward(model, responses, self.tokenizer.pad_token_id)
