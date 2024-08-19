@@ -448,7 +448,7 @@ class OnlineDPOTrainer(Trainer):
                 torch.cuda.empty_cache()
 
             # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
-            for epoch_idx in range(args.num_ppo_epochs):
+            for ppo_epoch_idx in range(args.num_ppo_epochs):
                 b_inds = np.random.permutation(args.local_batch_size // self.num_generation_per_prompt)
                 minibatch_idx = 0
                 for mini_batch_start in range(
@@ -531,18 +531,18 @@ class OnlineDPOTrainer(Trainer):
                             with torch.no_grad():
                                 chosen_rewards = self.beta * (chosen_logprobs_sum - chosen_ref_logprobs_sum)
                                 rejected_rewards = self.beta * (rejected_logprobs_sum - rejected_ref_logprobs_sum)
-                                loss_stats[epoch_idx, minibatch_idx, gradient_accumulation_idx] = loss
+                                loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = loss
                                 chosen_rewards_stats[
-                                    epoch_idx, minibatch_idx, gradient_accumulation_idx
+                                    ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
                                 ] = chosen_rewards.mean()
                                 rejected_rewards_stats[
-                                    epoch_idx, minibatch_idx, gradient_accumulation_idx
+                                    ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
                                 ] = rejected_rewards.mean()
                                 chosen_logprobs_stats[
-                                    epoch_idx, minibatch_idx, gradient_accumulation_idx
+                                    ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
                                 ] = chosen_logprobs_sum.mean()
                                 rejected_logprobs_stats[
-                                    epoch_idx, minibatch_idx, gradient_accumulation_idx
+                                    ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
                                 ] = rejected_logprobs_sum.mean()
                         gradient_accumulation_idx += 1
                     minibatch_idx += 1
