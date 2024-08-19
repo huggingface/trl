@@ -52,7 +52,7 @@ class OnlineDPOConfig(TrainingArguments):
     """the path to the reward model"""
     judge: Optional[str] = None
 
-    num_epochs: int = 4
+    num_steps_in_epoch: int = 4
     """the number of epochs to train"""
 
     beta: float = 0.05
@@ -62,7 +62,6 @@ class OnlineDPOConfig(TrainingArguments):
     disable_dropout: bool = True
     """whether to disable dropout of the model during training"""
     dataset_num_proc: Optional[int] = None
-
 
     sanity_check: bool = False
     """wether to run in debug mode"""

@@ -279,7 +279,7 @@ class OnlineDPOTrainer(Trainer):
 
         accelerator.print("===training policy===")
         start_time = time.time()
-        stats_shape = (args.num_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
+        stats_shape = (args.num_steps_in_epoch, args.num_mini_batches, args.gradient_accumulation_steps)
         loss_stats = torch.zeros(stats_shape, device=device)
         chosen_rewards_stats = torch.zeros(stats_shape, device=device)
         rejected_rewards_stats = torch.zeros(stats_shape, device=device)
@@ -451,7 +451,7 @@ class OnlineDPOTrainer(Trainer):
                 torch.cuda.empty_cache()
 
             # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
-            for epoch_idx in range(args.num_epochs):
+            for epoch_idx in range(args.num_steps_in_epoch):
                 b_inds = np.random.permutation(args.local_batch_size // self.num_generation_per_prompt)
                 minibatch_idx = 0
                 for mini_batch_start in range(
