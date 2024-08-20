@@ -202,7 +202,7 @@ class GKDTrainer(SFTTrainer):
                     # Set input_ids to the generated output
                     input_ids.append(sequence)
 
-                    # Set labels -100 for prompt, actual ids for completion up to EOS, then -100
+                    # Set the labels to the generated output with the prompt masked out (i.e., the teacher-forced part)
                     prompt_length = (inputs["prompts"][i] != self.tokenizer.pad_token_id).sum().item()
                     label = torch.full_like(sequence, -100)
                     label[prompt_length:eos_pos] = sequence[prompt_length:eos_pos]
