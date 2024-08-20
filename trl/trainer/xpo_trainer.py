@@ -269,7 +269,6 @@ class XPOTrainer(OnlineDPOTrainer):
                                 ] = rejected_log_ratios.mean()
                         gradient_accumulation_idx += 1
                     minibatch_idx += 1
-                    self.state.global_step += 1
 
             with torch.no_grad():
                 mean_kl = kl.sum(1).mean()
@@ -295,10 +294,10 @@ class XPOTrainer(OnlineDPOTrainer):
                 metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
                 metrics["episode"] = self.state.episode
                 self.state.epoch = self.state.episode / self.train_dataset_len  # used by self.log
-                self.state.global_step += 1
                 self.log(metrics)
 
             self.lr_scheduler.step()
+            self.state.global_step += 1
             self.control = self.callback_handler.on_step_end(args, self.state, self.control)
             if self.control.should_save:
                 self._save_checkpoint(model, trial=None, metrics=metrics)
