@@ -20,6 +20,7 @@ from transformers import (
 NUM_DUMMY_SAMPLES = 100
 tokenizer = AutoTokenizer.from_pretrained("gpt2")
 tok.add_special_tokens({"pad_token": "[PAD]"})
+# The model to optimise
 model = AutoModelForCausalLM.from_pretrained("gpt2")
 ref_model = AutoModelForCausalLM.from_pretrained("gpt2")
 # The model to score completions with. In practice, you will need a fine-tuned reward model. See Reward Bench for some good ones: https://huggingface.co/spaces/allenai/reward-bench
