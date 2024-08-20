@@ -214,61 +214,77 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
         return batch
 
 
-class DataCollatorForChatML(DataCollatorForLanguageModeling):
+@dataclass
+class DataCollatorForChatML:
     """
     Data collator for ChatML format datasets.
     """
 
-    def __init__(
-        self, tokenizer: PreTrainedTokenizerBase, mlm: bool = False, ignore_index: int = -100, max_length: int = None
-    ):
-        super().__init__(tokenizer=tokenizer, mlm=mlm)
-        self.ignore_index = ignore_index
-        self.max_length = max_length or self.tokenizer.model_max_length
+    tokenizer: PreTrainedTokenizerBase
+    ignore_index: int = -100
+    max_length: int = None
 
-    def torch_call(self, examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
-        # Apply chat template to each conversation
-        formatted_chats = [
-            self.tokenizer.apply_chat_template(example["messages"], tokenize=False) for example in examples
-        ]
+    def __post_init__(self):
+        if self.tokenizer.pad_token_id is None:
+            raise ValueError("The tokenizer does not have a pad token. Please set `pad_token_id` in the tokenizer.")
+        if self.max_length is None:
+            self.max_length = self.tokenizer.model_max_length
 
-        # Tokenize the formatted chats
-        batch = self.tokenizer(
-            formatted_chats, padding=True, truncation=True, max_length=self.max_length, return_tensors="pt"
-        )
-
-        # Prepare labels, prompts, and completions
-        labels = torch.full_like(batch["input_ids"], self.ignore_index)
+    def __call__(self, examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
         prompts = []
         completions = []
 
-        for i, (input_ids, example) in enumerate(zip(batch["input_ids"], examples)):
+        for example in examples:
             messages = example["messages"]
-            # Tokenize all messages except the last one for the prompt
-            prompt_text = self.tokenizer.apply_chat_template(messages[:-1], tokenize=False)
-            prompt_ids = self.tokenizer.encode(prompt_text, add_special_tokens=False)
-            prompt_length = len(prompt_ids)
+            formatted_chat = self.tokenizer.apply_chat_template(messages, tokenize=False)
 
-            # Tokenize the last message for the completion
-            completion_text = messages[-1]["content"]
-            completion_ids = self.tokenizer.encode(completion_text, add_special_tokens=False)
-            completion_length = len(completion_ids)
+            # Split the formatted chat into prompt and completion
+            assistant_messages = [msg for msg in messages if msg["role"] == "assistant"]
+            last_assistant_message = assistant_messages[-1]["content"]
+            prompt = formatted_chat.rsplit(last_assistant_message, 1)[0]
+            completion = last_assistant_message
 
-            # Set labels for the completion part
-            labels[i, prompt_length : prompt_length + completion_length] = input_ids[
-                prompt_length : prompt_length + completion_length
-            ]
+            prompts.append(prompt)
+            completions.append(completion)
 
-            # Store prompts and completions
-            prompts.append(input_ids[:prompt_length])
-            completions.append(input_ids[prompt_length : prompt_length + completion_length])
+        # Tokenize prompts and completions
+        tokenized_prompts = self.tokenizer(
+            prompts, truncation=True, max_length=self.max_length, padding=False, return_tensors=None
+        )
+        tokenized_completions = self.tokenizer(
+            completions, truncation=True, max_length=self.max_length, padding=False, return_tensors=None
+        )
 
-        prompts = pad(prompts, padding_value=self.tokenizer.pad_token_id, padding_side="left")
-        completions = pad(completions, padding_value=self.tokenizer.pad_token_id, padding_side="right")
+        # Combine prompts and completions
+        input_ids = []
+        attention_mask = []
+        labels = []
 
-        batch["labels"] = labels
-        batch["prompts"] = prompts
-        batch["completions"] = completions
+        for prompt, completion in zip(tokenized_prompts["input_ids"], tokenized_completions["input_ids"]):
+            combined_input_ids = prompt + completion
+            combined_attention_mask = [1] * len(combined_input_ids)
+            combined_labels = [self.ignore_index] * len(prompt) + completion
+
+            input_ids.append(combined_input_ids)
+            attention_mask.append(combined_attention_mask)
+            labels.append(combined_labels)
+
+        # Pad the sequences
+        max_length = min(max(len(ids) for ids in input_ids), self.max_length)
+
+        for i in range(len(input_ids)):
+            padding_length = max_length - len(input_ids[i])
+            input_ids[i] = input_ids[i] + [self.tokenizer.pad_token_id] * padding_length
+            attention_mask[i] = attention_mask[i] + [0] * padding_length
+            labels[i] = labels[i] + [self.ignore_index] * padding_length
+
+        batch = {
+            "input_ids": torch.tensor(input_ids),
+            "attention_mask": torch.tensor(attention_mask),
+            "labels": torch.tensor(labels),
+            "prompts": prompts,
+            "completions": completions,
+        }
 
         return batch
 

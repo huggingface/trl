@@ -24,7 +24,7 @@ from transformers import AutoModelForCausalLM, GenerationConfig, PreTrainedModel
 from ..models.utils import unwrap_model_for_generation
 from .gkd_config import GKDConfig
 from .sft_trainer import SFTTrainer
-from .utils import disable_dropout_in_model
+from .utils import DataCollatorForChatML, disable_dropout_in_model
 
 
 class GKDTrainer(SFTTrainer):
@@ -39,6 +39,7 @@ class GKDTrainer(SFTTrainer):
     ):
         # add remove_unused_columns=False to the the dataclass args
         args.remove_unused_columns = False
+        kwargs["data_collator"] = DataCollatorForChatML(tokenizer=kwargs["tokenizer"])
 
         super().__init__(*sft_args, args=args, **kwargs)
 
@@ -156,7 +157,6 @@ class GKDTrainer(SFTTrainer):
     def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         """
         Perform a training step on a batch of inputs.
-
 
         Args:
             model (`nn.Module`):

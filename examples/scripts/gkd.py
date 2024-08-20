@@ -78,7 +78,6 @@ from trl import (
     get_quantization_config,
     setup_chat_format,
 )
-from trl.trainer.utils import DataCollatorForChatML
 
 tqdm.pandas()
 
@@ -123,8 +122,10 @@ if __name__ == "__main__":
     ################
     raw_datasets = load_dataset(args.dataset_name)
     train_dataset = raw_datasets[args.dataset_train_split]
-    eval_dataset = raw_datasets[args.dataset_test_split]
-    data_collator = DataCollatorForChatML(tokenizer=tokenizer)
+    try:
+        eval_dataset = raw_datasets[args.dataset_test_split]
+    except KeyError:
+        eval_dataset = None
 
     ################
     # Optional rich context managers
@@ -149,7 +150,6 @@ if __name__ == "__main__":
             tokenizer=tokenizer,
             peft_config=get_peft_config(model_config),
             callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
-            data_collator=data_collator,
         )
 
     trainer.train()
