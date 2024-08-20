@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from typing import Optional
 
-from accelerate import PartialState
 from datasets import load_dataset
 from transformers import (
     AutoModelForCausalLM,
@@ -67,17 +66,23 @@ if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained(
         model_config.model_name_or_path,
         padding_side="left",
-        trust_remote_code=True,
+        trust_remote_code=model_config.trust_remote_code,
     )
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_QUERY_CHAT_TEMPLATE
 
-    ref_model = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path)
-    model = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path)
+    ref_model = AutoModelForCausalLM.from_pretrained(
+        model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code
+    )
+    model = AutoModelForCausalLM.from_pretrained(
+        model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code
+    )
 
     if config.reward_model_path is not None:
-        reward_model = AutoModelForSequenceClassification.from_pretrained(config.reward_model_path, num_labels=1)
+        reward_model = AutoModelForSequenceClassification.from_pretrained(
+            config.reward_model_path, num_labels=1, trust_remote_code=model_config.trust_remote_code
+        )
     else:
         reward_model = None
 
