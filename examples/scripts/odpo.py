@@ -3,7 +3,8 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 
 from trl import ModelConfig
 from trl.commands.cli_utils import TrlParser
-from trl.trainer.odpo import OnlineDPOConfig, OnlineDPOTrainer
+from trl.trainer.odpo import ODPOTrainer
+from trl.trainer.online_dpo_config import ODPOConfig
 
 
 """
@@ -11,7 +12,7 @@ python examples/scripts/online_dpo.py --output_dir online_dpo
 """
 
 if __name__ == "__main__":
-    parser = TrlParser((OnlineDPOConfig, ModelConfig))
+    parser = TrlParser((ODPOConfig, ModelConfig))
     training_args, model_config = parser.parse_args_and_config()
 
     model = AutoModelForCausalLM.from_pretrained("cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr")
@@ -27,7 +28,7 @@ if __name__ == "__main__":
     for split in dataset:
         dataset[split] = dataset[split].select(range(1024))
 
-    trainer = OnlineDPOTrainer(
+    trainer = ODPOTrainer(
         model=model,
         ref_model=ref_model,
         reward_model=reward_model,
