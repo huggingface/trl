@@ -30,7 +30,7 @@ eval_dataset = Dataset.from_dict(
     {"input_ids": [tok.encode("Q: What do you like to eat A:")] * NUM_DUMMY_SAMPLES})
 trainer = OnlineDPOTrainer(
     OnlineDPOConfig(
-        output_dir="models/minimal/demo",
+        output_dir="online-dpo-model",
     ),
     model=model,
     ref_model=ref_model,
