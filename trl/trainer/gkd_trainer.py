@@ -195,7 +195,7 @@ class GKDTrainer(SFTTrainer):
                     eos_pos = (sequence == self.tokenizer.eos_token_id).nonzero()
                     if eos_pos.numel() > 0:
                         eos_pos = eos_pos[-1].item()
-                        sequence[eos_pos+1:] = self.tokenizer.pad_token_id
+                        sequence[eos_pos + 1 :] = self.tokenizer.pad_token_id
                     else:
                         eos_pos = sequence.size(0)
 
@@ -212,7 +212,7 @@ class GKDTrainer(SFTTrainer):
                 inputs["input_ids"] = torch.stack(input_ids)
                 inputs["labels"] = torch.stack(labels)
                 inputs["attention_mask"] = (inputs["input_ids"] != self.tokenizer.pad_token_id).long()
-                
+
         inputs = self._prepare_inputs(inputs)
         model.train()
         with self.compute_loss_context_manager():
