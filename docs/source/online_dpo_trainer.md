@@ -18,7 +18,7 @@ from transformers import (
     AutoTokenizer,
 )
 NUM_DUMMY_SAMPLES = 100
-tok = AutoTokenizer.from_pretrained("gpt2")
+tokenizer = AutoTokenizer.from_pretrained("gpt2")
 tok.add_special_tokens({"pad_token": "[PAD]"})
 model = AutoModelForCausalLM.from_pretrained("gpt2")
 ref_model = AutoModelForCausalLM.from_pretrained("gpt2")
