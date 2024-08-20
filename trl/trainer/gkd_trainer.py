@@ -187,12 +187,10 @@ class GKDTrainer(SFTTrainer):
                     do_sample=True,
                     top_k=0,
                 )
-                attention_mask = inputs["prompts"] != self.tokenizer.pad_token_id
 
                 # generate output with respect to the prompt only
                 generated_outputs = unwrapped_model.generate(
                     input_ids=inputs["prompts"],
-                    attention_mask=attention_mask,
                     generation_config=generation_config,
                     return_dict_in_generate=True,
                 )

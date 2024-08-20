@@ -279,7 +279,7 @@ class DataCollatorForChatML:
             attention_mask[i] = attention_mask[i] + [0] * padding_length
             labels[i] = labels[i] + [self.ignore_index] * padding_length
 
-        # padd the tokenized_prompts
+        # pad the tokenized_prompts
         max_prompt_length = max(len(ids) for ids in tokenized_prompts["input_ids"])
         for i in range(len(tokenized_prompts["input_ids"])):
             padding_length = max_prompt_length - len(tokenized_prompts["input_ids"][i])
