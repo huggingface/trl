@@ -7,6 +7,43 @@ While [Guo et al. (2024)](https://huggingface.co/papers/2402.04792) used a LLM j
 
 ## Get started
 
+The basic API looks as follows:
+
+```python
+from datasets import Dataset
+from trl import OnlineDPOConfig, OnlineDPOTrainer
+from transformers import (
+    AutoModelForCausalLM,
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+)
+NUM_DUMMY_SAMPLES = 100
+tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-135M-Instruct")
+tok.add_special_tokens({"pad_token": "[PAD]"})
+# The model to optimise
+model = AutoModelForCausalLM.from_pretrained("HuggingFaceTB/SmolLM-135M-Instruct")
+ref_model = AutoModelForCausalLM.from_pretrained("HuggingFaceTB/SmolLM-135M-Instruct")
+# The model to score completions with. In practice, you will need a fine-tuned reward model. See Reward Bench for some good ones: https://huggingface.co/spaces/allenai/reward-bench
+reward_model = AutoModelForSequenceClassification.from_pretrained("HuggingFaceTB/SmolLM-135M-Instruct", num_labels=1)
+train_dataset = Dataset.from_dict(
+    {"input_ids": [tok.encode("Q: Hi how are you? A:")] * NUM_DUMMY_SAMPLES})
+eval_dataset = Dataset.from_dict(
+    {"input_ids": [tok.encode("Q: What do you like to eat A:")] * NUM_DUMMY_SAMPLES})
+trainer = OnlineDPOTrainer(
+    OnlineDPOConfig(
+        output_dir="online-dpo-model",
+    ),
+    model=model,
+    ref_model=ref_model,
+    reward_model=reward_model,
+    tokenizer=tok,
+    train_dataset=train_dataset,
+    eval_dataset=eval_dataset,
+)
+trainer.train()
+```
+
+
 To just run the online DPO script to make sure the trainer can run, you can run the following command to train an online DPO model with a dummy reward model.
 
 ```bash

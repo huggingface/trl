@@ -68,6 +68,25 @@ def add_margin(row):
 dataset = dataset.map(add_margin)
 ```
 
+### Centering rewards
+
+In many scenarios, it's preferable to ensure that a reward model's output is mean zero. This is often done by first calculating the model's average score and then subtracting it.
+
+[[Eisenstein et al., 2023]](https://huggingface.co/papers/2312.09244) proposed an auxiliary loss function designed to directly learn a centered reward model. This auxiliary loss minimizes the squared sum of the rewards, encouraging the model to naturally produce mean-zero outputs:
+
+$$\Big( R(p, r_1) + R(p, r_2) \Big)^2 $$
+
+This auxiliary loss is combined with the main loss function, weighted by the parameter `center_rewards_coefficient` in the `[RewardConfig]`. By default, this feature is deactivated (`center_rewards_coefficient = None`).
+
+```python
+reward_config = RewardConfig(
+    center_rewards_coefficient=0.01,
+    ...
+)
+```
+
+For reference results, please refer PR [#1932](https://github.com/huggingface/trl/pull/1932).
+
 ## RewardConfig
 
 [[autodoc]] RewardConfig
