@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, Literal, Optional
 
 from transformers import TrainingArguments
 
@@ -27,6 +27,11 @@ class KTOConfig(TrainingArguments):
     command line.
 
     Parameters:
+        loss_type (`str`, *optional*, defaults to `"kto"`):
+                The type of unpaired loss to use. Possible values are:
+
+                    - `"kto"`: KTO loss from the [KTO](https://huggingface.co/papers/2402.01306) paper.
+                    - `"apo_zero_unpaired"`: Unpaired variant of APO-zero loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
         max_length (`int`, *optional*, defaults to `None`):
             The maximum length of the sequences in the batch. This argument is required if you want to use the default data collator.
         max_prompt_length (`int`, *optional*, defaults to `None`):
@@ -60,6 +65,10 @@ class KTOConfig(TrainingArguments):
             Number of processes to use for processing the datasets.
     """
 
+    loss_type: Literal[
+        "kto",
+        "apo_zero_unpaired",
+    ] = "kto"
     max_length: Optional[int] = None
     """The maximum length of the sequences in the batch. This argument is required if you want to use the default data collator."""
     max_prompt_length: Optional[int] = None
