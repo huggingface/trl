@@ -47,7 +47,11 @@ class GKDTrainer(SFTTrainer):
     ):
         # add remove_unused_columns=False to the the dataclass args
         args.remove_unused_columns = False
-        kwargs["data_collator"] = DataCollatorForChatML(tokenizer=kwargs["tokenizer"])
+        tokenizer = kwargs["tokenizer"]
+        if args.max_seq_length is None:
+            # to overcome some issues with broken tokenizers
+            args.max_seq_length = min(tokenizer.model_max_length, 1024)
+        kwargs["data_collator"] = DataCollatorForChatML(tokenizer=tokenizer, max_length=args.max_seq_length)
 
         super().__init__(*sft_args, args=args, **kwargs)
 
