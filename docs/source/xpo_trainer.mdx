@@ -8,7 +8,6 @@ XPO augments the DPO objective with an exploration bonus allowing the method to 
 
 To just run the XPO script to make sure this trainer can run, you can run the following command to train an XPO model with a dummy reward model.
 
-
 ```bash
 python examples/scripts/xpo.py \
     --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
@@ -33,9 +32,8 @@ The logged metrics are as follows:
 * `eps`: Tracks the number of episodes per second.
 * `objective/kl`: The mean Kullback-Leibler (KL) divergence between the current model and reference model.
 * `objective/entropy`: The mean entropy of the model, indicating the randomness of the actions chosen by the model.
-* `objective/non_score_reward`: The mean reward from non-score-related sources, basically `beta * kl.sum(1)`, where `beta` is the KL penalty coefficient and `kl` is the per-token KL divergence.
-* `objective/rlhf_reward`: The mean RLHF reward, which is `score - non_score_reward`.
-* `objective/scores`: The mean scores returned by the reward model / environment.
+* `objective/mean_dpo_score`: The mean dpo score between the model and reference model responses.
+* `objective/xpo_loss`: The mean xpo part of the full loss.
 * `objective/scores_margin`: The mean score margin (according to the external reward model) between the chosen and rejected completions.
 * `rewards/accuracies`: The accuracies of the online DPO's implicit reward model.
 * `rewards/chosen`: The mean reward (according to online DPO's implicit reward model)of the chosen completions.
@@ -43,6 +41,5 @@ The logged metrics are as follows:
 * `rewards/margins`: The mean reward margin (according to online DPO's implicit reward model) between the chosen and rejected completions.
 * `logps/chosen`: The mean log probabilities of the chosen completions.
 * `logps/rejected`: The mean log probabilities of the rejected completions.
-* `val/num_eos_tokens`: The number of end-of-sequence (EOS) tokens generated, which can indicate the number of complete responses.
 * `lr`: lr: The current learning rate used by the optimizer.
 * `episode`: episode: The current global step or episode count in the training process.
