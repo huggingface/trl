@@ -23,7 +23,6 @@ from transformers import (
 
 from trl import GKDConfig, GKDTrainer
 from trl.import_utils import is_peft_available
-from trl.trainer.utils import DataCollatorForChatML
 
 
 def formatting_prompts_func(example):
@@ -122,7 +121,6 @@ class GKDTrainerTester(unittest.TestCase):
                 {"prompt": "What is 4+4?", "completion": "8"},
             ]
         )
-        self.collator = DataCollatorForChatML(tokenizer=self.tokenizer)
 
     def test_gkd_trainer(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -134,7 +132,6 @@ class GKDTrainerTester(unittest.TestCase):
                 eval_steps=2,
                 save_steps=2,
                 per_device_train_batch_size=2,
-                remove_unused_columns=False,
             )
 
             trainer = GKDTrainer(
@@ -143,7 +140,7 @@ class GKDTrainerTester(unittest.TestCase):
                 args=training_args,
                 train_dataset=self.dummy_chatml_dataset,
                 eval_dataset=self.dummy_chatml_dataset,
-                data_collator=self.collator,
+                tokenizer=self.tokenizer,
             )
 
             trainer.train()
