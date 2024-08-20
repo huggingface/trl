@@ -271,19 +271,25 @@ class DataCollatorForChatML:
 
         # Pad the sequences
         max_length = min(max(len(ids) for ids in input_ids), self.max_length)
-
+        
+        # pad the input_ids, attention_mask and labels
         for i in range(len(input_ids)):
             padding_length = max_length - len(input_ids[i])
-            input_ids[i] = input_ids[i] + [self.tokenizer.pad_token_id] * padding_length
+            input_ids[i] = [self.tokenizer.pad_token_id] * padding_length + input_ids[i] # pad to the left
             attention_mask[i] = attention_mask[i] + [0] * padding_length
             labels[i] = labels[i] + [self.ignore_index] * padding_length
+
+        # padd the tokenized_prompts
+        max_prompt_length = max(len(ids) for ids in tokenized_prompts["input_ids"])
+        for i in range(len(tokenized_prompts["input_ids"])):
+            padding_length = max_prompt_length - len(tokenized_prompts["input_ids"][i])
+            tokenized_prompts["input_ids"][i] = [self.tokenizer.pad_token_id] * padding_length + tokenized_prompts["input_ids"][i] # pad to the left
 
         batch = {
             "input_ids": torch.tensor(input_ids),
             "attention_mask": torch.tensor(attention_mask),
             "labels": torch.tensor(labels),
-            "prompts": prompts,
-            "completions": completions,
+            "prompts": torch.tensor(tokenized_prompts["input_ids"]),
         }
 
         return batch

@@ -183,7 +183,7 @@ class GKDTrainer(SFTTrainer):
 
                 # generate output with respect to the prompt only
                 generated_outputs = unwrapped_model.generate(
-                    input_ids=torch.masked_fill(inputs["prompts"], ~attention_mask, self.tokenizer.pad_token_id),
+                    input_ids=inputs["prompts"],
                     attention_mask=attention_mask,
                     generation_config=generation_config,
                     return_dict_in_generate=True,
