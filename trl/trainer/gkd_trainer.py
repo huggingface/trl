@@ -189,16 +189,30 @@ class GKDTrainer(SFTTrainer):
                     return_dict_in_generate=True,
                 )
 
-                # set input_ids to the generated output and attention_mask to 1 where the generated output is not the pad token
-                inputs["input_ids"] = torch.where(
-                    generated_outputs.sequences != -100, generated_outputs.sequences, self.tokenizer.pad_token_id
-                )
-                inputs["attention_mask"] = torch.where(generated_outputs.sequences != -100, 1, 0)
-                # set all but the last self.args.max_new_tokens labels to -100
-                labels = generated_outputs.sequences
-                labels[:, : -self.args.max_new_tokens] = -100
-                inputs["labels"] = labels
+                input_ids = []
+                labels = []
+                for i, sequence in enumerate(generated_outputs.sequences):
+                    eos_pos = (sequence == self.tokenizer.eos_token_id).nonzero()
+                    if eos_pos.numel() > 0:
+                        eos_pos = eos_pos[-1].item()
+                        sequence[eos_pos+1:] = self.tokenizer.pad_token_id
+                    else:
+                        eos_pos = sequence.size(0)
 
+                    # Set input_ids to the generated output
+                    input_ids.append(sequence)
+
+                    # Set labels -100 for prompt, actual ids for completion up to EOS, then -100
+                    prompt_length = (inputs["prompts"][i] != self.tokenizer.pad_token_id).sum().item()
+                    label = torch.full_like(sequence, -100)
+                    label[prompt_length:eos_pos] = sequence[prompt_length:eos_pos]
+                    labels.append(label)
+
+                # Update inputs, labels, and attention_mask
+                inputs["input_ids"] = torch.stack(input_ids)
+                inputs["labels"] = torch.stack(labels)
+                inputs["attention_mask"] = (inputs["input_ids"] != self.tokenizer.pad_token_id).long()
+                
         inputs = self._prepare_inputs(inputs)
         model.train()
         with self.compute_loss_context_manager():
