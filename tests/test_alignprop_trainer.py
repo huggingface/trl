@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import gc
+import tempfile
 import unittest
 
 import torch
@@ -40,52 +41,53 @@ class AlignPropTrainerTester(unittest.TestCase):
     Test the AlignPropTrainer class.
     """
 
-    def setUp(self):
-        alignprop_config = AlignPropConfig(
-            num_epochs=2,
-            train_gradient_accumulation_steps=1,
-            train_batch_size=2,
-            truncated_backprop_rand=False,
-            mixed_precision=None,
-            save_freq=1000000,
-        )
-        pretrained_model = "hf-internal-testing/tiny-stable-diffusion-torch"
-        pretrained_revision = "main"
-        pipeline_with_lora = DefaultDDPOStableDiffusionPipeline(
-            pretrained_model, pretrained_model_revision=pretrained_revision, use_lora=True
-        )
-        pipeline_without_lora = DefaultDDPOStableDiffusionPipeline(
-            pretrained_model, pretrained_model_revision=pretrained_revision, use_lora=False
-        )
-        self.trainer_with_lora = AlignPropTrainer(
-            alignprop_config, scorer_function, prompt_function, pipeline_with_lora
-        )
-        self.trainer_without_lora = AlignPropTrainer(
-            alignprop_config, scorer_function, prompt_function, pipeline_without_lora
-        )
-
     def tearDown(self) -> None:
         gc.collect()
 
     @parameterized.expand([True, False])
     def test_generate_samples(self, use_lora):
-        trainer = self.trainer_with_lora if use_lora else self.trainer_without_lora
-        output_pairs = trainer._generate_samples(2, with_grad=True)
-        assert len(output_pairs.keys()) == 3
-        assert len(output_pairs["images"]) == 2
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            alignprop_config = AlignPropConfig(
+                output_dir=tmp_dir,
+                num_epochs=2,
+                train_gradient_accumulation_steps=1,
+                train_batch_size=2,
+                truncated_backprop_rand=False,
+                mixed_precision=None,
+                save_freq=1000000,
+            )
+            pretrained_model = "hf-internal-testing/tiny-stable-diffusion-torch"
+            pipeline = DefaultDDPOStableDiffusionPipeline(pretrained_model, use_lora=use_lora)
+            trainer = AlignPropTrainer(alignprop_config, scorer_function, prompt_function, pipeline)
+            output_pairs = trainer._generate_samples(2, with_grad=True)
+            assert len(output_pairs.keys()) == 3
+            assert len(output_pairs["images"]) == 2
 
     @parameterized.expand([True, False])
     def test_calculate_loss(self, use_lora):
-        trainer = self.trainer_with_lora if use_lora else self.trainer_without_lora
-        sample = trainer._generate_samples(2)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            alignprop_config = AlignPropConfig(
+                output_dir=tmp_dir,
+                num_epochs=2,
+                train_gradient_accumulation_steps=1,
+                train_batch_size=2,
+                truncated_backprop_rand=False,
+                mixed_precision=None,
+                save_freq=1000000,
+            )
+            pretrained_model = "hf-internal-testing/tiny-stable-diffusion-torch"
+            pipeline = DefaultDDPOStableDiffusionPipeline(pretrained_model, use_lora=use_lora)
+            trainer = AlignPropTrainer(alignprop_config, scorer_function, prompt_function, pipeline)
 
-        images = sample["images"]
-        prompts = sample["prompts"]
+            sample = trainer._generate_samples(2)
 
-        assert images.shape == (2, 3, 128, 128)
-        assert len(prompts) == 2
+            images = sample["images"]
+            prompts = sample["prompts"]
 
-        rewards = trainer.compute_rewards(sample)
-        loss = trainer.calculate_loss(rewards)
+            assert images.shape == (2, 3, 128, 128)
+            assert len(prompts) == 2
 
-        assert torch.isfinite(loss.cpu())
+            rewards = trainer.compute_rewards(sample)
+            loss = trainer.calculate_loss(rewards)
+
+            assert torch.isfinite(loss.cpu())
