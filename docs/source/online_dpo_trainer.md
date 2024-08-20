@@ -22,6 +22,7 @@ tokenizer = AutoTokenizer.from_pretrained("gpt2")
 tok.add_special_tokens({"pad_token": "[PAD]"})
 model = AutoModelForCausalLM.from_pretrained("gpt2")
 ref_model = AutoModelForCausalLM.from_pretrained("gpt2")
+# The model to score completions with. In practice, you will need a fine-tuned reward model. See Reward Bench for some good ones: https://huggingface.co/spaces/allenai/reward-bench
 reward_model = AutoModelForSequenceClassification.from_pretrained("gpt2", num_labels=1)
 train_dataset = Dataset.from_dict(
     {"input_ids": [tok.encode("Q: Hi how are you? A:")] * NUM_DUMMY_SAMPLES})
