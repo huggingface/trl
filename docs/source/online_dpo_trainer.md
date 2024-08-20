@@ -18,13 +18,13 @@ from transformers import (
     AutoTokenizer,
 )
 NUM_DUMMY_SAMPLES = 100
-tokenizer = AutoTokenizer.from_pretrained("gpt2")
+tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-135M-Instruct")
 tok.add_special_tokens({"pad_token": "[PAD]"})
 # The model to optimise
-model = AutoModelForCausalLM.from_pretrained("gpt2")
-ref_model = AutoModelForCausalLM.from_pretrained("gpt2")
+model = AutoModelForCausalLM.from_pretrained("HuggingFaceTB/SmolLM-135M-Instruct")
+ref_model = AutoModelForCausalLM.from_pretrained("HuggingFaceTB/SmolLM-135M-Instruct")
 # The model to score completions with. In practice, you will need a fine-tuned reward model. See Reward Bench for some good ones: https://huggingface.co/spaces/allenai/reward-bench
-reward_model = AutoModelForSequenceClassification.from_pretrained("gpt2", num_labels=1)
+reward_model = AutoModelForSequenceClassification.from_pretrained("HuggingFaceTB/SmolLM-135M-Instruct", num_labels=1)
 train_dataset = Dataset.from_dict(
     {"input_ids": [tok.encode("Q: Hi how are you? A:")] * NUM_DUMMY_SAMPLES})
 eval_dataset = Dataset.from_dict(
