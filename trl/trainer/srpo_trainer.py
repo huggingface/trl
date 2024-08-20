@@ -66,7 +66,7 @@ if is_deepspeed_available():
 
 class SRPOTrainer(Trainer):
     r"""
-    Initialize DPOTrainer.
+    Initialize SRPOTrainer.
 
     Args:
         model (`transformers.PreTrainedModel`):
@@ -74,8 +74,8 @@ class SRPOTrainer(Trainer):
         ref_model (`PreTrainedModelWrapper`):
             Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation and loss. If no
             reference model is provided, the trainer will create a reference model with the same architecture as the model to be optimized.
-        args (`DPOConfig`):
-            The DPO config arguments to use for training.
+        args (`SRPOConfig`):
+            The SRPO config arguments to use for training.
         data_collator (`transformers.DataCollator`):
             The data collator to use for training. If None is specified, the default data collator (`DPODataCollatorWithPadding`) will be used
             which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
@@ -126,7 +126,7 @@ class SRPOTrainer(Trainer):
             "reference_free",
             "force_use_ref_model",
         ],
-        custom_message="Deprecated positional argument(s) used in DPOTrainer, please use the DPOConfig to set these arguments instead.",
+        custom_message="Deprecated positional argument(s) used in SRPOTrainer, please use the SRPOConfig to set these arguments instead.",
     )
     def __init__(
         self,
@@ -177,17 +177,17 @@ class SRPOTrainer(Trainer):
         force_use_ref_model: bool = False,
     ):
         self.srpo_keys = [
-            "improve_to_chosen_given_rejected",
-            "improve_to_chosen_given_chosen",
-            "improve_to_rejected_given_rejected",
-            "improve_to_rejected_given_chosen",
+            "chosen_improved_to_given_rejected",
+            "chosen_improved_to_given_chosen",
+            "rejected_improved_to_given_rejected",
+            "rejected_improved_to_given_chosen",
             "chosen",
             "rejected",
         ]
         self.alpha = 0.8
         if model_init_kwargs is not None:
             warnings.warn(
-                "You passed `model_init_kwargs` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+                "You passed `model_init_kwargs` to the SRPOTrainer, the value you passed will override the one in the `SRPOConfig`."
             )
             args.model_init_kwargs = model_init_kwargs
 
@@ -195,19 +195,27 @@ class SRPOTrainer(Trainer):
             model_init_kwargs = {}
         elif not isinstance(model, str):
             raise ValueError(
-                "You passed model_init_kwargs to the DPOTrainer/DPOConfig, but your model is already instantiated."
+                "You passed model_init_kwargs to the SRPOTrainer/SRPOConfig, but your model is already instantiated."
             )
         else:
             model_init_kwargs = args.model_init_kwargs
-            model_init_kwargs["torch_dtype"] = (
-                model_init_kwargs["torch_dtype"]
-                if model_init_kwargs["torch_dtype"] in ["auto", None]
-                else getattr(torch, model_init_kwargs["torch_dtype"])
-            )
+
+            torch_dtype = model_init_kwargs["torch_dtype"]
+            if torch_dtype is not None:
+                # Convert to `torch.dtype` if an str is passed
+                if isinstance(torch_dtype, str) and torch_dtype != "auto":
+                    torch_dtype = getattr(torch, torch_dtype)
+
+                if torch_dtype != "auto" and not isinstance(torch_dtype, torch.dtype):
+                    raise ValueError(
+                        f"Invalid `torch_dtype` passed to the SRPOConfig. Expected a string with either `torch.dtype` or 'auto', but got {torch_dtype}."
+                    )
+
+            model_init_kwargs["torch_dtype"] = torch_dtype
 
         if ref_model_init_kwargs is not None:
             warnings.warn(
-                "You passed `ref_model_init_kwargs` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+                "You passed `ref_model_init_kwargs` to the SRPOTrainer, the value you passed will override the one in the `SRPOConfig`."
             )
             args.ref_model_init_kwargs = ref_model_init_kwargs
 
@@ -215,26 +223,34 @@ class SRPOTrainer(Trainer):
             ref_model_init_kwargs = {}
         elif not isinstance(ref_model, str):
             raise ValueError(
-                "You passed ref_model_init_kwargs to the DPOTrainer/DPOConfig, but your ref_model is already instantiated."
+                "You passed ref_model_init_kwargs to the SRPOTrainer/SRPOConfig, but your ref_model is already instantiated."
             )
         else:
             ref_model_init_kwargs = args.ref_model_init_kwargs
-            ref_model_init_kwargs["torch_dtype"] = (
-                ref_model_init_kwargs["torch_dtype"]
-                if ref_model_init_kwargs["torch_dtype"] in ["auto", None]
-                else getattr(torch, ref_model_init_kwargs["torch_dtype"])
-            )
+            torch_dtype = ref_model_init_kwargs["torch_dtype"]
+            if torch_dtype is not None:
+                # Convert to `torch.dtype` if an str is passed
+                if isinstance(torch_dtype, str) and torch_dtype != "auto":
+                    torch_dtype = getattr(torch, torch_dtype)
+
+                if torch_dtype != "auto" and not isinstance(torch_dtype, torch.dtype):
+                    raise ValueError(
+                        f"Invalid `torch_dtype` passed to the SRPOConfig. Expected a string with either `torch.dtype` or 'auto', but got {torch_dtype}."
+                    )
+
+            ref_model_init_kwargs["torch_dtype"] = torch_dtype
+
 
         if isinstance(model, str):
             warnings.warn(
-                "You passed a model_id to the DPOTrainer. This will automatically create an "
+                "You passed a model_id to the SRPOTrainer. This will automatically create an "
                 "`AutoModelForCausalLM` or a `PeftModel` (if you passed a `peft_config`) for you."
             )
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
 
         if isinstance(ref_model, str):
             warnings.warn(
-                "You passed a ref model_id to the DPOTrainer. This will automatically create an "
+                "You passed a ref model_id to the SRPOTrainer. This will automatically create an "
                 "`AutoModelForCausalLM`"
             )
             ref_model = AutoModelForCausalLM.from_pretrained(ref_model, **ref_model_init_kwargs)
@@ -245,7 +261,7 @@ class SRPOTrainer(Trainer):
 
         if force_use_ref_model:
             warnings.warn(
-                "You passed `force_use_ref_model` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+                "You passed `force_use_ref_model` to the SRPOTrainer, the value you passed will override the one in the `SRPOConfig`."
             )
             args.force_use_ref_model = force_use_ref_model
 
@@ -260,8 +276,8 @@ class SRPOTrainer(Trainer):
 
             if ref_model is not None and not args.force_use_ref_model:
                 raise ValueError(
-                    "You passed both a ref_model and a peft_config. For training PEFT adapters with DPO there is no need to pass a reference"
-                    " model. Please pass `ref_model=None` in case you want to train PEFT adapters, or pass a ref_model with `force_use_ref_model=True` in DPOTrainer's init."
+                    "You passed both a ref_model and a peft_config. For training PEFT adapters with SRPO there is no need to pass a reference"
+                    " model. Please pass `ref_model=None` in case you want to train PEFT adapters, or pass a ref_model with `force_use_ref_model=True` in SRPOTrainer's init."
                     " if you want to use a different ref_model."
                 )
 
@@ -312,7 +328,7 @@ class SRPOTrainer(Trainer):
 
         if generate_during_eval:
             warnings.warn(
-                "You passed `generate_during_eval` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+                "You passed `generate_during_eval` to the SRPOTrainer, the value you passed will override the one in the `SRPOConfig`."
             )
             args.generate_during_eval = generate_during_eval
         if args.generate_during_eval and not is_wandb_available():
@@ -323,14 +339,14 @@ class SRPOTrainer(Trainer):
 
         if is_encoder_decoder is not None:
             warnings.warn(
-                "You passed `is_encoder_decoder` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+                "You passed `is_encoder_decoder` to the SRPOTrainer, the value you passed will override the one in the `SRPOConfig`."
             )
             args.is_encoder_decoder = is_encoder_decoder
         if model is not None:
             self.is_encoder_decoder = model.config.is_encoder_decoder
         elif args.is_encoder_decoder is None:
             raise ValueError(
-                "When no model is provided, you need to pass the parameter is_encoder_decoder to the DPOTrainer/DPOConfig."
+                "When no model is provided, you need to pass the parameter is_encoder_decoder to the SRPOTrainer/SRPOConfig."
             )
         else:
             self.is_encoder_decoder = args.is_encoder_decoder
@@ -338,28 +354,28 @@ class SRPOTrainer(Trainer):
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
         if model_adapter_name is not None:
             warnings.warn(
-                "You passed `model_adapter_name` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+                "You passed `model_adapter_name` to the SRPOTrainer, the value you passed will override the one in the `SRPOConfig`."
             )
             args.model_adapter_name = model_adapter_name
         self.model_adapter_name = args.model_adapter_name
 
         if ref_adapter_name is not None:
             warnings.warn(
-                "You passed `ref_adapter_name` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+                "You passed `ref_adapter_name` to the SRPOTrainer, the value you passed will override the one in the `SRPOConfig`."
             )
             args.ref_adapter_name = ref_adapter_name
         self.ref_adapter_name = args.ref_adapter_name
 
         if reference_free:
             warnings.warn(
-                "You passed `reference_free` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+                "You passed `reference_free` to the SRPOTrainer, the value you passed will override the one in the `SRPOConfig`."
             )
             args.reference_free = reference_free
         self.reference_free = args.reference_free
 
         if precompute_ref_log_probs:
             warnings.warn(
-                "You passed `precompute_ref_log_probs` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+                "You passed `precompute_ref_log_probs` to the SRPOTrainer, the value you passed will override the one in the `SRPOConfig`."
             )
             args.precompute_ref_log_probs = precompute_ref_log_probs
 
@@ -372,16 +388,16 @@ class SRPOTrainer(Trainer):
             self.ref_model = create_reference_model(model)
 
         if tokenizer is None:
-            raise ValueError("tokenizer must be specified to tokenize a DPO dataset.")
+            raise ValueError("tokenizer must be specified to tokenize a SRPO dataset.")
 
         if max_length is not None:
             warnings.warn(
-                "You passed `max_length` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+                "You passed `max_length` to the SRPOTrainer, the value you passed will override the one in the `SRPOConfig`."
             )
             args.max_length = max_length
         if args.max_length is None:
             warnings.warn(
-                "`max_length` is not set in the DPOConfig's init"
+                "`max_length` is not set in the SRPOConfig's init"
                 " it will default to `512` by default, but you should do it yourself in the future.",
                 UserWarning,
             )
@@ -389,12 +405,12 @@ class SRPOTrainer(Trainer):
 
         if max_prompt_length is not None:
             warnings.warn(
-                "You passed `max_prompt_length` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+                "You passed `max_prompt_length` to the SRPOTrainer, the value you passed will override the one in the `SRPOConfig`."
             )
             args.max_prompt_length = max_prompt_length
         if args.max_prompt_length is None:
             warnings.warn(
-                "`max_prompt_length` is not set in the DPOConfig's init"
+                "`max_prompt_length` is not set in the SRPOConfig's init"
                 " it will default to `128` by default, but you should do it yourself in the future.",
                 UserWarning,
             )
@@ -402,12 +418,12 @@ class SRPOTrainer(Trainer):
 
         if max_target_length is not None:
             warnings.warn(
-                "You passed `max_target_length` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+                "You passed `max_target_length` to the SRPOTrainer, the value you passed will override the one in the `SRPOConfig`."
             )
             args.max_target_length = max_target_length
         if args.max_target_length is None and self.is_encoder_decoder:
             warnings.warn(
-                "When using an encoder decoder architecture, you should set `max_target_length` in the DPOConfig's init"
+                "When using an encoder decoder architecture, you should set `max_target_length` in the SRPOConfig's init"
                 " it will default to `128` by default, but you should do it yourself in the future.",
                 UserWarning,
             )
@@ -415,7 +431,7 @@ class SRPOTrainer(Trainer):
 
         if label_pad_token_id != -100:
             warnings.warn(
-                "You passed `label_pad_token_id` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+                "You passed `label_pad_token_id` to the SRPOTrainer, the value you passed will override the one in the `SRPOConfig`."
             )
             args.label_pad_token_id = label_pad_token_id
         if data_collator is None:
@@ -440,7 +456,7 @@ class SRPOTrainer(Trainer):
 
         if not disable_dropout:
             warnings.warn(
-                "You passed `disable_dropout` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+                "You passed `disable_dropout` to the SRPOTrainer, the value you passed will override the one in the `SRPOConfig`."
             )
             args.disable_dropout = disable_dropout
         if args.disable_dropout:
@@ -453,14 +469,14 @@ class SRPOTrainer(Trainer):
         self.label_pad_token_id = args.label_pad_token_id
         if padding_value is not None:
             warnings.warn(
-                "You passed `padding_value` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+                "You passed `padding_value` to the SRPOTrainer, the value you passed will override the one in the `SRPOConfig`."
             )
             args.padding_value = padding_value
         self.padding_value = args.padding_value if padding_value is not None else tokenizer.pad_token_id
         self.max_prompt_length = args.max_prompt_length
         if truncation_mode != "keep_end":
             warnings.warn(
-                "You passed `truncation_mode` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+                "You passed `truncation_mode` to the SRPOTrainer, the value you passed will override the one in the `SRPOConfig`."
             )
             args.truncation_mode = truncation_mode
         self.truncation_mode = args.truncation_mode
@@ -475,12 +491,12 @@ class SRPOTrainer(Trainer):
 
         if loss_type != "sigmoid":
             warnings.warn(
-                "You passed `loss_type` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+                "You passed `loss_type` to the SRPOTrainer, the value you passed will override the one in the `SRPOConfig`."
             )
             args.loss_type = loss_type
         if label_smoothing != 0:
             warnings.warn(
-                "You passed `label_smoothing` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+                "You passed `label_smoothing` to the SRPOTrainer, the value you passed will override the one in the `SRPOConfig`."
             )
             args.label_smoothing = label_smoothing
         if args.loss_type in ["hinge", "ipo", "kto_pair", "bco_pair"] and args.label_smoothing > 0:
@@ -490,7 +506,7 @@ class SRPOTrainer(Trainer):
 
         if beta != 0.1:
             warnings.warn(
-                "You passed `beta` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+                "You passed `beta` to the SRPOTrainer, the value you passed will override the one in the `SRPOConfig`."
             )
             args.beta = beta
         self.beta = args.beta
@@ -501,7 +517,7 @@ class SRPOTrainer(Trainer):
 
         if dataset_num_proc is not None:
             warnings.warn(
-                "You passed `dataset_num_proc` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+                "You passed `dataset_num_proc` to the SRPOTrainer, the value you passed will override the one in the `SRPOConfig`."
             )
             args.dataset_num_proc = dataset_num_proc
         self.dataset_num_proc = args.dataset_num_proc
@@ -511,10 +527,9 @@ class SRPOTrainer(Trainer):
         with PartialState().local_main_process_first():
             # tokenize the dataset
             if train_dataset is not None:
-                train_dataset = train_dataset.map(self.tokenize_row, num_proc=self.dataset_num_proc)
+                train_dataset = train_dataset.map(lambda x: self.tokenize_row(x, model=model), num_proc=self.dataset_num_proc, writer_batch_size=10)
             if eval_dataset is not None:
-                eval_dataset = eval_dataset.map(self.tokenize_row, num_proc=self.dataset_num_proc)
-
+                eval_dataset = eval_dataset.map(lambda x: self.tokenize_row(x, model=model), num_proc=self.dataset_num_proc, writer_batch_size=10)
         super().__init__(
             model=model,
             args=args,
@@ -622,22 +637,67 @@ class SRPOTrainer(Trainer):
 
             reference_chosen_logps = []
             reference_rejected_logps = []
+            reference_chosen_improved_to_given_rejected_logps = []
+            reference_chosen_improved_to_given_chosen_logps = []
+            reference_rejected_improved_to_given_rejected_logps = []
+            reference_rejected_improved_to_given_chosen_logps = []
             for padded_batch in tqdm(iterable=data_loader, desc="Train dataset reference log probs"):
-                reference_chosen_logp, reference_rejected_logp = self.compute_reference_log_probs(padded_batch)
-                reference_chosen_logp, reference_rejected_logp = self.accelerator.gather_for_metrics(
-                    (reference_chosen_logp, reference_rejected_logp)
+                reference_logps = self.compute_reference_log_probs(padded_batch)
+                reference_chosen_improved_to_given_rejected_logp = reference_logps["chosen_improved_to_given_rejected"]
+                reference_chosen_improved_to_given_chosen_logp = reference_logps["chosen_improved_to_given_chosen"]
+                reference_rejected_improved_to_given_rejected_logp = reference_logps["rejected_improved_to_given_rejected"]
+                reference_rejected_improved_to_given_chosen_logp = reference_logps["rejected_improved_to_given_chosen"]
+                reference_chosen_logp = reference_logps["chosen"]
+                reference_rejected_logp = reference_logps["rejected"]
+
+                (
+                        reference_chosen_logp, 
+                        reference_rejected_logp,
+                        reference_chosen_improved_to_given_rejected_logp,
+                        reference_chosen_improved_to_given_chosen_logp,
+                        reference_rejected_improved_to_given_rejected_logp,
+                        reference_rejected_improved_to_given_chosen_logp
+                ) = self.accelerator.gather_for_metrics(
+                    (
+                        reference_chosen_logp, 
+                        reference_rejected_logp,
+                        reference_chosen_improved_to_given_rejected_logp,
+                        reference_chosen_improved_to_given_chosen_logp,
+                        reference_rejected_improved_to_given_rejected_logp,
+                        reference_rejected_improved_to_given_chosen_logp
+                    )
                 )
                 reference_chosen_logps.append(reference_chosen_logp.cpu())
                 reference_rejected_logps.append(reference_rejected_logp.cpu())
+                reference_chosen_improved_to_given_rejected_logps.append(reference_chosen_improved_to_given_rejected_logp.cpu())
+                reference_chosen_improved_to_given_chosen_logps.append(reference_chosen_improved_to_given_chosen_logp.cpu())
+                reference_rejected_improved_to_given_rejected_logps.append(reference_rejected_improved_to_given_rejected_logp.cpu())
+                reference_rejected_improved_to_given_chosen_logps.append(reference_rejected_improved_to_given_chosen_logp.cpu())
 
             all_reference_chosen_logps = torch.cat(reference_chosen_logps).float().numpy()
             all_reference_rejected_logps = torch.cat(reference_rejected_logps).float().numpy()
+            all_reference_chosen_improved_to_given_rejected_logps = torch.cat(reference_chosen_improved_to_given_rejected_logps).float().numpy()
+            all_reference_chosen_improved_to_given_chosen_logps = torch.cat(reference_chosen_improved_to_given_chosen_logps).float().numpy()
+            all_reference_rejected_improved_to_given_rejected_logps = torch.cat(reference_rejected_improved_to_given_rejected_logps).float().numpy()
+            all_reference_rejected_improved_to_given_chosen_logps = torch.cat(reference_rejected_improved_to_given_chosen_logps).float().numpy()
 
             self.train_dataset = self.train_dataset.add_column(
                 name="reference_chosen_logps", column=all_reference_chosen_logps
             )
             self.train_dataset = self.train_dataset.add_column(
                 name="reference_rejected_logps", column=all_reference_rejected_logps
+            )
+            self.train_dataset = self.train_dataset.add_column(
+                name="reference_chosen_improved_to_given_rejected_logps", column=all_reference_chosen_improved_to_given_rejected_logps
+            )
+            self.train_dataset = self.train_dataset.add_column(
+                name="reference_chosen_improved_to_given_chosen_logps", column=all_reference_chosen_improved_to_given_chosen_logps
+            )
+            self.train_dataset = self.train_dataset.add_column(
+                name="reference_rejected_improved_to_given_rejected_logps", column=all_reference_rejected_improved_to_given_rejected_logps
+            )
+            self.train_dataset = self.train_dataset.add_column(
+                name="reference_rejected_improved_to_given_chosen_logps", column=all_reference_rejected_improved_to_given_chosen_logps
             )
 
             self._precomputed_train_ref_log_probs = True
@@ -761,7 +821,7 @@ class SRPOTrainer(Trainer):
         )
 
     def tokenize_row(self, feature, model: Optional[Union[PreTrainedModel, nn.Module]] = None) -> Dict:
-        """Tokenize a single row from a DPO specific dataset.
+        """Tokenize a single row from a SRPO specific dataset.
 
         At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
         in case the prompt + chosen or prompt + rejected responses is/are too long. First
@@ -796,18 +856,18 @@ class SRPOTrainer(Trainer):
             if not isinstance(rejected, str):
                 raise ValueError(f"rejected should be an str but got {type(rejected)}")
 
-            improve_to_chosen_given_rejected_tokens = self.build_tokenized_answer(prompt, chosen, example=rejected)
-            improve_to_chosen_given_chosen_tokens = self.build_tokenized_answer(prompt, chosen, example=chosen)
-            improve_to_rejected_given_rejected_tokens = self.build_tokenized_answer(prompt, rejected, example=rejected)
-            improve_to_rejected_given_chosen_tokens = self.build_tokenized_answer(prompt, rejected, example=chosen)
+            chosen_improved_to_given_rejected_tokens = self.build_tokenized_answer(prompt, chosen, example=rejected)
+            chosen_improved_to_given_chosen_tokens = self.build_tokenized_answer(prompt, chosen, example=chosen)
+            rejected_improved_to_given_rejected_tokens = self.build_tokenized_answer(prompt, rejected, example=rejected)
+            rejected_improved_to_given_chosen_tokens = self.build_tokenized_answer(prompt, rejected, example=chosen)
             rejected = self.build_tokenized_answer(prompt, rejected)
             chosen = self.build_tokenized_answer(prompt, chosen)
             token_set = {
                 "zero_prompt": prompt_tokens,
-                "improve_to_chosen_given_rejected": improve_to_chosen_given_rejected_tokens,
-                "improve_to_chosen_given_chosen": improve_to_chosen_given_chosen_tokens,
-                "improve_to_rejected_given_rejected": improve_to_rejected_given_rejected_tokens,
-                "improve_to_rejected_given_chosen": improve_to_rejected_given_chosen_tokens,
+                "chosen_improved_to_given_rejected": chosen_improved_to_given_rejected_tokens,
+                "chosen_improved_to_given_chosen": chosen_improved_to_given_chosen_tokens,
+                "rejected_improved_to_given_rejected": rejected_improved_to_given_rejected_tokens,
+                "rejected_improved_to_given_chosen": rejected_improved_to_given_chosen_tokens,
                 "rejected": rejected,
                 "chosen": chosen,
             }
@@ -880,37 +940,43 @@ class SRPOTrainer(Trainer):
 
             batch["prompt"] = prompt
         else:
-            chosen_tokens = self.tokenizer(
-                chosen,
-                truncation=True,
-                max_length=self.max_target_length,
-                add_special_tokens=True,
-            )
-            rejected_tokens = self.tokenizer(
-                rejected,
-                truncation=True,
-                max_length=self.max_target_length,
-                add_special_tokens=True,
-            )
-            prompt_tokens = self.tokenizer(
-                prompt,
-                truncation=True,
-                max_length=self.max_prompt_length,
-                add_special_tokens=True,
-            )
+            def build_encoder_answer(answer, example=None):
+                if example:
+                    chat_template = self.tokenizer.apply_chat_template("", answer=answer, example=example, add_special_tokens=False, tokenize=False)
+                    return self.tokenizer(chat_template, truncation=True, max_length=self.max_target_length)
+                else:
+                    chat_template = self.tokenizer.apply_chat_template("", answer=answer, add_special_tokens=False, tokenize=False)
+                    return self.tokenizer(chat_template, truncation=True, max_length=self.max_target_length)
+            chosen_improved_to_given_rejected_tokens = build_encoder_answer(chosen, example=rejected)
+            chosen_improved_to_given_chosen_tokens = build_encoder_answer(chosen, example=chosen)
+            rejected_improved_to_given_rejected_tokens = build_encoder_answer(rejected, example=rejected)
+            rejected_improved_to_given_chosen_tokens = build_encoder_answer(rejected, example=chosen)
+            rejected_tokens = build_encoder_answer(rejected)
+            chosen_tokens = build_encoder_answer(chosen)
+            prompt_tokens = self.tokenizer.apply_chat_template(prompt, add_special_tokens=False, tokenize=False)
+            prompt_tokens = self.tokenizer(prompt_tokens, truncation=True, max_length=self.max_target_length)
 
-            batch["chosen_labels"] = chosen_tokens["input_ids"]
-            batch["rejected_labels"] = rejected_tokens["input_ids"]
+            token_set = {
+                "chosen_improved_to_given_rejected": chosen_improved_to_given_rejected_tokens,
+                "chosen_improved_to_given_chosen": chosen_improved_to_given_chosen_tokens,
+                "rejected_improved_to_given_rejected": rejected_improved_to_given_rejected_tokens,
+                "rejected_improved_to_given_chosen": rejected_improved_to_given_chosen_tokens,
+                "rejected": rejected_tokens,
+                "chosen": chosen_tokens,
+            }
+
+            for key in self.srpo_keys:
+                batch[f"{key}_labels"] = token_set[key]["input_ids"]
             batch["prompt_input_ids"] = prompt_tokens["input_ids"]
             batch["prompt_attention_mask"] = prompt_tokens["attention_mask"]
+            
 
-            # if model is not None and hasattr(model, "prepare_decoder_input_ids_from_labels"):
-            #     batch["rejected_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
-            #         labels=torch.tensor(batch["rejected_labels"])
-            #     )
-            #     batch["chosen_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
-            #         labels=torch.tensor(batch["chosen_labels"])
-            #     )
+            if model is not None and hasattr(model, "prepare_decoder_input_ids_from_labels"):
+                for key in self.srpo_keys:
+                    batch[f"{key}_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
+                        labels=torch.tensor(batch[f"{key}_labels"])
+                    )
+                    assert -100 not in batch[f"{key}_decoder_input_ids"]
 
         return batch
 
@@ -929,30 +995,20 @@ class SRPOTrainer(Trainer):
                 self.model.set_adapter(self.model_adapter_name or "default")
 
     def compute_reference_log_probs(self, padded_batch: Dict) -> Dict:
-        """Computes log probabilities of the reference model for a single padded batch of a DPO specific dataset."""
+        """Computes log probabilities of the reference model for a single padded batch of a SRPO specific dataset."""
         compte_ref_context_manager = torch.cuda.amp.autocast if self._peft_has_been_casted_to_bf16 else nullcontext
 
         # compute reference logps
         with torch.no_grad(), compte_ref_context_manager():
             if self.ref_model is None:
                 with self.null_ref_context():
-                    (
-                        reference_chosen_logps,
-                        reference_rejected_logps,
-                        _,
-                        _,
-                        _,
-                    ) = self.concatenated_forward(self.model, padded_batch)
+                    result = self.concatenated_forward(self.model, padded_batch)
+                    reference_logps = result["logps"]
             else:
-                (
-                    reference_chosen_logps,
-                    reference_rejected_logps,
-                    _,
-                    _,
-                    _,
-                ) = self.concatenated_forward(self.ref_model, padded_batch)
+                result = self.concatenated_forward(self.ref_model, padded_batch)
+                reference_logps = result["logps"]
 
-        return reference_chosen_logps, reference_rejected_logps
+        return reference_logps
 
     def concatenated_inputs(
         self,
@@ -983,8 +1039,9 @@ class SRPOTrainer(Trainer):
 
         for key in self.srpo_keys:
             for k in batch:
-                if k.startswith(key) and isinstance(batch[k], torch.Tensor):
-                    if "labels" in k or is_encoder_decoder:
+                matching_keys = [f"{key}_labels", f"{key}_input_ids", f"{key}_attention_mask", f"{key}_decoder_input_ids"]
+                if k in matching_keys and isinstance(batch[k], torch.Tensor):
+                    if "labels" in k:
                         pad_value = label_pad_token_id
                     elif k.endswith("_input_ids"):
                         pad_value = padding_value
@@ -999,13 +1056,12 @@ class SRPOTrainer(Trainer):
                             pad_to_length(batch[k], max_length, pad_value=pad_value).to(device),
                         ),
                     )
-        # TODO: fix encoder decoder here.
         if is_encoder_decoder:
             concatenated_batch["concatenated_input_ids"] = (
-                batch["zero_prompt_input_ids"].repeat(2, 1).to(device=device)
+                batch["prompt_input_ids"].repeat(6, 1).to(device=device)
             )
             concatenated_batch["concatenated_attention_mask"] = (
-                batch["prompt_attention_mask"].repeat(2, 1).to(device=device)
+                batch["prompt_attention_mask"].repeat(6, 1).to(device=device)
             )
 
         return concatenated_batch
@@ -1015,7 +1071,7 @@ class SRPOTrainer(Trainer):
         policy_logps,
         reference_logps,
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
-        """Compute the DPO loss for a batch of policy and reference model log probabilities.
+        """Compute the SRPO loss for a batch of policy and reference model log probabilities.
 
         Args:
             policy_chosen_logps: Log probabilities of the policy model for the chosen responses. Shape: (batch_size,)
@@ -1025,45 +1081,45 @@ class SRPOTrainer(Trainer):
 
         Returns:
             A tuple of three tensors: (losses, chosen_rewards, rejected_rewards).
-            The losses tensor contains the DPO loss for each example in the batch.
+            The losses tensor contains the SRPO loss for each example in the batch.
             The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
         """
 
-        improve_to_chosen_given_rejected = policy_logps["improve_to_chosen_given_rejected"].to(self.accelerator.device)
-        improve_to_rejected_given_rejected = policy_logps["improve_to_rejected_given_rejected"].to(
+        chosen_improved_to_given_rejected = policy_logps["chosen_improved_to_given_rejected"].to(self.accelerator.device)
+        rejected_improved_to_given_rejected = policy_logps["rejected_improved_to_given_rejected"].to(
             self.accelerator.device
         )
-        improve_to_chosen_given_chosen = policy_logps["improve_to_chosen_given_chosen"].to(self.accelerator.device)
-        improve_to_rejected_given_chosen = policy_logps["improve_to_rejected_given_chosen"].to(self.accelerator.device)
+        chosen_improved_to_given_chosen = policy_logps["chosen_improved_to_given_chosen"].to(self.accelerator.device)
+        rejected_improved_to_given_chosen = policy_logps["rejected_improved_to_given_chosen"].to(self.accelerator.device)
         chosen_logps = policy_logps["chosen"].to(self.accelerator.device)
         rejected_logps = policy_logps["rejected"].to(self.accelerator.device)
 
-        ref_improve_to_chosen_given_rejected = reference_logps["improve_to_chosen_given_rejected"].to(
+        ref_chosen_improved_to_given_rejected = reference_logps["chosen_improved_to_given_rejected"].to(
             self.accelerator.device
         )
-        ref_improve_to_rejected_given_rejected = reference_logps["improve_to_rejected_given_rejected"].to(
+        ref_rejected_improved_to_given_rejected = reference_logps["rejected_improved_to_given_rejected"].to(
             self.accelerator.device
         )
-        ref_improve_to_chosen_given_chosen = reference_logps["improve_to_chosen_given_chosen"].to(
+        ref_chosen_improved_to_given_chosen = reference_logps["chosen_improved_to_given_chosen"].to(
             self.accelerator.device
         )
-        ref_improve_to_rejected_given_chosen = reference_logps["improve_to_rejected_given_chosen"].to(
+        ref_rejected_improved_to_given_chosen = reference_logps["rejected_improved_to_given_chosen"].to(
             self.accelerator.device
         )
         ref_chosen_logps = reference_logps["chosen"].to(self.accelerator.device)
         ref_rejected_logps = reference_logps["rejected"].to(self.accelerator.device)
 
-        rejected_to_chosen_improvement_ratio = improve_to_chosen_given_rejected - ref_improve_to_chosen_given_rejected
+        rejected_to_chosen_improvement_ratio = chosen_improved_to_given_rejected - ref_chosen_improved_to_given_rejected
         rejected_to_rejected_improvement_ratio = (
-            improve_to_rejected_given_rejected - ref_improve_to_rejected_given_rejected
+            rejected_improved_to_given_rejected - ref_rejected_improved_to_given_rejected
         )
         given_rejected = (
             0.5 - self.beta * (rejected_to_chosen_improvement_ratio - rejected_to_rejected_improvement_ratio)
         ) ** 2
 
-        chosen_to_chosen_improvement_ratio = improve_to_chosen_given_chosen - ref_improve_to_chosen_given_chosen
+        chosen_to_chosen_improvement_ratio = chosen_improved_to_given_chosen - ref_chosen_improved_to_given_chosen
 
-        chosen_to_rejected_improvement_ratio = improve_to_rejected_given_chosen - ref_improve_to_rejected_given_chosen
+        chosen_to_rejected_improvement_ratio = rejected_improved_to_given_chosen - ref_rejected_improved_to_given_chosen
         given_chosen = (
             0.5 - self.beta * (chosen_to_chosen_improvement_ratio - chosen_to_rejected_improvement_ratio)
         ) ** 2
@@ -1137,6 +1193,7 @@ class SRPOTrainer(Trainer):
         We do this to avoid doing two forward passes, because it's faster for FSDP.
         """
 
+        # TODO happens here not in preprocess. Something to do with how batches are collated?
         concatenated_batch = self.concatenated_inputs(
             batch,
             is_encoder_decoder=self.is_encoder_decoder,
@@ -1146,14 +1203,12 @@ class SRPOTrainer(Trainer):
         )
         len_chosen = batch["chosen_labels"].shape[0]
 
-        model_kwargs = (
-            {
-                "labels": concatenated_batch["concatenated_labels"],
-                "decoder_input_ids": concatenated_batch.pop("concatenated_decoder_input_ids", None),
-            }
-            if self.is_encoder_decoder
-            else {}
-        )
+        model_kwargs = {}
+
+        if self.is_encoder_decoder:
+            model_kwargs["labels"] = concatenated_batch["concatenated_labels"]
+            model_kwargs["decoder_input_ids"] = concatenated_batch.pop("concatenated_decoder_input_ids", None)
+
         all_logits = model(
             concatenated_batch["concatenated_input_ids"],
             attention_mask=concatenated_batch["concatenated_attention_mask"],
@@ -1201,7 +1256,7 @@ class SRPOTrainer(Trainer):
         batch: Dict[str, Union[List, torch.LongTensor]],
         train_eval: Literal["train", "eval"] = "train",
     ):
-        """Compute the DPO loss and other metrics for the given batch of inputs for train or test."""
+        """Compute the SRPO loss and other metrics for the given batch of inputs for train or test."""
         metrics = {}
 
         result = self.concatenated_forward(model, batch)
@@ -1210,13 +1265,15 @@ class SRPOTrainer(Trainer):
 
         # if reference_chosen_logps and reference_rejected_logps in batch use them, otherwise use the reference model
         # TODO: fix these reference logps in params
-        if (
-            "reference_chosen_logps" in batch
-            and "reference_rejected_logps" in batch
-            and self.args.rpo_alpha is not None
-        ):
-            reference_chosen_logps = batch["reference_chosen_logps"]
-            reference_rejected_logps = batch["reference_rejected_logps"]
+        all_reference_keys_in_batch = True
+        for key in self.srpo_keys:
+            if f"reference_{key}_logps" not in batch:
+                all_reference_keys_in_batch = False
+                break
+        if all_reference_keys_in_batch:
+            reference_logps = {}
+            for key in self.srpo_keys:
+                reference_logps[key] = batch[f"reference_{key}_logps"]
         else:
             with torch.no_grad():
                 if self.ref_model is None:
@@ -1235,8 +1292,6 @@ class SRPOTrainer(Trainer):
             reward_ratios["rejected_to_chosen_improvement_ratio"]
             > reward_ratios["chosen_to_rejected_improvement_ratio"]
         ).float()
-        # if self.args.rpo_alpha is not None:
-        #     losses = losses * self.args.rpo_alpha + policy_nll_loss
 
         prefix = "eval_" if train_eval == "eval" else ""
         metrics[f"{prefix}rewards/chosen"] = chosen_rewards.mean().cpu()
@@ -1250,8 +1305,6 @@ class SRPOTrainer(Trainer):
         metrics[f"{prefix}logits/chosen"] = policy_logits["chosen"].detach().mean().cpu()
         for key, item in reward_ratios.items():
             metrics[f"{prefix}ratios/{key}"] = item.detach().mean().cpu()
-        if self.args.rpo_alpha is not None:
-            metrics[f"{prefix}nll_loss"] = policy_nll_loss.detach().mean().cpu()
 
         return losses.mean(), metrics
 
