@@ -228,7 +228,8 @@ class DataCollatorForChatML:
         if self.tokenizer.pad_token_id is None:
             raise ValueError("The tokenizer does not have a pad token. Please set `pad_token_id` in the tokenizer.")
         if self.max_length is None:
-            self.max_length = self.tokenizer.model_max_length
+            # set a sensible default
+            self.max_length = min(self.tokenizer.model_max_length, 1024)
 
     def __call__(self, examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
         prompts = []
