@@ -11,8 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from datasets import DatasetDict
 from copy import deepcopy
+
+from datasets import DatasetDict
+
 
 def _reformat_row_dpo_to_kto(row: dict):
     # turn each paired row into two unpaired rows
@@ -26,7 +28,8 @@ def _reformat_row_dpo_to_kto(row: dict):
     new_rows = {k: chosen_row[k] + rejected_row[k] for k in chosen_row.keys()}
     return new_rows
 
-def maybe_reformat_dpo_to_kto(dataset: DatasetDict, num_proc:int = None):  
+
+def maybe_reformat_dpo_to_kto(dataset: DatasetDict, num_proc: int = None):
     keys = list(dataset["train"].features.keys())
 
     # check if the dataset is in the KTO format or needs to be reformatted
@@ -50,5 +53,4 @@ def maybe_reformat_dpo_to_kto(dataset: DatasetDict, num_proc:int = None):
         )
         return dataset
     else:
-        raise ValueError('Dataset format not compatible with KTO.')
-    
+        raise ValueError("Dataset format not compatible with KTO.")
