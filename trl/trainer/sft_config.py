@@ -20,7 +20,11 @@ from transformers import TrainingArguments
 @dataclass
 class SFTConfig(TrainingArguments):
     r"""
-    Initialize `SFTConfig`.
+    Configuration class for the [`SFTTrainer`].
+
+    Using [`~transformers.HfArgumentParser`] we can turn this class into
+    [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
+    command line.
 
     Args:
         dataset_text_field (`Optional[str]`, *optional*, defaults to `None`):

@@ -20,9 +20,9 @@ from transformers import TrainingArguments
 @dataclass
 class ORPOConfig(TrainingArguments):
     r"""
-    ORPOConfig collects all training arguments related to the [`ORPOTrainer`] class.
+    Configuration class for the [`ORPOTrainer`].
 
-    Using [`HfArgumentParser`] we can turn this class into
+    Using [`~transformers.HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.
 

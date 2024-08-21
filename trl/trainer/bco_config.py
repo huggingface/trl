@@ -20,9 +20,9 @@ from transformers import TrainingArguments
 @dataclass
 class BCOConfig(TrainingArguments):
     r"""
-    BCOConfig collects all training arguments related to the [`BCOTrainer`] class.
+    Configuration class for the [`BCOTrainer`].
 
-    Using [`HfArgumentParser`] we can turn this class into
+    Using [`~transformers.HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.
 

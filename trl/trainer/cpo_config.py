@@ -20,9 +20,9 @@ from transformers import TrainingArguments
 @dataclass
 class CPOConfig(TrainingArguments):
     r"""
-    CPOConfig collects all training arguments related to the [`CPOTrainer`] class.
+    Configuration class for the [`CPOTrainer`].
 
-    Using [`HfArgumentParser`] we can turn this class into
+    Using [`~transformers.HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.
 

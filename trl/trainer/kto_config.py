@@ -20,9 +20,9 @@ from transformers import TrainingArguments
 @dataclass
 class KTOConfig(TrainingArguments):
     r"""
-    KTOConfig collects all training arguments related to the [`KTOTrainer`] class.
+    Configuration class for the [`KTOTrainer`].
 
-    Using [`HfArgumentParser`] we can turn this class into
+    Using [`~transformers.HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.
 

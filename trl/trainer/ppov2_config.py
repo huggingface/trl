@@ -6,6 +6,13 @@ from ..trainer.utils import OnPolicyConfig
 
 @dataclass
 class PPOv2Config(OnPolicyConfig):
+    r"""
+    Configuration class for the [`PPOv2Trainer`].
+
+    Using [`~transformers.HfArgumentParser`] we can turn this class into
+    [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
+    command line.
+    """
     exp_name: str = os.path.basename(__file__)[: -len(".py")]
     """the name of this experiment"""
     reward_model_path: str = "EleutherAI/pythia-160m"

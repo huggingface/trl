@@ -10,8 +10,13 @@ from ..import_utils import is_bitsandbytes_available, is_torchvision_available
 
 @dataclass
 class DDPOConfig:
-    """
-    Configuration class for DDPOTrainer
+    r"""
+    Configuration class for the [`DDPOTrainer`].
+
+    Using [`~transformers.HfArgumentParser`] we can turn this class into
+    [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
+    command line.
+
     """
 
     # common parameters

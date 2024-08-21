@@ -33,8 +33,12 @@ JSONDict = Annotated[Optional[dict], tyro.conf.arg(metavar="JSON", constructor=j
 
 @dataclass
 class PPOConfig:
-    """
-    Configuration class for PPOTrainer
+    r"""
+    Configuration class for the [`PPOTrainer`].
+
+    Using [`~transformers.HfArgumentParser`] we can turn this class into
+    [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
+    command line.
     """
 
     # common parameters

@@ -32,7 +32,11 @@ class FDivergenceConstants:
 @dataclass
 class DPOConfig(TrainingArguments):
     r"""
-    Initialize DPOConfig.
+    Configuration class for the [`DPOTrainer`].
+
+    Using [`~transformers.HfArgumentParser`] we can turn this class into
+    [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
+    command line.
 
     Args:
         beta (`float`, *optional*, defaults to `0.1`):

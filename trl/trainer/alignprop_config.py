@@ -11,7 +11,11 @@ from ..import_utils import is_bitsandbytes_available, is_torchvision_available
 @dataclass
 class AlignPropConfig(TrainingArguments):
     r"""
-    Initialize `AlignPropConfig`.
+    Configuration class for the [`AlignPropTrainer`].
+
+    Using [`~transformers.HfArgumentParser`] we can turn this class into
+    [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
+    command line.
 
     Args:
         exp_name (`str`, *optional*, defaults to `os.path.basename(sys.argv[0])[: -len(".py")]`):
