@@ -126,7 +126,11 @@ class DataCollatorForCompletionOnlyLMTester(unittest.TestCase):
 
         assert not "attention_mask" in batch_paddingfree
         assert "input_ids" in batch_paddingfree and "labels" in batch_paddingfree and "position_ids" in batch_paddingfree
-        assert batch_paddingfree["input_ids"].size() == batch_paddingfree["labels"].size() == batch_paddingfree["position_ids"].size()
+        assert (
+            batch_paddingfree["input_ids"].size()
+            == batch_paddingfree["labels"].size()
+            == batch_paddingfree["position_ids"].size()
+        )
 
         attn_mask = batch["attention_mask"]
         input_ids_remove_pad = batch["input_ids"][attn_mask.bool()].unsqueeze(0)
