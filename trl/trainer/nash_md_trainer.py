@@ -250,7 +250,6 @@ class NashMDTrainer(OnlineDPOTrainer):
 
         for update in range(1, args.num_updates + 1):
             self.state.episode += 1 * args.batch_size
-            self.lr_scheduler.step()
             data = next(iter_dataloader)
 
             with torch.no_grad():
@@ -286,7 +285,7 @@ class NashMDTrainer(OnlineDPOTrainer):
                         args.local_rollout_forward_batch_size,
                         tokenizer.pad_token_id,
                         generation_config,
-                    )
+                    )                    
 
                 for i in range(0, queries.shape[0], args.local_rollout_forward_batch_size):
                     query = queries[i : i + args.local_rollout_forward_batch_size]
@@ -430,7 +429,7 @@ class NashMDTrainer(OnlineDPOTrainer):
                             chosen_responses = responses[chosen_mb_inds]
 
                             ## rejected
-                            rejected_mb_inds = rejected_indices[micro_batch_inds]
+                            rejected_mb_inds = chosen_mixture_indices[micro_batch_inds]
                             rejected_responses = responses[rejected_mb_inds]
 
                             concat_mb_inds = torch.cat((chosen_mb_inds, rejected_mb_inds), dim=0)
@@ -504,7 +503,6 @@ class NashMDTrainer(OnlineDPOTrainer):
                                 ] = rejected_logprobs_sum.mean()
                         gradient_accumulation_idx += 1
                     minibatch_idx += 1
-                    self.state.global_step += 1
                     # del everything and empty cache
                     # fmt: off
                     del (
@@ -542,10 +540,12 @@ class NashMDTrainer(OnlineDPOTrainer):
                 metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
                 metrics["episode"] = self.state.episode
                 self.state.epoch = self.state.episode / self.train_dataset_len  # used by self.log
-                self.state.global_step += 1
                 self.log(metrics)
             del (kl, mean_kl, mean_entropy, scores, scores_margin)
 
+            self.lr_scheduler.step()
+            self.state.global_step += 1
+            
             self.control = self.callback_handler.on_step_end(args, self.state, self.control)
             if self.control.should_save:
                 self._save_checkpoint(model, trial=None, metrics=metrics)
