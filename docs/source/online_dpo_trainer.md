@@ -4,10 +4,6 @@ TRL supports training LLMs with online DPO ([Guo et al., 2024](https://huggingfa
 
 While [Guo et al. (2024)](https://huggingface.co/papers/2402.04792) used an LLM judge to score model completions, the current implementation only supports reward models -- see [Reward Bench](https://huggingface.co/spaces/allenai/reward-bench) for a leaderboard of public models you can use.
 
-> [!IMPORTANT]
-> Make sure the SFT model and reward model use the _same_ chat template. Otherwise you may find the model completions are scored incorrectly.
-
-
 ## Get started
 
 The basic API looks as follows:
@@ -47,8 +43,7 @@ trainer = OnlineDPOTrainer(
 trainer.train()
 ```
 
-
-To just run the online DPO script to make sure the trainer can run, you can run the following command to train an online DPO model with a dummy reward model.
+To run the online DPO script with a dummy reward model, run:
 
 ```bash
 python examples/scripts/online_dpo.py \
@@ -67,6 +62,20 @@ python examples/scripts/online_dpo.py \
     --sanity_check
 ```
 
+## Expected dataset format
+
+Unlike standard DPO where one provides a dataset with chosen and rejected columns, for online DPO one just needs a dataset of prompts to generate the completions from. The [`OnlineDPOTrainer`] assumes that the dataset is preprocessed for model inference, so typically you will want to wrap your prompts in the messages format and then apply the chat template as follows:
+
+```python
+def prepare_dataset(dataset, tokenizer, dataset_prompt_field):
+    """pre-tokenize the dataset before training; only collate during training"""
+    return dataset.map(
+        lambda x: {"input_ids": tokenizer.apply_chat_template(x[dataset_prompt_field], add_generation_prompt=True)},
+        remove_columns=dataset.column_names,
+    )
+
+dataset = prepare_dataset(dataset)
+```
 
 ## Explanation of the logged metrics
 
@@ -91,6 +100,10 @@ The logged metrics are as follows. Here is an example [tracked run at Weights an
 
 
 ## Cookbook
+
+> [!IMPORTANT]
+> Make sure the SFT model and reward model use the _same_ chat template. Otherwise you may find the model completions are scored incorrectly.
+
 
 * Debugging TIP: `objective/rlhf_reward`: this is the ultimate objective of the RLHF training. If training works as intended, this metric should keep going up.
 * Memory TIP: If you are running out of memory, you can try to reduce the `--per_device_train_batch_size` or increase the `--gradient_accumulation_steps` to reduce the memory footprint.
