@@ -218,8 +218,8 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
             attn_mask = batch.pop("attention_mask")
             batch["input_ids"] = batch["input_ids"][attn_mask.bool()].unsqueeze(0)
             batch["position_ids"] = attn_mask.cumsum(1)[attn_mask.bool()].unsqueeze(0) - 1
-            batch["labels"] = batch["labels"][attn_mask.bool()].unsqueeze(0) 
-            batch["labels"][batch["position_ids"]==0] = self.ignore_index
+            batch["labels"] = batch["labels"][attn_mask.bool()].unsqueeze(0)
+            batch["labels"][batch["position_ids"] == 0] = self.ignore_index
 
         return batch
 
