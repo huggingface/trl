@@ -452,7 +452,6 @@ class NashMDTrainer(OnlineDPOTrainer):
                 metrics["eps"] = eps
                 metrics["objective/kl"] = self.accelerator.gather(mean_kl).mean().item()
                 metrics["objective/entropy"] = self.accelerator.gather(mean_entropy).mean().item()
-                metrics["objective/scores"] = self.accelerator.gather(scores.mean()).mean().item()
                 metrics["objective/scores_margin"] = self.accelerator.gather(scores_margin.mean()).mean().item()
                 metrics["rewards/chosen"] = g_chosen_reward.mean().item()
                 metrics["rewards/rejected"] = g_rejected_reward.mean().item()
