@@ -125,7 +125,9 @@ class DataCollatorForCompletionOnlyLMTester(unittest.TestCase):
         batch_paddingfree = collator_paddingfree(tokenized_instruction)
 
         assert not "attention_mask" in batch_paddingfree
-        assert "input_ids" in batch_paddingfree and "labels" in batch_paddingfree and "position_ids" in batch_paddingfree
+        assert (
+            "input_ids" in batch_paddingfree and "labels" in batch_paddingfree and "position_ids" in batch_paddingfree
+        )
         assert (
             batch_paddingfree["input_ids"].size()
             == batch_paddingfree["labels"].size()
