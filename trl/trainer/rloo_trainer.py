@@ -3,6 +3,7 @@ import math
 import os
 import time
 from collections import defaultdict
+from functools import wraps
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -40,12 +41,15 @@ from ..trainer.utils import (
     truncate_response,
 )
 from .rloo_config import RLOOConfig
+from .utils import trl_sanitze_kwargs_for_tagging
 
 
 INVALID_LOGPROB = 1.0
 
 
 class RLOOTrainer(Trainer):
+    _tag_names = ["trl", "rloo"]
+
     def __init__(
         self,
         config: RLOOConfig,
@@ -253,7 +257,6 @@ class RLOOTrainer(Trainer):
 
         for update in range(1, args.num_total_batches + 1):
             self.state.episode += 1 * args.batch_size
-            self.lr_scheduler.step()
             data = next(iter_dataloader)
             with torch.no_grad():
                 queries = data["input_ids"].to(device)
@@ -328,7 +331,7 @@ class RLOOTrainer(Trainer):
                 # only query humans on responses that pass that filter
                 contain_eos_token = torch.any(postprocessed_responses == tokenizer.eos_token_id, dim=-1)
                 if args.non_eos_penalty:
-                    scores = torch.where(contain_eos_token, scores, torch.full_like(scores, args.penalty_reward_value))
+                    scores = torch.where(contain_eos_token, scores, args.penalty_reward_value)
                 # accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
 
                 # be very careful with `padding_mask_p1`; see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
@@ -440,6 +443,7 @@ class RLOOTrainer(Trainer):
                 self.log(metrics)
             del kl, mean_kl, mean_entropy, scores
 
+            self.lr_scheduler.step()
             self.control = self.callback_handler.on_step_end(args, self.state, self.control)
             if self.control.should_save:
                 self._save_checkpoint(model, trial=None, metrics=metrics)
@@ -498,10 +502,26 @@ class RLOOTrainer(Trainer):
                 if sampling:
                     break
         df = pd.DataFrame(table)
-        if self.accelerator.process_index == 0:
-            print_rich_table(df.iloc[0 : 0 + 5])
-        if "wandb" in args.report_to:
-            import wandb
 
-            if wandb.run is not None:
-                wandb.log({"completions": wandb.Table(dataframe=df)})
+        if self.accelerator.is_main_process:
+            print_rich_table(df.iloc[0 : 0 + 5])
+            if "wandb" in args.report_to:
+                import wandb
+
+                if wandb.run is not None:
+                    wandb.log({"completions": wandb.Table(dataframe=df)})
+
+    @wraps(Trainer.push_to_hub)
+    def push_to_hub(
+        self,
+        commit_message: Optional[str] = "End of training",
+        blocking: bool = True,
+        **kwargs,
+    ) -> str:
+        """
+        Overwrite the `push_to_hub` method in order to force-add the tag "rloo" when pushing the
+        model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
+        Unlike the parent class, we don't use the `token` argument to mitigate security risks.
+        """
+        kwargs = trl_sanitze_kwargs_for_tagging(model=self.model, tag_names=self._tag_names, kwargs=kwargs)
+        return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)

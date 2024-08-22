@@ -621,7 +621,9 @@ class RunningMoments:
 
 
 @torch.no_grad()
-def get_global_statistics(accelerator, xs: torch.Tensor, mask=None, device="cpu") -> Tuple[float, float, int]:
+def get_global_statistics(
+    accelerator, xs: torch.Tensor, mask=None, device="cpu"
+) -> Tuple[torch.Tensor, torch.Tensor, int]:
     """
     Computes element-wise mean and variance of the tensor across processes. Reference:
     https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/utils.py#L57C1-L73C75
@@ -636,7 +638,7 @@ def get_global_statistics(accelerator, xs: torch.Tensor, mask=None, device="cpu"
     sum_var = accelerator.reduce(sum_var)
     global_var = sum_var / count
 
-    return global_mean.to(device), global_var.to(device), count.to(device)
+    return global_mean.to(device), global_var.to(device), count.item()
 
 
 def compute_accuracy(eval_pred) -> Dict[str, float]:
@@ -819,12 +821,13 @@ def get_peft_config(model_config: ModelConfig) -> "Optional[PeftConfig]":
         )
 
     peft_config = LoraConfig(
+        task_type=model_config.lora_task_type,
         r=model_config.lora_r,
+        target_modules=model_config.lora_target_modules,
         lora_alpha=model_config.lora_alpha,
         lora_dropout=model_config.lora_dropout,
         bias="none",
-        task_type=model_config.lora_task_type,
-        target_modules=model_config.lora_target_modules,
+        use_rslora=model_config.use_rslora,
         modules_to_save=model_config.lora_modules_to_save,
     )
 
@@ -887,6 +890,7 @@ class OnPolicyConfig(TrainingArguments):
     """a unique name of this run"""
     sanity_check: bool = False
     """wether to run in debug mode"""
+    dataset_num_proc: Optional[int] = None
 
     # batch size related config
     num_mini_batches: int = 1
@@ -1173,3 +1177,37 @@ def batch_generation(
         query_responses.append(query_response)
         logitss.append(logits)
     return torch.cat(query_responses, 0), torch.cat(logitss, 0)
+
+
+def add_bos_token_if_needed(
+    bos_token_id: Optional[int],
+    prompt_len_input_ids: int,
+    prompt_tokens: Dict[str, List[int]],
+    chosen_prompt_len_input_ids: int,
+    chosen_tokens: Dict[str, List[int]],
+    rejected_prompt_len_input_ids: int,
+    rejected_tokens: Dict[str, List[int]],
+):
+    if bos_token_id is not None:
+        if prompt_len_input_ids == 0 or bos_token_id != prompt_tokens["prompt_input_ids"][0]:
+            prompt_tokens["prompt_input_ids"] = [bos_token_id] + prompt_tokens["prompt_input_ids"]
+            prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens["prompt_attention_mask"]
+        if chosen_prompt_len_input_ids == 0 or bos_token_id != chosen_tokens["prompt_input_ids"][0]:
+            chosen_tokens["prompt_input_ids"] = [bos_token_id] + chosen_tokens["prompt_input_ids"]
+            chosen_tokens["prompt_attention_mask"] = [1] + chosen_tokens["prompt_attention_mask"]
+        if rejected_prompt_len_input_ids == 0 or bos_token_id != rejected_tokens["prompt_input_ids"][0]:
+            rejected_tokens["prompt_input_ids"] = [bos_token_id] + rejected_tokens["prompt_input_ids"]
+            rejected_tokens["prompt_attention_mask"] = [1] + rejected_tokens["prompt_attention_mask"]
+    return prompt_tokens, chosen_tokens, rejected_tokens
+
+
+def add_eos_token_if_needed(
+    eos_token_id: int, chosen_tokens: Dict[str, List[int]], rejected_tokens: Dict[str, List[int]]
+):
+    if len(chosen_tokens["input_ids"]) == 0 or eos_token_id != chosen_tokens["input_ids"][-1]:
+        chosen_tokens["input_ids"].append(eos_token_id)
+        chosen_tokens["attention_mask"].append(1)
+    if len(rejected_tokens["input_ids"]) == 0 or eos_token_id != rejected_tokens["input_ids"][-1]:
+        rejected_tokens["input_ids"].append(eos_token_id)
+        rejected_tokens["attention_mask"].append(1)
+    return chosen_tokens, rejected_tokens

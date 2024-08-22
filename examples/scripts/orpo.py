@@ -52,9 +52,9 @@ python examples/scripts/orpo.py \
     --lora_alpha=16
 """
 
-import multiprocessing
 from dataclasses import dataclass, field
 
+from accelerate import PartialState
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
@@ -96,15 +96,16 @@ if __name__ == "__main__":
         tokenizer.chat_template = "{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"
 
     def process(row):
-        row["chosen"] = tokenizer.apply_chat_template(row["chosen"], tokenize=False)
-        row["rejected"] = tokenizer.apply_chat_template(row["rejected"], tokenize=False)
+        row["prompt"] = tokenizer.apply_chat_template(row["chosen"][:-1], tokenize=False)
+        row["chosen"] = tokenizer.apply_chat_template([row["chosen"][-1]], tokenize=False)
+        row["rejected"] = tokenizer.apply_chat_template([row["rejected"][-1]], tokenize=False)
         return row
 
-    ds = ds.map(
-        process,
-        num_proc=1 if orpo_args.debug else multiprocessing.cpu_count(),
-        load_from_cache_file=False,
-    )
+    # Compute that only on the main process for faster data processing.
+    # see: https://github.com/huggingface/trl/pull/1255
+    with PartialState().local_main_process_first():
+        ds = ds.map(process, num_prc=orpo_args.dataset_num_proc)
+
     train_dataset = ds["train"]
     eval_dataset = ds["test"]
 

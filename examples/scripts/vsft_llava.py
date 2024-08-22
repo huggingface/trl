@@ -13,55 +13,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-# regular:
-python examples/scripts/vsft_llava.py \
-    --dataset_name="HuggingFaceH4/llava-instruct-mix-vsft" \
-    --model_name_or_path="llava-hf/llava-1.5-7b-hf" \
-    --report_to="wandb" \
-    --learning_rate=1.4e-5 \
-    --per_device_train_batch_size=8 \
-    --gradient_accumulation_steps=1 \
-    --output_dir="data/vsft-llava-1.5-7b-hf" \
-    --logging_steps=5 \
-    --num_train_epochs=1 \
-    --push_to_hub \
-    --gradient_checkpointing \
-    --remove_unused_columns=False \
-    --torch_dtype=float16 \
-    --fp16=True
-    
-# peft:
-python examples/scripts/vsft_llava.py \
-    --dataset_name="HuggingFaceH4/llava-instruct-mix-vsft" \    
-    --model_name_or_path="llava-hf/llava-1.5-7b-hf" \
-    --report_to="wandb" \
-    --learning_rate=1.4e-5 \
-    --per_device_train_batch_size=8 \
-    --gradient_accumulation_steps=1 \
-    --output_dir="data/vsft-llava-1.5-7b-hf" \
-    --logging_steps=5 \
-    --num_train_epochs=1 \
-    --push_to_hub \
-    --gradient_checkpointing \
-    --remove_unused_columns=False \
-    --torch_dtype=float16 \
-    --fp16=True \ 
-    --use_peft=True \
-    --lora_r=64 \
-    --lora_alpha=16 \
-    --lora_target_modules=all-linear"
+pip install pillow
 
-# evaluation:
- 
-To evaluate, first install the lmms-eval framework: pip install git+https://github.com/EvolvingLMMs-Lab/lmms-eval.git
-then run:
-accelerate launch --num_processes=8 -m lmms_eval \
-        --model llava_hf \
-        --model_args pretrained=llava-hf/llava-1.5-7b-hf \
-        --tasks mmbench \
-        --batch_size 1 \
-        --output_path ./logs/ \
-        --log_sample    
+python examples/scripts/vsft_llava.py \
+    --dataset_name HuggingFaceH4/llava-instruct-mix-vsft \
+    --model_name_or_path llava-hf/llava-1.5-7b-hf \
+    --per_device_train_batch_size 8 \
+    --gradient_accumulation_steps 8 \
+    --output_dir sft-llava-1.5-7b-hf \
+    --bf16 \
+    --torch_dtype bfloat16 \
+    --gradient_checkpointing \
+    --use_peft \
+    --dataloader_num_workers 32 \
+    --lora_target_modules=all-linear
 """
 
 import logging
@@ -85,7 +50,7 @@ from accelerate import Accelerator
 from datasets import load_dataset
 
 from tqdm.rich import tqdm
-from transformers import AutoTokenizer, AutoProcessor, LlavaForConditionalGeneration
+from transformers import AutoProcessor, LlavaForConditionalGeneration
 
 from trl import (
     ModelConfig,
@@ -107,6 +72,9 @@ if __name__ == "__main__":
     parser = TrlParser((SFTScriptArguments, SFTConfig, ModelConfig))
     sft_script_args, training_args, model_config = parser.parse_args_and_config()
     training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
+    training_args.dataset_text_field = ""  # need a dummy field
+    training_args.remove_unused_columns = False
+    training_args.dataset_kwargs = {"skip_prepare_dataset": True}
     # Force use our print callback
     if TRL_USE_RICH:
         training_args.disable_tqdm = True
@@ -115,8 +83,6 @@ if __name__ == "__main__":
     ################
     # Model, Tokenizer & Processor
     ################
-    LLAVA_CHAT_TEMPLATE = """{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. {% for message in messages %}{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}{% if add_generation_prompt %}ASSISTANT: {% endif %}"""
-
     torch_dtype = (
         model_config.torch_dtype
         if model_config.torch_dtype in ["auto", None]
@@ -130,14 +96,9 @@ if __name__ == "__main__":
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, use_fast=True
-    )
-    tokenizer.chat_template = LLAVA_CHAT_TEMPLATE
     processor = AutoProcessor.from_pretrained(
         model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code
     )
-    processor.tokenizer = tokenizer
 
     model = LlavaForConditionalGeneration.from_pretrained(
         model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, **model_kwargs
@@ -146,34 +107,20 @@ if __name__ == "__main__":
     ################
     # Create a data collator to encode text and image pairs
     ################
+    def collate_fn(examples):
+        # Get the texts and images, and apply the chat template
+        texts = [processor.apply_chat_template(example["messages"], tokenize=False) for example in examples]
+        images = [example["images"][0] for example in examples]
 
-    class LLavaDataCollator:
-        def __init__(self, processor):
-            self.processor = processor
+        # Tokenize the texts and process the images
+        batch = processor(texts, images, return_tensors="pt", padding=True)
 
-        def __call__(self, examples):
-            texts = []
-            images = []
-            for example in examples:
-                if len(example["images"]) > 1:
-                    raise ValueError("This collator only supports one image per example")
-                messages = example["messages"]
-                text = self.processor.tokenizer.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=False
-                )
-                texts.append(text)
-                images.append(example["images"][0])
+        # The labels are the input_ids, and we mask the padding tokens in the loss computation
+        labels = batch["input_ids"].clone()
+        labels[labels == processor.tokenizer.pad_token_id] = -100
+        batch["labels"] = labels
 
-            batch = self.processor(texts, images, return_tensors="pt", padding=True)
-
-            labels = batch["input_ids"].clone()
-            if self.processor.tokenizer.pad_token_id is not None:
-                labels[labels == self.processor.tokenizer.pad_token_id] = -100
-            batch["labels"] = labels
-
-            return batch
-
-    data_collator = LLavaDataCollator(processor)
+        return batch
 
     ################
     # Dataset
@@ -199,14 +146,12 @@ if __name__ == "__main__":
         trainer = SFTTrainer(
             model=model,
             args=training_args,
+            data_collator=collate_fn,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            dataset_text_field="text",  # need a dummy field
-            tokenizer=tokenizer,
+            tokenizer=processor.tokenizer,
             peft_config=get_peft_config(model_config),
             callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
-            data_collator=data_collator,
-            dataset_kwargs={"skip_prepare_dataset": True},
         )
 
     trainer.train()
