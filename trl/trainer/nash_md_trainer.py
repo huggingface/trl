@@ -464,7 +464,7 @@ class NashMDTrainer(OnlineDPOTrainer):
                 metrics["episode"] = self.state.episode
                 self.state.epoch = self.state.episode / self.train_dataset_len  # used by self.log
                 self.log(metrics)
-            del (kl, mean_kl, mean_entropy, scores, scores_margin)
+            del (kl, mean_kl, mean_entropy, scores_margin)
 
             self.lr_scheduler.step()
             self.state.global_step += 1
