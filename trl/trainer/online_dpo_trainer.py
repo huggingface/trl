@@ -3,6 +3,7 @@ import math
 import os
 import time
 from collections import defaultdict
+from functools import wraps
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -40,12 +41,15 @@ from ..trainer.utils import (
     truncate_response,
 )
 from .online_dpo_config import OnlineDPOConfig
+from .utils import trl_sanitze_kwargs_for_tagging
 
 
 INVALID_LOGPROB = 1.0
 
 
 class OnlineDPOTrainer(Trainer):
+    _tag_names = ["trl", "online-dpo"]
+
     def __init__(
         self,
         config: OnlineDPOConfig,
@@ -207,6 +211,7 @@ class OnlineDPOTrainer(Trainer):
         tokenizer = self.tokenizer
         dataloader = self.dataloader
         device = accelerator.device
+        self.model_wrapped = self.model
 
         def repeat_generator():
             while True:
@@ -333,7 +338,6 @@ class OnlineDPOTrainer(Trainer):
                 contain_eos_token = torch.any(postprocessed_responses == tokenizer.eos_token_id, dim=-1)
                 if args.non_eos_penalty:
                     scores = torch.where(contain_eos_token, scores, args.penalty_reward_value)
-                # accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
 
                 # be very careful with `padding_mask_p1`; see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
                 response_idxs = torch.arange(responses.shape[1], device=responses.device).repeat(responses.shape[0], 1)
@@ -462,7 +466,6 @@ class OnlineDPOTrainer(Trainer):
                                 ] = rejected_logprobs_sum.mean()
                         gradient_accumulation_idx += 1
                     minibatch_idx += 1
-                    self.state.global_step += 1
                     # del everything and empty cache
                     # fmt: off
                     del (
@@ -500,11 +503,11 @@ class OnlineDPOTrainer(Trainer):
                 metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
                 metrics["episode"] = self.state.episode
                 self.state.epoch = self.state.episode / self.train_dataset_len  # used by self.log
-                self.state.global_step += 1
                 self.log(metrics)
             del (kl, mean_kl, mean_entropy, scores, scores_margin)
 
             self.lr_scheduler.step()
+            self.state.global_step += 1
             self.control = self.callback_handler.on_step_end(args, self.state, self.control)
             if self.control.should_save:
                 self._save_checkpoint(model, trial=None, metrics=metrics)
@@ -563,10 +566,26 @@ class OnlineDPOTrainer(Trainer):
                 if sampling:
                     break
         df = pd.DataFrame(table)
-        if self.accelerator.process_index == 0:
-            print_rich_table(df.iloc[0 : 0 + 5])
-        if "wandb" in args.report_to:
-            import wandb
 
-            if wandb.run is not None:
-                wandb.log({"completions": wandb.Table(dataframe=df)})
+        if self.accelerator.is_main_process:
+            print_rich_table(df.iloc[0 : 0 + 5])
+            if "wandb" in args.report_to:
+                import wandb
+
+                if wandb.run is not None:
+                    wandb.log({"completions": wandb.Table(dataframe=df)})
+
+    @wraps(Trainer.push_to_hub)
+    def push_to_hub(
+        self,
+        commit_message: Optional[str] = "End of training",
+        blocking: bool = True,
+        **kwargs,
+    ) -> str:
+        """
+        Overwrite the `push_to_hub` method in order to force-add the tag "online-dpo" when pushing the
+        model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
+        Unlike the parent class, we don't use the `token` argument to mitigate security risks.
+        """
+        kwargs = trl_sanitze_kwargs_for_tagging(model=self.model, tag_names=self._tag_names, kwargs=kwargs)
+        return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)
