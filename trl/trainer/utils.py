@@ -645,6 +645,12 @@ def compute_accuracy(eval_pred) -> Dict[str, float]:
     return {"accuracy": accuracy}
 
 
+def pad_list_to_length(seq: List[int], length: int, pad_value: Union[int, float], dim: int = -1) -> List[int]:
+    tensor = torch.Tensor(seq, device = "cpu")
+    tensor = pad_to_length(tensor, length, pad_value, dim)
+    return tensor.tolist()
+    
+
 def pad_to_length(tensor: torch.Tensor, length: int, pad_value: Union[int, float], dim: int = -1) -> torch.Tensor:
     if tensor.size(dim) >= length:
         return tensor
