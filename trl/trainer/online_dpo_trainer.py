@@ -554,8 +554,19 @@ class OnlineDPOTrainer(Trainer):
                         postprocessed_response = truncate_response(
                             args.stop_token_id, tokenizer.pad_token_id, response
                         )
-                    table["query"].extend(gather_object(tokenizer.batch_decode(query, skip_special_tokens=True)))
-                    table["model response"].extend(gather_object(tokenizer.batch_decode(postprocessed_response)))
+                    # For the WandB table of prompts and completions, we keep
+                    # the special tokens associated with the chat template, but
+                    # discard the padding tokens for readability
+                    table_query = [
+                        q.replace(tokenizer.pad_token, "")
+                        for q in tokenizer.batch_decode(query, skip_special_tokens=False)
+                    ]
+                    table_response = [
+                        r.replace(tokenizer.pad_token, "")
+                        for r in tokenizer.batch_decode(postprocessed_response, skip_special_tokens=False)
+                    ]
+                    table["query"].extend(gather_object(table_query))
+                    table["model response"].extend(gather_object(table_response))
 
                     postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
                     _, score, _ = get_reward(
