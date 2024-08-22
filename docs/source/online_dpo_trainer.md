@@ -1,8 +1,11 @@
 # Online DPO Trainer
 
-TRL supports training LLMs with online DPO ([Guo et al., 2024](https://huggingface.co/papers/2402.04792)) with a reward model (RM). The idea of online DPO is to generate completions based on prompts and either have an RM or a LLM judge to rank the responses. Then the model is updated with the ranked responses using the DPO loss.
+TRL supports training LLMs with online DPO ([Guo et al., 2024](https://huggingface.co/papers/2402.04792)) with a reward model (RM). The idea of online DPO is to generate completions based on prompts and either have a reward model or an LLM judge to rank the responses as chosen or rejected. Then the model is updated with the ranked responses using the DPO loss.
 
-While [Guo et al. (2024)](https://huggingface.co/papers/2402.04792) used a LLM judge, in this implementation we just used a RM.
+While [Guo et al. (2024)](https://huggingface.co/papers/2402.04792) used an LLM judge to score model completions, the current implementation only supports reward models -- see [Reward Bench](https://huggingface.co/spaces/allenai/reward-bench) for a leaderboard of public models you can use.
+
+> [!IMPORTANT]
+> Make sure the SFT model and reward model use the _same_ chat template. Otherwise you may find the model completions are scored incorrectly.
 
 
 ## Get started
@@ -22,8 +25,9 @@ tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-135M-Instruct")
 tok.add_special_tokens({"pad_token": "[PAD]"})
 # The model to optimise
 model = AutoModelForCausalLM.from_pretrained("HuggingFaceTB/SmolLM-135M-Instruct")
+# The reference model to calculate the KL divergence against
 ref_model = AutoModelForCausalLM.from_pretrained("HuggingFaceTB/SmolLM-135M-Instruct")
-# The model to score completions with. In practice, you will need a fine-tuned reward model. See Reward Bench for some good ones: https://huggingface.co/spaces/allenai/reward-bench
+# The model to score completions with. In practice, you will need a fine-tuned reward model.
 reward_model = AutoModelForSequenceClassification.from_pretrained("HuggingFaceTB/SmolLM-135M-Instruct", num_labels=1)
 train_dataset = Dataset.from_dict(
     {"input_ids": [tok.encode("Q: Hi how are you? A:")] * NUM_DUMMY_SAMPLES})
@@ -48,7 +52,7 @@ To just run the online DPO script to make sure the trainer can run, you can run 
 
 ```bash
 python examples/scripts/online_dpo.py \
-    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
+    --dataset_name trl-lib/tldr \
     --learning_rate 3e-6 \
     --output_dir models/minimal/online_dpo \
     --per_device_train_batch_size 1 \
@@ -214,7 +218,7 @@ To validate the online DPO implementation works, we ran experiments on the 1B an
 # 1B Online DPO experiment
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
     examples/scripts/online_dpo.py \
-    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
+    --dataset_name trl-lib/tldr \
     --learning_rate 3e-6 \
     --output_dir models/minimal/online_dpo_tldr \
     --per_device_train_batch_size 16 \
@@ -236,7 +240,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
 # 6.9B Online DPO experiment
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/online_dpo.py \
-    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
+    --dataset_name trl-lib/tldr \
     --learning_rate 3e-6 \
     --output_dir models/minimal/online_dpo_tldr_6.9b \
     --per_device_train_batch_size 4 \
