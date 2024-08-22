@@ -30,17 +30,22 @@ from ..trainer.utils import (
     batch_generation,
     disable_dropout_in_model,
     exact_div,
-    first_true_indices,
     forward,
     get_reward,
     prepare_deepspeed,
-    truncate_response,
 )
 from .nash_md_config import NashMDConfig
 from .online_dpo_trainer import OnlineDPOTrainer
 
 
 INVALID_LOGPROB = 1.0
+
+
+@staticmethod
+def logits_to_logprobs(logits, response_ids, temperature=1.0):
+    logits /= temperature + 1e-7
+    logprobs = F.log_softmax(logits, dim=-1)
+    return torch.gather(logprobs, -1, response_ids.unsqueeze(-1)).squeeze(-1)
 
 
 class NashMDTrainer(OnlineDPOTrainer):
@@ -108,7 +113,7 @@ class NashMDTrainer(OnlineDPOTrainer):
             "`local_batch_size` must be a multiple of `num_generation_per_prompt`",
         )  # DPO logic: repeats the same prompt args.rloo_k times
 
-        ### DPO stuff
+        ### hyperparams stuff
         self.beta = config.beta
         self.loss_type = config.loss_type
 
@@ -211,7 +216,7 @@ class NashMDTrainer(OnlineDPOTrainer):
             ref_model=self.ref_model,
             model=model,
             generation_config=generation_config,
-            beta=args.beta,
+            mixture_coeff=args.mixture_coeff,
             device=accelerator.device,
         )
 
@@ -253,21 +258,16 @@ class NashMDTrainer(OnlineDPOTrainer):
             data = next(iter_dataloader)
 
             with torch.no_grad():
-                queries = data["input_ids"].to(device)
-                queries = queries.repeat(args.num_generation_per_prompt, 1)
+                all_queries = []
+                all_chosen_responses = []
+                all_rejected_responses = []
+                all_ref_logprobs_chosen = []
+                all_ref_logprobs_rejected = []
+                all_ref_responses = []
+                all_reward_margins = []
+                queries = data["input_ids"]
+                all_queries.append(queries)
                 context_length = queries.shape[1]
-
-                responses = []
-                postprocessed_responses = []
-                logprobs = []
-                scores = []
-                sequence_lengths = []
-
-                mixture_responses = []
-                mixture_postprocessed_responses = []
-                mixture_logprobs = []
-                mixture_scores = []
-                mixture_sequence_lengths = []
 
                 with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
                     query_responses, logits_responses = batch_generation(
@@ -285,119 +285,79 @@ class NashMDTrainer(OnlineDPOTrainer):
                         args.local_rollout_forward_batch_size,
                         tokenizer.pad_token_id,
                         generation_config,
-                    )                    
+                    )
 
                 for i in range(0, queries.shape[0], args.local_rollout_forward_batch_size):
-                    query = queries[i : i + args.local_rollout_forward_batch_size]
+                    # get responses from the model and the reference mixture model
                     query_response = query_responses[i : i + args.local_rollout_forward_batch_size]
-                    response = query_response[:, context_length:]
-                    logits = logits_responses[i : i + args.local_rollout_forward_batch_size]
-                    all_logprob = F.log_softmax(logits, dim=-1)
-                    logprob = torch.gather(all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
-                    del logits, all_logprob
-                    torch.cuda.empty_cache()
-
                     mixture_query_response = mixture_query_responses[i : i + args.local_rollout_forward_batch_size]
-                    mixture_response = mixture_query_response[:, context_length:]
-                    mixture_logits = mixture_logits_responses[i : i + args.local_rollout_forward_batch_size]
-                    mixture_all_logprob = F.log_softmax(mixture_logits, dim=-1)
-                    mixture_logprob = torch.gather(mixture_all_logprob, 2, mixture_response.unsqueeze(-1)).squeeze(-1)
-                    del mixture_logits, mixture_all_logprob
-                    torch.cuda.empty_cache()
 
-                    # Response Processing 1. truncate response after the first occurrence of `stop_token_id`
-                    postprocessed_response = response
-                    if args.stop_token_id is not None:  # handle the edge case when stop_token_id exists but is 0
-                        postprocessed_response = truncate_response(
-                            args.stop_token_id, tokenizer.pad_token_id, response
-                        )
+                    # Compute rewards for both sets of responses
+                    _, model_reward, _ = get_reward(
+                        reward_model, query_response, tokenizer.pad_token_id, context_length
+                    )
+                    _, ref_reward, _ = get_reward(
+                        reward_model, mixture_query_response, tokenizer.pad_token_id, context_length
+                    )
+                    # if the responses do not contain eos token then set the reward to penalty_reward_value
+                    if args.non_eos_penalty:
+                        model_resp_contains_eos = torch.any(query_response == tokenizer.eos_token_id, dim=-1)
+                        model_reward = torch.where(model_resp_contains_eos, model_reward, args.penalty_reward_value)
+                        ref_resp_contains_eos = torch.any(mixture_query_response == tokenizer.eos_token_id, dim=-1)
+                        ref_reward = torch.where(ref_resp_contains_eos, ref_reward, args.penalty_reward_value)
 
-                    # TODO use judge API here
-                    # Response Processing 2. run reward model on the truncated responses
-                    postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
-                    sequence_length = first_true_indices(postprocessed_response == tokenizer.pad_token_id) - 1
-                    _, score, _ = get_reward(
-                        reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
+                    # Create preference dataset based on rewards
+                    chosen_mask = model_reward >= ref_reward
+                    rejected_mask = ~chosen_mask
+
+                    # reward margin between chosen and rejected responses
+                    reward_margin = torch.where(chosen_mask, model_reward - ref_reward, ref_reward - model_reward)
+                    all_reward_margins.append(reward_margin)
+
+                    # chosen and rejected responses
+                    chosen_response = torch.where(chosen_mask.unsqueeze(1), query_response, mixture_query_response)
+                    rejected_response = torch.where(rejected_mask.unsqueeze(1), query_response, mixture_query_response)
+                    all_chosen_responses.append(chosen_response)
+                    all_rejected_responses.append(rejected_response)
+
+                    ref_logprobs_model_response = self.compute_logprobs(
+                        model, query_response, context_length, ref_model, mixture_coeff=args.mixture_coeff
+                    )
+                    ref_logprobs_ref_response = self.compute_logprobs(
+                        model, mixture_query_response, context_length, ref_model, mixture_coeff=args.mixture_coeff
                     )
 
-                    postprocessed_mixture_response = mixture_response
-                    if args.stop_token_id is not None:  # handle the edge case when stop_token_id exists but is 0
-                        postprocessed_mixture_response = truncate_response(
-                            args.stop_token_id, tokenizer.pad_token_id, mixture_response
-                        )
-
-                    postprocessed_mixture_query_response = torch.cat((query, postprocessed_mixture_response), 1)
-                    mixture_sequence_length = (
-                        first_true_indices(postprocessed_mixture_response == tokenizer.pad_token_id) - 1
+                    ref_logprobs_chosen = torch.where(
+                        chosen_mask.unsqueeze(1), ref_logprobs_model_response, ref_logprobs_ref_response
                     )
-                    _, mixture_score, _ = get_reward(
-                        reward_model, postprocessed_mixture_query_response, tokenizer.pad_token_id, context_length
+                    ref_logprobs_rejected = torch.where(
+                        rejected_mask.unsqueeze(1), ref_logprobs_model_response, ref_logprobs_ref_response
                     )
 
-                    responses.append(response)
-                    postprocessed_responses.append(postprocessed_response)
-                    logprobs.append(logprob)
-                    sequence_lengths.append(sequence_length)
-                    scores.append(score)
+                    all_ref_logprobs_chosen.append(ref_logprobs_chosen)
+                    all_ref_logprobs_rejected.append(ref_logprobs_rejected)
 
-                    mixture_responses.append(mixture_response)
-                    mixture_postprocessed_responses.append(postprocessed_mixture_response)
-                    mixture_logprobs.append(mixture_logprob)
-                    mixture_sequence_lengths.append(mixture_sequence_length)
-                    mixture_scores.append(mixture_score)
+                # stack all the tensors
+                all_queries = torch.cat(all_queries, dim=0)
+                all_chosen_responses = torch.cat(all_chosen_responses, dim=0)
+                all_rejected_responses = torch.cat(all_rejected_responses, dim=0)
+                all_ref_logprobs_chosen = torch.cat(all_ref_logprobs_chosen, dim=0)
+                all_ref_logprobs_rejected = torch.cat(all_ref_logprobs_rejected, dim=0)
+                all_ref_responses = torch.cat(all_ref_responses, dim=0)
+                all_reward_margins = torch.cat(all_reward_margins, dim=0)
 
-                responses = torch.cat(responses, 0)
-                postprocessed_responses = torch.cat(postprocessed_responses, 0)
-                logprobs = torch.cat(logprobs, 0)
-                sequence_lengths = torch.cat(sequence_lengths, 0)
-                scores = torch.cat(scores, 0)
-
-                mixture_responses = torch.cat(mixture_responses, 0)
-                mixture_postprocessed_responses = torch.cat(mixture_postprocessed_responses, 0)
-                mixture_logprobs = torch.cat(mixture_logprobs, 0)
-                mixture_sequence_lengths = torch.cat(mixture_sequence_lengths, 0)
-                mixture_scores = torch.cat(mixture_scores, 0)
-
-                del (logprob, score, mixture_logprob, mixture_score)
                 torch.cuda.empty_cache()
                 gc.collect()
 
-                # Response Processing 3. filter response. Ensure that the sample contains stop_token_id
-                # responses not passing that filter will receive a low (fixed) score
-                # only query humans on responses that pass that filter
-                contain_eos_token = torch.any(postprocessed_responses == tokenizer.eos_token_id, dim=-1)
-                if args.non_eos_penalty:
-                    scores = torch.where(contain_eos_token, scores, args.penalty_reward_value)
-
-                contains_eos_token = torch.any(postprocessed_mixture_response == tokenizer.eos_token_id, dim=-1)
-                if args.non_eos_penalty:
-                    mixture_scores = torch.where(contains_eos_token, mixture_scores, args.penalty_reward_value)
-
-                # accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
-
-                # be very careful with `padding_mask_p1`; see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
-                response_idxs = torch.arange(responses.shape[1], device=responses.device).repeat(responses.shape[0], 1)
-                padding_mask = response_idxs > sequence_lengths.unsqueeze(1)
-                logprobs = torch.masked_fill(logprobs, padding_mask, INVALID_LOGPROB)
-
-                mixture_response_idxs = torch.arange(
-                    mixture_responses.shape[1], device=mixture_responses.device
-                ).repeat(mixture_responses.shape[0], 1)
-                mixture_padding_mask = mixture_response_idxs > mixture_sequence_lengths.unsqueeze(1)
-                mixture_logprobs = torch.masked_fill(mixture_logprobs, mixture_padding_mask, INVALID_LOGPROB)
-
-                # 4. compute rewards
-                kl = logprobs - mixture_logprobs
-
-                # TODO: check if this makes sense for beta
-                non_score_reward = (-args.beta * kl).sum(1)
-                rlhf_reward = scores + mixture_scores + non_score_reward
-
-                chosen_model_indices = scores >= mixture_scores
-                chosen_mixture_indices = scores < mixture_scores
-
-                scores_margin = abs(scores - mixture_scores)
-                torch.cuda.empty_cache()
+                # logging kl between the model and ref mixture model responses
+                logprobs_model = logits_to_logprobs(
+                    logits_responses, query_response[:, context_length:], args.temperature
+                )
+                logprobs_ref = logits_to_logprobs(
+                    mixture_logits_responses, mixture_query_response[:, context_length:], args.temperature
+                )
+                kl = logprobs_model - logprobs_ref
+                scores_margin = all_reward_margins.mean()
 
             # Do multiple epochs of training, with a fresh random shuffle in each epoch
             for epoch_idx in range(args.num_epochs):
@@ -417,78 +377,56 @@ class NashMDTrainer(OnlineDPOTrainer):
                         args.per_device_train_batch_size,
                     ):
                         with accelerator.accumulate(model):
-                            import pdb
-
-                            pdb.set_trace()
                             micro_batch_end = micro_batch_start + args.per_device_train_batch_size
                             micro_batch_inds = mini_batch_inds[micro_batch_start:micro_batch_end]
 
+                            ## context lengths
+                            context_lengths = all_queries[micro_batch_inds].shape[1]
 
                             ## chosen
-                            chosen_mb_inds = chosen_model_indices[micro_batch_inds]
-                            chosen_responses = responses[chosen_mb_inds]
-
+                            chosen_responses = all_chosen_responses[micro_batch_inds]
                             ## rejected
-                            rejected_mb_inds = chosen_mixture_indices[micro_batch_inds]
-                            rejected_responses = responses[rejected_mb_inds]
+                            rejected_responses = all_rejected_responses[micro_batch_inds]
 
-                            concat_mb_inds = torch.cat((chosen_mb_inds, rejected_mb_inds), dim=0)
-                            concat_query_responses = query_responses[concat_mb_inds]
-                            concat_output = forward(model, concat_query_responses, tokenizer.pad_token_id)
-                            num_examples = chosen_mb_inds.shape[0]
-                            chosen_logits = concat_output.logits[:num_examples]
-                            rejected_logits = concat_output.logits[num_examples:]
-
-                            # chosen
-                            chosen_logits = chosen_logits[:, context_length - 1 : -1]
-                            chosen_logits /= args.temperature + 1e-7
-                            chosen_all_logprobs = F.log_softmax(chosen_logits, dim=-1)
-                            chosen_logprobs = torch.gather(
-                                chosen_all_logprobs, 2, chosen_responses.unsqueeze(-1)
-                            ).squeeze(-1)
-                            chosen_logprobs = torch.masked_fill(
-                                chosen_logprobs, padding_mask[chosen_mb_inds], INVALID_LOGPROB
-                            )
-                            chosen_ref_logprobs = ref_logprobs[chosen_mb_inds]
-                            chosen_logprobs_sum = (chosen_logprobs * ~padding_mask[chosen_mb_inds]).sum(1)
-                            chosen_ref_logprobs_sum = (chosen_ref_logprobs * ~padding_mask[chosen_mb_inds]).sum(1)
-
-                            # rejected
-                            rejected_logits = rejected_logits[:, context_length - 1 : -1]
-                            rejected_logits /= args.temperature + 1e-7
-                            rejected_all_logprobs = F.log_softmax(rejected_logits, dim=-1)
-                            rejected_logprobs = torch.gather(
-                                rejected_all_logprobs, 2, rejected_responses.unsqueeze(-1)
-                            ).squeeze(-1)
-                            rejected_logprobs = torch.masked_fill(
-                                rejected_logprobs, padding_mask[rejected_mb_inds], INVALID_LOGPROB
-                            )
-                            rejected_ref_logprobs = ref_logprobs[rejected_mb_inds]
-                            rejected_logprobs_sum = (rejected_logprobs * ~padding_mask[rejected_mb_inds]).sum(1)
-                            rejected_ref_logprobs_sum = (rejected_ref_logprobs * ~padding_mask[rejected_mb_inds]).sum(
-                                1
+                            ## concated log_probs to compute log probs
+                            concated_logprobs = self.compute_logprobs(
+                                model,
+                                torch.cat([chosen_responses, rejected_responses], dim=0),
+                                context_lengths,
                             )
 
-                            pi_logratios = chosen_logprobs_sum - rejected_logprobs_sum
-                            ref_logratios = chosen_ref_logprobs_sum - rejected_ref_logprobs_sum
+                            # model logprobs
+                            (chosen_logprobs, rejected_logprobs) = torch.split(
+                                concated_logprobs, [chosen_responses.shape[0], rejected_responses.shape[0]]
+                            )
 
-                            logits = pi_logratios - ref_logratios
+                            # pre-calculated ref logprobs for chosen and rejected
+                            ref_logprobs_chosen = all_ref_logprobs_chosen[micro_batch_inds]
+                            ref_logprobs_rejected = all_ref_logprobs_rejected[micro_batch_inds]
 
+                            # log ratios
+                            chosen_log_ratios = chosen_logprobs.sum(1) - ref_logprobs_chosen.sum(1)
+                            rejected_log_ratios = rejected_logprobs.sum(1) - ref_logprobs_rejected.sum(1)
+                            diff_log_ratios = chosen_log_ratios - rejected_log_ratios
+
+                            # dpo losses
                             if self.loss_type == "sigmoid":
-                                losses = -F.logsigmoid(self.beta * logits)
+                                dpo_losses = -F.logsigmoid(self.beta * diff_log_ratios)
                             elif self.loss_type == "ipo":
-                                losses = (logits - 1 / (2 * self.beta)) ** 2
+                                dpo_losses = (diff_log_ratios - 1 / (2 * self.beta)) ** 2
                             else:
                                 raise NotImplementedError(f"invalid loss type {self.loss_type}")
 
-                            loss = losses.mean()
+                            # total loss
+                            loss = (dpo_losses).mean()
+
                             accelerator.backward(loss)
                             optimizer.step()
                             optimizer.zero_grad()
                             with torch.no_grad():
-                                chosen_rewards = self.beta * (chosen_logprobs_sum - chosen_ref_logprobs_sum)
-                                rejected_rewards = self.beta * (rejected_logprobs_sum - rejected_ref_logprobs_sum)
-                                loss_stats[epoch_idx, minibatch_idx, gradient_accumulation_idx] = loss
+                                chosen_rewards = self.beta * chosen_log_ratios.detach()
+                                rejected_rewards = self.beta * rejected_log_ratios.detach()
+                                loss_stats[epoch_idx, minibatch_idx, gradient_accumulation_idx] = loss.detach()
                                 chosen_rewards_stats[
                                     epoch_idx, minibatch_idx, gradient_accumulation_idx
                                 ] = chosen_rewards.mean()
@@ -497,27 +435,16 @@ class NashMDTrainer(OnlineDPOTrainer):
                                 ] = rejected_rewards.mean()
                                 chosen_logprobs_stats[
                                     epoch_idx, minibatch_idx, gradient_accumulation_idx
-                                ] = chosen_logprobs_sum.mean()
+                                ] = chosen_log_ratios.mean()
                                 rejected_logprobs_stats[
                                     epoch_idx, minibatch_idx, gradient_accumulation_idx
-                                ] = rejected_logprobs_sum.mean()
+                                ] = rejected_log_ratios.mean()
                         gradient_accumulation_idx += 1
                     minibatch_idx += 1
-                    # del everything and empty cache
-                    # fmt: off
-                    del (
-                        loss, logits,
-                        concat_output, concat_query_responses,
-                        chosen_logits, rejected_logits,
-                        chosen_logprobs, rejected_logprobs,
-                        chosen_responses, rejected_responses,
-                    )
-                    # fmt: on
-                    torch.cuda.empty_cache()
+
             with torch.no_grad():
                 mean_kl = kl.sum(1).mean()
-                mean_entropy = (-logprobs).sum(1).mean()
-                mean_non_score_reward = non_score_reward.mean()
+                mean_entropy = -logprobs_model.mean()
                 eps = int(self.state.episode / (time.time() - start_time))
                 g_chosen_reward = self.accelerator.gather(chosen_rewards_stats)
                 g_rejected_reward = self.accelerator.gather(rejected_rewards_stats)
@@ -525,8 +452,6 @@ class NashMDTrainer(OnlineDPOTrainer):
                 metrics["eps"] = eps
                 metrics["objective/kl"] = self.accelerator.gather(mean_kl).mean().item()
                 metrics["objective/entropy"] = self.accelerator.gather(mean_entropy).mean().item()
-                metrics["objective/non_score_reward"] = self.accelerator.gather(mean_non_score_reward).mean().item()
-                metrics["objective/rlhf_reward"] = self.accelerator.gather(rlhf_reward).mean().item()
                 metrics["objective/scores"] = self.accelerator.gather(scores.mean()).mean().item()
                 metrics["objective/scores_margin"] = self.accelerator.gather(scores_margin.mean()).mean().item()
                 metrics["rewards/chosen"] = g_chosen_reward.mean().item()
@@ -536,7 +461,6 @@ class NashMDTrainer(OnlineDPOTrainer):
                 metrics["loss/policy_avg"] = self.accelerator.gather(loss_stats).mean().item()
                 metrics["logps/chosen"] = self.accelerator.gather(chosen_logprobs_stats).mean().item()
                 metrics["logps/rejected"] = self.accelerator.gather(rejected_logprobs_stats).mean().item()
-                metrics["val/num_eos_tokens"] = (responses == tokenizer.eos_token_id).sum().item()
                 metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
                 metrics["episode"] = self.state.episode
                 self.state.epoch = self.state.episode / self.train_dataset_len  # used by self.log
@@ -545,7 +469,7 @@ class NashMDTrainer(OnlineDPOTrainer):
 
             self.lr_scheduler.step()
             self.state.global_step += 1
-            
+
             self.control = self.callback_handler.on_step_end(args, self.state, self.control)
             if self.control.should_save:
                 self._save_checkpoint(model, trial=None, metrics=metrics)
@@ -561,3 +485,19 @@ class NashMDTrainer(OnlineDPOTrainer):
         if self.control.should_save:
             self._save_checkpoint(model, trial=None, metrics=None)
             self.control = self.callback_handler.on_save(self.args, self.state, self.control)
+
+    def compute_logprobs(self, model, responses, context_length, ref_model=None, mixture_coeff=0):
+        output = forward(model, responses, self.tokenizer.pad_token_id)
+        logits = output.logits[:, context_length - 1 : -1]
+        logits /= self.args.temperature + 1e-7
+
+        if ref_model is not None:
+            with torch.no_grad():
+                ref_output = forward(ref_model, responses, self.tokenizer.pad_token_id)
+                ref_logits = ref_output.logits[:, context_length - 1 : -1]
+                ref_logits /= self.args.temperature + 1e-7
+                logits = mixture_coeff * ref_logits + (1 - mixture_coeff) * logits
+
+        logprobs = F.log_softmax(logits, dim=-1)
+        target_ids = responses[:, context_length:]
+        return torch.gather(logprobs, 2, target_ids.unsqueeze(-1)).squeeze(-1)
