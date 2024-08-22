@@ -293,26 +293,6 @@ class PPODecorators:
                 torch.cuda.empty_cache()
                 gc.collect()
 
-class GRPODecorators:
-    optimize_device_cache = False
-
-    @classmethod
-    @contextmanager
-    def empty_device_cache(cls):
-        yield
-        if cls.optimize_device_cache:
-            if is_xpu_available():
-                gc.collect()
-                torch.xpu.empty_cache()
-                gc.collect()
-            elif is_npu_available():
-                gc.collect()
-                torch.npu.empty_cache()
-                gc.collect()
-            elif torch.cuda.is_available():
-                gc.collect()
-                torch.cuda.empty_cache()
-                gc.collect()
 
 def randn_tensor(
     shape: Union[Tuple, List],
