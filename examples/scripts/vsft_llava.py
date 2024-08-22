@@ -28,7 +28,7 @@ python examples/scripts/vsft_llava.py \
     --dataloader_num_workers 32 \
     --lora_target_modules=all-linear
 
-For LLaVA-NeXT, just use
+For LLaVA-NeXT, use: (requires transformers>=4.45)
     --model_name_or_path llava-hf/llava-v1.6-mistral-7b-hf
 """
 
