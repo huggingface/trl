@@ -116,7 +116,9 @@ class DataCollatorForCompletionOnlyLMTester(unittest.TestCase):
 
         response_template = "\n### Assistant:"
         collator = DataCollatorForCompletionOnlyLM(response_template, tokenizer=tokenizer)
-        collator_paddingfree = DataCollatorForCompletionOnlyLM(response_template, tokenizer=tokenizer, padding_free=True)
+        collator_paddingfree = DataCollatorForCompletionOnlyLM(
+            response_template, tokenizer=tokenizer, padding_free=True
+        )
 
         tokenized_instruction = [tokenizer(x, add_special_tokens=False) for x in [inst1, inst2]]
         batch = collator(tokenized_instruction)
