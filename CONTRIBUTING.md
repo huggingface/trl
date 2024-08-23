@@ -53,8 +53,7 @@ already reported** (use the search bar on GitHub under Issues). Your issue shoul
 
 Once you've confirmed the bug hasn't already been reported, please include the following information in your issue so we can quickly resolve it:
 
-* Your **OS type and version** and **Python**, **PyTorch** and
-  **Transformers** versions when applicable.
+* Your **OS type and version**, **Python**, **PyTorch**, **TRL** and **Transformers** versions.
 * A short, self-contained, code snippet that allows us to reproduce the bug in
   less than 30s.
 * The *full* traceback if an exception is raised.
@@ -103,7 +102,7 @@ Based on the community and maintainer feedback, the next step will be to impleme
 
 ## Do you want to add documentation?
 
-We're always looking for improvements to the documentation that make it more clear and accurate. Please let us know how the documentation can be improved such as typos and any content that is missing, unclear or inaccurate. We'll be happy to make the changes or help you make a contribution if you're interested!
+We're always looking for improvements to the documentation that make it more clear and accurate. Please let us know how the documentation can be improved, such as typos, dead links and any missing, unclear or inaccurate content.. We'll be happy to make the changes or help you make a contribution if you're interested!
 
 ## Submitting a pull request (PR)
 
@@ -157,7 +156,7 @@ Follow these steps to start contributing:
    ```
 
    (If TRL was already installed in the virtual environment, remove
-   it with `pip uninstall tr;` before reinstalling it.)
+   it with `pip uninstall trl` before reinstalling it.)
 
    Alternatively, if you are using [Visual Studio Code](https://code.visualstudio.com/Download), the fastest way to get set up is by using
    the provided Dev Container. Documentation on how to get started with dev containers is available [here](https://code.visualstudio.com/docs/remote/containers).
