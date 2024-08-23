@@ -2,7 +2,8 @@ import gc
 import math
 import os
 import time
-from collections import OrderedDict, defaultdict
+from collections import defaultdict
+from functools import wraps
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -41,6 +42,7 @@ from ..trainer.utils import (
     truncate_response,
 )
 from .ppov2_config import PPOv2Config
+from .utils import trl_sanitze_kwargs_for_tagging
 
 
 INVALID_LOGPROB = 1.0
@@ -64,6 +66,8 @@ class PolicyAndValueWrapper(nn.Module):
 
 
 class PPOv2Trainer(Trainer):
+    _tag_names = ["trl", "ppo"]
+
     def __init__(
         self,
         config: PPOv2Config,
@@ -142,6 +146,7 @@ class PPOv2Trainer(Trainer):
         if args.stop_token and args.stop_token == "eos":
             args.stop_token_id = tokenizer.eos_token_id
         self.model = PolicyAndValueWrapper(policy, value_model)
+        self.model.config = policy.config  # needed for pushing to hub
         self.create_optimizer_and_scheduler(
             num_training_steps=args.num_total_batches
         )  # note that we are calling `self.lr_scheduler.step()` manually only at the batch level
@@ -170,7 +175,6 @@ class PPOv2Trainer(Trainer):
             self.init_hf_repo()
         if self.args.should_save:
             os.makedirs(self.args.output_dir, exist_ok=True)
-        self.backup_model = None
 
         #########
         ### setup dataloader
@@ -213,30 +217,20 @@ class PPOv2Trainer(Trainer):
     def get_eval_dataloader(self) -> DataLoader:
         return self.eval_dataloader
 
-    def push_to_hub(self, **kwargs):
-        """Modified from `Trainer.save_model` to only save the policy and not the value network."""
-        self.backup_model = self.model
-        self.model = self.accelerator.unwrap_model(self.model).policy  # save only the policy
-        super().push_to_hub(**kwargs)
-        self.model = self.backup_model
-
     def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
-        """Modified from `Trainer.save_model` to only save the policy and not the value network."""
-        if not _internal_call:  # `push_to_hub` already swaps out the self.model with policy
-            self.backup_model = self.model
-            self.model = self.accelerator.unwrap_model(self.model).policy  # save only the policy
-        if output_dir is None:
-            output_dir = self.args.output_dir
-        state_dict = self.accelerator.get_state_dict(self.backup_model)
-        policy_state_dict = state_dict
-        if self.accelerator.is_main_process:
-            policy_state_dict = OrderedDict(
-                {k[len("policy.") :]: v for k, v in state_dict.items() if k.startswith("policy.")}
-            )
-        if self.args.should_save:
-            self._save(output_dir, state_dict=policy_state_dict)
-        if not _internal_call:
-            self.model = self.backup_model
+        backup_model = self.model
+        self.model = self.model.policy  # save only the policy
+
+        if self.is_deepspeed_enabled:
+            backup_deepspeed = self.deepspeed
+            self.deepspeed = self.model
+
+        super().save_model(output_dir, _internal_call)
+
+        self.model = backup_model
+
+        if self.is_deepspeed_enabled:
+            self.deepspeed = backup_deepspeed
 
     def train(self):
         args = self.args
@@ -610,10 +604,26 @@ class PPOv2Trainer(Trainer):
                 if sampling:
                     break
         df = pd.DataFrame(table)
-        if self.accelerator.process_index == 0:
-            print_rich_table(df.iloc[0 : 0 + 5])
-        if "wandb" in args.report_to:
-            import wandb
 
-            if wandb.run is not None:
-                wandb.log({"completions": wandb.Table(dataframe=df)})
+        if self.accelerator.is_main_process:
+            print_rich_table(df.iloc[0 : 0 + 5])
+            if "wandb" in args.report_to:
+                import wandb
+
+                if wandb.run is not None:
+                    wandb.log({"completions": wandb.Table(dataframe=df)})
+
+    @wraps(Trainer.push_to_hub)
+    def push_to_hub(
+        self,
+        commit_message: Optional[str] = "End of training",
+        blocking: bool = True,
+        **kwargs,
+    ) -> str:
+        """
+        Overwrite the `push_to_hub` method in order to force-add the tag "ppo" when pushing the
+        model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
+        Unlike the parent class, we don't use the `token` argument to mitigate security risks.
+        """
+        kwargs = trl_sanitze_kwargs_for_tagging(model=self.model, tag_names=self._tag_names, kwargs=kwargs)
+        return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)
