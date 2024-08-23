@@ -69,7 +69,7 @@ class GRPOTrainer(Trainer):
         data_collator: Optional[DataCollatorWithPadding] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
          # less commonly used
-        optimizer: Optional[torch.optim.Optimizer] = None,
+        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         callbacks: Optional[List[TrainerCallback]] = None
     ):
         self.args = config
@@ -99,19 +99,22 @@ class GRPOTrainer(Trainer):
         accelerator = Accelerator(gradient_accumulation_steps=args.gradient_accumulation_steps)
         self.accelerator = accelerator
         args.world_size = accelerator.num_processes
+        args.per_device_train_batch_size = args.per_device_train_batch_size * args.sampling_group_size
         args.local_batch_size = (
-            args.per_device_train_batch_size * args.gradient_accumulation_steps * args.num_mini_batches * args.sampling_group_size
+            args.per_device_train_batch_size * args.gradient_accumulation_steps * args.num_mini_batches
         )
         args.micro_batch_size = int(args.per_device_train_batch_size * args.world_size)
         args.batch_size = int(args.local_batch_size * args.world_size)
+        args.mini_batch_size = args.batch_size * args.sampling_group_size
         args.mini_batch_size = exact_div(
             args.batch_size, args.num_mini_batches, "`batch_size` must be a multiple of `num_mini_batches`"
         )
+
         args.local_mini_batch_size = exact_div(
             args.local_batch_size, args.num_mini_batches, "`local_batch_size` must be a multiple of `num_mini_batches`"
         )
         args.num_total_batches = math.ceil(
-            args.total_episodes / args.batch_size
+            args.total_episodes* args.sampling_group_size / args.batch_size
         )  # we may train for more than `total_episodes`
         time_tensor = torch.tensor(int(time.time()), device=accelerator.device)
         time_int = broadcast(time_tensor, 0).item()  # avoid different timestamps across processes
@@ -149,8 +152,8 @@ class GRPOTrainer(Trainer):
             max_new_tokens=args.response_length,
             min_new_tokens=args.response_length,
             temperature=(self.sampling_temperature + 1e-7),
-            top_k=self.sampling_strategy_top_p,
-            top_p=self.sampling_strategy_top_k,
+            top_k=self.sampling_strategy_top_k,
+            top_p=self.sampling_strategy_top_p,
             do_sample=True,
         )
         #########
@@ -260,7 +263,7 @@ class GRPOTrainer(Trainer):
 
         accelerator.print("===training policy===")
         start_time = time.time()
-        stats_shape = (args.num_ppo_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
+        stats_shape = (args.num_grpo_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
         approxkl_stats = torch.zeros(stats_shape, device=device)
         pg_clipfrac_stats = torch.zeros(stats_shape, device=device)
         pg_loss_stats = torch.zeros(stats_shape, device=device)
@@ -316,7 +319,7 @@ class GRPOTrainer(Trainer):
                         self.generation_config,
                     )
 
-                for i in range(0, queries.shape[0], args.local_rollout_forward_batch_size):
+                for i in range(0, queries.shape[0], args.local_rollout_forward_batch_size ):
                     # the query here is sampling_group_size * number of orginal queries
 
                     query = queries[i : i + args.local_rollout_forward_batch_size]
@@ -346,7 +349,7 @@ class GRPOTrainer(Trainer):
                     # Response Processing 2. run reward model on the truncated responses
                     postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
                     sequence_length = first_true_indices(postprocessed_response == tokenizer.pad_token_id) - 1
-                    unwrapped_value_model = accelerator.unwrap_model(model).value_model
+
                     _, score, _ = get_reward(
                         reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
                     )
@@ -364,7 +367,7 @@ class GRPOTrainer(Trainer):
                 ref_logprobs = torch.cat(ref_logprobs, 0)
                 sequence_lengths = torch.cat(sequence_lengths, 0)
                 scores = torch.cat(scores, 0)
-                del (logprob, ref_logprob, full_value, score, unwrapped_model)
+                del (logprob, ref_logprob, score, unwrapped_model)
                 torch.cuda.empty_cache()
                 gc.collect()
                 torch.cuda.empty_cache()
@@ -403,117 +406,116 @@ class GRPOTrainer(Trainer):
                 kl = logprobs - ref_logprobs
                 rlhf_reward = scores
                 ##### This is only for the outcome supervision
-                advantages = rlhf_reward
+                advantages = rlhf_reward.unsqueeze(1)
 
-                for grpo_epoch in range(args.num_grpo_epochs):
-                    b_inds = np.random.permutation(args.local_batch_size)
-                    minibatch_idx = 0
-                    for mini_batch_start in range(0, args.local_batch_size, args.local_mini_batch_size):
-                        mini_batch_end = mini_batch_start + args.local_mini_batch_size
-                        mini_batch_inds = b_inds[mini_batch_start:mini_batch_end]
-                        gradient_accumulation_idx = 0
-                        for micro_batch_start in range(0, args.local_mini_batch_size, args.per_device_train_batch_size):
-                            with accelerator.accumulate(model):
-                                micro_batch_end = micro_batch_start + args.per_device_train_batch_size
-                                micro_batch_inds = mini_batch_inds[micro_batch_start:micro_batch_end]
-                                mb_advantage = advantages[micro_batch_inds]
-                                mb_responses = responses[micro_batch_inds]
-                                mb_query_responses = query_responses[micro_batch_inds]
-                                mb_logprobs = logprobs[micro_batch_inds]
+            for grpo_epoch in range(args.num_grpo_epochs):
+                b_inds = np.random.permutation(args.local_batch_size)
+                minibatch_idx = 0
+                for mini_batch_start in range(0, args.local_batch_size, args.local_mini_batch_size):
+                    mini_batch_end = mini_batch_start + args.local_mini_batch_size
+                    mini_batch_inds = b_inds[mini_batch_start:mini_batch_end]
+                    gradient_accumulation_idx = 0
+                    for micro_batch_start in range(0, args.local_mini_batch_size, args.per_device_train_batch_size):
+                        with accelerator.accumulate(model):
+                            micro_batch_end = micro_batch_start + args.per_device_train_batch_size
+                            micro_batch_inds = mini_batch_inds[micro_batch_start:micro_batch_end]
+                            mb_advantage = advantages[micro_batch_inds]
+                            mb_responses = responses[micro_batch_inds]
+                            mb_query_responses = query_responses[micro_batch_inds]
+                            mb_logprobs = logprobs[micro_batch_inds]
+                            output = forward(model, mb_query_responses, tokenizer.pad_token_id)
+                            logits = output.logits[:, context_length - 1 : -1]
+                            logits /= args.temperature + 1e-7
+                            new_all_logprobs = F.log_softmax(logits, dim=-1)
+                            new_logprobs = torch.gather(new_all_logprobs, 2, mb_responses.unsqueeze(-1)).squeeze(-1)
+                            new_logprobs = torch.masked_fill(
+                                new_logprobs, padding_mask[micro_batch_inds], INVALID_LOGPROB
+                            )
+                            # As described in equation (4) in the paper
+                            kl_estimate = ref_logprobs - new_logprobs
+                            approx_kl = torch.exp(kl_estimate) - kl_estimate -1
+                            kl_coef_approx_kl = args.kl_coef*approx_kl
 
-                                output = forward(model, mb_query_responses, tokenizer.pad_token_id)
-                                logits = output.logits[:, context_length - 1 : -1]
-                                logits /= args.temperature + 1e-7
-                                new_all_logprobs = F.log_softmax(logits, dim=-1)
-                                new_logprobs = torch.gather(new_all_logprobs, 2, mb_responses.unsqueeze(-1)).squeeze(-1)
-                                new_logprobs = torch.masked_fill(
-                                    new_logprobs, padding_mask[micro_batch_inds], INVALID_LOGPROB
-                                )
-                                # As described in equation (4) in the paper
-                                kl_estimate = ref_logprobs - new_logprobs
-                                approx_kl = torch.exp(kl_estimate) - kl_estimate -1
-                                kl_coef_approx_kl = args.kl_coef*approx_kl
 
-                                logprobs_diff = new_logprobs - mb_logprobs
-                                ratio = torch.exp(logprobs_diff)
+                            logprobs_diff = new_logprobs - mb_logprobs
+                            ratio = torch.exp(logprobs_diff)
 
-                                new_ratio = (new_logprobs - mb_logprobs).exp()
-
-                                pg_losses = -mb_advantage * ratio
-                                pg_losses2 = -mb_advantage * torch.clamp(ratio, 1.0 - args.cliprange, 1.0 + args.cliprange)
-                                pg_loss_max = torch.max(pg_losses, pg_losses2) + kl_coef_approx_kl / self.sampling_group_size
-                                pg_loss = masked_mean(pg_loss_max, ~padding_mask[micro_batch_inds])
-                                loss = pg_loss
-                                accelerator.backward(loss)
-                                optimizer.step()
-                                optimizer.zero_grad()
-                                with torch.no_grad():
-                                    pg_clipfrac = (pg_losses2 > pg_losses).float().mean()
-                                    prob_dist = torch.nn.functional.softmax(logits, dim=-1)
-                                    entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1)
-                                    approxkl = 0.5 * (logprobs_diff**2).mean()
-                                    approxkl_stats[grpo_epoch, minibatch_idx, gradient_accumulation_idx] = approxkl
-                                    pg_clipfrac_stats[
-                                        grpo_epoch, minibatch_idx, gradient_accumulation_idx
-                                    ] = pg_clipfrac
-                                    pg_loss_stats[grpo_epoch, minibatch_idx, gradient_accumulation_idx] = pg_loss
-                                    entropy_stats[grpo_epoch, minibatch_idx, gradient_accumulation_idx] = entropy.mean()
-                                    ratio_stats[grpo_epoch, minibatch_idx, gradient_accumulation_idx] = new_ratio.mean()
-                            gradient_accumulation_idx += 1
-                        minibatch_idx += 1
-                        self.state.global_step += 1
-                        # del everything and empty cache
-                        # fmt: off
-                        del (
-                            output, logits, new_all_logprobs, new_logprobs,
-                            logprobs_diff, ratio, pg_losses, pg_losses2,
-                            pg_loss, loss, pg_clipfrac, prob_dist, entropy, approxkl,
-                            mb_advantage, mb_responses, mb_query_responses, mb_logprobs,
-                        )
-                        # fmt: on
-                        torch.cuda.empty_cache()
-                with torch.no_grad():
-                    mean_kl = kl.sum(1).mean()
-                    mean_entropy = (-logprobs).sum(1).mean()
-                    eps = int(self.state.episode / (time.time() - start_time))
-                    metrics = {}
-                    metrics["eps"] = eps
-                    metrics["objective/kl"] = self.accelerator.gather(mean_kl).mean().item()
-                    metrics["objective/entropy"] = self.accelerator.gather(mean_entropy).mean().item()
-                    metrics["objective/rlhf_reward"] = self.accelerator.gather(rlhf_reward).mean().item()
-                    metrics["objective/scores"] = self.accelerator.gather(scores.mean()).mean().item()
-                    metrics["policy/approxkl_avg"] = self.accelerator.gather(approxkl_stats).mean().item()
-                    metrics["policy/clipfrac_avg"] = self.accelerator.gather(pg_clipfrac_stats).mean().item()
-                    metrics["loss/policy_avg"] = self.accelerator.gather(pg_loss_stats).mean().item()
-                    metrics["loss/value_avg"] = self.accelerator.gather(vf_loss_stats).mean().item()
-                    metrics["val/clipfrac_avg"] = self.accelerator.gather(vf_clipfrac_stats).mean().item()
-                    metrics["policy/entropy_avg"] = self.accelerator.gather(entropy_stats).mean().item()
-                    metrics["val/ratio"] = self.accelerator.gather(ratio_stats).mean().item()
-                    metrics["val/ratio_var"] = self.accelerator.gather(ratio_stats).var().item()
-                    metrics["val/num_eos_tokens"] = (responses == tokenizer.eos_token_id).sum().item()
-                    metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
-                    metrics["episode"] = self.state.episode
-                    self.state.epoch = self.state.episode / self.train_dataset_len  # used by self.log
+                            new_ratio = (new_logprobs - mb_logprobs).exp()
+                            pg_losses = -mb_advantage * ratio
+                            pg_losses2 = -mb_advantage * torch.clamp(ratio, 1.0 - args.cliprange, 1.0 + args.cliprange)
+                            pg_loss_max = torch.max(pg_losses, pg_losses2) + kl_coef_approx_kl / self.sampling_group_size
+                            pg_loss = masked_mean(pg_loss_max, ~padding_mask[micro_batch_inds])
+                            loss = pg_loss
+                            accelerator.backward(loss)
+                            optimizer.step()
+                            optimizer.zero_grad()
+                            with torch.no_grad():
+                                pg_clipfrac = (pg_losses2 > pg_losses).float().mean()
+                                prob_dist = torch.nn.functional.softmax(logits, dim=-1)
+                                entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1)
+                                approxkl = 0.5 * (logprobs_diff**2).mean()
+                                approxkl_stats[grpo_epoch, minibatch_idx, gradient_accumulation_idx] = approxkl
+                                pg_clipfrac_stats[
+                                    grpo_epoch, minibatch_idx, gradient_accumulation_idx
+                                ] = pg_clipfrac
+                                pg_loss_stats[grpo_epoch, minibatch_idx, gradient_accumulation_idx] = pg_loss
+                                entropy_stats[grpo_epoch, minibatch_idx, gradient_accumulation_idx] = entropy.mean()
+                                ratio_stats[grpo_epoch, minibatch_idx, gradient_accumulation_idx] = new_ratio.mean()
+                        gradient_accumulation_idx += 1
+                    minibatch_idx += 1
                     self.state.global_step += 1
-                    self.log(metrics)
-                del kl, mean_kl, mean_entropy, scores
+                    # del everything and empty cache
+                    # fmt: off
+                    del (
+                        output, logits, new_all_logprobs, new_logprobs,
+                        logprobs_diff, ratio, pg_losses, pg_losses2,
+                        pg_loss, loss, pg_clipfrac, prob_dist, entropy, approxkl,
+                        mb_advantage, mb_responses, mb_query_responses, mb_logprobs,
+                    )
+                    # fmt: on
+                    torch.cuda.empty_cache()
+            with torch.no_grad():
+                mean_kl = kl.sum(1).mean()
+                mean_entropy = (-logprobs).sum(1).mean()
+                eps = int(self.state.episode / (time.time() - start_time))
+                metrics = {}
+                metrics["eps"] = eps
+                metrics["objective/kl"] = self.accelerator.gather(mean_kl).mean().item()
+                metrics["objective/entropy"] = self.accelerator.gather(mean_entropy).mean().item()
+                metrics["objective/rlhf_reward"] = self.accelerator.gather(rlhf_reward).mean().item()
+                metrics["objective/scores"] = self.accelerator.gather(scores.mean()).mean().item()
+                metrics["policy/approxkl_avg"] = self.accelerator.gather(approxkl_stats).mean().item()
+                metrics["policy/clipfrac_avg"] = self.accelerator.gather(pg_clipfrac_stats).mean().item()
+                metrics["loss/policy_avg"] = self.accelerator.gather(pg_loss_stats).mean().item()
+                metrics["loss/value_avg"] = self.accelerator.gather(vf_loss_stats).mean().item()
+                metrics["val/clipfrac_avg"] = self.accelerator.gather(vf_clipfrac_stats).mean().item()
+                metrics["policy/entropy_avg"] = self.accelerator.gather(entropy_stats).mean().item()
+                metrics["val/ratio"] = self.accelerator.gather(ratio_stats).mean().item()
+                metrics["val/ratio_var"] = self.accelerator.gather(ratio_stats).var().item()
+                metrics["val/num_eos_tokens"] = (responses == tokenizer.eos_token_id).sum().item()
+                metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
+                metrics["episode"] = self.state.episode
+                self.state.epoch = self.state.episode / self.train_dataset_len  # used by self.log
+                self.state.global_step += 1
+                self.log(metrics)
+            del kl, mean_kl, mean_entropy, scores
 
-                self.lr_scheduler.step()
-                self.control = self.callback_handler.on_step_end(args, self.state, self.control)
-                if self.control.should_save:
-                    self._save_checkpoint(model, trial=None, metrics=metrics)
-                    self.control = self.callback_handler.on_save(self.args, self.state, self.control)
-                torch.cuda.empty_cache()
-                gc.collect()
-
-                if args.num_sample_generations > 0 and (update - 1) % self.sample_generations_freq == 0:
-                    self.generate_completions(sampling=True)
-
-            # HF trainer specifics
-            self.control = self.callback_handler.on_train_end(args, self.state, self.control)
+            self.lr_scheduler.step()
+            self.control = self.callback_handler.on_step_end(args, self.state, self.control)
             if self.control.should_save:
-                self._save_checkpoint(model, trial=None, metrics=None)
+                self._save_checkpoint(model, trial=None, metrics=metrics)
                 self.control = self.callback_handler.on_save(self.args, self.state, self.control)
+            torch.cuda.empty_cache()
+            gc.collect()
+
+            if args.num_sample_generations > 0 and (update - 1) % self.sample_generations_freq == 0:
+                self.generate_completions(sampling=True)
+
+        # HF trainer specifics
+        self.control = self.callback_handler.on_train_end(args, self.state, self.control)
+        if self.control.should_save:
+            self._save_checkpoint(model, trial=None, metrics=None)
+            self.control = self.callback_handler.on_save(self.args, self.state, self.control)
 
 
     def generate_completions(self, sampling: bool = False):
