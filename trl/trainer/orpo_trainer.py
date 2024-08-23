@@ -784,20 +784,22 @@ class ORPOTrainer(Trainer):
 
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
         reward_margin  = chosen_rewards - rejected_rewards
-        xm.mark_step() # needed because .cpu() calls
 
         prefix = "eval_" if train_eval == "eval" else ""
-        metrics[f"{prefix}rewards/chosen"] = chosen_rewards.cpu().mean()
-        metrics[f"{prefix}rewards/rejected"] = rejected_rewards.cpu().mean()
-        metrics[f"{prefix}rewards/accuracies"] = reward_accuracies.cpu().mean()
-        metrics[f"{prefix}rewards/margins"] = reward_margin.cpu().mean()
-        metrics[f"{prefix}logps/rejected"] = policy_rejected_logps.detach().cpu().mean()
-        metrics[f"{prefix}logps/chosen"] = policy_chosen_logps.detach().cpu().mean()
-        metrics[f"{prefix}logits/rejected"] = policy_rejected_logits.detach().cpu().mean()
-        metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.detach().cpu().mean()
-        metrics[f"{prefix}nll_loss"] = policy_nll_loss.detach().cpu().mean()
-        metrics[f"{prefix}log_odds_ratio"] = log_odds_ratio.item()
-        metrics[f"{prefix}log_odds_chosen"] = log_odds_chosen.item()
+        metrics[f"{prefix}rewards/chosen"] = chosen_rewards.mean()
+        metrics[f"{prefix}rewards/rejected"] = rejected_rewards.mean()
+        metrics[f"{prefix}rewards/accuracies"] = reward_accuracies.mean()
+        metrics[f"{prefix}rewards/margins"] = reward_margin.mean()
+        metrics[f"{prefix}logps/rejected"] = policy_rejected_logps.detach().mean()
+        metrics[f"{prefix}logps/chosen"] = policy_chosen_logps.detach().mean()
+        metrics[f"{prefix}logits/rejected"] = policy_rejected_logits.detach().mean()
+        metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.detach().mean()
+        metrics[f"{prefix}nll_loss"] = policy_nll_loss.detach().mean()
+        metrics[f"{prefix}log_odds_ratio"] = log_odds_ratio
+        metrics[f"{prefix}log_odds_chosen"] = log_odds_chosen
+        xm.mark_step() # needed because .item() calls
+        for k, v in metrics.items():
+            metrics[k] = v.item()
         if self.aux_loss_enabled:
             loss += getattr(model.config, "router_aux_loss_coef", 0.0) * aux_loss
 
