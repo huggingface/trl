@@ -1375,7 +1375,7 @@ class DPOTrainer(Trainer):
         if (
             "reference_chosen_logps" in batch
             and "reference_rejected_logps" in batch
-            and self.args.rpo_alpha is not None
+            and (self.precompute_ref_log_probs or self.args.rpo_alpha is not None)
         ):
             reference_chosen_logps = batch["reference_chosen_logps"]
             reference_rejected_logps = batch["reference_rejected_logps"]
