@@ -63,7 +63,7 @@ class OnlineDPOConfig(TrainingArguments):
 
 @dataclass
 class ODPOConfig(TrainingArguments):
-    response_length: int = 53
+    completion_length: int = 53
     temperature: float = 0.7
     missing_eos_penalty: Optional[float] = None
     beta: float = 0.05

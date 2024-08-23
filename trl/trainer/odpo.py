@@ -20,7 +20,7 @@ from transformers.utils import (
     is_sagemaker_mp_enabled,
     is_torch_mlu_available,
     is_torch_mps_available,
-    is_torch_musa_available,
+    # is_torch_musa_available,
     is_torch_npu_available,
     is_torch_xpu_available,
     logging,
@@ -31,12 +31,9 @@ from .judges import BasePairwiseJudge
 from .online_dpo_config import OnlineDPOConfig
 from .utils import (
     DPODataCollatorWithPadding,
-    batch_generation,
     first_true_indices,
-    forward,
     get_reward,
     prepare_deepspeed,
-    truncate_response,
 )
 
 
@@ -53,6 +50,30 @@ else:
     IS_SAGEMAKER_MP_POST_1_10 = False
 
 logger = logging.get_logger(__name__)
+
+
+def truncate_right(input_ids: torch.Tensor, stop_token_id: int, pad_token_id: int):
+    """
+    Truncates the input tensor from the right side after the first occurrence of the stop token.
+
+    Args:
+        input_ids (`torch.Tensor`):
+            The tensor containing the responses to be truncated
+        stop_token_id (`int`):
+            The token ID representing the stop token where truncation occurs
+        pad_token_id (`int`):
+            The token ID representing the pad token used to fill the truncated responses
+
+    Returns:
+        `torch.Tensor`:
+            The truncated responses tensor with pad tokens filled after the stop token.
+    """
+    trunc_idxs = first_true_indices(input_ids == stop_token_id).unsqueeze(-1)
+    new_size = [1] * (len(input_ids.size()) - 1) + [input_ids.shape[1]]
+    idxs = torch.arange(input_ids.shape[1], device=input_ids.device).view(*new_size)
+    output_ids = torch.masked_fill(input_ids, idxs > trunc_idxs, pad_token_id)
+    mask = torch.masked_fill(torch.ones_like(input_ids), idxs > trunc_idxs, 0)
+    return output_ids, mask
 
 
 class ODPOTrainer(Trainer):
@@ -180,102 +201,94 @@ class ODPOTrainer(Trainer):
     def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         model.train()
 
+        # Sample 2 completations per prompt of size `completion_length` from the model
         inputs = self._prepare_inputs(inputs)
-
-        # Generate two completions
         generation_config = GenerationConfig(
-            max_new_tokens=self.args.response_length,
-            min_new_tokens=self.args.response_length,
-            temperature=(self.args.temperature + 1e-7),
+            max_new_tokens=self.args.completion_length,
+            min_new_tokens=self.args.completion_length,
+            temperature=self.args.temperature,
             top_k=0.0,
             top_p=1.0,
             do_sample=True,
         )
-        repeated_prompts = inputs["prompt_input_ids"].repeat(2, 1)
+        num_examples, context_length = inputs["prompt_input_ids"].shape
+        prompt_ids = inputs["prompt_input_ids"].repeat(2, 1)
+        prompt_mask = inputs["prompt_attention_mask"].repeat(2, 1)
+        with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+            output = unwrapped_model.generate(
+                input_ids=prompt_ids,
+                attention_mask=prompt_mask,
+                generation_config=generation_config,
+            )
+        del inputs
+
+        completion_ids = output[:, context_length:]  # completions.shape[1] == self.args.completion_length
+        completion_ids, completion_mask = truncate_right(
+            completion_ids, self.tokenizer.eos_token_id, self.tokenizer.pad_token_id
+        )
+        prompt_completion_ids = torch.cat((prompt_ids, completion_ids), dim=1)
+        prompt_completion_mask = torch.cat((prompt_mask, completion_mask), dim=1)
+
+        # Get the logprobs of the completions from the model
+        output = model(prompt_completion_ids, attention_mask=prompt_completion_mask)
+        # There is 1 offset, because the model predict the next token
+        logits = output.logits[:, context_length - 1 : -1]
+        # Turn logits into logprobs
+        all_logprobs = F.log_softmax(logits, dim=-1)
+        # Take the completion tokens logprob
+        logprobs = torch.take_along_dim(all_logprobs, completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
+        del output, logits, all_logprobs  # free memory
+        self.empty_cache()
+
+        # Same for the reference model
         with torch.no_grad():
-            with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
-                query_responses, logits = batch_generation(
-                    model=unwrapped_model,
-                    queries=repeated_prompts,  # generate 2 completions per prompt
-                    local_rollout_forward_batch_size=self.args.per_device_train_batch_size,
-                    pad_token_id=self.tokenizer.pad_token_id,
-                    generation_config=generation_config,
-                )
-            num_examples, context_length = inputs["prompt_input_ids"].shape
-            responses = query_responses[:, context_length:]  # responses.shape[1] == self.args.response_length
-            # Turn logits into logprobs
-            all_logprobs = F.log_softmax(logits, dim=-1)  # (batch_size, response_length, vocab_size)
-            # Take the response tokens logprob (batch_size, response_length)
-            logprobs = torch.take_along_dim(all_logprobs, responses.unsqueeze(-1), dim=2).squeeze(-1)
+            ref_output = self.ref_model(prompt_completion_ids, attention_mask=prompt_completion_mask)
+        ref_logits = ref_output.logits[:, context_length - 1 : -1]
+        ref_all_logprobs = F.log_softmax(ref_logits, dim=-1)
+        ref_logprobs = torch.take_along_dim(ref_all_logprobs, completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
+        del ref_output, ref_logits, ref_all_logprobs  # free memory
+        self.empty_cache()
 
-            # Same for the reference model
-            ref_output = forward(self.ref_model, query_responses, pad_token_id=self.tokenizer.pad_token_id)
-            # There is 1 offset, because the model predict the next token
-            ref_logits = ref_output.logits[:, context_length - 1 : -1] / generation_config.temperature
-            # Turn logits into logprobs
-            ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
-            # Take the response tokens logprob
-            ref_logprobs = torch.take_along_dim(ref_all_logprob, responses.unsqueeze(-1), dim=2).squeeze(-1)
-
-            # Truncate response after the first occurrence of `stop_token_id`.
-            processed_responses = truncate_response(
-                self.tokenizer.eos_token_id, self.tokenizer.pad_token_id, responses
-            )
-            # Reponses now look like: [123, 234, 345, EOS, PAD, PAD, ...]
-
-            # Run reward model on the truncated responses
-            processed_query_responses = torch.hstack((repeated_prompts, processed_responses))
+        # Get the reward from the reward model
+        with torch.no_grad():
             _, scores, _ = get_reward(
-                self.reward_model, processed_query_responses, self.tokenizer.pad_token_id, context_length
+                self.reward_model, prompt_completion_ids, self.tokenizer.pad_token_id, context_length
             )
 
-            # Filter response. Ensure that the sample contains stop_token_id
-            # responses not passing that filter will receive a low (fixed) score
-            # only query humans on responses that pass that filter
-            contain_eos_token = torch.any(processed_responses == self.tokenizer.eos_token_id, dim=-1)
-            if self.args.missing_eos_penalty is not None:
-                scores = torch.where(contain_eos_token, scores, self.args.missing_eos_penalty)
+        # Filter completion. Ensure that the sample contains stop_token_id
+        # Completions not passing that filter will receive a low (fixed) score
+        contain_eos_token = torch.any(completion_ids == self.tokenizer.eos_token_id, dim=-1)
+        if self.args.missing_eos_penalty is not None:
+            scores = torch.where(contain_eos_token, scores, self.args.missing_eos_penalty)
 
-            # be very careful with `padding_mask_p1`; see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
-            response_idxs = torch.arange(responses.shape[1], device=responses.device).repeat(responses.shape[0], 1)
-            # response_idxs looks like tensor([[ 0,  1,  2,  3], [ 0,  1,  2,  3]])
-            sequence_lengths = first_true_indices(processed_responses == self.tokenizer.pad_token_id)
-            # The seq_len-th token is the EOS: [234, 345, EOS, PAD, PAD, ...] -> sequence_length = 2
-            padding_mask = response_idxs > (sequence_lengths.unsqueeze(1) - 1)
-            # With the above example, logprobs must look like [0.1, 0.2, 0.3, 1.0, 1.0, ...]
-            logprobs = logprobs.masked_fill(padding_mask, 1.0)
-            ref_logprobs = ref_logprobs.masked_fill(padding_mask, 1.0)
+        # Replace the logprobs of the padding tokens by 1.0
+        padding_mask = ~completion_mask.bool()
+        logprobs = logprobs.masked_fill(padding_mask, 1.0)
+        ref_logprobs = ref_logprobs.masked_fill(padding_mask, 1.0)
 
-            # Compute the rewards
-            kl = logprobs - ref_logprobs
-            non_score_reward = (-self.args.beta * kl).sum(1)
-            rlhf_reward = scores + non_score_reward
-            mean_entropy = (-logprobs).sum(1).mean()
+        # Compute the rewards
+        kl = logprobs - ref_logprobs
+        non_score_reward = (-self.args.beta * kl).sum(1)
+        rlhf_reward = scores + non_score_reward
+        mean_entropy = (-logprobs).sum(1).mean()
 
-            # Split the scores in 2
-            first_half, second_half = scores.split(num_examples)
+        # Split the scores in 2 (the prompts of the first half are the same as the second half)
+        first_half, second_half = scores.split(num_examples)
 
-            # Get the indices of the chosen and rejected examples
-            num_examples_range = torch.arange(num_examples, device=scores.device)
-            mask = first_half >= second_half
-            chosen_indices = num_examples_range + (~mask * num_examples)
-            rejected_indices = num_examples_range + (mask * num_examples)
-            scores_margin = scores[chosen_indices] - scores[rejected_indices]
+        # Get the indices of the chosen and rejected examples
+        num_examples_range = torch.arange(num_examples, device=scores.device)
+        mask = first_half >= second_half
+        chosen_indices = num_examples_range + (~mask * num_examples)
+        rejected_indices = num_examples_range + (mask * num_examples)
+        scores_margin = scores[chosen_indices] - scores[rejected_indices]
 
-        cr_indices = torch.cat((chosen_indices, rejected_indices), dim=0)
+        cr_indices = torch.cat((chosen_indices, rejected_indices), dim=0)  # cr = chosen and rejected
+        cr_logprobs = logprobs[cr_indices]
+        cr_ref_logprobs = ref_logprobs[cr_indices]
+        cr_padding_mask = padding_mask[cr_indices]
 
-        cr_responses = responses[cr_indices]
-        cr_query_responses = query_responses[cr_indices]
-        cr_output = forward(model, cr_query_responses, self.tokenizer.pad_token_id)
-        cr_logits = cr_output.logits
-        cr_logits = cr_logits[:, context_length - 1 : -1] / generation_config.temperature
-        cr_all_log_probs = F.log_softmax(cr_logits, dim=-1)
-        cr_logprobs = torch.take_along_dim(cr_all_log_probs, cr_responses.unsqueeze(-1), dim=2)
-        cr_logprobs = cr_logprobs.squeeze(-1)
-        cr_logprobs = cr_logprobs.masked_fill(padding_mask[cr_indices], 1.0)
-
-        cr_logprobs_sum = (cr_logprobs * ~padding_mask[cr_indices]).sum(1)
-        cr_ref_logprobs_sum = (ref_logprobs[cr_indices] * ~padding_mask[cr_indices]).sum(1)
+        cr_logprobs_sum = (cr_logprobs * ~cr_padding_mask).sum(1)
+        cr_ref_logprobs_sum = (cr_ref_logprobs * ~cr_padding_mask).sum(1)
 
         # Split the chosen and rejected examples
         chosen_logprobs_sum, rejected_logprobs_sum = torch.split(cr_logprobs_sum, num_examples)
@@ -293,24 +306,12 @@ class ODPOTrainer(Trainer):
             raise NotImplementedError(f"invalid loss type {self.loss_type}")
 
         loss = losses.mean()
-        del inputs
 
         if (
             self.args.torch_empty_cache_steps is not None
             and self.state.global_step % self.args.torch_empty_cache_steps == 0
         ):
-            if is_torch_xpu_available():
-                torch.xpu.empty_cache()
-            elif is_torch_mlu_available():
-                torch.mlu.empty_cache()
-            elif is_torch_musa_available():
-                torch.musa.empty_cache()
-            elif is_torch_npu_available():
-                torch.npu.empty_cache()
-            elif is_torch_mps_available(min_version="2.0"):
-                torch.mps.empty_cache()
-            else:
-                torch.cuda.empty_cache()
+            self.empty_cache()
 
         kwargs = {}
 
@@ -328,3 +329,17 @@ class ODPOTrainer(Trainer):
             self.accelerator.backward(loss, **kwargs)
 
         return loss.detach() / self.args.gradient_accumulation_steps
+
+    def empty_cache(self):
+        if is_torch_xpu_available():
+            torch.xpu.empty_cache()
+        elif is_torch_mlu_available():
+            torch.mlu.empty_cache()
+        # elif is_torch_musa_available():
+        #     torch.musa.empty_cache()
+        elif is_torch_npu_available():
+            torch.npu.empty_cache()
+        elif is_torch_mps_available(min_version="2.0"):
+            torch.mps.empty_cache()
+        else:
+            torch.cuda.empty_cache()
