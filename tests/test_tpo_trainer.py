@@ -1,0 +1,197 @@
+# Copyright 2024 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+import tempfile
+import unittest
+
+import torch
+from datasets import Dataset
+from parameterized import parameterized
+from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
+
+from trl import TPOTrainer, TPOConfig
+from .testing_utils import require_peft
+
+
+class TPOTrainerTester(unittest.TestCase):
+    def setUp(self):
+        self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        # get t5 as seq2seq example:
+        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration-correct-vocab"
+        self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+        self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+    def _init_dummy_dataset(self):
+        # fmt: off
+        dummy_dataset_dict = {
+            "prompt": [
+                "hello",
+                "how are you",
+                "What is your name?",
+                "What is your name?",
+                "Which is the best programming language?",
+                "Which is the best programming language?",
+                "Which is the best programming language?",
+                "[INST] How is the stock price? [/INST]",
+                "[INST] How is the stock price? [/INST] ",
+            ],
+            "reference": [
+                "Hello! It's great to see you here!",
+                "I'm doing fantastic, thank you for asking! It's a beautiful day, and I'm feeling energized and ready to tackle whatever comes my way. How about you?",
+                "My name is Mary. It's nice to meet you!",
+                "My name is Mary. It's nice to meet you!",
+                "Python is often considered the best programming language due to its readability, versatility, and strong community support.",
+                "Python is often considered the best programming language due to its readability, versatility, and strong community support.",
+                "Python is often considered the best programming language due to its readability, versatility, and strong community support.",
+                "The stock price has increased by 5% today, reaching an all-time high of $150 per share.",
+                "The stock price has increased by 5% today, reaching an all-time high of $150 per share.",
+            ],
+            "chosen": [
+                "hi nice to meet you",
+                "I am fine",
+                "My name is Mary",
+                "My name is Mary",
+                "Python",
+                "Python",
+                "Python",
+                "$46 as of 10am EST",
+                "46 as of 10am EST",
+            ],
+            "rejected": [
+                "leave me alone",
+                "I am not fine",
+                "Whats it to you?",
+                "I dont have a name",
+                "Javascript",
+                "C++",
+                "Java",
+                " $46 as of 10am EST",
+                " 46 as of 10am EST",
+            ],
+        }
+        # fmt: on
+        return Dataset.from_dict(dummy_dataset_dict)
+
+    @parameterized.expand(
+        [
+            ["gpt2", "sigmoid"],
+            ["t5", "hinge"],
+            ["gpt2", "ipo"],
+            ["t5", "ipo"],
+            ["gpt2", "simpo"],
+            ["t5", "simpo"],
+        ]
+    )
+    def test_tpo_trainer(self, name, loss_type):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=1,
+                learning_rate=9e-1,
+                # eval_strategy="steps",
+                is_three_preference = True,
+                beta=0.1,
+                loss_type=loss_type,
+                tpo_alpha=1.0,
+                report_to="none",
+            )
+
+            dummy_dataset = self._init_dummy_dataset()
+
+            if name == "gpt2":
+                model = self.model
+                tokenizer = self.tokenizer
+            elif name == "t5":
+                model = self.t5_model
+                tokenizer = self.t5_tokenizer
+                training_args.is_encoder_decoder = True
+
+            trainer = TPOTrainer(
+                model=model,
+                args=training_args,
+                tokenizer=tokenizer,
+                train_dataset=dummy_dataset,
+                eval_dataset=dummy_dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            assert trainer.state.log_history[-1]["train_loss"] is not None
+
+            # check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                # check the params have changed - ignore 0 biases
+                if param.sum() != 0:
+                    assert not torch.equal(param, new_param)
+
+    @require_peft
+    def test_tpo_trainer_with_lora(self):
+        from peft import LoraConfig
+
+        lora_config = LoraConfig(
+            r=16,
+            lora_alpha=32,
+            lora_dropout=0.05,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=4,
+                learning_rate=9e-1,
+                is_three_preference = True,
+                # eval_strategy="steps",
+                beta=0.1,
+                tpo_alpha=1.0,
+                report_to="none",
+            )
+
+            dummy_dataset = self._init_dummy_dataset()
+
+            trainer = TPOTrainer(
+                model=self.model,
+                args=training_args,
+                tokenizer=self.tokenizer,
+                train_dataset=dummy_dataset,
+                eval_dataset=dummy_dataset,
+                peft_config=lora_config,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            assert trainer.state.log_history[-1]["train_loss"] is not None
+
+            # check the params have changed
+            for n, param in previous_trainable_params.items():
+                if "lora" in n:
+                    new_param = trainer.model.get_parameter(n)
+                    # check the params have changed - ignore 0 biases
+                    if param.sum() != 0:
+                        assert not torch.equal(param, new_param)

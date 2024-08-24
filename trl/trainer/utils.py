@@ -36,8 +36,8 @@ from transformers import (
     TrainingArguments,
 )
 
-from ..import_utils import is_peft_available, is_unsloth_available, is_xpu_available
-from ..trainer.model_config import ModelConfig
+from trl.import_utils import is_peft_available, is_unsloth_available, is_xpu_available
+from trl.trainer.model_config import ModelConfig
 
 
 if is_peft_available():
@@ -380,7 +380,7 @@ class DPODataCollatorWithPadding:
                         padding_value = self.pad_token_id
                     elif k.endswith("_attention_mask"):
                         padding_value = 0
-                    elif k.startswith(("chosen", "rejected", "completion")) or ("decoder" in k):
+                    elif k.startswith(("reference", "chosen", "rejected", "completion")) or ("decoder" in k):
                         padding_value = self.label_pad_token_id
                     else:
                         raise ValueError(f"Unexpected key in batch '{k}'")
@@ -1173,6 +1173,8 @@ def add_bos_token_if_needed(
     bos_token_id: Optional[int],
     prompt_len_input_ids: int,
     prompt_tokens: Dict[str, List[int]],
+    reference_prompt_len_input_ids: int,
+    reference_tokens: Dict[str, List[int]],
     chosen_prompt_len_input_ids: int,
     chosen_tokens: Dict[str, List[int]],
     rejected_prompt_len_input_ids: int,
@@ -1188,11 +1190,14 @@ def add_bos_token_if_needed(
         if rejected_prompt_len_input_ids == 0 or bos_token_id != rejected_tokens["prompt_input_ids"][0]:
             rejected_tokens["prompt_input_ids"] = [bos_token_id] + rejected_tokens["prompt_input_ids"]
             rejected_tokens["prompt_attention_mask"] = [1] + rejected_tokens["prompt_attention_mask"]
-    return prompt_tokens, chosen_tokens, rejected_tokens
+        if reference_prompt_len_input_ids == 0 or bos_token_id != reference_tokens["prompt_input_ids"][0]:
+            reference_tokens["prompt_input_ids"] = [bos_token_id] + reference_tokens["prompt_input_ids"]
+            reference_tokens["prompt_attention_mask"] = [1] + reference_tokens["prompt_attention_mask"]
+    return prompt_tokens, chosen_tokens, rejected_tokens, reference_tokens
 
 
 def add_eos_token_if_needed(
-    eos_token_id: int, chosen_tokens: Dict[str, List[int]], rejected_tokens: Dict[str, List[int]]
+    eos_token_id: int, reference_tokens: Dict[str, List[int]], chosen_tokens: Dict[str, List[int]], rejected_tokens: Dict[str, List[int]]
 ):
     if len(chosen_tokens["input_ids"]) == 0 or eos_token_id != chosen_tokens["input_ids"][-1]:
         chosen_tokens["input_ids"].append(eos_token_id)
@@ -1200,4 +1205,7 @@ def add_eos_token_if_needed(
     if len(rejected_tokens["input_ids"]) == 0 or eos_token_id != rejected_tokens["input_ids"][-1]:
         rejected_tokens["input_ids"].append(eos_token_id)
         rejected_tokens["attention_mask"].append(1)
-    return chosen_tokens, rejected_tokens
+    if len(reference_tokens["input_ids"]) == 0 or eos_token_id != reference_tokens["input_ids"][-1]:
+        reference_tokens["input_ids"].append(eos_token_id)
+        reference_tokens["attention_mask"].append(1)
+    return reference_tokens, chosen_tokens, rejected_tokens
