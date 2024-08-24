@@ -364,10 +364,6 @@ class OnlineDPOTrainer(Trainer):
         accuracy = margin > 0
         self.stats["rewards/accuracies"].append(accuracy.float().mean().item())
 
-        if self.state.global_step % self.state.logging_steps == 0:
-            self.log({key: sum(val) / len(val) for key, val in self.stats.items()})
-            self.stats = {key: [] for key in self.stats}  # reset stats
-
         if (
             self.args.torch_empty_cache_steps is not None
             and self.state.global_step % self.args.torch_empty_cache_steps == 0
@@ -390,6 +386,41 @@ class OnlineDPOTrainer(Trainer):
             self.accelerator.backward(loss, **kwargs)
 
         return loss.detach() / self.args.gradient_accumulation_steps
+
+    # Same as Trainer.evaluate but log our metrics
+    def _maybe_log_save_evaluate(self, tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval):
+        if self.control.should_log and self.state.global_step > self._globalstep_last_logged:
+            logs: Dict[str, float] = {}
+
+            # all_gather + mean() to get average loss over all processes
+            tr_loss_scalar = self._nested_gather(tr_loss).mean().item()
+
+            # reset tr_loss to zero
+            tr_loss -= tr_loss
+
+            logs["loss"] = round(tr_loss_scalar / (self.state.global_step - self._globalstep_last_logged), 4)
+            if grad_norm is not None:
+                logs["grad_norm"] = grad_norm.detach().item() if isinstance(grad_norm, torch.Tensor) else grad_norm
+            logs["learning_rate"] = self._get_learning_rate()
+
+            # Add our metrics
+            for key, val in self.stats.items():
+                logs[key] = sum(val) / len(val)
+            self.stats = {key: [] for key in self.stats}  # reset stats
+
+            self._total_loss_scalar += tr_loss_scalar
+            self._globalstep_last_logged = self.state.global_step
+            self.store_flos()
+
+            self.log(logs)
+
+        metrics = None
+        if self.control.should_evaluate:
+            metrics = self._evaluate(trial, ignore_keys_for_eval)
+
+        if self.control.should_save:
+            self._save_checkpoint(model, trial, metrics=metrics)
+            self.control = self.callback_handler.on_save(self.args, self.state, self.control)
 
     def empty_cache(self):
         if is_torch_xpu_available():
