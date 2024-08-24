@@ -14,6 +14,8 @@ class OnlineDPOConfig(TrainingArguments):
     command line.
 
     Args:
+        reward_model_path (`Optional[str]`, *optional*, defaults to `None`):
+            Path to the reward model.
         completion_length (`int`, *optional*, defaults to `53`):
             Length of the completions to generate.
         temperature (`float`, *optional*, defaults to `0.7`):
@@ -32,6 +34,7 @@ class OnlineDPOConfig(TrainingArguments):
             Number of workers to use to process the data.
     """
 
+    reward_model_path: Optional[str] = None
     completion_length: int = 53
     temperature: float = 0.7
     missing_eos_penalty: Optional[float] = None
