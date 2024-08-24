@@ -16,8 +16,9 @@ from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
 
 
 """
+# Single GPU training
 python examples/scripts/online_dpo.py \
-    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
+    --dataset_name trl-lib/tldr \
     --learning_rate 3e-6 \
     --output_dir models/minimal/online_dpo \
     --per_device_train_batch_size 1 \
@@ -29,9 +30,11 @@ python examples/scripts/online_dpo.py \
     --stop_token eos \
     --response_length 53 \
     --sanity_check
+
+# Multi-GPU training with ZeRO-2
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
     examples/scripts/online_dpo.py \
-    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
+    --dataset_name trl-lib/tldr \
     --learning_rate 3e-6 \
     --output_dir models/minimal/online_dpo \
     --per_device_train_batch_size 16 \
@@ -54,26 +57,17 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
 @dataclass
 class ScriptArguments:
     dataset_name: str = None
-    dataset_text_field: str = "prompt"
+    dataset_prompt_field: str = "prompt"
     dataset_train_split: str = "train"
-    dataset_test_split: Optional[str] = "validation"
+    dataset_test_split: Optional[str] = "test"
     max_length: int = 512
 
 
-def prepare_dataset(dataset, tokenizer, dataset_text_field, num_proc):
+def prepare_dataset(dataset, tokenizer, dataset_prompt_field, num_proc):
     """pre-tokenize the dataset before training; only collate during training"""
-
-    def tokenize(element):
-        outputs = tokenizer(
-            element[dataset_text_field],
-            padding=False,
-        )
-        return {"input_ids": outputs["input_ids"]}
-
     return dataset.map(
-        tokenize,
+        lambda x: {"input_ids": tokenizer.apply_chat_template(x[dataset_prompt_field], add_generation_prompt=True)},
         remove_columns=dataset.column_names,
-        batched=True,
         num_proc=num_proc,
     )
 
@@ -109,11 +103,11 @@ if __name__ == "__main__":
     # Compute that only on the main process for faster data processing.
     # see: https://github.com/huggingface/trl/pull/1255
     with PartialState().local_main_process_first():
-        train_dataset = prepare_dataset(train_dataset, tokenizer, args.dataset_text_field, config.dataset_num_proc)
+        train_dataset = prepare_dataset(train_dataset, tokenizer, args.dataset_prompt_field, config.dataset_num_proc)
 
         if args.dataset_test_split is not None:
             eval_dataset = raw_datasets[args.dataset_test_split]
-            eval_dataset = prepare_dataset(eval_dataset, tokenizer, args.dataset_text_field, config.dataset_num_proc)
+            eval_dataset = prepare_dataset(eval_dataset, tokenizer, args.dataset_prompt_field, config.dataset_num_proc)
         else:
             eval_dataset = None
 
