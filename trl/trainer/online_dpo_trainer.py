@@ -46,7 +46,7 @@ else:
 logger = logging.get_logger(__name__)
 
 
-class ODPOTrainer(Trainer):
+class OnlineDPOTrainer(Trainer):
     def __init__(
         self,
         model: Union[PreTrainedModel, nn.Module] = None,
