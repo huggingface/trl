@@ -16,12 +16,12 @@ class LogCompletionsCallback(WandbCallback):
         self._last_logged_step = -1
         self.freq = freq
 
-    def on_step(self, args, state, control, **kwargs):
+    def on_step_end(self, args, state, control, **kwargs):
         if not state.is_world_process_zero:
             return
         if state.global_step == self._last_logged_step:
             return
-        freq = self.freq or args.save_steps
+        freq = self.freq or state.save_steps
         if state.global_step % freq != 0:
             return
         model = kwargs["model"]
