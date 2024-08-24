@@ -28,7 +28,7 @@ from transformers.utils import (
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
 from .online_dpo_config import OnlineDPOConfig
-from .utils import DPODataCollatorWithPadding, first_true_indices, get_reward, prepare_deepspeed
+from .utils import DPODataCollatorWithPadding, truncate_right, get_reward, prepare_deepspeed
 
 
 if is_apex_available():
@@ -44,30 +44,6 @@ else:
     IS_SAGEMAKER_MP_POST_1_10 = False
 
 logger = logging.get_logger(__name__)
-
-
-def truncate_right(input_ids: torch.Tensor, stop_token_id: int, pad_token_id: int):
-    """
-    Truncates the input tensor from the right side after the first occurrence of the stop token.
-
-    Args:
-        input_ids (`torch.Tensor`):
-            The tensor containing the responses to be truncated
-        stop_token_id (`int`):
-            The token ID representing the stop token where truncation occurs
-        pad_token_id (`int`):
-            The token ID representing the pad token used to fill the truncated responses
-
-    Returns:
-        `torch.Tensor`:
-            The truncated responses tensor with pad tokens filled after the stop token.
-    """
-    trunc_idxs = first_true_indices(input_ids == stop_token_id).unsqueeze(-1)
-    new_size = [1] * (len(input_ids.size()) - 1) + [input_ids.shape[1]]
-    idxs = torch.arange(input_ids.shape[1], device=input_ids.device).view(*new_size)
-    output_ids = torch.masked_fill(input_ids, idxs > trunc_idxs, pad_token_id)
-    mask = torch.masked_fill(torch.ones_like(input_ids), idxs > trunc_idxs, 0)
-    return output_ids, mask
 
 
 class ODPOTrainer(Trainer):
@@ -334,6 +310,7 @@ class ODPOTrainer(Trainer):
         chosen_indices = num_examples_range + (~mask * num_examples)
         rejected_indices = num_examples_range + (mask * num_examples)
 
+        # Build tensor so that the first half is the chosen examples and the second half the rejected examples
         cr_indices = torch.cat((chosen_indices, rejected_indices), dim=0)  # cr = chosen and rejected
         cr_logprobs = logprobs[cr_indices]
         cr_ref_logprobs = ref_logprobs[cr_indices]
@@ -387,7 +364,7 @@ class ODPOTrainer(Trainer):
         accuracy = margin > 0
         self.stats["rewards/accuracies"].append(accuracy.float().mean().item())
 
-        if self.state.global_step % self.args.logging_steps == 0:
+        if self.state.global_step % self.state.logging_steps == 0:
             self.log({key: sum(val) / len(val) for key, val in self.stats.items()})
             self.stats = {key: [] for key in self.stats}  # reset stats
 
