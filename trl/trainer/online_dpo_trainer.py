@@ -28,7 +28,7 @@ from transformers.utils import (
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
 from .online_dpo_config import OnlineDPOConfig
-from .utils import DPODataCollatorWithPadding, truncate_right, get_reward, prepare_deepspeed
+from .utils import DPODataCollatorWithPadding, get_reward, prepare_deepspeed, truncate_right
 
 
 if is_apex_available():
