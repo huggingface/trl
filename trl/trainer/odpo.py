@@ -20,7 +20,6 @@ from transformers.utils import (
     is_sagemaker_mp_enabled,
     is_torch_mlu_available,
     is_torch_mps_available,
-    # is_torch_musa_available,
     is_torch_npu_available,
     is_torch_xpu_available,
     logging,
@@ -29,12 +28,7 @@ from transformers.utils import (
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
 from .online_dpo_config import OnlineDPOConfig
-from .utils import (
-    DPODataCollatorWithPadding,
-    first_true_indices,
-    get_reward,
-    prepare_deepspeed,
-)
+from .utils import DPODataCollatorWithPadding, first_true_indices, get_reward, prepare_deepspeed
 
 
 if is_apex_available():
@@ -132,6 +126,22 @@ class ODPOTrainer(Trainer):
             if eval_dataset is not None:
                 eval_dataset = eval_dataset.map(self.tokenize_row, fn_kwargs=fn_kwargs, num_proc=args.dataset_num_proc)
 
+        self.stats = {
+            "objective/kl": [],
+            "objective/entropy": [],
+            "objective/non_score_reward": [],
+            "objective/rlhf_reward": [],
+            "objective/scores": [],
+            "objective/scores_margin": [],
+            "rewards/chosen": [],
+            "rewards/rejected": [],
+            "rewards/accuracies": [],
+            "rewards/margins": [],
+            "logps/chosen": [],
+            "logps/rejected": [],
+            "val/contain_eos_token": [],
+        }
+
         super().__init__(
             model=model,
             args=args,
@@ -197,6 +207,55 @@ class ODPOTrainer(Trainer):
             dataloader_params["prefetch_factor"] = self.args.dataloader_prefetch_factor
 
         return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
+
+    # Same as Trainer.get_eval_dataloader but skip the "remove_unused_columns".
+    @wraps(Trainer.get_eval_dataloader)
+    def get_eval_dataloader(self, eval_dataset: Optional[Union[str, Dataset]] = None) -> DataLoader:
+        if eval_dataset is None and self.eval_dataset is None:
+            raise ValueError("Trainer: evaluation requires an eval_dataset.")
+
+        # If we have persistent workers, don't do a fork bomb especially as eval datasets
+        # don't change during training
+        dataloader_key = eval_dataset if isinstance(eval_dataset, str) else "eval"
+        if (
+            hasattr(self, "_eval_dataloaders")
+            and dataloader_key in self._eval_dataloaders
+            and self.args.dataloader_persistent_workers
+        ):
+            return self.accelerator.prepare(self._eval_dataloaders[dataloader_key])
+
+        eval_dataset = (
+            self.eval_dataset[eval_dataset]
+            if isinstance(eval_dataset, str)
+            else eval_dataset
+            if eval_dataset is not None
+            else self.eval_dataset
+        )
+        data_collator = self.data_collator
+
+        dataloader_params = {
+            "batch_size": self.args.eval_batch_size,
+            "collate_fn": data_collator,
+            "num_workers": self.args.dataloader_num_workers,
+            "pin_memory": self.args.dataloader_pin_memory,
+            "persistent_workers": self.args.dataloader_persistent_workers,
+        }
+
+        if not isinstance(eval_dataset, torch.utils.data.IterableDataset):
+            dataloader_params["sampler"] = self._get_eval_sampler(eval_dataset)
+            dataloader_params["drop_last"] = self.args.dataloader_drop_last
+            dataloader_params["prefetch_factor"] = self.args.dataloader_prefetch_factor
+
+        # accelerator.free_memory() will destroy the references, so
+        # we need to store the non-prepared version
+        eval_dataloader = DataLoader(eval_dataset, **dataloader_params)
+        if self.args.dataloader_persistent_workers:
+            if hasattr(self, "_eval_dataloaders"):
+                self._eval_dataloaders[dataloader_key] = eval_dataloader
+            else:
+                self._eval_dataloaders = {dataloader_key: eval_dataloader}
+
+        return self.accelerator.prepare(eval_dataloader)
 
     def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         model.train()
@@ -266,12 +325,6 @@ class ODPOTrainer(Trainer):
         logprobs = logprobs.masked_fill(padding_mask, 1.0)
         ref_logprobs = ref_logprobs.masked_fill(padding_mask, 1.0)
 
-        # Compute the rewards
-        kl = logprobs - ref_logprobs
-        non_score_reward = (-self.args.beta * kl).sum(1)
-        rlhf_reward = scores + non_score_reward
-        mean_entropy = (-logprobs).sum(1).mean()
-
         # Split the scores in 2 (the prompts of the first half are the same as the second half)
         first_half, second_half = scores.split(num_examples)
 
@@ -280,7 +333,6 @@ class ODPOTrainer(Trainer):
         mask = first_half >= second_half
         chosen_indices = num_examples_range + (~mask * num_examples)
         rejected_indices = num_examples_range + (mask * num_examples)
-        scores_margin = scores[chosen_indices] - scores[rejected_indices]
 
         cr_indices = torch.cat((chosen_indices, rejected_indices), dim=0)  # cr = chosen and rejected
         cr_logprobs = logprobs[cr_indices]
@@ -306,6 +358,38 @@ class ODPOTrainer(Trainer):
             raise NotImplementedError(f"invalid loss type {self.loss_type}")
 
         loss = losses.mean()
+
+        # Log everything
+        self.stats["val/contain_eos_token"].append(contain_eos_token.float().mean().item())
+        self.stats["logps/chosen"].append(self.accelerator.gather(chosen_logprobs_sum).mean().item())
+        self.stats["logps/rejected"].append(self.accelerator.gather(rejected_logprobs_sum).mean().item())
+        self.stats["objective/scores"].append(self.accelerator.gather(scores.mean()).mean().item())
+        kl = logprobs - ref_logprobs
+        mean_kl = kl.sum(1).mean()
+        self.stats["objective/kl"].append(self.accelerator.gather(mean_kl).mean().item())
+        non_score_reward = (-self.args.beta * kl).sum(1)
+        mean_non_score_reward = non_score_reward.mean()
+        self.stats["objective/non_score_reward"].append(self.accelerator.gather(mean_non_score_reward).mean().item())
+        rlhf_reward = scores + non_score_reward
+        self.stats["objective/rlhf_reward"].append(self.accelerator.gather(rlhf_reward).mean().item())
+        mean_entropy = -logprobs.sum(1).mean()
+        self.stats["objective/entropy"].append(self.accelerator.gather(mean_entropy).mean().item())
+        scores_margin = scores[chosen_indices] - scores[rejected_indices]
+        self.stats["objective/scores_margin"].append(self.accelerator.gather(scores_margin.mean()).mean().item())
+        chosen_rewards = self.args.beta * (chosen_logprobs_sum - chosen_ref_logprobs_sum)
+        gathered_chosen_rewards = self.accelerator.gather(chosen_rewards)
+        self.stats["rewards/chosen"].append(gathered_chosen_rewards.mean().item())
+        rejected_rewards = self.args.beta * (rejected_logprobs_sum - rejected_ref_logprobs_sum)
+        gathered_rejected_rewards = self.accelerator.gather(rejected_rewards)
+        self.stats["rewards/rejected"].append(gathered_rejected_rewards.mean().item())
+        margin = gathered_chosen_rewards - gathered_rejected_rewards
+        self.stats["rewards/margins"].append(margin.mean().item())
+        accuracy = margin > 0
+        self.stats["rewards/accuracies"].append(accuracy.float().mean().item())
+
+        if self.state.global_step % self.args.logging_steps == 0:
+            self.log({key: sum(val) / len(val) for key, val in self.stats.items()})
+            self.stats = {key: [] for key in self.stats}  # reset stats
 
         if (
             self.args.torch_empty_cache_steps is not None
