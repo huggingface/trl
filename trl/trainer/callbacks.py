@@ -300,8 +300,8 @@ class LogCompletionsCallback(WandbCallback):
         completion_ids, _ = truncate_right(completion_ids, tokenizer.eos_token_id, tokenizer.pad_token_id)
 
         # Decode the prompts and completions
-        prompts = tokenizer.batch_decode(inputs["input_ids"], skip_special_tokens=True)
-        completions = tokenizer.batch_decode(completion_ids, skip_special_tokens=True)
+        prompts = tokenizer.batch_decode(inputs["input_ids"], skip_special_tokens=False)
+        completions = tokenizer.batch_decode(completion_ids, skip_special_token=False)
 
         # Build the data to log
         global_step = [str(state.global_step)] * len(prompts)

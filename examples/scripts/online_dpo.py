@@ -16,7 +16,7 @@
 import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
-
+from accelerate import PartialState
 from trl import (
     DPOScriptArguments,
     ModelConfig,
@@ -67,6 +67,15 @@ if __name__ == "__main__":
         trust_remote_code=model_config.trust_remote_code,
     )
     dataset = load_dataset(args.dataset_name)
+
+    def process(row):
+        row["prompt"] = tokenizer.apply_chat_template(row["prompt"], tokenize=False, add_generation_prompt=True)
+        return row
+
+    # Compute that only on the main process for faster data processing.
+    # see: https://github.com/huggingface/trl/pull/1255
+    with PartialState().local_main_process_first():
+        dataset = dataset.map(process, num_proc=training_args.dataset_num_proc)
 
     prompts = dataset[args.dataset_test_split]["prompt"][:8]
     log_completions_callback = LogCompletionsCallback(prompts)
