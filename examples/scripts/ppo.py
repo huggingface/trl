@@ -37,6 +37,7 @@ tqdm.pandas()
 class ScriptArguments:
     use_seq2seq: bool = field(default=False, metadata={"help": "whether to use seq2seq"})
     trust_remote_code: bool = field(default=False, metadata={"help": "Enable `trust_remote_code`"})
+    dataset_num_proc: Optional[int] = field(default=4, metadata={"help": "num data processes"})
 
     # LoraConfig
     use_peft: bool = field(default=False, metadata={"help": "whether to use peft"})
@@ -94,7 +95,7 @@ def build_dataset(query_dataset, input_min_text_length=2, input_max_text_length=
 # Compute that only on the main process for faster data processing.
 # see: https://github.com/huggingface/trl/pull/1255
 with PartialState().local_main_process_first():
-    dataset = build_dataset(ppo_config, ppo_config.query_dataset)
+    dataset = build_dataset(ppo_config.query_dataset)
 
 
 def collator(data):
@@ -174,7 +175,7 @@ generation_kwargs = {
     "max_new_tokens": 32,
 }
 
-for _epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
+for _epoch, batch in tqdm(enumerate(ppo_trainer.dataloader), total=len(ppo_trainer.dataloader)):
     query_tensors = batch["input_ids"]
 
     # Get response from gpt2
