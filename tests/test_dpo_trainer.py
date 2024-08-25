@@ -163,7 +163,13 @@ class DPOTrainerTester(unittest.TestCase):
                 if param.sum() != 0:
                     assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
 
-    def test_dpo_trainer_without_providing_ref_model(self):
+    @parameterized.expand(
+        [
+            [None, "Test when rpo_alpha is set to None"],
+            [0.5, "Test when rpo_alpha is set to 0.5"],
+        ]
+    )
+    def test_dpo_trainer_without_providing_ref_model(self, rpo_alpha, _):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
                 output_dir=tmp_dir,
@@ -175,7 +181,7 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 beta=0.1,
                 precompute_ref_log_probs=True,
-                rpo_alpha=0.5,
+                rpo_alpha=rpo_alpha,
                 report_to="none",
             )
 
