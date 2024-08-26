@@ -127,14 +127,8 @@ class DataCollatorForCompletionOnlyLMTester(unittest.TestCase):
         self.assertIn("input_ids", batch_paddingfree)
         self.assertIn("labels", batch_paddingfree)
         self.assertIn("position_ids", batch_paddingfree)
-        self.assertEqual(
-            batch_paddingfree["input_ids"].size(),
-            batch_paddingfree["labels"].size()
-        )
-        self.assertEqual(
-            batch_paddingfree["labels"].size(),
-            batch_paddingfree["position_ids"].size()
-        )
+        self.assertEqual(batch_paddingfree["input_ids"].size(), batch_paddingfree["labels"].size())
+        self.assertEqual(batch_paddingfree["labels"].size(), batch_paddingfree["position_ids"].size())
 
         attn_mask = batch["attention_mask"]
         input_ids_remove_pad = batch["input_ids"][attn_mask.bool()].unsqueeze(0)
