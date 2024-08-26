@@ -84,7 +84,7 @@ def _tokenize(
     if not args.is_encoder_decoder:
         prompt = features["prompt"]
         images = features.get("images", [None] * len(features["prompt"]))
-        
+
         prompt_tokens = _process_prompt(prompt, processor, tokenizer, images)
         chosen_tokens = _process_answer(prompt, features["chosen"], processor, tokenizer, images)
         rejected_tokens = _process_answer(prompt, features["rejected"], processor, tokenizer, images)
