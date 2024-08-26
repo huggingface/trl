@@ -171,20 +171,13 @@ class KTOTrainerTester(unittest.TestCase):
                 self.assertListEqual(tokenized_dataset["answer_input_ids"][0], [5968, 1219, 72, 3621, 284, 1826, 345])
                 self.assertListEqual(tokenized_dataset["answer_attention_mask"][0], [1, 1, 1, 1, 1, 1, 1])
 
-                # Test reversal of (prompt, completion) pairs for KL dataset
-                tokenized_kl_dataset = tokenized_dataset.map(_get_kl_dataset, batched=True, batch_size=2)
-                self.assertListEqual(
-                    tokenized_kl_dataset["prompt_input_ids"][0], tokenized_dataset["prompt_input_ids"][0]
-                )
-                self.assertListEqual(
-                    tokenized_kl_dataset["prompt_attention_mask"][0], tokenized_dataset["prompt_attention_mask"][0]
-                )
-                self.assertListEqual(
-                    tokenized_kl_dataset["answer_input_ids"][0], tokenized_dataset["answer_input_ids"][1]
-                )
-                self.assertListEqual(
-                    tokenized_kl_dataset["answer_attention_mask"][0], tokenized_dataset["answer_attention_mask"][1]
-                )
+                # Test corruption of (prompt, completion) pairs for KL dataset
+                for batch_size in [2, 3]:
+                    tokenized_kl_dataset = tokenized_dataset.map(_get_kl_dataset, batched=True, batch_size=batch_size)
+
+                    # Check that the "answer_input_ids" mismatch, i.e., the new answer_input_ids are different from the original
+                    for i in range(len(tokenized_kl_dataset["answer_input_ids"])):
+                        self.assertNotEqual(tokenized_dataset["answer_input_ids"][i], tokenized_kl_dataset["answer_input_ids"][i])
 
                 fn_kwargs = {
                     "prefix": "",
