@@ -36,8 +36,8 @@ from transformers import (
     TrainingArguments,
 )
 
-from trl.import_utils import is_peft_available, is_unsloth_available, is_xpu_available
-from trl.trainer.model_config import ModelConfig
+from ..import_utils import is_peft_available, is_unsloth_available, is_xpu_available
+from ..trainer.model_config import ModelConfig
 
 
 if is_peft_available():
