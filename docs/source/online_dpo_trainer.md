@@ -1,9 +1,8 @@
 # Online DPO Trainer
 
-TRL supports training LLMs with online DPO ([Guo et al., 2024](https://huggingface.co/papers/2402.04792)) with a reward model (RM). The idea of online DPO is to generate completions based on prompts and either have an RM or a LLM judge to rank the responses. Then the model is updated with the ranked responses using the DPO loss.
+TRL supports training LLMs with online DPO ([Guo et al., 2024](https://huggingface.co/papers/2402.04792)) with a reward model (RM). The idea of online DPO is to generate completions based on prompts and either have a reward model or an LLM judge to rank the responses as chosen or rejected. Then the model is updated with the ranked responses using the DPO loss.
 
-While [Guo et al. (2024)](https://huggingface.co/papers/2402.04792) used a LLM judge, in this implementation we just used a RM.
-
+While [Guo et al. (2024)](https://huggingface.co/papers/2402.04792) used an LLM judge to score model completions, the current implementation only supports reward models -- see [Reward Bench](https://huggingface.co/spaces/allenai/reward-bench) for a leaderboard of public models you can use.
 
 ## Get started
 
@@ -22,8 +21,9 @@ tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-135M-Instruct")
 tok.add_special_tokens({"pad_token": "[PAD]"})
 # The model to optimise
 model = AutoModelForCausalLM.from_pretrained("HuggingFaceTB/SmolLM-135M-Instruct")
+# The reference model to calculate the KL divergence against
 ref_model = AutoModelForCausalLM.from_pretrained("HuggingFaceTB/SmolLM-135M-Instruct")
-# The model to score completions with. In practice, you will need a fine-tuned reward model. See Reward Bench for some good ones: https://huggingface.co/spaces/allenai/reward-bench
+# The model to score completions with. In practice, you will need a fine-tuned reward model.
 reward_model = AutoModelForSequenceClassification.from_pretrained("HuggingFaceTB/SmolLM-135M-Instruct", num_labels=1)
 train_dataset = Dataset.from_dict(
     {"input_ids": [tok.encode("Q: Hi how are you? A:")] * NUM_DUMMY_SAMPLES})
@@ -43,12 +43,11 @@ trainer = OnlineDPOTrainer(
 trainer.train()
 ```
 
-
-To just run the online DPO script to make sure the trainer can run, you can run the following command to train an online DPO model with a dummy reward model.
+To run the online DPO script with a dummy reward model, run:
 
 ```bash
 python examples/scripts/online_dpo.py \
-    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
+    --dataset_name trl-lib/tldr \
     --learning_rate 3e-6 \
     --output_dir models/minimal/online_dpo \
     --per_device_train_batch_size 1 \
@@ -63,6 +62,20 @@ python examples/scripts/online_dpo.py \
     --sanity_check
 ```
 
+## Expected dataset format
+
+Unlike standard DPO where one provides a dataset with chosen and rejected columns, for online DPO one just needs a dataset of prompts to generate the completions from. The [`OnlineDPOTrainer`] assumes that the dataset is preprocessed for model inference, so typically you will want to wrap your prompts in the messages format and then apply the chat template as follows:
+
+```python
+def prepare_dataset(dataset, tokenizer, dataset_prompt_field):
+    """pre-tokenize the dataset before training; only collate during training"""
+    return dataset.map(
+        lambda x: {"input_ids": tokenizer.apply_chat_template(x[dataset_prompt_field], add_generation_prompt=True)},
+        remove_columns=dataset.column_names,
+    )
+
+dataset = prepare_dataset(dataset)
+```
 
 ## Explanation of the logged metrics
 
@@ -87,6 +100,10 @@ The logged metrics are as follows. Here is an example [tracked run at Weights an
 
 
 ## Cookbook
+
+> [!IMPORTANT]
+> Make sure the SFT model and reward model use the _same_ chat template. Otherwise you may find the model completions are scored incorrectly.
+
 
 * Debugging TIP: `objective/rlhf_reward`: this is the ultimate objective of the RLHF training. If training works as intended, this metric should keep going up.
 * Memory TIP: If you are running out of memory, you can try to reduce the `--per_device_train_batch_size` or increase the `--gradient_accumulation_steps` to reduce the memory footprint.
@@ -214,7 +231,7 @@ To validate the online DPO implementation works, we ran experiments on the 1B an
 # 1B Online DPO experiment
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
     examples/scripts/online_dpo.py \
-    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
+    --dataset_name trl-lib/tldr \
     --learning_rate 3e-6 \
     --output_dir models/minimal/online_dpo_tldr \
     --per_device_train_batch_size 16 \
@@ -236,7 +253,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
 # 6.9B Online DPO experiment
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/online_dpo.py \
-    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
+    --dataset_name trl-lib/tldr \
     --learning_rate 3e-6 \
     --output_dir models/minimal/online_dpo_tldr_6.9b \
     --per_device_train_batch_size 4 \

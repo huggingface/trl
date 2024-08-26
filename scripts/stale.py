@@ -26,6 +26,7 @@ LABELS_TO_EXEMPT = [
     "good first issue",
     "good second issue",
     "feature request",
+    "help wanted",
 ]
 
 
