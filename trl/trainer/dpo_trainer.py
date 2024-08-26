@@ -81,7 +81,7 @@ def _tokenize(
     """
     batch = defaultdict(list)
 
-    if not args.is_encoder_decoder:
+    if model is None:
         prompt = features["prompt"]
         images = features.get("images", [None] * len(features["prompt"]))
 
@@ -245,9 +245,9 @@ def _append_prompt_tokens_to_batch(batch: Dict[str, List[int]], prompt_tokens: L
 def _tokenize_encoder_decoder(
     batch: Dict[str, List[int]],
     tokenizer: PreTrainedTokenizerBase,
-    prompt: str,
-    chosen: str,
-    rejected: str,
+    prompt: List[str],
+    chosen: List[str],
+    rejected: List[str],
     args: DPOConfig,
     model: Optional[PreTrainedModel],
 ) -> None:
@@ -261,6 +261,15 @@ def _tokenize_encoder_decoder(
     batch["prompt_attention_mask"] = prompt_tokens["attention_mask"]
 
     if model is not None and hasattr(model, "prepare_decoder_input_ids_from_labels"):
+        # Ensure the sequences are of the same length
+        max_length = max(len(seq) for seq in batch["chosen_labels"] + batch["rejected_labels"])
+        batch["chosen_labels"] = [
+            seq + [tokenizer.pad_token_id] * (max_length - len(seq)) for seq in batch["chosen_labels"]
+        ]
+        batch["rejected_labels"] = [
+            seq + [tokenizer.pad_token_id] * (max_length - len(seq)) for seq in batch["rejected_labels"]
+        ]
+
         batch["rejected_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
             labels=torch.tensor(batch["rejected_labels"])
         )

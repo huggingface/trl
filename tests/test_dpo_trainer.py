@@ -156,9 +156,6 @@ class DPOTrainerTester(unittest.TestCase):
                 ref_model = self.t5_ref_model
                 tokenizer = self.t5_tokenizer
 
-            if name == "t5":
-                self.skipTest("For some reason t5 does not compute gradients properly on tiny models")
-
             trainer = DPOTrainer(
                 model=model,
                 ref_model=ref_model,
