@@ -82,23 +82,12 @@ def _tokenize(
     batch = defaultdict(list)
 
     if not args.is_encoder_decoder:
-        prompt_tokens = _process_prompt(
-            features["prompt"], processor, tokenizer, features.get("images", [None] * len(features["prompt"]))
-        )
-        chosen_tokens = _process_answer(
-            features["prompt"],
-            features["chosen"],
-            processor,
-            tokenizer,
-            features.get("images", [None] * len(features["prompt"])),
-        )
-        rejected_tokens = _process_answer(
-            features["prompt"],
-            features["rejected"],
-            processor,
-            tokenizer,
-            features.get("images", [None] * len(features["prompt"])),
-        )
+        prompt = features["prompt"]
+        images = features.get("images", [None] * len(features["prompt"]))
+        
+        prompt_tokens = _process_prompt(prompt, processor, tokenizer, images)
+        chosen_tokens = _process_answer(prompt, features["chosen"], processor, tokenizer, images)
+        rejected_tokens = _process_answer(prompt, features["rejected"], processor, tokenizer, images)
 
         prompt_len_input_ids = _adjust_prompt_length(prompt_tokens, chosen_tokens, rejected_tokens)
 
@@ -122,7 +111,7 @@ def _tokenize(
 
 
 def _process_prompt(
-    prompts: List[str], processor: Optional[Callable], tokenizer: PreTrainedTokenizerBase, images: Optional[List[Any]]
+    prompts: List[str], processor: Optional[Callable], tokenizer: PreTrainedTokenizerBase, images: List[Optional[Any]]
 ) -> List[Dict[str, List[int]]]:
     """
     Processes a list of prompts by tokenizing them, optionally using a processor for additional processing.
@@ -149,7 +138,7 @@ def _process_answer(
     answers: List[str],
     processor: Optional[Callable],
     tokenizer: PreTrainedTokenizerBase,
-    images: Optional[List[Any]],
+    images: List[Optional[Any]],
 ) -> List[Dict[str, Any]]:
     return [
         _build_tokenized_answer(prompt, answer, image, processor=processor, tokenizer=tokenizer)
