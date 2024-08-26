@@ -432,10 +432,9 @@ if __name__ == "__main__":
 
     if script_args.dataset_name == "orpofakedataset":
         dataset = Dataset.from_dict(orpo_toy_dataset_dict)
+        dataset = dataset.train_test_split(test_size=0.1)
     else:
         dataset = load_dataset(script_args.dataset_name)
-
-    dataset = dataset.train_test_split(test_size=0.1)
 
     if script_args.mode == Mode.ORPO.value:
         trainer = get_orpo_trainer(
