@@ -204,23 +204,25 @@ def _truncate_tokens(
     Truncates the tokens in chosen, rejected, and prompt sequences to ensure they fit within the maximum length constraints.
     """
     for c_tokens, r_tokens, p_tokens in zip(chosen_tokens, rejected_tokens, prompt_tokens):
-        max_response_length = max(len(c_tokens["input_ids"]), len(r_tokens["input_ids"]))
-        total_length = len(p_tokens["prompt_input_ids"]) + max_response_length
+        longer_response_length = max(len(c_tokens["input_ids"]), len(r_tokens["input_ids"]))
 
-        if total_length > args.max_length:
-            if args.truncation_mode == "keep_start":
-                p_tokens["prompt_input_ids"] = p_tokens["prompt_input_ids"][: args.max_prompt_length]
-                p_tokens["prompt_attention_mask"] = p_tokens["prompt_attention_mask"][: args.max_prompt_length]
-            elif args.truncation_mode == "keep_end":
-                p_tokens["prompt_input_ids"] = p_tokens["prompt_input_ids"][-args.max_prompt_length :]
-                p_tokens["prompt_attention_mask"] = p_tokens["prompt_attention_mask"][-args.max_prompt_length :]
-            else:
-                raise ValueError(f"Unknown truncation mode: {args.truncation_mode}")
+        # if combined sequence is too long, truncate the prompt
+        for answer_tokens in [c_tokens, r_tokens, p_tokens]:
+            if len(answer_tokens["prompt_input_ids"]) + longer_response_length > args.max_length:
+                if args.truncation_mode == "keep_start":
+                    for k in ["prompt_input_ids", "prompt_attention_mask"]:
+                        answer_tokens[k] = answer_tokens[k][: args.max_prompt_length]
+                elif args.truncation_mode == "keep_end":
+                    for k in ["prompt_input_ids", "prompt_attention_mask"]:
+                        answer_tokens[k] = answer_tokens[k][-args.max_prompt_length :]
+                else:
+                    raise ValueError(f"Unknown truncation mode: {args.truncation_mode}")
 
-            for tokens in [c_tokens, r_tokens]:
-                if len(p_tokens["prompt_input_ids"]) + len(tokens["input_ids"]) > args.max_length:
-                    tokens["input_ids"] = tokens["input_ids"][: args.max_length - args.max_prompt_length]
-                    tokens["attention_mask"] = tokens["attention_mask"][: args.max_length - args.max_prompt_length]
+        # if that's still too long, truncate the response
+        for answer_tokens in [c_tokens, r_tokens]:
+            if len(answer_tokens["prompt_input_ids"]) + longer_response_length > args.max_length:
+                for k in ["input_ids", "attention_mask"]:
+                    answer_tokens[k] = answer_tokens[k][: args.max_length - args.max_prompt_length]
 
 
 def _build_sequence_tokens(
