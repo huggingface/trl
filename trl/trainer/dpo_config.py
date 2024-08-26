@@ -147,8 +147,3 @@ class DPOConfig(TrainingArguments):
     ref_model_mixup_alpha: float = 0.9
     ref_model_sync_steps: int = 64
     rpo_alpha: Optional[float] = None
-
-    def __post_init__(self):
-        if self.loss_type == "kto_pair":
-            raise ValueError("Support for kto_pair has been removed in DPOTrainer. Please use KTOTrainer.")
-        return super().__post_init__()
