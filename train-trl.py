@@ -261,7 +261,8 @@ def create_and_prepare_model(args, device):
         # token=os.environ["HF_TOKEN"],
         # trust_remote_code=False,
         torch_dtype=torch_dtype,
-        use_cache=True
+        use_cache=True,
+        device_map="auto" #reduces amount of peak memory usage
     )
 
     # model.to(device)
