@@ -294,7 +294,7 @@ class OnlineDPOTrainer(Trainer):
         # Completions not passing that filter will receive a low (fixed) score
         contain_eos_token = torch.any(completion_ids == self.tokenizer.eos_token_id, dim=-1)
         if self.args.missing_eos_penalty is not None:
-            scores = torch.where(contain_eos_token, scores, self.args.missing_eos_penalty)
+            scores[~contain_eos_token] -= self.args.missing_eos_penalty
 
         # Replace the logprobs of the padding tokens by 1.0
         padding_mask = ~completion_mask.bool()
