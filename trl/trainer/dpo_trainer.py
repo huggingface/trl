@@ -203,6 +203,9 @@ def _truncate_tokens(
     """
     Truncates the tokens in chosen, rejected, and prompt sequences to ensure they fit within the maximum length constraints.
     """
+    if args.truncation_mode not in ["keep_start", "keep_end"]:
+        raise ValueError(f"Invalid truncation mode: {args.truncation_mode}")
+
     for c_tokens, r_tokens, p_tokens in zip(chosen_tokens, rejected_tokens, prompt_tokens):
         longer_response_length = max(len(c_tokens["input_ids"]), len(r_tokens["input_ids"]))
 
@@ -215,8 +218,6 @@ def _truncate_tokens(
                 elif args.truncation_mode == "keep_end":
                     for k in ["prompt_input_ids", "prompt_attention_mask"]:
                         answer_tokens[k] = answer_tokens[k][-args.max_prompt_length :]
-                else:
-                    raise ValueError(f"Unknown truncation mode: {args.truncation_mode}")
 
         # if that's still too long, truncate the response
         for answer_tokens in [c_tokens, r_tokens]:
