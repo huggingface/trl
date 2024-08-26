@@ -18,11 +18,11 @@ class OnlineDPOConfig(TrainingArguments):
             Path to the reward model.
         completion_length (`int`, *optional*, defaults to `53`):
             Length of the completions to generate.
-        temperature (`float`, *optional*, defaults to `0.7`):
-            Temperature for sampling.
+        temperature (`float`, *optional*, defaults to `0.9`):
+            Temperature for sampling. The higher the temperature, the more random the completions.
         missing_eos_penalty (`Optional[float]`, *optional*, defaults to `None`):
             Penalty when the model fails to generate an EOS token.
-        beta (`float`, *optional*, defaults to `0.05`):
+        beta (`float`, *optional*, defaults to `0.1`):
             Beta parameter for the DPO loss.
         loss_type (`str`, *optional*, defaults to `"sigmoid"`):
             Type of DPO loss to use. Possible values are:
@@ -36,8 +36,8 @@ class OnlineDPOConfig(TrainingArguments):
 
     reward_model_path: Optional[str] = None
     completion_length: int = 53
-    temperature: float = 0.7
+    temperature: float = 0.9
     missing_eos_penalty: Optional[float] = None
-    beta: float = 0.05
+    beta: float = 0.1
     loss_type: Literal["sigmoid", "ipo"] = "sigmoid"
     dataset_num_proc: Optional[int] = None
