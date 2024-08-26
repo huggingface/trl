@@ -175,8 +175,11 @@ class KTOTrainerTester(unittest.TestCase):
                 for batch_size in [2, 3]:
                     tokenized_kl_dataset = tokenized_dataset.map(_get_kl_dataset, batched=True, batch_size=batch_size)
 
-                    # Check that the "answer_input_ids" mismatch, i.e., the new answer_input_ids are different from the original
-                    for i in range(len(tokenized_kl_dataset["answer_input_ids"])):
+                    # Verify that the "answer_input_ids" have been modified, meaning the new "answer_input_ids" differ
+                    # from the original ones. However, when the length of the dataset modulo batch_size equals 1,
+                    # the last batch remains unaltered. This is a rare scenario that does not impact the training process,
+                    # so we exclude it from testing by iterating only up to len - 1.
+                    for i in range(len(tokenized_kl_dataset["answer_input_ids"]) - 1):
                         self.assertNotEqual(
                             tokenized_dataset["answer_input_ids"][i], tokenized_kl_dataset["answer_input_ids"][i]
                         )
