@@ -3,6 +3,7 @@ import math
 import os
 import time
 from collections import defaultdict
+from functools import wraps
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -40,12 +41,15 @@ from ..trainer.utils import (
     truncate_response,
 )
 from .online_dpo_config import OnlineDPOConfig
+from .utils import trl_sanitze_kwargs_for_tagging
 
 
 INVALID_LOGPROB = 1.0
 
 
 class OnlineDPOTrainer(Trainer):
+    _tag_names = ["trl", "online-dpo"]
+
     def __init__(
         self,
         config: OnlineDPOConfig,
@@ -76,6 +80,7 @@ class OnlineDPOTrainer(Trainer):
         self.data_collator = data_collator
         self.eval_dataset = eval_dataset
         self.optimizer, self.lr_scheduler = optimizers
+        self.num_generation_per_prompt = 2
 
         #########
         # calculate various batch sizes
@@ -101,13 +106,13 @@ class OnlineDPOTrainer(Trainer):
         )  # we may train for more than `total_episodes`
         time_tensor = torch.tensor(int(time.time()), device=accelerator.device)
         time_int = broadcast(time_tensor, 0).item()  # avoid different timestamps across processes
-        args.run_name = f"{args.exp_name}__{args.seed}__{time_int}"
+        args.run_name = f"{args.exp_name}__{args.seed}__{time_int}" if args.run_name is None else args.run_name
         self.local_seed = args.seed + accelerator.process_index * 100003  # Prime
         if args.num_sample_generations > 0:
             self.sample_generations_freq = max(1, args.num_total_batches // args.num_sample_generations)
         self.local_dataloader_batch_size = exact_div(
             args.local_batch_size,
-            args.num_generation_per_prompt,
+            self.num_generation_per_prompt,
             "`local_batch_size` must be a multiple of `num_generation_per_prompt`",
         )  # DPO logic: repeats the same prompt args.rloo_k times
 
@@ -123,7 +128,7 @@ class OnlineDPOTrainer(Trainer):
         self.ref_model.eval()
         self.reward_model.eval()
 
-        if args.stop_token and args.stop_token == "eos":
+        if args.stop_token_id is None and args.stop_token and args.stop_token == "eos":
             args.stop_token_id = tokenizer.eos_token_id
         self.model = model
         self.create_optimizer_and_scheduler(
@@ -206,6 +211,7 @@ class OnlineDPOTrainer(Trainer):
         tokenizer = self.tokenizer
         dataloader = self.dataloader
         device = accelerator.device
+        self.model_wrapped = self.model
 
         def repeat_generator():
             while True:
@@ -256,11 +262,10 @@ class OnlineDPOTrainer(Trainer):
 
         for update in range(1, args.num_total_batches + 1):
             self.state.episode += 1 * args.batch_size
-            self.lr_scheduler.step()
             data = next(iter_dataloader)
             with torch.no_grad():
                 queries = data["input_ids"].to(device)
-                queries = queries.repeat(args.num_generation_per_prompt, 1)
+                queries = queries.repeat(self.num_generation_per_prompt, 1)
                 context_length = queries.shape[1]
                 responses = []
                 postprocessed_responses = []
@@ -287,14 +292,13 @@ class OnlineDPOTrainer(Trainer):
                     del logits, all_logprob
                     torch.cuda.empty_cache()
 
-                    with torch.no_grad():
-                        ref_output = forward(ref_model, query_response, tokenizer.pad_token_id)
-                        ref_logits = ref_output.logits[:, context_length - 1 : -1]
-                        ref_logits /= args.temperature + 1e-7
-                        ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
-                        ref_logprob = torch.gather(ref_all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
-                        del ref_output, ref_logits, ref_all_logprob
-                        torch.cuda.empty_cache()
+                    ref_output = forward(ref_model, query_response, tokenizer.pad_token_id)
+                    ref_logits = ref_output.logits[:, context_length - 1 : -1]
+                    ref_logits /= args.temperature + 1e-7
+                    ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
+                    ref_logprob = torch.gather(ref_all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
+                    del ref_output, ref_logits, ref_all_logprob
+                    torch.cuda.empty_cache()
 
                     # Response Processing 1. truncate response after the first occurrence of `stop_token_id`
                     postprocessed_response = response
@@ -304,12 +308,11 @@ class OnlineDPOTrainer(Trainer):
                         )
 
                     # Response Processing 2. run reward model on the truncated responses
-                    with torch.no_grad():
-                        postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
-                        sequence_length = first_true_indices(postprocessed_response == tokenizer.pad_token_id) - 1
-                        _, score, _ = get_reward(
-                            reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
-                        )
+                    postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
+                    sequence_length = first_true_indices(postprocessed_response == tokenizer.pad_token_id) - 1
+                    _, score, _ = get_reward(
+                        reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
+                    )
 
                     responses.append(response)
                     postprocessed_responses.append(postprocessed_response)
@@ -317,6 +320,8 @@ class OnlineDPOTrainer(Trainer):
                     ref_logprobs.append(ref_logprob)
                     sequence_lengths.append(sequence_length)
                     scores.append(score)
+
+                # stack all the tensors
                 responses = torch.cat(responses, 0)
                 postprocessed_responses = torch.cat(postprocessed_responses, 0)
                 logprobs = torch.cat(logprobs, 0)
@@ -332,8 +337,7 @@ class OnlineDPOTrainer(Trainer):
                 # only query humans on responses that pass that filter
                 contain_eos_token = torch.any(postprocessed_responses == tokenizer.eos_token_id, dim=-1)
                 if args.non_eos_penalty:
-                    scores = torch.where(contain_eos_token, scores, torch.full_like(scores, args.penalty_reward_value))
-                # accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
+                    scores = torch.where(contain_eos_token, scores, args.penalty_reward_value)
 
                 # be very careful with `padding_mask_p1`; see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
                 response_idxs = torch.arange(responses.shape[1], device=responses.device).repeat(responses.shape[0], 1)
@@ -365,19 +369,19 @@ class OnlineDPOTrainer(Trainer):
 
             # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
             for epoch_idx in range(args.num_epochs):
-                b_inds = np.random.permutation(args.local_batch_size // args.num_generation_per_prompt)
+                b_inds = np.random.permutation(args.local_batch_size // self.num_generation_per_prompt)
                 minibatch_idx = 0
                 for mini_batch_start in range(
                     0,
-                    args.local_batch_size // args.num_generation_per_prompt,
-                    args.local_mini_batch_size // args.num_generation_per_prompt,
+                    args.local_batch_size // self.num_generation_per_prompt,
+                    args.local_mini_batch_size // self.num_generation_per_prompt,
                 ):
-                    mini_batch_end = mini_batch_start + args.local_mini_batch_size // args.num_generation_per_prompt
+                    mini_batch_end = mini_batch_start + args.local_mini_batch_size // self.num_generation_per_prompt
                     mini_batch_inds = b_inds[mini_batch_start:mini_batch_end]
                     gradient_accumulation_idx = 0
                     for micro_batch_start in range(
                         0,
-                        args.local_mini_batch_size // args.num_generation_per_prompt,
+                        args.local_mini_batch_size // self.num_generation_per_prompt,
                         args.per_device_train_batch_size,
                     ):
                         with accelerator.accumulate(model):
@@ -462,7 +466,6 @@ class OnlineDPOTrainer(Trainer):
                                 ] = rejected_logprobs_sum.mean()
                         gradient_accumulation_idx += 1
                     minibatch_idx += 1
-                    self.state.global_step += 1
                     # del everything and empty cache
                     # fmt: off
                     del (
@@ -500,10 +503,11 @@ class OnlineDPOTrainer(Trainer):
                 metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
                 metrics["episode"] = self.state.episode
                 self.state.epoch = self.state.episode / self.train_dataset_len  # used by self.log
-                self.state.global_step += 1
                 self.log(metrics)
             del (kl, mean_kl, mean_entropy, scores, scores_margin)
 
+            self.lr_scheduler.step()
+            self.state.global_step += 1
             self.control = self.callback_handler.on_step_end(args, self.state, self.control)
             if self.control.should_save:
                 self._save_checkpoint(model, trial=None, metrics=metrics)
@@ -550,8 +554,19 @@ class OnlineDPOTrainer(Trainer):
                         postprocessed_response = truncate_response(
                             args.stop_token_id, tokenizer.pad_token_id, response
                         )
-                    table["query"].extend(gather_object(tokenizer.batch_decode(query, skip_special_tokens=True)))
-                    table["model response"].extend(gather_object(tokenizer.batch_decode(postprocessed_response)))
+                    # For the WandB table of prompts and completions, we keep
+                    # the special tokens associated with the chat template, but
+                    # discard the padding tokens for readability
+                    table_query = [
+                        q.replace(tokenizer.pad_token, "")
+                        for q in tokenizer.batch_decode(query, skip_special_tokens=False)
+                    ]
+                    table_response = [
+                        r.replace(tokenizer.pad_token, "")
+                        for r in tokenizer.batch_decode(postprocessed_response, skip_special_tokens=False)
+                    ]
+                    table["query"].extend(gather_object(table_query))
+                    table["model response"].extend(gather_object(table_response))
 
                     postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
                     _, score, _ = get_reward(
@@ -562,10 +577,26 @@ class OnlineDPOTrainer(Trainer):
                 if sampling:
                     break
         df = pd.DataFrame(table)
-        if self.accelerator.process_index == 0:
-            print_rich_table(df.iloc[0 : 0 + 5])
-        if "wandb" in args.report_to:
-            import wandb
 
-            if wandb.run is not None:
-                wandb.log({"completions": wandb.Table(dataframe=df)})
+        if self.accelerator.is_main_process:
+            print_rich_table(df.iloc[0 : 0 + 5])
+            if "wandb" in args.report_to:
+                import wandb
+
+                if wandb.run is not None:
+                    wandb.log({"completions": wandb.Table(dataframe=df)})
+
+    @wraps(Trainer.push_to_hub)
+    def push_to_hub(
+        self,
+        commit_message: Optional[str] = "End of training",
+        blocking: bool = True,
+        **kwargs,
+    ) -> str:
+        """
+        Overwrite the `push_to_hub` method in order to force-add the tag "online-dpo" when pushing the
+        model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
+        Unlike the parent class, we don't use the `token` argument to mitigate security risks.
+        """
+        kwargs = trl_sanitze_kwargs_for_tagging(model=self.model, tag_names=self._tag_names, kwargs=kwargs)
+        return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)
