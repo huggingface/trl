@@ -1110,6 +1110,9 @@ class DPOTrainer(Trainer):
             concatenated_batch["concatenated_attention_mask"] = (
                 batch["prompt_attention_mask"].repeat(2, 1).to(device=device)
             )
+            concatenated_batch["concatenated_decoder_input_ids"] = torch.cat(
+                [batch["chosen_decoder_input_ids"], batch["rejected_decoder_input_ids"]], dim=0
+            ).to(device=device)
 
         if is_vision_model:
             concatenated_batch["pixel_values"] = torch.cat(
@@ -1507,12 +1510,6 @@ class DPOTrainer(Trainer):
             warnings.warn(
                 "compute_loss is only implemented for DPODataCollatorWithPadding, and you passed a datacollator that is different than "
                 "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
-            )
-
-        if self.is_encoder_decoder:
-            # For encoder-decoder models, we need to use the prepared decoder_input_ids
-            inputs["decoder_input_ids"] = torch.cat(
-                [inputs["chosen_decoder_input_ids"], inputs["rejected_decoder_input_ids"]], dim=0
             )
 
         compute_loss_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
