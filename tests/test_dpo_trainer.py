@@ -134,11 +134,6 @@ class TestTruncateTokens(unittest.TestCase):
         ]
         prompt_tokens = [{"prompt_input_ids": list(range(15)), "prompt_attention_mask": [1] * 15}]
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = DPOConfig(
-                max_length=20, max_prompt_length=10, truncation_mode="keep_start", output_dir=tmp_dir
-            )
-
         _truncate_tokens(chosen_tokens, rejected_tokens, prompt_tokens, self.args)
 
         # Check if prompt is truncated correctly

@@ -219,7 +219,7 @@ def _truncate_tokens(
                     for k in ["prompt_input_ids", "prompt_attention_mask"]:
                         answer_tokens[k] = answer_tokens[k][-args.max_prompt_length :]
 
-        # if that's still too long, truncate the response
+        # if that's still too long, truncate the response from the end
         for answer_tokens in [c_tokens, r_tokens]:
             if len(answer_tokens["prompt_input_ids"]) + longer_response_length > args.max_length:
                 for k in ["input_ids", "attention_mask"]:
