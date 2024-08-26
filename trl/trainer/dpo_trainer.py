@@ -317,7 +317,14 @@ def _build_tokenized_answer(
     if len(full_tokenized["input_ids"]) != len(prompt_input_ids + answer_input_ids):
         raise ValueError("Prompt input ids and answer input ids should have the same length.")
 
+    # On some tokenizers, like Llama-2 tokenizer, there are occasions where tokens
+    # can be merged together when tokenizing prompt+answer. This could result
+    # on the last token from the prompt being different when tokenized on its own
+    # vs when done as prompt+answer.
     response_token_ids_start_idx = len(prompt_input_ids)
+
+    # If tokenized prompt is different than both prompt+answer, then it means the
+    # last token has changed due to merging.
     if prompt_input_ids != full_tokenized["input_ids"][:response_token_ids_start_idx]:
         response_token_ids_start_idx -= 1
 
