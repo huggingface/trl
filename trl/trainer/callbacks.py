@@ -58,7 +58,9 @@ class SyncRefModelCallback(TrainerCallback):
     def sync_target_model(model, target_model, alpha):
         deepspeed_plugin = AcceleratorState().deepspeed_plugin
         if deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3:
-            with deepspeed.zero.GatheredParameters(list(model.parameters()), modifier_rank=0):
+            with deepspeed.zero.GatheredParameters(
+                list(model.parameters()) + list(target_model.parameters()), modifier_rank=0
+            ):
                 if deepspeed.comm.get_rank() == 0:
                     SyncRefModelCallback._sync_target_model(model, target_model, alpha)
         else:
