@@ -72,9 +72,9 @@ if is_deepspeed_available():
 def _tokenize(
     features: Dict[str, List],
     tokenizer: PreTrainedTokenizerBase,
+    args: DPOConfig,
     processor: Optional[Callable] = None,
     model: Optional[PreTrainedModel] = None,
-    args: Optional[DPOConfig] = None,
 ) -> Dict[str, List]:
     """
     Tokenizes and processes a batch of input features using the provided tokenizer and processor.
@@ -805,9 +805,9 @@ class DPOTrainer(Trainer):
             # tokenize the dataset, lower writer batch size to avoid OOM (frequent in vision models)
             fn_kwargs = {
                 "tokenizer": self.tokenizer,
+                "args": args,
                 "processor": self.processor if self.is_vision_model else None,
                 "model": model if self.is_encoder_decoder else None,
-                "args": args,
             }
             train_dataset = train_dataset.map(
                 _tokenize,
