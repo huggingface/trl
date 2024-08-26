@@ -123,14 +123,17 @@ class DataCollatorForCompletionOnlyLMTester(unittest.TestCase):
         batch = collator(tokenized_instruction)
         batch_paddingfree = collator_paddingfree(tokenized_instruction)
 
-        assert "attention_mask" not in batch_paddingfree
-        assert (
-            "input_ids" in batch_paddingfree and "labels" in batch_paddingfree and "position_ids" in batch_paddingfree
+        self.assertNotIn("attention_mask", batch_paddingfree)
+        self.assertIn("input_ids", batch_paddingfree)
+        self.assertIn("labels", batch_paddingfree)
+        self.assertIn("position_ids", batch_paddingfree)
+        self.assertEqual(
+            batch_paddingfree["input_ids"].size(),
+            batch_paddingfree["labels"].size()
         )
-        assert (
-            batch_paddingfree["input_ids"].size()
-            == batch_paddingfree["labels"].size()
-            == batch_paddingfree["position_ids"].size()
+        self.assertEqual(
+            batch_paddingfree["labels"].size(),
+            batch_paddingfree["position_ids"].size()
         )
 
         attn_mask = batch["attention_mask"]
@@ -142,6 +145,6 @@ class DataCollatorForCompletionOnlyLMTester(unittest.TestCase):
             expected_labels[-1][0] = collator.ignore_index
         expected_labels = torch.cat(expected_labels).unsqueeze(0)
 
-        assert (input_ids_remove_pad == batch_paddingfree["input_ids"]).all()
-        assert (expected_position_ids == batch_paddingfree["position_ids"]).all()
-        assert (expected_labels == batch_paddingfree["labels"]).all()
+        self.assertTrue((input_ids_remove_pad == batch_paddingfree["input_ids"]).all())
+        self.assertTrue((expected_position_ids == batch_paddingfree["position_ids"]).all())
+        self.assertTrue((expected_labels == batch_paddingfree["labels"]).all())
