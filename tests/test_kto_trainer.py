@@ -177,7 +177,9 @@ class KTOTrainerTester(unittest.TestCase):
 
                     # Check that the "answer_input_ids" mismatch, i.e., the new answer_input_ids are different from the original
                     for i in range(len(tokenized_kl_dataset["answer_input_ids"])):
-                        self.assertNotEqual(tokenized_dataset["answer_input_ids"][i], tokenized_kl_dataset["answer_input_ids"][i])
+                        self.assertNotEqual(
+                            tokenized_dataset["answer_input_ids"][i], tokenized_kl_dataset["answer_input_ids"][i]
+                        )
 
                 fn_kwargs = {
                     "prefix": "",
