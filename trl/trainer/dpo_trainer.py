@@ -648,6 +648,10 @@ class DPOTrainer(Trainer):
                 reference_chosen_logps.append(reference_chosen_logp.cpu())
                 reference_rejected_logps.append(reference_rejected_logp.cpu())
 
+                # Unnecessary cache clearing to avoid OOM
+                torch.cuda.empty_cache()
+                self.accelerator.free_memory()
+
             all_reference_chosen_logps = torch.cat(reference_chosen_logps).float().numpy()
             all_reference_rejected_logps = torch.cat(reference_rejected_logps).float().numpy()
 
