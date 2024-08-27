@@ -98,6 +98,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
         *args,
         mlm: bool = False,
         ignore_index: int = -100,
+        padding_free: bool = False,
         **kwargs,
     ):
         super().__init__(*args, mlm=mlm, **kwargs)
@@ -127,6 +128,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
             )
 
         self.ignore_index = ignore_index
+        self.padding_free = padding_free
 
     def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
         batch = super().torch_call(examples)
@@ -210,6 +212,14 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
 
                 if len(response_token_ids_idxs) < len(human_token_ids_idxs):
                     batch["labels"][i, human_token_ids_idxs[-1] :] = self.ignore_index
+
+        if self.padding_free:
+            # remove padding, `attention_mask` and add `position_ids`
+            attn_mask = batch.pop("attention_mask")
+            batch["input_ids"] = batch["input_ids"][attn_mask.bool()].unsqueeze(0)
+            batch["position_ids"] = attn_mask.cumsum(1)[attn_mask.bool()].unsqueeze(0) - 1
+            batch["labels"] = batch["labels"][attn_mask.bool()].unsqueeze(0)
+            batch["labels"][batch["position_ids"] == 0] = self.ignore_index
 
         return batch
 

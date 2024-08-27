@@ -604,13 +604,14 @@ class PPOv2Trainer(Trainer):
                 if sampling:
                     break
         df = pd.DataFrame(table)
-        if self.accelerator.process_index == 0:
-            print_rich_table(df.iloc[0 : 0 + 5])
-        if "wandb" in args.report_to:
-            import wandb
 
-            if wandb.run is not None:
-                wandb.log({"completions": wandb.Table(dataframe=df)})
+        if self.accelerator.is_main_process:
+            print_rich_table(df.iloc[0 : 0 + 5])
+            if "wandb" in args.report_to:
+                import wandb
+
+                if wandb.run is not None:
+                    wandb.log({"completions": wandb.Table(dataframe=df)})
 
     @wraps(Trainer.push_to_hub)
     def push_to_hub(

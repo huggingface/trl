@@ -338,7 +338,6 @@ class OnlineDPOTrainer(Trainer):
                 contain_eos_token = torch.any(postprocessed_responses == tokenizer.eos_token_id, dim=-1)
                 if args.non_eos_penalty:
                     scores = torch.where(contain_eos_token, scores, args.penalty_reward_value)
-                # accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
 
                 # be very careful with `padding_mask_p1`; see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
                 response_idxs = torch.arange(responses.shape[1], device=responses.device).repeat(responses.shape[0], 1)
@@ -467,7 +466,6 @@ class OnlineDPOTrainer(Trainer):
                                 ] = rejected_logprobs_sum.mean()
                         gradient_accumulation_idx += 1
                     minibatch_idx += 1
-                    self.state.global_step += 1
                     # del everything and empty cache
                     # fmt: off
                     del (
@@ -505,11 +503,11 @@ class OnlineDPOTrainer(Trainer):
                 metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
                 metrics["episode"] = self.state.episode
                 self.state.epoch = self.state.episode / self.train_dataset_len  # used by self.log
-                self.state.global_step += 1
                 self.log(metrics)
             del (kl, mean_kl, mean_entropy, scores, scores_margin)
 
             self.lr_scheduler.step()
+            self.state.global_step += 1
             self.control = self.callback_handler.on_step_end(args, self.state, self.control)
             if self.control.should_save:
                 self._save_checkpoint(model, trial=None, metrics=metrics)
@@ -556,8 +554,19 @@ class OnlineDPOTrainer(Trainer):
                         postprocessed_response = truncate_response(
                             args.stop_token_id, tokenizer.pad_token_id, response
                         )
-                    table["query"].extend(gather_object(tokenizer.batch_decode(query, skip_special_tokens=True)))
-                    table["model response"].extend(gather_object(tokenizer.batch_decode(postprocessed_response)))
+                    # For the WandB table of prompts and completions, we keep
+                    # the special tokens associated with the chat template, but
+                    # discard the padding tokens for readability
+                    table_query = [
+                        q.replace(tokenizer.pad_token, "")
+                        for q in tokenizer.batch_decode(query, skip_special_tokens=False)
+                    ]
+                    table_response = [
+                        r.replace(tokenizer.pad_token, "")
+                        for r in tokenizer.batch_decode(postprocessed_response, skip_special_tokens=False)
+                    ]
+                    table["query"].extend(gather_object(table_query))
+                    table["model response"].extend(gather_object(table_response))
 
                     postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
                     _, score, _ = get_reward(
@@ -568,13 +577,14 @@ class OnlineDPOTrainer(Trainer):
                 if sampling:
                     break
         df = pd.DataFrame(table)
-        if self.accelerator.process_index == 0:
-            print_rich_table(df.iloc[0 : 0 + 5])
-        if "wandb" in args.report_to:
-            import wandb
 
-            if wandb.run is not None:
-                wandb.log({"completions": wandb.Table(dataframe=df)})
+        if self.accelerator.is_main_process:
+            print_rich_table(df.iloc[0 : 0 + 5])
+            if "wandb" in args.report_to:
+                import wandb
+
+                if wandb.run is not None:
+                    wandb.log({"completions": wandb.Table(dataframe=df)})
 
     @wraps(Trainer.push_to_hub)
     def push_to_hub(
