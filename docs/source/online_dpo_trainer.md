@@ -160,7 +160,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --push_to_hub
 
 # 6.9B Online DPO experiment
-accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
+accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
     examples/scripts/dpo_online.py \
     --model_name_or_path trl-lib/pythia-6.9b-deduped-tldr-sft  \
     --reward_model_path trl-lib/pythia-6.9b-deduped-tldr-rm \
@@ -175,6 +175,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
     --warmup_ratio 0.1 \
     --missing_eos_penalty 1.0 \
     --bf16 \
+    --gradient_checkpointing \
     --logging_steps 1 \
     --save_steps 0.1 \
     --push_to_hub

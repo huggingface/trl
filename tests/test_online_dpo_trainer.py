@@ -93,4 +93,4 @@ class TestOnlineDPOTrainer(unittest.TestCase):
             trainer.train()
 
             # Check if training loss is available
-            self.assertIn("loss/policy_avg", trainer.state.log_history[-1])
+            self.assertIn("train_loss", trainer.state.log_history[-1])
