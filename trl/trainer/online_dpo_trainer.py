@@ -243,11 +243,11 @@ class OnlineDPOTrainer(Trainer):
     def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         model.train()
 
-        # Sample 2 completations per prompt of size `completion_length` from the model
+        # Sample 2 completations per prompt of size `max_new_tokens` from the model
         inputs = self._prepare_inputs(inputs)
         generation_config = GenerationConfig(
-            max_new_tokens=self.args.completion_length,
-            min_new_tokens=self.args.completion_length,
+            max_new_tokens=self.args.max_new_tokens,
+            min_new_tokens=self.args.max_new_tokens,
             temperature=self.args.temperature,
             top_k=0.0,
             top_p=1.0,
@@ -265,7 +265,7 @@ class OnlineDPOTrainer(Trainer):
             )
         del inputs
 
-        completion_ids = output[:, context_length:]  # completions.shape[1] == self.args.completion_length
+        completion_ids = output[:, context_length:]
         completion_ids, completion_mask = truncate_right(
             completion_ids, self.tokenizer.eos_token_id, self.tokenizer.pad_token_id
         )

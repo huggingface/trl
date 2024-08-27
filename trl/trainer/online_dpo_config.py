@@ -16,8 +16,8 @@ class OnlineDPOConfig(TrainingArguments):
     Args:
         reward_model_path (`Optional[str]`, *optional*, defaults to `None`):
             Path to the reward model.
-        completion_length (`int`, *optional*, defaults to `53`):
-            Length of the completions to generate.
+        max_new_tokens (`int`, *optional*, defaults to `64`):
+            The maximum number of tokens to generate per completion.
         temperature (`float`, *optional*, defaults to `0.9`):
             Temperature for sampling. The higher the temperature, the more random the completions.
         missing_eos_penalty (`Optional[float]`, *optional*, defaults to `None`):
@@ -35,7 +35,7 @@ class OnlineDPOConfig(TrainingArguments):
     """
 
     reward_model_path: Optional[str] = None
-    completion_length: int = 53
+    max_new_tokens: int = 53
     temperature: float = 0.9
     missing_eos_penalty: Optional[float] = None
     beta: float = 0.1

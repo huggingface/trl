@@ -286,15 +286,13 @@ class LogCompletionsCallback(WandbCallback):
         model.eval()
 
         # Generate completions
-        generation_config = GenerationConfig(
-            max_new_tokens=args.completion_length, min_new_tokens=args.completion_length
-        )
+        generation_config = GenerationConfig(max_new_tokens=args.max_new_tokens, min_new_tokens=args.max_new_tokens)
         inputs = self.inputs.to(args.device)
         _, context_length = inputs["input_ids"].shape
         output = model.generate(**inputs, generation_config=generation_config)
 
         # Get only the completions
-        completion_ids = output[:, context_length:]  # completions.shape[1] == self.args.completion_length
+        completion_ids = output[:, context_length:]
 
         # After the first EOS token, replace all tokens with padding tokens
         completion_ids, _ = truncate_right(completion_ids, tokenizer.eos_token_id, tokenizer.pad_token_id)
