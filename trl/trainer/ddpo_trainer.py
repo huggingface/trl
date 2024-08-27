@@ -317,8 +317,10 @@ class DDPOTrainer(BaseTrainer):
 
             original_keys = samples.keys()
             original_values = samples.values()
-            # rebatch them as user defined train_batch_size is different from sample_batch_size
-            reshaped_values = [v.reshape(-1, self.config.train_batch_size, *v.shape[1:]) for v in original_values]
+            # rebatch them as user defined per_device_train_batch_size is different from sample_batch_size
+            reshaped_values = [
+                v.reshape(-1, self.config.per_device_train_batch_size, *v.shape[1:]) for v in original_values
+            ]
 
             # Transpose the list of original values
             transposed_values = zip(*reshaped_values)
@@ -572,20 +574,20 @@ class DDPOTrainer(BaseTrainer):
             self.config.sample_batch_size * self.accelerator.num_processes * self.config.sample_num_batches_per_epoch
         )
         total_train_batch_size = (
-            self.config.train_batch_size
+            self.config.per_device_train_batch_size
             * self.accelerator.num_processes
             * self.config.train_gradient_accumulation_steps
         )
 
-        if not self.config.sample_batch_size >= self.config.train_batch_size:
+        if not self.config.sample_batch_size >= self.config.per_device_train_batch_size:
             return (
                 False,
-                f"Sample batch size ({self.config.sample_batch_size}) must be greater than or equal to the train batch size ({self.config.train_batch_size})",
+                f"Sample batch size ({self.config.sample_batch_size}) must be greater than or equal to the train batch size ({self.config.per_device_train_batch_size})",
             )
-        if not self.config.sample_batch_size % self.config.train_batch_size == 0:
+        if not self.config.sample_batch_size % self.config.per_device_train_batch_size == 0:
             return (
                 False,
-                f"Sample batch size ({self.config.sample_batch_size}) must be divisible by the train batch size ({self.config.train_batch_size})",
+                f"Sample batch size ({self.config.sample_batch_size}) must be divisible by the train batch size ({self.config.per_device_train_batch_size})",
             )
         if not samples_per_epoch % total_train_batch_size == 0:
             return (

@@ -224,7 +224,7 @@ class AlignPropTrainer(BaseTrainer):
         for _ in range(self.config.train_gradient_accumulation_steps):
             with self.accelerator.accumulate(self.sd_pipeline.unet), self.autocast(), torch.enable_grad():
                 prompt_image_pairs = self._generate_samples(
-                    batch_size=self.config.train_batch_size,
+                    batch_size=self.config.per_device_train_batch_size,
                 )
 
                 rewards = self.compute_rewards(prompt_image_pairs)

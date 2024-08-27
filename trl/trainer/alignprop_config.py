@@ -57,8 +57,6 @@ class AlignPropConfig(TrainingArguments):
             Eta parameter for the DDIM sampler.
         sample_guidance_scale (`float`, *optional*, defaults to `5.0`):
             Classifier-free guidance weight.
-        train_batch_size (`int`, *optional*, defaults to `1`):
-            Batch size (per GPU) to use for training.
         train_use_8bit_adam (`bool`, *optional*, defaults to `False`):
             Whether to use the 8bit Adam optimizer from `bitsandbytes`.
         train_learning_rate (`float`, *optional*, defaults to `1e-3`):
@@ -104,7 +102,6 @@ class AlignPropConfig(TrainingArguments):
     sample_num_steps: int = 50
     sample_eta: float = 1.0
     sample_guidance_scale: float = 5.0
-    train_batch_size: int = 1
     train_use_8bit_adam: bool = False
     train_learning_rate: float = 1e-3
     train_adam_beta1: float = 0.9
