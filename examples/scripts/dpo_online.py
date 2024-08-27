@@ -93,7 +93,6 @@ if __name__ == "__main__":
         dataset = dataset.map(prepare_dataset, num_proc=training_args.dataset_num_proc)
 
     prompts = dataset[args.dataset_test_split]["prompt"][:8]
-    log_completions_callback = LogCompletionsCallback(prompts, freq=training_args.logging_steps)
 
     trainer = OnlineDPOTrainer(
         model=model,
@@ -103,6 +102,7 @@ if __name__ == "__main__":
         train_dataset=dataset[args.dataset_train_split],
         eval_dataset=dataset[args.dataset_test_split],
         tokenizer=tokenizer,
-        callbacks=[log_completions_callback],
     )
+    log_completions_callback = LogCompletionsCallback(prompts, trainer)
+    trainer.add_callback(log_completions_callback)
     trainer.train()
