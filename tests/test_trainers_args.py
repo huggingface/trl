@@ -223,7 +223,6 @@ class TrainerArgTester(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             args = OnlineDPOConfig(
                 tmp_dir,
-                run_name="dummy_run_name",
                 sanity_check=True,
                 num_mini_batches=2,
                 total_episodes=100,
@@ -261,7 +260,6 @@ class TrainerArgTester(unittest.TestCase):
                 reward_model=reward_model,
                 train_dataset=dataset,
             )
-            self.assertEqual(trainer.args.run_name, "dummy_run_name")
             self.assertEqual(trainer.args.sanity_check, True)
             self.assertEqual(trainer.args.num_mini_batches, 2)
             self.assertEqual(trainer.args.total_episodes, 100)

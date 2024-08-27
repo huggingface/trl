@@ -106,7 +106,6 @@ class OnlineDPOTrainer(Trainer):
         )  # we may train for more than `total_episodes`
         time_tensor = torch.tensor(int(time.time()), device=accelerator.device)
         time_int = broadcast(time_tensor, 0).item()  # avoid different timestamps across processes
-        args.run_name = f"{args.exp_name}__{args.seed}__{time_int}" if args.run_name is None else args.run_name
         self.local_seed = args.seed + accelerator.process_index * 100003  # Prime
         if args.num_sample_generations > 0:
             self.sample_generations_freq = max(1, args.num_total_batches // args.num_sample_generations)

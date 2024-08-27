@@ -1,3 +1,5 @@
+import os
+import sys
 import warnings
 from dataclasses import dataclass, field
 from typing import Any, Dict, Literal, Optional, Tuple
@@ -20,8 +22,6 @@ class AlignPropConfig(TrainingArguments):
     Args:
         exp_name (`str`, *optional*, defaults to `os.path.basename(sys.argv[0])[: -len(".py")]`):
             Name of this experiment (defaults to the file name without the extension).
-        run_name (`str`, *optional*, defaults to `""`):
-            Run name for `wandb` logging and checkpoint saving.
         seed (`int`, *optional*, defaults to `0`):
             Seed value for random generations.
         log_with (`Optional[Literal["wandb", "tensorboard"]]`, *optional*, defaults to `None`):
@@ -83,8 +83,7 @@ class AlignPropConfig(TrainingArguments):
             Range of diffusion timesteps for randomized truncated backpropagation.
     """
 
-    # exp_name: str = os.path.basename(sys.argv[0])[: -len(".py")]
-    # run_name: Optional[str] = ""
+    exp_name: str = os.path.basename(sys.argv[0])[: -len(".py")]
     seed: int = 0
     log_with: Optional[Literal["wandb", "tensorboard"]] = None
     log_image_freq: int = 1
