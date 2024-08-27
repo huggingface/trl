@@ -78,6 +78,7 @@ EXTRAS = {
         "pytest-xdist",
         "scikit-learn",
         "Pillow",
+        "pytest-rerunfailures",
     ],
     "peft": ["peft>=0.8.0"],
     "diffusers": ["diffusers>=0.18.0"],
