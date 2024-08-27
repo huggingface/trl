@@ -15,6 +15,8 @@ import os
 import tempfile
 import unittest
 
+import torch
+import torch.nn.functional as F
 from datasets import Dataset
 from transformers import (
     AutoModelForCausalLM,
@@ -35,6 +37,89 @@ def formatting_prompts_func_batched(example):
         text = f"### Question: {question}\n ### Answer: {example['answer'][i]}"
         output_text.append(text)
     return output_text
+
+
+class TestGeneralizedJSDLoss(unittest.TestCase):
+    def setUp(self):
+        self.batch_size = 2
+        self.seq_length = 3
+        self.vocab_size = 5
+        self.student_logits = torch.randn(self.batch_size, self.seq_length, self.vocab_size)
+        self.teacher_logits = torch.randn(self.batch_size, self.seq_length, self.vocab_size)
+        self.eps = 1e-6
+
+    def test_uniform_distribution(self):
+        logits = torch.ones(1, 1, self.vocab_size)
+        loss = GKDTrainer.generalized_jsd_loss(logits, logits)
+        self.assertAlmostEqual(loss.item(), 0, places=5)
+
+    def test_generalized_jsd_loss_edge_cases(self):
+        # Setup
+        student_logits = torch.log(torch.tensor([[0.1, 0.9]])).unsqueeze(0)
+        teacher_logits = torch.log(torch.tensor([[0.9, 0.1]])).unsqueeze(0)
+
+        # Case 1: beta = 1 (should be equivalent to KL(student || teacher))
+        loss_beta_1 = GKDTrainer.generalized_jsd_loss(student_logits, teacher_logits, beta=1)
+        expected_loss_beta_1 = F.kl_div(
+            F.log_softmax(student_logits, dim=-1), F.softmax(teacher_logits, dim=-1), reduction="batchmean"
+        )
+        self.assertAlmostEqual(loss_beta_1.item(), expected_loss_beta_1.item(), places=5)
+
+        # Case 2: beta = 0 (should be equivalent to KL(teacher || student))
+        loss_beta_0 = GKDTrainer.generalized_jsd_loss(student_logits, teacher_logits, beta=0)
+        expected_loss_beta_0 = F.kl_div(
+            F.log_softmax(teacher_logits, dim=-1), F.softmax(student_logits, dim=-1), reduction="batchmean"
+        )
+        self.assertAlmostEqual(loss_beta_0.item(), expected_loss_beta_0.item(), places=5)
+
+    def test_temperature_scaling(self):
+        student_logits = torch.tensor([[1.0, 2.0]]).unsqueeze(0)
+        teacher_logits = torch.tensor([[2.0, 1.0]]).unsqueeze(0)
+        loss_temp_1 = GKDTrainer.generalized_jsd_loss(student_logits, teacher_logits, temperature=1)
+        loss_temp_2 = GKDTrainer.generalized_jsd_loss(student_logits, teacher_logits, temperature=2)
+        self.assertLess(loss_temp_2, loss_temp_1)
+
+    def test_output_shape(self):
+        loss = GKDTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits)
+        self.assertTrue(torch.is_tensor(loss))
+        self.assertEqual(loss.shape, torch.Size([]))
+
+    def test_beta_values(self):
+        loss_beta_0 = GKDTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, beta=0)
+        loss_beta_1 = GKDTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, beta=1)
+        self.assertNotEqual(loss_beta_0, loss_beta_1)
+
+    def test_temperature_scaling(self):
+        loss_temp_1 = GKDTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, temperature=1)
+        loss_temp_2 = GKDTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, temperature=2)
+        self.assertNotEqual(loss_temp_1, loss_temp_2)
+
+    def test_reduction_methods(self):
+        loss_batchmean = GKDTrainer.generalized_jsd_loss(
+            self.student_logits, self.teacher_logits, reduction="batchmean"
+        )
+        loss_sum = GKDTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, reduction="sum")
+        loss_mean = GKDTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, reduction="mean")
+        loss_none = GKDTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, reduction="none")
+
+        self.assertEqual(loss_batchmean.shape, torch.Size([]))
+        self.assertEqual(loss_sum.shape, torch.Size([]))
+        self.assertEqual(loss_mean.shape, torch.Size([]))
+        self.assertEqual(loss_none.shape, self.student_logits.shape)
+
+    def test_symmetry(self):
+        student_teacher = GKDTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, beta=0.1)
+        teacher_student = GKDTrainer.generalized_jsd_loss(self.teacher_logits, self.student_logits, beta=0.1)
+        self.assertNotEqual(student_teacher, teacher_student)
+
+        student_teacher = GKDTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits, beta=0.5)
+        teacher_student = GKDTrainer.generalized_jsd_loss(self.teacher_logits, self.student_logits, beta=0.5)
+        self.assertEqual(student_teacher, teacher_student)
+
+    def test_zero_loss_for_identical_inputs(self):
+        identical_logits = torch.randn(self.batch_size, self.seq_length, self.vocab_size)
+        loss = GKDTrainer.generalized_jsd_loss(identical_logits, identical_logits)
+        self.assertAlmostEqual(loss.item(), 0, places=6)
 
 
 class GKDTrainerTester(unittest.TestCase):
