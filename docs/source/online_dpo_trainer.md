@@ -88,7 +88,7 @@ The logged metrics are as follows. Here is an example [tracked run at Weights an
 * `rewards/margins`: The mean reward margin (according to online DPO's implicit reward model) between the chosen and rejected completions.
 * `logps/chosen`: The mean log probabilities of the chosen completions.
 * `logps/rejected`: The mean log probabilities of the rejected completions.
-* `val/contain_eos+token`: The fraction of completions which contain and EOS token.
+* `val/contain_eos_token`: The fraction of completions which contain and EOS token.
 * `lr`: lr: The current learning rate used by the optimizer.
 
 
@@ -101,7 +101,7 @@ The logged metrics are as follows. Here is an example [tracked run at Weights an
 * Debugging TIP: `objective/rlhf_reward`: this is the ultimate objective of the RLHF training. If training works as intended, this metric should keep going up.
 * Memory TIP: If you are running out of memory, you can try to reduce the `--per_device_train_batch_size` or increase the `--gradient_accumulation_steps` to reduce the memory footprint.
 * Memory TIP: If you have multiple GPUs, you can also run training with DeepSpeed stage 3 to reduce the memory footprint `accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml`.
-* Usage TIP: We recommend to use the "EOS trick" via `--missing_eos_penalty`, which replaces the score of completions that do not end with an EOS token with a static scalar penalty. This can help the model learn to generate more coherent completions.
+* Usage TIP: We recommend to use the "EOS trick" via `--missing_eos_penalty`, which subtract to the score of completions that do not end with an EOS token a static scalar penalty. This can help the model learn to generate more coherent completions.
 
 
 ## What is my model doing exactly?
@@ -113,7 +113,6 @@ To help you understand what your model is doing, we periodically log some sample
 
 Many online implementation details are borrowed from the [`PPOv2Trainer`], which is itself based on the [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://huggingface.co/papers/2403.17031). Here are some additional implementation details:
 
-1. When we turn on the EOS trick (i.e., replacing the score of completions that do not end with an EOS token with a scalar penalty score like `-1`) via `--missing_eos_penalty`, it's possible that the chosen and rejected completions have the same score. In this case, we will naively select the completion with the lower index and the chosen completion.
 
 ## Benchmark experiments
 
@@ -184,7 +183,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
 
 Checkpoints and experiment tracking are available at:
 
-- [🤗 Model checkpoint](https://huggingface.co/collections/trl-lib/online-dpo-66acd3fa38a331a9cd457b07)
+- [🤗 Model checkpoints](https://huggingface.co/collections/trl-lib/online-dpo-66acd3fa38a331a9cd457b07)
 - [🐝 Tracked experiment](https://wandb.ai/huggingface/trl/runs/dd2o3g35)
 
 
