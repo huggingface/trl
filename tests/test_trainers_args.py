@@ -223,70 +223,30 @@ class TrainerArgTester(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             args = OnlineDPOConfig(
                 tmp_dir,
-                run_name="dummy_run_name",
-                sanity_check=True,
-                num_mini_batches=2,
-                total_episodes=100,
-                local_rollout_forward_batch_size=32,
-                num_sample_generations=20,
-                response_length=52,
-                stop_token="eos",
-                stop_token_id=123,
+                max_new_tokens=42,
                 temperature=0.5,
-                penalty_reward_value=-2,
-                non_eos_penalty=True,
-                sft_model_path="EleutherAI/pythia-14m",
-                world_size=4,
-                num_total_batches=100,
-                micro_batch_size=32,
-                local_batch_size=64,
-                batch_size=256,
-                local_mini_batch_size=8,
-                mini_batch_size=32,
-                exp_name="dummy_exp_name",
-                reward_model_path="EleutherAI/pythia-14m",
-                num_epochs=2,
-                beta=0.1,
-                loss_type="ipo",
-                disable_dropout=False,
+                missing_eos_penalty=0.33,
+                beta=0.6,
+                loss_type="hinge",
+                dataset_num_proc=4,
             )
             model = AutoModelForCausalLM.from_pretrained("EleutherAI/pythia-14m")
             ref_model = AutoModelForCausalLM.from_pretrained("EleutherAI/pythia-14m")
             reward_model = AutoModelForSequenceClassification.from_pretrained("EleutherAI/pythia-14m", num_labels=1)
             trainer = OnlineDPOTrainer(
-                config=args,
+                args=args,
                 tokenizer=tokenizer,
                 model=model,
                 ref_model=ref_model,
                 reward_model=reward_model,
                 train_dataset=dataset,
             )
-            self.assertEqual(trainer.args.run_name, "dummy_run_name")
-            self.assertEqual(trainer.args.sanity_check, True)
-            self.assertEqual(trainer.args.num_mini_batches, 2)
-            self.assertEqual(trainer.args.total_episodes, 100)
-            self.assertEqual(trainer.args.local_rollout_forward_batch_size, 32)
-            self.assertEqual(trainer.args.num_sample_generations, 20)
-            self.assertEqual(trainer.args.response_length, 52)
-            self.assertEqual(trainer.args.stop_token, "eos")
-            self.assertEqual(trainer.args.stop_token_id, 123)
+            self.assertEqual(trainer.args.max_new_tokens, 42)
             self.assertEqual(trainer.args.temperature, 0.5)
-            self.assertEqual(trainer.args.penalty_reward_value, -2)
-            self.assertEqual(trainer.args.non_eos_penalty, True)
-            self.assertEqual(trainer.args.sft_model_path, "EleutherAI/pythia-14m")
-            # self.assertEqual(trainer.args.world_size, 4)
-            # self.assertEqual(trainer.args.num_total_batches, 100)
-            # self.assertEqual(trainer.args.micro_batch_size, 32)
-            # self.assertEqual(trainer.args.local_batch_size, 64)
-            # self.assertEqual(trainer.args.batch_size, 256)
-            self.assertEqual(trainer.args.local_mini_batch_size, 8)
-            # self.assertEqual(trainer.args.mini_batch_size, 32)
-            self.assertEqual(trainer.args.exp_name, "dummy_exp_name")
-            self.assertEqual(trainer.args.reward_model_path, "EleutherAI/pythia-14m")
-            self.assertEqual(trainer.args.num_epochs, 2)
-            self.assertEqual(trainer.args.beta, 0.1)
-            self.assertEqual(trainer.args.loss_type, "ipo")
-            self.assertEqual(trainer.args.disable_dropout, False)
+            self.assertEqual(trainer.args.missing_eos_penalty, 0.33)
+            self.assertEqual(trainer.args.beta, 0.6)
+            self.assertEqual(trainer.args.loss_type, "hinge")
+            self.assertEqual(trainer.args.dataset_num_proc, 4)
 
     def test_orpo(self):
         tokenizer = AutoTokenizer.from_pretrained("gpt2")
