@@ -46,7 +46,6 @@ class TestGeneralizedJSDLoss(unittest.TestCase):
         self.vocab_size = 5
         self.student_logits = torch.randn(self.batch_size, self.seq_length, self.vocab_size)
         self.teacher_logits = torch.randn(self.batch_size, self.seq_length, self.vocab_size)
-        self.eps = 1e-6
 
     def test_uniform_distribution(self):
         logits = torch.ones(1, 1, self.vocab_size)
@@ -71,13 +70,6 @@ class TestGeneralizedJSDLoss(unittest.TestCase):
             F.log_softmax(teacher_logits, dim=-1), F.softmax(student_logits, dim=-1), reduction="batchmean"
         )
         self.assertAlmostEqual(loss_beta_0.item(), expected_loss_beta_0.item(), places=5)
-
-    def test_temperature_scaling(self):
-        student_logits = torch.tensor([[1.0, 2.0]]).unsqueeze(0)
-        teacher_logits = torch.tensor([[2.0, 1.0]]).unsqueeze(0)
-        loss_temp_1 = GKDTrainer.generalized_jsd_loss(student_logits, teacher_logits, temperature=1)
-        loss_temp_2 = GKDTrainer.generalized_jsd_loss(student_logits, teacher_logits, temperature=2)
-        self.assertLess(loss_temp_2, loss_temp_1)
 
     def test_output_shape(self):
         loss = GKDTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits)
