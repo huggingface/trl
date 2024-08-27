@@ -252,6 +252,7 @@ class OnlineDPOTrainer(Trainer):
             top_k=0.0,
             top_p=1.0,
             do_sample=True,
+            use_cache=False if self.args.gradient_checkpointing else True,
         )
         num_examples, context_length = inputs["prompt_input_ids"].shape
         prompt_ids = inputs["prompt_input_ids"].repeat(2, 1)
