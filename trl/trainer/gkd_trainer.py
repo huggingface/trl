@@ -216,20 +216,8 @@ class GKDTrainer(SFTTrainer):
                 inputs["labels"] = torch.stack(labels)
                 inputs["attention_mask"] = (inputs["input_ids"] != self.tokenizer.pad_token_id).long()
 
-        inputs = self._prepare_inputs(inputs)
-        model.train()
-        with self.compute_loss_context_manager():
-            loss = self.compute_loss(model, inputs, return_outputs=False)
-
-        del inputs
-        torch.cuda.empty_cache()
-
-        if self.args.n_gpu > 1:
-            loss = loss.mean()  # mean() to average on multi-gpu parallel training
-
-        self.accelerator.backward(loss)
-
-        return loss.detach() / self.args.gradient_accumulation_steps
+        loss = super().training_step(model, inputs)
+        return loss
 
     def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
         # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
