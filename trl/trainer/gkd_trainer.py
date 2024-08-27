@@ -72,16 +72,15 @@ class GKDTrainer(SFTTrainer):
             )
             teacher_model = AutoModelForCausalLM.from_pretrained(teacher_model, **teacher_model_init_kwargs)
 
-        self.teacher_model = teacher_model
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
-            if self.teacher_model is not None:
-                disable_dropout_in_model(self.teacher_model)
+            if teacher_model is not None:
+                disable_dropout_in_model(teacher_model)
 
         if self.is_deepspeed_enabled:
-            self.teacher_model = self._prepare_deepspeed(self.teacher_model)
+            self.teacher_model = self._prepare_deepspeed(teacher_model)
         else:
-            self.teacher_model = self.accelerator.prepare_model(self.teacher_model, evaluation_mode=True)
+            self.teacher_model = self.accelerator.prepare_model(teacher_model, evaluation_mode=True)
 
         self.lmbda = args.lmbda
         self.beta = args.beta
