@@ -38,8 +38,6 @@ def formatting_prompts_func_batched(example):
     return output_text
 
 
-if is_peft_available():
-    pass
 
 
 class GKDTrainerTester(unittest.TestCase):
