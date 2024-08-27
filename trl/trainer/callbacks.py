@@ -304,7 +304,7 @@ class LogCompletionsCallback(WandbCallback):
         ]
         completions = [
             c.replace(tokenizer.pad_token, "")
-            for c in tokenizer.batch_decode(completion_ids, skip_special_token=False)
+            for c in tokenizer.batch_decode(completion_ids, skip_special_tokens=False)
         ]
 
         # Build the data to log

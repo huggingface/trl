@@ -103,6 +103,6 @@ if __name__ == "__main__":
         eval_dataset=dataset[args.dataset_test_split],
         tokenizer=tokenizer,
     )
-    log_completions_callback = LogCompletionsCallback(prompts, trainer)
+    log_completions_callback = LogCompletionsCallback(prompts)
     trainer.add_callback(log_completions_callback)
     trainer.train()
