@@ -144,19 +144,17 @@ class GKDTrainer(SFTTrainer):
                 input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], labels=inputs["labels"]
             )
 
+        # slice the logits for the generated tokens
+        generated_mask = inputs["labels"] != -100
+        student_logits = outputs_student.logits[generated_mask]
+        teacher_logits = outputs_teacher.logits[generated_mask]
+
         # compute loss
-        loss = 0
-        batch_size = inputs["labels"].shape[0]
-        for i in range(batch_size):
-            index = (inputs["labels"] != -100)[i]
-            student_logits = outputs_student.logits[i, index, :][-self.args.max_new_tokens :, :]
-            teacher_logits = outputs_teacher.logits[i, index, :][-self.args.max_new_tokens :, :]
-            loss += self.generalized_jsd_loss(
-                student_logits=student_logits,
-                teacher_logits=teacher_logits,
-                beta=self.beta,
-            )
-        loss /= batch_size
+        loss = self.generalized_jsd_loss(
+            student_logits=student_logits,
+            teacher_logits=teacher_logits,
+            beta=self.beta,
+        )
 
         # Return loss
         return (loss, outputs_student) if return_outputs else loss

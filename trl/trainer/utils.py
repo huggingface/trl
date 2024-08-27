@@ -294,14 +294,12 @@ class DataCollatorForChatML:
         prompts_input_ids = [torch.tensor(ids) for ids in tokenized_prompts["input_ids"]]
         prompts_input_ids = pad(prompts_input_ids, padding_side="left", padding_value=self.tokenizer.pad_token_id)
 
-        batch = {
+        return {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "labels": labels,
             "prompts": prompts_input_ids,
         }
-
-        return batch
 
 
 @dataclass
