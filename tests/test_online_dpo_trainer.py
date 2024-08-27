@@ -84,7 +84,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
                 model=self.model,
                 ref_model=self.model,
                 reward_model=self.reward_model,
-                config=training_args,
+                args=training_args,
                 tokenizer=self.tokenizer,
                 train_dataset=self.dummy_dataset,
                 eval_dataset=self.dummy_dataset,
