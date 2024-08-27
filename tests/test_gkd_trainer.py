@@ -145,7 +145,7 @@ class GKDTrainerTester(unittest.TestCase):
 
             trainer.train()
 
-            assert trainer.state.log_history[(-1)]["train_loss"] is not None
+            self.assertIsNotNone(trainer.state.log_history[(-1)]["train_loss"])
             assert trainer.state.log_history[0]["eval_loss"] is not None
 
             assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2")
