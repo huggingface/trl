@@ -22,7 +22,6 @@ from transformers import (
 )
 
 from trl import GKDConfig, GKDTrainer
-from trl.import_utils import is_peft_available
 
 
 def formatting_prompts_func(example):
@@ -36,8 +35,6 @@ def formatting_prompts_func_batched(example):
         text = f"### Question: {question}\n ### Answer: {example['answer'][i]}"
         output_text.append(text)
     return output_text
-
-
 
 
 class GKDTrainerTester(unittest.TestCase):
@@ -130,6 +127,7 @@ class GKDTrainerTester(unittest.TestCase):
                 eval_steps=2,
                 save_steps=2,
                 per_device_train_batch_size=2,
+                per_device_eval_batch_size=2,
             )
 
             trainer = GKDTrainer(

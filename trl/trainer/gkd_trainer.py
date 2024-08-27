@@ -221,7 +221,7 @@ class GKDTrainer(SFTTrainer):
         inputs = self._prepare_inputs(inputs)
         model.train()
         with self.compute_loss_context_manager():
-            loss = self.compute_loss(model, inputs)
+            loss = self.compute_loss(model, inputs, return_outputs=False)
 
         del inputs
         torch.cuda.empty_cache()
