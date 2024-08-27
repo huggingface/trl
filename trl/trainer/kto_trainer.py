@@ -71,9 +71,9 @@ RUNNING_NAME = "running.pt"
 
 
 def _get_kl_dataset(batch: Dict[str, List[Any]]) -> Dict[str, List[Any]]:
-    """Creates mismatched pairs of prompts and completions for the KL dataset by reversing the order of completions."""
-    batch["answer_input_ids"] = batch["answer_input_ids"][::-1]
-    batch["answer_attention_mask"] = batch["answer_attention_mask"][::-1]
+    """Creates mismatched pairs of prompts and completions for the KL dataset by adding a +1 offset to the order of completions."""
+    batch["answer_input_ids"] = [batch["answer_input_ids"][-1]] + batch["answer_input_ids"][:-1]
+    batch["answer_attention_mask"] = [batch["answer_attention_mask"][-1]] + batch["answer_attention_mask"][:-1]
     return batch
 
 

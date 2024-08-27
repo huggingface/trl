@@ -78,6 +78,8 @@ EXTRAS = {
         "pytest-xdist",
         "scikit-learn",
         "Pillow",
+        "pytest-rerunfailures",
+        "llm-blender>=0.0.2",
     ],
     "peft": ["peft>=0.8.0"],
     "diffusers": ["diffusers>=0.18.0"],

@@ -648,6 +648,10 @@ class DPOTrainer(Trainer):
                 reference_chosen_logps.append(reference_chosen_logp.cpu())
                 reference_rejected_logps.append(reference_rejected_logp.cpu())
 
+                # Unnecessary cache clearing to avoid OOM
+                torch.cuda.empty_cache()
+                self.accelerator.free_memory()
+
             all_reference_chosen_logps = torch.cat(reference_chosen_logps).float().numpy()
             all_reference_rejected_logps = torch.cat(reference_rejected_logps).float().numpy()
 
@@ -1375,7 +1379,7 @@ class DPOTrainer(Trainer):
         if (
             "reference_chosen_logps" in batch
             and "reference_rejected_logps" in batch
-            and self.args.rpo_alpha is not None
+            and (self.precompute_ref_log_probs or self.args.rpo_alpha is not None)
         ):
             reference_chosen_logps = batch["reference_chosen_logps"]
             reference_rejected_logps = batch["reference_rejected_logps"]

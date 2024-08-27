@@ -67,6 +67,7 @@ _import_structure = {
         "BasePairwiseJudge",
         "RandomRankJudge",
         "RandomPairwiseJudge",
+        "PairRMJudge",
         "HfPairwiseJudge",
         "OpenAIPairwiseJudge",
     ],
@@ -153,6 +154,7 @@ if TYPE_CHECKING:
         BasePairwiseJudge,
         RandomRankJudge,
         RandomPairwiseJudge,
+        PairRMJudge,
         HfPairwiseJudge,
         OpenAIPairwiseJudge,
     )
