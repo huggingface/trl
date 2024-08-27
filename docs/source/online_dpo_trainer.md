@@ -1,12 +1,12 @@
 # Online DPO Trainer
 
-TRL supports training LLMs with online DPO ([Guo et al., 2024](https://huggingface.co/papers/2402.04792)) with a reward model (RM). The idea of online DPO is to generate completions based on prompts and either have a reward model or an LLM judge to rank the responses as chosen or rejected. Then the model is updated with the ranked responses using the DPO loss.
+TRL supports post-training LLMs with online DPO ([Guo et al., 2024](https://huggingface.co/papers/2402.04792)). The idea of online DPO is to generate completions per batch of prompts and have either a reward model or an LLM judge rank the responses as chosen or rejected. Then the model is updated with the ranked responses using the DPO loss.
 
 While [Guo et al. (2024)](https://huggingface.co/papers/2402.04792) used an LLM judge to score model completions, the current implementation only supports reward models -- see [Reward Bench](https://huggingface.co/spaces/allenai/reward-bench) for a leaderboard of public models you can use.
 
 ## Get started
 
-The basic API looks as follows:
+The basic API is as follows:
 
 ```python
 from datasets import Dataset
@@ -18,25 +18,23 @@ from transformers import (
 )
 NUM_DUMMY_SAMPLES = 100
 tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-135M-Instruct")
-tok.add_special_tokens({"pad_token": "[PAD]"})
+tokenizer.add_special_tokens({"pad_token": "[PAD]"})
 # The model to optimise
 model = AutoModelForCausalLM.from_pretrained("HuggingFaceTB/SmolLM-135M-Instruct")
 # The reference model to calculate the KL divergence against
 ref_model = AutoModelForCausalLM.from_pretrained("HuggingFaceTB/SmolLM-135M-Instruct")
-# The model to score completions with. In practice, you will need a fine-tuned reward model.
+# The model to score completions with. In practice, you will need a reward model.
 reward_model = AutoModelForSequenceClassification.from_pretrained("HuggingFaceTB/SmolLM-135M-Instruct", num_labels=1)
 train_dataset = Dataset.from_dict(
-    {"input_ids": [tok.encode("Q: Hi how are you? A:")] * NUM_DUMMY_SAMPLES})
+    {"prompt": ["Q: Hi how are you? A:"] * NUM_DUMMY_SAMPLES})
 eval_dataset = Dataset.from_dict(
-    {"input_ids": [tok.encode("Q: What do you like to eat A:")] * NUM_DUMMY_SAMPLES})
+    {"prompt": ["Q: What do you like to eat A:"] * NUM_DUMMY_SAMPLES})
 trainer = OnlineDPOTrainer(
-    OnlineDPOConfig(
-        output_dir="online-dpo-model",
-    ),
     model=model,
     ref_model=ref_model,
     reward_model=reward_model,
-    tokenizer=tok,
+    args=OnlineDPOConfig(output_dir="online-dpo-model"),
+    tokenizer=tokenizer,
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
 )
@@ -46,15 +44,28 @@ trainer.train()
 To run the online DPO script with a dummy reward model, run:
 
 ```bash
-python examples/scripts/online_dpo.py \
+python examples/scripts/dpo_online.py \
+    --model_name_or_path trl-lib/pythia-1b-deduped-tldr-sft  \
+    --reward_model_path trl-lib/pythia-1b-deduped-tldr-rm \
+    --dataset_name trl-lib/tldr \
+    --learning_rate 5.0e-7 \
+    --output_dir pythia-1b-tldr-online-dpo \
+    --per_device_train_batch_size 8 \
+    --gradient_accumulation_steps 2 \
+    --num_train_epochs 3 \
+    --completion_length 53 \
+    --warmup_ratio 0.1 \
+    --missing_eos_penalty 1.0 \
+    --push_to_hub
+
+python examples/scripts/dpo_online.py \
     --dataset_name trl-lib/tldr \
     --learning_rate 3e-6 \
-    --output_dir models/minimal/online_dpo \
+    --output_dir online-dpo-mpdel \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 64 \
     --total_episodes 30000 \
     --model_name_or_path EleutherAI/pythia-14m \
-    --sft_model_path EleutherAI/pythia-14m \
     --reward_model_path EleutherAI/pythia-14m \
     --non_eos_penalty \
     --stop_token eos \
@@ -67,12 +78,10 @@ python examples/scripts/online_dpo.py \
 Unlike standard DPO where one provides a dataset with chosen and rejected columns, for online DPO one just needs a dataset of prompts to generate the completions from. The [`OnlineDPOTrainer`] assumes that the dataset is preprocessed for model inference, so typically you will want to wrap your prompts in the messages format and then apply the chat template as follows:
 
 ```python
-def prepare_dataset(dataset, tokenizer, dataset_prompt_field):
-    """pre-tokenize the dataset before training; only collate during training"""
-    return dataset.map(
-        lambda x: {"input_ids": tokenizer.apply_chat_template(x[dataset_prompt_field], add_generation_prompt=True)},
-        remove_columns=dataset.column_names,
-    )
+def prepare_dataset(row):
+    """Apply chat template to messages"""
+    row["prompt"] = tokenizer.apply_chat_template(row["prompt"], tokenize=False, add_generation_prompt=True)
+    return row
 
 dataset = prepare_dataset(dataset)
 ```

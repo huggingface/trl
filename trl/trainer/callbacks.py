@@ -251,7 +251,7 @@ class LogCompletionsCallback(WandbCallback):
         prompts (`List[str]`):
             The prompts to generate completions for.
         freq (`Optional[int]`, *optional*, defaults to `None`):
-            The frequency at which to log completions. If not provided, defaults to `save_steps`.
+            The frequency at which to log completions. If not provided, defaults to `logging_steps`.
     """
 
     def __init__(self, prompts: List[str], freq: int = None):
@@ -275,8 +275,8 @@ class LogCompletionsCallback(WandbCallback):
         if state.global_step == self._last_logged_step:
             return
 
-        # Only log every `freq` steps (if no `freq` is provided, log every `save_steps` steps)
-        freq = self.freq or state.save_steps
+        # Only log every `freq` steps (if no `freq` is provided, log every `logging_steps` steps)
+        freq = self.freq or state.logging_steps
         if state.global_step % freq != 0:
             return
 
