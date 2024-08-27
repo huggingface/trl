@@ -82,7 +82,7 @@ if __name__ == "__main__":
     )
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_QUERY_CHAT_TEMPLATE
-    
+
     dataset = load_dataset(args.dataset_name)
 
     def prepare_dataset(row):
