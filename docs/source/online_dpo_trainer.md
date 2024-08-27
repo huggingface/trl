@@ -82,13 +82,14 @@ The logged metrics are as follows. Here is an example [tracked run at Weights an
 * `objective/rlhf_reward`: The mean RLHF reward, which is `score - non_score_reward`.
 * `objective/scores`: The mean scores returned by the reward model / environment.
 * `objective/scores_margin`: The mean score margin (according to the external reward model) between the chosen and rejected completions.
+* `rewards/accuracies`: The accuracies of the online DPO's implicit reward model.
 * `rewards/chosen`: The mean reward (according to online DPO's implicit reward model)of the chosen completions.
 * `rewards/rejected`: The mean reward (according to online DPO's implicit reward model) of the rejected completions.
-* `rewards/accuracies`: The accuracies of the online DPO's implicit reward model.
 * `rewards/margins`: The mean reward margin (according to online DPO's implicit reward model) between the chosen and rejected completions.
 * `logps/chosen`: The mean log probabilities of the chosen completions.
 * `logps/rejected`: The mean log probabilities of the rejected completions.
-* `val/contain_eos_token`: The fraction of completions which contain an EOS token.
+* `val/contain_eos+token`: The fraction of completions which contain and EOS token.
+* `lr`: lr: The current learning rate used by the optimizer.
 
 
 ## Cookbook
@@ -157,7 +158,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --bf16 \
     --logging_steps 20 \
     --save_steps 0.1 \
-    --push_to_hub
+    --push_to_hub \
 
 # 6.9B Online DPO experiment
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
