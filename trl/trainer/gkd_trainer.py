@@ -86,6 +86,13 @@ class GKDTrainer(SFTTrainer):
         self.beta = args.beta
         self.temperature = args.temperature
 
+        self.generation_config = GenerationConfig(
+            max_new_tokens=args.max_new_tokens,
+            temperature=args.temperature,
+            do_sample=True,
+            top_k=0,
+        )
+
     @staticmethod
     def generalized_jsd_loss(student_logits, teacher_logits, beta=0.5, temperature=1.0, reduction="batchmean"):
         """
@@ -159,6 +166,41 @@ class GKDTrainer(SFTTrainer):
         # Return loss
         return (loss, outputs_student) if return_outputs else loss
 
+    @staticmethod
+    def generate_on_policy_outputs(model, tokenizer, inputs, generation_config):
+        # Generate output with respect to the prompt only
+        generated_outputs = model.generate(
+            input_ids=inputs["prompts"],
+            generation_config=generation_config,
+            return_dict_in_generate=True,
+            output_scores=True,
+        )
+
+        # Get the generated token IDs
+        generated_tokens = generated_outputs.sequences
+
+        # Create labels: -100 for prompt tokens, actual token IDs for generated tokens
+        labels = torch.full_like(generated_tokens, fill_value=-100)
+        for i, (prompt, generated) in enumerate(zip(inputs["prompts"], generated_tokens)):
+            prompt_length = prompt.ne(tokenizer.pad_token_id).sum().item()
+            labels[i, prompt_length:] = generated[prompt_length:]
+
+        # Create new attention mask
+        new_attention_mask = (generated_tokens != tokenizer.pad_token_id).long()
+
+        # Ensure the last token is either EOS or PAD
+        for i, seq in enumerate(generated_tokens):
+            if seq[-1] not in [tokenizer.eos_token_id, tokenizer.pad_token_id]:
+                if seq[-1] == tokenizer.pad_token_id:
+                    generated_tokens[i, -1] = tokenizer.eos_token_id
+                    labels[i, -1] = tokenizer.eos_token_id
+                else:
+                    # If the sequence is full, replace the last token with EOS
+                    generated_tokens[i, -1] = tokenizer.eos_token_id
+                    labels[i, -1] = tokenizer.eos_token_id
+
+        return generated_tokens, labels, new_attention_mask
+
     def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         """
         Perform a training step for the Generalized Knowledge Distillation (GKD) model.
@@ -168,45 +210,13 @@ class GKDTrainer(SFTTrainer):
         which are then used for training instead of the original labels.
         """
         if random.random() <= self.lmbda:
-            # On-policy: Generate outputs from the student model with temperature self.temperature
             with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
-                generation_config = GenerationConfig(
-                    max_new_tokens=self.args.max_new_tokens,
-                    temperature=self.temperature,
-                    do_sample=True,
-                    top_k=0,
+                new_input_ids, new_labels, new_attention_mask = self.generate_on_policy_outputs(
+                    unwrapped_model, self.tokenizer, inputs, self.generation_config
                 )
-
-                # generate output with respect to the prompt only
-                generated_outputs = unwrapped_model.generate(
-                    input_ids=inputs["prompts"],
-                    generation_config=generation_config,
-                    return_dict_in_generate=True,
-                )
-
-                input_ids = []
-                labels = []
-                for i, sequence in enumerate(generated_outputs.sequences):
-                    eos_pos = (sequence == self.tokenizer.eos_token_id).nonzero()
-                    if eos_pos.numel() > 0:
-                        eos_pos = eos_pos[-1].item()
-                        sequence[eos_pos + 1 :] = self.tokenizer.pad_token_id
-                    else:
-                        eos_pos = sequence.size(0)
-
-                    # Set input_ids to the generated output
-                    input_ids.append(sequence)
-
-                    # Set the labels to the generated output with the prompt masked out (i.e., the teacher-forced part)
-                    prompt_length = (inputs["prompts"][i] != self.tokenizer.pad_token_id).sum().item()
-                    label = torch.full_like(sequence, -100)
-                    label[prompt_length:eos_pos] = sequence[prompt_length:eos_pos]
-                    labels.append(label)
-
-                # Update inputs, labels, and attention_mask
-                inputs["input_ids"] = torch.stack(input_ids)
-                inputs["labels"] = torch.stack(labels)
-                inputs["attention_mask"] = (inputs["input_ids"] != self.tokenizer.pad_token_id).long()
+            inputs["input_ids"] = new_input_ids
+            inputs["labels"] = new_labels
+            inputs["attention_mask"] = new_attention_mask
 
         loss = super().training_step(model, inputs)
         return loss
