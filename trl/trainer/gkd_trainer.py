@@ -161,19 +161,11 @@ class GKDTrainer(SFTTrainer):
 
     def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         """
-        Perform a training step on a batch of inputs.
+        Perform a training step for the Generalized Knowledge Distillation (GKD) model.
 
-        Args:
-            model (`nn.Module`):
-                The model to train.
-            inputs (`Dict[str, Union[torch.Tensor, Any]]`):
-                The inputs and targets of the model.
-
-                The dictionary will be unpacked before being fed to the model. Most models expect the targets under the
-                argument `labels`. Check your model's documentation for all accepted arguments.
-
-        Return:
-            `torch.Tensor`: The tensor with training loss on this batch.
+        This method implements the on-policy learning approach described in the GKD paper.
+        With probability `self.lmbda`, it generates new responses using the student model,
+        which are then used for training instead of the original labels.
         """
         if random.random() <= self.lmbda:
             # On-policy: Generate outputs from the student model with temperature self.temperature
