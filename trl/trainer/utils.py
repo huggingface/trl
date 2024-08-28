@@ -36,6 +36,11 @@ from transformers import (
     TrainerState,
     TrainingArguments,
 )
+from transformers.utils import (
+    is_torch_mlu_available,
+    is_torch_npu_available,
+    is_torch_xpu_available,
+)
 
 from ..import_utils import is_peft_available, is_unsloth_available, is_xpu_available
 from ..trainer.model_config import ModelConfig
@@ -1241,3 +1246,21 @@ def truncate_right(
     output_ids = torch.masked_fill(input_ids, idxs > trunc_idxs, pad_token_id)
     mask = torch.masked_fill(torch.ones_like(input_ids), idxs > trunc_idxs, 0)
     return output_ids, mask
+
+
+def empty_cache() -> None:
+    """Empties the cache of the available torch device.
+
+    This function checks for the availability of different torch devices (XPU, MLU, NPU, CUDA)
+    and empties the cache of the first available device it finds.
+
+    If none of the specific devices are available, it defaults to emptying the CUDA cache.
+    """
+    if is_torch_xpu_available():
+        torch.xpu.empty_cache()
+    elif is_torch_mlu_available():
+        torch.mlu.empty_cache()
+    elif is_torch_npu_available():
+        torch.npu.empty_cache()
+    else:
+        torch.cuda.empty_cache()

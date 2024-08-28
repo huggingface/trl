@@ -18,9 +18,6 @@ from transformers.training_args import OptimizerNames
 from transformers.utils import (
     is_apex_available,
     is_sagemaker_mp_enabled,
-    is_torch_mlu_available,
-    is_torch_npu_available,
-    is_torch_xpu_available,
     logging,
 )
 
@@ -29,6 +26,7 @@ from .judges import BasePairwiseJudge
 from .online_dpo_config import OnlineDPOConfig
 from .utils import (
     DPODataCollatorWithPadding,
+    empty_cache,
     get_reward,
     prepare_deepspeed,
     trl_sanitze_kwargs_for_tagging,
@@ -320,7 +318,7 @@ class OnlineDPOTrainer(Trainer):
         # Take the completion tokens logprob
         logprobs = torch.take_along_dim(all_logprobs, completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
         del output, logits, all_logprobs  # free memory
-        self.empty_cache()
+        empty_cache()
 
         # Same for the reference model
         with torch.no_grad():
@@ -329,7 +327,7 @@ class OnlineDPOTrainer(Trainer):
         ref_all_logprobs = F.log_softmax(ref_logits, dim=-1)
         ref_logprobs = torch.take_along_dim(ref_all_logprobs, completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
         del ref_output, ref_logits, ref_all_logprobs  # free memory
-        self.empty_cache()
+        empty_cache()
 
         # Get the reward from the reward model
         with torch.no_grad():
@@ -415,7 +413,7 @@ class OnlineDPOTrainer(Trainer):
             self.args.torch_empty_cache_steps is not None
             and self.state.global_step % self.args.torch_empty_cache_steps == 0
         ):
-            self.empty_cache()
+            empty_cache()
 
         kwargs = {}
 
@@ -468,16 +466,6 @@ class OnlineDPOTrainer(Trainer):
         if self.control.should_save:
             self._save_checkpoint(model, trial, metrics=metrics)
             self.control = self.callback_handler.on_save(self.args, self.state, self.control)
-
-    def empty_cache(self):
-        if is_torch_xpu_available():
-            torch.xpu.empty_cache()
-        elif is_torch_mlu_available():
-            torch.mlu.empty_cache()
-        elif is_torch_npu_available():
-            torch.npu.empty_cache()
-        else:
-            torch.cuda.empty_cache()
 
     @wraps(Trainer.push_to_hub)
     def push_to_hub(
