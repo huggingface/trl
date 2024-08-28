@@ -104,3 +104,41 @@ class DataCollatorForCompletionOnlyLMTester(unittest.TestCase):
         encoded_instance = self.collator.torch_call([self.tokenized_instruction])
         result = torch.all(encoded_instance["labels"] == -100)
         assert result, "Not all values in the tensor are -100."
+
+    def test_padding_free(self):
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/dummy-GPT2-correct-vocab")
+        if tokenizer.pad_token_id is None:
+            tokenizer.pad_token = tokenizer.eos_token
+            tokenizer.pad_token_id = tokenizer.eos_token_id
+        inst1 = "### System: You are a helpful assistant.\n\n### User: How much is 2+2?\n\n### Assistant: 2+2 equals 4"
+        inst2 = "### System: You are a honest and helpful assistant.\n\n### User: What is the answer of 22x22?\n\n### Assistant: 22x22 equals 484"
+
+        response_template = "\n### Assistant:"
+        collator = DataCollatorForCompletionOnlyLM(response_template, tokenizer=tokenizer)
+        collator_paddingfree = DataCollatorForCompletionOnlyLM(
+            response_template, tokenizer=tokenizer, padding_free=True
+        )
+
+        tokenized_instruction = [tokenizer(x, add_special_tokens=False) for x in [inst1, inst2]]
+        batch = collator(tokenized_instruction)
+        batch_paddingfree = collator_paddingfree(tokenized_instruction)
+
+        self.assertNotIn("attention_mask", batch_paddingfree)
+        self.assertIn("input_ids", batch_paddingfree)
+        self.assertIn("labels", batch_paddingfree)
+        self.assertIn("position_ids", batch_paddingfree)
+        self.assertEqual(batch_paddingfree["input_ids"].size(), batch_paddingfree["labels"].size())
+        self.assertEqual(batch_paddingfree["labels"].size(), batch_paddingfree["position_ids"].size())
+
+        attn_mask = batch["attention_mask"]
+        input_ids_remove_pad = batch["input_ids"][attn_mask.bool()].unsqueeze(0)
+        expected_position_ids = attn_mask.cumsum(1)[attn_mask.bool()].unsqueeze(0) - 1
+        expected_labels = []
+        for idx in range(batch["input_ids"].size(0)):
+            expected_labels.append(batch["labels"][idx][attn_mask[idx].bool()])
+            expected_labels[-1][0] = collator.ignore_index
+        expected_labels = torch.cat(expected_labels).unsqueeze(0)
+
+        self.assertTrue((input_ids_remove_pad == batch_paddingfree["input_ids"]).all())
+        self.assertTrue((expected_position_ids == batch_paddingfree["position_ids"]).all())
+        self.assertTrue((expected_labels == batch_paddingfree["labels"]).all())

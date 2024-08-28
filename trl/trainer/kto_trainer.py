@@ -71,9 +71,9 @@ RUNNING_NAME = "running.pt"
 
 
 def _get_kl_dataset(batch: Dict[str, List[Any]]) -> Dict[str, List[Any]]:
-    """Creates mismatched pairs of prompts and completions for the KL dataset by reversing the order of completions."""
-    batch["answer_input_ids"] = batch["answer_input_ids"][::-1]
-    batch["answer_attention_mask"] = batch["answer_attention_mask"][::-1]
+    """Creates mismatched pairs of prompts and completions for the KL dataset by adding a +1 offset to the order of completions."""
+    batch["answer_input_ids"] = [batch["answer_input_ids"][-1]] + batch["answer_input_ids"][:-1]
+    batch["answer_attention_mask"] = [batch["answer_attention_mask"][-1]] + batch["answer_attention_mask"][:-1]
     return batch
 
 
@@ -1385,12 +1385,12 @@ class KTOTrainer(Trainer):
         self,
         commit_message: Optional[str] = "End of training",
         blocking: bool = True,
-        token: Optional[str] = None,
         **kwargs,
     ) -> str:
         """
         Overwrite the `push_to_hub` method in order to force-add the tag "kto" when pushing the
         model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
+        Unlike the parent class, we don't use the `token` argument to mitigate security risks.
         """
         kwargs = trl_sanitze_kwargs_for_tagging(model=self.model, tag_names=self._tag_names, kwargs=kwargs)
-        return super().push_to_hub(commit_message=commit_message, blocking=blocking, token=token, **kwargs)
+        return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)

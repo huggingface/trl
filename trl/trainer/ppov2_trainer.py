@@ -604,25 +604,26 @@ class PPOv2Trainer(Trainer):
                 if sampling:
                     break
         df = pd.DataFrame(table)
-        if self.accelerator.process_index == 0:
-            print_rich_table(df.iloc[0 : 0 + 5])
-        if "wandb" in args.report_to:
-            import wandb
 
-            if wandb.run is not None:
-                wandb.log({"completions": wandb.Table(dataframe=df)})
+        if self.accelerator.is_main_process:
+            print_rich_table(df.iloc[0 : 0 + 5])
+            if "wandb" in args.report_to:
+                import wandb
+
+                if wandb.run is not None:
+                    wandb.log({"completions": wandb.Table(dataframe=df)})
 
     @wraps(Trainer.push_to_hub)
     def push_to_hub(
         self,
         commit_message: Optional[str] = "End of training",
         blocking: bool = True,
-        token: Optional[str] = None,
         **kwargs,
     ) -> str:
         """
         Overwrite the `push_to_hub` method in order to force-add the tag "ppo" when pushing the
         model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
+        Unlike the parent class, we don't use the `token` argument to mitigate security risks.
         """
         kwargs = trl_sanitze_kwargs_for_tagging(model=self.model, tag_names=self._tag_names, kwargs=kwargs)
-        return super().push_to_hub(commit_message=commit_message, blocking=blocking, token=token, **kwargs)
+        return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)
