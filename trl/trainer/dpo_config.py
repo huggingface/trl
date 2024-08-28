@@ -13,7 +13,7 @@
 # limitations under the License.
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, Literal, Optional
+from typing import Any, Dict, Literal, Optional
 
 from transformers import TrainingArguments
 
@@ -43,7 +43,7 @@ class DPOConfig(TrainingArguments):
             Beta factor in DPO loss. Higher beta means less divergence from the initial policy. For the IPO loss, beta
             is the regularization parameter denoted by tau in the [paper](https://huggingface.co/papers/2310.12036).
         label_smoothing (`float`, *optional*, defaults to `0.0`):
-            Robust DPO label smoothing parameter from the [cDPO](https://ericmitchell.ai/cdpo.pdf) report and 
+            Robust DPO label smoothing parameter from the [cDPO](https://ericmitchell.ai/cdpo.pdf) report and
             [Robust DPO](https://huggingface.co/papers/2403.00409) paper that should be between `0.0` and `0.5`.
         loss_type (`str`, *optional*, defaults to `"sigmoid"`):
             Type of DPO loss to use. Possible values are:
