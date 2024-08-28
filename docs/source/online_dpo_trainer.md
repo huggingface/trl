@@ -14,7 +14,7 @@ This post-training method was contributed by [Michael Noukhovitch](https://huggi
 
 ## Usage tips
 
-> [!IMPORTANT]
+> [!WARNING]
 > Make sure that the SFT model and reward model use the _same_ chat template. Otherwise, you may find the model completions are scored incorrectly during training.
 
 The basic API is as follows:
