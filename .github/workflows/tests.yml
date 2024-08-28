@@ -13,6 +13,9 @@ on:
       - ".github/**.yml"
       - "tests/**.py"
 
+env:
+  TQDM_DISABLE: 1
+
 jobs:
   check_code_quality:
     runs-on: ubuntu-latest
