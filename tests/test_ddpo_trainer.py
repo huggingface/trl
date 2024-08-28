@@ -48,6 +48,7 @@ class DDPOTrainerTester(unittest.TestCase):
             ddpo_config = DDPOConfig(
                 output_dir=tmp_dir,
                 num_epochs=2,
+                per_device_train_batch_size=1,
                 train_gradient_accumulation_steps=1,
                 per_prompt_stat_tracking_buffer_size=32,
                 sample_num_batches_per_epoch=2,
@@ -70,6 +71,7 @@ class DDPOTrainerTester(unittest.TestCase):
             ddpo_config = DDPOConfig(
                 output_dir=tmp_dir,
                 num_epochs=2,
+                per_device_train_batch_size=1,
                 train_gradient_accumulation_steps=1,
                 per_prompt_stat_tracking_buffer_size=32,
                 sample_num_batches_per_epoch=2,
@@ -91,6 +93,7 @@ class DDPOTrainerTester(unittest.TestCase):
             ddpo_config = DDPOConfig(
                 output_dir=tmp_dir,
                 num_epochs=2,
+                per_device_train_batch_size=1,
                 train_gradient_accumulation_steps=1,
                 per_prompt_stat_tracking_buffer_size=32,
                 sample_num_batches_per_epoch=2,
@@ -137,6 +140,7 @@ class DDPOTrainerWithLoRATester(unittest.TestCase):
             ddpo_config = DDPOConfig(
                 output_dir=tmp_dir,
                 num_epochs=2,
+                per_device_train_batch_size=1,
                 train_gradient_accumulation_steps=1,
                 per_prompt_stat_tracking_buffer_size=32,
                 sample_num_batches_per_epoch=2,
@@ -159,6 +163,7 @@ class DDPOTrainerWithLoRATester(unittest.TestCase):
             ddpo_config = DDPOConfig(
                 output_dir=tmp_dir,
                 num_epochs=2,
+                per_device_train_batch_size=1,
                 train_gradient_accumulation_steps=1,
                 per_prompt_stat_tracking_buffer_size=32,
                 sample_num_batches_per_epoch=2,
@@ -180,6 +185,7 @@ class DDPOTrainerWithLoRATester(unittest.TestCase):
             ddpo_config = DDPOConfig(
                 output_dir=tmp_dir,
                 num_epochs=2,
+                per_device_train_batch_size=1,
                 train_gradient_accumulation_steps=1,
                 per_prompt_stat_tracking_buffer_size=32,
                 sample_num_batches_per_epoch=2,
