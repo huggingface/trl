@@ -31,9 +31,15 @@ from torch.utils.data import IterableDataset
 from transformers import (
     BitsAndBytesConfig,
     DataCollatorForLanguageModeling,
+    GenerationConfig,
     PreTrainedTokenizerBase,
     TrainerState,
     TrainingArguments,
+)
+from transformers.utils import (
+    is_torch_mlu_available,
+    is_torch_npu_available,
+    is_torch_xpu_available,
 )
 
 from ..import_utils import is_peft_available, is_unsloth_available, is_xpu_available
@@ -1118,7 +1124,7 @@ def truncate_response(stop_token_id: int, pad_token_id: int, responses: torch.Te
 
 
 def generate(
-    lm_backbone: torch.nn.Module, queries: torch.Tensor, pad_token_id: int, generation_config: dict
+    lm_backbone: torch.nn.Module, queries: torch.Tensor, pad_token_id: int, generation_config: GenerationConfig
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Generates sequences from the language model backbone in a way that does not affect padding tokens.
@@ -1130,8 +1136,8 @@ def generate(
             The tensor containing the input queries.
         pad_token_id (`int`):
             The token ID representing the pad token.
-        generation_config (`dict`):
-            The configuration dictionary for generation settings.
+        generation_config (`GenerationConfig`):
+            The configuration for the generation process.
 
     Returns:
         tuple:
@@ -1162,7 +1168,7 @@ def batch_generation(
     queries: torch.Tensor,
     local_rollout_forward_batch_size: int,
     pad_token_id: int,
-    generation_config: dict,
+    generation_config: GenerationConfig,
 ):
     query_responses = []
     logitss = []
@@ -1211,3 +1217,50 @@ def add_eos_token_if_needed(
         rejected_tokens["input_ids"].append(eos_token_id)
         rejected_tokens["attention_mask"].append(1)
     return chosen_tokens, rejected_tokens
+
+
+def truncate_right(
+    input_ids: torch.Tensor, stop_token_id: int, pad_token_id: int
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Truncates the input tensor from the right side after the first occurrence of the stop token.
+
+    Args:
+        input_ids (`torch.Tensor`):
+            The tensor containing the responses to be truncated
+        stop_token_id (`int`):
+            The token ID representing the stop token where truncation occurs
+        pad_token_id (`int`):
+            The token ID representing the pad token used to fill the truncated responses
+
+    Returns:
+        tuple:
+            - `output_ids` (`torch.Tensor`):
+                The truncated responses tensor with pad tokens filled after the stop token
+            - `mask` (`torch.Tensor`):
+                The mask tensor to indicate the padding tokens
+    """
+    trunc_idxs = first_true_indices(input_ids == stop_token_id).unsqueeze(-1)
+    new_size = [1] * (len(input_ids.size()) - 1) + [input_ids.shape[1]]
+    idxs = torch.arange(input_ids.shape[1], device=input_ids.device).view(*new_size)
+    output_ids = torch.masked_fill(input_ids, idxs > trunc_idxs, pad_token_id)
+    mask = torch.masked_fill(torch.ones_like(input_ids), idxs > trunc_idxs, 0)
+    return output_ids, mask
+
+
+def empty_cache() -> None:
+    """Empties the cache of the available torch device.
+
+    This function checks for the availability of different torch devices (XPU, MLU, NPU, CUDA)
+    and empties the cache of the first available device it finds.
+
+    If none of the specific devices are available, it defaults to emptying the CUDA cache.
+    """
+    if is_torch_xpu_available():
+        torch.xpu.empty_cache()
+    elif is_torch_mlu_available():
+        torch.mlu.empty_cache()
+    elif is_torch_npu_available():
+        torch.npu.empty_cache()
+    else:
+        torch.cuda.empty_cache()
