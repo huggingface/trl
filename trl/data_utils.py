@@ -17,7 +17,7 @@ from datasets import DatasetDict
 
 
 def _reformat_row_dpo_to_kto(row: dict):
-    # turn each paired row into two unpaired rows
+    """Turn a DPO-formatted dataset row into two KTO-formatted rows."""
 
     chosen_row = {"prompt": row["prompt"], "completion": row["chosen"], "label": [True] * len(row["chosen"])}
     rejected_row = {
@@ -30,6 +30,24 @@ def _reformat_row_dpo_to_kto(row: dict):
 
 
 def maybe_reformat_dpo_to_kto(dataset: DatasetDict, num_proc: int = None):
+    """
+    Reformat a dataset from the DPO format to the KTO format if necessary.
+
+    This function checks whether the input dataset is already in the KTO format (containing "prompt", "completion", and "label" fields).
+    If the dataset is in DPO format (with "prompt", "chosen", and "rejected" fields), it converts it to KTO format by:
+    - Removing any unnecessary columns.
+    - Reformatting each row to create a unified format suitable for KTO training.
+
+    Args:
+        dataset (DatasetDict): The dataset to potentially reformat.
+        num_proc (int, optional): The number of processes to use for multiprocessing during dataset transformation. Defaults to None.
+
+    Returns:
+        DatasetDict: The reformatted dataset, if conversion was needed; otherwise, the original dataset.
+
+    Raises:
+        ValueError: If the dataset format is not compatible with KTO or DPO.
+    """
     keys = list(dataset["train"].features.keys())
 
     # check if the dataset is in the KTO format or needs to be reformatted
