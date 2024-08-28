@@ -30,10 +30,12 @@ from transformers import (
     TrainerState,
     TrainingArguments,
 )
+from transformers.integrations import WandbCallback
 from transformers.trainer_utils import has_length
 
 from ..models.utils import unwrap_model_for_generation
 from .judges import BaseRankJudge
+from .utils import truncate_right
 
 
 if is_deepspeed_available():
@@ -235,3 +237,84 @@ class WinRateCallback(TrainerCallback):
         if self.trainer.accelerator.is_main_process:
             win_rate = sum(winner_idx == 1 for winner_idx in winner_indices) / len(winner_indices)
             self.trainer.log({"eval_win_rate": win_rate})
+
+
+class LogCompletionsCallback(WandbCallback):
+    r"""
+    A [`~transformers.TrainerCallback`] that logs completions to Weights & Biases.
+
+    Usage:
+    ```python
+    prompts = ["The capital of France is", "The opposite of up is"]
+    trainer = DPOTrainer(..., callbacks=[LogCompletionsCallback(prompts)])
+    ```
+
+    Args:
+        prompts (`List[str]`):
+            The prompts to generate completions for.
+        freq (`Optional[int]`, *optional*, defaults to `None`):
+            The frequency at which to log completions. If not provided, defaults to `logging_steps`.
+    """
+
+    def __init__(self, prompts: List[str], freq: int = None):
+        super().__init__()
+        self.prompts = prompts
+        self.inputs = None  # will be tokenized in on_train_begin
+        self.table = []
+        self._last_logged_step = -1
+        self.freq = freq
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        tokenizer = kwargs["tokenizer"]
+        self.inputs = tokenizer(self.prompts, return_tensors="pt", padding=True, truncation=True)
+
+    def on_step_end(self, args, state, control, **kwargs):
+        # Only log from the main process
+        if not state.is_world_process_zero:
+            return
+
+        # Only log once per step (this method may be called multiple times)
+        if state.global_step == self._last_logged_step:
+            return
+
+        # Only log every `freq` steps (if no `freq` is provided, log every `logging_steps` steps)
+        freq = self.freq or state.logging_steps
+        if state.global_step % freq != 0:
+            return
+
+        # Get the model and tokenizer
+        model = kwargs["model"]
+        tokenizer = kwargs["tokenizer"]
+        model.eval()
+
+        # Generate completions
+        generation_config = GenerationConfig(max_new_tokens=args.max_new_tokens, min_new_tokens=args.max_new_tokens)
+        inputs = self.inputs.to(args.device)
+        _, context_length = inputs["input_ids"].shape
+        output = model.generate(**inputs, generation_config=generation_config)
+
+        # Get only the completions
+        completion_ids = output[:, context_length:]
+
+        # After the first EOS token, replace all tokens with padding tokens
+        completion_ids, _ = truncate_right(completion_ids, tokenizer.eos_token_id, tokenizer.pad_token_id)
+
+        # Decode the prompts and completions
+        prompts = [
+            p.replace(tokenizer.pad_token, "")
+            for p in tokenizer.batch_decode(inputs["input_ids"], skip_special_tokens=False)
+        ]
+        completions = [
+            c.replace(tokenizer.pad_token, "")
+            for c in tokenizer.batch_decode(completion_ids, skip_special_tokens=False)
+        ]
+
+        # Build the data to log
+        global_step = [str(state.global_step)] * len(prompts)
+        data = list(zip(global_step, prompts, completions))
+        self.table.extend(data)
+        table = self._wandb.Table(columns=["step", "prompt", "completion"], data=self.table)
+        self._wandb.log({"completions": table})
+
+        # Save the last logged step, so we don't log the same completions multiple times
+        self._last_logged_step = state.global_step
