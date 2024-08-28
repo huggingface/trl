@@ -6,7 +6,6 @@ from typing import Literal, Optional
 
 from transformers import TrainingArguments
 
-from ..core import flatten_dict
 from ..import_utils import is_bitsandbytes_available, is_torchvision_available
 
 
@@ -135,13 +134,8 @@ class DDPOConfig(TrainingArguments):
     max_workers: int = 2
     negative_prompts: str = ""
 
-    def to_dict(self):
-        output_dict = {}
-        for key, value in self.__dict__.items():
-            output_dict[key] = value
-        return flatten_dict(output_dict)
-
     def __post_init__(self):
+        super().__post_init__()
         if self.log_with not in ["wandb", "tensorboard"]:
             warnings.warn(
                 "Accelerator tracking only supports image logging if `log_with` is set to 'wandb' or 'tensorboard'."

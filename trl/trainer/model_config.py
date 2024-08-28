@@ -1,8 +1,6 @@
 from dataclasses import dataclass
 from typing import List, Literal, Optional
 
-from ..core import flatten_dict
-
 
 @dataclass
 class ModelConfig:
@@ -78,13 +76,8 @@ class ModelConfig:
     bnb_4bit_quant_type: Literal["fp4", "nf4"] = "nf4"
     use_bnb_nested_quant: bool = False
 
-    def to_dict(self):
-        output_dict = {}
-        for key, value in self.__dict__.items():
-            output_dict[key] = value
-        return flatten_dict(output_dict)
-
     def __post_init__(self):
+        super().__post_init__()
         if self.load_in_8bit and self.load_in_4bit:
             raise ValueError("You can't use 8 bit and 4 bit precision at the same time")
 

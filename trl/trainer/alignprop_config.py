@@ -6,7 +6,6 @@ from typing import Any, Dict, Literal, Optional, Tuple
 
 from transformers import TrainingArguments
 
-from ..core import flatten_dict
 from ..import_utils import is_bitsandbytes_available, is_torchvision_available
 
 
@@ -114,13 +113,8 @@ class AlignPropConfig(TrainingArguments):
     truncated_backprop_timestep: int = 49
     truncated_rand_backprop_minmax: Tuple[int, int] = (0, 50)
 
-    def to_dict(self) -> Dict[str, Any]:
-        output_dict = {}
-        for key, value in self.__dict__.items():
-            output_dict[key] = value
-        return flatten_dict(output_dict)
-
     def __post_init__(self):
+        super().__post_init__()
         if self.log_with not in ["wandb", "tensorboard"]:
             warnings.warn(
                 "Accelerator tracking only supports image logging if `log_with` is set to 'wandb' or 'tensorboard'."

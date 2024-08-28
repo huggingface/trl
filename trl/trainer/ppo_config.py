@@ -24,7 +24,6 @@ from typing_extensions import Annotated
 
 from trl.trainer.utils import exact_div
 
-from ..core import flatten_dict
 from ..import_utils import is_wandb_available
 
 
@@ -179,9 +178,3 @@ class PPOConfig:
 
         self.total_ppo_epochs = int(np.ceil(self.steps / self.batch_size))
         assert self.kl_penalty in ["kl", "abs", "mse", "full"]
-
-    def to_dict(self):
-        output_dict = {}
-        for key, value in self.__dict__.items():
-            output_dict[key] = value
-        return flatten_dict(output_dict)
