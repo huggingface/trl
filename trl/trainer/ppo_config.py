@@ -139,6 +139,8 @@ class PPOConfig:
     global_batch_size: tyro.conf.Suppress[int] = None
     """TO BE FILLED In RUNTIME: the effective `batch_size` across all processes"""
 
+    dataset_num_proc: Optional[int] = None
+
     if optimize_cuda_cache is not None:
         warnings.warn(
             "The `optimize_cuda_cache` argument will be deprecated soon, please use `optimize_device_cache` instead."

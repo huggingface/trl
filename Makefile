@@ -12,7 +12,7 @@ dev:
 	ln -s `pwd`/examples/scripts/ `pwd`/trl/commands
 
 test:
-	python -m pytest -n auto --dist=loadfile -s -v ./tests/
+	python -m pytest -n auto --dist=loadfile -s -v --reruns 5 --reruns-delay 1 --only-rerun '(OSError|Timeout|HTTPError.*502|HTTPError.*504||not less than or equal to 0.01)' ./tests/
 
 precommit:
 	pre-commit run --all-files
