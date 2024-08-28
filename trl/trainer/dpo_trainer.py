@@ -1401,7 +1401,7 @@ class DPOTrainer(Trainer):
                 logits = logits[..., :-1, :].contiguous()
                 labels = labels[..., 1:].contiguous()
             # Flatten the tokens
-            loss_fct = nn.CrossEntropyLoss()
+            loss_fct = nn.CrossEntropyLoss(ignore_index=self.label_pad_token_id)
             logits = logits.view(-1, logits.shape[-1])
             labels = labels.view(-1)
             # Enable model parallelism
