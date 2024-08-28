@@ -13,6 +13,9 @@ on:
       - ".github/**.yml"
       - "tests/**.py"
 
+env:
+  TQDM_DISABLE: 1
+
 jobs:
   check_code_quality:
     runs-on: ubuntu-latest
@@ -37,7 +40,7 @@ jobs:
     needs: check_code_quality
     strategy:
       matrix:
-        python-version: ['3.8', '3.9', '3.10']
+        python-version: ['3.9', '3.10', '3.11']
         os: ['ubuntu-latest', 'windows-latest']
     runs-on: ${{ matrix.os }}
     steps:
@@ -53,8 +56,11 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
+        # install PEFT & transformers from source
+        pip install -U git+https://github.com/huggingface/peft.git
+        pip install -U git+https://github.com/huggingface/transformers.git 
         # cpu version of pytorch
-        pip install ".[test, peft, diffusers]"
+        pip install ".[test, diffusers]"
     - name: Test with pytest
       run: |
         make test
