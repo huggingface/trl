@@ -117,6 +117,8 @@ class OnlineDPOTrainer(Trainer):
             )
         elif reward_model is None and judge is None:
             raise ValueError("Either `reward_model` or `judge` must be provided.")
+        elif reward_model is None and judge is not None:
+            raise NotImplementedError("Using `judge` is not yet supported.")
 
         self.reward_model = reward_model
         self.judge = judge
