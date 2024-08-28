@@ -568,7 +568,6 @@ class ConstantLengthDataset(IterableDataset):
 
 @dataclass
 class RunningMoments:
-
     """
     Calculates the running mean and standard deviation of a data stream. Reference:
     https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/utils.py#L75
