@@ -13,7 +13,7 @@ class OnlineDPOConfig(TrainingArguments):
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.
 
-    Args:
+    Parameters:
         reward_model_path (`Optional[str]`, *optional*, defaults to `None`):
             Path to the reward model.
         max_new_tokens (`int`, *optional*, defaults to `64`):

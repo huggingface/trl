@@ -20,6 +20,7 @@ from typing import Literal, Optional
 
 import numpy as np
 import tyro
+from transformers import TrainingArguments
 from typing_extensions import Annotated
 
 from trl.trainer.utils import exact_div
@@ -31,20 +32,20 @@ JSONDict = Annotated[Optional[dict], tyro.conf.arg(metavar="JSON", constructor=j
 
 
 @dataclass
-class PPOConfig:
+class PPOConfig(TrainingArguments):
     r"""
     Configuration class for the [`PPOTrainer`].
 
     Using [`~transformers.HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.
+
+    Parameters:
     """
 
     # common parameters
     exp_name: str = os.path.basename(sys.argv[0])[: -len(".py")]
     """the name of this experiment (by default is the file name without the extension name)"""
-    seed: int = 0
-    """Seed value for random generations"""
     log_with: Optional[Literal["wandb", "tensorboard"]] = None
     """Log with either 'wandb' or 'tensorboard', check  https://huggingface.co/docs/accelerate/usage_guides/tracking for more details"""
     task_name: Optional[str] = None

@@ -38,7 +38,7 @@ class DPOConfig(TrainingArguments):
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.
 
-    Args:
+    Parameters:
         beta (`float`, *optional*, defaults to `0.1`):
             Beta factor in DPO loss. Higher beta means less divergence from the initial policy. For the IPO loss, beta
             is the regularization parameter denoted by tau in the [paper](https://huggingface.co/papers/2310.12036).

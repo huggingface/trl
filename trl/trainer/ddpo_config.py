@@ -18,7 +18,7 @@ class DDPOConfig(TrainingArguments):
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.
 
-    Args:
+    Parameters:
         exp_name (`str`, *optional*, defaults to `os.path.basename(sys.argv[0])[: -len(".py")]`):
             Name of this experiment (by default is the file name without the extension name).
         log_with (`Optional[Literal["wandb", "tensorboard"]]`, *optional*, defaults to `None`):

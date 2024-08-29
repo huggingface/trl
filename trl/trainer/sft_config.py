@@ -26,7 +26,7 @@ class SFTConfig(TrainingArguments):
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.
 
-    Args:
+    Parameters:
         dataset_text_field (`Optional[str]`, *optional*, defaults to `None`):
             Name of the text field of the dataset. If provided, the trainer will automatically create a
             `ConstantLengthDataset` based on `dataset_text_field`.

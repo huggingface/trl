@@ -18,11 +18,9 @@ class AlignPropConfig(TrainingArguments):
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.
 
-    Args:
+    Parameters:
         exp_name (`str`, *optional*, defaults to `os.path.basename(sys.argv[0])[: -len(".py")]`):
             Name of this experiment (defaults to the file name without the extension).
-        seed (`int`, *optional*, defaults to `0`):
-            Seed value for random generations.
         log_with (`Optional[Literal["wandb", "tensorboard"]]`, *optional*, defaults to `None`):
             Log with either `"wandb"` or `"tensorboard"`. Check
             [tracking](https://huggingface.co/docs/accelerate/usage_guides/tracking) for more details.
@@ -83,7 +81,6 @@ class AlignPropConfig(TrainingArguments):
     """
 
     exp_name: str = os.path.basename(sys.argv[0])[: -len(".py")]
-    seed: int = 0
     log_with: Optional[Literal["wandb", "tensorboard"]] = None
     log_image_freq: int = 1
     tracker_kwargs: Dict[str, Any] = field(default_factory=dict)

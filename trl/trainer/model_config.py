@@ -11,7 +11,7 @@ class ModelConfig:
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.
 
-    Args:
+    Parameters:
         model_name_or_path (`Optional[str]`, *optional*, defaults to `None`):
             Model checkpoint for weights initialization.
         model_revision (`str`, *optional*, defaults to `"main"`):

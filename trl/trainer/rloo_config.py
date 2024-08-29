@@ -13,7 +13,7 @@ class RLOOConfig(OnPolicyConfig):
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.
 
-    Args:
+    Parameters:
         exp_name (`str`, *optional*, defaults to `os.path.basename(__file__)[: -len(".py")]`):
             Name of this experiment.
         reward_model_path (`str`, *optional*, defaults to `"EleutherAI/pythia-160m"`):
