@@ -63,7 +63,7 @@ __version__ = "0.9.6.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1
 REQUIRED_PKGS = [
     "torch>=1.4.0",
     "transformers>=4.31.0",
-    "numpy>=1.18.2,<2.0.0",
+    "numpy>=1.18.2",
     "accelerate",
     "datasets",
     "tyro>=0.5.11",
@@ -83,7 +83,7 @@ EXTRAS = {
     ],
     "peft": ["peft>=0.8.0"],
     "diffusers": ["diffusers>=0.18.0"],
-    "deepspeed": ["deepspeed>=0.9.5"],
+    "deepspeed": ["deepspeed>=0.14.4"],
     "benchmark": ["wandb", "ghapi", "openrlbenchmark==0.2.1a5", "requests", "deepspeed"],
     "quantization": ["bitsandbytes<=0.41.1"],
     "llm_judge": ["openai>=1.23.2", "huggingface_hub>=0.22.2", "llm-blender>=0.0.2"],
