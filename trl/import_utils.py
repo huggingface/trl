@@ -31,7 +31,7 @@ def is_peft_available() -> bool:
 
 
 def is_liger_available() -> bool:
-    return find_spec("liger-kernel-nightly") is not None
+    return find_spec("liger_kernel") is not None
 
 
 def is_unsloth_available() -> bool:
