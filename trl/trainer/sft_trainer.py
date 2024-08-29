@@ -187,7 +187,7 @@ class SFTTrainer(Trainer):
                 "You passed a model_id to the SFTTrainer. This will automatically create an "
                 "`AutoModelForCausalLM` or a `PeftModel` (if you passed a `peft_config`) for you."
             )
-            if use_liger:
+            if args.use_liger:
                 model = AutoLigerKernelForCausalLM.from_pretrained(model, **model_init_kwargs)
             else:
                 model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
