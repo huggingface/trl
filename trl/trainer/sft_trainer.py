@@ -39,7 +39,7 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 
 from ..extras.dataset_formatting import get_formatting_func_from_dataset
-from ..import_utils import is_peft_available
+from ..import_utils import is_peft_available, is_liger_available
 from .callbacks import RichProgressCallback
 from .sft_config import SFTConfig
 from .utils import (
@@ -54,6 +54,8 @@ from .utils import (
 if is_peft_available():
     from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
 
+if is_liger_available():
+    from liger_kernel.transformers import AutoLigerKernelForCausalLM
 
 class SFTTrainer(Trainer):
     r"""
@@ -140,6 +142,7 @@ class SFTTrainer(Trainer):
         model_init_kwargs: Optional[Dict] = None,
         dataset_kwargs: Optional[Dict] = None,
         eval_packing: Optional[bool] = None,
+        use_liger: Optional[bool] = False,
     ):
         if args is None:
             output_dir = "tmp_trainer"
@@ -183,7 +186,11 @@ class SFTTrainer(Trainer):
                 "You passed a model_id to the SFTTrainer. This will automatically create an "
                 "`AutoModelForCausalLM` or a `PeftModel` (if you passed a `peft_config`) for you."
             )
-            model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
+            if use_liger:
+                model = AutoLigerKernelForCausalLM.from_pretrained(model, **model_init_kwargs)
+            else:
+                model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
+                
 
         if packing:
             warnings.warn(
