@@ -138,7 +138,7 @@ class PeftModelTester(unittest.TestCase):
             assert os.path.exists(f"{tmp_dir}/adapter_config.json"), f"{tmp_dir}/adapter_config.json does not exist"
             # check also for `pytorch_model.bin` and make sure it only contains `v_head` weights
             assert os.path.exists(f"{tmp_dir}/pytorch_model.bin"), f"{tmp_dir}/pytorch_model.bin does not exist"
-            maybe_v_head = torch.load(f"{tmp_dir}/pytorch_model.bin")
+            maybe_v_head = torch.load(f"{tmp_dir}/pytorch_model.bin", weights_only=True)
             # check that only keys that starts with `v_head` are in the dict
             assert all(
                 k.startswith("v_head") for k in maybe_v_head.keys()

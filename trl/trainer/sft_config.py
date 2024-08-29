@@ -51,6 +51,8 @@ class SFTConfig(TrainingArguments):
             The number of characters per token to use for the `ConstantLengthDataset`. Defaults to `3.6`. You can check how this is computed in the
             stack-llama example:
             [chars_token_ratio](https://github.com/huggingface/trl/blob/08f550674c553c36c51d1027613c29f14f3676a5/examples/stack_llama/scripts/supervised_finetuning.py#L53).
+        use_liger (`Optional[bool]`):
+            Monkey patch the model with Liger kernels to increase throughput and reduce memory usage.
     """
 
     dataset_text_field: Optional[str] = None
@@ -64,3 +66,4 @@ class SFTConfig(TrainingArguments):
     eval_packing: Optional[bool] = None
     num_of_sequences: Optional[int] = 1024
     chars_per_token: Optional[float] = 3.6
+    use_liger: Optional[bool] = False
