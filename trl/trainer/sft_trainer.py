@@ -39,7 +39,7 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 
 from ..extras.dataset_formatting import get_formatting_func_from_dataset
-from ..import_utils import is_peft_available, is_liger_available
+from ..import_utils import is_liger_available, is_peft_available
 from .callbacks import RichProgressCallback
 from .sft_config import SFTConfig
 from .utils import (
@@ -56,6 +56,7 @@ if is_peft_available():
 
 if is_liger_available():
     from liger_kernel.transformers import AutoLigerKernelForCausalLM
+
 
 class SFTTrainer(Trainer):
     r"""
@@ -190,7 +191,6 @@ class SFTTrainer(Trainer):
                 model = AutoLigerKernelForCausalLM.from_pretrained(model, **model_init_kwargs)
             else:
                 model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
-                
 
         if packing:
             warnings.warn(
