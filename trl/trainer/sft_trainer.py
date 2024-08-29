@@ -143,7 +143,6 @@ class SFTTrainer(Trainer):
         model_init_kwargs: Optional[Dict] = None,
         dataset_kwargs: Optional[Dict] = None,
         eval_packing: Optional[bool] = None,
-        use_liger: Optional[bool] = False,
     ):
         if args is None:
             output_dir = "tmp_trainer"
