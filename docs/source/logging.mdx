@@ -6,6 +6,7 @@ By default, the TRL [`PPOTrainer`] saves a lot of relevant information to `wandb
 Upon initialization, pass one of these two options to the [`PPOConfig`]:
 ```
 config = PPOConfig(
+    output_dir="output_dir", 
     model_name=args.model_name,
     log_with=`wandb`, # or `tensorboard`
 )
