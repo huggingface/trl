@@ -30,6 +30,10 @@ def is_peft_available() -> bool:
     return find_spec("peft") is not None
 
 
+def is_liger_available() -> bool:
+    return find_spec("liger_kernel") is not None
+
+
 def is_unsloth_available() -> bool:
     return find_spec("unsloth") is not None
 
