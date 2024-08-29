@@ -29,6 +29,8 @@ else:
 def is_peft_available() -> bool:
     return find_spec("peft") is not None
 
+def is_liger_available() -> bool:
+    return find_spec("liger-kernel-nightly") is not None
 
 def is_unsloth_available() -> bool:
     return find_spec("unsloth") is not None

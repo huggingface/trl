@@ -89,6 +89,7 @@ class SFTScriptArguments:
         default=False,
         metadata={"help": "Whether to apply `use_reentrant` for gradient_checkpointing"},
     )
+    use_liger: bool = field(default=False, metadata={"help": "Monkey patch the model with Liger kernels"})
 
 
 @dataclass
