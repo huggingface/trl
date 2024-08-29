@@ -12,18 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import unittest
+
 from datasets import Dataset, DatasetDict
 
 from trl.data_utils import maybe_reformat_dpo_to_kto
 
-class MaybeReformatDPOToKTOTester(unittest.TestCase):
 
+class MaybeReformatDPOToKTOTester(unittest.TestCase):
     def setUp(self):
         # Create a sample DPO-formatted dataset for testing
         self.dpo_data = {
             "prompt": ["What is AI?", "Define machine learning."],
             "chosen": ["AI is artificial intelligence.", "Machine learning is a subset of AI."],
-            "rejected": ["AI is a computer.", "Machine learning is a program."]
+            "rejected": ["AI is a computer.", "Machine learning is a program."],
         }
         self.dpo_dataset = DatasetDict({"train": Dataset.from_dict(self.dpo_data)})
 
@@ -34,9 +35,9 @@ class MaybeReformatDPOToKTOTester(unittest.TestCase):
                 "AI is artificial intelligence.",
                 "Machine learning is a subset of AI.",
                 "AI is a computer.",
-                "Machine learning is a program."
+                "Machine learning is a program.",
             ],
-            "label": [True, True, False, False]
+            "label": [True, True, False, False],
         }
         self.kto_dataset = DatasetDict({"train": Dataset.from_dict(self.kto_data)})
 
@@ -46,7 +47,7 @@ class MaybeReformatDPOToKTOTester(unittest.TestCase):
         self.assertEqual(
             reformatted_dataset["train"].to_dict(),
             self.kto_dataset["train"].to_dict(),
-            "The DPO-formatted dataset was not correctly reformatted to KTO format."
+            "The DPO-formatted dataset was not correctly reformatted to KTO format.",
         )
 
     def test_already_kto_format(self):
@@ -55,16 +56,16 @@ class MaybeReformatDPOToKTOTester(unittest.TestCase):
         self.assertEqual(
             reformatted_dataset["train"].to_dict(),
             self.kto_dataset["train"].to_dict(),
-            "The KTO-formatted dataset should remain unchanged."
+            "The KTO-formatted dataset should remain unchanged.",
         )
 
     def test_invalid_format(self):
         # Test that a dataset with an incompatible format raises a ValueError
         invalid_data = {
             "input": ["What is AI?", "Define machine learning."],
-            "output": ["AI is artificial intelligence.", "Machine learning is a subset of AI."]
+            "output": ["AI is artificial intelligence.", "Machine learning is a subset of AI."],
         }
         invalid_dataset = DatasetDict({"train": Dataset.from_dict(invalid_data)})
-        
+
         with self.assertRaises(ValueError):
             maybe_reformat_dpo_to_kto(invalid_dataset)
