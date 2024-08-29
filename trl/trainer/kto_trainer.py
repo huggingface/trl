@@ -520,6 +520,7 @@ class KTOTrainer(Trainer):
         self.max_completion_length = max_completion_length
         self.tokenizer = tokenizer
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
+        self.low_vram_threshold = args.low_vram_threshold
 
         # Since ref_logs are precomputed on the first call to get_train/eval_dataloader
         # keep track of first called to avoid computation of future calls
@@ -926,6 +927,7 @@ class KTOTrainer(Trainer):
         average_log_prob: bool = False,
         label_pad_token_id: int = -100,
         is_encoder_decoder: bool = False,
+        low_vram_threshold: Optional[int] = None,
     ) -> torch.FloatTensor:
         """Compute the log probabilities of the given labels under the given logits.
 
@@ -949,15 +951,29 @@ class KTOTrainer(Trainer):
 
         loss_mask = labels != label_pad_token_id
 
+        tokens = logits.shape[1]
+        if low_vram_threshold is not None and tokens >= low_vram_threshold:
+            # Use CPU
+            logits = logits.cpu()
+            labels = labels.cpu()
+            loss_mask = loss_mask.cpu()
+
         # dummy token; we'll ignore the losses on these tokens later
         labels[labels == label_pad_token_id] = 0
 
-        per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
+        try:
+            per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
+        except torch.cuda.OutOfMemoryError as e:
+            warnings.warn(
+                f"*** Hint: set low_vram_threshold to less than or equal to {tokens} to avoid running out of VRAM. ***"
+            )
+            raise e
 
         if average_log_prob:
-            return (per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)
+            return ((per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)).cuda()
         else:
-            return (per_token_logps * loss_mask).sum(-1)
+            return (per_token_logps * loss_mask).sum(-1).cuda()
+
 
     def forward(
         self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]
@@ -987,6 +1003,7 @@ class KTOTrainer(Trainer):
             average_log_prob=False,
             is_encoder_decoder=self.is_encoder_decoder,
             label_pad_token_id=self.label_pad_token_id,
+            low_vram_threshold=self.low_vram_threshold,
         )
 
         model_kwargs = (
@@ -1013,6 +1030,7 @@ class KTOTrainer(Trainer):
             average_log_prob=False,
             is_encoder_decoder=self.is_encoder_decoder,
             label_pad_token_id=self.label_pad_token_id,
+            low_vram_threshold=self.low_vram_threshold,
         )
 
         if completion_logps.shape[0] != len(batch["label"]):

@@ -58,6 +58,8 @@ class KTOConfig(TrainingArguments):
             Dict of Optional kwargs to pass when instantiating the ref model from a string.
         dataset_num_proc: (`Optional[int]`, *optional*, defaults to `None`):
             Number of processes to use for processing the datasets.
+        low_vram_threshold (`Optional[int]`, *optional*):
+            Threshold for low VRAM mode, in number of tokens for a given sample (should be in range from 0 to whatever the context size of the training session is). This will perform certain operations on the CPU instead of in VRAM which are prone to give VRAM usage spikes, if the context size of the sample exceeds the threshold. This can be enabled if the trainer runs out of VRAM during training, at a slight performance cost. Note: the trainer will give a hint about what to set this to when it crashes. Look above the Traceback line.
     """
 
     max_length: Optional[int] = None
@@ -82,3 +84,5 @@ class KTOConfig(TrainingArguments):
     model_init_kwargs: Optional[Dict] = None
     ref_model_init_kwargs: Optional[Dict] = None
     dataset_num_proc: Optional[int] = None
+
+    low_vram_threshold: Optional[int] = None
