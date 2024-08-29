@@ -72,7 +72,7 @@ class PPOConfig(TrainingArguments):
             Initial KL penalty coefficient (used for adaptive and linear control).
         kl_penalty (`Literal["kl", "abs", "mse", "full"]`, *optional*, defaults to `"kl"`):
             kl penalty options. Possible values are:
-            
+
                 - `"kl"`: model_logp - ref_logp
                 - `"abs"`: abs(kl)
                 - `"mse"`: mean squared error mse(kl)
@@ -131,6 +131,7 @@ class PPOConfig(TrainingArguments):
         dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
             Number of processes to use for the dataset.
     """
+
     exp_name: str = os.path.basename(sys.argv[0])[: -len(".py")]
     log_with: Optional[Literal["wandb", "tensorboard"]] = None
     task_name: Optional[str] = None
@@ -176,8 +177,6 @@ class PPOConfig(TrainingArguments):
     global_backward_batch_size: Optional[tyro.conf.Suppress[int]] = None
     global_batch_size: tyro.conf.Suppress[int] = None
     dataset_num_proc: Optional[int] = None
-
-
 
     def __post_init__(self):
         super().__post_init__()
