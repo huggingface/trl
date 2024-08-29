@@ -19,9 +19,9 @@ from datasets import Dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
-from trl import TPOTrainer, TPOConfig
-from .testing_utils import require_peft
+from trl import TPOConfig, TPOTrainer
 
+from .testing_utils import require_peft
 
 class TPOTrainerTester(unittest.TestCase):
     def setUp(self):
@@ -106,7 +106,7 @@ class TPOTrainerTester(unittest.TestCase):
                 gradient_accumulation_steps=1,
                 learning_rate=9e-1,
                 # eval_strategy="steps",
-                is_three_preference = True,
+                is_three_preference=True,
                 beta=0.1,
                 loss_type=loss_type,
                 tpo_alpha=1.0,
@@ -164,7 +164,7 @@ class TPOTrainerTester(unittest.TestCase):
                 remove_unused_columns=False,
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
-                is_three_preference = True,
+                is_three_preference=True,
                 # eval_strategy="steps",
                 beta=0.1,
                 tpo_alpha=1.0,

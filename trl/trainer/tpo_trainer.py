@@ -38,8 +38,6 @@ from ..import_utils import is_peft_available, is_wandb_available
 from .tpo_config import TPOConfig
 from .utils import (
     DPODataCollatorWithPadding,
-    add_bos_token_if_needed,
-    add_eos_token_if_needed,
     disable_dropout_in_model,
     pad_to_length,
     peft_module_casting_to_bf16,
@@ -429,7 +427,9 @@ class TPOTrainer(Trainer):
             reference_prompt_len_input_ids = len(reference_tokens["prompt_input_ids"])
             chosen_prompt_len_input_ids = len(chosen_tokens["prompt_input_ids"])
             rejected_prompt_len_input_ids = len(rejected_tokens["prompt_input_ids"])
-            prompt_len_input_ids = min(reference_prompt_len_input_ids, chosen_prompt_len_input_ids, rejected_prompt_len_input_ids)
+            prompt_len_input_ids = min(
+                reference_prompt_len_input_ids, chosen_prompt_len_input_ids, rejected_prompt_len_input_ids
+                )
 
             for k, v in prompt_tokens.items():
                 prompt_tokens[k] = v[:prompt_len_input_ids]
@@ -460,23 +460,30 @@ class TPOTrainer(Trainer):
                 )
 
             # add BOS token to head of prompt. Avoid adding if it's already there
-            prompt_tokens, chosen_tokens, rejected_tokens, reference_tokens = add_bos_token_if_needed(
-                self.tokenizer.bos_token_id,
-                prompt_len_input_ids,
-                prompt_tokens,
-                reference_prompt_len_input_ids,
-                reference_tokens,                
-                chosen_prompt_len_input_ids,
-                chosen_tokens,
-                rejected_prompt_len_input_ids,
-                rejected_tokens,
-            )
+            if self.tokenizer.bos_token_id is not None:
+                if prompt_len_input_ids == 0 or self.tokenizer.bos_token_id != prompt_tokens["prompt_input_ids"][0]:
+                    prompt_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + prompt_tokens["prompt_input_ids"]
+                    prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens["prompt_attention_mask"]
+                if chosen_prompt_len_input_ids == 0 or self.tokenizer.bos_token_id != chosen_tokens["prompt_input_ids"][0]:
+                    chosen_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + chosen_tokens["prompt_input_ids"]
+                    chosen_tokens["prompt_attention_mask"] = [1] + chosen_tokens["prompt_attention_mask"]
+                if rejected_prompt_len_input_ids == 0 or self.tokenizer.bos_token_id != rejected_tokens["prompt_input_ids"][0]:
+                    rejected_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + rejected_tokens["prompt_input_ids"]
+                    rejected_tokens["prompt_attention_mask"] = [1] + rejected_tokens["prompt_attention_mask"]
+                if reference_prompt_len_input_ids == 0 or self.tokenizer.bos_token_id != reference_tokens["prompt_input_ids"][0]:
+                    reference_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + reference_tokens["prompt_input_ids"]
+                    reference_tokens["prompt_attention_mask"] = [1] + reference_tokens["prompt_attention_mask"]
 
             # add EOS token to end of answer. Avoid adding if it's already there
-            reference_tokens, chosen_tokens, rejected_tokens = add_eos_token_if_needed(
-                self.tokenizer.eos_token_id, reference_tokens, chosen_tokens, rejected_tokens
-            )
-
+            if len(chosen_tokens["input_ids"]) == 0 or self.tokenizer.eos_token_id != chosen_tokens["input_ids"][-1]:
+                chosen_tokens["input_ids"].append(self.tokenizer.eos_token_id)
+                chosen_tokens["attention_mask"].append(1)
+            if len(rejected_tokens["input_ids"]) == 0 or self.tokenizer.eos_token_id != rejected_tokens["input_ids"][-1]:
+                rejected_tokens["input_ids"].append(self.tokenizer.eos_token_id)
+                rejected_tokens["attention_mask"].append(1)
+            if len(reference_tokens["input_ids"]) == 0 or self.tokenizer.eos_token_id != reference_tokens["input_ids"][-1]:
+                reference_tokens["input_ids"].append(self.tokenizer.eos_token_id)
+                reference_tokens["attention_mask"].append(1)
             longer_response_length = max(len(reference_tokens["input_ids"]), len(chosen_tokens["input_ids"]), len(rejected_tokens["input_ids"]))
 
             # if combined sequence is too long, truncate the prompt
