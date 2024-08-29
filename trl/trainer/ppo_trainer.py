@@ -213,7 +213,6 @@ class PPOTrainer(BaseTrainer):
         )
 
         # Step 1.1 Runtime variables filled by the accelerator
-        config.world_size = self.accelerator.num_processes
         config.global_backward_batch_size = config.backward_batch_size * config.world_size
         config.global_batch_size = config.batch_size * config.world_size
 
