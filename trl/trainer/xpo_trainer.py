@@ -21,6 +21,8 @@ if is_apex_available():
 
 
 class XPOTrainer(OnlineDPOTrainer):
+    _tag_names = ["trl", "xpo"]
+
     def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         model.train()
         ref_model = self.ref_model
@@ -161,19 +163,19 @@ class XPOTrainer(OnlineDPOTrainer):
         mean_non_score_reward = non_score_reward.mean()
         self.stats["objective/non_score_reward"].append(self.accelerator.gather(mean_non_score_reward).mean().item())
 
-        rlhf_reward = all_scores + non_score_reward
+        rlhf_reward = all_scores + non_score_reward.repeat(2)
         self.stats["objective/rlhf_reward"].append(self.accelerator.gather(rlhf_reward).mean().item())
 
         mean_entropy = -model_completion_logprobs.sum(1).mean()
         self.stats["objective/entropy"].append(self.accelerator.gather(mean_entropy).mean().item())
 
-        scores_margin = model_scores[chosen_indices] - ref_scores[rejected_indices]
+        scores_margin = torch.where(chosen_mask, model_scores - ref_scores, ref_scores - model_scores)
         self.stats["objective/scores_margin"].append(self.accelerator.gather(scores_margin.mean()).mean().item())
 
         chosen_rewards = self.args.beta * (chosen_logprobs_sum - chosen_ref_logprobs_sum)
         rejected_rewards = self.args.beta * (rejected_logprobs_sum - rejected_ref_logprobs_sum)
-        gathered_chosen_rewards = self.accelerator.gather(chosen_rewards)
-        gathered_rejected_rewards = self.accelerator.gather(rejected_rewards)
+        gathered_chosen_rewards = self.accelerator.gather(chosen_rewards.mean())
+        gathered_rejected_rewards = self.accelerator.gather(rejected_rewards.mean())
         self.stats["rewards/chosen"].append(gathered_chosen_rewards.mean().item())
         self.stats["rewards/rejected"].append(gathered_rejected_rewards.mean().item())
 
@@ -182,8 +184,8 @@ class XPOTrainer(OnlineDPOTrainer):
         accuracy = margin > 0
         self.stats["rewards/accuracies"].append(accuracy.float().mean().item())
 
-        # XPO specific logging
-        self.stats["objective/xpo_loss"].append(self.accelerator.gather(xpo_losses).mean().item())
+        # # XPO specific logging
+        # self.stats["objective/xpo_loss"].append(self.accelerator.gather(xpo_losses).mean().item())
 
         if (
             self.args.torch_empty_cache_steps is not None
@@ -192,7 +194,6 @@ class XPOTrainer(OnlineDPOTrainer):
             empty_cache()
 
         kwargs = {}
-
         # For LOMO optimizers you need to explicitly use the learning rate
         if self.args.optim in [OptimizerNames.LOMO, OptimizerNames.ADALOMO]:
             kwargs["learning_rate"] = self._get_learning_rate()
