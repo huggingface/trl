@@ -67,10 +67,6 @@ class TestOnlineDPOTrainer(unittest.TestCase):
         # fmt: on
         self.dummy_dataset = Dataset.from_dict(dummy_dataset_dict)
 
-    @unittest.skip(
-        "This test fails with the latest transformers version. We skip it as we are about "
-        "to refactor the `OnlineDPOTrainer`. See PR #1839."
-    )
     def test_online_dpo_trainer_training(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = OnlineDPOConfig(

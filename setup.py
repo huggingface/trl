@@ -82,7 +82,7 @@ EXTRAS = {
         "llm-blender>=0.0.2",
     ],
     "peft": ["peft>=0.8.0"],
-    "liger": ["liger-kernel-nightly==0.1.1.dev20240828063745"],
+    "liger": ["liger-kernel>=0.2.1"],
     "diffusers": ["diffusers>=0.18.0"],
     "deepspeed": ["deepspeed>=0.14.4"],
     "benchmark": ["wandb", "ghapi", "openrlbenchmark==0.2.1a5", "requests", "deepspeed"],
