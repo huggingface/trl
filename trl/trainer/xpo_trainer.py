@@ -1,322 +1,209 @@
-import math
-import time
+from typing import Any, Dict, Union
 
-import numpy as np
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from transformers import GenerationConfig
+from transformers.training_args import OptimizerNames
+from transformers.utils import is_apex_available
 
 from ..models.utils import unwrap_model_for_generation
 from .online_dpo_trainer import OnlineDPOTrainer
 from .utils import (
-    batch_generation,
-    forward,
+    empty_cache,
     get_reward,
+    truncate_right,
 )
 
 
-@staticmethod
-def logits_to_logprobs(logits, response_ids, temperature=1.0):
-    logits /= temperature + 1e-7
-    logprobs = F.log_softmax(logits, dim=-1)
-    return torch.gather(logprobs, -1, response_ids.unsqueeze(-1)).squeeze(-1)
+if is_apex_available():
+    from apex import amp
 
 
 class XPOTrainer(OnlineDPOTrainer):
-    def train(self):
-        args = self.args
-        accelerator = self.accelerator
-        optimizer = self.optimizer
-        model = self.model
+    def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
+        model.train()
         ref_model = self.ref_model
-        reward_model = self.reward_model
-        tokenizer = self.tokenizer
-        device = accelerator.device
+        ref_model.eval()
 
-        def repeat_generator():
-            while True:
-                yield from self.dataloader
-
-        iter_dataloader = iter(repeat_generator())
-
+        # Sample completions from both the model and the reference model
+        inputs = self._prepare_inputs(inputs)
         generation_config = GenerationConfig(
-            max_new_tokens=args.response_length,
-            min_new_tokens=args.response_length,
-            temperature=(args.temperature + 1e-7),
+            max_new_tokens=self.args.max_new_tokens,
+            min_new_tokens=self.args.max_new_tokens,
+            temperature=self.args.temperature,
             top_k=0.0,
             top_p=1.0,
             do_sample=True,
+            use_cache=False if self.args.gradient_checkpointing else True,
+        )
+        num_examples, context_length = inputs["prompt_input_ids"].shape
+        prompt_ids = inputs["prompt_input_ids"]
+        prompt_mask = inputs["prompt_attention_mask"]
+
+        # Generate completions from the model
+        with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+            model_output = unwrapped_model.generate(
+                input_ids=prompt_ids,
+                attention_mask=prompt_mask,
+                generation_config=generation_config,
+            )
+
+        # Generate completions from the reference model
+        with torch.no_grad(), unwrap_model_for_generation(ref_model, self.accelerator) as unwrapped_ref_model:
+            ref_output = unwrapped_ref_model.generate(
+                input_ids=prompt_ids,
+                attention_mask=prompt_mask,
+                generation_config=generation_config,
+            )
+
+        del inputs
+
+        # Process model completions
+        model_completion_ids = model_output[:, context_length:]
+        model_completion_ids, model_completion_mask = truncate_right(
+            model_completion_ids, self.tokenizer.eos_token_id, self.tokenizer.pad_token_id
+        )
+        model_prompt_completion_ids = torch.cat((prompt_ids, model_completion_ids), dim=1)
+        model_prompt_completion_mask = torch.cat((prompt_mask, model_completion_mask), dim=1)
+
+        # Process reference model completions
+        ref_completion_ids = ref_output[:, context_length:]
+        ref_completion_ids, ref_completion_mask = truncate_right(
+            ref_completion_ids, self.tokenizer.eos_token_id, self.tokenizer.pad_token_id
+        )
+        ref_prompt_completion_ids = torch.cat((prompt_ids, ref_completion_ids), dim=1)
+        ref_prompt_completion_mask = torch.cat((prompt_mask, ref_completion_mask), dim=1)
+
+        # Get logprobs for model completions
+        model_output = model(model_prompt_completion_ids, attention_mask=model_prompt_completion_mask)
+        model_logits = model_output.logits[:, context_length - 1 : -1]
+        model_logprobs = F.log_softmax(model_logits, dim=-1)
+        model_completion_logprobs = torch.gather(model_logprobs, 2, model_completion_ids.unsqueeze(-1)).squeeze(-1)
+
+        # Get logprobs for reference model completions
+        with torch.no_grad():
+            ref_output = ref_model(ref_prompt_completion_ids, attention_mask=ref_prompt_completion_mask)
+        ref_logits = ref_output.logits[:, context_length - 1 : -1]
+        ref_logprobs = F.log_softmax(ref_logits, dim=-1)
+        ref_completion_logprobs = torch.gather(ref_logprobs, 2, ref_completion_ids.unsqueeze(-1)).squeeze(-1)
+
+        # Get logprobs for model on reference completions (for XPO loss)
+        model_on_ref_output = model(ref_prompt_completion_ids, attention_mask=ref_prompt_completion_mask)
+        model_on_ref_logits = model_on_ref_output.logits[:, context_length - 1 : -1]
+        model_on_ref_logprobs = F.log_softmax(model_on_ref_logits, dim=-1)
+        model_on_ref_completion_logprobs = torch.gather(
+            model_on_ref_logprobs, 2, ref_completion_ids.unsqueeze(-1)
+        ).squeeze(-1)
+
+        # Concatenate model and reference completions for reward computation
+        all_prompt_completion_ids = torch.cat((model_prompt_completion_ids, ref_prompt_completion_ids), dim=0)
+        # Get rewards
+        with torch.no_grad():
+            _, all_scores, _ = get_reward(
+                self.reward_model, all_prompt_completion_ids, self.tokenizer.pad_token_id, context_length
+            )
+        # Split scores for model and reference completions
+        model_scores, ref_scores = all_scores.split(num_examples)
+
+        # Apply EOS penalty if needed
+        if self.args.missing_eos_penalty is not None:
+            model_contain_eos = torch.any(model_completion_ids == self.tokenizer.eos_token_id, dim=-1)
+            ref_contain_eos = torch.any(ref_completion_ids == self.tokenizer.eos_token_id, dim=-1)
+            model_scores[~model_contain_eos] -= self.args.missing_eos_penalty
+            ref_scores[~ref_contain_eos] -= self.args.missing_eos_penalty
+
+        # Mask padding tokens
+        model_padding_mask = ~model_completion_mask.bool()
+        ref_padding_mask = ~ref_completion_mask.bool()
+        model_completion_logprobs = model_completion_logprobs.masked_fill(model_padding_mask, 0.0)
+        ref_completion_logprobs = ref_completion_logprobs.masked_fill(ref_padding_mask, 0.0)
+        model_on_ref_completion_logprobs = model_on_ref_completion_logprobs.masked_fill(ref_padding_mask, 0.0)
+
+        # Compute log ratios
+        model_logprobs_sum = model_completion_logprobs.sum(1)
+        ref_logprobs_sum = ref_completion_logprobs.sum(1)
+        log_ratios = model_logprobs_sum - ref_logprobs_sum
+
+        # Compute losses
+        chosen_mask = model_scores >= ref_scores
+        dpo_losses = torch.where(
+            chosen_mask, -F.logsigmoid(self.args.beta * log_ratios), -F.logsigmoid(-self.args.beta * log_ratios)
         )
 
-        start_time = time.time()
-        stats_shape = (args.num_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
-        loss_stats = torch.zeros(stats_shape, device=device)
-        chosen_rewards_stats = torch.zeros(stats_shape, device=device)
-        rejected_rewards_stats = torch.zeros(stats_shape, device=device)
-        chosen_logprobs_stats = torch.zeros(stats_shape, device=device)
-        rejected_logprobs_stats = torch.zeros(stats_shape, device=device)
-        # trainer state initialization
-        self.state.global_step = 0
-        self.state.episode = 0
-        self.state.max_steps = args.num_total_batches * args.num_mini_batches
-        self.state.num_train_epochs = args.total_episodes / self.train_dataset_len
-        # Compute absolute values for logging, eval, and save if given as ratio
-        if args.logging_steps is not None:
-            if args.logging_steps < 1:
-                self.state.logging_steps = math.ceil(self.state.max_steps * args.logging_steps)
-            else:
-                self.state.logging_steps = args.logging_steps
-        if args.eval_steps is not None:
-            if args.eval_steps < 1:
-                self.state.eval_steps = math.ceil(self.state.max_steps * args.eval_steps)
-            else:
-                self.state.eval_steps = args.eval_steps
-        if args.save_steps is not None:
-            if args.save_steps < 1:
-                self.state.save_steps = math.ceil(self.state.max_steps * args.save_steps)
-            else:
-                self.state.save_steps = args.save_steps
-        self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
+        # XPO specific loss (using model logprobs on reference model generations)
+        xpo_losses = self.args.alpha * model_on_ref_completion_logprobs.sum(1)
 
-        for update in range(1, args.num_total_batches + 1):
-            self.state.episode += 1 * args.batch_size
-            data = next(iter_dataloader)
-            ref_model.eval()
-            model.eval()
+        # Total loss
+        loss = (dpo_losses - xpo_losses).mean()  # Note the minus sign for xpo_losses
 
-            # data collation
-            with torch.no_grad():
-                all_queries = []
-                all_chosen_responses = []
-                all_rejected_responses = []
-                all_ref_logprobs_chosen = []
-                all_ref_logprobs_rejected = []
-                all_ref_responses = []
-                all_reward_margins = []
-                queries = data["input_ids"]
-                all_queries.append(queries)
+        # Log everything
+        contain_eos_token = torch.any(model_completion_ids == self.tokenizer.eos_token_id, dim=-1)
+        self.stats["val/contain_eos_token"].append(contain_eos_token.float().mean().item())
 
-                context_length = queries.shape[1]
-                # model responses
-                with unwrap_model_for_generation(model, accelerator) as unwrapped_model:
-                    model_responses, model_logits = batch_generation(
-                        unwrapped_model,
-                        queries,
-                        args.local_rollout_forward_batch_size,
-                        tokenizer.pad_token_id,
-                        generation_config,
-                    )
+        chosen_indices = torch.where(chosen_mask)[0]
+        rejected_indices = torch.where(~chosen_mask)[0]
 
-                # reference model responses
-                with unwrap_model_for_generation(ref_model, accelerator) as unwrapped_model:
-                    ref_responses, ref_logits = batch_generation(
-                        ref_model,
-                        queries,
-                        args.local_rollout_forward_batch_size,
-                        tokenizer.pad_token_id,
-                        generation_config,
-                    )
-                    all_ref_responses.append(ref_responses)
+        chosen_logprobs_sum = model_logprobs_sum[chosen_indices]
+        rejected_logprobs_sum = model_logprobs_sum[rejected_indices]
+        chosen_ref_logprobs_sum = ref_logprobs_sum[chosen_indices]
+        rejected_ref_logprobs_sum = ref_logprobs_sum[rejected_indices]
 
-                # compute rewards and ref log probs in local rollout forward batch sizes:
-                for i in range(0, queries.shape[0], args.local_rollout_forward_batch_size):
-                    model_response = model_responses[i : i + args.local_rollout_forward_batch_size]
-                    ref_response = ref_responses[i : i + args.local_rollout_forward_batch_size]
+        self.stats["logps/chosen"].append(self.accelerator.gather(chosen_logprobs_sum).mean().item())
+        self.stats["logps/rejected"].append(self.accelerator.gather(rejected_logprobs_sum).mean().item())
+        self.stats["objective/scores"].append(self.accelerator.gather(all_scores.mean()).mean().item())
 
-                    # Compute rewards for both sets of responses
-                    _, model_reward, _ = get_reward(
-                        reward_model, model_response, tokenizer.pad_token_id, context_length
-                    )
-                    _, ref_reward, _ = get_reward(reward_model, ref_response, tokenizer.pad_token_id, context_length)
-                    # if the responses do not contain eos token then set the reward to penalty_reward_value
-                    if args.non_eos_penalty:
-                        model_resp_contains_eos = torch.any(model_response == tokenizer.eos_token_id, dim=-1)
-                        model_reward = torch.where(model_resp_contains_eos, model_reward, args.penalty_reward_value)
-                        ref_resp_contains_eos = torch.any(ref_response == tokenizer.eos_token_id, dim=-1)
-                        ref_reward = torch.where(ref_resp_contains_eos, ref_reward, args.penalty_reward_value)
+        kl = model_completion_logprobs - ref_completion_logprobs
+        mean_kl = kl.sum(1).mean()
+        self.stats["objective/kl"].append(self.accelerator.gather(mean_kl).mean().item())
 
-                    # Create preference dataset based on rewards
-                    chosen_mask = model_reward >= ref_reward
-                    rejected_mask = ~chosen_mask
+        non_score_reward = (-self.args.beta * kl).sum(1)
+        mean_non_score_reward = non_score_reward.mean()
+        self.stats["objective/non_score_reward"].append(self.accelerator.gather(mean_non_score_reward).mean().item())
 
-                    # reward margin between chosen and rejected responses
-                    reward_margin = torch.where(chosen_mask, model_reward - ref_reward, ref_reward - model_reward)
-                    all_reward_margins.append(reward_margin)
+        rlhf_reward = all_scores + non_score_reward
+        self.stats["objective/rlhf_reward"].append(self.accelerator.gather(rlhf_reward).mean().item())
 
-                    # chosen and rejected responses
-                    chosen_response = torch.where(chosen_mask.unsqueeze(1), model_response, ref_response)
-                    rejected_response = torch.where(rejected_mask.unsqueeze(1), model_response, ref_response)
-                    all_chosen_responses.append(chosen_response)
-                    all_rejected_responses.append(rejected_response)
+        mean_entropy = -model_completion_logprobs.sum(1).mean()
+        self.stats["objective/entropy"].append(self.accelerator.gather(mean_entropy).mean().item())
 
-                    ref_logprobs_model_response = self.compute_logprobs(ref_model, model_response, context_length)
-                    ref_logprobs_ref_response = self.compute_logprobs(ref_model, ref_response, context_length)
+        scores_margin = model_scores[chosen_indices] - ref_scores[rejected_indices]
+        self.stats["objective/scores_margin"].append(self.accelerator.gather(scores_margin.mean()).mean().item())
 
-                    ref_logprobs_chosen = torch.where(
-                        chosen_mask.unsqueeze(1), ref_logprobs_model_response, ref_logprobs_ref_response
-                    )
-                    ref_logprobs_rejected = torch.where(
-                        rejected_mask.unsqueeze(1), ref_logprobs_model_response, ref_logprobs_ref_response
-                    )
+        chosen_rewards = self.args.beta * (chosen_logprobs_sum - chosen_ref_logprobs_sum)
+        rejected_rewards = self.args.beta * (rejected_logprobs_sum - rejected_ref_logprobs_sum)
+        gathered_chosen_rewards = self.accelerator.gather(chosen_rewards)
+        gathered_rejected_rewards = self.accelerator.gather(rejected_rewards)
+        self.stats["rewards/chosen"].append(gathered_chosen_rewards.mean().item())
+        self.stats["rewards/rejected"].append(gathered_rejected_rewards.mean().item())
 
-                    all_ref_logprobs_chosen.append(ref_logprobs_chosen)
-                    all_ref_logprobs_rejected.append(ref_logprobs_rejected)
+        margin = gathered_chosen_rewards - gathered_rejected_rewards
+        self.stats["rewards/margins"].append(margin.mean().item())
+        accuracy = margin > 0
+        self.stats["rewards/accuracies"].append(accuracy.float().mean().item())
 
-                # stack all the tensors
-                all_queries = torch.cat(all_queries, dim=0)
-                all_chosen_responses = torch.cat(all_chosen_responses, dim=0)
-                all_rejected_responses = torch.cat(all_rejected_responses, dim=0)
-                all_ref_logprobs_chosen = torch.cat(all_ref_logprobs_chosen, dim=0)
-                all_ref_logprobs_rejected = torch.cat(all_ref_logprobs_rejected, dim=0)
-                all_ref_responses = torch.cat(all_ref_responses, dim=0)
-                all_reward_margins = torch.cat(all_reward_margins, dim=0)
-                torch.cuda.empty_cache()
+        # XPO specific logging
+        self.stats["objective/xpo_loss"].append(self.accelerator.gather(xpo_losses).mean().item())
 
-            # logging kl between the model and ref model responses
-            logprobs_model = logits_to_logprobs(model_logits, model_responses[:, context_length:], args.temperature)
-            logprobs_ref = logits_to_logprobs(ref_logits, ref_responses[:, context_length:], args.temperature)
-            kl = logprobs_model - logprobs_ref
-            dpo_score = -args.beta * (kl).sum(1).mean()
-            scores_margin = all_reward_margins.mean()
+        if (
+            self.args.torch_empty_cache_steps is not None
+            and self.state.global_step % self.args.torch_empty_cache_steps == 0
+        ):
+            empty_cache()
 
-            # Do multiple epochs of XPO training, with a fresh random shuffle in each epoch
-            model.train()
-            for epoch_idx in range(args.num_epochs):
-                b_inds = np.random.permutation(args.local_batch_size // self.num_generation_per_prompt)
-                minibatch_idx = 0
-                for mini_batch_start in range(
-                    0,
-                    args.local_batch_size // self.num_generation_per_prompt,
-                    args.local_mini_batch_size // self.num_generation_per_prompt,
-                ):
-                    mini_batch_end = mini_batch_start + args.local_mini_batch_size // self.num_generation_per_prompt
-                    mini_batch_inds = b_inds[mini_batch_start:mini_batch_end]
-                    gradient_accumulation_idx = 0
-                    for micro_batch_start in range(
-                        0,
-                        args.local_mini_batch_size // self.num_generation_per_prompt,
-                        args.per_device_train_batch_size,
-                    ):
-                        with accelerator.accumulate(model):
-                            micro_batch_end = micro_batch_start + args.per_device_train_batch_size
-                            micro_batch_inds = mini_batch_inds[micro_batch_start:micro_batch_end]
+        kwargs = {}
 
-                            ## context lengths
-                            context_lengths = all_queries[micro_batch_inds].shape[1]
+        # For LOMO optimizers you need to explicitly use the learning rate
+        if self.args.optim in [OptimizerNames.LOMO, OptimizerNames.ADALOMO]:
+            kwargs["learning_rate"] = self._get_learning_rate()
 
-                            ## chosen
-                            chosen_responses = all_chosen_responses[micro_batch_inds]
-                            ## rejected
-                            rejected_responses = all_rejected_responses[micro_batch_inds]
+        if self.args.n_gpu > 1:
+            loss = loss.mean()  # mean() to average on multi-gpu parallel training
 
-                            ## concated log_probs to compute log probs
-                            concated_logprobs = self.compute_logprobs(
-                                model,
-                                torch.cat([chosen_responses, rejected_responses], dim=0),
-                                context_lengths,
-                            )
+        if self.use_apex:
+            with amp.scale_loss(loss, self.optimizer) as scaled_loss:
+                scaled_loss.backward()
+        else:
+            self.accelerator.backward(loss, **kwargs)
 
-                            # model logprobs
-                            (chosen_logprobs, rejected_logprobs) = torch.split(
-                                concated_logprobs, [chosen_responses.shape[0], rejected_responses.shape[0]]
-                            )
-
-                            # pre-calculated ref logprobs for chosen and rejected
-                            ref_logprobs_chosen = all_ref_logprobs_chosen[micro_batch_inds]
-                            ref_logprobs_rejected = all_ref_logprobs_rejected[micro_batch_inds]
-
-                            # log ratios
-                            chosen_log_ratios = chosen_logprobs.sum(1) - ref_logprobs_chosen.sum(1)
-                            rejected_log_ratios = rejected_logprobs.sum(1) - ref_logprobs_rejected.sum(1)
-                            diff_log_ratios = chosen_log_ratios - rejected_log_ratios
-
-                            # dpo losses
-                            if self.loss_type == "sigmoid":
-                                dpo_losses = -F.logsigmoid(self.beta * diff_log_ratios)
-                            elif self.loss_type == "ipo":
-                                dpo_losses = (diff_log_ratios - 1 / (2 * self.beta)) ** 2
-                            else:
-                                raise NotImplementedError(f"invalid loss type {self.loss_type}")
-
-                            # xpo losses
-                            model_logprobs_ref = self.compute_logprobs(
-                                model, all_ref_responses[micro_batch_inds], context_lengths
-                            )
-                            xpo_losses = args.alpha * model_logprobs_ref.sum(1)
-
-                            # total loss
-                            loss = (dpo_losses + xpo_losses).mean()
-
-                            accelerator.backward(loss)
-                            optimizer.step()
-                            optimizer.zero_grad()
-                            with torch.no_grad():
-                                chosen_rewards = self.beta * chosen_log_ratios.detach()
-                                rejected_rewards = self.beta * rejected_log_ratios.detach()
-                                xpo_loss = xpo_losses.detach()
-                                loss_stats[epoch_idx, minibatch_idx, gradient_accumulation_idx] = loss.detach()
-                                chosen_rewards_stats[
-                                    epoch_idx, minibatch_idx, gradient_accumulation_idx
-                                ] = chosen_rewards.mean()
-                                rejected_rewards_stats[
-                                    epoch_idx, minibatch_idx, gradient_accumulation_idx
-                                ] = rejected_rewards.mean()
-                                chosen_logprobs_stats[
-                                    epoch_idx, minibatch_idx, gradient_accumulation_idx
-                                ] = chosen_log_ratios.mean()
-                                rejected_logprobs_stats[
-                                    epoch_idx, minibatch_idx, gradient_accumulation_idx
-                                ] = rejected_log_ratios.mean()
-                        gradient_accumulation_idx += 1
-                    minibatch_idx += 1
-
-            with torch.no_grad():
-                mean_kl = kl.sum(1).mean()
-                mean_entropy = -logprobs_model.mean()
-                mean_dpo_score = dpo_score.item()
-                eps = int(self.state.episode / (time.time() - start_time))
-                g_chosen_reward = self.accelerator.gather(chosen_rewards_stats)
-                g_rejected_reward = self.accelerator.gather(rejected_rewards_stats)
-                metrics = {}
-                metrics["eps"] = eps
-                metrics["objective/kl"] = self.accelerator.gather(mean_kl).mean().item()
-                metrics["objective/entropy"] = self.accelerator.gather(mean_entropy).mean().item()
-                metrics["objective/mean_dpo_score"] = self.accelerator.gather(mean_dpo_score)
-                metrics["objective/xpo_loss"] = self.accelerator.gather(xpo_loss).mean().item()
-                metrics["objective/scores_margin"] = self.accelerator.gather(scores_margin.mean()).mean().item()
-                metrics["rewards/chosen"] = g_chosen_reward.mean().item()
-                metrics["rewards/rejected"] = g_rejected_reward.mean().item()
-                metrics["rewards/accuracies"] = (g_chosen_reward > g_rejected_reward).float().mean().item()
-                metrics["rewards/margins"] = (g_chosen_reward - g_rejected_reward).mean().item()
-                metrics["loss/policy_avg"] = self.accelerator.gather(loss_stats).mean().item()
-                metrics["logps/chosen"] = self.accelerator.gather(chosen_logprobs_stats).mean().item()
-                metrics["logps/rejected"] = self.accelerator.gather(rejected_logprobs_stats).mean().item()
-                metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
-                metrics["episode"] = self.state.episode
-                self.state.epoch = self.state.episode / self.train_dataset_len  # used by self.log
-                self.log(metrics)
-
-            self.lr_scheduler.step()
-            self.state.global_step += 1
-            self.control = self.callback_handler.on_step_end(args, self.state, self.control)
-            if self.control.should_save:
-                self._save_checkpoint(model, trial=None, metrics=metrics)
-                self.control = self.callback_handler.on_save(self.args, self.state, self.control)
-            torch.cuda.empty_cache()
-
-            if args.num_sample_generations > 0 and (update - 1) % self.sample_generations_freq == 0:
-                self.generate_completions(sampling=True)
-
-        # HF trainer specifics
-        self.control = self.callback_handler.on_train_end(args, self.state, self.control)
-        if self.control.should_save:
-            self._save_checkpoint(model, trial=None, metrics=None)
-            self.control = self.callback_handler.on_save(self.args, self.state, self.control)
-
-    def compute_logprobs(self, model, responses, context_length):
-        output = forward(model, responses, self.tokenizer.pad_token_id)
-        logits = output.logits[:, context_length - 1 : -1]
-        logits /= self.args.temperature + 1e-7
-        logprobs = F.log_softmax(logits, dim=-1)
-        target_ids = responses[:, context_length:]
-        return torch.gather(logprobs, 2, target_ids.unsqueeze(-1)).squeeze(-1)
+        return loss.detach() / self.args.gradient_accumulation_steps
