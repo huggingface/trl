@@ -24,6 +24,7 @@ python examples/scripts/xpo.py \
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 32 \
     --num_train_epochs 3 \
+    --max_new_tokens 53 \
     --warmup_ratio 0.1 \
     --missing_eos_penalty 1.0 \
     --push_to_hub
