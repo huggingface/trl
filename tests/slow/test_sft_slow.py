@@ -422,7 +422,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
             )
 
             # check that the components of the trainer.model are monkey patched:
-            self.assertTrue(any("Liger" in module.__class__.__name__ for module in trainer.model.model.modules()))
+            self.assertTrue(any("Liger" in type(module).__name__ for module in trainer.model.model.modules()))
             trainer.train()
 
         release_memory(trainer.model, trainer)
