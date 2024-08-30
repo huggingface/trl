@@ -26,6 +26,7 @@ _import_structure = {
         "is_xpu_available",
         "is_llmblender_available",
         "is_openai_available",
+        "is_liger_available",
     ],
     "models": [
         "AutoModelForCausalLMWithValueHead",
@@ -112,6 +113,7 @@ if TYPE_CHECKING:
         is_xpu_available,
         is_llmblender_available,
         is_openai_available,
+        is_liger_available,
     )
     from .models import (
         AutoModelForCausalLMWithValueHead,

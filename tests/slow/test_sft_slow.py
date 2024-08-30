@@ -22,15 +22,24 @@ from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
-from trl import SFTConfig, SFTTrainer, is_peft_available
+from trl import SFTConfig, SFTTrainer, is_liger_available, is_peft_available
 from trl.models.utils import setup_chat_format
 
-from ..testing_utils import require_bitsandbytes, require_peft, require_torch_gpu, require_torch_multi_gpu
+from ..testing_utils import (
+    require_bitsandbytes,
+    require_liger_kernel,
+    require_peft,
+    require_torch_gpu,
+    require_torch_multi_gpu,
+)
 from .testing_constants import DEVICE_MAP_OPTIONS, GRADIENT_CHECKPOINTING_KWARGS, MODELS_TO_TEST, PACKING_OPTIONS
 
 
 if is_peft_available():
     from peft import LoraConfig, PeftModel
+
+if is_liger_available():
+    from liger_kernel.transformers.rms_norm import LigerRMSNorm
 
 
 @require_torch_gpu
@@ -387,3 +396,36 @@ class SFTTrainerSlowTester(unittest.TestCase):
             trainer.train()
 
         release_memory(model, trainer)
+
+    @parameterized.expand(list(itertools.product(MODELS_TO_TEST, PACKING_OPTIONS)))
+    @require_liger_kernel
+    def test_sft_trainer_with_liger(self, model_name, packing):
+        """
+        Tests if passing use_liger=True to SFTConfig loads and runs the trainer
+        with AutoLigerKernelForCausalLM as expected.
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            args = SFTConfig(
+                output_dir=tmp_dir,
+                logging_strategy="no",
+                report_to="none",
+                per_device_train_batch_size=2,
+                max_steps=2,
+                packing=packing,
+                dataset_text_field=self.dataset_text_field,
+                max_seq_length=self.max_seq_length,
+                use_liger=True,
+            )
+
+            trainer = SFTTrainer(
+                model_name,
+                args=args,
+                train_dataset=self.train_dataset,
+                eval_dataset=self.eval_dataset,
+            )
+
+            # check that the components of the trainer.model are monkey patched:
+            self.assertTrue(any("Liger" in module.__class__.__name__ for module in trainer.model.model.modules()))
+            trainer.train()
+
+        release_memory(trainer.model, trainer)
