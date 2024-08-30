@@ -69,6 +69,10 @@ _import_structure = {
         "RandomPairwiseJudge",
         "HfPairwiseJudge",
         "OpenAIPairwiseJudge",
+        "BaseReviser",
+        "IdentityReviser",
+        "HfReviser",
+        "OpenAIReviser",
     ],
     "commands": [],
     "commands.cli_utils": ["init_zero_verbose", "SFTScriptArguments", "DPOScriptArguments", "TrlParser"],
@@ -154,6 +158,10 @@ if TYPE_CHECKING:
         RandomPairwiseJudge,
         HfPairwiseJudge,
         OpenAIPairwiseJudge,
+        BaseReviser,
+        IdentityReviser,
+        HfReviser,
+        OpenAIReviser,
     )
     from .trainer.callbacks import RichProgressCallback, SyncRefModelCallback
     from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config

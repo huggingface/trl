@@ -63,6 +63,7 @@ _import_structure = {
         "HfPairwiseJudge",
         "OpenAIPairwiseJudge",
     ],
+    "revisions": ["BaseReviser", "IdentityReviser", "HfReviser", "OpenAIReviser"],
 }
 
 try:
@@ -124,6 +125,7 @@ if TYPE_CHECKING:
         HfPairwiseJudge,
         OpenAIPairwiseJudge,
     )
+    from .revisions import BaseReviser, IdentityReviser, HfReviser, OpenAIReviser
 
     try:
         if not is_diffusers_available():
