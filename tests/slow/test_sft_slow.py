@@ -22,7 +22,7 @@ from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
-from trl import SFTConfig, SFTTrainer, is_liger_available, is_peft_available
+from trl import SFTConfig, SFTTrainer, is_peft_available
 from trl.models.utils import setup_chat_format
 
 from ..testing_utils import (
@@ -37,9 +37,6 @@ from .testing_constants import DEVICE_MAP_OPTIONS, GRADIENT_CHECKPOINTING_KWARGS
 
 if is_peft_available():
     from peft import LoraConfig, PeftModel
-
-if is_liger_available():
-    from liger_kernel.transformers.rms_norm import LigerRMSNorm
 
 
 @require_torch_gpu
