@@ -20,7 +20,7 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 from trl import XPOConfig, XPOTrainer
 
 
-class TestOnlineDPOTrainer(unittest.TestCase):
+class TestXPOTrainer(unittest.TestCase):
     def setUp(self):
         self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
@@ -67,7 +67,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
         # fmt: on
         self.dummy_dataset = Dataset.from_dict(dummy_dataset_dict)
 
-    def test_online_dpo_trainer_training(self):
+    def test_xpo_trainer_training(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = XPOConfig(
                 output_dir=tmp_dir,

@@ -162,6 +162,16 @@ class OnlineDPOTrainer(Trainer):
             "val/contain_eos_token": [],
         }
 
+        self.generation_config = GenerationConfig(
+            max_new_tokens=args.max_new_tokens,
+            min_new_tokens=args.max_new_tokens,
+            temperature=args.temperature,
+            top_k=0.0,
+            top_p=1.0,
+            do_sample=True,
+            use_cache=False if args.gradient_checkpointing else True,
+        )
+
         super().__init__(
             model=model,
             args=args,
@@ -282,15 +292,6 @@ class OnlineDPOTrainer(Trainer):
 
         # Sample 2 completations per prompt of size `max_new_tokens` from the model
         inputs = self._prepare_inputs(inputs)
-        generation_config = GenerationConfig(
-            max_new_tokens=self.args.max_new_tokens,
-            min_new_tokens=self.args.max_new_tokens,
-            temperature=self.args.temperature,
-            top_k=0.0,
-            top_p=1.0,
-            do_sample=True,
-            use_cache=False if self.args.gradient_checkpointing else True,
-        )
         num_examples, context_length = inputs["prompt_input_ids"].shape
         prompt_ids = inputs["prompt_input_ids"].repeat(2, 1)
         prompt_mask = inputs["prompt_attention_mask"].repeat(2, 1)
@@ -298,7 +299,7 @@ class OnlineDPOTrainer(Trainer):
             output = unwrapped_model.generate(
                 input_ids=prompt_ids,
                 attention_mask=prompt_mask,
-                generation_config=generation_config,
+                generation_config=self.generation_config,
             )
         del inputs
 
