@@ -315,7 +315,7 @@ class KTOTrainer(Trainer):
         model_adapter_name: Optional[str] = None,
         ref_adapter_name: Optional[str] = None,
     ):
-        if type(args) == TrainingArguments:
+        if type(args) is TrainingArguments:
             raise ValueError("Please use `KTOConfig` instead TrainingArguments.")
 
         if args.model_init_kwargs is None:
