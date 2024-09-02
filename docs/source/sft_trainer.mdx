@@ -594,6 +594,23 @@ trainer.train()
 
 The saved model is fully compatible with Hugging Face's transformers library. Learn more about unsloth in their [official repository](https://github.com/unslothai/unsloth).
 
+### Increase 20% throughput and reduces 60% memory using Liger-Kernel
+
+[Liger Kernel](https://github.com/linkedin/Liger-Kernel) is a collection of Triton kernels designed specifically for LLM training. It can effectively increase multi-GPU training throughput by 20% and reduces memory usage by 60%. We have implemented Hugging Face Compatible RMSNorm, RoPE, SwiGLU, CrossEntropy, FusedLinearCrossEntropy, and more to come. The kernel works out of the box with Flash Attention, PyTorch FSDP, and Microsoft DeepSpeed. We welcome contributions from the community to gather the best kernels for LLM training.
+
+To use Liger-Kernel in `SFTTrainer`, we should first install Liger-Kernel according to [the official website](https://github.com/linkedin/Liger-Kernel). Once installed, we can use it out-of-the-box with one simple line change:
+
+```diff
++ from liger_kernel.transformers import AutoLigerKernelForCausalLM
+
+...
+
+- model = AutoModelForCausalLM.from_pretrained("path/to/some/model")
+# This AutoModel wrapper class automatically monkey-patches the
+# model with the optimized Liger kernels if the model is supported.
+model = AutoLigerKernelForCausalLM.from_pretrained("path/to/some/model")
+```
+
 ## Best practices
 
 Pay attention to the following best practices when training a model with that trainer:
