@@ -42,7 +42,7 @@ class YamlConfigParser:
         return config
 
     def to_string(self, config):
-        final_string = """"""
+        final_string = ""
         for key, value in config.items():
             if isinstance(value, (dict, list)):
                 if len(value) != 0:

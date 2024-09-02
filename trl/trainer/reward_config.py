@@ -27,11 +27,11 @@ class RewardConfig(TrainingArguments):
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.
 
-    Parameters:
+    Args:
         max_length (`int`, *optional*, defaults to `None`):
             The maximum length of the sequences in the batch. This argument is required if you want to use the default data collator.
         gradient_checkpointing (`bool`, *optional*, defaults to `True`):
-                If True, use gradient checkpointing to save memory at the expense of slower backward pass.
+            If True, use gradient checkpointing to save memory at the expense of slower backward pass.
     """
 
     max_length: Optional[int] = None

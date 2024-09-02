@@ -556,7 +556,13 @@ def pipeline_step_with_grad(
     guidance_rescale: float = 0.0,
 ):
     r"""
-    Function to get RGB image with gradients attached to the model weights.  Args: prompt (`str` or `List[str]`, *optional*): The prompt or prompts to guide the image generation. If not defined, one has to pass `prompt_embeds`.  instead.  height (`int`, *optional*, defaults to pipeline.unet.config.sample_size * pipeline.vae_scale_factor): The height in pixels of the generated image.
+    Function to get RGB image with gradients attached to the model weights.
+    
+    Args:
+        prompt (`str` or `List[str]`, *optional*):
+            The prompt or prompts to guide the image generation. If not defined, one has to pass `prompt_embeds` instead.
+        height (`int`, *optional*, defaults to pipeline.unet.config.sample_size * pipeline.vae_scale_factor):
+            The height in pixels of the generated image.
         width (`int`, *optional*, defaults to pipeline.unet.config.sample_size * pipeline.vae_scale_factor):
             The width in pixels of the generated image.
         num_inference_steps (`int`, *optional*, defaults to 50):
