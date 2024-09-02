@@ -366,8 +366,12 @@ class SFTTrainer(Trainer):
                 warnings.warn(
                     "You passed a dataset that is already processed (contains an `input_ids` field) together with a valid formatting function. Therefore `formatting_func` will be ignored."
                 )
-
-            return dataset
+            formatting_func = lambda x: x["input_ids"]
+            if not packing:
+                return dataset
+            warnings.warn(
+                "Since packing is set to True, though the dataset is pretokenized, it will undergo constant length dataset preparation."
+            )
 
         # check if torch dataset / dataloader and do nothing
         # see https://github.com/huggingface/trl/pull/1468 for why datasets.IterableDataset needs a separate check
