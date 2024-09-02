@@ -327,7 +327,7 @@ class BCOTrainer(Trainer):
         embedding_func: Optional[Callable] = None,
         embedding_tokenizer: Optional[PreTrainedTokenizerBase] = None,
     ):
-        if type(args) == TrainingArguments:
+        if type(args) is TrainingArguments:
             raise ValueError("Please use `BCOConfig` instead TrainingArguments.")
 
         if args.model_init_kwargs is None:

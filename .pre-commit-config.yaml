@@ -1,10 +1,12 @@
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.2.0
+    rev: v0.6.3
     hooks:
       - id: ruff
+        types_or: [ python, pyi ]
         args: [ --fix ]
       - id: ruff-format
+        types_or: [ python, pyi ]
 
   # - repo: https://github.com/codespell-project/codespell
   #   rev: v2.1.0
