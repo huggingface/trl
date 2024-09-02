@@ -91,9 +91,10 @@ class BestOfNSampler:
         if isinstance(tokenized_query, torch.Tensor) and tokenized_query.ndim == 1:
             queries = tokenized_query.unsqueeze(0)
         elif isinstance(tokenized_query, List):
-            if isinstance(tokenized_query[0], int):
+            element_type = type(tokenized_query[0])
+            if element_type is int:
                 queries = torch.tensor(tokenized_query).unsqueeze(0)
-            elif isinstance(tokenized_query[0], torch.Tensor):
+            elif element_type is torch.Tensor:
                 queries = [tensor.reshape((1, -1)) for tensor in tokenized_query]
             else:
                 queries = [torch.tensor(query).reshape((1, -1)) for query in tokenized_query]
