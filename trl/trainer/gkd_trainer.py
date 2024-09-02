@@ -88,9 +88,11 @@ class GKDTrainer(SFTTrainer):
 
         self.generation_config = GenerationConfig(
             max_new_tokens=args.max_new_tokens,
+            min_new_tokens=args.max_new_tokens,
             temperature=args.temperature,
             do_sample=True,
             top_k=0,
+            use_cache=False if args.gradient_checkpointing else True,
         )
 
     @staticmethod
