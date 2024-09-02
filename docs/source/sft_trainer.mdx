@@ -604,7 +604,11 @@ With great memory reduction, you can potentially turn off cpu_offloading or grad
 |--------------------------|-------------------------|
 | ![Speed up](https://raw.githubusercontent.com/linkedin/Liger-Kernel/main/docs/images/e2e-tps.png) | ![Memory](https://raw.githubusercontent.com/linkedin/Liger-Kernel/main/docs/images/e2e-memory.png) |
 
-To use Liger-Kernel in `SFTTrainer`, you can first install Liger-Kernel according to [the official website](https://github.com/linkedin/Liger-Kernel). Once installed, we can use it out-of-the-box with two simple line changes:
+
+1. To use Liger-Kernel in `SFTTrainer`, first install by 
+
+```bash
+pip install liger-kernel
 
 ```diff
 + from liger_kernel.transformers import AutoLigerKernelForCausalLM
