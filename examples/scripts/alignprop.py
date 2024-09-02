@@ -24,6 +24,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python examples/scripts/alignprop.py \
     --log_with="wandb"
 
 """
+
 from dataclasses import dataclass, field
 
 import numpy as np
