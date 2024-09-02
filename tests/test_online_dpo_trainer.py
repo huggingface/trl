@@ -28,11 +28,6 @@ class TestOnlineDPOTrainer(unittest.TestCase):
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
-    def _get_dummy_model_and_tokenizer(self):
-        # Return dummy model and tokenizer. This is a placeholder.
-        return self.model, self.tokenizer, self.reward_model
-
-    def _init_dummy_dataset(self):
         # fmt: off
         dummy_dataset_dict = {
             "prompt": [
@@ -70,27 +65,9 @@ class TestOnlineDPOTrainer(unittest.TestCase):
             ],
         }
         # fmt: on
-        return Dataset.from_dict(dummy_dataset_dict)
+        self.dummy_dataset = Dataset.from_dict(dummy_dataset_dict)
 
     def test_online_dpo_trainer_training(self):
-        model, tokenizer, reward_model = self._get_dummy_model_and_tokenizer()
-        dummy_dataset = self._init_dummy_dataset()
-
-        def tokenize(element):
-            outputs = tokenizer(
-                element["prompt"],
-                padding=False,
-            )
-            return {"input_ids": outputs["input_ids"]}
-
-        dummy_dataset = dummy_dataset.map(
-            tokenize,
-            remove_columns=dummy_dataset.column_names,
-            batched=True,
-            num_proc=4,
-            load_from_cache_file=False,
-        )
-
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = OnlineDPOConfig(
                 output_dir=tmp_dir,
@@ -104,16 +81,16 @@ class TestOnlineDPOTrainer(unittest.TestCase):
             )
 
             trainer = OnlineDPOTrainer(
-                model=model,
-                ref_model=model,
-                reward_model=reward_model,
-                config=training_args,
-                tokenizer=tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                model=self.model,
+                ref_model=self.model,
+                reward_model=self.reward_model,
+                args=training_args,
+                tokenizer=self.tokenizer,
+                train_dataset=self.dummy_dataset,
+                eval_dataset=self.dummy_dataset,
             )
 
             trainer.train()
 
             # Check if training loss is available
-            self.assertIn("loss/policy_avg", trainer.state.log_history[-1])
+            self.assertIn("train_loss", trainer.state.log_history[-1])
