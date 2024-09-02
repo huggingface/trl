@@ -141,20 +141,22 @@ class GKDTrainer(SFTTrainer):
     def compute_loss(self, model, inputs, return_outputs=False):
         # compute student output
         outputs_student = model(
-            input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], labels=inputs["labels"]
+            input_ids=inputs["input_ids"],
+            attention_mask=inputs["attention_mask"],
         )
 
         # compute teacher output in eval mode
         self.teacher_model.eval()
         with torch.no_grad():
             outputs_teacher = self.teacher_model(
-                input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], labels=inputs["labels"]
+                input_ids=inputs["input_ids"],
+                attention_mask=inputs["attention_mask"],
             )
 
-        # slice the logits for the generated tokens
-        generated_mask = inputs["labels"] != -100
-        student_logits = outputs_student.logits[generated_mask]
-        teacher_logits = outputs_teacher.logits[generated_mask]
+        # slice the logits for the generated tokens using the inputs["prompts"] lengths
+        prompt_lengths = inputs["prompts"].shape[1]
+        student_logits = outputs_student.logits[:, prompt_lengths:, :]
+        teacher_logits = outputs_teacher.logits[:, prompt_lengths:, :]
 
         # compute loss
         loss = self.generalized_jsd_loss(
@@ -171,6 +173,7 @@ class GKDTrainer(SFTTrainer):
         # Generate output with respect to the prompt only
         generated_outputs = model.generate(
             input_ids=inputs["prompts"],
+            attention_mask=inputs.get("prompt_attention_mask", None),
             generation_config=generation_config,
             return_dict_in_generate=True,
             output_scores=True,
@@ -178,28 +181,15 @@ class GKDTrainer(SFTTrainer):
 
         # Get the generated token IDs
         generated_tokens = generated_outputs.sequences
+        # Calculate new attention mask
+        new_attention_mask = torch.ones_like(generated_tokens)
 
-        # Create labels: -100 for prompt tokens, actual token IDs for generated tokens
-        labels = torch.full_like(generated_tokens, fill_value=-100)
-        for i, (prompt, generated) in enumerate(zip(inputs["prompts"], generated_tokens)):
-            prompt_length = prompt.ne(tokenizer.pad_token_id).sum().item()
-            labels[i, prompt_length:] = generated[prompt_length:]
+        # If there's padding, set attention mask to 0 for padding tokens
+        pad_token_id = tokenizer.pad_token_id
+        if pad_token_id is not None:
+            new_attention_mask[generated_tokens == pad_token_id] = 0
 
-        # Create new attention mask
-        new_attention_mask = (generated_tokens != tokenizer.pad_token_id).long()
-
-        # Ensure the last token is either EOS or PAD
-        for i, seq in enumerate(generated_tokens):
-            if seq[-1] not in [tokenizer.eos_token_id, tokenizer.pad_token_id]:
-                if seq[-1] == tokenizer.pad_token_id:
-                    generated_tokens[i, -1] = tokenizer.eos_token_id
-                    labels[i, -1] = tokenizer.eos_token_id
-                else:
-                    # If the sequence is full, replace the last token with EOS
-                    generated_tokens[i, -1] = tokenizer.eos_token_id
-                    labels[i, -1] = tokenizer.eos_token_id
-
-        return generated_tokens, labels, new_attention_mask
+        return generated_tokens, new_attention_mask
 
     def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         """
@@ -211,11 +201,10 @@ class GKDTrainer(SFTTrainer):
         """
         if random.random() <= self.lmbda:
             with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
-                new_input_ids, new_labels, new_attention_mask = self.generate_on_policy_outputs(
+                new_input_ids, new_attention_mask = self.generate_on_policy_outputs(
                     unwrapped_model, self.tokenizer, inputs, self.generation_config
                 )
             inputs["input_ids"] = new_input_ids
-            inputs["labels"] = new_labels
             inputs["attention_mask"] = new_attention_mask
 
         loss = super().training_step(model, inputs)

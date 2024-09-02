@@ -239,6 +239,7 @@ class DataCollatorForChatML:
     tokenizer: PreTrainedTokenizerBase
     ignore_index: int = -100
     max_length: int = None
+    messages_key: str = "messages"
 
     def __post_init__(self):
         if self.tokenizer.pad_token_id is None:
@@ -252,7 +253,7 @@ class DataCollatorForChatML:
         completions = []
 
         for example in examples:
-            messages = example["messages"]
+            messages = example[self.messages_key]
             formatted_chat = self.tokenizer.apply_chat_template(messages, tokenize=False)
 
             # Split the formatted chat into prompt and completion
@@ -280,7 +281,10 @@ class DataCollatorForChatML:
         for prompt, completion in zip(tokenized_prompts["input_ids"], tokenized_completions["input_ids"]):
             combined_input_ids = prompt + completion
             combined_attention_mask = [1] * len(combined_input_ids)
-            combined_labels = [self.ignore_index] * len(prompt) + completion
+
+            # Create labels for one-token ahead task, masking the prompt
+            combined_labels = [self.ignore_index] * len(prompt) + completion[:-1]
+            combined_labels.append(self.tokenizer.eos_token_id)  # Add EOS token as final target
 
             input_ids.append(combined_input_ids)
             attention_mask.append(combined_attention_mask)
@@ -300,11 +304,19 @@ class DataCollatorForChatML:
         prompts_input_ids = [torch.tensor(ids) for ids in tokenized_prompts["input_ids"]]
         prompts_input_ids = pad(prompts_input_ids, padding_side="left", padding_value=self.tokenizer.pad_token_id)
 
+        # prompt attention mask
+        prompt_attention_mask = pad(
+            [torch.tensor([1] * len(ids)) for ids in tokenized_prompts["input_ids"]],
+            padding_side="left",
+            padding_value=0,
+        )
+
         return {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "labels": labels,
             "prompts": prompts_input_ids,
+            "prompt_attention_mask": prompt_attention_mask,
         }
 
 

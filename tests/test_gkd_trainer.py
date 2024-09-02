@@ -66,36 +66,21 @@ class TestGKDTrainer(unittest.TestCase):
 
         # Check that outputs is a tuple of three tensors
         self.assertIsInstance(outputs, tuple)
-        self.assertEqual(len(outputs), 3)
+        self.assertEqual(len(outputs), 2)
 
-        new_input_ids, new_labels, new_attention_mask = outputs
+        new_input_ids, new_attention_mask = outputs
 
         # Check shapes
         batch_size = len(prompts)
         self.assertEqual(new_input_ids.shape[0], batch_size)
-        self.assertEqual(new_labels.shape[0], batch_size)
         self.assertEqual(new_attention_mask.shape[0], batch_size)
 
         # Check types
         self.assertIsInstance(new_input_ids, torch.Tensor)
-        self.assertIsInstance(new_labels, torch.Tensor)
         self.assertIsInstance(new_attention_mask, torch.Tensor)
 
         # Check that new_input_ids and new_attention_mask have the same shape
         self.assertEqual(new_input_ids.shape, new_attention_mask.shape)
-
-        # Check that labels are properly masked
-        for i in range(batch_size):
-            prompt_length = inputs["prompts"][i].ne(self.tokenizer.pad_token_id).sum().item()
-            self.assertTrue(torch.all(new_labels[i, :prompt_length] == -100))
-            self.assertTrue(torch.any(new_labels[i, prompt_length:] != -100))
-
-        # Check that input_ids and labels are the same where labels are not -100
-        self.assertTrue(torch.all(new_input_ids[new_labels != -100] == new_labels[new_labels != -100]))
-
-        # Check that generated sequences end with eos_token_id or pad_token_id
-        for seq in new_input_ids:
-            self.assertTrue(seq[-1].item() in [self.tokenizer.eos_token_id, self.tokenizer.pad_token_id])
 
 
 class TestGeneralizedJSDLoss(unittest.TestCase):
