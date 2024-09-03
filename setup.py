@@ -1,4 +1,4 @@
-""" trl is an open library for RL with transformer models.
+"""trl is an open library for RL with transformer models.
 
 Note:
 
@@ -53,17 +53,19 @@ To create the package for pypi.
 8. Change the version in __init__.py and setup.py to X.X.X+1.dev0 (e.g. VERSION=1.18.3 -> 1.18.4.dev0).
    Then push the change with a message 'set dev version'
 """
+
 import os
 
 from setuptools import find_packages, setup
 
 
-__version__ = "0.9.6.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
+__version__ = "0.11.0.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
 
 REQUIRED_PKGS = [
     "torch>=1.4.0",
     "transformers>=4.31.0",
-    "numpy>=1.18.2",
+    "numpy>=1.18.2;platform_system!='Windows'",
+    "numpy<2;platform_system=='Windows'",
     "accelerate",
     "datasets",
     "tyro>=0.5.11",
@@ -82,7 +84,7 @@ EXTRAS = {
         "llm-blender>=0.0.2",
     ],
     "peft": ["peft>=0.8.0"],
-    "liger": ["liger-kernel-nightly==0.1.1.dev20240828063745"],
+    "liger": ["liger-kernel>=0.2.1"],
     "diffusers": ["diffusers>=0.18.0"],
     "deepspeed": ["deepspeed>=0.14.4"],
     "benchmark": ["wandb", "ghapi", "openrlbenchmark==0.2.1a5", "requests", "deepspeed"],
