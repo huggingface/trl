@@ -110,7 +110,7 @@ class RewardTrainer(Trainer):
             peft_config (`Dict`, defaults to `None`):
                 The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
         """
-        if type(args) == TrainingArguments:
+        if type(args) is TrainingArguments:
             warnings.warn(
                 "Using `transformers.TrainingArguments` for `args` is deprecated and will be removed in a future version. Please use `RewardConfig` instead.",
                 FutureWarning,
@@ -163,7 +163,7 @@ class RewardTrainer(Trainer):
                 raise ValueError(
                     "max_length or a tokenizer must be specified when using the default RewardDataCollatorWithPadding"
                 )
-            if type(args) == TrainingArguments:
+            if type(args) is TrainingArguments:
                 if max_length is None:
                     warnings.warn(
                         "When using RewardDataCollatorWithPadding, you should set `max_length` in RewardConfig."
