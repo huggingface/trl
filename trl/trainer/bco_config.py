@@ -78,8 +78,6 @@ class BCOConfig(TrainingArguments):
     model_init_kwargs: Optional[Dict[str, Any]] = None
     ref_model_init_kwargs: Optional[Dict[str, Any]] = None
     dataset_num_proc: Optional[int] = None
-
-    # BCO config
     prompt_sample_size: int = 1024
     min_density_ratio: float = 0.5
     max_density_ratio: float = 10.0

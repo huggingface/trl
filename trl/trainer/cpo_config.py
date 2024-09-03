@@ -28,7 +28,8 @@ class CPOConfig(TrainingArguments):
 
     Parameters:
         max_length (`Optional[int]`, *optional*, defaults to `None`):
-            Maximum length of the sequences (prompt + completion) in the batch. This argument is required if you want             to use the default data collator.
+            Maximum length of the sequences (prompt + completion) in the batch. This argument is required if you want
+            to use the default data collator.
         max_prompt_length (`Optional[int]`, *optional*, defaults to `None`):
             Maximum length of the prompt. This argument is required if you want to use the default data collator.
         max_completion_length (`Optional[int]`, *optional*, defaults to `None`):
