@@ -470,11 +470,11 @@ class ConstantLengthDataset(IterableDataset):
                 Number of characters per token used to estimate number of tokens in text buffer.
             eos_token_id (`int`, *optional*, defaults to `0`):
                 Id of the end of sequence token if the passed tokenizer does not have an EOS token.
-            shuffle ('bool', *optional*, defaults to True)
+            shuffle (`bool`, *optional*, defaults to True)
                 Shuffle the examples before they are returned
-            append_concat_token ('bool', *optional*, defaults to True)
+            append_concat_token (`bool`, *optional*, defaults to True)
                 If true, appends `eos_token_id` at the end of each sample being packed.
-            add_special_tokens ('bool', *optional*, defaults to True)
+            add_special_tokens (`bool`, *optional*, defaults to True)
                 If true, tokenizers adds special tokens to each sample being packed.
     """
 

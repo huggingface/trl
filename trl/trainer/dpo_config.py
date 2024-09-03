@@ -107,14 +107,14 @@ class DPOConfig(TrainingArguments):
             Type of f-divergence regularization function to compute divergence between policy and reference model.
         f_alpha_divergence_coef (`float`, *optional*, defaults to `1.0`):
             α coefficient in the α-divergence \\( u^{-\alpha} \\) regularization function for DPO loss.
-        sync_ref_model ('bool', *optional*, defaults to `False`):
+        sync_ref_model (`bool`, *optional*, defaults to `False`):
             Flag for syncing reference model during training from the
             [TR-DPO](https://huggingface.co/papers/2404.09656) paper.
-        ref_model_mixup_alpha ('float', *optional*, defaults to `0.9`):
+        ref_model_mixup_alpha (`float`, *optional*, defaults to `0.9`):
             Alpha parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper.
-        ref_model_sync_steps ('int', *optional*, defaults to `64`):
+        ref_model_sync_steps (`int`, *optional*, defaults to `64`):
             Tau parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper.
-        rpo_alpha ('float', *optional*, defaults to `None`):
+        rpo_alpha (`float`, *optional*, defaults to `None`):
             Alpha parameter from the [RPO](https://huggingface.co/papers/2404.19733) paper V3. If None, no weighting is
             applied and the loss is the same as the DPO loss. The paper recommends `rpo_alpha=1.0`.
     """
