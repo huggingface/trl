@@ -42,7 +42,7 @@ class SFTConfig(TrainingArguments):
             Number of examples to tokenize per batch. If `dataset_batch_size <= 0` or `dataset_batch_size is None`,
             tokenizes the full dataset as a single batch.
         neftune_noise_alpha (`Optional[float]`, *optional*, defaults to `None`):
-            The scale of the noise for NEFTune embeddings. The [NEFTune paper](https://huggingface.co/papers/2310.05914)
+            Scale of the noise for NEFTune embeddings. The [NEFTune paper](https://huggingface.co/papers/2310.05914)
             suggests using values between `5` and `15`. If set to `None`, NEFTune is not activated. Activating NEFTune
             can significantly improve model performance for instruction fine-tuning.
         model_init_kwargs (`Optional[Dict[str, Any]]`, *optional*, defaults to `None`):

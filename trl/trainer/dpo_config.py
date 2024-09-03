@@ -101,7 +101,7 @@ class DPOConfig(TrainingArguments):
         ref_adapter_name (`Optional[str]`, *optional*, defaults to `None`):
             Name of the reference PEFT adapter, when using LoRA with multiple adapters.
         reference_free (`bool`, *optional*, defaults to `False`):
-            If True, we ignore the _provided_ reference model and implicitly use a reference model that assigns equal
+            If `True`, we ignore the _provided_ reference model and implicitly use a reference model that assigns equal
             probability to all responses.
         force_use_ref_model (`bool`, *optional*, defaults to `False`):
             In case one passes a PEFT model for the active model and you want to use a different model for the
