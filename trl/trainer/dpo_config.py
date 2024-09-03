@@ -115,17 +115,18 @@ class DPOConfig(TrainingArguments):
             steps, using the `ref_model_mixup_alpha` parameter. This synchronization originites from the
             [TR-DPO](https://huggingface.co/papers/2404.09656) paper.
         ref_model_mixup_alpha (`float`, *optional*, defaults to `0.9`):
-            The α parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which controls the mix
+            α parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which controls the mix
             between the current policy and the previous reference policy during updates. The reference policy is
             updated according to the equation: `π_ref = α * π_θ + (1 - α) * π_ref_prev`
             To use this parameter, you must set `sync_ref_model=True`.
         ref_model_sync_steps (`int`, *optional*, defaults to `64`):
-            The τ parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which determines how
+            τ parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which determines how
             frequently the current policy is synchronized with the reference policy. To use this parameter, you must
             set `sync_ref_model=True`.
         rpo_alpha (`float`, *optional*, defaults to `None`):
-            Alpha parameter from the [RPO](https://huggingface.co/papers/2404.19733) paper V3. If None, no weighting is
-            applied and the loss is the same as the DPO loss. The paper recommends `rpo_alpha=1.0`.
+            α parameter from the [RPO](https://huggingface.co/papers/2404.19733) paper (v3), which controls the
+            weighting of the NLL term in the loss. If `None`, no weighting is applied and the loss is the same as the
+            DPO loss. The paper recommends `rpo_alpha=1.0`.
     """
 
     beta: float = 0.1
