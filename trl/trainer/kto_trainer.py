@@ -1151,7 +1151,10 @@ class KTOTrainer(Trainer):
 
             reference_chosen_logps = batch["reference_logps"][chosen_idx, ...]
             reference_rejected_logps = batch["reference_logps"][rejected_idx, ...]
-            reference_KL_logps = batch["reference_KL_logps"]
+            if self.calculate_KL:
+                reference_KL_logps = batch["reference_KL_logps"]
+            else:
+                reference_KL_logps = None
         else:
             with torch.no_grad():
                 if self.ref_model is None:
