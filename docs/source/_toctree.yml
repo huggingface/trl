@@ -1,4 +1,5 @@
 - sections:
+  title: Get started
   - local: index
     title: TRL
   - local: quickstart
@@ -15,7 +16,6 @@
     title: Customize the Training
   - local: logging
     title: Understanding Logs
-  title: Get started
 - sections:
   - local: models
     title: Model Classes
