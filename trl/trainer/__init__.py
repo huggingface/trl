@@ -47,6 +47,8 @@ _import_structure = {
     "orpo_trainer": ["ORPOTrainer"],
     "ppo_config": ["PPOConfig"],
     "ppo_trainer": ["PPOTrainer"],
+    "simpo_config": ["SimPOConfig"],
+    "simpo_trainer": ["SimPOTrainer"],
     "reward_config": ["RewardConfig"],
     "reward_trainer": ["RewardTrainer", "compute_accuracy"],
     "sft_config": ["SFTConfig"],
@@ -112,6 +114,8 @@ if TYPE_CHECKING:
     from .orpo_trainer import ORPOTrainer
     from .ppo_config import PPOConfig
     from .ppo_trainer import PPOTrainer
+    from .simpo_config import SimPOConfig
+    from .simpo_trainer import SimPOTrainer
     from .reward_config import RewardConfig
     from .reward_trainer import RewardTrainer, compute_accuracy
     from .sft_config import SFTConfig

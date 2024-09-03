@@ -49,6 +49,8 @@
     title: AlignProp Trainer
   - local: orpo_trainer
     title: ORPO Trainer
+  - local: simpo_trainer
+    title: SimPO Trainer
   - local: iterative_sft_trainer
     title: Iterative Supervised Fine-Tuning
   - local: callbacks
