@@ -33,7 +33,8 @@ class ORPOConfig(TrainingArguments):
         max_prompt_length (`Optional[int]`, *optional*, defaults to `None`):
             Maximum length of the prompt. This argument is required if you want to use the default data collator.
         max_completion_length (`Optional[int]`, *optional*, defaults to `None`):
-            Maximum length of the completions. This argument is required if you want to use the default data collator and your model is an encoder-decoder.
+            Maximum length of the completion. This argument is required if you want to use the default data collator
+            and your model is an encoder-decoder.
         beta (`float`, *optional*, defaults to `0.1`):
             Parameter controlling the relative ratio loss weight in the ORPO loss. In the [paper](https://huggingface.co/papers/2403.07691),
             it is denoted by λ. In the [code](https://github.com/xfactlab/orpo), it is denoted by `alpha`.
