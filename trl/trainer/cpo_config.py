@@ -45,7 +45,13 @@ class CPOConfig(TrainingArguments):
         label_smoothing (`float`, *optional*, defaults to `0.0`):
             Label smoothing factor. This argument is required if you want to use the default data collator.
         loss_type (`str`, *optional*, defaults to `"sigmoid"`):
-            Type of loss to use. This argument is required if you want to use the default data collator.
+            Type of loss to use. Possible values are:
+
+                - `"sigmoid"`: sigmoid loss from the original [DPO](https://huggingface.co/papers/2305.18290) paper.
+                - `"hinge"`: hinge loss on the normalized likelihood from the [SLiC](https://huggingface.co/papers/2305.10425) paper.
+                - `"ipo"`: IPO loss from the [IPO](https://huggingface.co/papers/2310.12036) paper.
+                - `"simpo"`: SimPO loss from the [SimPO](https://huggingface.co/papers/2405.14734) paper.
+
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model.
         cpo_alpha (`float`, *optional*, defaults to `1.0`):

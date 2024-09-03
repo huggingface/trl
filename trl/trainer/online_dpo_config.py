@@ -27,7 +27,7 @@ class OnlineDPOConfig(TrainingArguments):
             reference model. For the IPO loss (`loss_type="ipo"`), β is the regularization parameter denoted by τ in
             the [paper](https://huggingface.co/papers/2310.12036).
         loss_type (`str`, *optional*, defaults to `"sigmoid"`):
-            Type of DPO loss to use. Possible values are:
+            Type of loss to use. Possible values are:
 
                 - `"sigmoid"`: sigmoid loss from the original [DPO](https://huggingface.co/papers/2305.18290) paper.
                 - `"ipo"`: IPO loss from the [IPO](https://huggingface.co/papers/2310.12036) paper.
