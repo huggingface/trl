@@ -29,12 +29,12 @@ class SFTConfig(TrainingArguments):
     Parameters:
         dataset_text_field (`Optional[str]`, *optional*, defaults to `None`):
             Name of the text field of the dataset. If provided, the trainer will automatically create a
-            `ConstantLengthDataset` based on `dataset_text_field`.
+            [`ConstantLengthDataset`] based on `dataset_text_field`.
         packing (`bool`, *optional*, defaults to `False`):
-            Used only when `dataset_text_field` is provided. Controls whether the `ConstantLengthDataset` packs
+            Used only when `dataset_text_field` is provided. Controls whether the [`ConstantLengthDataset`] packs
             the sequences of the dataset.
         max_seq_length (`Optional[int]`, *optional*, defaults to `None`):
-            Maximum sequence length for the `ConstantLengthDataset` and for automatically creating the dataset. If
+            Maximum sequence length for the [`ConstantLengthDataset`] and for automatically creating the dataset. If
             `None`, the smaller value between `tokenizer.model_max_length` and `1024`.
         dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
             Number of workers to use for tokenizing the data. Only used when `packing=False`.
@@ -52,9 +52,9 @@ class SFTConfig(TrainingArguments):
         eval_packing (`Optional[bool]`, *optional*, defaults to `None`):
             Whether to pack the eval dataset as well. If `None`, uses the same value as `packing`.
         num_of_sequences (`int`, *optional*, defaults to `1024`):
-            Number of sequences to use for the `ConstantLengthDataset`.
+            Number of sequences to use for the [`ConstantLengthDataset`].
         chars_per_token (`float`, *optional*, defaults to `3.6`):
-            Number of characters per token to use for the `ConstantLengthDataset`. See
+            Number of characters per token to use for the [`ConstantLengthDataset`]. See
             [chars_token_ratio](https://github.com/huggingface/trl/blob/08f550674c553c36c51d1027613c29f14f3676a5/examples/stack_llama/scripts/supervised_finetuning.py#L53) for more details.
         use_liger (`bool`, *optional*, defaults to `False`):
             Monkey patch the model with Liger kernels to increase throughput and reduce memory usage.
