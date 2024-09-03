@@ -46,7 +46,8 @@ class BCOConfig(TrainingArguments):
             Truncation mode to use, either `keep_end` or `keep_start`. This argument is required if you want to use
             the default data collator.
         generate_during_eval (`bool`, *optional*, defaults to `False`):
-            Whether to sample and log generations during evaluation step.
+            If `True`, generates and logs completions from both the model and the reference model to W&B during
+            evaluation.
         is_encoder_decoder (`Optional[bool]`, *optional*, defaults to `None`):
             When using the `model_init` argument (callable) to instantiate the model instead of the `model` argument,
             you need to specify if the model returned by the callable is an encoder-decoder model.
