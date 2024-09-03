@@ -18,6 +18,8 @@
   title: Get started
 - sections:
   - sections:
+    - local: trainer
+      title: Overview
     - local: alignprop_trainer
       title: AlignProp
     - local: bco_trainer
