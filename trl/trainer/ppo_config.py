@@ -20,11 +20,11 @@ from typing import Literal, Optional
 
 import numpy as np
 import tyro
-from transformers import TrainingArguments
 from typing_extensions import Annotated
 
 from trl.trainer.utils import exact_div
 
+from ..core import flatten_dict
 from ..import_utils import is_wandb_available
 
 
@@ -32,7 +32,7 @@ JSONDict = Annotated[Optional[dict], tyro.conf.arg(metavar="JSON", constructor=j
 
 
 @dataclass
-class PPOConfig(TrainingArguments):
+class PPOConfig:
     r"""
     Configuration class for the [`PPOTrainer`].
 
@@ -43,6 +43,8 @@ class PPOConfig(TrainingArguments):
     Parameters:
         exp_name (`str`, *optional*, defaults to `os.path.basename(__file__)[: -len(".py")]`):
             Name of this experiment.
+        seed (`int`, *optional*, defaults to `0`):
+            Random seed.
         log_with (`Optional[Literal["wandb", "tensorboard"]]`, *optional*, defaults to `None`):
             Log with either `"wandb"` or `"tensorboard"`. Check
             [tracking](https://huggingface.co/docs/accelerate/usage_guides/tracking) for more details.
@@ -54,6 +56,8 @@ class PPOConfig(TrainingArguments):
             Name of dataset to query - used only for tracking purposes.
         reward_model (`Optional[str]`, *optional*, defaults to `"sentiment-analysis:lvwerra/distilbert-imdb"`):
             Reward model to use - used only for tracking purposes.
+        remove_unused_columns (`bool`, *optional*, defaults to `True`):
+            Remove unused columns from the dataset.
         tracker_kwargs (`JSONDict`, *optional*, defaults to `{}`):
             Keyword arguments for the tracker (e.g. `python ppo.py --tracker_kwargs='{"wandb": {"entity": "my_wandb_entity", "name": "my_exp_name"}}'`.
         accelerator_kwargs (`JSONDict`, *optional*, defaults to `{}`):
@@ -66,6 +70,8 @@ class PPOConfig(TrainingArguments):
             Keyword arguments for pushing model to the hub during training (e.g. repo_id).
         steps (`int`, *optional*, defaults to `20000`):
             Number of training steps.
+        learning_rate (`float`, *optional*, defaults to `1.41e-5`):
+            Learning rate for the optimizer.
         adap_kl_ctrl (`bool`, *optional*, defaults to `True`):
             Use adaptive KL control, otherwise linear.
         init_kl_coef (`Optional[float]`, *optional*, defaults to `0.2`):
@@ -98,6 +104,10 @@ class PPOConfig(TrainingArguments):
             DEPRECATED: use `mini_batch_size` instead, which does the same thing.
         mini_batch_size (`int`, *optional*, defaults to `128`):
             Number of samples optimized in each mini batch.
+        gradient_accumulation_steps (`int`, *optional*, defaults to `1`):
+            Number of gradient accumulation steps.
+        world_size (`Optional[int]`, *optional*, defaults to `None`):
+            Number of processes to use for distributed training.
         ppo_epochs (`int`, *optional*, defaults to `4`):
             Number of optimisation epochs per batch of samples.
         optimize_device_cache (`bool`, *optional*, defaults to `False`):
@@ -133,17 +143,20 @@ class PPOConfig(TrainingArguments):
     """
 
     exp_name: str = os.path.basename(sys.argv[0])[: -len(".py")]
+    seed: int = 0
     log_with: Optional[Literal["wandb", "tensorboard"]] = None
     task_name: Optional[str] = None
     model_name: str = "gpt2"
     query_dataset: str = "imdb"
     reward_model: str = "sentiment-analysis:lvwerra/distilbert-imdb"
+    remove_unused_columns: bool = True
     tracker_kwargs: JSONDict = field(default_factory=dict)
     accelerator_kwargs: JSONDict = field(default_factory=dict)
     project_kwargs: JSONDict = field(default_factory=dict)
     tracker_project_name: str = "trl"
     push_to_hub_if_best_kwargs: JSONDict = field(default_factory=dict)
     steps: int = 20000
+    learning_rate: float = 1.41e-5
     adap_kl_ctrl: bool = True
     init_kl_coef: float = 0.2
     kl_penalty: Literal["kl", "abs", "mse", "full"] = "kl"
@@ -158,6 +171,7 @@ class PPOConfig(TrainingArguments):
     forward_batch_size: Optional[int] = None
     mini_batch_size: int = 128
     gradient_accumulation_steps: int = 1
+    world_size: tyro.conf.Suppress[int] = None
     ppo_epochs: int = 4
     max_grad_norm: Optional[float] = None
     optimize_cuda_cache: Optional[bool] = None
@@ -178,19 +192,17 @@ class PPOConfig(TrainingArguments):
     global_batch_size: tyro.conf.Suppress[int] = None
     dataset_num_proc: Optional[int] = None
 
+    if optimize_cuda_cache is not None:
+        warnings.warn(
+            "The `optimize_cuda_cache` argument will be deprecated soon, please use `optimize_device_cache` instead."
+        )
+
+        if optimize_device_cache is True:
+            raise ValueError("Both `optimize_device_cache` and `optimize_cuda_cache` were provided")
+
+        optimize_device_cache = optimize_cuda_cache
+
     def __post_init__(self):
-        super().__post_init__()
-
-        if self.optimize_cuda_cache is not None:
-            warnings.warn(
-                "The `optimize_cuda_cache` argument will be deprecated soon, please use `optimize_device_cache` instead."
-            )
-
-            if self.optimize_device_cache is True:
-                raise ValueError("Both `optimize_device_cache` and `optimize_cuda_cache` were provided")
-
-            self.optimize_device_cache = self.optimize_cuda_cache
-
         if self.forward_batch_size is not None:
             warnings.warn(
                 "Note that using `forward_batch_size` is deprecated, use `mini_batch_size` instead. By setting it you overwrite `mini_batch_size` which affects both the batch size during forward passes and also the mini batch size for PPO optimization."
@@ -214,3 +226,9 @@ class PPOConfig(TrainingArguments):
 
         self.total_ppo_epochs = int(np.ceil(self.steps / self.batch_size))
         assert self.kl_penalty in ["kl", "abs", "mse", "full"]
+
+    def to_dict(self):
+        output_dict = {}
+        for key, value in self.__dict__.items():
+            output_dict[key] = value
+        return flatten_dict(output_dict)

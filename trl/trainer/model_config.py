@@ -77,7 +77,6 @@ class ModelConfig:
     use_bnb_nested_quant: bool = False
 
     def __post_init__(self):
-        super().__post_init__()
         if self.load_in_8bit and self.load_in_4bit:
             raise ValueError("You can't use 8 bit and 4 bit precision at the same time")
 
