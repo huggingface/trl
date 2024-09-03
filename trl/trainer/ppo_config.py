@@ -129,7 +129,8 @@ class PPOConfig:
         whiten_rewards (`bool`, *optional*, defaults to `False`):
             Whiten the rewards before computing advantages.
         is_encoder_decoder (`Optional[bool]`, *optional*, defaults to `None`):
-            Whether the model is an encoder-decoder model.
+            When using the `model_init` argument (callable) to instantiate the model instead of the `model` argument,
+            you need to specify if the model returned by the callable is an encoder-decoder model.
         is_peft_model (`Optional[bool]`, *optional*, defaults to `None`):
             Whether the model is a PEFT model.
         backward_batch_size (`Optional[int]`, *optional*, defaults to `None`):

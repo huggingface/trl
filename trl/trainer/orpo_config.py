@@ -48,7 +48,8 @@ class ORPOConfig(TrainingArguments):
         generate_during_eval (`bool`, *optional*, defaults to `False`):
             Whether to sample and log generations during evaluation step.
         is_encoder_decoder (`Optional[bool]`, *optional*, defaults to `None`):
-            If no model is provided, we need to know if the model_init returns an encoder-decoder.
+            When using the `model_init` argument (callable) to instantiate the model instead of the `model` argument,
+            you need to specify if the model returned by the callable is an encoder-decoder model.
         model_init_kwargs (`Optional[Dict[str, Any]]`, *optional*, defaults to `None`):
             Dict of optional kwargs to pass when instantiating the model from a string
         dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):

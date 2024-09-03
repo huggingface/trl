@@ -78,7 +78,8 @@ class DPOConfig(TrainingArguments):
             Maximum length of the target. This argument is required if you want to use the default data collator and
             your model is an encoder-decoder.
         is_encoder_decoder(`Optional[int]`, *optional*, defaults to `None`):
-            If no model is provided, we need to know if the model_init returns an encoder-decoder.
+            When using the `model_init` argument (callable) to instantiate the model instead of the `model` argument,
+            you need to specify if the model returned by the callable is an encoder-decoder model.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model and reference model.
         generate_during_eval (`bool`, *optional*, defaults to `False`):
