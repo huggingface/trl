@@ -50,7 +50,7 @@ class SFTConfig(TrainingArguments):
         dataset_kwargs (`Optional[Dict[str, Any]]`, *optional*, defaults to `None`):
             Dictionary of optional keyword arguments to pass when creating packed or non-packed datasets.
         eval_packing (`Optional[bool]`, *optional*, defaults to `None`):
-            Whether to pack the eval dataset as well. If `None`, uses the same value as `packing`.
+            Whether to pack the eval dataset. If `None`, uses the same value as `packing`.
         num_of_sequences (`int`, *optional*, defaults to `1024`):
             Number of sequences to use for the [`ConstantLengthDataset`].
         chars_per_token (`float`, *optional*, defaults to `3.6`):
