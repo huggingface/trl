@@ -35,7 +35,7 @@ class SFTConfig(TrainingArguments):
             the sequences of the dataset.
         max_seq_length (`Optional[int]`, *optional*, defaults to `None`):
             Maximum sequence length for the [`ConstantLengthDataset`] and for automatically creating the dataset. If
-            `None`, the smaller value between `tokenizer.model_max_length` and `1024`.
+            `None`, it uses the smaller value between `tokenizer.model_max_length` and `1024`.
         dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset. Only used when `packing=False`.
         dataset_batch_size (`Union[int, None]`, *optional*, defaults to `1000`):

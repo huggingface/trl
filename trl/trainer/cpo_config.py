@@ -35,9 +35,6 @@ class CPOConfig(TrainingArguments):
         max_completion_length (`Optional[int]`, *optional*, defaults to `None`):
             Maximum length of the completion. This argument is required if you want to use the default data collator
             and your model is an encoder-decoder.
-        max_target_length (`Optional[int]`, *optional*, defaults to `None`):
-            Maximum length of the target. This argument is required if you want to use the default data collator
-            and your model is an encoder-decoder.
         beta (`float`, *optional*, defaults to `0.1`):
             Parameter controlling the deviation from the reference model. Higher β means less deviation from the
             reference model. For the IPO loss (`loss_type="ipo"`), β is the regularization parameter denoted by τ in
@@ -80,7 +77,6 @@ class CPOConfig(TrainingArguments):
     max_length: Optional[int] = None
     max_prompt_length: Optional[int] = None
     max_completion_length: Optional[int] = None
-    max_target_length: Optional[int] = None
     beta: float = 0.1
     label_smoothing: float = 0.0
     loss_type: Literal["sigmoid", "hinge", "ipo", "simpo"] = "sigmoid"

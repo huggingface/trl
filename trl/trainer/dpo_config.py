@@ -74,7 +74,7 @@ class DPOConfig(TrainingArguments):
             to use the default data collator.
         max_prompt_length (`Optional[int]`, *optional*, defaults to `None`):
             Maximum length of the prompt. This argument is required if you want to use the default data collator.
-        max_target_length (`Optional[int]`, *optional*, defaults to `None`):
+        max_completion_length (`Optional[int]`, *optional*, defaults to `None`):
             Maximum length of the target. This argument is required if you want to use the default data collator and
             your model is an encoder-decoder.
         is_encoder_decoder(`Optional[int]`, *optional*, defaults to `None`):
@@ -150,7 +150,7 @@ class DPOConfig(TrainingArguments):
     truncation_mode: str = "keep_end"
     max_length: Optional[int] = None
     max_prompt_length: Optional[int] = None
-    max_target_length: Optional[int] = None
+    max_completion_length: Optional[int] = None
     is_encoder_decoder: Optional[bool] = None
     disable_dropout: bool = True
     generate_during_eval: bool = False
