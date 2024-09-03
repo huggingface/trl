@@ -86,8 +86,8 @@ class DPOConfig(TrainingArguments):
             Truncation mode to use when the prompt is too long. Possible values are `"keep_end"` or `"keep_start"`.
             This argument is required if you want to use the default data collator.
         precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
-            Flag to precompute reference model log probabilities for training and evaluation datasets. This is useful
-            if you want to train without the reference model and reduce the total GPU memory needed.
+            Whether to precompute reference model log probabilities for training and evaluation datasets. This is
+            useful when training without the reference model to reduce the total GPU memory needed.
         dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
         model_init_kwargs (`Optional[Dict[str, Any]]`, *optional*, defaults to `None`):

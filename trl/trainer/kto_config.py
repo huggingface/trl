@@ -56,8 +56,8 @@ class KTOConfig(TrainingArguments):
             When using the `model_init` argument (callable) to instantiate the model instead of the `model` argument,
             you need to specify if the model returned by the callable is an encoder-decoder model.
         precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
-            Flag to precompute reference model log probabilities for training and evaluation datasets. This is useful
-            if you want to train without the reference model and reduce the total GPU memory needed.
+            Whether to precompute reference model log probabilities for training and evaluation datasets. This is
+            useful when training without the reference model to reduce the total GPU memory needed.
         model_init_kwargs (`Optional[Dict[str, Any]]`, *optional*, defaults to `None`):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
             string.
