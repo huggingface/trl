@@ -890,7 +890,7 @@ class OnlineTrainerState(TrainerState):
 
 @dataclass
 class OnPolicyConfig(TrainingArguments):
-    r""" "
+    r"""
     Base configuration class for on-policy trainers.
 
     Using [`~transformers.HfArgumentParser`] we can turn this class into
@@ -898,6 +898,8 @@ class OnPolicyConfig(TrainingArguments):
     command line.
 
     Parameters:
+        run_name (`Optional[str]`, *optional*, defaults to `None`):
+            Name of the run.
         sanity_check (`bool`, *optional*, defaults to `False`):
             Whether to run in debug mode.
         dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
@@ -924,6 +926,8 @@ class OnPolicyConfig(TrainingArguments):
             Whether to penalize responses that do not contain `stop_token_id`.
         sft_model_path (`str`, *optional*, defaults to `"EleutherAI/pythia-160m"`):
             Path to the SFT model.
+        world_size (`Optional[int]`, *optional*, defaults to `None`):
+            Number of processes (GPUs) to use for the training.
         num_total_batches (`Optional[int]`, *optional*, defaults to `None`):
             Number of total batches to train.
         micro_batch_size (`Optional[int]`, *optional*, defaults to `None`):
@@ -938,6 +942,7 @@ class OnPolicyConfig(TrainingArguments):
             Mini batch size across GPUs.
     """
 
+    run_name: Optional[str] = None
     sanity_check: bool = False
     dataset_num_proc: Optional[int] = None
     num_mini_batches: int = 1
@@ -951,6 +956,7 @@ class OnPolicyConfig(TrainingArguments):
     penalty_reward_value: int = -1
     non_eos_penalty: bool = False
     sft_model_path: str = "EleutherAI/pythia-160m"
+    world_size: Optional[int] = None
     num_total_batches: Optional[int] = None
     micro_batch_size: Optional[int] = None
     local_batch_size: Optional[int] = None
