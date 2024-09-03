@@ -1,7 +1,7 @@
 import tempfile
 
 from datasets import Dataset, DatasetDict
-from transformers import AutoModelForCausalLM, AutoTokenizer, Trainer, TrainingArguments, GenerationConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, Trainer, TrainingArguments
 
 from trl import BasePairwiseJudge, WinRateCallback
 
@@ -19,7 +19,9 @@ class TrainerWithRefModel(Trainer):
     # This is a dummy class to test the callback. Compared to the Trainer class, it only has an additional
     # ref_model attribute
     def __init__(self, model, ref_model, args, trainer_dataset, eval_dataset, tokenizer):
-        super().__init__(model=model, args=args, train_dataset=trainer_dataset, eval_dataset=eval_dataset, tokenizer=tokenizer)
+        super().__init__(
+            model=model, args=args, train_dataset=trainer_dataset, eval_dataset=eval_dataset, tokenizer=tokenizer
+        )
         self.ref_model = ref_model
 
 
@@ -86,7 +88,9 @@ def test_trainer_callback():
             tokenizer=tokenizer,
         )
         generation_config = GenerationConfig(max_length=32)
-        win_rate_callback = WinRateCallback(judge=ThreeQuatersPairwiseJudge(), trainer=trainer, generation_config=generation_config)
+        win_rate_callback = WinRateCallback(
+            judge=ThreeQuatersPairwiseJudge(), trainer=trainer, generation_config=generation_config
+        )
         trainer.add_callback(win_rate_callback)
         trainer.train()
         winrate_history = [h for h in trainer.state.log_history if "eval_win_rate" in h]
