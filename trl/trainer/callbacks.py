@@ -226,7 +226,7 @@ class WinRateCallback(TrainerCallback):
         tokenizer = kwargs["tokenizer"]
         tokenizer.padding_side = "left"
         accelerator = self.trainer.accelerator
-        model = getattr(self.trainer, "ref_model", kwargs["model"]) # get the ref model if any, else use the model
+        model = getattr(self.trainer, "ref_model", kwargs["model"])  # get the ref model if any, else use the model
         with accelerator.split_between_processes(self.eval_dataset["prompt"], apply_padding=True) as prompts:
             self.ref_completions = self.generate_completions_for_model(model, tokenizer, prompts)
 
