@@ -57,7 +57,7 @@ class BCOConfig(TrainingArguments):
         ref_model_init_kwargs (`Optional[Dict[str, Any]]`, *optional*, defaults to `None`):
             Dict of optional kwargs to pass when instantiating the reference model from a string.
         dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
-            Number of processes to use for processing the datasets.
+            Number of processes to use for processing the dataset.
         prompt_sample_size (`int`, *optional*, defaults to `1024`):
             Number of prompts that are fed to density ratio classifier.
         min_density_ratio (`float`, *optional*, defaults to `0.5`):

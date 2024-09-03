@@ -903,7 +903,7 @@ class OnPolicyConfig(TrainingArguments):
         sanity_check (`bool`, *optional*, defaults to `False`):
             Whether to run in debug mode.
         dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
-            Number of processes to use for the dataset.
+            Number of processes to use for processing the dataset.
         num_mini_batches (`int`, *optional*, defaults to `1`):
             Number of minibatches to split a batch into.
         total_episodes (`Optional[int]`, *optional*, defaults to `None`):

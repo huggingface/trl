@@ -139,7 +139,7 @@ class PPOConfig:
         global_batch_size (`Optional[int]`, *optional*, defaults to `None`):
             Effective `batch_size` across all processes.
         dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
-            Number of processes to use for the dataset.
+            Number of processes to use for processing the dataset.
     """
 
     exp_name: str = os.path.basename(sys.argv[0])[: -len(".py")]

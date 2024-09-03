@@ -37,7 +37,7 @@ class SFTConfig(TrainingArguments):
             Maximum sequence length for the [`ConstantLengthDataset`] and for automatically creating the dataset. If
             `None`, the smaller value between `tokenizer.model_max_length` and `1024`.
         dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
-            Number of workers to use for tokenizing the data. Only used when `packing=False`.
+            Number of processes to use for processing the dataset. Only used when `packing=False`.
         dataset_batch_size (`Union[int, None]`, *optional*, defaults to `1000`):
             Number of examples to tokenize per batch. If `dataset_batch_size <= 0` or `dataset_batch_size is None`,
             tokenizes the full dataset as a single batch.

@@ -66,7 +66,7 @@ class CPOConfig(TrainingArguments):
         model_init_kwargs (`Optional[Dict]`, *optional*, defaults to `None`):
             Dict of optional kwargs to pass when instantiating the model from a string
         dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
-            Number of workers to use to process the data.
+            Number of processes to use for processing the dataset.
     """
 
     max_length: Optional[int] = None

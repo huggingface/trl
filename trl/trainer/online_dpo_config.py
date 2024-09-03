@@ -33,7 +33,7 @@ class OnlineDPOConfig(TrainingArguments):
                 - `"ipo"`: IPO loss from the [IPO](https://huggingface.co/papers/2310.12036) paper.
 
         dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
-            Number of workers to use to process the data.
+            Number of processes to use for processing the dataset.
     """
 
     reward_model_path: Optional[str] = None

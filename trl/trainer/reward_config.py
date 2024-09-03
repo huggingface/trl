@@ -32,7 +32,7 @@ class RewardConfig(TrainingArguments):
             Maximum length of the sequences (prompt + completion) in the batch. This argument is required if you want
             to use the default data collator.
         dataset_num_proc (`int`, *optional*, defaults to `None`):
-            The number of processes to use for the dataset.
+            Number of processes to use for processing the dataset.
         center_rewards_coefficient (`float`, *optional*, defaults to `None`):
             Coefficient to incentivize the reward model to output mean-zero rewards (proposed by
             https://huggingface.co/papers/2312.09244, Eq. 2). Recommended value: `0.01`.
