@@ -166,7 +166,7 @@ class OnlineDPOTrainer(Trainer):
             max_new_tokens=args.max_new_tokens,
             min_new_tokens=args.max_new_tokens,
             temperature=args.temperature,
-            top_k=0.0,
+            top_k=0,
             top_p=1.0,
             do_sample=True,
             use_cache=False if args.gradient_checkpointing else True,
