@@ -40,8 +40,9 @@ class DPOConfig(TrainingArguments):
 
     Parameters:
         beta (`float`, *optional*, defaults to `0.1`):
-            Beta factor in DPO loss. Higher beta means less divergence from the initial policy. For the IPO loss, beta
-            is the regularization parameter denoted by tau in the [paper](https://huggingface.co/papers/2310.12036).
+            Parameter controlling the deviation from the reference model. Higher β means less deviation from the
+            reference model. For the IPO loss (`loss_type="ipo"`), β is the regularization parameter denoted by τ in
+            the [paper](https://huggingface.co/papers/2310.12036).
         label_smoothing (`float`, *optional*, defaults to `0.0`):
             Robust DPO label smoothing parameter from the [cDPO](https://ericmitchell.ai/cdpo.pdf) report and
             [Robust DPO](https://huggingface.co/papers/2403.00409) paper that should be between `0.0` and `0.5`.

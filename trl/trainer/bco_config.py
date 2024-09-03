@@ -36,7 +36,8 @@ class BCOConfig(TrainingArguments):
             Maximum length of the target. This argument is required if you want to use the default data collator
             and your model is an encoder-decoder.
         beta (`float`, *optional*, defaults to `0.1`):
-            Beta factor in BCO loss. Higher beta means less divergence from the initial policy.
+            Parameter controlling the deviation from the reference model. Higher β means less deviation from the
+            reference model.
         label_pad_token_id (`int`,  *optional*, defaults to `-100`):
             Label pad token id. This argument is required if you want to use the default data collator.
         padding_value (`Optional[int]`, *optional*, defaults to `None`):

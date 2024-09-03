@@ -39,7 +39,9 @@ class CPOConfig(TrainingArguments):
             Maximum length of the target. This argument is required if you want to use the default data collator
             and your model is an encoder-decoder.
         beta (`float`, *optional*, defaults to `0.1`):
-            Beta factor in CPO loss.
+            Parameter controlling the deviation from the reference model. Higher β means less deviation from the
+            reference model. For the IPO loss (`loss_type="ipo"`), β is the regularization parameter denoted by τ in
+            the [paper](https://huggingface.co/papers/2310.12036).
         label_smoothing (`float`, *optional*, defaults to `0.0`):
             Label smoothing factor. This argument is required if you want to use the default data collator.
         loss_type (`str`, *optional*, defaults to `"sigmoid"`):
@@ -83,5 +85,4 @@ class CPOConfig(TrainingArguments):
     generate_during_eval: bool = False
     is_encoder_decoder: Optional[bool] = None
     model_init_kwargs: Optional[Dict[str, Any]] = None
-
     dataset_num_proc: Optional[int] = None

@@ -23,7 +23,9 @@ class OnlineDPOConfig(TrainingArguments):
         missing_eos_penalty (`Optional[float]`, *optional*, defaults to `None`):
             Penalty when the model fails to generate an EOS token.
         beta (`float`, *optional*, defaults to `0.1`):
-            Beta parameter for the DPO loss.
+            Parameter controlling the deviation from the reference model. Higher β means less deviation from the
+            reference model. For the IPO loss (`loss_type="ipo"`), β is the regularization parameter denoted by τ in
+            the [paper](https://huggingface.co/papers/2310.12036).
         loss_type (`str`, *optional*, defaults to `"sigmoid"`):
             Type of DPO loss to use. Possible values are:
 
