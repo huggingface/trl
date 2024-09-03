@@ -46,7 +46,6 @@ from .utils import (
     add_eos_token_if_needed,
     disable_dropout_in_model,
     pad_to_length,
-    pad_list_to_length,
     peft_module_casting_to_bf16,
     trl_sanitze_kwargs_for_tagging,
 )
@@ -538,7 +537,7 @@ class ORPOTrainer(Trainer):
                 )
         
         if is_torch_xla_available():
-            #Pad the sequences to global max_length
+            #Pad the sequences to global max_length to avoid TorchXLA recompilation
             for k in batch:
                 if "labels" in k or self.is_encoder_decoder:
                     pad_value = self.label_pad_token_id
@@ -546,7 +545,7 @@ class ORPOTrainer(Trainer):
                     pad_value = self.padding_value
                 elif k.endswith("_attention_mask"):
                     pad_value = 0
-                batch[k] = pad_list_to_length(batch[k], self.max_length, pad_value=pad_value)
+                batch[k] = batch[k] + [pad_value] * (self.max_length - len(batch[k]))
         return batch
 
     @staticmethod
