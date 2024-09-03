@@ -557,7 +557,7 @@ def pipeline_step_with_grad(
 ):
     r"""
     Function to get RGB image with gradients attached to the model weights.
-    
+
     Args:
         prompt (`str` or `List[str]`, *optional*):
             The prompt or prompts to guide the image generation. If not defined, one has to pass `prompt_embeds` instead.
