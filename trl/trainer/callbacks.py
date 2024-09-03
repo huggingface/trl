@@ -197,8 +197,6 @@ class WinRateCallback(TrainerCallback):
         self.ref_completions = []
         self.trainer = trainer
         self.eval_dataset = self.trainer.eval_dataset
-        if not hasattr(trainer, "ref_model"):
-            raise AttributeError("Trainer must have a `ref_model` attribute.")
         self.batch_size = batch_size
 
     def generate_completions_for_model(self, model, tokenizer, prompts):
