@@ -141,6 +141,7 @@ class DDPOConfig:
     async_reward_computation: bool = False
     max_workers: int = 2
     negative_prompts: str = ""
+
     def to_dict(self):
         output_dict = {}
         for key, value in self.__dict__.items():
