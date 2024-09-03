@@ -38,7 +38,7 @@ class ORPOConfig(TrainingArguments):
             Parameter controlling the relative ratio loss weight in the ORPO loss. In the [paper](https://huggingface.co/papers/2403.07691),
             it is denoted by λ. In the [code](https://github.com/xfactlab/orpo), it is denoted by `alpha`.
         disable_dropout (`bool`, *optional*, defaults to `True`):
-            Whether or not to disable dropouts in `model`.
+            Whether to disable dropout in the model.
         label_pad_token_id (`int`, *optional*, defaults to `-100`):
             Label pad token id. This argument is required if you want to use the default data collator.
         padding_value (`Optional[int]`, *optional*, defaults to `None`):

@@ -80,7 +80,7 @@ class DPOConfig(TrainingArguments):
         is_encoder_decoder(`Optional[int]`, *optional*, defaults to `None`):
             If no model is provided, we need to know if the model_init returns an encoder-decoder.
         disable_dropout (`bool`, *optional*, defaults to `True`):
-            Whether or not to disable dropouts in `model` and `ref_model`.
+            Whether to disable dropout in the model and reference model.
         generate_during_eval (`bool`, *optional*, defaults to `False`):
             Whether to sample and log generations during evaluation step.
         precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):

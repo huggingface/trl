@@ -47,7 +47,7 @@ class CPOConfig(TrainingArguments):
         loss_type (`str`, *optional*, defaults to `"sigmoid"`):
             Type of loss to use. This argument is required if you want to use the default data collator.
         disable_dropout (`bool`, *optional*, defaults to `True`):
-            Whether or not to disable dropouts in `model`.
+            Whether to disable dropout in the model.
         cpo_alpha (`float`, *optional*, defaults to `1.0`):
             Weight of the BC regularizer in CPO training.
         simpo_gamma (`float`, *optional*, defaults to `0.5`):
