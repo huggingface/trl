@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import gc
-import tempfile
 import unittest
 
 import torch
@@ -40,179 +39,89 @@ class DDPOTrainerTester(unittest.TestCase):
     Test the DDPOTrainer class.
     """
 
+    def setUp(self):
+        self.ddpo_config = DDPOConfig(
+            num_epochs=2,
+            train_gradient_accumulation_steps=1,
+            per_prompt_stat_tracking_buffer_size=32,
+            sample_num_batches_per_epoch=2,
+            sample_batch_size=2,
+            mixed_precision=None,
+            save_freq=1000000,
+        )
+        pretrained_model = "hf-internal-testing/tiny-stable-diffusion-torch"
+        pretrained_revision = "main"
+
+        pipeline = DefaultDDPOStableDiffusionPipeline(
+            pretrained_model, pretrained_model_revision=pretrained_revision, use_lora=False
+        )
+
+        self.trainer = DDPOTrainer(self.ddpo_config, scorer_function, prompt_function, pipeline)
+
+        return super().setUp()
+
     def tearDown(self) -> None:
         gc.collect()
 
     def test_loss(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            ddpo_config = DDPOConfig(
-                output_dir=tmp_dir,
-                num_epochs=2,
-                per_device_train_batch_size=1,
-                train_gradient_accumulation_steps=1,
-                per_prompt_stat_tracking_buffer_size=32,
-                sample_num_batches_per_epoch=2,
-                sample_batch_size=2,
-                mixed_precision=None,
-                save_freq=1000000,
-            )
-            pipeline = DefaultDDPOStableDiffusionPipeline(
-                "hf-internal-testing/tiny-stable-diffusion-torch", use_lora=False
-            )
-            trainer = DDPOTrainer(ddpo_config, scorer_function, prompt_function, pipeline)
-            advantage = torch.tensor([-1.0])
-            clip_range = 0.0001
-            ratio = torch.tensor([1.0])
-            loss = trainer.loss(advantage, clip_range, ratio)
-            assert loss.item() == 1.0
+        advantage = torch.tensor([-1.0])
+        clip_range = 0.0001
+        ratio = torch.tensor([1.0])
+        loss = self.trainer.loss(advantage, clip_range, ratio)
+        assert loss.item() == 1.0
 
     def test_generate_samples(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            ddpo_config = DDPOConfig(
-                output_dir=tmp_dir,
-                num_epochs=2,
-                per_device_train_batch_size=1,
-                train_gradient_accumulation_steps=1,
-                per_prompt_stat_tracking_buffer_size=32,
-                sample_num_batches_per_epoch=2,
-                sample_batch_size=2,
-                mixed_precision=None,
-                save_freq=1000000,
-            )
-            pipeline = DefaultDDPOStableDiffusionPipeline(
-                "hf-internal-testing/tiny-stable-diffusion-torch", use_lora=False
-            )
-            trainer = DDPOTrainer(ddpo_config, scorer_function, prompt_function, pipeline)
-            samples, output_pairs = trainer._generate_samples(1, 2)
-            assert len(samples) == 1
-            assert len(output_pairs) == 1
-            assert len(output_pairs[0][0]) == 2
+        samples, output_pairs = self.trainer._generate_samples(1, 2)
+        assert len(samples) == 1
+        assert len(output_pairs) == 1
+        assert len(output_pairs[0][0]) == 2
 
     def test_calculate_loss(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            ddpo_config = DDPOConfig(
-                output_dir=tmp_dir,
-                num_epochs=2,
-                per_device_train_batch_size=1,
-                train_gradient_accumulation_steps=1,
-                per_prompt_stat_tracking_buffer_size=32,
-                sample_num_batches_per_epoch=2,
-                sample_batch_size=2,
-                mixed_precision=None,
-                save_freq=1000000,
-            )
-            pipeline = DefaultDDPOStableDiffusionPipeline(
-                "hf-internal-testing/tiny-stable-diffusion-torch", use_lora=False
-            )
-            trainer = DDPOTrainer(ddpo_config, scorer_function, prompt_function, pipeline)
-            samples, _ = trainer._generate_samples(1, 2)
-            sample = samples[0]
+        samples, _ = self.trainer._generate_samples(1, 2)
+        sample = samples[0]
 
-            latents = sample["latents"][0, 0].unsqueeze(0)
-            next_latents = sample["next_latents"][0, 0].unsqueeze(0)
-            log_probs = sample["log_probs"][0, 0].unsqueeze(0)
-            timesteps = sample["timesteps"][0, 0].unsqueeze(0)
-            prompt_embeds = sample["prompt_embeds"]
-            advantage = torch.tensor([1.0], device=prompt_embeds.device)
+        latents = sample["latents"][0, 0].unsqueeze(0)
+        next_latents = sample["next_latents"][0, 0].unsqueeze(0)
+        log_probs = sample["log_probs"][0, 0].unsqueeze(0)
+        timesteps = sample["timesteps"][0, 0].unsqueeze(0)
+        prompt_embeds = sample["prompt_embeds"]
+        advantage = torch.tensor([1.0], device=prompt_embeds.device)
 
-            assert latents.shape == (1, 4, 64, 64)
-            assert next_latents.shape == (1, 4, 64, 64)
-            assert log_probs.shape == (1,)
-            assert timesteps.shape == (1,)
-            assert prompt_embeds.shape == (2, 77, 32)
-            loss, approx_kl, clipfrac = trainer.calculate_loss(
-                latents, timesteps, next_latents, log_probs, advantage, prompt_embeds
-            )
-            assert torch.isfinite(loss.cpu())
+        assert latents.shape == (1, 4, 64, 64)
+        assert next_latents.shape == (1, 4, 64, 64)
+        assert log_probs.shape == (1,)
+        assert timesteps.shape == (1,)
+        assert prompt_embeds.shape == (2, 77, 32)
+        loss, approx_kl, clipfrac = self.trainer.calculate_loss(
+            latents, timesteps, next_latents, log_probs, advantage, prompt_embeds
+        )
+
+        assert torch.isfinite(loss.cpu())
 
 
 @require_diffusers
-class DDPOTrainerWithLoRATester(unittest.TestCase):
+class DDPOTrainerWithLoRATester(DDPOTrainerTester):
     """
     Test the DDPOTrainer class.
     """
 
-    def tearDown(self) -> None:
-        gc.collect()
+    def setUp(self):
+        self.ddpo_config = DDPOConfig(
+            num_epochs=2,
+            train_gradient_accumulation_steps=1,
+            per_prompt_stat_tracking_buffer_size=32,
+            sample_num_batches_per_epoch=2,
+            sample_batch_size=2,
+            mixed_precision=None,
+            save_freq=1000000,
+        )
+        pretrained_model = "hf-internal-testing/tiny-stable-diffusion-torch"
+        pretrained_revision = "main"
 
-    def test_loss(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            ddpo_config = DDPOConfig(
-                output_dir=tmp_dir,
-                num_epochs=2,
-                per_device_train_batch_size=1,
-                train_gradient_accumulation_steps=1,
-                per_prompt_stat_tracking_buffer_size=32,
-                sample_num_batches_per_epoch=2,
-                sample_batch_size=2,
-                mixed_precision=None,
-                save_freq=1000000,
-            )
-            pipeline = DefaultDDPOStableDiffusionPipeline(
-                "hf-internal-testing/tiny-stable-diffusion-torch", use_lora=True
-            )
-            trainer = DDPOTrainer(ddpo_config, scorer_function, prompt_function, pipeline)
-            advantage = torch.tensor([-1.0])
-            clip_range = 0.0001
-            ratio = torch.tensor([1.0])
-            loss = trainer.loss(advantage, clip_range, ratio)
-            assert loss.item() == 1.0
+        pipeline = DefaultDDPOStableDiffusionPipeline(
+            pretrained_model, pretrained_model_revision=pretrained_revision, use_lora=True
+        )
 
-    def test_generate_samples(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            ddpo_config = DDPOConfig(
-                output_dir=tmp_dir,
-                num_epochs=2,
-                per_device_train_batch_size=1,
-                train_gradient_accumulation_steps=1,
-                per_prompt_stat_tracking_buffer_size=32,
-                sample_num_batches_per_epoch=2,
-                sample_batch_size=2,
-                mixed_precision=None,
-                save_freq=1000000,
-            )
-            pipeline = DefaultDDPOStableDiffusionPipeline(
-                "hf-internal-testing/tiny-stable-diffusion-torch", use_lora=True
-            )
-            trainer = DDPOTrainer(ddpo_config, scorer_function, prompt_function, pipeline)
-            samples, output_pairs = trainer._generate_samples(1, 2)
-            assert len(samples) == 1
-            assert len(output_pairs) == 1
-            assert len(output_pairs[0][0]) == 2
+        self.trainer = DDPOTrainer(self.ddpo_config, scorer_function, prompt_function, pipeline)
 
-    def test_calculate_loss(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            ddpo_config = DDPOConfig(
-                output_dir=tmp_dir,
-                num_epochs=2,
-                per_device_train_batch_size=1,
-                train_gradient_accumulation_steps=1,
-                per_prompt_stat_tracking_buffer_size=32,
-                sample_num_batches_per_epoch=2,
-                sample_batch_size=2,
-                mixed_precision=None,
-                save_freq=1000000,
-            )
-            pipeline = DefaultDDPOStableDiffusionPipeline(
-                "hf-internal-testing/tiny-stable-diffusion-torch", use_lora=True
-            )
-            trainer = DDPOTrainer(ddpo_config, scorer_function, prompt_function, pipeline)
-            samples, _ = trainer._generate_samples(1, 2)
-            sample = samples[0]
-            latents = sample["latents"][0, 0].unsqueeze(0)
-            next_latents = sample["next_latents"][0, 0].unsqueeze(0)
-            log_probs = sample["log_probs"][0, 0].unsqueeze(0)
-            timesteps = sample["timesteps"][0, 0].unsqueeze(0)
-            prompt_embeds = sample["prompt_embeds"]
-            advantage = torch.tensor([1.0], device=prompt_embeds.device)
-
-            assert latents.shape == (1, 4, 64, 64)
-            assert next_latents.shape == (1, 4, 64, 64)
-            assert log_probs.shape == (1,)
-            assert timesteps.shape == (1,)
-            assert prompt_embeds.shape == (2, 77, 32)
-            loss, approx_kl, clipfrac = trainer.calculate_loss(
-                latents, timesteps, next_latents, log_probs, advantage, prompt_embeds
-            )
-
-            assert torch.isfinite(loss.cpu())
+        return super().setUp()

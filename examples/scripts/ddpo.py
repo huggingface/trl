@@ -17,7 +17,7 @@ python examples/scripts/ddpo.py \
     --train_gradient_accumulation_steps=1 \
     --sample_num_steps=50 \
     --sample_batch_size=6 \
-    --per_device_train_batch_size=3 \
+    --train_batch_size=3 \
     --sample_num_batches_per_epoch=4 \
     --per_prompt_stat_tracking=True \
     --per_prompt_stat_tracking_buffer_size=32 \

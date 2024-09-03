@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import sys
-import tempfile
 import unittest
 from functools import partial
 from unittest.mock import patch
@@ -122,37 +121,36 @@ class TestPeftDependancy(unittest.TestCase):
             tokenizer = AutoTokenizer.from_pretrained(ppo_model_id)
             tokenizer.pad_token_id = tokenizer.eos_token_id
 
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                ppo_config = PPOConfig(output_dir=tmp_dir, batch_size=2, mini_batch_size=1, log_with=None)
+            ppo_config = PPOConfig(batch_size=2, mini_batch_size=1, log_with=None)
 
-                dummy_dataset = DummyDataset(
-                    [torch.LongTensor([0, 1, 0, 1, 0, 1]), torch.LongTensor([0, 1, 0, 1, 0, 1])],
-                    [torch.LongTensor([1, 0, 1, 0, 1, 0]), torch.LongTensor([0, 1, 0, 1, 0, 1])],
-                )
+            dummy_dataset = DummyDataset(
+                [torch.LongTensor([0, 1, 0, 1, 0, 1]), torch.LongTensor([0, 1, 0, 1, 0, 1])],
+                [torch.LongTensor([1, 0, 1, 0, 1, 0]), torch.LongTensor([0, 1, 0, 1, 0, 1])],
+            )
 
-                ppo_trainer = PPOTrainer(
-                    config=ppo_config,
-                    model=trl_model,
-                    ref_model=None,
-                    tokenizer=tokenizer,
-                    dataset=dummy_dataset,
-                )
-                ppo_trainer.optimizer.zero_grad = partial(ppo_trainer.optimizer.zero_grad, set_to_none=False)
-                dummy_dataloader = ppo_trainer.dataloader
+            ppo_trainer = PPOTrainer(
+                config=ppo_config,
+                model=trl_model,
+                ref_model=None,
+                tokenizer=tokenizer,
+                dataset=dummy_dataset,
+            )
+            ppo_trainer.optimizer.zero_grad = partial(ppo_trainer.optimizer.zero_grad, set_to_none=False)
+            dummy_dataloader = ppo_trainer.dataloader
 
-                for query_tensor, response_tensor in dummy_dataloader:
-                    # define a reward for response
-                    # (this could be any reward such as human feedback or output from another model)
-                    reward = [torch.tensor(1.0), torch.tensor(0.0)]
-                    # train model
-                    train_stats = ppo_trainer.step(list(query_tensor), list(response_tensor), reward)
-                    break
+            for query_tensor, response_tensor in dummy_dataloader:
+                # define a reward for response
+                # (this could be any reward such as human feedback or output from another model)
+                reward = [torch.tensor(1.0), torch.tensor(0.0)]
+                # train model
+                train_stats = ppo_trainer.step(list(query_tensor), list(response_tensor), reward)
+                break
 
-                # check gradients are not None
-                for _, param in trl_model.named_parameters():
-                    if param.requires_grad:
-                        assert param.grad is not None
+            # check gradients are not None
+            for _, param in trl_model.named_parameters():
+                if param.requires_grad:
+                    assert param.grad is not None
 
-                # check expected stats
-                for stat in EXPECTED_STATS:
-                    assert stat in train_stats
+            # check expected stats
+            for stat in EXPECTED_STATS:
+                assert stat in train_stats

@@ -4,13 +4,12 @@ import warnings
 from dataclasses import dataclass, field
 from typing import Any, Dict, Literal, Optional, Tuple
 
-from transformers import TrainingArguments
-
+from ..core import flatten_dict
 from ..import_utils import is_bitsandbytes_available, is_torchvision_available
 
 
 @dataclass
-class AlignPropConfig(TrainingArguments):
+class AlignPropConfig:
     r"""
     Configuration class for the [`AlignPropTrainer`].
 
@@ -21,6 +20,8 @@ class AlignPropConfig(TrainingArguments):
     Parameters:
         exp_name (`str`, *optional*, defaults to `os.path.basename(sys.argv[0])[: -len(".py")]`):
             Name of this experiment (defaults to the file name without the extension).
+        run_name (`str`, *optional*, defaults to `""`):
+            Name of this run.
         log_with (`Optional[Literal["wandb", "tensorboard"]]`, *optional*, defaults to `None`):
             Log with either `"wandb"` or `"tensorboard"`. Check
             [tracking](https://huggingface.co/docs/accelerate/usage_guides/tracking) for more details.
@@ -81,6 +82,8 @@ class AlignPropConfig(TrainingArguments):
     """
 
     exp_name: str = os.path.basename(sys.argv[0])[: -len(".py")]
+    run_name: str = ""
+    seed: int = 0
     log_with: Optional[Literal["wandb", "tensorboard"]] = None
     log_image_freq: int = 1
     tracker_kwargs: Dict[str, Any] = field(default_factory=dict)
@@ -97,6 +100,7 @@ class AlignPropConfig(TrainingArguments):
     sample_num_steps: int = 50
     sample_eta: float = 1.0
     sample_guidance_scale: float = 5.0
+    train_batch_size: int = 1
     train_use_8bit_adam: bool = False
     train_learning_rate: float = 1e-3
     train_adam_beta1: float = 0.9
@@ -110,8 +114,13 @@ class AlignPropConfig(TrainingArguments):
     truncated_backprop_timestep: int = 49
     truncated_rand_backprop_minmax: Tuple[int, int] = (0, 50)
 
+    def to_dict(self):
+        output_dict = {}
+        for key, value in self.__dict__.items():
+            output_dict[key] = value
+        return flatten_dict(output_dict)
+
     def __post_init__(self):
-        super().__post_init__()
         if self.log_with not in ["wandb", "tensorboard"]:
             warnings.warn(
                 "Accelerator tracking only supports image logging if `log_with` is set to 'wandb' or 'tensorboard'."
