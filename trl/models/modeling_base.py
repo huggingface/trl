@@ -313,7 +313,7 @@ class PreTrainedModelWrapper(nn.Module):
                     use_safe = False
 
             loading_func = safe_load_file if use_safe else torch.load
-            load_kwargs = {} if use_safe else {"map_location": "cpu"}
+            load_kwargs = {} if use_safe else {"map_location": "cpu", "weights_only": True}
 
             if is_resuming_training:
                 if is_sharded:
@@ -485,7 +485,7 @@ class PreTrainedModelWrapper(nn.Module):
             local_filename = filename
 
         loading_func = safe_load_file if safe_loading else torch.load
-        load_kwargs = {} if safe_loading else {"map_location": "cpu"}
+        load_kwargs = {} if safe_loading else {"map_location": "cpu", "weights_only": True}
 
         adapter_state_dict = loading_func(local_filename, **load_kwargs)
 

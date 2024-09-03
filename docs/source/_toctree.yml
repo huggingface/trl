@@ -31,12 +31,12 @@
     title: PPOv2 Trainer
   - local: rloo_trainer
     title: RLOO Trainer
-  - local: online_dpo_trainer
-    title: Online DPO Trainer
   - local: best_of_n
     title: Best of N Sampling
   - local: dpo_trainer
     title: DPO Trainer
+  - local: online_dpo_trainer
+    title: Online DPO Trainer
   - local: kto_trainer
     title: KTO Trainer
   - local: bco_trainer

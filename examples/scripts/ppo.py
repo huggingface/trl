@@ -15,6 +15,7 @@
 python examples/scripts/ppo.py \
     --log_with=wandb
 """
+
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -60,7 +61,7 @@ tokenizer.pad_token = tokenizer.eos_token
 # Below is an example function to build the dataset. In our case, we use the IMDB dataset
 # from the `datasets` library. One should customize this function to train the model on
 # its own dataset.
-def build_dataset(query_dataset, input_min_text_length=2, input_max_text_length=8):
+def build_dataset(query_dataset, dataset_num_proc, input_min_text_length=2, input_max_text_length=8):
     """
     Build dataset for training. This builds the dataset from `load_dataset`, one should
     customize this function to train the model on its own dataset.
@@ -76,7 +77,7 @@ def build_dataset(query_dataset, input_min_text_length=2, input_max_text_length=
     # load imdb with datasets
     ds = load_dataset(query_dataset, split="train")
     ds = ds.rename_columns({"text": "review"})
-    ds = ds.filter(lambda x: len(x["review"]) > 200, num_proc=args.dataset_num_proc)
+    ds = ds.filter(lambda x: len(x["review"]) > 200, num_proc=dataset_num_proc)
 
     input_size = LengthSampler(input_min_text_length, input_max_text_length)
 
@@ -85,7 +86,7 @@ def build_dataset(query_dataset, input_min_text_length=2, input_max_text_length=
         sample["query"] = tokenizer.decode(sample["input_ids"])
         return sample
 
-    ds = ds.map(tokenize, num_proc=args.dataset_num_proc)
+    ds = ds.map(tokenize, num_proc=dataset_num_proc)
     ds.set_format(type="torch")
     return ds
 
@@ -94,7 +95,7 @@ def build_dataset(query_dataset, input_min_text_length=2, input_max_text_length=
 # Compute that only on the main process for faster data processing.
 # see: https://github.com/huggingface/trl/pull/1255
 with PartialState().local_main_process_first():
-    dataset = build_dataset(ppo_config, ppo_config.query_dataset)
+    dataset = build_dataset(ppo_config.query_dataset, ppo_config.dataset_num_proc)
 
 
 def collator(data):
@@ -174,7 +175,7 @@ generation_kwargs = {
     "max_new_tokens": 32,
 }
 
-for _epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
+for batch in tqdm(ppo_trainer.dataloader):
     query_tensors = batch["input_ids"]
 
     # Get response from gpt2

@@ -1,4 +1,4 @@
-""" trl is an open library for RL with transformer models.
+"""trl is an open library for RL with transformer models.
 
 Note:
 
@@ -53,17 +53,19 @@ To create the package for pypi.
 8. Change the version in __init__.py and setup.py to X.X.X+1.dev0 (e.g. VERSION=1.18.3 -> 1.18.4.dev0).
    Then push the change with a message 'set dev version'
 """
+
 import os
 
 from setuptools import find_packages, setup
 
 
-__version__ = "0.9.6.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
+__version__ = "0.11.0.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
 
 REQUIRED_PKGS = [
     "torch>=1.4.0",
     "transformers>=4.31.0",
-    "numpy>=1.18.2,<2.0.0",
+    "numpy>=1.18.2;platform_system!='Windows'",
+    "numpy<2;platform_system=='Windows'",
     "accelerate",
     "datasets",
     "tyro>=0.5.11",
@@ -78,10 +80,13 @@ EXTRAS = {
         "pytest-xdist",
         "scikit-learn",
         "Pillow",
+        "pytest-rerunfailures",
+        "llm-blender>=0.0.2",
     ],
     "peft": ["peft>=0.8.0"],
+    "liger": ["liger-kernel>=0.2.1"],
     "diffusers": ["diffusers>=0.18.0"],
-    "deepspeed": ["deepspeed>=0.9.5"],
+    "deepspeed": ["deepspeed>=0.14.4"],
     "benchmark": ["wandb", "ghapi", "openrlbenchmark==0.2.1a5", "requests", "deepspeed"],
     "quantization": ["bitsandbytes<=0.41.1"],
     "llm_judge": ["openai>=1.23.2", "huggingface_hub>=0.22.2", "llm-blender>=0.0.2"],
@@ -105,10 +110,9 @@ try:
             "Natural Language :: English",
             "Operating System :: OS Independent",
             "Programming Language :: Python :: 3",
-            "Programming Language :: Python :: 3.7",
-            "Programming Language :: Python :: 3.8",
             "Programming Language :: Python :: 3.9",
             "Programming Language :: Python :: 3.10",
+            "Programming Language :: Python :: 3.11",
         ],
         url="https://github.com/huggingface/trl",
         entry_points={

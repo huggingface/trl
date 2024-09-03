@@ -24,6 +24,7 @@ python examples/scripts/ddpo.py \
     --tracker_project_name="stable_diffusion_training" \
     --log_with="wandb"
 """
+
 import os
 from dataclasses import dataclass, field
 
@@ -93,7 +94,7 @@ class AestheticScorer(torch.nn.Module):
             cached_path = hf_hub_download(model_id, model_filename)
         except EntryNotFoundError:
             cached_path = os.path.join(model_id, model_filename)
-        state_dict = torch.load(cached_path, map_location=torch.device("cpu"))
+        state_dict = torch.load(cached_path, map_location=torch.device("cpu"), weights_only=True)
         self.mlp.load_state_dict(state_dict)
         self.dtype = dtype
         self.eval()

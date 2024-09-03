@@ -66,6 +66,7 @@ _import_structure = {
         "BasePairwiseJudge",
         "RandomRankJudge",
         "RandomPairwiseJudge",
+        "PairRMJudge",
         "HfPairwiseJudge",
         "OpenAIPairwiseJudge",
     ],
@@ -95,6 +96,7 @@ if TYPE_CHECKING:
         RunningMoments,
         disable_dropout_in_model,
         peft_module_casting_to_bf16,
+        empty_cache,
     )
     # isort: on
 
@@ -132,6 +134,7 @@ if TYPE_CHECKING:
         BasePairwiseJudge,
         RandomRankJudge,
         RandomPairwiseJudge,
+        PairRMJudge,
         HfPairwiseJudge,
         OpenAIPairwiseJudge,
     )
