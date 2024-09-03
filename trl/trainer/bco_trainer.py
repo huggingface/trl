@@ -332,7 +332,7 @@ class BCOTrainer(Trainer):
                 "BCOTrainer requires the scikit-learn library. Please install it with `pip install scikit-learn`."
             )
 
-        if type(args) == TrainingArguments:
+        if type(args) is TrainingArguments:
             raise ValueError("Please use `BCOConfig` instead `TrainingArguments`.")
 
         if args.model_init_kwargs is None:
