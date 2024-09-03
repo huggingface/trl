@@ -90,10 +90,12 @@ class DPOConfig(TrainingArguments):
             if you want to train without the reference model and reduce the total GPU memory needed.
         dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
-        model_init_kwargs (`Optional[Dict]`, *optional*, defaults to `None`):
-            Dict of optional kwargs to pass when instantiating the model from a string.
-        ref_model_init_kwargs (`Optional[Dict]`, *optional*, defaults to `None`):
-            Dict of optional kwargs to pass when instantiating the ref model from a string.
+        model_init_kwargs (`Optional[Dict[str, Any]]`, *optional*, defaults to `None`):
+            Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
+            string.
+        ref_model_init_kwargs (`Optional[Dict[str, Any]]`, *optional*, defaults to `None`):
+            Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the reference model
+            from a string.
         model_adapter_name (`Optional[str]`, *optional*, defaults to `None`):
             Name of the train target PEFT adapter, when using LoRA with multiple adapters.
         ref_adapter_name (`Optional[str]`, *optional*, defaults to `None`):

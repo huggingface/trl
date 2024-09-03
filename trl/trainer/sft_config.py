@@ -46,7 +46,8 @@ class SFTConfig(TrainingArguments):
             suggests using values between `5` and `15`. If set to `None`, NEFTune is not activated. Activating NEFTune
             can significantly improve model performance for instruction fine-tuning.
         model_init_kwargs (`Optional[Dict[str, Any]]`, *optional*, defaults to `None`):
-            Dictionary of optional keyword arguments to pass when instantiating the model from a string.
+            Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
+            string.
         dataset_kwargs (`Optional[Dict[str, Any]]`, *optional*, defaults to `None`):
             Dictionary of optional keyword arguments to pass when creating packed or non-packed datasets.
         eval_packing (`Optional[bool]`, *optional*, defaults to `None`):
