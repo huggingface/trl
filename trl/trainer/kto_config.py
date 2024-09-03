@@ -47,8 +47,8 @@ class KTOConfig(TrainingArguments):
         padding_value (`Optional[int]`, *optional*, defaults to `None`):
             Padding value if it is different to the tokenizer's pad_token_id.
         truncation_mode (`str`, *optional*, defaults to `"keep_end"`):
-            Truncation mode to use, either `keep_end` or `keep_start`. This argument is required if you want to use the
-            default data collator.
+            Truncation mode to use when the prompt is too long. Possible values are `"keep_end"` or `"keep_start"`.
+            This argument is required if you want to use the default data collator.
         generate_during_eval (`bool`, *optional*, defaults to `False`):
             If `True`, generates and logs completions from both the model and the reference model to W&B during
             evaluation.

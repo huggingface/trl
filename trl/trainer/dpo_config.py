@@ -83,8 +83,8 @@ class DPOConfig(TrainingArguments):
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model and reference model.
         generate_during_eval (`bool`, *optional*, defaults to `False`):
-            If `True`, generates and logs completions from both the model and the reference model to W&B during
-            evaluation.
+            Truncation mode to use when the prompt is too long. Possible values are `"keep_end"` or `"keep_start"`.
+            This argument is required if you want to use the default data collator.
         precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
             Flag to precompute reference model log probabilities for training and evaluation datasets. This is useful
             if you want to train without the reference model and reduce the total GPU memory needed.
