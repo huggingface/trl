@@ -34,7 +34,7 @@ from transformers.integrations import WandbCallback
 from transformers.trainer_utils import has_length
 
 from ..models.utils import unwrap_model_for_generation
-from .judges import BaseRankJudge
+from .judges import BasePairwiseJudge
 from .utils import truncate_right
 
 
@@ -158,6 +158,12 @@ class WinRateCallback(TrainerCallback):
     """
     A [`~transformers.TrainerCallback`] that computes the win rate of a model based on a reference.
 
+    It generates completions using prompts from the evaluation dataset and compares the trained model's outputs against
+    a reference. The reference is either the initial version of the model (before training) or the reference model, if
+    available in the trainer. During each evaluation step, a judge determines how often the trained model's completions
+    win against the reference using a judge. The win rate is then logged in the trainer's logs under the key
+    `"eval_win_rate"`.
+
     Usage:
     ```python
     trainer = DPOTrainer(...)
@@ -166,12 +172,13 @@ class WinRateCallback(TrainerCallback):
     ```
 
     Args:
-        prompts (`List[str]`):
-            The prompts to generate completions for.
-        judge (`BaseRankJudge`):
+        judge (`BasePairwiseJudge`):
             The judge to use for comparing completions.
         trainer (`Trainer`):
-            The trainer.
+            Trainer to which the callback will be attached. The trainer's evaluation dataset must include a `"prompt"`
+            column containing the prompts for generating completions. If the `Trainer` has a reference model (via the
+            `ref_model` attribute), it will use this reference model for generating the reference completions;
+            otherwise, it defaults to using the initial model.
         generation_config (`GenerationConfig`, *optional*):
             The generation config to use for generating completions.
         batch_size (`int`, *optional*):
@@ -180,20 +187,16 @@ class WinRateCallback(TrainerCallback):
 
     def __init__(
         self,
-        prompts: List[str],
-        judge: BaseRankJudge,
+        judge: BasePairwiseJudge,
         trainer: Trainer,
         generation_config: Optional[GenerationConfig] = None,
         batch_size: int = 4,
     ):
-        self.prompts = prompts
         self.generation_config = generation_config
         self.judge = judge
         self.ref_completions = []
         self.trainer = trainer
         self.eval_dataset = self.trainer.eval_dataset
-        if not hasattr(trainer, "ref_model"):
-            raise AttributeError("Trainer must have a `ref_model` attribute.")
         self.batch_size = batch_size
 
     def generate_completions_for_model(self, model, tokenizer, prompts):
@@ -217,13 +220,18 @@ class WinRateCallback(TrainerCallback):
         return completions
 
     def on_train_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
+        # When the trainer is initialized, we generate completions for the reference model.
         tokenizer = kwargs["tokenizer"]
         tokenizer.padding_side = "left"
         accelerator = self.trainer.accelerator
+        model = getattr(self.trainer, "ref_model", kwargs["model"])  # get the ref model if any, else use the model
         with accelerator.split_between_processes(self.eval_dataset["prompt"], apply_padding=True) as prompts:
-            self.ref_completions = self.generate_completions_for_model(self.trainer.ref_model, tokenizer, prompts)
+            self.ref_completions = self.generate_completions_for_model(model, tokenizer, prompts)
 
     def on_evaluate(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
+        # At every evaluation step, we generate completions for the model and compare them with the reference
+        # completions that have been generated at the beginning of training. We then compute the win rate and log it to
+        # the trainer.
         model = kwargs["model"]
         tokenizer = kwargs["tokenizer"]
         accelerator = self.trainer.accelerator
