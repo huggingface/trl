@@ -594,6 +594,33 @@ trainer.train()
 
 The saved model is fully compatible with Hugging Face's transformers library. Learn more about unsloth in their [official repository](https://github.com/unslothai/unsloth).
 
+## Liger-Kernel: Increase 20% throughput and reduces 60% memory for multi-GPU training
+
+[Liger Kernel](https://github.com/linkedin/Liger-Kernel) is a collection of Triton kernels designed specifically for LLM training. It can effectively increase multi-GPU training throughput by 20% and reduces memory usage by 60%. That way, we can **4x** our context length, as described in the benchmark below. They have implemented Hugging Face Compatible `RMSNorm`, `RoPE`, `SwiGLU`, `CrossEntropy`, `FusedLinearCrossEntropy`, and more to come. The kernel works out of the box with [Flash Attention](https://github.com/Dao-AILab/flash-attention), [PyTorch FSDP](https://pytorch.org/tutorials/intermediate/FSDP_tutorial.html), and [Microsoft DeepSpeed](https://github.com/microsoft/DeepSpeed).
+
+With great memory reduction, you can potentially turn off cpu_offloading or gradient checkpointing to further boost the performance. 
+
+| Speed Up                 | Memory Reduction        |
+|--------------------------|-------------------------|
+| ![Speed up](https://raw.githubusercontent.com/linkedin/Liger-Kernel/main/docs/images/e2e-tps.png) | ![Memory](https://raw.githubusercontent.com/linkedin/Liger-Kernel/main/docs/images/e2e-memory.png) |
+
+
+1. To use Liger-Kernel in `SFTTrainer`, first install by 
+
+```bash
+pip install liger-kernel
+```
+
+2. Once installed, set `use_liger` in [SFTConfig](https://github.com/huggingface/trl/blob/850ddcf598984013007d384c6b3e311def2a616e/trl/trainer/sft_config.py#L69). No other changes are needed!
+
+```python
+config = SFTConfig(
+  use_liger=True
+)
+```
+
+To learn more about Liger-Kernel, visit their [official repository](https://github.com/linkedin/Liger-Kernel/).
+
 ## Best practices
 
 Pay attention to the following best practices when training a model with that trainer:
