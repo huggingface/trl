@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from transformers import TrainingArguments
 
@@ -38,6 +38,12 @@ class KTOConfig(TrainingArguments):
         beta (`float`, *optional*, defaults to `0.1`):
             Parameter controlling the deviation from the reference model. Higher β means less deviation from the
             reference model.
+        loss_type (`str`, *optional*, defaults to `"kto"`):
+            Type of loss to use. Possible values are:
+
+                - `"kto"`: KTO loss from the [KTO](https://huggingface.co/papers/2402.01306) paper.
+                - `"apo_zero_unpaired"`: Unpaired variant of APO-zero loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
+
         desirable_weight (`float`, *optional*, defaults to `1.0`):
             Desirable losses are weighed by this factor to counter unequal number of desirable and undesirable paris.
         undesirable_weight (`float`, *optional*, defaults to `1.0`):
@@ -72,6 +78,7 @@ class KTOConfig(TrainingArguments):
     max_prompt_length: Optional[int] = None
     max_completion_length: Optional[int] = None
     beta: float = 0.1
+    loss_type: Literal["kto", "apo_zero_unpaired"] = "kto"
     desirable_weight: float = 1.0
     undesirable_weight: float = 1.0
     label_pad_token_id: int = -100
