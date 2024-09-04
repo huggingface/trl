@@ -452,32 +452,32 @@ class ConstantLengthDataset(IterableDataset):
     The dataset also formats the text before tokenization with a specific format that is provided
     by the user.
 
-        Args:
-            tokenizer (`transformers.PreTrainedTokenizer`):
-                The processor used for processing the data.
-            dataset (`dataset.Dataset`):
-                Dataset with text files.
-            dataset_text_field (`str`, **optional**):
-                Name of the field in the dataset that contains the text. Used only if `formatting_func` is `None`.
-            formatting_func (`Callable`, **optional**):
-                Function that formats the text before tokenization. Usually it is recommended to have follows a certain
-                pattern such as `"### Question: {question} ### Answer: {answer}"`
-            infinite (`bool`, *optional*, defaults to `False`):
-                If True the iterator is reset after dataset reaches end else stops.
-            seq_length (`int`, *optional*, defaults to `1024`):
-                Length of token sequences to return.
-            num_of_sequences (`int`, *optional*, defaults to `1024`):
-                Number of token sequences to keep in buffer.
-            chars_per_token (`int`, *optional*, defaults to `3.6`):
-                Number of characters per token used to estimate number of tokens in text buffer.
-            eos_token_id (`int`, *optional*, defaults to `0`):
-                Id of the end of sequence token if the passed tokenizer does not have an EOS token.
-            shuffle (`bool`, *optional*, defaults to True)
-                Shuffle the examples before they are returned
-            append_concat_token (`bool`, *optional*, defaults to True)
-                If true, appends `eos_token_id` at the end of each sample being packed.
-            add_special_tokens (`bool`, *optional*, defaults to True)
-                If true, tokenizers adds special tokens to each sample being packed.
+    Args:
+        tokenizer (`transformers.PreTrainedTokenizer`):
+            The processor used for processing the data.
+        dataset (`dataset.Dataset`):
+            Dataset with text files.
+        dataset_text_field (`str`, **optional**):
+            Name of the field in the dataset that contains the text. Used only if `formatting_func` is `None`.
+        formatting_func (`Callable`, **optional**):
+            Function that formats the text before tokenization. Usually it is recommended to have follows a certain
+            pattern such as `"### Question: {question} ### Answer: {answer}"`
+        infinite (`bool`, *optional*, defaults to `False`):
+            If True the iterator is reset after dataset reaches end else stops.
+        seq_length (`int`, *optional*, defaults to `1024`):
+            Length of token sequences to return.
+        num_of_sequences (`int`, *optional*, defaults to `1024`):
+            Number of token sequences to keep in buffer.
+        chars_per_token (`int`, *optional*, defaults to `3.6`):
+            Number of characters per token used to estimate number of tokens in text buffer.
+        eos_token_id (`int`, *optional*, defaults to `0`):
+            Id of the end of sequence token if the passed tokenizer does not have an EOS token.
+        shuffle (`bool`, *optional*, defaults to True)
+            Shuffle the examples before they are returned
+        append_concat_token (`bool`, *optional*, defaults to True)
+            If true, appends `eos_token_id` at the end of each sample being packed.
+        add_special_tokens (`bool`, *optional*, defaults to True)
+            If true, tokenizers adds special tokens to each sample being packed.
     """
 
     def __init__(
@@ -900,7 +900,7 @@ class OnPolicyConfig(TrainingArguments):
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.
 
-    Parameters:
+    Args:
         run_name (`Optional[str]`, *optional*, defaults to `None`):
             Name of the run.
         sanity_check (`bool`, *optional*, defaults to `False`):
