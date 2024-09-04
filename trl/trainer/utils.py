@@ -470,11 +470,11 @@ class ConstantLengthDataset(IterableDataset):
                 Number of characters per token used to estimate number of tokens in text buffer.
             eos_token_id (`int`, *optional*, defaults to `0`):
                 Id of the end of sequence token if the passed tokenizer does not have an EOS token.
-            shuffle ('bool', *optional*, defaults to True)
+            shuffle (`bool`, *optional*, defaults to True)
                 Shuffle the examples before they are returned
-            append_concat_token ('bool', *optional*, defaults to True)
+            append_concat_token (`bool`, *optional*, defaults to True)
                 If true, appends `eos_token_id` at the end of each sample being packed.
-            add_special_tokens ('bool', *optional*, defaults to True)
+            add_special_tokens (`bool`, *optional*, defaults to True)
                 If true, tokenizers adds special tokens to each sample being packed.
     """
 
@@ -890,54 +890,79 @@ class OnlineTrainerState(TrainerState):
 
 @dataclass
 class OnPolicyConfig(TrainingArguments):
-    # common config
+    r"""
+    Base configuration class for on-policy trainers.
+
+    Using [`~transformers.HfArgumentParser`] we can turn this class into
+    [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
+    command line.
+
+    Parameters:
+        run_name (`Optional[str]`, *optional*, defaults to `None`):
+            Name of the run.
+        sanity_check (`bool`, *optional*, defaults to `False`):
+            Whether to run in debug mode.
+        dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
+            Number of processes to use for processing the dataset.
+        num_mini_batches (`int`, *optional*, defaults to `1`):
+            Number of minibatches to split a batch into.
+        total_episodes (`Optional[int]`, *optional*, defaults to `None`):
+            Total number of episodes in the dataset.
+        local_rollout_forward_batch_size (`int`, *optional*, defaults to `64`):
+            Per rank no grad forward pass in the rollout phase.
+        num_sample_generations (`int`, *optional*, defaults to `10`):
+            Number of debugging samples generations (i.e., `generate_completions` calls) throughout training.
+        response_length (`int`, *optional*, defaults to `53`):
+            Length of the response.
+        stop_token (`Optional[str]`, *optional*, defaults to `None`):
+            Stop token.
+        stop_token_id (`Optional[int]`, *optional*, defaults to `None`):
+            Truncation token id.
+        temperature (`float`, *optional*, defaults to `0.7`):
+            Sampling temperature.
+        penalty_reward_value (`int`, *optional*, defaults to `-1`):
+            Reward value for responses that do not contain `stop_token_id`.
+        non_eos_penalty (`bool`, *optional*, defaults to `False`):
+            Whether to penalize responses that do not contain `stop_token_id`.
+        sft_model_path (`str`, *optional*, defaults to `"EleutherAI/pythia-160m"`):
+            Path to the SFT model.
+        world_size (`Optional[int]`, *optional*, defaults to `None`):
+            Number of processes (GPUs) to use for the training.
+        num_total_batches (`Optional[int]`, *optional*, defaults to `None`):
+            Number of total batches to train.
+        micro_batch_size (`Optional[int]`, *optional*, defaults to `None`):
+            Micro batch size across devices (HF's `per_device_train_batch_size` * `world_size`).
+        local_batch_size (`Optional[int]`, *optional*, defaults to `None`):
+            Batch size per GPU (HF's `per_device_train_batch_size` * `gradient_accumulation_steps`).
+        batch_size (`Optional[int]`, *optional*, defaults to `None`):
+            Batch size across devices (HF's `per_device_train_batch_size` * `world_size` * `gradient_accumulation_steps`).
+        local_mini_batch_size (`Optional[int]`, *optional*, defaults to `None`):
+            Mini batch size per GPU.
+        mini_batch_size (`Optional[int]`, *optional*, defaults to `None`):
+            Mini batch size across GPUs.
+    """
+
     run_name: Optional[str] = None
-    """a unique name of this run"""
     sanity_check: bool = False
-    """wether to run in debug mode"""
     dataset_num_proc: Optional[int] = None
-
-    # batch size related config
     num_mini_batches: int = 1
-    """Number of minibatches to split a batch into"""
     total_episodes: Optional[int] = None
-    """The total number of episodes in the dataset"""
     local_rollout_forward_batch_size: int = 64
-    """per rank no grad forward pass in the rollout phase"""
     num_sample_generations: int = 10
-    """the number of debugging samples generations (i.e., `generate_completions` calls) throughout training"""
-
-    # other config
     response_length: int = 53
-    """the length of the response"""
     stop_token: Optional[Literal["eos"]] = None
-    """the stop token"""
     stop_token_id: Optional[int] = None
-    """the truncation token id"""
     temperature: float = 0.7
-    """the sampling temperature"""
     penalty_reward_value: int = -1
-    """the reward value for responses that do not contain `stop_token_id`"""
     non_eos_penalty: bool = False
-    """whether to penalize responses that do not contain `stop_token_id`"""
     sft_model_path: str = "EleutherAI/pythia-160m"
-    """the path to the sft model"""
-
-    # various batch sizes
     world_size: Optional[int] = None
-    """The number of processes (GPUs) to use"""
     num_total_batches: Optional[int] = None
-    """The number of total batches to train"""
     micro_batch_size: Optional[int] = None
-    """The micro batch size across devices (HF's `per_device_train_batch_size` * `world_size`)"""
     local_batch_size: Optional[int] = None
-    """The batch size per GPU (HF's `per_device_train_batch_size` * `gradient_accumulation_steps`)"""
     batch_size: Optional[int] = None
-    """The batch size across devices (HF's `per_device_train_batch_size` * `world_size` * `gradient_accumulation_steps`)"""
     local_mini_batch_size: Optional[int] = None
-    """the mini batch size per GPU"""
     mini_batch_size: Optional[int] = None
-    """the mini batch size across GPUs"""
 
 
 def first_true_indices(bools: torch.Tensor, dtype=torch.long):
