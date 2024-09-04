@@ -198,7 +198,7 @@ class XPOTrainer(OnlineDPOTrainer):
         xpo_losses = self.args.alpha * model_on_ref_logprobs.sum(1)
 
         # Total loss
-        loss = (dpo_losses - xpo_losses).mean()  # Note the minus sign for xpo_losses
+        loss = (dpo_losses + xpo_losses).mean()
 
         return loss, dpo_losses, xpo_losses
 
