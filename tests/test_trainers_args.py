@@ -77,7 +77,6 @@ class TrainerArgTester(unittest.TestCase):
                 max_length=256,
                 max_prompt_length=64,
                 max_completion_length=64,
-                max_target_length=64,
                 beta=0.5,
                 label_smoothing=0.5,
                 loss_type="hinge",
@@ -96,7 +95,6 @@ class TrainerArgTester(unittest.TestCase):
             self.assertEqual(trainer.args.max_length, 256)
             self.assertEqual(trainer.args.max_prompt_length, 64)
             self.assertEqual(trainer.args.max_completion_length, 64)
-            self.assertEqual(trainer.args.max_target_length, 64)
             self.assertEqual(trainer.args.beta, 0.5)
             self.assertEqual(trainer.args.label_smoothing, 0.5)
             self.assertEqual(trainer.args.loss_type, "hinge")
@@ -127,7 +125,7 @@ class TrainerArgTester(unittest.TestCase):
                 truncation_mode="keep_start",
                 max_length=256,
                 max_prompt_length=64,
-                max_target_length=64,
+                max_completion_length=64,
                 is_encoder_decoder=True,
                 disable_dropout=False,
                 # generate_during_eval=True, # ignore this one, it requires wandb
@@ -155,7 +153,7 @@ class TrainerArgTester(unittest.TestCase):
             self.assertEqual(trainer.args.truncation_mode, "keep_start")
             self.assertEqual(trainer.args.max_length, 256)
             self.assertEqual(trainer.args.max_prompt_length, 64)
-            self.assertEqual(trainer.args.max_target_length, 64)
+            self.assertEqual(trainer.args.max_completion_length, 64)
             self.assertEqual(trainer.args.is_encoder_decoder, True)
             self.assertEqual(trainer.args.disable_dropout, False)
             # self.assertEqual(trainer.args.generate_during_eval, True)

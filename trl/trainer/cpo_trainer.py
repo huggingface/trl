@@ -225,15 +225,15 @@ class CPOTrainer(Trainer):
         else:
             max_prompt_length = args.max_prompt_length
 
-        if args.max_target_length is None and self.is_encoder_decoder:
+        if args.max_completion_length is None and self.is_encoder_decoder:
             warnings.warn(
-                "When using an encoder decoder architecture, you should set `max_target_length` in the CPOConfig's init"
+                "When using an encoder decoder architecture, you should set `max_completion_length` in the CPOConfig's init"
                 " it will default to `128` by default, but you should do it yourself in the future.",
                 UserWarning,
             )
-            max_target_length = 128
+            max_completion_length = 128
         else:
-            max_target_length = args.max_target_length
+            max_completion_length = args.max_completion_length
 
         if data_collator is None:
             data_collator = DPODataCollatorWithPadding(
@@ -264,7 +264,7 @@ class CPOTrainer(Trainer):
         self.padding_value = args.padding_value if args.padding_value is not None else tokenizer.pad_token_id
         self.max_prompt_length = max_prompt_length
         self.truncation_mode = args.truncation_mode
-        self.max_target_length = max_target_length
+        self.max_completion_length = max_completion_length
         self.tokenizer = tokenizer
 
         if args.loss_type in ["hinge", "ipo"] and args.label_smoothing > 0:
@@ -495,10 +495,10 @@ class CPOTrainer(Trainer):
 
         else:
             chosen_tokens = self.tokenizer(
-                chosen, truncation=True, max_length=self.max_target_length, add_special_tokens=True
+                chosen, truncation=True, max_length=self.max_completion_length, add_special_tokens=True
             )
             rejected_tokens = self.tokenizer(
-                rejected, truncation=True, max_length=self.max_target_length, add_special_tokens=True
+                rejected, truncation=True, max_length=self.max_completion_length, add_special_tokens=True
             )
             prompt_tokens = self.tokenizer(
                 prompt, truncation=True, max_length=self.max_prompt_length, add_special_tokens=True
