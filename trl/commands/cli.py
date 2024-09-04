@@ -21,7 +21,7 @@ from subprocess import CalledProcessError
 from rich.console import Console
 
 
-SUPPORTED_COMMANDS = ["sft", "dpo", "chat"]
+SUPPORTED_COMMANDS = ["sft", "dpo", "chat", "kto"]
 
 
 def main():
