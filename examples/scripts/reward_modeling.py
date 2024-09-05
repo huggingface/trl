@@ -114,8 +114,6 @@ if __name__ == "__main__":
     # Load and preprocess dataset
     #############################
     raw_datasets = load_dataset(args.dataset_name)
-    # Tokenize chosen/rejected pairs of inputs
-    # Adapt this section to your needs for custom datasets
 
     def preprocess_function(examples):
         new_examples = {
@@ -127,7 +125,6 @@ if __name__ == "__main__":
         for chosen, rejected in zip(examples["chosen"], examples["rejected"]):
             tokenized_chosen = tokenizer(chosen)
             tokenized_rejected = tokenizer(rejected)
-
             new_examples["input_ids_chosen"].append(tokenized_chosen["input_ids"])
             new_examples["attention_mask_chosen"].append(tokenized_chosen["attention_mask"])
             new_examples["input_ids_rejected"].append(tokenized_rejected["input_ids"])
@@ -136,9 +133,10 @@ if __name__ == "__main__":
         return new_examples
 
     with PartialState().local_main_process_first():
+        # Wrap inputs with chat template. 
+        # This assumes the chosen/rejected columns are in the OpenAI messages format.
         chosen_fn = conversations_formatting_function(tokenizer, "chosen")
         rejected_fn = conversations_formatting_function(tokenizer, "rejected")
-        # Wrap inputs with chat template
         raw_datasets = raw_datasets.map(
             lambda x: {"chosen": chosen_fn(x), "rejected": rejected_fn(x)}, num_proc=config.dataset_num_proc
         )
