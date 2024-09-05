@@ -13,20 +13,35 @@
 # limitations under the License.
 """
 python examples/scripts/reward_modeling.py \
-    --model_name_or_path=facebook/opt-350m \
-    --output_dir="reward_modeling_anthropic_hh" \
-    --per_device_train_batch_size=16 \
-    --num_train_epochs=1 \
-    --gradient_accumulation_steps=2 \
-    --gradient_checkpointing=True \
-    --learning_rate=1.41e-5 \
-    --report_to="wandb" \
-    --remove_unused_columns=False \
-    --optim="adamw_torch" \
-    --logging_steps=10 \
-    --eval_strategy="steps" \
-    --eval_steps=500 \
-    --max_length=512
+    --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
+    --output_dir Qwen2-0.5B-Reward \
+    --per_device_train_batch_size 8 \
+    --num_train_epochs 1 \
+    --gradient_accumulation_steps 1 \
+    --remove_unused_columns False \
+    --gradient_checkpointing True \
+    --learning_rate 1.0e-5 \
+    --logging_steps 25 \
+    --eval_strategy steps \
+    --eval_steps 50 \
+    --max_length 2048
+
+python examples/scripts/reward_modeling.py \
+    --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
+    --output_dir Qwen2-0.5B-Reward \
+    --per_device_train_batch_size 8 \
+    --num_train_epochs 1 \
+    --gradient_accumulation_steps 1 \
+    --remove_unused_columns False \
+    --gradient_checkpointing True \
+    --learning_rate 1.0e-5 \
+    --logging_steps 25 \
+    --eval_strategy steps \
+    --eval_steps 50 \
+    --max_length 2048 /
+    --use_peft \
+    --lora_r 32 \
+    --lora_alpha 16
 """
 
 import warnings
@@ -78,22 +93,22 @@ if __name__ == "__main__":
     model = AutoModelForSequenceClassification.from_pretrained(
         model_config.model_name_or_path, num_labels=1, trust_remote_code=model_config.trust_remote_code, **model_kwargs
     )
-    # Fix pad tokens
+    # Align padding tokens between tokenizer and model
     model.config.pad_token_id = tokenizer.pad_token_id
 
-    # If we are aligning a base model, we use ChatML as the default template
+    # If post-training a base model, use ChatML as the default template
     if tokenizer.chat_template is None:
         model, tokenizer = setup_chat_format(model, tokenizer)
 
-    if model_config.lora_task_type != "SEQ_CLS":
+    if model_config.use_peft and model_config.lora_task_type != "SEQ_CLS":
         warnings.warn(
             "You are using a `task_type` that is different than `SEQ_CLS` for PEFT. This will lead to silent bugs"
             " Make sure to pass --lora_task_type SEQ_CLS when using this script with PEFT."
         )
 
-    ################
-    # Dataset
-    ################
+    #############################
+    # Load and preprocess dataset
+    #############################
     raw_datasets = load_dataset(args.dataset_name)
     # Tokenize chosen/rejected pairs of inputs
     # Adapt this section to your needs for custom datasets
@@ -116,18 +131,20 @@ if __name__ == "__main__":
 
         return new_examples
 
-    # Preprocess the dataset and filter out examples that are longer than args.max_length
     with PartialState().local_main_process_first():
         chosen_fn = conversations_formatting_function(tokenizer, "chosen")
         rejected_fn = conversations_formatting_function(tokenizer, "rejected")
+        # Wrap inputs with chat template
         raw_datasets = raw_datasets.map(
             lambda x: {"chosen": chosen_fn(x), "rejected": rejected_fn(x)}, num_proc=config.dataset_num_proc
         )
+        # Tokenize inputs
         raw_datasets = raw_datasets.map(
             preprocess_function,
             batched=True,
             num_proc=config.dataset_num_proc,
         )
+        # Filter out examples that are too long
         raw_datasets = raw_datasets.filter(
             lambda x: len(x["input_ids_chosen"]) <= config.max_length
             and len(x["input_ids_rejected"]) <= config.max_length,
@@ -137,9 +154,9 @@ if __name__ == "__main__":
     train_dataset = raw_datasets[args.dataset_train_split]
     eval_dataset = raw_datasets[args.dataset_test_split]
 
-    ################
+    ##########
     # Training
-    ################
+    ##########
     trainer = RewardTrainer(
         model=model,
         tokenizer=tokenizer,
@@ -149,8 +166,13 @@ if __name__ == "__main__":
         peft_config=get_peft_config(model_config),
     )
     trainer.train()
+
+    ############################
+    # Save model and push to Hub
+    ############################
     trainer.save_model(config.output_dir)
-    trainer.push_to_hub()
     metrics = trainer.evaluate()
     trainer.log_metrics("eval", metrics)
-    print(metrics)
+    trainer.save_metrics("eval", metrics)
+    trainer.save_model(config.output_dir)
+    trainer.push_to_hub()

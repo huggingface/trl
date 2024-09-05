@@ -30,7 +30,13 @@ from transformers.trainer_utils import EvalPrediction
 
 from ..import_utils import is_peft_available
 from .reward_config import RewardConfig
-from .utils import RewardDataCollatorWithPadding, compute_accuracy, print_rich_table, trl_sanitze_kwargs_for_tagging
+from .utils import (
+    RewardDataCollatorWithPadding,
+    compute_accuracy,
+    decode_and_strip_padding,
+    print_rich_table,
+    trl_sanitze_kwargs_for_tagging,
+)
 
 
 if is_peft_available():
@@ -304,14 +310,8 @@ class RewardTrainer(Trainer):
         table = defaultdict(list)
         for _, inputs in enumerate(eval_dataloader):
             _, logits, _ = self.prediction_step(self.model, inputs, prediction_loss_only=False)
-            chosen_text = [
-                c.replace(self.tokenizer.pad_token, "")
-                for c in self.tokenizer.batch_decode(inputs["input_ids_chosen"], skip_special_tokens=False)
-            ]
-            rejected_text = [
-                r.replace(self.tokenizer.pad_token, "")
-                for r in self.tokenizer.batch_decode(inputs["input_ids_rejected"], skip_special_tokens=False)
-            ]
+            chosen_text = decode_and_strip_padding(inputs["input_ids_chosen"], self.tokenizer)
+            rejected_text = decode_and_strip_padding(inputs["input_ids_rejected"], self.tokenizer)
             table["chosen_text"].extend(gather_object(chosen_text))
             table["rejected_text"].extend(gather_object(rejected_text))
             table["logits"].extend(
