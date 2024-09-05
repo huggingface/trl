@@ -73,21 +73,33 @@ if __name__ == "__main__":
         model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, **model_kwargs
     )
     reward_model = AutoModelForSequenceClassification.from_pretrained(
-        training_args.reward_model_path, num_labels=1, trust_remote_code=model_config.trust_remote_code
-    )
+        training_args.reward_model_path,
+        trust_remote_code=model_config.trust_remote_code,
+        **model_kwargs,
+    ).to("cuda")
+
     tokenizer = AutoTokenizer.from_pretrained(
         model_config.model_name_or_path,
         padding_side="left",
         trust_remote_code=model_config.trust_remote_code,
+        **model_kwargs,
     )
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_QUERY_CHAT_TEMPLATE
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    # prompt = 'What are some synonyms for the word "beautiful"?'
+    # response = "Nicely, Beautifully, Handsome, Stunning, Wonderful, Gorgeous, Pretty, Stunning, Elegant"
+    # messages = [{"role": "user", "content": prompt}, {"role": "assistant", "content": response}]
+    # input_ids = tokenizer.apply_chat_template(messages, return_tensors="pt").to("cuda")
+    # output = reward_model(input_ids)
 
     dataset = load_dataset(args.dataset_name)
 
     def prepare_dataset(row):
-        row["prompt"] = tokenizer.apply_chat_template(row["prompt"], tokenize=False, add_generation_prompt=True)
-        return row
+        prompt = tokenizer.apply_chat_template([row["messages"]], tokenize=False, add_generation_prompt=True)
+        return {"prompt": prompt}
 
     with PartialState().local_main_process_first():
         dataset = dataset.map(prepare_dataset, num_proc=training_args.dataset_num_proc)
