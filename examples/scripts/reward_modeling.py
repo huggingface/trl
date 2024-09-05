@@ -15,6 +15,7 @@
 Full training:
 python examples/scripts/reward_modeling.py \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
+    --dataset_name trl-lib/ultrafeedback_binarized \
     --output_dir Qwen2-0.5B-Reward \
     --per_device_train_batch_size 8 \
     --num_train_epochs 1 \
@@ -30,6 +31,7 @@ python examples/scripts/reward_modeling.py \
 LoRA:
 python examples/scripts/reward_modeling.py \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
+    --dataset_name trl-lib/ultrafeedback_binarized \
     --output_dir Qwen2-0.5B-Reward \
     --per_device_train_batch_size 8 \
     --num_train_epochs 1 \
