@@ -1,122 +1,84 @@
-import sys
-from dataclasses import dataclass, field
-from typing import Optional
+import re
+from dataclasses import dataclass
+from typing import Dict, List, Optional
 
 from datasets import load_dataset
 from huggingface_hub import HfApi
-from huggingface_hub.repocard import RepoCard
 from transformers import HfArgumentParser
-
-
-"""
-# debug
-python -i examples/datasets/anthropic_hh.py --debug --push_to_hub
-# actual push
-python examples/datasets/anthropic_hh.py --push_to_hub --hf_entity trl-internal-testing
-"""
-
-
-api = HfApi()
 
 
 @dataclass
 class ScriptArguments:
-    debug: Optional[bool] = field(default=False, metadata={"help": "Enable debug mode"})
-    hf_entity: Optional[str] = field(default=None, metadata={"help": "The Hugging Face entity to use"})
-    hf_repo_id: Optional[str] = field(
-        default="hh-rlhf-helpful-base-trl-style", metadata={"help": "The Hugging Face repository ID"}
-    )
-    revision: Optional[str] = field(default="0.1.0", metadata={"help": "The revision of the repository"})
-    update_main_revision: Optional[bool] = field(
-        default=True, metadata={"help": "Update the main revision of the repository"}
-    )
-    push_to_hub: Optional[bool] = field(default=False, metadata={"help": "Push the dataset to the Hugging Face Hub"})
-    dataset_num_proc: Optional[int] = field(
-        default=None, metadata={"help": "The number of workers to use for dataset processing"}
-    )
+    r"""
+    Arguments for the script.
+
+    Args:
+        push_to_hub (`bool`, *optional*, defaults to `False`):
+            Whether to push the dataset to the Hugging Face Hub.
+        repo_id (`str`, *optional*, defaults to `"trl-lib/hh-rlhf-helpful-base"`):
+            The Hugging Face repository ID to push the dataset to.
+        dataset_num_proc (`int`, *optional*, defaults to `None`):
+            The number of workers to use for dataset processing.
+    """
+
+    push_to_hub: bool = False
+    repo_id: str = "trl-lib/hh-rlhf-helpful-base"
+    dataset_num_proc: Optional[int] = None
 
 
-# GPT-4 generated 😄 Define a function to process the input and extract the dialogue into structured format
-def extract_dialogue(input_text):
-    # Split the input by lines and initialize variables
-    lines = input_text.strip().split("\n\n")
-    dialogue_list = []
-
-    # Iterate through each line and extract the dialogue
-    for line in lines:
-        # Check if the line starts with "Human" or "Assistant" and split accordingly
-        if line.startswith("Human:"):
-            role = "user"
-            content = line.replace("Human: ", "").strip()
-        elif line.startswith("Assistant:"):
-            role = "assistant"
-            content = line.replace("Assistant: ", "").strip()
+def common_start(str1: str, str2: str) -> str:
+    # Zip the two strings and iterate over them together
+    common_chars = []
+    for c1, c2 in zip(str1, str2):
+        if c1 == c2:
+            common_chars.append(c1)
         else:
-            # If the line doesn't start with "Human" or "Assistant", it's part of the previous message's content
-            # Append it to the last message's content
-            dialogue_list[-1]["content"] += "\n\n" + line.strip()
-            continue
+            break
+    # Join the common characters and return as a string
+    return "".join(common_chars)
 
-        # Append the extracted dialogue piece to the list
-        dialogue_list.append({"role": role, "content": content})
 
-    return dialogue_list
+def extract_dialogue(example: str) -> List[Dict[str, str]]:
+    # Extract the prompt, which corresponds to the common start of the chosen and rejected dialogues
+    prompt_text = common_start(example["chosen"], example["rejected"])
+
+    # The chosen and rejected may share a common start, so we need to remove the common part
+    if not prompt_text.endswith("\n\nAssistant: "):
+        prompt_text = prompt_text[: prompt_text.rfind("\n\nAssistant: ")] + "\n\nAssistant: "
+
+    # Extract the chosen and rejected lines
+    chosen_line = example["chosen"][len(prompt_text) :]
+    rejected_line = example["rejected"][len(prompt_text) :]
+
+    # Remove the generation prompt ("\n\nAssistant: ") from the prompt
+    prompt_text = prompt_text[: -len("\n\nAssistant: ")]
+
+    # Split the string at every occurrence of "Human: " or "Assistant: "
+    prompt_lines = re.split(r"(\n\nAssistant: |\n\nHuman: )", prompt_text)
+
+    # Remove the first element as it's empty
+    prompt_lines = prompt_lines[1:]
+
+    prompt = []
+    for idx in range(0, len(prompt_lines), 2):
+        role = "user" if prompt_lines[idx] == "\n\nHuman: " else "assistant"
+        content = prompt_lines[idx + 1]
+        prompt.append({"role": role, "content": content})
+
+    # Remove the prompt from the chosen and rejected dialogues
+    chosen = [{"role": "assitant", "content": chosen_line}]
+    rejected = [{"role": "assistant", "content": rejected_line}]
+
+    return {"prompt": prompt, "chosen": chosen, "rejected": rejected}
 
 
 if __name__ == "__main__":
-    args = HfArgumentParser(ScriptArguments).parse_args_into_dataclasses()[0]
-    if args.hf_entity is None:
-        args.hf_entity = api.whoami()["name"]
-    full_repo_id = f"{args.hf_entity}/{args.hf_repo_id}"
+    parser = HfArgumentParser(ScriptArguments)
+    args = parser.parse_args_into_dataclasses()[0]
+
     ds = load_dataset("Anthropic/hh-rlhf", data_dir="helpful-base")
-    if args.debug:
-        for key in ds:
-            ds[key] = ds[key].select(range(50))
+    ds = ds.map(extract_dialogue, num_proc=args.dataset_num_proc)
 
-    def process(row):
-        row["chosen"] = extract_dialogue(row["chosen"])
-        row["rejected"] = extract_dialogue(row["rejected"])
-        row["prompt"] = row["chosen"][0]["content"]
-        return row
-
-    ds = ds.map(process, num_proc=args.dataset_num_proc)
     if args.push_to_hub:
-        revisions = ["main"] if args.update_main_revision else []
-        revisions.append(args.revision)
-
-        # get the commnad used to run the script
-        run_command = " ".join(["python"] + sys.argv)
-
-        for revision in revisions:
-            ds.push_to_hub(full_repo_id, revision=revision)
-            repo_full_url = f"https://huggingface.co/datasets/{full_repo_id}/tree/{revision}"
-
-            # get the name of the current file
-            file_name = __file__.split("/")[-1]
-            api.upload_file(
-                path_or_fileobj=__file__,
-                path_in_repo=file_name,
-                revision=revision,
-                repo_id=full_repo_id,
-                repo_type="dataset",
-            )
-
-        sft_card = RepoCard.load(
-            full_repo_id,
-            repo_type="dataset",
-        )
-        sft_card.text = f"""\
-# TRL's Anthropic HH Dataset
-
-We preprocess the dataset using our standard `prompt, chosen, rejected` format.
-
-
-## Reproduce this dataset
-
-1. Download the `{file_name}` from the {repo_full_url}.
-2. Run `{run_command}`
-"""
-        sft_card.push_to_hub(
-            full_repo_id,
-            repo_type="dataset",
-        )
+        api = HfApi()
+        ds.push_to_hub(args.repo_id)
