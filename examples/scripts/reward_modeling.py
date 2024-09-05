@@ -26,7 +26,7 @@ python examples/scripts/reward_modeling.py \
     --logging_steps=10 \
     --eval_strategy="steps" \
     --eval_steps=500 \
-    --max_length=512 \
+    --max_length=512
 """
 
 import warnings
@@ -39,6 +39,7 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer, HfAr
 
 from trl import ModelConfig, RewardConfig, RewardTrainer, get_kbit_device_map, get_peft_config, get_quantization_config
 
+from trl.extras.dataset_formatting import conversations_formatting_function
 
 tqdm.pandas()
 
@@ -68,6 +69,8 @@ if __name__ == "__main__":
     model = AutoModelForSequenceClassification.from_pretrained(
         model_config.model_name_or_path, num_labels=1, trust_remote_code=model_config.trust_remote_code, **model_kwargs
     )
+    # Fix pad tokens
+    model.config.pad_token_id = tokenizer.pad_token_id
 
     if model_config.lora_task_type != "SEQ_CLS":
         warnings.warn(
@@ -78,7 +81,7 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    raw_datasets = load_dataset("Anthropic/hh-rlhf")
+    raw_datasets = load_dataset("trl-lib/ultrafeedback_binarized")
     # Tokenize chosen/rejected pairs of inputs
     # Adapt this section to your needs for custom datasets
 
@@ -104,6 +107,9 @@ if __name__ == "__main__":
     # Compute that only on the main process for faster data processing.
     # see: https://github.com/huggingface/trl/pull/1255
     with PartialState().local_main_process_first():
+        chosen_fn = conversations_formatting_function(tokenizer, "chosen")
+        rejected_fn = conversations_formatting_function(tokenizer, "rejected")
+        raw_datasets = raw_datasets.map(lambda x: {"chosen": chosen_fn(x), "rejected": rejected_fn(x)}, num_proc=config.dataset_num_proc)
         raw_datasets = raw_datasets.map(
             preprocess_function,
             batched=True,
