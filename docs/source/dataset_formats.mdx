@@ -13,67 +13,51 @@ Each TRL trainer supports a specific dataset format. In this document, we provid
   <tr>
     <td>Non-preference</td>
     <td>
-      <pre><code class="language-json">{
-  "prompt": "The sky is",
-  "completion": " blue."
-}</code></pre>
+      <pre><code>{"prompt": "The sky is",
+ "completion": " blue."}</code></pre>
       or
-      <pre><code>{
-  "text": "The sky is blue."
-}</code></pre>
+      <pre><code>{"text": "The sky is blue."}</code></pre>
     </td>
     <td>
-      <pre><code>{
-  "prompt": [{"role": "user", "content": "What color is the sky?"}],
-  "completion": [{"role": "assistant", "content": "It is blue."}]
-}</code></pre>
+      <pre><code>{"prompt": [{"role": "user", "content": "What color is the sky?"}],
+ "completion": [{"role": "assistant", "content": "It is blue."}]}</code></pre>
     </td>
   </tr>
     <tr>
     <td>Prompt-only</td>
     <td>
-      <pre><code class="language-json">{
+      <pre><code>{
   "prompt": "The sky is",
 }</code></pre>
     </td>
     <td>
-      <pre><code>{
-  "prompt": [{"role": "user", "content": "What color is the sky?"}],
-}</code></pre>
+      <pre><code>{"prompt": [{"role": "user", "content": "What color is the sky?"}]}</code></pre>
     </td>
   </tr>
   <tr>
     <td>Preference</td>
     <td>
-      <pre><code>{
-  "prompt": "The sky is",
-  "chosen": " blue.",
-  "rejected": " green."
-}</code></pre>
+      <pre><code>{"prompt": "The sky is",
+ "chosen": " blue.",
+ "rejected": " green."}</code></pre>
     </td>
     <td>
-      <pre><code>{
-  "prompt": [{"role": "user", "content": "What color is the sky?"}],
-  "chosen": [{"role": "assistant", "content": "It is blue."}],
-  "rejected": [{"role": "assistant", "content": "It is green."}]
-}</code></pre>
+      <pre><code>{"prompt": [{"role": "user", "content": "What color is the sky?"}],
+ "chosen": [{"role": "assistant", "content": "It is blue."}],
+ "rejected": [{"role": "assistant", "content": "It is green."}]}</code></pre>
     </td>
   </tr>
   <tr>
     <td>Unpaired preference</td>
     <td>
-      <pre><code>{
-  "prompt": "The sky is",
-  "completion": " blue.",
-  "label": True
-}</code></pre>
+      <pre><code>{"prompt": "The sky is",
+ "completion": " blue.",
+ "label": True}</code></pre>
     </td>
     <td>
-      <pre><code>{
-  "prompt": [{"role": "user", "content": "What color is the sky?"}],
-  "completion": [{"role": "assistant", "content": "It is green."}],
-  "label": False
-}</code></pre>
+      <pre><code>{"prompt": [{"role": "user", "content": "What color is the sky?"}],
+ "completion": [{"role": "assistant", "content": "It is green."}],
+ "label": False}</code></pre>
     </td>
   </tr>
 </table>
