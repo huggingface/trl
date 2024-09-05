@@ -17,7 +17,7 @@ class ScriptArguments:
             Whether to push the dataset to the Hugging Face Hub.
         repo_id (`str`, *optional*, defaults to `"trl-lib/hh-rlhf-helpful-base"`):
             The Hugging Face repository ID to push the dataset to.
-        dataset_num_proc (`int`, *optional*, defaults to `None`):
+        dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
             The number of workers to use for dataset processing.
     """
 
@@ -76,9 +76,9 @@ if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
     args = parser.parse_args_into_dataclasses()[0]
 
-    ds = load_dataset("Anthropic/hh-rlhf", data_dir="helpful-base")
-    ds = ds.map(extract_dialogue, num_proc=args.dataset_num_proc)
+    dataset = load_dataset("Anthropic/hh-rlhf", data_dir="helpful-base")
+    dataset = dataset.map(extract_dialogue, num_proc=args.dataset_num_proc)
 
     if args.push_to_hub:
         api = HfApi()
-        ds.push_to_hub(args.repo_id)
+        dataset.push_to_hub(args.repo_id)
