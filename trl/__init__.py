@@ -3,11 +3,8 @@
 __version__ = "0.11.0.dev0"
 
 from typing import TYPE_CHECKING
-from .import_utils import (
-    _LazyModule,
-    is_diffusers_available,
-    OptionalDependencyNotAvailable,
-)
+from .import_utils import _LazyModule, is_diffusers_available, OptionalDependencyNotAvailable
+
 
 _import_structure = {
     "core": [
@@ -79,22 +76,9 @@ _import_structure = {
         "OpenAIPairwiseJudge",
     ],
     "commands": [],
-    "commands.cli_utils": [
-        "init_zero_verbose",
-        "SFTScriptArguments",
-        "DPOScriptArguments",
-        "TrlParser",
-    ],
-    "trainer.callbacks": [
-        "RichProgressCallback",
-        "SyncRefModelCallback",
-        "WinRateCallback",
-    ],
-    "trainer.utils": [
-        "get_kbit_device_map",
-        "get_peft_config",
-        "get_quantization_config",
-    ],
+    "commands.cli_utils": ["init_zero_verbose", "SFTScriptArguments", "DPOScriptArguments", "TrlParser"],
+    "trainer.callbacks": ["RichProgressCallback", "SyncRefModelCallback"],
+    "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config"],
     "multitask_prompt_tuning": [
         "MultitaskPromptEmbedding",
         "MultitaskPromptTuningConfig",
