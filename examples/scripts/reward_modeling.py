@@ -133,7 +133,7 @@ if __name__ == "__main__":
         return new_examples
 
     with PartialState().local_main_process_first():
-        # Wrap inputs with chat template. 
+        # Wrap inputs with chat template.
         # This assumes the chosen/rejected columns are in the OpenAI messages format.
         chosen_fn = conversations_formatting_function(tokenizer, "chosen")
         rejected_fn = conversations_formatting_function(tokenizer, "rejected")
