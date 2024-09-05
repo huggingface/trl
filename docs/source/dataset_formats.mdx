@@ -1,0 +1,147 @@
+# Dataset formats
+
+Each TRL trainer supports a specific dataset format. In this document, we provide an overview of the dataset formats supported by each trainer. Additionally, since conversational datasets are very common, we also provide a guide on how to use them, and how to convert them into a standard dataset format for TRL trainers.
+
+## Overview of the dataset formats
+
+<table>
+  <tr>
+    <th>Dataset type</th>
+    <th>Standard</th>
+    <th>Conversational</th>
+  </tr>
+  <tr>
+    <td>Non-preference</td>
+    <td>
+      <pre><code class="language-json">{
+  "prompt": "The sky is",
+  "completion": " blue."
+}</code></pre>
+      or
+      <pre><code>{
+  "text": "The sky is blue."
+}</code></pre>
+    </td>
+    <td>
+      <pre><code>{
+  "prompt": [{"role": "user", "content": "What color is the sky?"}],
+  "completion": [{"role": "assistant", "content": "It is blue."}]
+}</code></pre>
+    </td>
+  </tr>
+    <tr>
+    <td>Prompt-only</td>
+    <td>
+      <pre><code class="language-json">{
+  "prompt": "The sky is",
+}</code></pre>
+    </td>
+    <td>
+      <pre><code>{
+  "prompt": [{"role": "user", "content": "What color is the sky?"}],
+}</code></pre>
+    </td>
+  </tr>
+  <tr>
+    <td>Preference</td>
+    <td>
+      <pre><code>{
+  "prompt": "The sky is",
+  "chosen": " blue.",
+  "rejected": " green."
+}</code></pre>
+    </td>
+    <td>
+      <pre><code>{
+  "prompt": [{"role": "user", "content": "What color is the sky?"}],
+  "chosen": [{"role": "assistant", "content": "It is blue."}],
+  "rejected": [{"role": "assistant", "content": "It is green."}]
+}</code></pre>
+    </td>
+  </tr>
+  <tr>
+    <td>Unpaired preference</td>
+    <td>
+      <pre><code>{
+  "prompt": "The sky is",
+  "completion": " blue.",
+  "label": True
+}</code></pre>
+    </td>
+    <td>
+      <pre><code>{
+  "prompt": [{"role": "user", "content": "What color is the sky?"}],
+  "completion": [{"role": "assistant", "content": "It is green."}],
+  "label": False
+}</code></pre>
+    </td>
+  </tr>
+</table>
+
+## Which dataset format to use?
+
+TRL trainers only support standard datasets. Conversational datasets need to be formatted first to match the standard dataset format. To more info, see above
+
+| Trainer    | Expected dataset format |
+| ---------- | ----------------------- |
+| SFT        | Non-preference          |
+| DPO        | Preference              |
+| KTO        | Unpaired preference     |
+| Online-DPO | Prompt-only             |
+
+
+## Conversational dataset
+
+Conversational dataset are very common. 
+
+### Structure of a conversational dataset
+
+
+
+### Convert a conversational dataset into a standard dataset
+
+TRL trainers don't support conversational as is, but need to be converted into a standard dataset. For converting a conversational dataset into a standard dataset, we use a chat template.
+Every model has its own chat template.
+
+Caution: it's very important to use the template associated with the model you're using. As an example, you can't use a dataset formated with the Qwen chat template to finetune a Llama model.
+
+To convert a conversational dataset into a standard dataset, TRL provides a function called `convert_conversational_to_standard` that takes a conversational dataset and a tokenizer as input and returns a standard dataset.
+
+Here is an example with prompt-only dataset, and the Qwen chat template:
+
+```python
+from datasets import Dataset
+from transformers import AutoTokenizer
+
+conversational_dataset_dict = {
+    "prompt": [
+        [{"role": "user", "content": "What color is the sky?"}],
+    ]
+}
+
+conversational_dataset = Dataset.from_dict(conversational_dataset_dict)
+
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-72B-Instruct")
+
+standard_dataset = conversational_dataset.map(convert_conversational_to_standard, fn_kwargs={"tokenizer": tokenizer})
+```
+
+The resulting `standard_dataset` will look like this:
+
+```python
+>>> print(standard_dataset[0]["prompt"])
+<|im_start|>system
+You are a helpful assistant.<|im_end|>
+<|im_start|>user
+What color is the sky?<|im_end|>
+<|im_start|>assistant
+```
+
+Note: once again, it's very important to use the template associated with the model you're using. As an example, here is what you get if you use the chat template of the Llama model instead:
+
+```python
+>>> print(standard_dataset[0]["prompt"])
+<|user|>
+What color is the sky?<|end|>
+<|assistant|>
+```

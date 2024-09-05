@@ -1,12 +1,14 @@
 - sections:
   - local: index
     title: TRL
-  - local: quickstart
-    title: Quickstart
   - local: installation
     title: Installation
+  - local: quickstart
+    title: Quickstart
   - local: clis
     title: Get started with Command Line Interfaces (CLIs)
+  - local: dataset_formats
+    title: Dataset Formats
   - local: how_to_train
     title: PPO Training FAQ
   - local: use_model
