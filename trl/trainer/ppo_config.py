@@ -206,7 +206,7 @@ class PPOConfig:
     def __post_init__(self):
         warnings.warn(
             "`PPOConfig` is deprecated and will be removed in trl v0.12. Please use `PPOv2Config` with `PPOv2Trainer` instead.",
-            DeprecationWarning,
+            FutureWarning,
         )
         if self.forward_batch_size is not None:
             warnings.warn(

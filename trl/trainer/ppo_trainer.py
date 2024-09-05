@@ -190,7 +190,7 @@ class PPOTrainer(BaseTrainer):
         """
         warnings.warn(
             "`PPOTrainer` is deprecated and will be removed in trl v0.12. Please use `PPOv2Trainer` instead.",
-            DeprecationWarning,
+            FutureWarning,
         )
         super().__init__(config)
 
