@@ -99,14 +99,17 @@ def apply_chat_template_non_preference(example, tokenizer):
             the prompt alone. It can indicate that the chat template is not supported by TRL.
 
     Example:
-        >>> from transformers import AutoTokenizer
-        >>> tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-128k-instruct")
-        >>> example = {
-        ...     "prompt": [{"role": "user", "content": "What color is the sky?"}],
-        ...     "completion": [{"role": "assistant", "content": "It is blue."}]
-        ... }
-        >>> apply_chat_template_non_preference(example, tokenizer)
-        {'prompt': '<|user|>\nWhat color is the sky?<|end|>\n<|assistant|>\n', 'completion': 'It is blue.<|end|>\n<|endoftext|>'}
+
+    ```python
+    >>> from transformers import AutoTokenizer
+    >>> tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-128k-instruct")
+    >>> example = {
+    ...     "prompt": [{"role": "user", "content": "What color is the sky?"}],
+    ...     "completion": [{"role": "assistant", "content": "It is blue."}]
+    ... }
+    >>> apply_chat_template_non_preference(example, tokenizer)
+    {'prompt': '<|user|>\nWhat color is the sky?<|end|>\n<|assistant|>\n', 'completion': 'It is blue.<|end|>\n<|endoftext|>'}
+    ```
     """
     # Apply the chat template to the prompt only and adding the generation prompt
     prompt = tokenizer.apply_chat_template(example["prompt"], tokenize=False, add_generation_prompt=True)
@@ -147,13 +150,16 @@ def apply_chat_template_prompt_only(
         `Dict[str, str]`: The formatted example with the chat template applied.
 
     Example:
-        >>> from transformers import AutoTokenizer
-        >>> tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-128k-instruct")
-        >>> example = {
-        ...     "prompt": [{"role": "user", "content": "What color is the sky?"}]
-        ... }
-        >>> apply_chat_template_prompt_only(example, tokenizer)
-        {'prompt': '<|user|>\nWhat color is the sky?<|end|>\n<|assistant|>\n'}
+
+    ```python
+    >>> from transformers import AutoTokenizer
+    >>> tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-128k-instruct")
+    >>> example = {
+    ...     "prompt": [{"role": "user", "content": "What color is the sky?"}]
+    ... }
+    >>> apply_chat_template_prompt_only(example, tokenizer)
+    {'prompt': '<|user|>\nWhat color is the sky?<|end|>\n<|assistant|>\n'}
+    ```
     """
     prompt = tokenizer.apply_chat_template(example["prompt"], tokenize=False, add_generation_prompt=True)
     return {"prompt": prompt}
@@ -185,15 +191,18 @@ def apply_chat_template_preference(
             applied to the prompt alone. It can indicate that the chat template is not supported by TRL.
 
     Example:
-        >>> from transformers import AutoTokenizer
-        >>> tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-128k-instruct")
-        >>> example = {
-        ...     "prompt": [{"role": "user", "content": "What color is the sky?"}],
-        ...     "chosen": [{"role": "assistant", "content": "It is blue."}],
-        ...     "rejected": [{"role": "assistant", "content": "It is green."}]
-        ... }
-        >>> apply_chat_template_preference(example, tokenizer)
-        {'prompt': '<|user|>\nWhat color is the sky?<|end|>\n<|assistant|>\n', 'chosen': 'It is blue.<|end|>\n<|endoftext|>', 'rejected': 'It is green.<|end|>\n<|endoftext|>'}
+
+    ```python
+    >>> from transformers import AutoTokenizer
+    >>> tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-128k-instruct")
+    >>> example = {
+    ...     "prompt": [{"role": "user", "content": "What color is the sky?"}],
+    ...     "chosen": [{"role": "assistant", "content": "It is blue."}],
+    ...     "rejected": [{"role": "assistant", "content": "It is green."}]
+    ... }
+    >>> apply_chat_template_preference(example, tokenizer)
+    {'prompt': '<|user|>\nWhat color is the sky?<|end|>\n<|assistant|>\n', 'chosen': 'It is blue.<|end|>\n<|endoftext|>', 'rejected': 'It is green.<|end|>\n<|endoftext|>'}
+    ```
     """
     # Apply the chat template to the prompt only and adding the generation prompt
     prompt = tokenizer.apply_chat_template(example["prompt"], tokenize=False, add_generation_prompt=True)
@@ -243,15 +252,18 @@ def apply_chat_template_unpaired_preference(
             the prompt alone. It can indicate that the chat template is not supported by TRL.
 
     Example:
-        >>> from transformers import AutoTokenizer
-        >>> tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-128k-instruct")
-        >>> example = {
-        ...     "prompt": [{"role": "user", "content": "What color is the sky?"}],
-        ...     "completion": [{"role": "assistant", "content": "It is blue."}],
-        ...     "label": True
-        ... }
-        >>> apply_chat_template_unpaired_preference(example, tokenizer)
-        {'prompt': '<|user|>\nWhat color is the sky?<|end|>\n<|assistant|>\n', 'completion': 'It is blue.<|end|>\n<|endoftext|>', 'label': True}
+
+    ```python
+    >>> from transformers import AutoTokenizer
+    >>> tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-128k-instruct")
+    >>> example = {
+    ...     "prompt": [{"role": "user", "content": "What color is the sky?"}],
+    ...     "completion": [{"role": "assistant", "content": "It is blue."}],
+    ...     "label": True
+    ... }
+    >>> apply_chat_template_unpaired_preference(example, tokenizer)
+    {'prompt': '<|user|>\nWhat color is the sky?<|end|>\n<|assistant|>\n', 'completion': 'It is blue.<|end|>\n<|endoftext|>', 'label': True}
+    ```
     """
     # Apply the chat template to the prompt only and adding the generation prompt
     prompt = tokenizer.apply_chat_template(example["prompt"], tokenize=False, add_generation_prompt=True)
@@ -299,13 +311,15 @@ def is_conversational(dataset: Union[Dataset, DatasetDict]) -> bool:
 
     Examples:
 
-        >>> from datasets import Dataset
-        >>> dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": "What color is the sky?"}]]})
-        >>> is_conversational(dataset)
-        True
-        >>> dataset = Dataset.from_dict({"prompt": ["The sky is"]})
-        >>> is_conversational(dataset)
-        False
+    ```python
+    >>> from datasets import Dataset
+    >>> dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": "What color is the sky?"}]]})
+    >>> is_conversational(dataset)
+    True
+    >>> dataset = Dataset.from_dict({"prompt": ["The sky is"]})
+    >>> is_conversational(dataset)
+    False
+    ```
 
     Note:
         When `dataset` is a `DatasetDict`, this function checks only the first split. Consequently, we don't
