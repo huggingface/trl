@@ -82,22 +82,27 @@ def apply_chat_template(example: Dict[str, List[Dict[str, str]]], tokenizer: Pre
 
     Args:
         example (`Dict[str, List[Dict[str, str]]`):
-            Dictionary representing a single data entry. Each data entry can have different keys depending on the
-            dataset format. The supported dataset formats are:
+            Dictionary representing a single data entry of a conversational dataset. Each data entry can have different
+            keys depending on the dataset format. The supported dataset formats are:
 
-                - Non-preference conversational dataset: `"prompt"` and `"completion"`.
-                - Prompt-only conversational dataset: `"prompt"`.
-                - Preference conversational dataset: `"prompt"`, `"chosen"`, and `"rejected"`.
-                - Unpaired preference conversational dataset: `"prompt"`, `"completion"`, and `"label"`.
+                - Name to find dataset: `"messages"`.
+                - Prompt-only dataset: `"prompt"`.
+                - Prompt-completion dataset: `"prompt"` and `"completion"`.
+                - Preference dataset: `"prompt"`, `"chosen"`, and `"rejected"`.
+                - Unpaired preference dataset: `"prompt"`, `"completion"`, and `"label"`.
 
-            For keys `"prompt"`, `"chosen"`, `"rejected"`, and `"completion"`, the values are lists of messages, where
-            each message is a dictionary with keys `"role"` and `"content"`.
+            For keys `"messages"`, `"prompt"`, `"chosen"`, `"rejected"`, and `"completion"`, the values are lists of
+            messages, where each message is a dictionary with keys `"role"` and `"content"`.
 
         tokenizer (`PreTrainedTokenizer`):
             The tokenizer to apply the chat template with.
 
     Returns:
         `Dict[str, str]`: The formatted example with the chat template applied.
+
+    Note:
+        This function does not alter the keys, except for name to find dataset, where `"messages"` is replaced by
+        `"text"`.
 
     Example:
 
@@ -112,9 +117,25 @@ def apply_chat_template(example: Dict[str, List[Dict[str, str]]], tokenizer: Pre
     {'prompt': '<|user|>\nWhat color is the sky?<|end|>\n<|assistant|>\n', 'completion': 'It is blue.<|end|>\n<|endoftext|>'}
     ```
     """
+    # Check that the example has the correct keys
+    supported_keys = ["prompt", "chosen", "rejected", "completion", "messages", "label"]
+    example_keys = {key for key in example.keys() if key in supported_keys}
+    if example_keys not in [
+        {"messages"},  # name to find
+        {"prompt"},  # prompt-only
+        {"prompt", "completion"},  # prompt-completion
+        {"prompt", "chosen", "rejected"},  # preference
+        {"prompt", "completion", "label"},  # unpaired preference
+    ]:
+        raise KeyError(f"Invalid keys in the example: {example_keys}")
 
-    # Apply the chat template to the prompt only and adding the generation prompt
-    prompt = tokenizer.apply_chat_template(example["prompt"], tokenize=False, add_generation_prompt=True)
+    # Apply the chat template to the whole conversation
+    if "messages" in example:
+        messages = tokenizer.apply_chat_template(example["messages"], tokenize=False)
+
+    # Apply the chat template to the prompt, adding the generation prompt
+    if "prompt" in example:
+        prompt = tokenizer.apply_chat_template(example["prompt"], tokenize=False, add_generation_prompt=True)
 
     # Apply the chat template to the entire prompt + completion
     if "chosen" in example:
@@ -137,7 +158,11 @@ def apply_chat_template(example: Dict[str, List[Dict[str, str]]], tokenizer: Pre
         raise ValueError(error_message)
 
     # Extract the completion by removing the prompt part from the prompt-completion string
-    output = {"prompt": prompt}
+    output = {}
+    if "messages" in example:
+        output["text"] = messages
+    if "prompt" in example:
+        output["prompt"] = prompt
     if "chosen" in example:
         output["chosen"] = prompt_chosen[len(prompt) :]
     if "rejected" in example:
@@ -181,8 +206,12 @@ def is_conversational(dataset: Union[Dataset, DatasetDict]) -> bool:
         dataset = dataset[list(dataset.keys())[0]]  # take the first split
 
     if "prompt" in dataset.features:
-        prompt = dataset["prompt"][0]
-        # it should be a list of messages, where each message is a list of dictionaries with keys "role" and "content"
-        if isinstance(prompt, list) and isinstance(prompt[0], dict) and "role" in prompt[0]:
-            return True
-    return False
+        messages = dataset["prompt"][0]
+    elif "messages" in dataset.features:
+        messages = dataset["messages"][0]
+    else:
+        return False
+
+    # It should be a list of messages, where each message is a list of dictionaries with keys "role" and "content"
+    if isinstance(messages, list) and isinstance(messages[0], dict) and "role" in messages[0]:
+        return True

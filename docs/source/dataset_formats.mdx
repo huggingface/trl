@@ -11,19 +11,16 @@ Each TRL trainer supports a specific dataset format. In this document, we provid
     <th>Conversational</th>
   </tr>
   <tr>
-    <td>Non-preference</td>
+    <td>Name to find</td>
     <td>
-      <pre><code>{"prompt": "The sky is",
- "completion": " blue."}</code></pre>
-      or
       <pre><code>{"text": "The sky is blue."}</code></pre>
     </td>
     <td>
-      <pre><code>{"prompt": [{"role": "user", "content": "What color is the sky?"}],
- "completion": [{"role": "assistant", "content": "It is blue."}]}</code></pre>
+      <pre><code>{"messages": [{"role": "user", "content": "What color is the sky?"},
+              {"role": "assistant", "content": "It is blue."}]}</code></pre>
     </td>
   </tr>
-    <tr>
+  <tr>
     <td>Prompt-only</td>
     <td>
       <pre><code>{"prompt": "The sky is"}</code></pre>
@@ -31,6 +28,18 @@ Each TRL trainer supports a specific dataset format. In this document, we provid
     <td>
       <pre><code>{"prompt": [{"role": "user", "content": "What color is the sky?"}]}</code></pre>
     </td>
+  </tr>
+  <tr>
+    <td>Prompt-completion</td>
+    <td>
+      <pre><code>{"prompt": "The sky is"
+ "completion": " blue."}</code></pre>
+    </td>
+    <td>
+      <pre><code>{"prompt": [{"role": "user", "content": "What color is the sky?"}],
+ "completion": [{"role": "assistant", "content": "It is blue."}]}</code></pre>
+    </td>
+  </tr>
   </tr>
   <tr>
     <td>Preference</td>
@@ -66,7 +75,7 @@ TRL trainers only support standard datasets. Conversational datasets need to be 
 
 | Trainer    | Expected dataset format |
 | ---------- | ----------------------- |
-| SFT        | Non-preference          |
+| SFT        | Prompt-completion       |
 | DPO        | Preference              |
 | KTO        | Unpaired preference     |
 | Online-DPO | Prompt-only             |

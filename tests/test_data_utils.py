@@ -10,12 +10,20 @@ from trl.data_utils import apply_chat_template, is_conversational
 
 class TestIsConversational(unittest.TestCase):
     conversational_examples = [
-        {  # Non-preference
-            "prompt": [[{"role": "user", "content": "What color is the sky?"}]],
-            "completion": [[{"role": "assistant", "content": "It is blue."}]],
+        {  # Name to find
+            "messages": [
+                [
+                    {"role": "user", "content": "What color is the sky?"},
+                    {"role": "assistant", "content": "It is blue."},
+                ]
+            ],
         },
         {  # Prompt only
             "prompt": [[{"role": "user", "content": "What color is the sky?"}]],
+        },
+        {  # Pompt-completion
+            "prompt": [[{"role": "user", "content": "What color is the sky?"}]],
+            "completion": [[{"role": "assistant", "content": "It is blue."}]],
         },
         {  # Preference
             "prompt": [[{"role": "user", "content": "What color is the sky?"}]],
@@ -72,12 +80,18 @@ class TestApplyChatTemplate(unittest.TestCase):
     ]
 
     examples = [
-        {  # Non-preference
-            "prompt": [{"role": "user", "content": "What color is the sky?"}],
-            "completion": [{"role": "assistant", "content": "It is blue."}],
+        {  # Name to find
+            "messages": [
+                {"role": "user", "content": "What color is the sky?"},
+                {"role": "assistant", "content": "It is blue."},
+            ],
         },
         {  # Prompt only
             "prompt": [{"role": "user", "content": "What color is the sky?"}],
+        },
+        {  # Pompt-completion
+            "prompt": [{"role": "user", "content": "What color is the sky?"}],
+            "completion": [{"role": "assistant", "content": "It is blue."}],
         },
         {  # Preference
             "prompt": [{"role": "user", "content": "What color is the sky?"}],
