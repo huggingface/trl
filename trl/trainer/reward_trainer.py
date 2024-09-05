@@ -304,8 +304,14 @@ class RewardTrainer(Trainer):
         table = defaultdict(list)
         for _, inputs in enumerate(eval_dataloader):
             _, logits, _ = self.prediction_step(self.model, inputs, prediction_loss_only=False)
-            chosen_text = self.tokenizer.batch_decode(inputs["input_ids_chosen"], skip_special_tokens=True)
-            rejected_text = self.tokenizer.batch_decode(inputs["input_ids_rejected"], skip_special_tokens=True)
+            chosen_text = [
+                c.replace(self.tokenizer.pad_token, "")
+                for c in self.tokenizer.batch_decode(inputs["input_ids_chosen"], skip_special_tokens=False)
+            ]
+            rejected_text = [
+                r.replace(self.tokenizer.pad_token, "")
+                for r in self.tokenizer.batch_decode(inputs["input_ids_rejected"], skip_special_tokens=False)
+            ]
             table["chosen_text"].extend(gather_object(chosen_text))
             table["rejected_text"].extend(gather_object(rejected_text))
             table["logits"].extend(

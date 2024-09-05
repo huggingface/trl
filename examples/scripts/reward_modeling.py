@@ -37,16 +37,25 @@ from datasets import load_dataset
 from tqdm import tqdm
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, HfArgumentParser
 
-from trl import ModelConfig, RewardConfig, RewardTrainer, get_kbit_device_map, get_peft_config, get_quantization_config
-
+from trl import (
+    ModelConfig,
+    RewardConfig,
+    RewardTrainer,
+    get_kbit_device_map,
+    get_peft_config,
+    get_quantization_config,
+    setup_chat_format,
+)
+from trl.commands.cli_utils import RewardScriptArguments
 from trl.extras.dataset_formatting import conversations_formatting_function
+
 
 tqdm.pandas()
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser((RewardConfig, ModelConfig))
-    config, model_config = parser.parse_args_into_dataclasses()
+    parser = HfArgumentParser((RewardScriptArguments, RewardConfig, ModelConfig))
+    args, config, model_config = parser.parse_args_into_dataclasses()
     config.gradient_checkpointing_kwargs = dict(use_reentrant=False)
 
     ################
@@ -72,16 +81,20 @@ if __name__ == "__main__":
     # Fix pad tokens
     model.config.pad_token_id = tokenizer.pad_token_id
 
+    # If we are aligning a base model, we use ChatML as the default template
+    if tokenizer.chat_template is None:
+        model, tokenizer = setup_chat_format(model, tokenizer)
+
     if model_config.lora_task_type != "SEQ_CLS":
         warnings.warn(
             "You are using a `task_type` that is different than `SEQ_CLS` for PEFT. This will lead to silent bugs"
-            " Make sure to pass --lora_task_type SEQ_CLS when using this script."
+            " Make sure to pass --lora_task_type SEQ_CLS when using this script with PEFT."
         )
 
     ################
     # Dataset
     ################
-    raw_datasets = load_dataset("trl-lib/ultrafeedback_binarized")
+    raw_datasets = load_dataset(args.dataset_name)
     # Tokenize chosen/rejected pairs of inputs
     # Adapt this section to your needs for custom datasets
 
@@ -104,12 +117,12 @@ if __name__ == "__main__":
         return new_examples
 
     # Preprocess the dataset and filter out examples that are longer than args.max_length
-    # Compute that only on the main process for faster data processing.
-    # see: https://github.com/huggingface/trl/pull/1255
     with PartialState().local_main_process_first():
         chosen_fn = conversations_formatting_function(tokenizer, "chosen")
         rejected_fn = conversations_formatting_function(tokenizer, "rejected")
-        raw_datasets = raw_datasets.map(lambda x: {"chosen": chosen_fn(x), "rejected": rejected_fn(x)}, num_proc=config.dataset_num_proc)
+        raw_datasets = raw_datasets.map(
+            lambda x: {"chosen": chosen_fn(x), "rejected": rejected_fn(x)}, num_proc=config.dataset_num_proc
+        )
         raw_datasets = raw_datasets.map(
             preprocess_function,
             batched=True,
@@ -121,8 +134,8 @@ if __name__ == "__main__":
             num_proc=config.dataset_num_proc,
         )
 
-    train_dataset = raw_datasets["train"]
-    eval_dataset = raw_datasets["test"]
+    train_dataset = raw_datasets[args.dataset_train_split]
+    eval_dataset = raw_datasets[args.dataset_test_split]
 
     ################
     # Training
