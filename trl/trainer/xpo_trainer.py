@@ -238,24 +238,28 @@ class XPOTrainer(OnlineDPOTrainer):
         self.stats["objective/scores"].append(gather_mean(model_scores))
         self.stats["objective/scores_margin"].append(gather_mean(model_scores - ref_scores))
 
-        # Log logprobs
+        # Determine which model outputs are "chosen" vs "rejected"
         chosen_mask = model_scores >= ref_scores
-        self.stats["logps/chosen"].append(gather_mean(model_logprobs[chosen_mask].sum(1)))
-        self.stats["logps/rejected"].append(gather_mean(model_logprobs[~chosen_mask].sum(1)))
+
+        # Log logprobs
+        chosen_logprobs = torch.where(chosen_mask, model_logprobs, ref_logprobs)
+        rejected_logprobs = torch.where(chosen_mask, ref_logprobs, model_logprobs)
+        self.stats["logps/chosen"].append(gather_mean(chosen_logprobs.mean()))
+        self.stats["logps/rejected"].append(gather_mean(rejected_logprobs.mean()))
 
         # Log KL divergence
         kl = model_logprobs - ref_logprobs
-        mean_kl = kl.sum(1).mean()
+        mean_kl = kl.mean()
         self.stats["objective/kl"].append(gather_mean(mean_kl))
 
         # Log entropy
-        mean_entropy = -model_logprobs.sum(1).mean()
+        mean_entropy = -model_logprobs.mean()
         self.stats["objective/entropy"].append(gather_mean(mean_entropy))
 
         # Log non-score reward and RLHF reward
-        non_score_reward = (-self.args.beta * kl).sum(1)
+        non_score_reward = (-self.args.beta * kl).mean()
         self.stats["objective/non_score_reward"].append(gather_mean(non_score_reward))
-        rlhf_reward = model_scores + non_score_reward
+        rlhf_reward = model_scores.mean() + ref_scores.mean() + non_score_reward
         self.stats["objective/rlhf_reward"].append(gather_mean(rlhf_reward))
 
         # Log rewards
@@ -269,9 +273,7 @@ class XPOTrainer(OnlineDPOTrainer):
         # Calculate margins correctly
         if chosen_rewards.numel() > 0 and rejected_rewards.numel() > 0:
             # Compute average margin
-            avg_chosen = chosen_rewards.mean()
-            avg_rejected = rejected_rewards.mean()
-            margin = avg_chosen - avg_rejected
+            margin = chosen_rewards.mean() - rejected_rewards.mean()
         else:
             margin = torch.tensor(0.0, device=chosen_rewards.device)
 
