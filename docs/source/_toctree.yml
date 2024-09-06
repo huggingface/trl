@@ -17,44 +17,46 @@
     title: Understanding Logs
   title: Get started
 - sections:
+  - sections:
+    - local: trainer
+      title: Overview
+    - local: alignprop_trainer
+      title: AlignProp
+    - local: bco_trainer
+      title: BCO
+    - local: cpo_trainer
+      title: CPO
+    - local: ddpo_trainer
+      title: DDPO
+    - local: dpo_trainer
+      title: DPO
+    - local: online_dpo_trainer
+      title: Online DPO
+    - local: orpo_trainer
+      title: ORPO
+    - local: kto_trainer
+      title: KTO
+    - local: ppo_trainer
+      title: PPO
+    - local: ppov2_trainer
+      title: PPOv2
+    - local: rloo_trainer
+      title: RLOO
+    - local: sft_trainer
+      title: SFT
+    - local: iterative_sft_trainer
+      title: Iterative SFT
+    - local: reward_trainer
+      title: Reward Model
+    title: Trainers
   - local: models
     title: Model Classes
-  - local: trainer
-    title: Trainer Classes
-  - local: reward_trainer
-    title: Reward Model Training
-  - local: sft_trainer
-    title: Supervised Fine-Tuning
-  - local: ppo_trainer
-    title: PPO Trainer
-  - local: ppov2_trainer
-    title: PPOv2 Trainer
-  - local: rloo_trainer
-    title: RLOO Trainer
   - local: best_of_n
     title: Best of N Sampling
-  - local: dpo_trainer
-    title: DPO Trainer
-  - local: online_dpo_trainer
-    title: Online DPO Trainer
-  - local: kto_trainer
-    title: KTO Trainer
-  - local: bco_trainer
-    title: BCO Trainer
-  - local: cpo_trainer
-    title: CPO Trainer
-  - local: ddpo_trainer
-    title: Denoising Diffusion Policy Optimization
-  - local: alignprop_trainer
-    title: AlignProp Trainer
-  - local: orpo_trainer
-    title: ORPO Trainer
-  - local: iterative_sft_trainer
-    title: Iterative Supervised Fine-Tuning
-  - local: callbacks
-    title: Callback Classes
   - local: judges
-    title: Judge Classes
+    title: Judges
+  - local: callbacks
+    title: Callbacks
   - local: text_environments
     title: Text Environments
   title: API

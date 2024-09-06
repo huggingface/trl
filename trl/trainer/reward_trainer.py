@@ -30,7 +30,13 @@ from transformers.trainer_utils import EvalPrediction
 
 from ..import_utils import is_peft_available
 from .reward_config import RewardConfig
-from .utils import RewardDataCollatorWithPadding, compute_accuracy, print_rich_table, trl_sanitze_kwargs_for_tagging
+from .utils import (
+    RewardDataCollatorWithPadding,
+    compute_accuracy,
+    decode_and_strip_padding,
+    print_rich_table,
+    trl_sanitze_kwargs_for_tagging,
+)
 
 
 if is_peft_available():
@@ -110,7 +116,7 @@ class RewardTrainer(Trainer):
             peft_config (`Dict`, defaults to `None`):
                 The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
         """
-        if type(args) == TrainingArguments:
+        if type(args) is TrainingArguments:
             warnings.warn(
                 "Using `transformers.TrainingArguments` for `args` is deprecated and will be removed in a future version. Please use `RewardConfig` instead.",
                 FutureWarning,
@@ -163,7 +169,7 @@ class RewardTrainer(Trainer):
                 raise ValueError(
                     "max_length or a tokenizer must be specified when using the default RewardDataCollatorWithPadding"
                 )
-            if type(args) == TrainingArguments:
+            if type(args) is TrainingArguments:
                 if max_length is None:
                     warnings.warn(
                         "When using RewardDataCollatorWithPadding, you should set `max_length` in RewardConfig."
@@ -304,8 +310,8 @@ class RewardTrainer(Trainer):
         table = defaultdict(list)
         for _, inputs in enumerate(eval_dataloader):
             _, logits, _ = self.prediction_step(self.model, inputs, prediction_loss_only=False)
-            chosen_text = self.tokenizer.batch_decode(inputs["input_ids_chosen"], skip_special_tokens=True)
-            rejected_text = self.tokenizer.batch_decode(inputs["input_ids_rejected"], skip_special_tokens=True)
+            chosen_text = decode_and_strip_padding(inputs["input_ids_chosen"], self.tokenizer)
+            rejected_text = decode_and_strip_padding(inputs["input_ids_rejected"], self.tokenizer)
             table["chosen_text"].extend(gather_object(chosen_text))
             table["rejected_text"].extend(gather_object(rejected_text))
             table["logits"].extend(
