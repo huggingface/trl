@@ -190,12 +190,16 @@ class XPOTrainer(OnlineDPOTrainer):
         # Determine which model outputs are "chosen" vs "rejected"
         chosen_mask = model_scores >= ref_scores
 
-        # Select log probs for chosen and rejected
-        chosen_logprobs = torch.where(chosen_mask, model_logprobs_sum, ref_logprobs_sum)
-        rejected_logprobs = torch.where(chosen_mask, ref_logprobs_sum, model_logprobs_sum)
+        # Calculate pi_log_chosen and pi_log_rejected
+        pi_log_chosen = model_logprobs_sum - ref_logprobs_sum
+        pi_log_rejected = model_logprobs_sum - ref_logprobs_sum
 
-        # Compute logits
-        logits = chosen_logprobs - rejected_logprobs
+        # Select log ratios for chosen and rejected
+        chosen_log_ratios = torch.where(chosen_mask, pi_log_chosen, torch.zeros_like(pi_log_chosen))
+        rejected_log_ratios = torch.where(chosen_mask, torch.zeros_like(pi_log_rejected), pi_log_rejected)
+
+        # Compute logits as the difference between chosen and rejected log ratios
+        logits = chosen_log_ratios - rejected_log_ratios
 
         if self.args.loss_type == "sigmoid":
             dpo_losses = -F.logsigmoid(self.args.beta * logits)
