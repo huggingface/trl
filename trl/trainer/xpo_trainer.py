@@ -242,10 +242,12 @@ class XPOTrainer(OnlineDPOTrainer):
         chosen_mask = model_scores >= ref_scores
 
         # Log logprobs
-        chosen_logprobs = torch.where(chosen_mask, model_logprobs, ref_logprobs)
-        rejected_logprobs = torch.where(chosen_mask, ref_logprobs, model_logprobs)
-        self.stats["logps/chosen"].append(gather_mean(chosen_logprobs.mean()))
-        self.stats["logps/rejected"].append(gather_mean(rejected_logprobs.mean()))
+        model_logprobs_sum = model_logprobs.sum(1)
+        ref_logprobs_sum = ref_logprobs.sum(1)
+        chosen_logprobs = torch.where(chosen_mask, model_logprobs_sum, ref_logprobs_sum)
+        rejected_logprobs = torch.where(chosen_mask, ref_logprobs_sum, model_logprobs_sum)
+        self.stats["logps/chosen"].append(gather_mean(chosen_logprobs))
+        self.stats["logps/rejected"].append(gather_mean(rejected_logprobs))
 
         # Log KL divergence
         kl = model_logprobs - ref_logprobs
