@@ -922,7 +922,7 @@ class OnPolicyConfig(TrainingArguments):
             Sampling temperature.
         penalty_reward_value (`int`, *optional*, defaults to `-1`):
             Reward value for responses that do not contain `stop_token_id`.
-        non_eos_penalty (`bool`, *optional*, defaults to `False`):
+        missing_eos_penalty (`bool`, *optional*, defaults to `False`):
             Whether to penalize responses that do not contain `stop_token_id`.
         sft_model_path (`str`, *optional*, defaults to `"EleutherAI/pythia-160m"`):
             Path to the SFT model.
@@ -954,7 +954,7 @@ class OnPolicyConfig(TrainingArguments):
     stop_token_id: Optional[int] = None
     temperature: float = 0.7
     penalty_reward_value: int = -1
-    non_eos_penalty: bool = False
+    missing_eos_penalty: bool = False
     sft_model_path: str = "EleutherAI/pythia-160m"
     world_size: Optional[int] = None
     num_total_batches: Optional[int] = None
