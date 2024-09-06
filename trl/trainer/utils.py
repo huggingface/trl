@@ -659,6 +659,7 @@ def compute_accuracy(eval_pred) -> Dict[str, float]:
     accuracy = np.array(predictions == labels, dtype=float).mean().item()
     return {"accuracy": accuracy}
 
+
 def pad_to_length(tensor: torch.Tensor, length: int, pad_value: Union[int, float], dim: int = -1) -> torch.Tensor:
     if tensor.size(dim) >= length:
         return tensor

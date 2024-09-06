@@ -64,6 +64,7 @@ if is_deepspeed_available():
 if is_torch_xla_available():
     import torch_xla.core.xla_model as xm
 
+
 class ORPOTrainer(Trainer):
     r"""
     Initialize ORPOTrainer.
@@ -535,9 +536,9 @@ class ORPOTrainer(Trainer):
                 batch["chosen_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
                     labels=torch.tensor(batch["chosen_labels"])
                 )
-        
+
         if is_torch_xla_available():
-            #Pad the sequences to global max_length to avoid TorchXLA recompilation
+            # Pad the sequences to global max_length to avoid TorchXLA recompilation
             for k in batch:
                 if "labels" in k or self.is_encoder_decoder:
                     pad_value = self.label_pad_token_id
@@ -798,7 +799,7 @@ class ORPOTrainer(Trainer):
         metrics[f"{prefix}log_odds_ratio"] = log_odds_ratio
         metrics[f"{prefix}log_odds_chosen"] = log_odds_chosen
         if is_torch_xla_available():
-            xm.mark_step() # needed because .item() calls
+            xm.mark_step()  # needed because .item() calls
         for k, v in metrics.items():
             metrics[k] = v.item()
         if self.aux_loss_enabled:
