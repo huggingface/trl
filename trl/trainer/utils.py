@@ -1288,3 +1288,21 @@ def empty_cache() -> None:
         torch.npu.empty_cache()
     else:
         torch.cuda.empty_cache()
+
+
+def decode_and_strip_padding(inputs: torch.Tensor, tokenizer: PreTrainedTokenizerBase) -> List[str]:
+    """
+    Decodes the input tensor and strips the padding tokens.
+
+    Args:
+        inputs (`torch.Tensor`):
+            The input tensor to be decoded.
+        tokenizer (`transformers.PreTrainedTokenizerBase`):
+            The tokenizer used to decode the input tensor.
+
+    Returns:
+        `List[str]`:
+            The list of decoded strings with padding tokens stripped.
+    """
+    decoded = tokenizer.batch_decode(inputs, skip_special_tokens=False)
+    return [d.replace(tokenizer.pad_token, "") for d in decoded]
