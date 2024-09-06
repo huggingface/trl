@@ -186,13 +186,23 @@ class XPOTrainer(OnlineDPOTrainer):
         # Compute log ratios
         model_logprobs_sum = model_logprobs.sum(1)
         ref_logprobs_sum = ref_logprobs.sum(1)
-        log_ratios = model_logprobs_sum - ref_logprobs_sum
 
-        # Compute DPO losses
+        # Determine which model outputs are "chosen" vs "rejected"
         chosen_mask = model_scores >= ref_scores
-        dpo_losses = torch.where(
-            chosen_mask, -F.logsigmoid(self.args.beta * log_ratios), -F.logsigmoid(-self.args.beta * log_ratios)
-        )
+
+        # Select log probs for chosen and rejected
+        chosen_logprobs = torch.where(chosen_mask, model_logprobs_sum, ref_logprobs_sum)
+        rejected_logprobs = torch.where(chosen_mask, ref_logprobs_sum, model_logprobs_sum)
+
+        # Compute logits
+        logits = chosen_logprobs - rejected_logprobs
+
+        if self.args.loss_type == "sigmoid":
+            dpo_losses = -F.logsigmoid(self.args.beta * logits)
+        elif self.args.loss_type == "ipo":
+            dpo_losses = (logits - 1 / (2 * self.args.beta)) ** 2
+        else:
+            raise NotImplementedError(f"invalid loss type {self.args.loss_type}")
 
         # Compute XPO specific loss
         xpo_losses = self.args.alpha * model_on_ref_logprobs.sum(1)
@@ -219,10 +229,6 @@ class XPOTrainer(OnlineDPOTrainer):
         def gather_mean(tensor):
             return self.accelerator.gather(tensor).mean().item()
 
-        # Compute various statistics
-        chosen_mask = model_scores >= ref_scores
-        log_ratios = model_logprobs.sum(1) - ref_logprobs.sum(1)
-
         # Log losses
         self.stats["loss/total"].append(gather_mean(loss))
         self.stats["loss/dpo"].append(gather_mean(dpo_losses))
@@ -233,6 +239,7 @@ class XPOTrainer(OnlineDPOTrainer):
         self.stats["objective/scores_margin"].append(gather_mean(model_scores - ref_scores))
 
         # Log logprobs
+        chosen_mask = model_scores >= ref_scores
         self.stats["logps/chosen"].append(gather_mean(model_logprobs[chosen_mask].sum(1)))
         self.stats["logps/rejected"].append(gather_mean(model_logprobs[~chosen_mask].sum(1)))
 
@@ -252,10 +259,13 @@ class XPOTrainer(OnlineDPOTrainer):
         self.stats["objective/rlhf_reward"].append(gather_mean(rlhf_reward))
 
         # Log rewards
-        chosen_rewards = self.args.beta * log_ratios[chosen_mask]
-        rejected_rewards = self.args.beta * log_ratios[~chosen_mask]
-        self.stats["rewards/chosen"].append(gather_mean(chosen_rewards))
-        self.stats["rewards/rejected"].append(gather_mean(rejected_rewards))
+        # Compute various statistics
+        log_ratios = self.args.beta * (model_logprobs - ref_logprobs)
+        chosen_rewards = log_ratios[chosen_mask]
+        rejected_rewards = log_ratios[~chosen_mask]
+        self.stats["rewards/chosen"].append(gather_mean(chosen_rewards.mean()))
+        self.stats["rewards/rejected"].append(gather_mean(rejected_rewards.mean()))
+
         # Calculate margins correctly
         if chosen_rewards.numel() > 0 and rejected_rewards.numel() > 0:
             # Compute average margin
@@ -268,11 +278,7 @@ class XPOTrainer(OnlineDPOTrainer):
         self.stats["rewards/margins"].append(gather_mean(margin))
 
         # Calculate accuracy
-        if chosen_rewards.numel() > 0 and rejected_rewards.numel() > 0:
-            accuracy = (chosen_rewards.unsqueeze(1) > rejected_rewards.unsqueeze(0)).float().mean()
-        else:
-            accuracy = torch.tensor(0.5, device=chosen_rewards.device)
-
+        accuracy = (margin > 0).float()
         self.stats["rewards/accuracies"].append(gather_mean(accuracy))
 
         # Log EOS token statistics
