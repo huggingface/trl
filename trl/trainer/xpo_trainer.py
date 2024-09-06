@@ -78,11 +78,8 @@ class XPOTrainer(OnlineDPOTrainer):
             "loss/total": [],
             "loss/dpo": [],
             "loss/xpo": [],
-            "objective/kl": [],
-            "objective/entropy": [],
-            "objective/non_score_reward": [],
-            "objective/rlhf_reward": [],
-            "objective/scores": [],
+            "objective/model_scores": [],
+            "objective/ref_scores": [],
             "objective/scores_margin": [],
             "rewards/chosen": [],
             "rewards/rejected": [],
@@ -164,38 +161,46 @@ class XPOTrainer(OnlineDPOTrainer):
             return token_logprobs
 
         # Compute logprobs for model completions
-        model_completion_logprobs = compute_logprobs_for_data(model, model_data)
+        model_logprobs_model_data = compute_logprobs_for_data(model, model_data)
+        # Compute logprobs for model on reference completions (for XPO loss)
+        model_logprobs_ref_data = compute_logprobs_for_data(model, ref_data)
 
         # Compute logprobs for reference model completions
         with torch.no_grad():
-            ref_completion_logprobs = compute_logprobs_for_data(ref_model, ref_data)
-
-        # Compute logprobs for model on reference completions (for XPO loss)
-        model_on_ref_completion_logprobs = compute_logprobs_for_data(model, ref_data)
+            ref_logprobs_model_data = compute_logprobs_for_data(ref_model, model_data)
+            ref_logprobs_ref_data = compute_logprobs_for_data(ref_model, ref_data)
 
         # Mask padding tokens
         model_padding_mask = model_data["attention_mask"][:, context_length:] == 0
         ref_padding_mask = ref_data["attention_mask"][:, context_length:] == 0
-        model_completion_logprobs = model_completion_logprobs.masked_fill(model_padding_mask, 0.0)
-        ref_completion_logprobs = ref_completion_logprobs.masked_fill(ref_padding_mask, 0.0)
-        model_on_ref_completion_logprobs = model_on_ref_completion_logprobs.masked_fill(ref_padding_mask, 0.0)
+        model_logprobs_model_data = model_logprobs_model_data.masked_fill(model_padding_mask, 0.0)
+        model_logprobs_ref_data = model_logprobs_ref_data.masked_fill(ref_padding_mask, 0.0)
+        ref_logprobs_ref_data = ref_logprobs_ref_data.masked_fill(ref_padding_mask, 0.0)
+        ref_logprobs_model_data = ref_logprobs_model_data.masked_fill(model_padding_mask, 0.0)
 
-        return model_completion_logprobs, ref_completion_logprobs, model_on_ref_completion_logprobs
+        return model_logprobs_model_data, model_logprobs_ref_data, ref_logprobs_ref_data, ref_logprobs_model_data
 
-    def _compute_losses(self, model_logprobs, ref_logprobs, model_on_ref_logprobs, model_scores, ref_scores):
+    def _compute_losses(
+        self,
+        model_logprobs_model_data,
+        model_logprobs_ref_data,
+        ref_logprobs_ref_data,
+        ref_logprobs_model_data,
+        chosen_mask,
+    ):
         # Compute log probs
-        model_logprobs_sum = model_logprobs.sum(1)
-        ref_logprobs_sum = ref_logprobs.sum(1)
+        model_logprobs_model_data_sum = model_logprobs_model_data.sum(1)
+        model_logprobs_ref_data_sum = model_logprobs_ref_data.sum(1)
+        ref_logprobs_ref_data_sum = ref_logprobs_ref_data.sum(1)
+        ref_logprobs_model_data_sum = ref_logprobs_model_data.sum(1)
 
-        # Determine which model outputs are "chosen" vs "rejected"
-        chosen_mask = model_scores >= ref_scores
+        chosen_model_logprobs = torch.where(chosen_mask, model_logprobs_model_data_sum, model_logprobs_ref_data_sum)
+        chosen_ref_logprobs = torch.where(chosen_mask, ref_logprobs_model_data_sum, ref_logprobs_ref_data_sum)
+        chosen_log_ratios = chosen_model_logprobs - chosen_ref_logprobs
 
-        # Calculate pi_log_ratio
-        pi_log_ratio = model_logprobs_sum - ref_logprobs_sum
-
-        # Select log ratios for chosen and rejected
-        chosen_log_ratios = torch.where(chosen_mask, pi_log_ratio, torch.zeros_like(pi_log_ratio))
-        rejected_log_ratios = torch.where(chosen_mask, torch.zeros_like(pi_log_ratio), pi_log_ratio)
+        rejected_model_logprobs = torch.where(~chosen_mask, model_logprobs_model_data_sum, model_logprobs_ref_data_sum)
+        rejected_ref_logprobs = torch.where(~chosen_mask, ref_logprobs_model_data_sum, ref_logprobs_ref_data_sum)
+        rejected_log_ratios = rejected_model_logprobs - rejected_ref_logprobs
 
         # Compute logits as the difference between chosen and rejected log ratios
         logits = chosen_log_ratios - rejected_log_ratios
@@ -208,7 +213,7 @@ class XPOTrainer(OnlineDPOTrainer):
             raise NotImplementedError(f"invalid loss type {self.args.loss_type}")
 
         # Compute XPO specific loss
-        xpo_losses = self.args.alpha * model_on_ref_logprobs.sum(1)
+        xpo_losses = self.args.alpha * model_logprobs_ref_data_sum
 
         # Total loss
         loss = (dpo_losses + xpo_losses).mean()
@@ -219,8 +224,10 @@ class XPOTrainer(OnlineDPOTrainer):
         self,
         model_data,
         ref_data,
-        model_logprobs,
-        ref_logprobs,
+        model_logprobs_model_data,
+        model_logprobs_ref_data,
+        ref_logprobs_ref_data,
+        ref_logprobs_model_data,
         model_scores,
         ref_scores,
         loss,
@@ -238,40 +245,32 @@ class XPOTrainer(OnlineDPOTrainer):
         self.stats["loss/xpo"].append(gather_mean(xpo_losses))
 
         # Log scores
-        self.stats["objective/scores"].append(gather_mean(model_scores))
+        self.stats["objective/model_scores"].append(gather_mean(model_scores))
+        self.stats["objective/ref_scores"].append(gather_mean(ref_scores))
         self.stats["objective/scores_margin"].append(gather_mean(model_scores - ref_scores))
 
         # Determine which model outputs are "chosen" vs "rejected"
         chosen_mask = model_scores >= ref_scores
 
         # Log logprobs
-        model_logprobs_sum = model_logprobs.sum(1)
-        ref_logprobs_sum = ref_logprobs.sum(1)
-        chosen_log_probs = torch.where(chosen_mask, model_logprobs_sum, ref_logprobs_sum)
-        rejected_log_probs = torch.where(~chosen_mask, model_logprobs_sum, ref_logprobs_sum)
-        self.stats["logps/chosen"].append(gather_mean(chosen_log_probs.mean()))
-        self.stats["logps/rejected"].append(gather_mean(rejected_log_probs.mean()))
+        model_logprobs_model_data_sum = model_logprobs_model_data.sum(1)
+        model_logprobs_ref_data_sum = model_logprobs_ref_data.sum(1)
+        ref_logprobs_ref_data_sum = ref_logprobs_ref_data.sum(1)
+        ref_logprobs_model_data_sum = ref_logprobs_model_data.sum(1)
 
-        # Log KL divergence
-        kl = model_logprobs - ref_logprobs
-        mean_kl = kl.mean()
-        self.stats["objective/kl"].append(gather_mean(mean_kl))
+        chosen_model_logprobs = torch.where(chosen_mask, model_logprobs_model_data_sum, model_logprobs_ref_data_sum)
+        chosen_ref_logprobs = torch.where(chosen_mask, ref_logprobs_model_data_sum, ref_logprobs_ref_data_sum)
+        chosen_log_ratios = chosen_model_logprobs - chosen_ref_logprobs
 
-        # Log entropy
-        mean_entropy = -model_logprobs.mean()
-        self.stats["objective/entropy"].append(gather_mean(mean_entropy))
+        rejected_model_logprobs = torch.where(~chosen_mask, model_logprobs_model_data_sum, model_logprobs_ref_data_sum)
+        rejected_ref_logprobs = torch.where(~chosen_mask, ref_logprobs_model_data_sum, ref_logprobs_ref_data_sum)
+        rejected_log_ratios = rejected_model_logprobs - rejected_ref_logprobs
 
-        # Log non-score reward and RLHF reward
-        non_score_reward = (-self.args.beta * kl).mean()
-        self.stats["objective/non_score_reward"].append(gather_mean(non_score_reward))
-        rlhf_reward = model_scores.mean() + ref_scores.mean() + non_score_reward
-        self.stats["objective/rlhf_reward"].append(gather_mean(rlhf_reward))
+        self.stats["logps/chosen"].append(gather_mean(chosen_model_logprobs.mean() + chosen_ref_logprobs.mean()))
+        self.stats["logps/rejected"].append(gather_mean(rejected_model_logprobs.mean() + rejected_ref_logprobs.mean()))
 
         # Log rewards
         # Compute various statistics
-        pi_log_ratio = model_logprobs_sum - ref_logprobs_sum
-        chosen_log_ratios = torch.where(chosen_mask, pi_log_ratio, torch.zeros_like(pi_log_ratio))
-        rejected_log_ratios = torch.where(chosen_mask, torch.zeros_like(pi_log_ratio), pi_log_ratio)
         chosen_rewards = chosen_log_ratios * self.args.beta
         rejected_rewards = rejected_log_ratios * self.args.beta
         self.stats["rewards/chosen"].append(gather_mean(chosen_rewards.mean()))
@@ -317,29 +316,35 @@ class XPOTrainer(OnlineDPOTrainer):
         model_data, ref_data = self._process_completions(model_output, ref_output, prompts)
 
         # Compute rewards
-        model_scores, ref_scores = self._compute_rewards(model_data, ref_data, context_length)
+        model_data_scores, ref_data_scores = self._compute_rewards(model_data, ref_data, context_length)
 
         # Compute logprobs
-        model_logprobs, ref_logprobs, model_on_ref_logprobs = self._compute_logprobs(
-            model, ref_model, model_data, ref_data, context_length
+        model_logprobs_model_data, model_logprobs_ref_data, ref_logprobs_ref_data, ref_logprobs_model_data = (
+            self._compute_logprobs(model, ref_model, model_data, ref_data, context_length)
         )
 
         # Compute loss
         loss, dpo_losses, xpo_losses = self._compute_losses(
-            model_logprobs, ref_logprobs, model_on_ref_logprobs, model_scores, ref_scores
+            model_logprobs_model_data,
+            model_logprobs_ref_data,
+            ref_logprobs_ref_data,
+            ref_logprobs_model_data,
+            model_data_scores >= ref_data_scores,
         )
 
         # Log everything
         self._log_statistics(
             model_data,
             ref_data,
-            model_logprobs,
-            ref_logprobs,
-            model_scores,
-            ref_scores,
-            loss,
-            dpo_losses,
-            xpo_losses,
+            model_logprobs_model_data.detach(),
+            model_logprobs_ref_data.detach(),
+            ref_logprobs_ref_data,
+            ref_logprobs_model_data,
+            model_data_scores,
+            ref_data_scores,
+            loss.detach(),
+            dpo_losses.detach(),
+            xpo_losses.detach(),
             context_length,
         )
 
