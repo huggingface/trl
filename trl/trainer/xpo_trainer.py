@@ -183,7 +183,7 @@ class XPOTrainer(OnlineDPOTrainer):
         return model_completion_logprobs, ref_completion_logprobs, model_on_ref_completion_logprobs
 
     def _compute_losses(self, model_logprobs, ref_logprobs, model_on_ref_logprobs, model_scores, ref_scores):
-        # Compute log ratios
+        # Compute log probs
         model_logprobs_sum = model_logprobs.sum(1)
         ref_logprobs_sum = ref_logprobs.sum(1)
 
@@ -247,10 +247,10 @@ class XPOTrainer(OnlineDPOTrainer):
         # Log logprobs
         model_logprobs_sum = model_logprobs.sum(1)
         ref_logprobs_sum = ref_logprobs.sum(1)
-        chosen_logprobs = torch.where(chosen_mask, model_logprobs_sum, ref_logprobs_sum)
-        rejected_logprobs = torch.where(chosen_mask, ref_logprobs_sum, model_logprobs_sum)
-        self.stats["logps/chosen"].append(gather_mean(chosen_logprobs))
-        self.stats["logps/rejected"].append(gather_mean(rejected_logprobs))
+        chosen_log_probs = torch.where(chosen_mask, model_logprobs_sum, ref_logprobs_sum)
+        rejected_log_probs = torch.where(~chosen_mask, model_logprobs_sum, ref_logprobs_sum)
+        self.stats["logps/chosen"].append(gather_mean(chosen_log_probs.mean()))
+        self.stats["logps/rejected"].append(gather_mean(rejected_log_probs.mean()))
 
         # Log KL divergence
         kl = model_logprobs - ref_logprobs
@@ -269,9 +269,11 @@ class XPOTrainer(OnlineDPOTrainer):
 
         # Log rewards
         # Compute various statistics
-        log_ratios = self.args.beta * (model_logprobs - ref_logprobs)
-        chosen_rewards = log_ratios[chosen_mask]
-        rejected_rewards = log_ratios[~chosen_mask]
+        pi_log_ratio = model_logprobs_sum - ref_logprobs_sum
+        chosen_log_ratios = torch.where(chosen_mask, pi_log_ratio, torch.zeros_like(pi_log_ratio))
+        rejected_log_ratios = torch.where(chosen_mask, torch.zeros_like(pi_log_ratio), pi_log_ratio)
+        chosen_rewards = chosen_log_ratios * self.args.beta
+        rejected_rewards = rejected_log_ratios * self.args.beta
         self.stats["rewards/chosen"].append(gather_mean(chosen_rewards.mean()))
         self.stats["rewards/rejected"].append(gather_mean(rejected_rewards.mean()))
 
