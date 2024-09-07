@@ -33,6 +33,7 @@ def apply_chat_template(example: Dict[str, List[Dict[str, str]]], tokenizer: Pre
                 - Prompt-only dataset: `"prompt"`.
                 - Prompt-completion dataset: `"prompt"` and `"completion"`.
                 - Preference dataset: `"prompt"`, `"chosen"`, and `"rejected"`.
+                - Preference dataset with implicit prompt: `"chosen"` and `"rejected"`.
                 - Unpaired preference dataset: `"prompt"`, `"completion"`, and `"label"`.
 
             For keys `"messages"`, `"prompt"`, `"chosen"`, `"rejected"`, and `"completion"`, the values are lists of
@@ -69,6 +70,7 @@ def apply_chat_template(example: Dict[str, List[Dict[str, str]]], tokenizer: Pre
         {"prompt"},  # prompt-only
         {"prompt", "completion"},  # prompt-completion
         {"prompt", "chosen", "rejected"},  # preference
+        {"chosen", "rejected"},  # preference with implicit prompt
         {"prompt", "completion", "label"},  # unpaired preference
     ]:
         raise KeyError(f"Invalid keys in the example: {example_keys}")
@@ -82,24 +84,36 @@ def apply_chat_template(example: Dict[str, List[Dict[str, str]]], tokenizer: Pre
         prompt = tokenizer.apply_chat_template(example["prompt"], tokenize=False, add_generation_prompt=True)
 
     # Apply the chat template to the entire prompt + completion
-    if "chosen" in example:
-        prompt_chosen = tokenizer.apply_chat_template(example["prompt"] + example["chosen"], tokenize=False)
-    if "rejected" in example:
-        prompt_rejected = tokenizer.apply_chat_template(example["prompt"] + example["rejected"], tokenize=False)
-    if "completion" in example:
-        prompt_completion = tokenizer.apply_chat_template(example["prompt"] + example["completion"], tokenize=False)
+    if "prompt" in example:  # explicit prompt and prompt-completion case
+        if "chosen" in example:
+            prompt_chosen = tokenizer.apply_chat_template(example["prompt"] + example["chosen"], tokenize=False)
+            chosen = prompt_chosen[len(prompt) :]
+        if "rejected" in example and "prompt" in example:  # explicit prompt
+            prompt_rejected = tokenizer.apply_chat_template(example["prompt"] + example["rejected"], tokenize=False)
+            rejected = prompt_rejected[len(prompt) :]
+        if "completion" in example:
+            prompt_completion = tokenizer.apply_chat_template(
+                example["prompt"] + example["completion"], tokenize=False
+            )
+            completion = prompt_completion[len(prompt) :]
+    else:  # implicit prompt case
+        if "chosen" in example:
+            chosen = tokenizer.apply_chat_template(example["chosen"], tokenize=False)
+        if "rejected" in example:
+            rejected = tokenizer.apply_chat_template(example["rejected"], tokenize=False)
 
     # Ensure that the prompt is the initial part of the prompt-completion string
-    error_message = (
-        "The chat template applied to the prompt + completion does not start with the chat template applied to "
-        "the prompt alone. This can indicate that the chat template is not supported by TRL."
-    )
-    if "chosen" in example and not prompt_chosen.startswith(prompt):
-        raise ValueError(error_message)
-    if "rejected" in example and not prompt_rejected.startswith(prompt):
-        raise ValueError(error_message)
-    if "completion" in example and not prompt_completion.startswith(prompt):
-        raise ValueError(error_message)
+    if "prompt" in example:
+        error_message = (
+            "The chat template applied to the prompt + completion does not start with the chat template applied to "
+            "the prompt alone. This can indicate that the chat template is not supported by TRL."
+        )
+        if "chosen" in example and not prompt_chosen.startswith(prompt):
+            raise ValueError(error_message)
+        if "rejected" in example and not prompt_rejected.startswith(prompt):
+            raise ValueError(error_message)
+        if "completion" in example and not prompt_completion.startswith(prompt):
+            raise ValueError(error_message)
 
     # Extract the completion by removing the prompt part from the prompt-completion string
     output = {}
@@ -108,11 +122,11 @@ def apply_chat_template(example: Dict[str, List[Dict[str, str]]], tokenizer: Pre
     if "prompt" in example:
         output["prompt"] = prompt
     if "chosen" in example:
-        output["chosen"] = prompt_chosen[len(prompt) :]
+        output["chosen"] = chosen
     if "rejected" in example:
-        output["rejected"] = prompt_rejected[len(prompt) :]
+        output["rejected"] = rejected
     if "completion" in example:
-        output["completion"] = prompt_completion[len(prompt) :]
+        output["completion"] = completion
     if "label" in example:
         output["label"] = example["label"]
 

@@ -48,6 +48,20 @@ class TestIsConversational(unittest.TestCase):
             "chosen": [[{"role": "assistant", "content": "It is blue."}]],
             "rejected": [[{"role": "assistant", "content": "It is green."}]],
         },
+        {  # Preference with implicit prompt
+            "chosen": [
+                [
+                    {"role": "user", "content": "What color is the sky?"},
+                    {"role": "assistant", "content": "It is blue."},
+                ]
+            ],
+            "rejected": [
+                [
+                    {"role": "user", "content": "What color is the sky?"},
+                    {"role": "assistant", "content": "It is green."},
+                ]
+            ],
+        },
         {  # Unpaired preference
             "prompt": [[{"role": "user", "content": "What color is the sky?"}]],
             "completion": [[{"role": "assistant", "content": "It is blue."}]],
@@ -115,6 +129,16 @@ class TestApplyChatTemplate(unittest.TestCase):
             "prompt": [{"role": "user", "content": "What color is the sky?"}],
             "chosen": [{"role": "assistant", "content": "It is blue."}],
             "rejected": [{"role": "assistant", "content": "It is green."}],
+        },
+        {  # Preference with implicit prompt
+            "chosen": [
+                {"role": "user", "content": "What color is the sky?"},
+                {"role": "assistant", "content": "It is blue."},
+            ],
+            "rejected": [
+                {"role": "user", "content": "What color is the sky?"},
+                {"role": "assistant", "content": "It is green."},
+            ],
         },
         {  # Unpaired preference
             "prompt": [{"role": "user", "content": "What color is the sky?"}],
