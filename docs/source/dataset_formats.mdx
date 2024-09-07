@@ -11,7 +11,7 @@ Each TRL trainer supports a specific dataset format. In this document, we provid
     <th>Conversational</th>
   </tr>
   <tr>
-    <td>Name to find</td>
+    <td>Language Modeling</td>
     <td>
       <pre><code>{"text": "The sky is blue."}</code></pre>
     </td>
@@ -90,11 +90,34 @@ TRL trainers only support standard datasets. Conversational datasets need to be 
 
 ## Conversational dataset
 
-Conversational dataset are very common. 
+Conversational dataset are very common.
 
-### Structure of a conversational dataset
+Important: TRL trainer  don't support conversational datasets as is. They need to be converted into a standard dataset format. But don't worry, be provide tools to easily convert them, see below.
+
+### A brief introduction to conversational dataset
+
+Usually, conversational datasets are formatted as a list of messages, where each message has a role (e.g., `"user"` or `"assistant"`) and a content (e.g., `"Hello, how are you?"`).
+Example:
 
 
+```python
+messages = [
+    {"role": "user", "content": "Hello, how are you?"},
+    {"role": "assistant", "content": "I'm doing great. How can I help you today?"},
+    {"role": "user", "content": "I'd like to show off how chat templating works!"},
+]
+```
+
+You can find many datasets like that, for example:
+
+<iframe
+  src="https://huggingface.co/datasets/trl-lib/kto-mix-14k/embed/viewer/default/train?row=0"
+  frameborder="0"
+  width="100%"
+  height="560px"
+></iframe>
+
+For an in-depth guide on how to use chat datasets, see the [Chat templating `transformers`'s documentation](https://huggingface.co/docs/transformers/en/chat_templating).
 
 ### Convert a conversational dataset into a standard dataset
 
@@ -102,6 +125,9 @@ TRL trainers don't support conversational as is, but need to be converted into a
 Every model has its own chat template.
 
 Caution: it's very important to use the template associated with the model you're using. As an example, you can't use a dataset formated with the Qwen chat template to finetune a Llama model.
+
+> [!IMPORTANT]
+> It's important to use the chat template associated with the model you're using. Chat templates are model-specific, and using the wrong template can lead to unexpected results.
 
 To convert a conversational dataset into a standard dataset, TRL provides a function called `convert_conversational_to_standard` that takes a conversational dataset and a tokenizer as input and returns a standard dataset.
 
@@ -134,6 +160,11 @@ You are a helpful assistant.<|im_end|>
 What color is the sky?<|im_end|>
 <|im_start|>assistant
 ```
+
+
+> [!IMPORTANT]
+> Make sure that the SFT model and reward model use the _same_ chat template. Otherwise, you may find the model completions are scored incorrectly during training.
+> 
 
 Note: once again, it's very important to use the template associated with the model you're using. As an example, here is what you get if you use the chat template of the Llama model instead:
 
