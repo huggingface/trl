@@ -951,7 +951,7 @@ class OnPolicyConfig(TrainingArguments):
     stop_token: Optional[Literal["eos"]] = None
     stop_token_id: Optional[int] = None
     temperature: float = 0.7
-    missing_eos_penalty: bool = False
+    missing_eos_penalty: Optional[float] = None
     sft_model_path: str = "EleutherAI/pythia-160m"
     world_size: Optional[int] = None
     num_total_batches: Optional[int] = None
