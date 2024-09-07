@@ -197,7 +197,7 @@ def unpair_preference_dataset(dataset: DatasetType, num_proc: Optional[int] = No
     Unpair a preference dataset.
 
     Args:
-        dataset (`Dataset`):
+        dataset (`Dataset` or `DatasetDict`):
             Preference dataset to unpair. The dataset must have columns `"chosen"`, `"rejected"` and optionally
             `"prompt"`.
         num_proc (`Optional[int]`, *optional*, defaults to `None`):
@@ -211,18 +211,9 @@ def unpair_preference_dataset(dataset: DatasetType, num_proc: Optional[int] = No
     ```python
     >>> from datasets import Dataset
     >>> dataset_dict = {
-    ...     "prompt": [
-    ...         [{"role": "user", "content": "What color is the sky?"}],
-    ...         [{"role": "user", "content": "Where is the sun?"}],
-    ...     ],
-    ...     "chosen": [
-    ...         [{"role": "assistant", "content": "It is blue."}],
-    ...         [{"role": "assistant", "content": "In the sky."}],
-    ...     ],
-    ...     "rejected": [
-    ...         [{"role": "assistant", "content": "It is green."}],
-    ...         [{"role": "assistant", "content": "In the sea."}],
-    ...     ],
+    ...     "prompt": ["The sky is", "The sun is"]
+    ...     "chosen": [" blue.", "in the sky."],
+    ...     "rejected": [" green.", " in the sea."]
     ... }
     >>> dataset = Dataset.from_dict(dataset_dict)
     >>> dataset = unpair_preference_dataset(dataset)
@@ -232,13 +223,46 @@ def unpair_preference_dataset(dataset: DatasetType, num_proc: Optional[int] = No
         num_rows: 4
     })
     >>> dataset[0]
-    {'prompt': [{'content': 'What color is the sky?', 'role': 'user'}], 'completion': [{'content': 'It is blue.', 'role': 'assistant'}], 'label': True}
+    {'prompt': 'The sky is', 'completion': ' blue.', 'label': True}
     ```
     """
     return dataset.map(_unpair_row, batched=True, remove_columns=["chosen", "rejected"], num_proc=num_proc)
 
 
 def maybe_unpair_preference_dataset(dataset: DatasetType, num_proc: Optional[int] = None) -> DatasetType:
+    r"""
+    Unpair a preference dataset if it is paired.
+
+    Args:
+        dataset (`Dataset` or `DatasetDict`):
+            Preference dataset to unpair. The dataset must have columns `"chosen"`, `"rejected"` and optionally
+            `"prompt"`.
+        num_proc (`Optional[int]`, *optional*, defaults to `None`):
+            Number of processes to use for processing the dataset.
+
+    Returns:
+        `Dataset` or `DatasetDict`: The unpaired preference dataset if it was paired, otherwise the original dataset.
+
+    Example:
+
+    ```python
+    >>> from datasets import Dataset
+    >>> dataset_dict = {
+    ...     "prompt": ["The sky is", "The sun is"]
+    ...     "chosen": [" blue.", "in the sky."],
+    ...     "rejected": [" green.", " in the sea."]
+    ... }
+    >>> dataset = Dataset.from_dict(dataset_dict)
+    >>> dataset = unpair_preference_dataset(dataset)
+    >>> dataset
+    Dataset({
+        features: ['prompt', 'completion', 'label'],
+        num_rows: 4
+    })
+    >>> dataset[0]
+    {'prompt': 'The sky is', 'completion': ' blue.', 'label': True}
+    ```
+    """
     if isinstance(dataset, DatasetDict):
         column_names = dataset[list(dataset.keys())[0]].column_names
     else:
