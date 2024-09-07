@@ -29,14 +29,13 @@ from transformers import (
 )
 NUM_DUMMY_SAMPLES = 100
 
-tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-135M-Instruct")
-tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 # The model to optimise
-model = AutoModelForCausalLM.from_pretrained("HuggingFaceTB/SmolLM-135M-Instruct")
+model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 # The reference model to calculate the KL divergence against
-ref_model = AutoModelForCausalLM.from_pretrained("HuggingFaceTB/SmolLM-135M-Instruct")
-# The model to score completions with. In practice, you will need a reward model.
-reward_model = AutoModelForSequenceClassification.from_pretrained("HuggingFaceTB/SmolLM-135M-Instruct", num_labels=1)
+ref_model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
+# The model to score completions with.
+reward_model = AutoModelForSequenceClassification.from_pretrained("trl-lib/Qwen2-0.5B-Reward", num_labels=1)
 
 train_dataset = Dataset.from_dict(
     {"prompt": ["Q: Hi how are you? A:"] * NUM_DUMMY_SAMPLES})

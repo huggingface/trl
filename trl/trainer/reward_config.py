@@ -20,22 +20,24 @@ from transformers import TrainingArguments
 
 @dataclass
 class RewardConfig(TrainingArguments):
-    """
-    RewardConfig collects all training arguments related to the [`RewardTrainer`] class.
+    r"""
+    Configuration class for the [`RewardTrainer`].
 
-    Using [`HfArgumentParser`] we can turn this class into
+    Using [`~transformers.HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.
 
     Parameters:
-        max_length (`int`, *optional*, defaults to `None`):
-            The maximum length of the sequences in the batch. This argument is required if you want to use the default data collator.
-        gradient_checkpointing (`bool`, *optional*, defaults to `True`):
-                If True, use gradient checkpointing to save memory at the expense of slower backward pass.
+        max_length (`Optional[int]`, *optional*, defaults to `None`):
+            Maximum length of the sequences (prompt + completion) in the batch. This argument is required if you want
+            to use the default data collator.
+        dataset_num_proc (`int`, *optional*, defaults to `None`):
+            Number of processes to use for processing the dataset.
+        center_rewards_coefficient (`float`, *optional*, defaults to `None`):
+            Coefficient to incentivize the reward model to output mean-zero rewards (proposed by
+            https://huggingface.co/papers/2312.09244, Eq. 2). Recommended value: `0.01`.
     """
 
     max_length: Optional[int] = None
-    """The maximum length of the sequences in the batch. This argument is required if you want to use the default data collator."""
     dataset_num_proc: Optional[int] = None
-    """Coefficient to incentivize the reward model to output mean-zero rewards (proposed by https://huggingface.co/papers/2312.09244, Eq. 2). Recommended value: `0.01`."""
     center_rewards_coefficient: Optional[float] = None

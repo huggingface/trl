@@ -327,8 +327,13 @@ class BCOTrainer(Trainer):
         embedding_func: Optional[Callable] = None,
         embedding_tokenizer: Optional[PreTrainedTokenizerBase] = None,
     ):
+        if not is_sklearn_available():
+            raise ImportError(
+                "BCOTrainer requires the scikit-learn library. Please install it with `pip install scikit-learn`."
+            )
+
         if type(args) is TrainingArguments:
-            raise ValueError("Please use `BCOConfig` instead TrainingArguments.")
+            raise ValueError("Please use `BCOConfig` instead `TrainingArguments`.")
 
         if args.model_init_kwargs is None:
             model_init_kwargs = {}
