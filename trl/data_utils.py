@@ -11,69 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from copy import deepcopy
-from typing import Dict, List, Union
+from typing import Dict, List, Optional, TypeVar, Union
 
-from datasets import Dataset, DatasetDict
+from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict
 from transformers import PreTrainedTokenizer
 
 
-def _reformat_row_dpo_to_kto(row: dict):
-    """Turn a DPO-formatted dataset row into two KTO-formatted rows."""
-
-    chosen_row = {"prompt": row["prompt"], "completion": row["chosen"], "label": [True] * len(row["chosen"])}
-    rejected_row = {
-        "prompt": row["prompt"],
-        "completion": row["rejected"],
-        "label": [False] * len(row["chosen"]),
-    }
-    new_rows = {k: chosen_row[k] + rejected_row[k] for k in chosen_row.keys()}
-    return new_rows
-
-
-def maybe_reformat_dpo_to_kto(dataset: DatasetDict, num_proc: int = None):
-    """
-    Reformat a dataset from the DPO format to the KTO format if necessary.
-
-    This function checks whether the input dataset is already in the KTO format (containing "prompt", "completion", and "label" fields).
-    If the dataset is in DPO format (with "prompt", "chosen", and "rejected" fields), it converts it to KTO format by:
-    - Removing any unnecessary columns.
-    - Reformatting each row to create a unified format suitable for KTO training.
-
-    Args:
-        dataset (DatasetDict): The dataset to potentially reformat.
-        num_proc (int, optional): The number of processes to use for multiprocessing during dataset transformation. Defaults to None.
-
-    Returns:
-        DatasetDict: The reformatted dataset, if conversion was needed; otherwise, the original dataset.
-
-    Raises:
-        ValueError: If the dataset format is not compatible with KTO or DPO.
-    """
-    keys = list(dataset["train"].features.keys())
-
-    # check if the dataset is in the KTO format or needs to be reformatted
-    if "prompt" in keys and "completion" in keys and "label" in keys:
-        return dataset
-    elif "prompt" in keys and "rejected" in keys and "chosen" in keys:
-        # remove unnecessary fields
-        keys_to_remove = deepcopy(keys)
-        keys_to_remove.remove("prompt")
-        keys_to_remove.remove("chosen")
-        keys_to_remove.remove("rejected")
-        dataset = dataset.remove_columns(keys_to_remove)
-
-        # turn each DPO-formatted row into two KTO-formatted rows.
-        dataset = dataset.map(
-            _reformat_row_dpo_to_kto,
-            num_proc=num_proc,
-            batched=True,
-            remove_columns=["chosen", "rejected"],
-            desc="Reformatting Dataset from DPO format to KTO format.",
-        )
-        return dataset
-    else:
-        raise ValueError("Dataset format not compatible with KTO.")
+DatasetType = TypeVar("DatasetType", Dataset, DatasetDict, IterableDataset, IterableDatasetDict)
 
 
 def apply_chat_template(example: Dict[str, List[Dict[str, str]]], tokenizer: PreTrainedTokenizer) -> Dict[str, str]:
@@ -215,3 +159,62 @@ def is_conversational(dataset: Union[Dataset, DatasetDict]) -> bool:
     # It should be a list of messages, where each message is a list of dictionaries with keys "role" and "content"
     if isinstance(messages, list) and isinstance(messages[0], dict) and "role" in messages[0]:
         return True
+
+
+def _unpair_row(examples: List[Dict[str, List[Dict[str, str]]]]) -> List[Dict[str, List[Dict[str, str]]]]:
+    batch_size = len(examples["chosen"])
+    new_rows = {
+        "prompt": examples["prompt"] + examples["prompt"],
+        "completion": examples["chosen"] + examples["rejected"],
+        "label": [True] * batch_size + [False] * batch_size,
+    }
+    return new_rows
+
+
+def unpair_preference_dataset(dataset: DatasetType, num_proc: Optional[int] = None) -> DatasetType:
+    r"""
+    Unpair a preference dataset.
+
+    Args:
+        dataset (`Dataset`):
+            Preference dataset to unpair. The dataset must have columns `"prompt"`, `"chosen"`, and `"rejected"`.
+        num_proc (`Optional[int]`, *optional*, defaults to `None`):
+            Number of processes to use for processing the dataset.
+
+    Returns:
+        `Dataset`: The unpaired preference dataset.
+
+    Example:
+
+    ```python
+    >>> from datasets import Dataset
+    >>> dataset_dict = {
+    ...     "prompt": [
+    ...         [{"role": "user", "content": "What color is the sky?"}],
+    ...         [{"role": "user", "content": "Where is the sun?"}],
+    ...     ],
+    ...     "chosen": [
+    ...         [{"role": "assistant", "content": "It is blue."}],
+    ...         [{"role": "assistant", "content": "In the sky."}],
+    ...     ],
+    ...     "rejected": [
+    ...         [{"role": "assistant", "content": "It is green."}],
+    ...         [{"role": "assistant", "content": "In the sea."}],
+    ...     ],
+    ... }
+    >>> dataset = Dataset.from_dict(dataset_dict)
+    >>> dataset = unpair_preference_dataset(dataset)
+    >>> dataset
+    Dataset({
+        features: ['prompt', 'completion', 'label'],
+        num_rows: 4
+    })
+    >>> dataset[0]
+    {'prompt': [{'content': 'What color is the sky?', 'role': 'user'}], 'completion': [{'content': 'It is blue.', 'role': 'assistant'}], 'label': True}
+    ```
+    """
+    return dataset.map(_unpair_row, batched=True, remove_columns=["chosen", "rejected"], num_proc=num_proc)
+
+
+def maybe_unpair_preference_dataset(dataset: DatasetType, num_proc: Optional[int] = None) -> DatasetType:
+    raise NotImplementedError("This function is not implemented yet.")
