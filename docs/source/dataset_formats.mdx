@@ -144,8 +144,8 @@ or, using the map method:
 ...                [{"role": "user", "content": "Where is the sun?"}]],
 ...     "completion": [[{"role": "assistant", "content": "It is blue."}],
 ...                    [{"role": "assistant", "content": "In the sky."}]]}
-dataset = Dataset.from_dict(dataset_dict)
-dataset = dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
+>>> dataset = Dataset.from_dict(dataset_dict)
+>>> dataset = dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
 {'prompt': ['<|user|>\nWhat color is the sky?<|end|>\n<|assistant|>\n', '<|user|>\nWhere is the sun?<|end|>\n<|assistant|>\n'],
  'completion': ['It is blue.<|end|>\n<|endoftext|>', 'In the sky.<|end|>\n<|endoftext|>']}
 ```
@@ -154,7 +154,7 @@ Every model has its own chat template.
 
 Caution: it's very important to use the template associated with the model you're using. As an example, you can't use a dataset formated with the Qwen chat template to finetune a Llama model.
 
-> [!CAUTION]
+> [!WARNING]
 > It's important to use the chat template associated with the model you're using. Chat templates are model-specific, and using the wrong template can lead to unexpected results.
 
 To convert a conversational dataset into a standard dataset, TRL provides a function called `convert_conversational_to_standard` that takes a conversational dataset and a tokenizer as input and returns a standard dataset.
@@ -162,25 +162,12 @@ To convert a conversational dataset into a standard dataset, TRL provides a func
 Here is an example with prompt-only dataset, and the Qwen chat template:
 
 ```python
-from datasets import Dataset
-from transformers import AutoTokenizer
-
-conversational_dataset_dict = {
-    "prompt": [
-        [{"role": "user", "content": "What color is the sky?"}],
-    ]
-}
-
-conversational_dataset = Dataset.from_dict(conversational_dataset_dict)
-
-tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-72B-Instruct")
-
-standard_dataset = conversational_dataset.map(convert_conversational_to_standard, fn_kwargs={"tokenizer": tokenizer})
-```
-
-The resulting `standard_dataset` will look like this:
-
-```python
+>>> from datasets import Dataset
+>>> from transformers import AutoTokenizer
+>>> conversational_dataset_dict = {"prompt": [[{"role": "user", "content": "What color is the sky?"}]]}
+>>> conversational_dataset = Dataset.from_dict(conversational_dataset_dict)
+>>> tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-72B-Instruct")
+>>> standard_dataset = conversational_dataset.map(convert_conversational_to_standard, fn_kwargs={"tokenizer": tokenizer})
 >>> print(standard_dataset[0]["prompt"])
 <|im_start|>system
 You are a helpful assistant.<|im_end|>
@@ -190,7 +177,7 @@ What color is the sky?<|im_end|>
 ```
 
 
-> [!IMPORTANT]
+> [!WARNING]
 > Make sure that the SFT model and reward model use the _same_ chat template. Otherwise, you may find the model completions are scored incorrectly during training.
 > 
 
