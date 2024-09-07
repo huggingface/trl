@@ -75,15 +75,17 @@ class KTOTrainerTester(unittest.TestCase):
 
     @parameterized.expand(
         [
-            ["gpt2", True, True],
-            ["gpt2", True, False],
-            # ["t5", True],
-            ["gpt2", False, True],
-            ["gpt2", False, False],
-            # ["t5", False],
+            ["gpt2", "kto", True, True],
+            ["gpt2", "kto", True, False],
+            ["gpt2", "kto", False, True],
+            ["gpt2", "kto", False, False],
+            ["gpt2", "apo_zero_unpaired", True, True],
+            ["gpt2", "apo_zero_unpaired", True, False],
+            ["gpt2", "apo_zero_unpaired", False, True],
+            ["gpt2", "apo_zero_unpaired", False, False],
         ]
     )
-    def test_kto_trainer(self, name, pre_compute, eval_dataset):
+    def test_kto_trainer(self, name, loss_type, pre_compute, eval_dataset):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = KTOConfig(
                 output_dir=tmp_dir,
@@ -95,6 +97,7 @@ class KTOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 beta=0.1,
                 precompute_ref_log_probs=pre_compute,
+                loss_type=loss_type,
                 report_to="none",
             )
 
