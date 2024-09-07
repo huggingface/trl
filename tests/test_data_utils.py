@@ -169,44 +169,76 @@ class TestApplyChatTemplate(unittest.TestCase):
 
 
 class UnpairPreferenceDatasetTester(unittest.TestCase):
-    def setUp(self):
-        # Create a sample DPO-formatted dataset for testing
-        self.dpo_data = {
-            "prompt": ["What is AI?", "Define machine learning."],
-            "chosen": ["AI is artificial intelligence.", "Machine learning is a subset of AI."],
-            "rejected": ["AI is a computer.", "Machine learning is a program."],
+    paired_dataset = Dataset.from_dict(
+        {
+            "prompt": ["The sky is", "The sun is"],
+            "chosen": [" blue.", " in the sky."],
+            "rejected": [" green.", " in the sea."],
         }
-        self.dpo_dataset = DatasetDict({"train": Dataset.from_dict(self.dpo_data)})
+    )
 
-        # Create a sample KTO-formatted dataset for testing
-        self.kto_data = {
-            "prompt": ["What is AI?", "Define machine learning.", "What is AI?", "Define machine learning."],
-            "completion": [
-                "AI is artificial intelligence.",
-                "Machine learning is a subset of AI.",
-                "AI is a computer.",
-                "Machine learning is a program.",
-            ],
+    unpaired_dataset = Dataset.from_dict(
+        {
+            "prompt": ["The sky is", "The sun is", "The sky is", "The sun is"],
+            "completion": [" blue.", " in the sky.", " green.", " in the sea."],
             "label": [True, True, False, False],
         }
-        self.kto_dataset = DatasetDict({"train": Dataset.from_dict(self.kto_data)})
+    )
 
-    def test_dpo_to_kto_conversion(self):
-        # Test that a DPO-formatted dataset is correctly reformatted to KTO format
-        reformatted_dataset = unpair_preference_dataset(self.dpo_dataset)
+    def test_unpair_preference_dataset(self):
+        # Test that a paired-formatted dataset is correctly converted to unpaired format
+        unpaired_dataset = unpair_preference_dataset(self.paired_dataset)
         self.assertEqual(
-            reformatted_dataset["train"].to_dict(),
-            self.kto_dataset["train"].to_dict(),
-            "The DPO-formatted dataset was not correctly reformatted to KTO format.",
+            unpaired_dataset.to_dict(),
+            self.unpaired_dataset.to_dict(),
+            "The paired-formatted dataset should be reformatted to unpaired format.",
         )
 
-    def test_already_kto_format(self):
-        # Test that a KTO-formatted dataset remains unchanged
-        reformatted_dataset = maybe_unpair_preference_dataset(self.kto_dataset)
+    def test_unpair_preference_dataset_dict(self):
+        # Test that a paired-formatted dataset dict is correctly converted to unpaired format
+        paired_dataset_dict = DatasetDict({"abc": self.paired_dataset})
+        unpaired_dataset_dict = unpair_preference_dataset(paired_dataset_dict)
         self.assertEqual(
-            reformatted_dataset["train"].to_dict(),
-            self.kto_dataset["train"].to_dict(),
-            "The KTO-formatted dataset should remain unchanged.",
+            unpaired_dataset_dict["abc"].to_dict(),
+            self.unpaired_dataset.to_dict(),
+            "The paired-formatted dataset should be reformatted to unpaired format.",
+        )
+
+    def test_maybe_unpair_preference_dataset(self):
+        # Test that a paired-formatted dataset is correctly reformatted to unpaired format with maybe_unpair_preference_dataset
+        unpaired_dataset = maybe_unpair_preference_dataset(self.paired_dataset)
+        self.assertEqual(
+            unpaired_dataset.to_dict(),
+            self.unpaired_dataset.to_dict(),
+            "The paired-formatted dataset should be reformatted to unpaired format.",
+        )
+
+    def test_maybe_unpair_preference_dataset_dict(self):
+        # Test that a paired-formatted dataset dict is correctly converted to unpaired format with maybe_unpair_preference_dataset
+        paired_dataset_dict = DatasetDict({"abc": self.paired_dataset})
+        unpaired_dataset_dict = maybe_unpair_preference_dataset(paired_dataset_dict)
+        self.assertEqual(
+            unpaired_dataset_dict["abc"].to_dict(),
+            self.unpaired_dataset.to_dict(),
+            "The paired-formatted dataset should be reformatted to unpaired format.",
+        )
+
+    def test_maybe_unpair_preference_dataset_already_paired(self):
+        # Test that a paired-formatted dataset remains unchanged with maybe_unpair_preference_dataset
+        unpaired_dataset = maybe_unpair_preference_dataset(self.unpaired_dataset)
+        self.assertEqual(
+            unpaired_dataset.to_dict(),
+            self.unpaired_dataset.to_dict(),
+            "The unpaired-formatted dataset should remain unchanged.",
+        )
+
+    def test_maybe_unpair_preference_dataset_dict_already_paired(self):
+        # Test that a paired-formatted dataset dict remains unchanged with maybe_unpair_preference_dataset
+        unpaired_dataset_dict = maybe_unpair_preference_dataset(DatasetDict({"abc": self.unpaired_dataset}))
+        self.assertEqual(
+            unpaired_dataset_dict["abc"].to_dict(),
+            self.unpaired_dataset.to_dict(),
+            "The unpaired-formatted dataset should remain unchanged.",
         )
 
 

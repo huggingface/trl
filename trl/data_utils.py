@@ -13,11 +13,11 @@
 # limitations under the License.
 from typing import Dict, List, Optional, TypeVar, Union
 
-from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict
+from datasets import Dataset, DatasetDict
 from transformers import PreTrainedTokenizer
 
 
-DatasetType = TypeVar("DatasetType", Dataset, DatasetDict, IterableDataset, IterableDatasetDict)
+DatasetType = TypeVar("DatasetType", Dataset, DatasetDict)
 
 
 def apply_chat_template(example: Dict[str, List[Dict[str, str]]], tokenizer: PreTrainedTokenizer) -> Dict[str, str]:
@@ -167,6 +167,12 @@ def is_conversational(dataset: Union[Dataset, DatasetDict]) -> bool:
         messages = dataset["prompt"][0]
     elif "messages" in dataset.features:
         messages = dataset["messages"][0]
+    elif "completion" in dataset.features:
+        messages = dataset["completion"][0]
+    elif "chosen" in dataset.features:
+        messages = dataset["chosen"][0]
+    elif "rejected" in dataset.features:
+        messages = dataset["rejected"][0]
     else:
         return False
 
@@ -178,10 +184,11 @@ def is_conversational(dataset: Union[Dataset, DatasetDict]) -> bool:
 def _unpair_row(examples: List[Dict[str, List[Dict[str, str]]]]) -> List[Dict[str, List[Dict[str, str]]]]:
     batch_size = len(examples["chosen"])
     new_rows = {
-        "prompt": examples["prompt"] + examples["prompt"],
         "completion": examples["chosen"] + examples["rejected"],
         "label": [True] * batch_size + [False] * batch_size,
     }
+    if "prompt" in examples:
+        new_rows["prompt"] = examples["prompt"] + examples["prompt"]
     return new_rows
 
 
@@ -191,7 +198,8 @@ def unpair_preference_dataset(dataset: DatasetType, num_proc: Optional[int] = No
 
     Args:
         dataset (`Dataset`):
-            Preference dataset to unpair. The dataset must have columns `"prompt"`, `"chosen"`, and `"rejected"`.
+            Preference dataset to unpair. The dataset must have columns `"chosen"`, `"rejected"` and optionally
+            `"prompt"`.
         num_proc (`Optional[int]`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
 
@@ -231,4 +239,11 @@ def unpair_preference_dataset(dataset: DatasetType, num_proc: Optional[int] = No
 
 
 def maybe_unpair_preference_dataset(dataset: DatasetType, num_proc: Optional[int] = None) -> DatasetType:
-    raise NotImplementedError("This function is not implemented yet.")
+    if isinstance(dataset, DatasetDict):
+        column_names = dataset[list(dataset.keys())[0]].column_names
+    else:
+        column_names = dataset.column_names
+    if "chosen" in column_names and "rejected" in column_names:
+        return unpair_preference_dataset(dataset, num_proc=num_proc)
+    else:
+        return dataset
