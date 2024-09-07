@@ -111,13 +111,14 @@ def apply_chat_template(example: Dict[str, List[Dict[str, str]]], tokenizer: Pre
         error_message = (
             "The chat template applied to the prompt + completion does not start with the chat template applied to "
             "the prompt alone. This can indicate that the chat template is not supported by TRL."
+            "\n**Prompt**:\n{}\n\n**Prompt + Completion**:\n{}"
         )
         if "chosen" in example and not prompt_chosen.startswith(prompt):
-            raise ValueError(error_message)
+            raise ValueError(error_message.format(prompt, prompt_chosen))
         if "rejected" in example and not prompt_rejected.startswith(prompt):
-            raise ValueError(error_message)
+            raise ValueError(error_message.format(prompt, prompt_rejected))
         if "completion" in example and not prompt_completion.startswith(prompt):
-            raise ValueError(error_message)
+            raise ValueError(error_message.format(prompt, prompt_completion))
 
     # Extract the completion by removing the prompt part from the prompt-completion string
     output = {}
@@ -181,7 +182,6 @@ def maybe_apply_chat_template(
     {'prompt': '<|user|>\nWhat color is the sky?<|end|>\n<|assistant|>\n', 'completion': 'It is blue.<|end|>\n<|endoftext|>'}
     ```
     """
-
     if is_conversational(example):
         return apply_chat_template(example, tokenizer)
     else:
@@ -373,7 +373,13 @@ def maybe_extract_prompt(example: Dict[str, List]) -> Dict[str, List]:
      'rejected': [{'role': 'assistant', 'content': 'It is green.'}]}
     ```
     """
-    if "prompt" in example:
+    # Some dataset add a `"prompt"` column, even though the prompt is implicit and included in the "chosen" and
+    # "rejected" completions. E.g.:
+    # {"prompt": "What color is the sky?",
+    #  "chosen": [{"role": "user", "content": "What color is the sky?"}, {"role": "assistant", "content": "It is blue."}],
+    #  "rejected": [{"role": "user", "content": "What color is the sky?"}, {"role": "assistant", "content": "It is green."}]}
+    # That's why we check if the prompt is also conversational before deciding not to extract it.
+    if "prompt" in example and is_conversational({"prompt": example["prompt"]}):
         return example
     else:
-        return extract_prompt(example)
+        return extract_prompt({"chosen": example["chosen"], "rejected": example["rejected"]})
