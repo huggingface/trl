@@ -10,36 +10,34 @@ To just run the XPO script to make sure this trainer can run, you can run the fo
 
 ```bash
 python examples/scripts/xpo.py \
-    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
-    --learning_rate 3e-6 \
-    --output_dir models/minimal/xpo \
-    --per_device_train_batch_size 1 \
-    --gradient_accumulation_steps 64 \
-    --total_episodes 30000 \
-    --model_name_or_path EleutherAI/pythia-14m \
-    --sft_model_path EleutherAI/pythia-14m \
+    --model_name_or_path EleutherAI/pythia-14m  \
     --reward_model_path EleutherAI/pythia-14m \
-    --non_eos_penalty \
-    --stop_token eos \
+    --dataset_name trl-lib/tldr \
+    --learning_rate 5.0e-7 \
+    --output_dir pythia-1b-tldr-xpo \
+    --per_device_train_batch_size 4 \
+    --gradient_accumulation_steps 32 \
+    --num_train_epochs 3 \
     --max_new_tokens 53 \
-    --sanity_check
+    --warmup_ratio 0.1 \
+    --missing_eos_penalty 1.0
 ```
 
 ## Explanation of the logged metrics
 
 The logged metrics are as follows:
 
-* `eps`: Tracks the number of episodes per second.
-* `objective/kl`: The mean Kullback-Leibler (KL) divergence between the current model and reference model.
-* `objective/entropy`: The mean entropy of the model, indicating the randomness of the actions chosen by the model.
-* `objective/mean_dpo_score`: The mean dpo score between the model and reference model responses.
-* `objective/xpo_loss`: The mean xpo part of the full loss.
+* `loss/xpo`: The mean xpo part of the full loss.
+* `loss/dpo`: The mean dpo part of the full loss.
+* `objective/model_scores`: The mean scores (according to the reward model) of the model completions.
+* `objective/ref_scores`: The mean scores (according to the reward model) of the reference completions.
 * `objective/scores_margin`: The mean score margin (according to the external reward model) between the chosen and rejected completions.
-* `rewards/accuracies`: The accuracies of the online DPO's implicit reward model.
-* `rewards/chosen`: The mean reward (according to online DPO's implicit reward model)of the chosen completions.
-* `rewards/rejected`: The mean reward (according to online DPO's implicit reward model) of the rejected completions.
+* `rewards/accuracies`: The accuracies of the XPO's implicit reward model.
+* `rewards/chosen`: The mean reward (according to XPO's DPO implicit reward model) of the chosen completions.
+* `rewards/rejected`: The mean reward (according to XPO's DPO implicit reward model) of the rejected completions.
 * `rewards/margins`: The mean reward margin (according to online DPO's implicit reward model) between the chosen and rejected completions.
 * `logps/chosen`: The mean log probabilities of the chosen completions.
 * `logps/rejected`: The mean log probabilities of the rejected completions.
-* `lr`: lr: The current learning rate used by the optimizer.
-* `episode`: episode: The current global step or episode count in the training process.
+* `val/model_contain_eos_token`: The amount of times the model's output contains the eos token.
+* `val/ref_contain_eos_token`: The amount of times the reference's output contains the eos token.
+
