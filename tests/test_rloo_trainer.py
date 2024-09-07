@@ -26,7 +26,7 @@ python examples/scripts/rloo/rloo.py \
     --gradient_accumulation_steps 1 \
     --total_episodes 10 \
     --model_name_or_path EleutherAI/pythia-14m \
-    --non_eos_penalty \
+    --missing_eos_penalty -1.0 \
     --save_strategy no \
     --stop_token eos \
 """
