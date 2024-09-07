@@ -57,6 +57,7 @@ from contextlib import nullcontext
 
 from trl.commands.cli_utils import DPOScriptArguments, init_zero_verbose, TrlParser
 from trl.env_utils import strtobool
+from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
 
 TRL_USE_RICH = strtobool(os.getenv("TRL_USE_RICH", "0"))
 
@@ -79,6 +80,8 @@ from trl import (
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
+    maybe_extract_prompt,
+    maybe_apply_chat_template,
 )
 
 
@@ -128,7 +131,7 @@ if __name__ == "__main__":
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     if tokenizer.chat_template is None:
-        tokenizer.chat_template = "{% for message in messages %}{{message['role'] + ': ' + message['content'] + '\n\n'}}{% endfor %}{{ eos_token }}"
+        tokenizer.chat_template = SIMPLE_QUERY_CHAT_TEMPLATE
     if args.ignore_bias_buffers:
         # torch distributed hack
         model._ddp_params_and_buffers_to_ignore = [
@@ -153,16 +156,13 @@ if __name__ == "__main__":
         for key in ds:
             ds[key] = ds[key].select(range(50))
 
-    def process(row):
-        row["prompt"] = tokenizer.apply_chat_template(row["chosen"][:-1], tokenize=False)
-        row["chosen"] = tokenizer.apply_chat_template([row["chosen"][-1]], tokenize=False)
-        row["rejected"] = tokenizer.apply_chat_template([row["rejected"][-1]], tokenize=False)
-        return row
-
     # Compute that only on the main process for faster data processing.
     # see: https://github.com/huggingface/trl/pull/1255
     with PartialState().local_main_process_first():
-        ds = ds.map(process, num_proc=training_args.dataset_num_proc)
+        ds = ds.map(maybe_extract_prompt, num_proc=training_args.dataset_num_proc)
+        ds = ds.map(
+            maybe_apply_chat_template, num_proc=training_args.dataset_num_proc, fn_kwargs={"tokenizer": tokenizer}
+        )
 
     train_dataset = ds[args.dataset_train_split]
     eval_dataset = ds[args.dataset_test_split]
