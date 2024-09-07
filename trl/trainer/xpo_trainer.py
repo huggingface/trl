@@ -230,7 +230,6 @@ class XPOTrainer(OnlineDPOTrainer):
         ref_logprobs_model_data,
         model_scores,
         ref_scores,
-        loss,
         dpo_losses,
         xpo_losses,
         context_length,
@@ -240,7 +239,6 @@ class XPOTrainer(OnlineDPOTrainer):
             return self.accelerator.gather(tensor).mean().item()
 
         # Log losses
-        self.stats["loss/total"].append(gather_mean(loss))
         self.stats["loss/dpo"].append(gather_mean(dpo_losses))
         self.stats["loss/xpo"].append(gather_mean(xpo_losses))
 
@@ -342,7 +340,6 @@ class XPOTrainer(OnlineDPOTrainer):
             ref_logprobs_model_data,
             model_data_scores,
             ref_data_scores,
-            loss.detach(),
             dpo_losses.detach(),
             xpo_losses.detach(),
             context_length,
