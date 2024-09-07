@@ -1,4 +1,4 @@
-# Copyright 2022 The HuggingFace Team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import Dict, List, Optional, TypeVar, Union
+from typing import Any, Dict, List, Optional, TypeVar
 
 from datasets import Dataset, DatasetDict
 from transformers import PreTrainedTokenizer
@@ -20,53 +20,57 @@ from transformers import PreTrainedTokenizer
 DatasetType = TypeVar("DatasetType", Dataset, DatasetDict)
 
 
+def is_conversational(example: Dict[str, Any]) -> bool:
+    r"""
+    Check if the example is in a conversational format.
+
+    Args:
+        example (`Dict[str, Any]`):
+            A single data entry of a dataset. The example can have different keys depending on the
+            dataset format.
+
+    Returns:
+        `bool`: `True` if the data is in a conversational format, `False` otherwise.
+
+    Examples:
+
+    ```python
+    >>> example = {"prompt": [{"role": "user", "content": "What color is the sky?"}]}
+    >>> is_conversational(example)
+    True
+    >>> example = {"prompt": "The sky is"})
+    >>> is_conversational(example)
+    False
+    ```
+    """
+    supported_keys = ["prompt", "chosen", "rejected", "completion", "messages"]
+    example_keys = {key for key in example.keys() if key in supported_keys}
+
+    # It must have one of the supported keys
+    if example_keys:
+        key = example_keys.pop()  # take the first supported key
+        maybe_messages = example[key]
+        # It must be a list of messages,
+        if isinstance(maybe_messages, list):
+            maybe_message = maybe_messages[0]
+            # Each message must a list of dictionaries with keys "role" and "content"
+            if isinstance(maybe_message, dict) and "role" in maybe_message and "content" in maybe_message:
+                return True
+
+    return False
+
+
 def apply_chat_template(example: Dict[str, List[Dict[str, str]]], tokenizer: PreTrainedTokenizer) -> Dict[str, str]:
     r"""
     Apply a chat template to a conversational example.
 
-    Args:
-        example (`Dict[str, List[Dict[str, str]]`):
-            Dictionary representing a single data entry of a conversational dataset. Each data entry can have different
-            keys depending on the dataset format. The supported dataset formats are:
-
-                - Name to find dataset: `"messages"`.
-                - Prompt-only dataset: `"prompt"`.
-                - Prompt-completion dataset: `"prompt"` and `"completion"`.
-                - Preference dataset: `"prompt"`, `"chosen"`, and `"rejected"`.
-                - Preference dataset with implicit prompt: `"chosen"` and `"rejected"`.
-                - Unpaired preference dataset: `"prompt"`, `"completion"`, and `"label"`.
-
-            For keys `"messages"`, `"prompt"`, `"chosen"`, `"rejected"`, and `"completion"`, the values are lists of
-            messages, where each message is a dictionary with keys `"role"` and `"content"`.
-
-        tokenizer (`PreTrainedTokenizer`):
-            The tokenizer to apply the chat template with.
-
-    Returns:
-        `Dict[str, str]`: The formatted example with the chat template applied.
-
-    Note:
-        This function does not alter the keys, except for name to find dataset, where `"messages"` is replaced by
-        `"text"`.
-
-    Example:
-
-    ```python
-    >>> from transformers import AutoTokenizer
-    >>> tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-128k-instruct")
-    >>> example = {
-    ...     "prompt": [{"role": "user", "content": "What color is the sky?"}],
-    ...     "completion": [{"role": "assistant", "content": "It is blue."}]
-    ... }
-    >>> apply_chat_template(example, tokenizer)
-    {'prompt': '<|user|>\nWhat color is the sky?<|end|>\n<|assistant|>\n', 'completion': 'It is blue.<|end|>\n<|endoftext|>'}
-    ```
+    For more details, see [`maybe_apply_chat_template`].
     """
     # Check that the example has the correct keys
     supported_keys = ["prompt", "chosen", "rejected", "completion", "messages", "label"]
     example_keys = {key for key in example.keys() if key in supported_keys}
     if example_keys not in [
-        {"messages"},  # name to find
+        {"messages"},  # language modeling
         {"prompt"},  # prompt-only
         {"prompt", "completion"},  # prompt-completion
         {"prompt", "chosen", "rejected"},  # preference
@@ -133,52 +137,55 @@ def apply_chat_template(example: Dict[str, List[Dict[str, str]]], tokenizer: Pre
     return output
 
 
-def is_conversational(dataset: Union[Dataset, DatasetDict]) -> bool:
+def maybe_apply_chat_template(
+    example: Dict[str, List[Dict[str, str]]], tokenizer: PreTrainedTokenizer
+) -> Dict[str, str]:
     r"""
-    Check if the dataset is in a conversational format.
+    If the example is in a conversational format, apply a chat template to it.
 
     Args:
-        dataset (`Dataset` or `DatasetDict`):
-            The dataset to check.
+        example (`Dict[str, List[Dict[str, str]]`):
+            Dictionary representing a single data entry of a conversational dataset. Each data entry can have different
+            keys depending on the dataset format. The supported dataset formats are:
+
+                - Language modeling dataset: `"messages"`.
+                - Prompt-only dataset: `"prompt"`.
+                - Prompt-completion dataset: `"prompt"` and `"completion"`.
+                - Preference dataset: `"prompt"`, `"chosen"`, and `"rejected"`.
+                - Preference dataset with implicit prompt: `"chosen"` and `"rejected"`.
+                - Unpaired preference dataset: `"prompt"`, `"completion"`, and `"label"`.
+
+            For keys `"messages"`, `"prompt"`, `"chosen"`, `"rejected"`, and `"completion"`, the values are lists of
+            messages, where each message is a dictionary with keys `"role"` and `"content"`.
+
+        tokenizer (`PreTrainedTokenizer`):
+            The tokenizer to apply the chat template with.
 
     Returns:
-        `bool`: `True` if the dataset is in a conversational format, `False` otherwise.
-
-    Examples:
-
-    ```python
-    >>> from datasets import Dataset
-    >>> dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": "What color is the sky?"}]]})
-    >>> is_conversational(dataset)
-    True
-    >>> dataset = Dataset.from_dict({"prompt": ["The sky is"]})
-    >>> is_conversational(dataset)
-    False
-    ```
+        `Dict[str, str]`: The formatted example with the chat template applied.
 
     Note:
-        When `dataset` is a `DatasetDict`, this function checks only the first split. Consequently, we don't
-        consider the case where different splits have different formats.
+        This function does not alter the keys, except for Language modeling dataset, where `"messages"` is replaced by
+        `"text"`.
+
+    Example:
+
+    ```python
+    >>> from transformers import AutoTokenizer
+    >>> tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-128k-instruct")
+    >>> example = {
+    ...     "prompt": [{"role": "user", "content": "What color is the sky?"}],
+    ...     "completion": [{"role": "assistant", "content": "It is blue."}]
+    ... }
+    >>> apply_chat_template(example, tokenizer)
+    {'prompt': '<|user|>\nWhat color is the sky?<|end|>\n<|assistant|>\n', 'completion': 'It is blue.<|end|>\n<|endoftext|>'}
+    ```
     """
-    if isinstance(dataset, DatasetDict):
-        dataset = dataset[list(dataset.keys())[0]]  # take the first split
 
-    if "prompt" in dataset.features:
-        messages = dataset["prompt"][0]
-    elif "messages" in dataset.features:
-        messages = dataset["messages"][0]
-    elif "completion" in dataset.features:
-        messages = dataset["completion"][0]
-    elif "chosen" in dataset.features:
-        messages = dataset["chosen"][0]
-    elif "rejected" in dataset.features:
-        messages = dataset["rejected"][0]
+    if is_conversational(example):
+        return apply_chat_template(example, tokenizer)
     else:
-        return False
-
-    # It should be a list of messages, where each message is a list of dictionaries with keys "role" and "content"
-    if isinstance(messages, list) and isinstance(messages[0], dict) and "role" in messages[0]:
-        return True
+        return example
 
 
 def _unpair_row(examples: List[Dict[str, List[Dict[str, str]]]]) -> List[Dict[str, List[Dict[str, str]]]]:
@@ -271,3 +278,102 @@ def maybe_unpair_preference_dataset(dataset: DatasetType, num_proc: Optional[int
         return unpair_preference_dataset(dataset, num_proc=num_proc)
     else:
         return dataset
+
+
+def extract_prompt(example: Dict[str, List]) -> Dict[str, List]:
+    r"""
+    Extracts the shared prompt from a preference data example, where the prompt is implicit within both
+    the chosen and rejected completions.
+
+    For more details, see [`maybe_extract_prompt`].
+    """
+    for idx in range(min(len(example["chosen"]), len(example["rejected"]))):
+        if example["chosen"][idx]["content"] != example["rejected"][idx]["content"]:
+            break
+    return {
+        "prompt": example["chosen"][:idx],
+        "chosen": example["chosen"][idx:],
+        "rejected": example["rejected"][idx:],
+    }
+
+
+def maybe_extract_prompt(example: Dict[str, List]) -> Dict[str, List]:
+    r"""
+    Extracts the shared prompt from a preference data example, where the prompt is implicit within both
+    the chosen and rejected completions.
+
+    If the example already contains a `"prompt"` key, the function returns the example as is. Else, the function
+
+    identifies the longest common sequence (prefix) of conversation turns between the "chosen" and "rejected"
+    completions and extracts this as the prompt. It then removes this prompt from the respective "chosen" and
+    "rejected" completions.
+
+    Args:
+        example (`Dict[str, List]`):
+            A dictionary representing a single data entry in the preference dataset. It must contain the keys
+            `"chosen"` and `"rejected"`, where each value is a list.
+
+    Returns:
+        `Dict[str, List]`: A dictionary containing:
+            - `"prompt"`: The longest common prefix between the "chosen" and "rejected" completions.
+            - `"chosen"`: The remainder of the "chosen" completion, with the prompt removed.
+            - `"rejected"`: The remainder of the "rejected" completion, with the prompt removed.
+
+    Examples:
+
+    ```python
+    >>> example = {
+    ...     "chosen": [
+    ...         {"role": "user", "content": "What color is the sky?"},
+    ...         {"role": "assistant", "content": "It is blue."}
+    ...     ],
+    ...     "rejected": [
+    ...         {"role": "user", "content": "What color is the sky?"},
+    ...         {"role": "assistant", "content": "It is green."}
+    ...     ]
+    ... }
+    >>> extract_prompt(example)
+    {'prompt': [{'role': 'user', 'content': 'What color is the sky?'}],
+     'chosen': [{'role': 'assistant', 'content': 'It is blue.'}],
+     'rejected': [{'role': 'assistant', 'content': 'It is green.'}]}
+    ```
+
+    Or, with the `map` method of `datasets.Dataset`:
+
+    ```python
+    >>> from trl.data_utils import extract_prompt
+    >>> from datasets import Dataset
+    >>> dataset_dict = {
+    ...     "chosen": [
+    ...         [
+    ...             {"role": "user", "content": "What color is the sky?"},
+    ...             {"role": "assistant", "content": "It is blue."},
+    ...         ],
+    ...         [
+    ...             {"role": "user", "content": "Where is the sun?"},
+    ...             {"role": "assistant", "content": "In the sky."},
+    ...         ],
+    ...     ],
+    ...     "rejected": [
+    ...         [
+    ...             {"role": "user", "content": "What color is the sky?"},
+    ...             {"role": "assistant", "content": "It is green."},
+    ...         ],
+    ...         [
+    ...             {"role": "user", "content": "Where is the sun?"},
+    ...             {"role": "assistant", "content": "In the sea."},
+    ...         ],
+    ...     ],
+    ... }
+    >>> dataset = Dataset.from_dict(dataset_dict)
+    >>> dataset = dataset.map(extract_prompt)
+    >>> dataset[0]
+    {'prompt': [{'role': 'user', 'content': 'What color is the sky?'}],
+     'chosen': [{'role': 'assistant', 'content': 'It is blue.'}],
+     'rejected': [{'role': 'assistant', 'content': 'It is green.'}]}
+    ```
+    """
+    if "prompt" in example:
+        return example
+    else:
+        return extract_prompt(example)
