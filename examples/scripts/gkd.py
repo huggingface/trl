@@ -125,6 +125,7 @@ if __name__ == "__main__":
         prompts = eval_dataset["messages"][:8]
     except KeyError:
         eval_dataset = None
+        prompts = train_dataset["messages"][:8]
 
     ################
     # Optional rich context managers
@@ -150,9 +151,8 @@ if __name__ == "__main__":
             peft_config=get_peft_config(model_config),
             callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
         )
-    if eval_dataset is not None:
-        log_completions_callback = LogCompletionsCallback(prompts)
-        trainer.add_callback(log_completions_callback)
+    log_completions_callback = LogCompletionsCallback(prompts)
+    trainer.add_callback(log_completions_callback)
     trainer.train()
 
     with save_context:
