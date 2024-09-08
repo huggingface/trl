@@ -197,11 +197,102 @@ What color is the sky?<|end|>
 
 [[autodoc]] maybe_apply_chat_template
 
-### From paired to unpaired preference dataset
+### Name to find
 
-[[autodoc]] maybe_unpair_preference_dataset
 
-### From implicit prompt to explicit prompt dataset
+| From \ To                       | Preference with implicit prompt | Preference       | Unpaired preference                               |
+| ------------------------------- | ------------------------------- | ---------------- | ------------------------------------------------- |
+| Preference with implicit prompt | N/A                             | `extract_prompt` | `extract_prompt` then `unpair_preference_dataset` |
+| Preference                      | `dispatch_prompt`               | N/A              | `unpair_preference_dataset`                       |
 
-[[autodoc]] maybe_extract_prompt
 
+| From \ To                       | Language Modeling                                                                   | Prompt-completion                                                                   | Prompt-only                                                                   | Preference with implicit prompt                                              | Preference                                                 | Unpaired preference                                                                   |
+| ------------------------------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Language Modeling               | N/A                                                                                 | N/A                                                                                 | N/A                                                                           | N/A                                                                          | N/A                                                        | N/A                                                                                   |
+| Prompt-completion               | [Go to section](#from-prompt-completion-to-language-modeling-dataset)               | N/A                                                                                 | [Go to section](#from-prompt-completion-to-prompt-only-dataset)               | N/A                                                                          | N/A                                                        | N/A                                                                                   |
+| Prompt-only                     | N/A                                                                                 | N/A                                                                                 | N/A                                                                           | N/A                                                                          | N/A                                                        | N/A                                                                                   |
+| Preference with implicit prompt | [Go to section](#from-preference-with-implicit-prompt-to-language-modeling-dataset) | [Go to section](#from-preference-with-implicit-prompt-to-prompt-completion-dataset) | [Go to section](#from-preference-with-implicit-prompt-to-prompt-only-dataset) | N/A                                                                          | [Go to section](#from-implicit-to-explicit-prompt-dataset) | [Go to section](#from-preference-with-implicit-prompt-to-unpaired-preference-dataset) |
+| Preference                      | [Go to section](#from-preference-to-language-modeling-dataset)                      | [Go to section](#from-preference-to-prompt-completion-dataset)                      | [Go to section](#from-preference-to-prompt-only-dataset)                      | [Go to section](#from-preference-to-preference-with-implicit-prompt-dataset) | N/A                                                        | [Go to section](#from-preference-to-unpaired-preference-dataset)                      |
+| Unpaired preference             | [Go to section](#from-unpaired-preference-to-language-modeling-dataset)             | [Go to section](#from-unpaired-preference-to-prompt-completion-dataset)             | [Go to section](#from-unpaired-preference-to-prompt-only-dataset)             | N/A                                                                          | N/A                                                        | N/A                                                                                   |
+
+
+
+#### From prompt-completion to language modeling dataset
+
+To convert a prompt-completion dataset into a language modeling dataset, you can just concatenate the prompt and the completion.
+
+```python
+from datasets import Dataset
+
+dataset = Dataset.from_dict({
+    "prompt": ["The sky is", "The sun is"],
+    "completion": [" blue.", " yellow."]
+})
+
+def concat_prompt_completion(example):
+    return {"text": example["prompt"] + example["completion"]}
+
+dataset = dataset.map(concat_prompt_completion)
+```
+
+just concat the prompt and the completion
+
+#### From prompt-completion to prompt-only dataset
+
+just remove the completion
+
+#### From preference with implicit prompt to language modeling dataset
+
+remove the rejected, rename the chosen to text
+
+#### From preference with implicit prompt to prompt-completion dataset
+
+extract the prompt, remove the rejected, rename the chosen to completion
+
+#### From preference with implicit prompt to prompt-only dataset
+
+extract the prompt, remove the rejected and the chosen
+
+#### From implicit to explicit prompt dataset
+
+extract the prompt
+
+#### From preference with implicit prompt to unpaired preference dataset
+
+extract the prompt, and unpair the dataset
+
+#### From preference to language modeling dataset
+
+remove the rejected, concat the prompt and the chosen to create the text
+
+#### From preference to prompt-completion dataset
+
+remove the rejected, rename the chosen to completion
+
+#### From preference to prompt-only dataset
+
+remove chosen and rejected
+
+#### From preference to preference with implicit prompt dataset
+
+concat the prompt to chosne and rejected
+
+#### From preference to unpaired preference dataset
+
+unpair the dataset
+
+#### From unpaired preference to language modeling dataset
+
+remove the label, concat the prompt and the completion to create the text
+
+#### From unpaired preference to prompt-completion dataset
+
+remove the label
+
+#### From unpaired preference to prompt-only dataset
+
+remove the label and the completion
+
+#### From unpaired preference to preference with implicit prompt dataset
+
+concat the prompt to the completion
