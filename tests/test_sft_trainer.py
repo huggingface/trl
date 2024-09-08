@@ -456,7 +456,7 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=1,
                 num_train_epochs=2,
                 per_device_train_batch_size=2,
-                packing=True,
+                dataset_kwargs={"skip_prepare_dataset": True},
                 report_to="none",
             )
             trainer = SFTTrainer(
