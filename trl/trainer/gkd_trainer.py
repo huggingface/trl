@@ -1,4 +1,4 @@
-# Copyright 2023 The HuggingFace Team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,8 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-
 import random
 import warnings
 from copy import deepcopy
@@ -171,7 +169,7 @@ class GKDTrainer(SFTTrainer):
         return (loss, outputs_student) if return_outputs else loss
 
     @staticmethod
-    def generate_on_policy_outputs(model, tokenizer, inputs, generation_config):
+    def generate_on_policy_outputs(model, inputs, generation_config, pad_token_id=None):
         # Generate output with respect to the prompt only
         generated_outputs = model.generate(
             input_ids=inputs["prompts"],
@@ -186,8 +184,7 @@ class GKDTrainer(SFTTrainer):
         # Calculate new attention mask
         new_attention_mask = torch.ones_like(generated_tokens)
 
-        # If there's padding, set attention mask to 0 for padding tokens
-        pad_token_id = tokenizer.pad_token_id
+        # If there's pad_token_id, set attention mask to 0 for padding tokens
         if pad_token_id is not None:
             new_attention_mask[generated_tokens == pad_token_id] = 0
 
@@ -199,12 +196,12 @@ class GKDTrainer(SFTTrainer):
 
         This method implements the on-policy learning approach described in the GKD paper.
         With probability `self.lmbda`, it generates new responses using the student model,
-        which are then used for training instead of the original labels.
+        which are then used for training instead of the original inputs.
         """
         if random.random() <= self.lmbda:
             with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
                 new_input_ids, new_attention_mask = self.generate_on_policy_outputs(
-                    unwrapped_model, self.tokenizer, inputs, self.generation_config
+                    unwrapped_model, inputs, self.generation_config, self.tokenizer.pad_token_id
                 )
             inputs["input_ids"] = new_input_ids
             inputs["attention_mask"] = new_attention_mask

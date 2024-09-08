@@ -49,7 +49,9 @@ class TestGKDTrainer(unittest.TestCase):
             "attention_mask": tokenized_prompts["attention_mask"],
         }
 
-        outputs = GKDTrainer.generate_on_policy_outputs(self.model, self.tokenizer, inputs, self.generation_config)
+        outputs = GKDTrainer.generate_on_policy_outputs(
+            self.model, inputs, self.generation_config, self.tokenizer.pad_token_id
+        )
 
         # Check that outputs is a tuple of three tensors
         self.assertIsInstance(outputs, tuple)
