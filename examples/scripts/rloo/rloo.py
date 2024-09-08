@@ -25,7 +25,7 @@ python -i examples/scripts/rloo/rloo.py \
     --total_episodes 10000 \
     --model_name_or_path EleutherAI/pythia-1b-deduped \
     --missing_eos_penalty 1.0
-    
+
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/rloo/rloo.py \
     --output_dir models/minimal/rloo \
