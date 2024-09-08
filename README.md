@@ -89,22 +89,14 @@ For more flexibility and control over the training, you can use the dedicated tr
 This is a basic example of how to use the `SFTTrainer` from the library. The `SFTTrainer` is a light wrapper around the `transformers` Trainer to easily fine-tune language models or adapters on a custom dataset.
 
 ```python
-# imports
 from datasets import load_dataset
-from trl import SFTTrainer
+from trl import SFTConfig, SFTTrainer
 
-# get dataset
 dataset = load_dataset("imdb", split="train")
 
-# get trainer
-trainer = SFTTrainer(
-    "facebook/opt-350m",
-    train_dataset=dataset,
-    dataset_text_field="text",
-    max_seq_length=512,
-)
+args = SFTConfig(output_dir="/tmp",  dataset_text_field="text", max_seq_length=512)
+trainer = SFTTrainer("facebook/opt-350m", args= args, train_dataset=dataset)
 
-# train
 trainer.train()
 ```
 
