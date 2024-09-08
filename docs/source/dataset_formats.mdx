@@ -6,7 +6,7 @@ Each TRL trainer supports a specific dataset format. In this document, we provid
 
 <table>
   <tr>
-    <th>Dataset type</th>
+    <th>Dataset type \ Dataset format</th>
     <th>Standard</th>
     <th>Conversational</th>
   </tr>
@@ -187,13 +187,11 @@ What color is the sky?<|end|>
 <|assistant|>
 ```
 
-## Utilities for converting dataset formats
+## Utilities for converting dataset types
 
-### From conversational to standard dataset
+This section provides example code to help you convert between different dataset types. While some conversions can be performed after applying the chat template (i.e., in the standard format), we recommend performing the conversion before applying the chat template to ensure it works consistently.
 
-[[autodoc]] maybe_apply_chat_template
-
-### Name to find
+For simplicity, some of the examples below do not follow this recommendation and use the standard format. However, the conversions can be applied directly to the conversational format without modification.
 
 | From \ To                       | Language Modeling                                                       | Prompt-completion                                                       | Prompt-only                                                       | Preference with implicit prompt                           | Preference                                                | Unpaired preference                                                       |
 | ------------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------- |
@@ -204,7 +202,7 @@ What color is the sky?<|end|>
 | Preference                      | [🔗](#from-preference-to-language-modeling-dataset)                      | [🔗](#from-preference-to-prompt-completion-dataset)                      | [🔗](#from-preference-to-prompt-only-dataset)                      | [🔗](#from-explicit-to-implicit-prompt-preference-dataset) | N/A                                                       | [🔗](#from-preference-to-unpaired-preference-dataset)                      |
 | Unpaired preference             | [🔗](#from-unpaired-preference-to-language-modeling-dataset)             | [🔗](#from-unpaired-preference-to-prompt-completion-dataset)             | [🔗](#from-unpaired-preference-to-prompt-only-dataset)             | N/A                                                       | N/A                                                       | N/A                                                                       |
 
-#### From prompt-completion to language modeling dataset
+### From prompt-completion to language modeling dataset
 
 To convert a prompt-completion dataset into a language modeling dataset, concatenate the prompt and the completion.
 
@@ -227,7 +225,7 @@ dataset = dataset.map(concat_prompt_completion, remove_columns=["prompt", "compl
 {'text': 'The sky is blue.'}
 ```
 
-#### From prompt-completion to prompt-only dataset
+### From prompt-completion to prompt-only dataset
 
 To convert a prompt-completion dataset into a prompt-only dataset, remove the completion.
 
@@ -247,7 +245,7 @@ dataset = dataset.remove_columns("completion")
 {'prompt': 'The sky is'}
 ```
 
-#### From preference with implicit prompt to language modeling dataset
+### From preference with implicit prompt to language modeling dataset
 
 To convert a preference with implicit prompt dataset into a language modeling dataset, remove the rejected, and rename the column `"chosen"` to `"text"`.
 
@@ -267,7 +265,7 @@ dataset = dataset.rename_column("chosen", "text").remove_columns("rejected")
 {'text': 'The sky is blue.'}
 ```
 
-#### From preference with implicit prompt to prompt-completion dataset
+### From preference with implicit prompt to prompt-completion dataset
 
 To convert a preference dataset with implicit prompt into a prompt-completion dataset, extract the prompt with [`extract_prompt`], remove the rejected, and rename the column `"chosen"` to `"completion"`.
 
@@ -293,7 +291,7 @@ dataset = dataset.map(extract_prompt).remove_columns("rejected").rename_column("
 {'prompt': [{'role': 'user', 'content': 'What color is the sky?'}], 'completion': [{'role': 'assistant', 'content': 'It is blue.'}]}
 ```
 
-#### From preference with implicit prompt to prompt-only dataset
+### From preference with implicit prompt to prompt-only dataset
 
 To convert a preference dataset with implicit prompt into a prompt-only dataset, extract the prompt with [`extract_prompt`], and remove the rejected and the chosen.
 
@@ -319,7 +317,7 @@ dataset = dataset.map(extract_prompt).remove_columns(["chosen", "rejected"])
 {'prompt': [{'role': 'user', 'content': 'What color is the sky?'}]}
 ```
 
-#### From implicit to explicit prompt preference dataset
+### From implicit to explicit prompt preference dataset
 
 To convert a preference dataset with implicit prompt into a preference dataset with explicit prompt, extract the prompt with [`extract_prompt`].
 
@@ -348,7 +346,7 @@ dataset = dataset.map(extract_prompt)
  'rejected': [{'role': 'assistant', 'content': 'It is green.'}]}
 ```
 
-#### From preference with implicit prompt to unpaired preference dataset
+### From preference with implicit prompt to unpaired preference dataset
 
 To convert a preference dataset with implicit prompt into an unpaired preference dataset, extract the prompt with [`extract_prompt`], and unpair the dataset with [`unpair_preference_dataset`].
 
@@ -378,7 +376,7 @@ dataset = unpair_preference_dataset(dataset)
  'label': True}
 ```
 
-#### From preference to language modeling dataset
+### From preference to language modeling dataset
 
 To convert a preference dataset into a language modeling dataset, remove the rejected, concatenate the prompt and the chosen into the `"text"` column.
 
@@ -402,7 +400,7 @@ dataset = dataset.map(concat_prompt_chosen, remove_columns=["prompt", "chosen", 
 {'text': 'The sky is blue.'}
 ```
 
-#### From preference to prompt-completion dataset
+### From preference to prompt-completion dataset
 
 To convert a preference dataset into a prompt-completion dataset, remove the rejected, and rename the column `"chosen"` to `"completion"`.
 
@@ -423,7 +421,7 @@ dataset = dataset.remove_columns("rejected").rename_column("chosen", "completion
 {'prompt': 'The sky is', 'completion': ' blue.'}
 ```
 
-#### From preference to prompt-only dataset
+### From preference to prompt-only dataset
 
 To convert a preference dataset into a prompt-only dataset, remove the rejected and the chosen.
 
@@ -444,7 +442,7 @@ dataset = dataset.remove_columns(["chosen", "rejected"])
 {'prompt': 'The sky is'}
 ```
 
-#### From explicit to implicit prompt preference dataset
+### From explicit to implicit prompt preference dataset
 
 To convert a preference dataset with implicit prompt into a preference dataset with explicit prompt, concatenate the prompt to both chosen and rejected, and remove the prompt.
 
@@ -478,7 +476,7 @@ dataset = dataset.map(concat_prompt_to_completions, remove_columns="prompt")
  'rejected': [{'role': 'user', 'content': 'What color is the sky?'}, {'role': 'assistant', 'content': 'It is green.'}]}
 ```
 
-#### From preference to unpaired preference dataset
+### From preference to unpaired preference dataset
 
 To convert dataset into an unpaired preference dataset, unpair the dataset with [`unpair_preference_dataset`].
 
@@ -511,7 +509,7 @@ dataset = unpair_preference_dataset(dataset)
  'label': True}
 ```
 
-#### From unpaired preference to language modeling dataset
+### From unpaired preference to language modeling dataset
 
 To convert an unpaired preference dataset into a language modeling dataset, concatenate the prompt and the completion into the `"text"` column, and remove the prompt, completion and label columns.
 
@@ -535,7 +533,7 @@ dataset = dataset.map(concatenate_prompt_completion).remove_columns(["prompt", "
 {'text': 'The sky is blue.'}
 ```
 
-#### From unpaired preference to prompt-completion dataset
+### From unpaired preference to prompt-completion dataset
 
 To convert an unpaired preference dataset into a prompt-completion dataset, remove the label columns.
 
@@ -556,7 +554,7 @@ dataset = dataset.remove_columns(["label"])
 {'prompt': 'The sky is', 'completion': ' blue.'}
 ```
 
-#### From unpaired preference to prompt-only dataset
+### From unpaired preference to prompt-only dataset
 
 To convert an unpaired preference dataset into a prompt-only dataset, remove the completion and the label columns.
 
