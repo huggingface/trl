@@ -22,7 +22,7 @@ python examples/scripts/ppo/ppo.py \
     --gradient_accumulation_steps 1 \
     --total_episodes 10000 \
     --model_name_or_path EleutherAI/pythia-1b-deduped \
-    --missing_eos_penalty -1.0
+    --missing_eos_penalty 1.0
 ```
 
 
@@ -183,8 +183,8 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --sft_model_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr \
     --reward_model_path cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr \
     --local_rollout_forward_batch_size 16 \
-    --missing_eos_penalty -1.0 \
-    --stop_token eos \
+    --missing_eos_penalty 1.0 \
+    --stop_token eos
 ```
 
 Checkpoints and experiment tracking are available at:
