@@ -22,6 +22,7 @@ import torch.nn.functional as F
 from accelerate.utils import is_deepspeed_available
 from transformers import AutoModelForCausalLM, GenerationConfig, PreTrainedModel
 
+from ..import_utils import is_liger_available
 from ..models import PreTrainedModelWrapper
 from ..models.utils import unwrap_model_for_generation
 from .gkd_config import GKDConfig
@@ -31,6 +32,9 @@ from .utils import DataCollatorForChatML, disable_dropout_in_model
 
 if is_deepspeed_available():
     import deepspeed
+
+if is_liger_available():
+    from liger_kernel.transformers import AutoLigerKernelForCausalLM
 
 
 class GKDTrainer(SFTTrainer):
@@ -68,7 +72,10 @@ class GKDTrainer(SFTTrainer):
                 "You passed a teacher model_id to the GKDTrainer. This will automatically create an "
                 "`AutoModelForCausalLM`"
             )
-            teacher_model = AutoModelForCausalLM.from_pretrained(teacher_model, **teacher_model_init_kwargs)
+            if args.use_liger:
+                teacher_model = AutoLigerKernelForCausalLM.from_pretrained(teacher_model, **teacher_model_init_kwargs)
+            else:
+                teacher_model = AutoModelForCausalLM.from_pretrained(teacher_model, **teacher_model_init_kwargs)
 
         if args.disable_dropout:
             disable_dropout_in_model(self.model)

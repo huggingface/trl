@@ -50,10 +50,24 @@ python examples/scripts/gkd.py \
 import logging
 import os
 from contextlib import nullcontext
-from typing import Any, Dict, List, Union
 
+from datasets import load_dataset
+from tqdm.rich import tqdm
+from transformers import AutoTokenizer
+
+from trl import (
+    GKDConfig,
+    GKDTrainer,
+    ModelConfig,
+    RichProgressCallback,
+    get_kbit_device_map,
+    get_peft_config,
+    get_quantization_config,
+)
 from trl.commands.cli_utils import SFTScriptArguments, TrlParser, init_zero_verbose
 from trl.env_utils import strtobool
+from trl.trainer.callbacks import LogCompletionsCallback
+
 
 TRL_USE_RICH = strtobool(os.getenv("TRL_USE_RICH", "0"))
 
@@ -64,25 +78,9 @@ if TRL_USE_RICH:
     from rich.console import Console
     from rich.logging import RichHandler
 
-from accelerate import PartialState
-from datasets import load_dataset
-from tqdm.rich import tqdm
-from transformers import AutoTokenizer
-from trl import (
-    GKDConfig,
-    GKDTrainer,
-    ModelConfig,
-    RichProgressCallback,
-    get_kbit_device_map,
-    get_peft_config,
-    get_quantization_config,
-    setup_chat_format,
-)
+    logging.basicConfig(format=FORMAT, datefmt="[%X]", handlers=[RichHandler()], level=logging.INFO)
 
 tqdm.pandas()
-
-if TRL_USE_RICH:
-    logging.basicConfig(format=FORMAT, datefmt="[%X]", handlers=[RichHandler()], level=logging.INFO)
 
 
 if __name__ == "__main__":
@@ -124,6 +122,7 @@ if __name__ == "__main__":
     train_dataset = raw_datasets[args.dataset_train_split]
     try:
         eval_dataset = raw_datasets[args.dataset_test_split]
+        prompts = eval_dataset["messages"][:8]
     except KeyError:
         eval_dataset = None
 
@@ -151,7 +150,9 @@ if __name__ == "__main__":
             peft_config=get_peft_config(model_config),
             callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
         )
-
+    if eval_dataset is not None:
+        log_completions_callback = LogCompletionsCallback(prompts)
+        trainer.add_callback(log_completions_callback)
     trainer.train()
 
     with save_context:
