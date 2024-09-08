@@ -134,6 +134,7 @@ class OnlineDPOTrainer(Trainer):
         if self.reward_model is not None:
             self.reward_model.eval()
 
+        # Disable dropout in the model if specified
         if args.disable_dropout:
             disable_dropout_in_model(model)
 
