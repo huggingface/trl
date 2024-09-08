@@ -28,7 +28,6 @@ import torch.nn.functional as F
 from accelerate import PartialState
 from accelerate.utils import is_deepspeed_available, tqdm
 from datasets import Dataset
-from huggingface_hub.utils._deprecation import _deprecate_arguments
 from torch.utils.data import DataLoader
 from transformers import (
     AutoModelForCausalLM,
@@ -389,44 +388,12 @@ class DPOTrainer(Trainer):
 
     _tag_names = ["trl", "dpo"]
 
-    @_deprecate_arguments(
-        version="1.0.0",
-        deprecated_args=[
-            "beta",
-            "label_smoothing",
-            "loss_type",
-            "label_pad_token_id",
-            "padding_value",
-            "truncation_mode",
-            "max_length",
-            "max_prompt_length",
-            "max_target_length",
-            "is_encoder_decoder",
-            "disable_dropout",
-            "generate_during_eval",
-            "precompute_ref_log_probs",
-            "dataset_num_proc",
-            "model_init_kwargs",
-            "ref_model_init_kwargs",
-            "model_adapter_name",
-            "ref_adapter_name",
-            "reference_free",
-            "force_use_ref_model",
-        ],
-        custom_message="Deprecated positional argument(s) used in DPOTrainer, please use the DPOConfig to set these arguments instead.",
-    )
     def __init__(
         self,
         model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
         ref_model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
-        beta: float = 0.1,
-        label_smoothing: float = 0,
-        loss_type: Optional[str] = None,
         args: Optional[DPOConfig] = None,
         data_collator: Optional[DataCollator] = None,
-        label_pad_token_id: int = -100,
-        padding_value: Optional[int] = None,
-        truncation_mode: str = "keep_end",
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
         tokenizer: Optional[PreTrainedTokenizerBase] = None,
@@ -434,29 +401,9 @@ class DPOTrainer(Trainer):
         callbacks: Optional[List[TrainerCallback]] = None,
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        max_length: Optional[int] = None,
-        max_prompt_length: Optional[int] = None,
-        max_target_length: Optional[int] = None,
         peft_config: Optional[Dict] = None,
-        is_encoder_decoder: Optional[bool] = None,
-        disable_dropout: bool = True,
-        generate_during_eval: bool = False,
         compute_metrics: Optional[Callable[[EvalLoopOutput], Dict]] = None,
-        precompute_ref_log_probs: bool = False,
-        dataset_num_proc: Optional[int] = None,
-        model_init_kwargs: Optional[Dict] = None,
-        ref_model_init_kwargs: Optional[Dict] = None,
-        model_adapter_name: Optional[str] = None,
-        ref_adapter_name: Optional[str] = None,
-        reference_free: bool = False,
-        force_use_ref_model: bool = False,
     ):
-        if model_init_kwargs is not None:
-            warnings.warn(
-                "You passed `model_init_kwargs` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
-            )
-            args.model_init_kwargs = model_init_kwargs
-
         if args.model_init_kwargs is None:
             model_init_kwargs = {}
         elif not isinstance(model, str):
@@ -475,12 +422,6 @@ class DPOTrainer(Trainer):
                         f"Invalid `torch_dtype` passed to the DPOConfig. Expected a string with either `torch.dtype` or 'auto', but got {torch_dtype}."
                     )
                 model_init_kwargs["torch_dtype"] = torch_dtype
-
-        if ref_model_init_kwargs is not None:
-            warnings.warn(
-                "You passed `ref_model_init_kwargs` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
-            )
-            args.ref_model_init_kwargs = ref_model_init_kwargs
 
         if args.ref_model_init_kwargs is None:
             ref_model_init_kwargs = {}
@@ -518,12 +459,6 @@ class DPOTrainer(Trainer):
         # Initialize this variable to False. This helps tracking the case when `peft_module_casting_to_bf16`
         # has been called in order to properly call autocast if needed.
         self._peft_has_been_casted_to_bf16 = False
-
-        if force_use_ref_model:
-            warnings.warn(
-                "You passed `force_use_ref_model` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
-            )
-            args.force_use_ref_model = force_use_ref_model
 
         if not is_peft_available() and peft_config is not None:
             raise ValueError(
@@ -586,22 +521,12 @@ class DPOTrainer(Trainer):
 
                 model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
 
-        if generate_during_eval:
-            warnings.warn(
-                "You passed `generate_during_eval` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
-            )
-            args.generate_during_eval = generate_during_eval
         if args.generate_during_eval and not is_wandb_available():
             raise ValueError(
                 "`generate_during_eval=True` requires Weights and Biases to be installed."
                 " Please install `wandb` to resolve."
             )
 
-        if is_encoder_decoder is not None:
-            warnings.warn(
-                "You passed `is_encoder_decoder` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
-            )
-            args.is_encoder_decoder = is_encoder_decoder
         if model is not None:
             self.is_encoder_decoder = model.config.is_encoder_decoder
         elif args.is_encoder_decoder is None:
@@ -626,32 +551,9 @@ class DPOTrainer(Trainer):
             self.tokenizer = tokenizer
 
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
-        if model_adapter_name is not None:
-            warnings.warn(
-                "You passed `model_adapter_name` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
-            )
-            args.model_adapter_name = model_adapter_name
         self.model_adapter_name = args.model_adapter_name
-
-        if ref_adapter_name is not None:
-            warnings.warn(
-                "You passed `ref_adapter_name` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
-            )
-            args.ref_adapter_name = ref_adapter_name
         self.ref_adapter_name = args.ref_adapter_name
-
-        if reference_free:
-            warnings.warn(
-                "You passed `reference_free` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
-            )
-            args.reference_free = reference_free
         self.reference_free = args.reference_free
-
-        if precompute_ref_log_probs:
-            warnings.warn(
-                "You passed `precompute_ref_log_probs` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
-            )
-            args.precompute_ref_log_probs = precompute_ref_log_probs
 
         if ref_model:
             self.ref_model = ref_model
@@ -664,11 +566,6 @@ class DPOTrainer(Trainer):
         if tokenizer is None:
             raise ValueError("tokenizer must be specified to tokenize a DPO dataset.")
 
-        if max_length is not None:
-            warnings.warn(
-                "You passed `max_length` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
-            )
-            args.max_length = max_length
         if args.max_length is None:
             warnings.warn(
                 "`max_length` is not set in the DPOConfig's init"
@@ -677,11 +574,6 @@ class DPOTrainer(Trainer):
             )
             args.max_length = 512
 
-        if max_prompt_length is not None:
-            warnings.warn(
-                "You passed `max_prompt_length` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
-            )
-            args.max_prompt_length = max_prompt_length
         if args.max_prompt_length is None:
             warnings.warn(
                 "`max_prompt_length` is not set in the DPOConfig's init"
@@ -690,11 +582,6 @@ class DPOTrainer(Trainer):
             )
             args.max_prompt_length = 128
 
-        if max_target_length is not None:
-            warnings.warn(
-                "You passed `max_target_length` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
-            )
-            args.max_completion_length = max_target_length
         if args.max_completion_length is None and self.is_encoder_decoder:
             warnings.warn(
                 "When using an encoder decoder architecture, you should set `max_completion_length` in the DPOConfig's init"
@@ -703,11 +590,6 @@ class DPOTrainer(Trainer):
             )
             args.max_completion_length = 128
 
-        if label_pad_token_id != -100:
-            warnings.warn(
-                "You passed `label_pad_token_id` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
-            )
-            args.label_pad_token_id = label_pad_token_id
         if data_collator is None:
             data_collator = DPODataCollatorWithPadding(
                 pad_token_id=self.tokenizer.pad_token_id,
@@ -728,11 +610,6 @@ class DPOTrainer(Trainer):
         else:
             self.use_dpo_data_collator = False
 
-        if not disable_dropout:
-            warnings.warn(
-                "You passed `disable_dropout` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
-            )
-            args.disable_dropout = disable_dropout
         if args.disable_dropout:
             disable_dropout_in_model(model)
             if self.ref_model is not None:
@@ -741,18 +618,8 @@ class DPOTrainer(Trainer):
         self.max_length = args.max_length
         self.generate_during_eval = args.generate_during_eval
         self.label_pad_token_id = args.label_pad_token_id
-        if padding_value is not None:
-            warnings.warn(
-                "You passed `padding_value` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
-            )
-            args.padding_value = padding_value
-        self.padding_value = args.padding_value if padding_value is not None else self.tokenizer.pad_token_id
+        self.padding_value = args.padding_value if args.padding_value is not None else self.tokenizer.pad_token_id
         self.max_prompt_length = args.max_prompt_length
-        if truncation_mode != "keep_end":
-            warnings.warn(
-                "You passed `truncation_mode` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
-            )
-            args.truncation_mode = truncation_mode
         self.truncation_mode = args.truncation_mode
         self.max_completion_length = args.max_completion_length
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
@@ -762,16 +629,6 @@ class DPOTrainer(Trainer):
         self._precomputed_train_ref_log_probs = False
         self._precomputed_eval_ref_log_probs = False
 
-        if loss_type is not None:
-            warnings.warn(
-                "You passed `loss_type` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
-            )
-            args.loss_type = loss_type
-        if label_smoothing != 0:
-            warnings.warn(
-                "You passed `label_smoothing` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
-            )
-            args.label_smoothing = label_smoothing
         if (
             args.loss_type in ["hinge", "ipo", "bco_pair", "sppo_hard", "nca_pair", "apo_zero", "apo_down"]
             and args.label_smoothing > 0
@@ -782,11 +639,6 @@ class DPOTrainer(Trainer):
         if args.loss_type == "kto_pair":
             raise ValueError("Support for kto_pair has been removed in DPOTrainer. Please use KTOTrainer.")
 
-        if beta != 0.1:
-            warnings.warn(
-                "You passed `beta` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
-            )
-            args.beta = beta
         self.beta = args.beta
         self.label_smoothing = args.label_smoothing
         self.loss_type = args.loss_type
@@ -796,13 +648,6 @@ class DPOTrainer(Trainer):
 
         self.f_divergence_type = args.f_divergence_type
         self.f_divergence_params = {FDivergenceConstants.ALPHA_DIVERGENCE_COEF_KEY: args.f_alpha_divergence_coef}
-
-        if dataset_num_proc is not None:
-            warnings.warn(
-                "You passed `dataset_num_proc` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
-            )
-            args.dataset_num_proc = dataset_num_proc
-        self.dataset_num_proc = args.dataset_num_proc
 
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
@@ -818,7 +663,7 @@ class DPOTrainer(Trainer):
                 _tokenize,
                 fn_kwargs=fn_kwargs,
                 batched=True,
-                num_proc=self.dataset_num_proc,
+                num_proc=args.dataset_num_proc,
                 writer_batch_size=10,
                 desc="Tokenizing train dataset",
             )
@@ -827,7 +672,7 @@ class DPOTrainer(Trainer):
                     _tokenize,
                     fn_kwargs=fn_kwargs,
                     batched=True,
-                    num_proc=self.dataset_num_proc,
+                    num_proc=args.dataset_num_proc,
                     writer_batch_size=10,
                     desc="Tokenizing eval dataset",
                 )
@@ -878,7 +723,7 @@ class DPOTrainer(Trainer):
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
         if args.sync_ref_model:
-            if precompute_ref_log_probs:
+            if args.precompute_ref_log_probs:
                 raise ValueError(
                     "You cannot use `precompute_ref_log_probs=True` with TR-DPO method. Please set `precompute_ref_log_probs=False`."
                 )

@@ -24,7 +24,6 @@ from accelerate.state import PartialState
 from datasets import Dataset
 from datasets.arrow_writer import SchemaInferenceError
 from datasets.builder import DatasetGenerationError
-from huggingface_hub.utils._deprecation import _deprecate_arguments
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -125,28 +124,21 @@ class SFTTrainer(Trainer):
             args_as_dict.update({k: getattr(args, k) for k in args_as_dict.keys() if k.endswith("_token")})
             args = SFTConfig(**args_as_dict)
 
-        if model_init_kwargs is not None:
-            warnings.warn(
-                "You passed `model_init_kwargs` to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
-            )
-            args.model_init_kwargs = model_init_kwargs
-        if getattr(args, "model_init_kwargs", None) is None:
-            model_init_kwargs = {}
-        elif not isinstance(model, str):
+        if not isinstance(model, str) and args.model_init_kwargs is not None:
             raise ValueError("You passed model_init_kwargs to the SFTConfig, but your model is already instantiated.")
-        else:
-            model_init_kwargs = args.model_init_kwargs
-            torch_dtype = model_init_kwargs.get("torch_dtype")
-            if torch_dtype is not None:
-                # Convert to `torch.dtype` if an str is passed
-                if isinstance(torch_dtype, str) and torch_dtype != "auto":
-                    torch_dtype = getattr(torch, torch_dtype)
-                if torch_dtype != "auto" and not isinstance(torch_dtype, torch.dtype):
-                    raise ValueError(
-                        f"Invalid `torch_dtype` passed to the SFTConfig. Expected a string with either `torch.dtype` or 'auto', but got {torch_dtype}."
-                    )
-                model_init_kwargs["torch_dtype"] = torch_dtype
 
+        model_init_kwargs = args.model_init_kwargs or {}
+
+        torch_dtype = model_init_kwargs.get("torch_dtype")
+        if torch_dtype is not None:
+            # Convert to `torch.dtype` if an str is passed
+            if isinstance(torch_dtype, str) and torch_dtype != "auto":
+                torch_dtype = getattr(torch, torch_dtype)
+            if torch_dtype != "auto" and not isinstance(torch_dtype, torch.dtype):
+                raise ValueError(
+                    f"Invalid `torch_dtype` passed to the SFTConfig. Expected a string with either `torch.dtype` or 'auto', but got {torch_dtype}."
+                )
+            model_init_kwargs["torch_dtype"] = torch_dtype
 
         if isinstance(model, str):
             warnings.warn(
@@ -157,7 +149,6 @@ class SFTTrainer(Trainer):
                 model = AutoLigerKernelForCausalLM.from_pretrained(model, **model_init_kwargs)
             else:
                 model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
-
 
         if args.packing and data_collator is not None and isinstance(data_collator, DataCollatorForCompletionOnlyLM):
             raise ValueError(
@@ -238,11 +229,13 @@ class SFTTrainer(Trainer):
 
         if args.max_seq_length is None:
             # to overcome some issues with broken tokenizers
-            args.max_seq_length = min(tokenizer.model_max_length, 1024)
+            max_seq_length = min(tokenizer.model_max_length, 1024)
 
             warnings.warn(
-                f"You didn't pass a `max_seq_length` argument to the SFTTrainer, this will default to {args.max_seq_length}"
+                f"You didn't pass a `max_seq_length` argument to the SFTConfig, this will default to {max_seq_length}"
             )
+        else:
+            max_seq_length = args.max_seq_length
 
         self.dataset_num_proc = args.dataset_num_proc
         self.dataset_batch_size = args.dataset_batch_size
@@ -283,7 +276,7 @@ class SFTTrainer(Trainer):
                     tokenizer,
                     args.packing,
                     args.dataset_text_field,
-                    args.max_seq_length,
+                    max_seq_length,
                     formatting_func,
                     args.num_of_sequences,
                     args.chars_per_token,
@@ -302,7 +295,7 @@ class SFTTrainer(Trainer):
                         tokenizer,
                         eval_packing,
                         args.dataset_text_field,
-                        args.max_seq_length,
+                        max_seq_length,
                         formatting_func,
                         args.num_of_sequences,
                         args.chars_per_token,
